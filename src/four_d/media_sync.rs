@@ -101,6 +101,20 @@ fn invalidate_coordinator_session(plan: &mut super::media_timeline::PreparedTime
     plan.play_requested = false;
 }
 
+fn take_coordinator_session<T>(
+    client: &mut Option<T>,
+    timeline: &Mutex<super::media_timeline::PreparedTimeline>,
+) -> Option<T> {
+    let old = client.take()?;
+    // Invalidate once per live stream, not on every disconnected polling pass.
+    // Every transport-loss path shares this transition; no old arm or Play
+    // request may survive an ACK/heartbeat failure on an otherwise live engine.
+    if let Ok(mut plan) = timeline.lock() {
+        invalidate_coordinator_session(&mut plan);
+    }
+    Some(old)
+}
+
 #[derive(serde::Deserialize)]
 struct ControllerPlanIdentity {
     client_id: String,
@@ -200,7 +214,7 @@ pub fn spawn(
                 && connected.load(Ordering::Relaxed)
                 && super::controller::is_controller_endpoint(&requested_endpoint);
             if !usable || active_endpoint != requested_endpoint {
-                if let Some(mut old) = client.take() {
+                if let Some(mut old) = take_coordinator_session(&mut client, &timeline) {
                     sequence += 1;
                     let _ = old.call("controller.media.playback.update", json!({
                         "client_id":id,"sequence":sequence,"position_ms":0,"loaded":false,"playing":false,"rate":1.0}));
@@ -265,14 +279,13 @@ pub fn spawn(
                                     }
                                     Err(error) => {
                                         if let Ok(mut plan)=timeline.lock() {
-                                            if error.transport_failed { invalidate_coordinator_session(&mut plan); }
                                             plan.error=Some(format!("Publishing claim failed: {error}"));
                                             plan.play_requested=false;
                                         }
                                         if error.transport_failed {
                                             // Claim outcome is unknown. Reconnect, read authority
                                             // first, and never replay an output or handoff accept.
-                                            client=None;
+                                            let _ = take_coordinator_session(&mut client, &timeline);
                                             authority_ready=false;
                                             retry_at=Instant::now()+Duration::from_secs(2);
                                             continue;
@@ -299,12 +312,11 @@ pub fn spawn(
                         Err(error)=>{
                             authority_ready = false;
                             if let Ok(mut plan)=timeline.lock(){
-                                invalidate_coordinator_session(&mut plan);
                                 plan.error=Some(format!("Publishing authority unavailable: {error}"));
                             }
                             // A failed query cannot leave a dead socket pinned forever.
                             // The new stream queries authority before preparing or sending.
-                            client=None;
+                            let _ = take_coordinator_session(&mut client, &timeline);
                             previous=None;
                             retry_at=Instant::now()+Duration::from_secs(2);
                             continue;
@@ -313,7 +325,13 @@ pub fn spawn(
                 }
                 if !authority_ready || timeline.lock().is_ok_and(|plan|!plan.may_publish()) {
                     if reported_at.elapsed()>=Duration::from_secs(10) {
-                        let _=rpc.call("controller.app.instance.report",identity(&id,&current.name));reported_at=Instant::now();
+                        if rpc.call("controller.app.instance.report",identity(&id,&current.name)).is_err() {
+                            let _ = take_coordinator_session(&mut client, &timeline);
+                            authority_ready=false;
+                            previous=None;
+                            retry_at=Instant::now()+Duration::from_secs(2);
+                        }
+                        reported_at=Instant::now();
                     }
                     std::thread::sleep(Duration::from_millis(20));continue;
                 }
@@ -327,10 +345,9 @@ pub fn spawn(
                     });
                 if let Err(error) = result {
                     if let Ok(mut plan) = timeline.lock() {
-                        invalidate_coordinator_session(&mut plan);
                         plan.error = Some(format!("Hardware timeline state unavailable: {error}"));
                     }
-                    client = None;
+                    let _ = take_coordinator_session(&mut client, &timeline);
                     authority_ready = false;
                     previous = None;
                     retry_at = Instant::now() + Duration::from_secs(2);
@@ -381,6 +398,16 @@ pub fn spawn(
                                 "plan_revision": revision,
                             }),
                         );
+                        if let Err(error) = arm_result {
+                            let _ = take_coordinator_session(&mut client, &timeline);
+                            if let Ok(mut plan) = timeline.lock() {
+                                plan.error = Some(format!("Hardware clock acknowledgement failed: {error}"));
+                            }
+                            authority_ready = false;
+                            previous = None;
+                            retry_at = Instant::now() + Duration::from_secs(2);
+                            continue;
+                        }
                         if let Ok(mut plan) = timeline.lock()
                             && plan.revision == revision
                         {
@@ -426,6 +453,12 @@ pub fn spawn(
                             plan.deferred_reason = None;
                             plan.error = Some(format!("Hardware timeline not prepared: {}", error.message));
                             plan.play_requested = false;
+                        }
+                        if error.transport_failed {
+                            let _ = take_coordinator_session(&mut client, &timeline);
+                            authority_ready = false;
+                            previous = None;
+                            retry_at = Instant::now() + Duration::from_secs(2);
                         }
                         continue;
                     }
@@ -541,7 +574,8 @@ pub fn spawn(
                             eprintln!("Playback sync: {error}");
                             last_error = error;
                         }
-                        client = None;
+                        let _ = take_coordinator_session(&mut client, &timeline);
+                        authority_ready = false;
                         previous = None;
                         retry_at = Instant::now() + Duration::from_secs(2);
                     }
@@ -557,7 +591,10 @@ pub fn spawn(
                     )
                     .is_err()
                 {
-                    client = None;
+                    let _ = take_coordinator_session(&mut client, &timeline);
+                    authority_ready = false;
+                    previous = None;
+                    retry_at = Instant::now() + Duration::from_secs(2);
                 }
                 reported_at = Instant::now();
             }
@@ -613,6 +650,57 @@ mod tests {
         assert!(plan.last_ack.is_none());
         assert!(!plan.play_requested);
         assert!(!plan.ready_for(3));
+    }
+
+    #[test]
+    fn stream_loss_invalidates_once_and_disconnected_polls_never_churn_revisions() {
+        let mut plan = super::super::media_timeline::PreparedTimeline::default();
+        plan.revision = 7;
+        plan.acknowledged_revision = 7;
+        plan.clock_ack_revision = 7;
+        plan.clock_ack_epoch = 3;
+        plan.feedback = json!({"armed_epoch":3,"state":"playing"});
+        plan.last_ack = Some(Instant::now());
+        plan.play_requested = true;
+        plan.requires_reprepare = true;
+        let timeline = Mutex::new(plan);
+        let mut client = Some("live clock stream");
+        assert_eq!(take_coordinator_session(&mut client, &timeline), Some("live clock stream"));
+        for _ in 0..100 {
+            assert!(take_coordinator_session(&mut client, &timeline).is_none());
+        }
+        {
+            let plan = timeline.lock().unwrap();
+            assert_eq!(plan.revision, 8);
+            assert_eq!(plan.acknowledged_revision, 0);
+            assert_eq!(plan.clock_ack_revision, 0);
+            assert_eq!(plan.clock_ack_epoch, 0);
+            assert!(plan.last_ack.is_none());
+            assert!(plan.feedback.is_null());
+            assert!(!plan.play_requested);
+            assert!(plan.requires_reprepare, "Semantic safety faults stay latched");
+            assert!(!plan.ready_for(3));
+        }
+        client = Some("replacement clock stream");
+        let _ = take_coordinator_session(&mut client, &timeline);
+        assert_eq!(timeline.lock().unwrap().revision, 9);
+    }
+
+    #[test]
+    fn fresh_empty_coordinator_uses_new_revision_after_clock_transport_loss() {
+        let mut plan = super::super::media_timeline::PreparedTimeline::default();
+        plan.revision = 3;
+        plan.acknowledged_revision = 3;
+        plan.clock_ack_revision = 3;
+        plan.clock_ack_epoch = 2;
+        plan.play_requested = true;
+        let timeline = Mutex::new(plan);
+        let _ = take_coordinator_session(&mut Some(()), &timeline);
+        let mut plan = timeline.lock().unwrap();
+        reconcile_controller_revision(&mut plan, json!({"client_id":"","revision":0})).unwrap();
+        assert_eq!(plan.revision, 4);
+        assert_eq!(plan.acknowledged_revision, 0);
+        assert!(!plan.play_requested);
     }
 
     #[test]
