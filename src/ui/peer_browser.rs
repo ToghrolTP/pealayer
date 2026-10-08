@@ -11,6 +11,29 @@ pub enum Purpose {
     TimelineSave,
     ConfigImport,
     ConfigExport(Box<crate::config::AppConfig>),
+    PreferenceFile { key: String, extensions: Vec<String> },
+}
+
+fn preference_file_id(key: &str) -> egui::Id { egui::Id::new(("preference-file-selection", key)) }
+
+pub fn take_preference_file(ctx: &egui::Context, key: &str) -> Option<String> {
+    ctx.data_mut(|data| data.remove_temp::<String>(preference_file_id(key)))
+}
+
+fn selectable_file(purpose: &Purpose, path: &str) -> bool {
+    match purpose {
+        Purpose::PreferenceFile { extensions, .. } => path.rsplit('.').next()
+            .is_some_and(|extension| extensions.iter().any(|allowed| allowed.eq_ignore_ascii_case(extension))),
+        _ => true,
+    }
+}
+
+fn valid_selection(state: &State) -> bool {
+    if state.busy || state.selected.is_empty() || !selectable_file(&state.purpose, &state.selected) {
+        return false;
+    }
+    !matches!(state.purpose, Purpose::PreferenceFile { .. }) || state.listing.as_ref()
+        .is_some_and(|listing| listing.entries.iter().any(|entry| entry.path == state.selected && !entry.is_dir))
 }
 struct State {
     open: bool,
@@ -127,6 +150,8 @@ fn refresh(browser: &Browser, ctx: &egui::Context) {
         }
         state.busy = true;
         state.error = None;
+        state.listing = None;
+        state.selected.clear();
         state.path.clone()
     } else {
         return;
@@ -259,6 +284,7 @@ pub fn draw(app: &mut crate::app::PealayerApp, ui: &mut egui::Ui) {
                 .max_height((ui.available_height() - 78.0).max(80.0))
                 .show(ui, |ui| {
                     for (path, name, directory, media, size) in rows {
+                        if !directory && !selectable_file(&state.purpose, &path) { continue; }
                         let glyph = if directory {
                             crate::ui::icons::FOLDER_OPEN
                         } else if media {
@@ -277,7 +303,7 @@ pub fn draw(app: &mut crate::app::PealayerApp, ui: &mut egui::Ui) {
                                 .selected(state.selected == path)
                                 .wrap_mode(egui::TextWrapMode::Truncate),
                         );
-                        if response.clicked() {
+                        if response.clicked() && (!directory || !matches!(state.purpose, Purpose::PreferenceFile { .. })) {
                             state.selected = path.clone();
                         }
                         if response.double_clicked() {
@@ -316,10 +342,11 @@ pub fn draw(app: &mut crate::app::PealayerApp, ui: &mut egui::Ui) {
                     }
                     Purpose::TimelineSave | Purpose::ConfigExport(_) => "Save",
                     Purpose::ConfigImport => "Import",
+                    Purpose::PreferenceFile { .. } => "Select",
                 };
                 if ui
                     .add_enabled(
-                        !state.busy && !state.selected.is_empty(),
+                        valid_selection(&state),
                         egui::Button::new(format!("{} {label}", crate::ui::icons::CHECK)),
                     )
                     .clicked()
@@ -329,7 +356,7 @@ pub fn draw(app: &mut crate::app::PealayerApp, ui: &mut egui::Ui) {
             });
         });
     state.open = open && !cancel;
-    if commit {
+    if commit && valid_selection(&state) {
         let selected = state.selected.clone();
         let purpose = state.purpose.clone();
         state.busy = true;
@@ -337,6 +364,11 @@ pub fn draw(app: &mut crate::app::PealayerApp, ui: &mut egui::Ui) {
             app.load_media_target(&selected);
             state.open = false;
             state.busy = false;
+        } else if let Purpose::PreferenceFile { key, .. } = purpose {
+            ctx.data_mut(|data| data.insert_temp(preference_file_id(&key), selected));
+            state.open = false;
+            state.busy = false;
+            ctx.request_repaint();
         } else {
             let browser = browser.clone();
             let context = ctx.clone();
@@ -350,6 +382,7 @@ pub fn draw(app: &mut crate::app::PealayerApp, ui: &mut egui::Ui) {
                     Purpose::Audio=>client.post("/api/peer/media",&serde_json::json!({"operation":"command","name":"audio-add","args":[selected]})).map(|_|()),
                     Purpose::Subtitle=>client.post("/api/peer/media",&serde_json::json!({"operation":"command","name":"sub-add","args":[selected]})).map(|_|()),
                     Purpose::Media=>Ok(()),
+                    Purpose::PreferenceFile { .. }=>unreachable!("preference selection is returned to the draft, not executed remotely"),
                 };
                 if let Ok(mut state) = browser.0.lock() {
                     state.busy = false;
@@ -374,5 +407,35 @@ fn format_size(size: u64) -> String {
         format!("{:.1} KiB", size as f64 / 1024.0)
     } else {
         format!("{:.1} MiB", size as f64 / 1048576.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preference_file_selection_requires_a_supported_non_directory_from_current_listing() {
+        let mut state = State {
+            open: true, path: String::new(), selected: "icon.PNG".into(), filter: String::new(),
+            busy: false, error: None, listing: None,
+            purpose: Purpose::PreferenceFile { key: "app_icon".into(), extensions: vec!["png".into()] },
+        };
+        assert!(!valid_selection(&state));
+        state.listing = Some(crate::server::fs_api::DirectoryBrowseResponse {
+            current_path: String::new(), parent_path: None,
+            entries: vec![crate::server::fs_api::FileEntryInfo {
+                path: "icon.PNG".into(), name: "icon.PNG".into(), is_dir: false, is_media: false,
+                size_bytes: 1, has_thumbnail: false,
+            }],
+        });
+        assert!(valid_selection(&state));
+        state.listing.as_mut().unwrap().entries[0].is_dir = true;
+        assert!(!valid_selection(&state));
+        state.listing.as_mut().unwrap().entries[0].is_dir = false;
+        state.busy = true;
+        assert!(!valid_selection(&state));
+        assert!(!selectable_file(&state.purpose, "icon.png.exe"));
+        assert!(selectable_file(&Purpose::TimelineSave, "untitled.json"));
     }
 }

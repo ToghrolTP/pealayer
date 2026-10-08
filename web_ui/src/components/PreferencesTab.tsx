@@ -4,10 +4,12 @@ import {
   Button,
   Card,
   ColorPicker,
+  Collapse,
   Input,
   Select,
   Switch,
   Typography,
+  Tooltip,
 } from 'antd';
 import { FujiLoader } from './FujiLoader';
 import {
@@ -31,10 +33,14 @@ import {
   SafetyCertificateOutlined,
   SyncOutlined,
   WifiOutlined,
+  FileImageOutlined,
+  FolderOpenOutlined,
+  UndoOutlined,
 } from '@ant-design/icons';
 import { tr } from '../i18n';
 import { mergeAppearance } from '../appearance';
 import { NumericValueControl } from './NumericValueControl';
+import { ServerFilePicker } from './ServerFilePicker';
 import type { TimelineWheelPreferences } from '../timelineWheel';
 
 type JsonObject = Record<string, any>;
@@ -58,7 +64,7 @@ interface PreferenceControl {
   section: string;
   group: string;
   label: string;
-  kind: 'accent' | 'boolean' | 'multi_select' | 'number' | 'replacement_list' | 'select' | 'text';
+  kind: 'accent' | 'boolean' | 'file' | 'multi_select' | 'number' | 'replacement_list' | 'select' | 'text';
   description?: string;
   options?: PreferenceOption[];
   minimum?: number;
@@ -69,12 +75,21 @@ interface PreferenceControl {
   inverted?: boolean;
   placeholder?: string;
   custom_key?: string;
+  file_extensions?: string[];
+}
+
+interface PreferenceGroup {
+  section: string;
+  name: string;
+  collapsible: boolean;
+  default_open: boolean;
 }
 
 interface PreferencesContract {
   format: 'pealayer-preferences';
   sections: PreferenceSection[];
   controls: PreferenceControl[];
+  groups: PreferenceGroup[];
   values: JsonObject;
   defaults: JsonObject;
 }
@@ -99,6 +114,7 @@ const sectionIcons: Record<string, React.ReactNode> = {
 const controlIcons: Record<PreferenceControl['kind'], React.ReactNode> = {
   accent: <BgColorsOutlined />,
   boolean: <CheckSquareOutlined />,
+  file: <FileImageOutlined />,
   multi_select: <GlobalOutlined />,
   number: <ControlOutlined />,
   replacement_list: <SwapRightOutlined />,
@@ -145,6 +161,7 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
   const [status, setStatus] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
+  const [filePicker, setFilePicker] = useState<PreferenceControl | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -191,7 +208,7 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
     () => contract?.controls.filter((control) => control.section === section) ?? [],
     [contract, section],
   );
-  const groups = useMemo(() => Array.from(new Set(controls.map((control) => control.group))), [controls]);
+  const groups = useMemo(() => contract?.groups.filter((group) => group.section === section) ?? [], [contract, section]);
 
   const updatePaths = async (updates: Array<{ key: string; value: any }>) => {
     if (!contract) return;
@@ -244,6 +261,23 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
         <span>{tr(locale, control.label)}</span>
       </span>
     );
+    if (control.kind === 'file') {
+      return <div className="preference-control" key={control.key}>
+        {commonLabel}
+        <div className="preference-control__file">
+          <Input key={String(value ?? '')} defaultValue={value ?? ''}
+            aria-label={tr(locale, control.label)} title={String(value ?? '')}
+            placeholder={tr(locale, control.placeholder ?? '')}
+            onPressEnter={(event) => void update(control, event.currentTarget.value.trim())}
+            onBlur={(event) => event.currentTarget.value !== (value ?? '') && void update(control, event.currentTarget.value.trim())} />
+          <Button icon={<FolderOpenOutlined />} onClick={() => setFilePicker(control)}>{tr(locale, 'Browse…')}</Button>
+          <Tooltip title={tr(locale, 'Use default icon')}>
+            <Button icon={<UndoOutlined />} aria-label={tr(locale, 'Use default icon')} disabled={!value}
+              onClick={() => void update(control, null)} />
+          </Tooltip>
+        </div>
+      </div>;
+    }
     if (control.kind === 'accent') {
       const customKey = control.custom_key ?? 'custom_accent_color';
       const customHex = String(valueAtPath(contract?.values ?? {}, customKey) ?? '#0078d4');
@@ -478,19 +512,26 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
             ))}
           </nav>
           <main className="preferences-detail">
-            {groups.map((group) => (
-              <Card key={group} className="preferences-group" title={group} bordered>
-                <div className="preferences-group__controls">
-                  {controls.filter((control) => control.group === group).map(renderControl)}
-                </div>
-              </Card>
-            ))}
+            {groups.map((group) => {
+              const children = <div className="preferences-group__controls">
+                {controls.filter((control) => control.group === group.name).map(renderControl)}
+              </div>;
+              return group.collapsible
+                ? <Collapse key={`${section}:${group.name}`} className="preferences-group preferences-group--optional"
+                    defaultActiveKey={group.default_open ? [group.name] : []}
+                    items={[{ key: group.name, label: <span><FileImageOutlined /> {tr(locale, group.name)}</span>, children }]} />
+                : <Card key={group.name} className="preferences-group" title={tr(locale, group.name)} bordered>{children}</Card>;
+            })}
             <div className="preferences-save-state" aria-live="polite">
               {saving ? <><SaveOutlined /> {tr(locale, 'Saving')}</> : <><CheckOutlined /> {tr(locale, 'Changes save automatically')}</>}
             </div>
           </main>
         </div>
       )}
+      {filePicker && <ServerFilePicker apiBaseUrl={apiBaseUrl} locale={locale}
+        extensions={filePicker.file_extensions ?? []} initialFile={valueAtPath(contract?.values ?? {}, filePicker.key) ?? undefined}
+        title={tr(locale, 'Choose an image file')} onCancel={() => setFilePicker(null)}
+        onSelect={(path) => { void update(filePicker, path); setFilePicker(null); }} />}
     </section>
   );
 };

@@ -62,6 +62,12 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         return english.to_owned();
     }
     let translated = match english {
+        "Application icons" => "نمادهای برنامه",
+        "Default icon" => "نماد پیش‌فرض",
+        "Bundled application icon" => "نماد همراه برنامه",
+        "Use default icon" => "استفاده از نماد پیش‌فرض",
+        "Browse..." => "مرور…",
+        "Choose an image file" => "انتخاب پروندهٔ تصویر",
         "File" => "پرونده",
         "Edit" => "ویرایش",
         "Audio" => "صدا",
