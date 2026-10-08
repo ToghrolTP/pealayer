@@ -39,7 +39,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             let name_hint = app.tr("Workspace name");
             ui.add_sized(
                 [ui.available_width().max(280.0) - 250.0, 30.0],
-                egui::TextEdit::singleline(&mut app.workspace_profile_name_draft)
+                crate::ui::dialog::singleline_text_edit(&mut app.workspace_profile_name_draft)
                     .hint_text(name_hint),
             );
             workspace_icon_picker(
@@ -103,7 +103,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     }
                                     let name_response = ui.add_sized(
                                         [ui.available_width().max(420.0) - 390.0, 28.0],
-                                        egui::TextEdit::singleline(&mut name),
+                                        crate::ui::dialog::singleline_text_edit(&mut name),
                                     );
                                     metadata_changed |= name_response.changed();
                                     metadata_changed |= workspace_icon_picker(

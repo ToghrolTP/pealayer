@@ -47,6 +47,8 @@ pub struct PreferenceControl {
     pub group: &'static str,
     pub label: &'static str,
     pub kind: PreferenceControlKind,
+    /// Semantic Phosphor name shared by native and Web renderers.
+    pub icon: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<&'static str>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -130,6 +132,7 @@ impl PreferenceControl {
             group,
             label,
             kind: PreferenceControlKind::Boolean,
+            icon: "check-square",
             description: None,
             options: Vec::new(),
             minimum: None,
@@ -372,17 +375,6 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
         application_icon_control("app_icon_paused", "Paused", "Use default icon"),
         application_icon_control("app_icon_stopped", "Stopped", "Use default icon"),
         PreferenceControl::select(
-            "language",
-            "appearance",
-            "Interface",
-            "Language",
-            &[
-                ("system", "System language"),
-                ("en", "English"),
-                ("fa", "Persian"),
-            ],
-        ),
-        PreferenceControl::select(
             "fullscreen_video_background",
             "appearance",
             "Interface",
@@ -391,6 +383,17 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
                 ("black", "Black"),
                 ("dark_gray", "Dark gray"),
                 ("theme", "Use app theme"),
+            ],
+        ),
+        PreferenceControl::select(
+            "language",
+            "appearance",
+            "Interface",
+            "Language",
+            &[
+                ("system", "System language"),
+                ("en", "English"),
+                ("fa", "Persian"),
             ],
         ),
         {
@@ -1110,12 +1113,46 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
     controls.insert(14, recent_click);
     let mut hints = std::collections::HashSet::new();
     for control in &mut controls {
+        control.icon = semantic_preference_icon(control);
         if let Some(description) = control.description
             && !hints.insert((control.section, control.group, description)) {
             control.description = None;
         }
     }
     controls
+}
+
+fn semantic_preference_icon(control: &PreferenceControl) -> &'static str {
+    match control.key {
+        "theme" => "circle-half",
+        "accent_color" | "accent" => "palette",
+        "color_palette" => "swatches",
+        "language" => "translate",
+        "fullscreen_video_background" => "frame-corners",
+        "always_on_top" => "push-pin",
+        "consistent_video_aspect_ratio" => "arrows-out",
+        "osd_position" => "target",
+        "osd_timeout_seconds" => "clock",
+        "app_icon" => "image",
+        "app_icon_playing" => "play",
+        "app_icon_paused" => "pause",
+        "app_icon_stopped" => "stop-circle",
+        "audio_device" | "sfx_audio_device" => "speaker-high",
+        key if key.starts_with("subtitle_") => "subtitles",
+        key if key.starts_with("timeline_") => "waveform",
+        key if key.starts_with("web_") => "globe",
+        key if key.starts_with("keyboard_") || key.starts_with("shortcut_") => "keyboard",
+        _ => match control.kind {
+            PreferenceControlKind::Accent => "palette",
+            PreferenceControlKind::Boolean => "check-square",
+            PreferenceControlKind::File => "image",
+            PreferenceControlKind::Number => "sliders-horizontal",
+            PreferenceControlKind::MultiSelect => "globe",
+            PreferenceControlKind::ReplacementList => "text-align-left",
+            PreferenceControlKind::Select => "list-checks",
+            PreferenceControlKind::Text => "pencil-simple",
+        },
+    }
 }
 
 pub fn preferences_contract(config: &crate::config::AppConfig) -> PreferencesContract {
@@ -1167,6 +1204,19 @@ pub fn set_value_at_path(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn appearance_rows_have_semantic_icons_and_language_is_last() {
+        let controls = preference_controls(&crate::config::AppConfig::default());
+        let interface: Vec<_> = controls.iter().filter(|control| control.section == "appearance" && control.group == "Interface").collect();
+        assert_eq!(interface.iter().map(|control| control.key).collect::<Vec<_>>(),
+            ["theme", "accent_color", "color_palette", "fullscreen_video_background", "language"]);
+        assert_eq!(interface.iter().map(|control| control.icon).collect::<Vec<_>>(),
+            ["circle-half", "palette", "swatches", "frame-corners", "translate"]);
+        for (key, icon) in [("always_on_top", "push-pin"), ("osd_position", "target"), ("osd_timeout_seconds", "clock"),
+            ("app_icon_playing", "play"), ("app_icon_paused", "pause"), ("app_icon_stopped", "stop-circle")] {
+            assert_eq!(controls.iter().find(|control| control.key == key).unwrap().icon, icon);
+        }
+    }
     use super::*;
 
     #[test]

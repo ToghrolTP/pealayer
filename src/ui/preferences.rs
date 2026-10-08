@@ -955,7 +955,7 @@ fn render_contract_control(
     let mut replacement = None;
     let mut companion_changed = false;
     let mut description_rendered = false;
-    let control_icon = preference_control_icon(&control.kind);
+    let control_icon = preference_control_icon(control.icon);
     match control.kind {
         PreferenceControlKind::Accent => {
             let selected = current.as_str().unwrap_or("system");
@@ -1202,7 +1202,7 @@ fn render_contract_control(
                                 changed |= ui
                                     .add_sized(
                                         [field_width, PREFERENCE_ROW_HEIGHT],
-                                        egui::TextEdit::singleline(&mut item.from)
+                                        crate::ui::dialog::singleline_text_edit(&mut item.from)
                                             .horizontal_align(from_align)
                                             .hint_text(tr("Source text")),
                                     )
@@ -1211,7 +1211,7 @@ fn render_contract_control(
                                 changed |= ui
                                     .add_sized(
                                         [field_width, PREFERENCE_ROW_HEIGHT],
-                                        egui::TextEdit::singleline(&mut item.to)
+                                        crate::ui::dialog::singleline_text_edit(&mut item.to)
                                             .horizontal_align(to_align)
                                             .hint_text(tr("Replacement")),
                                     )
@@ -1267,7 +1267,7 @@ fn render_contract_control(
                 let clear_width = 24.0;
                 edited |= ui.add_sized(
                     [(width - browse_width - clear_width - PREFERENCE_COLUMN_GAP * 2.0).max(55.0), PREFERENCE_ROW_HEIGHT],
-                    egui::TextEdit::singleline(&mut text).hint_text(tr(control.placeholder.unwrap_or_default())),
+                    crate::ui::dialog::singleline_text_edit(&mut text).hint_text(tr(control.placeholder.unwrap_or_default())),
                 ).on_hover_text(&text).changed();
                 if ui.add_sized([browse_width, 26.0], egui::Button::new(format!(
                     "{} {}", crate::ui::icons::FOLDER_OPEN, tr("Browse..."),
@@ -1305,7 +1305,7 @@ fn render_contract_control(
             preference_row(ui, control_icon, &tr(control.label), label_width, |ui| {
                 let control_width = ui.available_width().min(PREFERENCE_CONTROL_MAX_WIDTH);
                 let response = ui.add(
-                    egui::TextEdit::singleline(&mut text)
+                    crate::ui::dialog::singleline_text_edit(&mut text)
                         .horizontal_align(text_align)
                         .desired_width(control_width)
                         .hint_text(control.placeholder.unwrap_or_default()),
@@ -1755,16 +1755,33 @@ fn preference_label_column_width(
     (text_width + 34.0).max(128.0)
 }
 
-fn preference_control_icon(kind: &PreferenceControlKind) -> &'static str {
-    match kind {
-        PreferenceControlKind::Accent => crate::ui::icons::PALETTE,
-        PreferenceControlKind::Boolean => crate::ui::icons::CHECK_SQUARE,
-        PreferenceControlKind::File => crate::ui::icons::IMAGE,
-        PreferenceControlKind::Number => crate::ui::icons::SLIDERS_HORIZONTAL,
-        PreferenceControlKind::MultiSelect => crate::ui::icons::GLOBE,
-        PreferenceControlKind::ReplacementList => crate::ui::icons::TEXT_ALIGN_LEFT,
-        PreferenceControlKind::Select => crate::ui::icons::LIST_CHECKS,
-        PreferenceControlKind::Text => crate::ui::icons::PENCIL_SIMPLE,
+fn preference_control_icon(name: &str) -> &'static str {
+    use egui_phosphor::regular::*;
+    match name {
+        "circle-half" => CIRCLE_HALF,
+        "palette" => PALETTE,
+        "swatches" => SWATCHES,
+        "translate" => TRANSLATE,
+        "frame-corners" => FRAME_CORNERS,
+        "push-pin" => PUSH_PIN,
+        "arrows-out" => ARROWS_OUT,
+        "target" => TARGET,
+        "clock" => CLOCK,
+        "image" => IMAGE,
+        "play" => PLAY,
+        "pause" => PAUSE,
+        "stop-circle" => STOP_CIRCLE,
+        "speaker-high" => SPEAKER_HIGH,
+        "subtitles" => SUBTITLES,
+        "waveform" => WAVEFORM,
+        "globe" => GLOBE,
+        "keyboard" => KEYBOARD,
+        "check-square" => CHECK_SQUARE,
+        "sliders-horizontal" => SLIDERS_HORIZONTAL,
+        "text-align-left" => TEXT_ALIGN_LEFT,
+        "list-checks" => LIST_CHECKS,
+        "pencil-simple" => PENCIL_SIMPLE,
+        _ => GEAR,
     }
 }
 

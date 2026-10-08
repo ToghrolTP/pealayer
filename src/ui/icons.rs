@@ -290,7 +290,7 @@ pub fn searchable_icon_picker_contents(
                     .max(70.0);
             let search_response = ui.add_sized(
                 [search_width, ui.spacing().interact_size.y],
-                egui::TextEdit::singleline(search)
+                crate::ui::dialog::singleline_text_edit(search)
                     .id_salt(search_id.with("input"))
                     .hint_text(config.search_hint)
                     .desired_width(search_width),

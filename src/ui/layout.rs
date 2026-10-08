@@ -5631,7 +5631,7 @@ fn draw_rf_code_tool(app: &mut PealayerApp, ui: &mut egui::Ui) {
     board_tool_card(ui, crate::ui::icons::RADIO, &app.tr("RF code"), |ui| {
         let response = ui.add_sized(
             [ui.available_width(), 28.0],
-            egui::TextEdit::singleline(&mut code)
+            crate::ui::dialog::singleline_text_edit(&mut code)
                 .hint_text("0x12AB34")
                 .font(egui::TextStyle::Monospace),
         );
@@ -5802,7 +5802,7 @@ fn draw_compact_control_card(
                     let edit_width = (ui.available_width() * 0.42).clamp(64.0, 190.0);
                     let edit = ui.add_sized(
                         [edit_width, 24.0],
-                        egui::TextEdit::singleline(&mut draft)
+                        crate::ui::dialog::singleline_text_edit(&mut draft)
                             .id(text_edit_id)
                             .horizontal_align(edit_align)
                             .hint_text(&control.default_name),
@@ -6127,7 +6127,7 @@ fn draw_control_card(
                                     edit_response = Some(
                                         ui.add_sized(
                                             [width, 24.0],
-                                            egui::TextEdit::singleline(&mut draft)
+                                            crate::ui::dialog::singleline_text_edit(&mut draft)
                                                 .id(text_edit_id)
                                                 .horizontal_align(edit_align)
                                                 .hint_text(&control.default_name),
@@ -11206,7 +11206,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             );
                                             let name_editor = ui.add_sized(
                                                 [ui.available_width(), 26.0],
-                                                egui::TextEdit::singleline(&mut template.name)
+                                                crate::ui::dialog::singleline_text_edit(&mut template.name)
                                                     .horizontal_align(name_align),
                                             );
                                             if name_editor.gained_focus() {
@@ -11978,7 +11978,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 &self.app.effects_search_query,
                             );
                             let res = ui.add(
-                                egui::TextEdit::singleline(&mut self.app.effects_search_query)
+                                crate::ui::dialog::singleline_text_edit(&mut self.app.effects_search_query)
                                     .horizontal_align(search_align)
                                     .hint_text(search_hint)
                                     .desired_width(ui.available_width())
@@ -12280,7 +12280,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                     );
                                                                     let name_response = ui.add_sized(
                                                                         [name_width, 24.0],
-                                                                        egui::TextEdit::singleline(&mut edit.name)
+                                                                        crate::ui::dialog::singleline_text_edit(&mut edit.name)
                                                                             .id(item_id.with("inline-name"))
                                                                             .horizontal_align(name_align)
                                                                             .char_limit(64),
@@ -12531,7 +12531,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 &draft.name,
                                             );
                                             let name_response = ui.add(
-                                                egui::TextEdit::singleline(&mut draft.name)
+                                                crate::ui::dialog::singleline_text_edit(&mut draft.name)
                                                     .horizontal_align(name_align)
                                                     .desired_width(250.0),
                                             );
@@ -13294,7 +13294,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 });
                                 let filter_response = header_ui.add_sized(
                                     [158.0, 22.0],
-                                    egui::TextEdit::singleline(&mut timeline_track_filter)
+                                    crate::ui::dialog::singleline_text_edit(&mut timeline_track_filter)
                                         .hint_text(self.app.tr("Tracks"))
                                         .frame(egui::Frame::NONE)
                                         .margin(egui::Margin::symmetric(4, 2)),
@@ -13493,7 +13493,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 });
                                                 let edit = ui.add_sized(
                                                     [label_width, timeline_track_height],
-                                                    egui::TextEdit::singleline(&mut draft),
+                                                    crate::ui::dialog::singleline_text_edit(&mut draft),
                                                 );
                                                 let focus = ui.ctx().data_mut(|data| {
                                                     data.get_temp::<bool>(rename_focus_id)
@@ -14082,7 +14082,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 });
                                                 let edit = ui.add_sized(
                                                     [88.0, 22.0],
-                                                    egui::TextEdit::singleline(&mut draft),
+                                                    crate::ui::dialog::singleline_text_edit(&mut draft),
                                                 );
                                                 let focus = ui.ctx().data_mut(|data| {
                                                     data.get_temp::<bool>(rename_focus_id)

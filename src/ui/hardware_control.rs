@@ -917,7 +917,7 @@ fn manager_channel_name(
                         (width - 2.0 * (MANAGER_NAME_ACTION_WIDTH + MANAGER_NAME_GAP)).max(1.0);
                     let edit = ui.add_sized(
                         [input_width, MANAGER_NAME_HEIGHT],
-                        egui::TextEdit::singleline(draft)
+                        crate::ui::dialog::singleline_text_edit(draft)
                             .id(input_id)
                             .font(egui::FontId::proportional(MANAGER_NAME_FONT_SIZE))
                             .margin(egui::Margin::symmetric(4, 0))
@@ -1429,7 +1429,7 @@ fn draw_channel_manager_page(
                                     }
                                     ui.add_sized(
                                         [42.0, 25.0],
-                                        egui::TextEdit::singleline(&mut order_draft)
+                                        crate::ui::dialog::singleline_text_edit(&mut order_draft)
                                             .id(order_edit_id)
                                             .horizontal_align(egui::Align::Center)
                                             .vertical_align(egui::Align::Center)
@@ -2670,7 +2670,7 @@ fn draw_channel_detail_page(
                                     );
                                     ui.add_sized(
                                         [field_width, 28.0],
-                                        egui::TextEdit::singleline(
+                                        crate::ui::dialog::singleline_text_edit(
                                             &mut app.hardware_control_name_draft,
                                         )
                                         .horizontal_align(align),

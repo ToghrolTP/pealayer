@@ -12,6 +12,12 @@ const ACTION_BUTTON_WIDTH: f32 = 104.0;
 const CONTROL_CORNER_RADIUS: f32 = 7.0;
 const CONTROL_TEXT_SIZE: f32 = 13.0;
 
+/// Single-line input text stays centered when its row supplies extra height.
+/// Multiline/wrapped editors intentionally keep TextEdit's top alignment.
+pub fn singleline_text_edit(text: &mut dyn egui::TextBuffer) -> egui::TextEdit<'_> {
+    egui::TextEdit::singleline(text).vertical_align(egui::Align::Center)
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DialogHost {
     Embedded,
@@ -312,6 +318,19 @@ pub fn escape_pressed(ctx: &egui::Context) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn single_line_text_is_centered_in_a_tall_input() {
+        let ctx = egui::Context::default();
+        let mut text = "Center me".to_owned();
+        let mut frame = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let output = singleline_text_edit(&mut text).min_size(egui::vec2(200.0, 46.0)).show(ui);
+            let text_center = output.galley_pos.y + output.galley.size().y * 0.5;
+            assert!((text_center - output.response.rect.center().y).abs() <= 1.0);
+            let wrapped = egui::TextEdit::multiline(&mut text).min_size(egui::vec2(200.0, 80.0)).show(ui);
+            assert!(wrapped.galley_pos.y + wrapped.galley.size().y < wrapped.response.rect.center().y);
+        });
+        frame.textures_delta.clear();
+    }
     use super::*;
 
     #[test]

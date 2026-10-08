@@ -438,7 +438,7 @@ pub fn draw_elapsed_editor(
     // TextEdit swap used different font padding and allocation rules, which
     // made the time jump when editing began even though the outer row stayed
     // in place.
-    let editor = egui::TextEdit::singleline(buffer)
+    let editor = crate::ui::dialog::singleline_text_edit(buffer)
         .id(edit_id)
         .font(egui::TextStyle::Monospace)
         .horizontal_align(egui::Align::Center)

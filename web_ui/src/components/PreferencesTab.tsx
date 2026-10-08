@@ -14,7 +14,6 @@ import {
 import { FujiLoader } from './FujiLoader';
 import {
   BgColorsOutlined,
-  BarsOutlined,
   CheckOutlined,
   CheckSquareOutlined,
   ControlOutlined,
@@ -36,6 +35,20 @@ import {
   FileImageOutlined,
   FolderOpenOutlined,
   UndoOutlined,
+  ClockCircleOutlined,
+  TranslationOutlined,
+  PushpinOutlined,
+  ExpandOutlined,
+  AimOutlined,
+  PauseCircleOutlined,
+  StopOutlined,
+  SoundOutlined,
+  FontSizeOutlined,
+  LineChartOutlined,
+  BorderOutlined,
+  GatewayOutlined,
+  MenuOutlined,
+  KeyOutlined,
 } from '@ant-design/icons';
 import { tr } from '../i18n';
 import { mergeAppearance } from '../appearance';
@@ -65,6 +78,7 @@ interface PreferenceControl {
   group: string;
   label: string;
   kind: 'accent' | 'boolean' | 'file' | 'multi_select' | 'number' | 'replacement_list' | 'select' | 'text';
+  icon: string;
   description?: string;
   options?: PreferenceOption[];
   minimum?: number;
@@ -111,15 +125,30 @@ const sectionIcons: Record<string, React.ReactNode> = {
   advanced: <SettingOutlined />,
 };
 
-const controlIcons: Record<PreferenceControl['kind'], React.ReactNode> = {
-  accent: <BgColorsOutlined />,
-  boolean: <CheckSquareOutlined />,
-  file: <FileImageOutlined />,
-  multi_select: <GlobalOutlined />,
-  number: <ControlOutlined />,
-  replacement_list: <SwapRightOutlined />,
-  select: <BarsOutlined />,
-  text: <EditOutlined />,
+const controlIcons: Record<string, React.ReactNode> = {
+  'circle-half': <GatewayOutlined />,
+  palette: <BgColorsOutlined />,
+  swatches: <BgColorsOutlined />,
+  translate: <TranslationOutlined />,
+  'frame-corners': <BorderOutlined />,
+  'push-pin': <PushpinOutlined />,
+  'arrows-out': <ExpandOutlined />,
+  target: <AimOutlined />,
+  clock: <ClockCircleOutlined />,
+  image: <FileImageOutlined />,
+  play: <PlayCircleOutlined />,
+  pause: <PauseCircleOutlined />,
+  'stop-circle': <StopOutlined />,
+  'speaker-high': <SoundOutlined />,
+  subtitles: <FontSizeOutlined />,
+  waveform: <LineChartOutlined />,
+  globe: <GlobalOutlined />,
+  keyboard: <KeyOutlined />,
+  'check-square': <CheckSquareOutlined />,
+  'sliders-horizontal': <ControlOutlined />,
+  'text-align-left': <SwapRightOutlined />,
+  'list-checks': <MenuOutlined />,
+  'pencil-simple': <EditOutlined />,
 };
 
 const networkOptionIcon = (icon?: string) => {
@@ -257,7 +286,7 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
     const value = control.inverted ? !Boolean(stored) : stored;
     const commonLabel = (
       <span className="preference-control__label">
-        {controlIcons[control.kind]}
+        {controlIcons[control.icon]}
         <span>{tr(locale, control.label)}</span>
       </span>
     );

@@ -5,6 +5,15 @@ the Web application. Non-contiguous controls in the same group produce one card,
 not repeated cards. Identical help text is retained only once within a group.
 Distinct, useful descriptions and all existing settings remain available.
 
+Each control carries a semantic icon name in the shared contract. Theme,
+palette, language, fullscreen background, window pinning and OSD placement no
+longer inherit the same list icon merely because they use dropdowns. Language
+follows Fullscreen background at the end of Interface.
+
+Single-line native inputs share `dialog::singleline_text_edit`, centering both
+text and placeholders vertically when allocated extra row height. Multiline
+and wrapped editors retain top alignment.
+
 Appearance ends with **Application icons**, a single optional disclosure. With
 no configured overrides it initially stays collapsed. Configured overrides make
 it initially open; the user can still collapse or expand it. It contains:
@@ -43,6 +52,8 @@ After deploying the exact build, verify:
 4. Advanced scrolled to its bottom: Config file is the final card.
 5. Web Preferences at phone, tablet and desktop widths in light and dark themes.
 
-Ask the user for full-window screenshots for visual acceptance; this task's user
-has requested human interaction rather than computer-control automation. Record
-installed build identity and actual screenshot results separately from tests.
+The user authorized Win32/built-in screenshot capture on 2026-10-08. Reuse
+`scripts/update-screenshots-windows.ps1` with an isolated profile, an explicit
+Preferences tab and optional image override. Do not change production settings
+just to stage a screenshot. Record build identity and inspected screenshot
+results separately from tests; a capture alone is not an installed-build claim.

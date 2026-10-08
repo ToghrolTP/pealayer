@@ -88,7 +88,7 @@ pub fn draw_connection(ui: &mut egui::Ui) {
         .show(ui.ctx(), |ui| {
             ui.label("Server");
             ui.add(
-                egui::TextEdit::singleline(&mut state.endpoint)
+                crate::ui::dialog::singleline_text_edit(&mut state.endpoint)
                     .hint_text("pealayer://host:8080")
                     .desired_width(f32::INFINITY),
             );
@@ -229,7 +229,7 @@ pub fn draw(app: &mut crate::app::PealayerApp, ui: &mut egui::Ui) {
                     reload = true;
                 }
                 let path = ui.add(
-                    egui::TextEdit::singleline(&mut state.path)
+                    crate::ui::dialog::singleline_text_edit(&mut state.path)
                         .desired_width(ui.available_width() - 44.0),
                 );
                 if path.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
@@ -244,7 +244,7 @@ pub fn draw(app: &mut crate::app::PealayerApp, ui: &mut egui::Ui) {
                 }
             });
             ui.add(
-                egui::TextEdit::singleline(&mut state.filter)
+                crate::ui::dialog::singleline_text_edit(&mut state.filter)
                     .hint_text("Filter files")
                     .desired_width(f32::INFINITY),
             );
@@ -330,7 +330,7 @@ pub fn draw(app: &mut crate::app::PealayerApp, ui: &mut egui::Ui) {
             ui.horizontal(|ui| {
                 ui.label("File");
                 ui.add(
-                    egui::TextEdit::singleline(&mut state.selected)
+                    crate::ui::dialog::singleline_text_edit(&mut state.selected)
                         .desired_width((ui.available_width() - 220.0).max(80.0)),
                 );
                 if crate::ui::dialog::action_button(ui, crate::ui::icons::X, "Cancel").clicked() {

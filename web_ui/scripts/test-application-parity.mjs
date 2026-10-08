@@ -20,6 +20,7 @@ const preferences = read('src/components/PreferencesTab.tsx');
 const filePicker = read('src/components/ServerFilePicker.tsx');
 
 const contracts = [
+  [preferences.includes('icon: string') && preferences.includes('controlIcons[control.icon]') && !preferences.includes('controlIcons[control.kind]'), 'preference row icons use semantic Rust metadata instead of input type'],
   [preferences.includes("control.kind === 'file'") && preferences.includes('<ServerFilePicker') && preferences.includes('FolderOpenOutlined'), 'file preferences expose a real Browse action'],
   [preferences.includes('contract?.groups.filter') && preferences.includes('group.default_open') && preferences.includes('<Collapse'), 'preference cards use shared ordering and optional disclosure'],
   [filePicker.includes('/api/fs/browse') && filePicker.includes('AbortController') && filePicker.includes('setDirectory(null)'), 'preference file picker browses authoritative server files without stale failed listings'],
