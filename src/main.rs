@@ -1,28 +1,8 @@
 #![windows_subsystem = "windows"]
 
-pub mod app;
-pub mod application_shortcuts;
-pub mod branding;
-pub mod cli;
-pub mod config;
-pub mod diagnostics;
-pub mod duration;
-pub mod four_d;
-pub mod hardware_shortcuts;
-pub mod media;
-pub mod media_info;
-pub mod messaging;
-pub mod mpv;
-pub mod network;
-pub mod peer;
-pub mod process_control;
-pub mod platform;
-pub mod preferences_contract;
-pub mod remote_location;
-pub mod server;
-pub mod subtitle;
-pub mod ui;
-pub mod update;
+// One contract and one set of process globals. Redeclaring library modules here
+// compiles the application twice and runs its unit suite in two distinct crates.
+pub use pealayer::*;
 
 use app::PealayerApp;
 use eframe::egui;

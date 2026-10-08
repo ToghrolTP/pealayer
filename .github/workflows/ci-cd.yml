@@ -55,6 +55,8 @@ jobs:
         run: npm ci --prefix web_ui --ignore-scripts --no-audit --no-fund
       - name: "🌐 Type-check and build the web UI"
         run: npm run build --prefix web_ui
+      - name: "🦀 Verify shared library and executable boundary"
+        run: node scripts/check-crate-boundary.mjs
       - name: "🐹 Install Go for actionlint"
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
