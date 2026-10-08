@@ -250,19 +250,15 @@ fn emit_build_metadata() {
         "cargo:rustc-env=PEALAYER_SOURCE_DATE_EPOCH={}",
         std::env::var("SOURCE_DATE_EPOCH").unwrap_or_else(|_| "not supplied".to_string())
     );
-    println!("cargo:rerun-if-changed=.git/HEAD");
-    if let Some(git_dir) = git_output(&["rev-parse", "--git-dir"]) {
-        let head = std::fs::read_to_string(std::path::Path::new(&git_dir).join("HEAD")).ok();
-        if let Some(reference) = head.and_then(|value| {
-            value
-                .strip_prefix("ref: ")
-                .map(str::trim)
-                .map(str::to_string)
-        }) {
-            println!(
-                "cargo:rerun-if-changed={}",
-                std::path::Path::new(&git_dir).join(reference).display()
-            );
+    // Linked worktrees keep HEAD/index locally but branch refs in the common
+    // Git directory. Joining a ref onto --git-dir watches a nonexistent file.
+    let mut git_paths = vec!["HEAD".to_string(), "index".to_string(), "packed-refs".to_string()];
+    if let Some(reference) = git_output(&["symbolic-ref", "-q", "HEAD"]) {
+        git_paths.push(reference);
+    }
+    for path in git_paths {
+        if let Some(resolved) = git_output(&["rev-parse", "--git-path", &path]) {
+            println!("cargo:rerun-if-changed={resolved}");
         }
     }
 }

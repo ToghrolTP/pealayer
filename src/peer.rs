@@ -227,6 +227,8 @@ pub fn take_gui_requests() -> Vec<GuiRequest> {
 struct ServerResources {
     engine: mpsc::Sender<crate::four_d::engine::EngineMessage>,
     capabilities: Arc<Mutex<Option<crate::four_d::controller::HardwareCapabilities>>>,
+    media_playback: Arc<Mutex<crate::four_d::media_sync::PlaybackSample>>,
+    media_clock_owned: Arc<std::sync::atomic::AtomicBool>,
     mpv: &'static libmpv2::Mpv,
     context: eframe::egui::Context,
 }
@@ -238,9 +240,27 @@ pub fn register_server(
     let _ = SERVER.set(ServerResources {
         engine: engine.sender.clone(),
         capabilities: engine.hardware_capabilities.clone(),
+        media_playback: engine.media_playback.clone(),
+        media_clock_owned: engine.media_clock_owned.clone(),
         mpv,
         context,
     });
+}
+/// Direct observer health, independent of a cached UI snapshot. No media paths
+/// or user-supplied titles are included in process diagnostics.
+pub fn playback_clock_diagnostics() -> Value {
+    let Some(server) = SERVER.get() else { return Value::Null };
+    match server.media_playback.try_lock() {
+        Ok(sample) => serde_json::json!({
+            "observer_owned": server.media_clock_owned.load(std::sync::atomic::Ordering::Acquire),
+            "identity_ready": !sample.name.is_empty(), "loaded": sample.loaded,
+            "position_ms": sample.position_ms, "playing": sample.playing,
+            "buffering": sample.buffering, "epoch": sample.epoch,
+            "sample_age_ms": sample.observed_at.elapsed().as_millis() as u64,
+        }),
+        Err(std::sync::TryLockError::WouldBlock) => serde_json::json!({"state":"busy"}),
+        Err(std::sync::TryLockError::Poisoned(_)) => serde_json::json!({"state":"unavailable"}),
+    }
 }
 pub fn server_session() -> Result<Session, String> {
     let server = SERVER.get().ok_or("Pealayer session is initializing")?;

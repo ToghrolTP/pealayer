@@ -26,6 +26,13 @@ if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
 
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'libmpv-windows.ps1')
+$packageCommit = (& git -C $repositoryRoot rev-parse HEAD).Trim()
+if ($LASTEXITCODE -ne 0 -or !$packageCommit) { throw 'Cannot identify package source.' }
+if (& git -C $repositoryRoot status --porcelain) { throw 'Commit or preserve local changes before packaging a production build.' }
+# Pin the existing build-metadata contract, invalidating stale shared-cache
+# metadata even when the worktree commit changed without a source-file change.
+$env:GITHUB_SHA = $packageCommit
+$env:GITHUB_REF_NAME = (& git -C $repositoryRoot rev-parse --abbrev-ref HEAD).Trim()
 if ($Branding) {
     $resolvedBranding = (Resolve-Path -LiteralPath $Branding -ErrorAction Stop).Path
     $brandDocument = Get-Content -Raw -LiteralPath $resolvedBranding | ConvertFrom-Json
@@ -157,6 +164,17 @@ $env:Path = $stagingDirectory + ';' + $libmpvDirectory + ';' + $env:Path
 $smoke = Start-Process -FilePath $stagedExecutable -ArgumentList '--smoke-test' -WorkingDirectory $stagingDirectory -Wait -PassThru
 if ($smoke.ExitCode -ne 0) { throw "Packaged Pealayer/libmpv smoke test failed with exit code $($smoke.ExitCode)" }
 
+$identityOutput = Join-Path $stagingDirectory 'build-identity.json'
+$identityProcess = Start-Process -FilePath $stagedExecutable -ArgumentList '--build-info' -WorkingDirectory $stagingDirectory -WindowStyle Hidden -RedirectStandardOutput $identityOutput -Wait -PassThru
+if ($identityProcess.ExitCode -ne 0) { throw 'Cannot inspect the packaged executable build identity.' }
+$embeddedIdentity = Get-Content -Raw -LiteralPath $identityOutput | ConvertFrom-Json
+if ($embeddedIdentity.commit -ne $packageCommit -or $embeddedIdentity.dirty) {
+    throw 'Embedded executable identity does not match clean package source; refusing publication.'
+}
+if ((& git -C $repositoryRoot rev-parse HEAD).Trim() -ne $packageCommit -or (& git -C $repositoryRoot status --porcelain)) {
+    throw 'Package source changed during the build; refusing publication.'
+}
+
 Copy-Item -LiteralPath $stagedExecutable -Destination $outputDirectory -Force
 Copy-PealayerLibmpvRuntime -RuntimeLibrary $stagedRuntime -DestinationDirectory $outputDirectory
 $fontSource = Join-Path $repositoryRoot 'assets\fonts\Vazirmatn-Regular.ttf'
@@ -198,8 +216,8 @@ $artifacts = @($effectiveExecutableFile,'libmpv-2.dll','mpv-2.dll','assets/fonts
 $manifest = [ordered]@{
     format = 'pealayer-windows-package'
     version = $resource.ProductVersion
-    git_commit = (& git -C $repositoryRoot rev-parse HEAD).Trim()
-    git_dirty = [bool](& git -C $repositoryRoot status --porcelain)
+    git_commit = $embeddedIdentity.commit
+    git_dirty = $embeddedIdentity.dirty
     built_at_utc = [DateTime]::UtcNow.ToString('o')
     target = (& rustc -vV | Select-String '^host:' | ForEach-Object { $_.Line.Substring(5).Trim() })
     build_host = [ordered]@{

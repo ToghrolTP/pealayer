@@ -37,12 +37,31 @@ own ephemeral listeners instead of fixed ports that could hit a running app.
 The extra logic fix needs its own test/package/deployment proof; the preceding
 green checkpoint must not be substituted for that proof.
 
-PCController's existing owner is implementing the real delayed-auto-start SCM
-service and separating dispatch, board ACK and total cue lateness. The 50 ms
-safety limit is unchanged; dispatch consumes that same budget. Root owns
-Pealayer verification/deployment. Do not deploy a competing controller or call
-an interactive recovery task a startup service. Live SCM restart, sole board
-ownership, preserved user data, and restored media clock are acceptance gates.
+PCController's owner completed the delayed-auto-start SCM service in merged
+PRs #610/#611, including the owned-data-root correction. Cafe's `PCController`
+service runs as `NT SERVICE\\PCController`, survives restart, owns the board,
+and has verified flash/EEPROM readback with settings preserved. Dispatch, board
+ACK and total cue lateness are separated; dispatch consumes the same 50 ms
+safety budget. Do not deploy a competing controller or call an interactive
+recovery task a startup service. The coordinated Pealayer reconnect test is
+still pending; keep the live SCM restart deferred until the media clock arms.
+
+Current Pealayer native release library verification passed 647 tests. Cafe's
+peer update replaced/restarted its canonical executable, but the embedded
+commit lagged behind the package manifest. Linked-worktree Git ref watches and
+package-time embedded-identity validation now guard that provenance boundary;
+`--build-info` prints identity without starting a player. The next clean package
+must prove this gate, not reuse the stale manifest as source verification.
+
+Live diagnostics further separated two faults: an API seek reaches actual
+libmpv, while the pending zero-position commit can leave UI time stale; a
+one-second seek settles correctly. Independently, the hardware clock remains
+unarmed. Process-local observer diagnostics expose loaded/playing/buffering,
+epoch and sample age without media paths, so this can be traced without
+restarting or actuating outputs. No temporary test cue or relay actuation has
+occurred in this baseline. The Windows GNU access violation was not reproduced
+by the controller owner: its exact PWA icon test and complete 647-test binary
+suite passed. Fresh CI is required; do not skip the failing test.
 
 ## Recent requests reconciled
 
