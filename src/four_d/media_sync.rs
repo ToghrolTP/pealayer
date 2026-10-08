@@ -71,6 +71,34 @@ fn handoff_pause_acknowledged(sample: &PlaybackSample, valid_echo: bool) -> bool
         && sample.observed_at.elapsed() < Duration::from_millis(250)
 }
 
+#[derive(Default)]
+struct AutomaticClaim {
+    attempted: bool,
+    owner: Option<String>,
+}
+impl AutomaticClaim {
+    fn should_request(&mut self, loaded: bool, status: &super::authority::Status) -> bool {
+        if self.owner.as_ref().is_some_and(|owner| !owner.is_empty()) && status.owner_id.is_empty() {
+            self.attempted = false;
+        }
+        self.owner = Some(status.owner_id.clone());
+        if !loaded || self.attempted { return false; }
+        self.attempted = true;
+        // Never take over an existing owner automatically, even after reconnect.
+        status.owner_id.is_empty()
+    }
+}
+
+fn invalidate_coordinator_session(plan: &mut super::media_timeline::PreparedTimeline) {
+    if plan.has_items() { plan.revision = plan.revision.saturating_add(1); }
+    plan.acknowledged_revision = 0;
+    plan.clock_ack_revision = 0;
+    plan.clock_ack_epoch = 0;
+    plan.last_ack = None;
+    plan.feedback = serde_json::Value::Null;
+    plan.play_requested = false;
+}
+
 // Wake idle UI/Web consumers for semantic transitions, not for every clock echo
 // or changing ACK age. The executor/observer never waits for a repaint.
 #[derive(PartialEq)]
@@ -132,7 +160,7 @@ pub fn spawn(
         let mut preparation_retry_revision = 0_u64;
         let mut last_error = String::new();
         let mut authority_at = Instant::now()-Duration::from_secs(2);
-        let mut automatic_claim_attempted = false;
+        let mut automatic_claim = AutomaticClaim::default();
         let mut authority_ready = false;
         let mut owner_endpoint_cache: (String, Option<String>) = (String::new(), None);
         let mut owner_endpoint_at = Instant::now() - Duration::from_secs(10);
@@ -182,6 +210,9 @@ pub fn spawn(
                         active_endpoint = requested_endpoint;
                         reported_at = Instant::now();
                         previous = None;
+                        authority_ready = false;
+                        authority_at = Instant::now() - Duration::from_secs(2);
+                        automatic_claim = AutomaticClaim::default();
                     }
                     Err(error) => {
                         if error != last_error {
@@ -200,11 +231,25 @@ pub fn spawn(
                     match result {
                         Ok(mut status)=>{
                             authority_ready = true;
-                            if !automatic_claim_attempted && current.loaded {
-                                automatic_claim_attempted=true;
-                                if status.owner_id.is_empty() {
-                                    if let Ok(value)=rpc.call("controller.media.authority.change",json!({"client_id":id,"operation":"request"})) {
+                            if automatic_claim.should_request(current.loaded, &status) {
+                                match rpc.call_detailed("controller.media.authority.change",json!({"client_id":id,"operation":"request"})) {
+                                    Ok(value) => {
                                         if let Ok(updated)=serde_json::from_value(value){status=updated;}
+                                    }
+                                    Err(error) => {
+                                        if let Ok(mut plan)=timeline.lock() {
+                                            if error.transport_failed { invalidate_coordinator_session(&mut plan); }
+                                            plan.error=Some(format!("Publishing claim failed: {error}"));
+                                            plan.play_requested=false;
+                                        }
+                                        if error.transport_failed {
+                                            // Claim outcome is unknown. Reconnect, read authority
+                                            // first, and never replay an output or handoff accept.
+                                            client=None;
+                                            authority_ready=false;
+                                            retry_at=Instant::now()+Duration::from_secs(2);
+                                            continue;
+                                        }
                                     }
                                 }
                             }
@@ -226,8 +271,16 @@ pub fn spawn(
                         }
                         Err(error)=>{
                             authority_ready = false;
-                            if let Ok(mut plan)=timeline.lock(){plan.error=Some(format!("Publishing authority unavailable: {error}"));plan.play_requested=false;}
-                            std::thread::sleep(Duration::from_millis(100));continue;
+                            if let Ok(mut plan)=timeline.lock(){
+                                invalidate_coordinator_session(&mut plan);
+                                plan.error=Some(format!("Publishing authority unavailable: {error}"));
+                            }
+                            // A failed query cannot leave a dead socket pinned forever.
+                            // The new stream queries authority before preparing or sending.
+                            client=None;
+                            previous=None;
+                            retry_at=Instant::now()+Duration::from_secs(2);
+                            continue;
                         }
                     }
                 }
@@ -469,6 +522,50 @@ fn identity(id: &str, name: &str) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn automatic_claim_recovers_after_release_or_reconnect_without_taking_an_owner() {
+        let mut status = super::super::authority::Status {
+            owner_id: String::new(), owner_label: String::new(), exclusive: false,
+            revision: 1, pending: vec![], owner_endpoint: None,
+        };
+        let mut claim = AutomaticClaim::default();
+        assert!(!claim.should_request(false, &status));
+        assert!(claim.should_request(true, &status));
+        assert!(!claim.should_request(true, &status));
+        status.owner_id = "another-publisher".into();
+        assert!(!claim.should_request(true, &status));
+        let mut reconnected = AutomaticClaim::default();
+        assert!(!reconnected.should_request(true, &status));
+        status.exclusive = true;
+        assert!(!reconnected.should_request(true, &status));
+        status.owner_id.clear();
+        status.exclusive = false;
+        assert!(claim.should_request(true, &status));
+        assert!(!claim.should_request(true, &status));
+        assert!(AutomaticClaim::default().should_request(true, &status));
+    }
+
+    #[test]
+    fn failed_authority_query_invalidates_arm_and_requires_a_new_plan_revision() {
+        let mut plan = super::super::media_timeline::PreparedTimeline::default();
+        plan.revision = 7;
+        plan.acknowledged_revision = 7;
+        plan.clock_ack_revision = 7;
+        plan.clock_ack_epoch = 3;
+        plan.feedback = json!({"armed_epoch":3,"state":"playing"});
+        plan.last_ack = Some(Instant::now());
+        plan.play_requested = true;
+        assert!(plan.ready_for(3));
+        invalidate_coordinator_session(&mut plan);
+        assert_eq!(plan.revision, 8);
+        assert_eq!(plan.acknowledged_revision, 0);
+        assert_eq!(plan.clock_ack_revision, 0);
+        assert_eq!(plan.clock_ack_epoch, 0);
+        assert!(plan.last_ack.is_none());
+        assert!(!plan.play_requested);
+        assert!(!plan.ready_for(3));
+    }
+
     #[test]
     fn sync_notifications_wake_on_transitions_not_clock_echoes_and_release_locks() {
         let plan = Arc::new(Mutex::new(super::super::media_timeline::PreparedTimeline::default()));
