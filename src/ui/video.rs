@@ -656,42 +656,48 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let pseudo_tex_id = egui::Id::new("active_pseudo_frame_texture");
     let pseudo_rendered = if app.is_scrubbing {
         if let Some(pseudo_frame) = &app.active_pseudo_frame {
-            let texture = ui
-                .ctx()
-                .data_mut(|d| {
-                    d.get_temp::<PseudoFrameTextureCache>(pseudo_tex_id)
-                        .and_then(|c| c.entry)
-                        .filter(|(pts, _)| (*pts - pseudo_frame.pts).abs() < 0.001)
-                        .map(|(_, handle)| handle)
-                })
-                .unwrap_or_else(|| {
-                    let image = egui::ColorImage::from_rgba_unmultiplied(
-                        [pseudo_frame.width as usize, pseudo_frame.height as usize],
-                        &pseudo_frame.rgba,
-                    );
-                    let handle = ui.ctx().load_texture(
-                        "active-pseudo-frame",
-                        image,
-                        egui::TextureOptions::LINEAR,
-                    );
-                    ui.ctx().data_mut(|d| {
-                        d.insert_temp(
-                            pseudo_tex_id,
-                            PseudoFrameTextureCache {
-                                entry: Some((pseudo_frame.pts, handle.clone())),
-                            },
+            if pseudo_frame.rgba.len()
+                == (pseudo_frame.width as usize) * (pseudo_frame.height as usize) * 4
+            {
+                let texture = ui
+                    .ctx()
+                    .data_mut(|d| {
+                        d.get_temp::<PseudoFrameTextureCache>(pseudo_tex_id)
+                            .and_then(|c| c.entry)
+                            .filter(|(pts, _)| (*pts - pseudo_frame.pts).abs() < 0.001)
+                            .map(|(_, handle)| handle)
+                    })
+                    .unwrap_or_else(|| {
+                        let image = egui::ColorImage::from_rgba_unmultiplied(
+                            [pseudo_frame.width as usize, pseudo_frame.height as usize],
+                            &pseudo_frame.rgba,
                         );
+                        let handle = ui.ctx().load_texture(
+                            "active-pseudo-frame",
+                            image,
+                            egui::TextureOptions::LINEAR,
+                        );
+                        ui.ctx().data_mut(|d| {
+                            d.insert_temp(
+                                pseudo_tex_id,
+                                PseudoFrameTextureCache {
+                                    entry: Some((pseudo_frame.pts, handle.clone())),
+                                },
+                            );
+                        });
+                        handle
                     });
-                    handle
-                });
 
-            ui.painter().image(
-                texture.id(),
-                dest_rect,
-                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                egui::Color32::WHITE,
-            );
-            true
+                ui.painter().image(
+                    texture.id(),
+                    dest_rect,
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    egui::Color32::WHITE,
+                );
+                true
+            } else {
+                false
+            }
         } else {
             false
         }
@@ -702,15 +708,13 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         false
     };
 
-    if !pseudo_rendered {
-        if let Some(texture_id) = texture_id_opt {
-            ui.painter().image(
-                texture_id,
-                dest_rect,
-                egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
-                egui::Color32::WHITE,
-            );
-        }
+    if !pseudo_rendered && let Some(texture_id) = texture_id_opt {
+        ui.painter().image(
+            texture_id,
+            dest_rect,
+            egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+            egui::Color32::WHITE,
+        );
     }
 
     // 2.5 Draw OSD overlay if active
