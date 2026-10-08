@@ -1450,7 +1450,7 @@ fn validate_journal(journal: &UpdateJournal, supplied_path: &Path) -> Result<(),
     Ok(())
 }
 
-fn wait_for_parent_exit(pid: u32, timeout: Duration) -> Result<(), String> {
+pub(crate) fn wait_for_parent_exit(pid: u32, timeout: Duration) -> Result<(), String> {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         if !process_is_running(pid) {

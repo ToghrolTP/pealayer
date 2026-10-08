@@ -408,7 +408,7 @@ fn handle_connection(mut stream: TcpStream, state: ControlState) {
             Ok(request) if !browser_origin_allowed(&request.headers, stream.local_addr().ok()) => {
                 HttpResponse::text(403, "Forbidden", "Browser origin is not permitted")
             }
-            Ok(request) if crate::peer::active() && peer_relay_route(&request.target) => {
+            Ok(request) if crate::peer::active() && peer_relay_route(&request.target) && !local_process_payload(&request.body) => {
                 let _ = proxy_http(&request, &mut stream);
                 return;
             }
@@ -438,6 +438,18 @@ fn peer_relay_route(target: &str) -> bool {
     // inspecting this consumer are process-local, never updates of its server.
     path.starts_with("/api/") && path != "/api/client/status"
         && !path.starts_with("/api/update/")
+        && !path.starts_with("/api/process/")
+}
+
+fn local_process_payload(body: &[u8]) -> bool {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) else { return false; };
+    // Invalid parameters still belong to this process and must receive its
+    // validation error, not be sent to the authority by the gateway.
+    if let Some(method) = value.get("method").and_then(serde_json::Value::as_str) {
+        return matches!(method, "pealayer.process.status" | "pealayer.process.connect" | "pealayer.process.quit");
+    }
+    serde_json::from_value::<crate::platform::interop::InteropCommand>(value)
+        .is_ok_and(|command| command.is_process_local())
 }
 
 fn handle_websocket(stream: TcpStream, state: ControlState) {
@@ -505,6 +517,12 @@ fn handle_websocket(stream: TcpStream, state: ControlState) {
 }
 
 fn handle_websocket_text(state: &ControlState, text: &str) -> Option<String> {
+    if local_process_payload(text.as_bytes()) {
+        if !crate::platform::interop::get_live_config().web_allow_control {
+            return Some(crate::platform::interop::format_interop_error(None, -32003, "Web control permission is disabled"));
+        }
+        return Some(dispatch_ipc_payload(state, text));
+    }
     if let Some(client) = crate::peer::client() {
         let value = match serde_json::from_str::<serde_json::Value>(text) {
             Ok(value) => value,
@@ -736,6 +754,16 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
             }
         }
         ("GET", "/api/client/status")=>HttpResponse::json(200,"OK",crate::peer::diagnostics().to_string()),
+        ("GET", "/api/process/status")=>HttpResponse::json(200,"OK",crate::process_control::status().to_string()),
+        ("POST", "/api/process/command") => {
+            if !std::str::from_utf8(&request.body).ok()
+                .and_then(|payload|crate::platform::interop::parse_interop_request(payload).ok())
+                .is_some_and(|(_,command)|command.is_process_local()) {
+                HttpResponse::text(400, "Bad Request", "A validated process-local command is required")
+            } else {
+                HttpResponse::json(200, "OK", dispatch_ipc_payload(state, &String::from_utf8_lossy(&request.body)))
+            }
+        }
         ("POST", "/api/peer/media") => peer_result(serde_json::from_slice(&request.body).map_err(|error|error.to_string()).and_then(crate::peer::apply_media_operation).map(|_|serde_json::json!({"accepted":true}))),
         ("POST", "/api/peer/controller") => {
             let result = serde_json::from_slice::<serde_json::Value>(&request.body).map_err(|error|error.to_string()).and_then(|value| {
@@ -949,6 +977,7 @@ fn denied_web_capability(
             | ("DELETE", "/api/osd")
             | ("POST", "/api/player/command")
             | ("POST", "/api/ipc")
+            | ("POST", "/api/process/command")
     );
     let file_route = path.starts_with("/api/fs/") || path.starts_with("/api/remote/") || matches!(path,"/api/peer/files"|"/api/peer/open")
         || matches!(path, "/api/player/frame" | "/api/player/seek-thumbnail"
@@ -1162,6 +1191,10 @@ fn pwa_manifest_response(state: &ControlState) -> HttpResponse {
 }
 
 fn json_rpc_response(body: &[u8], state: &ControlState) -> HttpResponse {
+    if local_process_payload(body) {
+        if !crate::platform::interop::get_live_config().web_allow_control { return permission_denied("control"); }
+        return HttpResponse::json(200, "OK", dispatch_ipc_payload(state, &String::from_utf8_lossy(body)));
+    }
     let response = match serde_json::from_slice::<crate::platform::interop::JsonRpcRequest>(body) {
         Ok(request)
             if matches!(
@@ -1258,6 +1291,10 @@ fn config_update_response(body: &[u8], state: &ControlState) -> HttpResponse {
 }
 
 fn player_command_response(body: &[u8], state: &ControlState) -> HttpResponse {
+    if local_process_payload(body) {
+        if !crate::platform::interop::get_live_config().web_allow_control { return permission_denied("control"); }
+        return HttpResponse::json(200, "OK", dispatch_ipc_payload(state, &String::from_utf8_lossy(body)));
+    }
     match parse_player_command(body) {
         Ok(command) if remote_command_permission(&command).is_some() => permission_denied("host file access"),
         Ok(command) => match command.validate() {
@@ -1370,9 +1407,7 @@ fn dispatch_ipc_payload(state: &ControlState, payload: &str) -> String {
         Err(error) => return crate::platform::interop::format_interop_error(None, -32600, &error),
     };
     if let Some(error) = remote_command_permission(&command) { return crate::platform::interop::format_interop_error(id, -32003, error); }
-    if matches!(command, InteropCommand::GetStatus) {
-        let value = serde_json::to_value(crate::platform::interop::get_live_status())
-            .unwrap_or_else(|_| serde_json::json!({"status":"initializing"}));
+    if let Some(value) = command.query_result() {
         return crate::platform::interop::format_interop_response(id, &value);
     }
 
@@ -1658,8 +1693,53 @@ mod tests {
         for target in ["/api/config", "/api/player/command", "/api/rpc", "/api/peer/session", "/api/fs/file?path=media"] {
             assert!(super::peer_relay_route(target), "{target}");
         }
+        for target in ["/api/process/status", "/api/process/command"] {
+            assert!(!super::peer_relay_route(target));
+        }
     }
     use super::*;
+
+    #[test]
+    fn process_lifecycle_uses_one_contract_across_rpc_ipc_http_and_websocket() {
+        use crate::platform::interop::InteropCommand;
+        let (tx, rx) = channel();
+        let state = ControlState {
+            command_tx:tx, latest_status:Arc::new(Mutex::new(None)),
+            websocket_clients:Arc::new(Mutex::new(vec![])), egui_ctx:eframe::egui::Context::default(),
+            runtime_config_json:"{}".into(), web_dist_root:std::path::PathBuf::new(),
+            launch_receipts:Arc::new(Mutex::new(LaunchReceiptCache::default())),
+            application_identity:"Pealayer".into(), expected_session_id:None,
+        };
+        let query=r#"{"jsonrpc":"2.0","id":1,"method":"pealayer.process.status"}"#;
+        assert!(local_process_payload(query.as_bytes()));
+        let response:serde_json::Value=serde_json::from_str(&dispatch_ipc_payload(&state,query)).unwrap();
+        assert_eq!(response["result"]["process_id"],std::process::id());
+        assert!(rx.try_recv().is_err());
+        assert!(handle_websocket_text(&state,query).unwrap().contains("process_id"));
+        for response in [json_rpc_response(query.as_bytes(),&state),player_command_response(query.as_bytes(),&state)] {
+            assert_eq!(response.status,200);
+            let value:serde_json::Value=serde_json::from_slice(&response.body).unwrap();
+            assert_eq!(value["result"]["process_id"],std::process::id());
+        }
+        let quit=r#"{"jsonrpc":"2.0","id":2,"method":"pealayer.process.quit"}"#;
+        assert!(dispatch_ipc_payload(&state,quit).contains("accepted"));
+        assert_eq!(rx.try_recv().unwrap(),InteropCommand::QuitLocal);
+        let connect=serde_json::json!({"jsonrpc":"2.0","id":3,"method":"pealayer.process.connect", "params":{
+            "operation_id":uuid::Uuid::new_v4().to_string(),"endpoint":"pealayer://publisher.example:8080","client_port":8081
+        }}).to_string();
+        assert!(local_process_payload(connect.as_bytes()));
+        assert!(dispatch_ipc_payload(&state,&connect).contains("accepted"));
+        assert!(matches!(rx.try_recv().unwrap(),InteropCommand::ConnectPeer{..}));
+        assert!(!local_process_payload(br#"{"command":"quit"}"#));
+        assert!(!local_process_payload(br#"{"command":"play"}"#));
+        let invalid=r#"{"jsonrpc":"2.0","id":4,"method":"pealayer.process.connect","params":{}}"#;
+        assert!(local_process_payload(invalid.as_bytes()));
+        assert!(dispatch_ipc_payload(&state,invalid).contains("error"));
+        assert!(rx.try_recv().is_err());
+        let restricted=crate::config::AppConfig{web_allow_control:false,..Default::default()};
+        assert_eq!(denied_web_capability("POST","/api/process/command",&restricted),Some("control"));
+        assert_eq!(denied_web_capability("GET","/api/process/status",&restricted),None);
+    }
 
     #[test]
     fn browser_origins_must_match_listener_host_and_cannot_rebind() {

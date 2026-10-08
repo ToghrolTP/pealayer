@@ -56,6 +56,9 @@ impl LaunchRequest {
             return Err("launch request must not contain more than 64 commands".to_string());
         }
         for command in &self.commands {
+            if command.is_process_local() {
+                return Err("Process lifecycle commands must be sent individually, not in a session launch".into());
+            }
             if matches!(command, InteropCommand::Launch { .. }) {
                 return Err("launch request must not contain a nested launch command".to_string());
             }
@@ -198,9 +201,13 @@ pub enum InteropCommand {
     },
     HideOsd,
     Quit,
-    /// Internal updater lifecycle: close this process, never its remote authority.
-    #[serde(skip)]
+    /// Process-local lifecycle: close this process, never its remote authority.
     QuitLocal,
+    GetProcessStatus,
+    ConnectPeer {
+        #[serde(flatten)]
+        request: crate::process_control::ConnectRequest,
+    },
     SetWorkspace {
         profile: String,
     },
@@ -495,8 +502,22 @@ fn valid_timeline_track_key(value: &str) -> bool {
 }
 
 impl InteropCommand {
+    pub fn is_process_local(&self) -> bool {
+        matches!(self, Self::QuitLocal | Self::GetProcessStatus | Self::ConnectPeer { .. })
+    }
+
+    pub fn query_result(&self) -> Option<Value> {
+        match self {
+            Self::GetStatus => Some(serde_json::to_value(get_live_status())
+                .unwrap_or_else(|_| serde_json::json!({"status":"initializing"}))),
+            Self::GetProcessStatus => Some(crate::process_control::status()),
+            _ => None,
+        }
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         match self {
+            Self::ConnectPeer { request } => request.validate(),
             Self::RfControl { operation, params } => {
                 if !crate::ui::rf::OPERATIONS.contains(&operation.as_str()) || !params.is_object() || params.to_string().len() > 32768 {
                     Err("Invalid RF operation or parameters".to_string())
@@ -776,6 +797,7 @@ pub fn command_catalog() -> Value {
     serde_json::json!({
         "contract": "pealayer.control",
         "transports": ["native", "http", "json-rpc", "websocket"],
+        "process": { "status": "/api/process/status", "command": "/api/process/command", "methods": ["pealayer.process.status", "pealayer.process.connect", "pealayer.process.quit"], "scope": "local process, never relayed to authority", "connect": "validated, idempotent, graceful restart; poll local status after reconnect" },
         "messaging": { "contract": "pealayer.messages.v1", "snapshot": "/api/messages", "subscription": "/ws", "publish": "pealayer.toast.show", "dismiss": "pealayer.toast.dismiss", "state": "pealayer.messages.state", "surfaces": ["egui", "web", "terminal"], "persistent_timeout_ms": 0 },
         "remote_folders": { "browse": "pealayer.remote.browse", "select": "pealayer.remote.select", "sort": "pealayer.remote.sort", "close": "pealayer.remote.close", "state": "/api/remote/state", "thumbnail": "/api/remote/thumbnail", "subscription": "/ws" },
         "commands": [
@@ -1565,6 +1587,11 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
             .ok_or_else(|| format!("missing string parameter: {}", names.join(" or ")))
     };
     let command = match request.method.as_str() {
+        "pealayer.process.status" => Some(InteropCommand::GetProcessStatus),
+        "pealayer.process.quit" => Some(InteropCommand::QuitLocal),
+        "pealayer.process.connect" => Some(InteropCommand::ConnectPeer {
+            request: serde_json::from_value(request.params.clone()).map_err(|error|error.to_string())?,
+        }),
         "pealayer.rf" | "rf_control" => Some(InteropCommand::RfControl { operation: string(&["operation"])?, params: request.params.get("params").cloned().unwrap_or_else(||serde_json::json!({})) }),
         "pealayer.rf.open" => Some(InteropCommand::OpenRfManager),
         "play" | "pealayer.play" => Some(InteropCommand::Play),
@@ -2558,9 +2585,7 @@ fn dispatch_local_payload(
         Ok(parsed) => parsed,
         Err(error) => return format_interop_error(None, -32600, &error),
     };
-    if matches!(command, InteropCommand::GetStatus) {
-        let value = serde_json::to_value(get_live_status())
-            .unwrap_or_else(|_| serde_json::json!({"status":"initializing"}));
+    if let Some(value) = command.query_result() {
         return format_interop_response(id, &value);
     }
     let operation_id = match &command {
@@ -3176,6 +3201,21 @@ pub fn spawn_pccontroller_action_bridge(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn process_status_and_quit_use_the_native_dispatcher_without_session_forwarding() {
+        let (tx,rx)=std::sync::mpsc::channel();
+        let context=eframe::egui::Context::default();
+        let receipts=Arc::new(Mutex::new(LaunchReceiptCache::default()));
+        let query=r#"{"jsonrpc":"2.0","id":1,"method":"pealayer.process.status"}"#;
+        let response=dispatch_local_payload(query,&tx,&context,&receipts,"Pealayer",None);
+        let value:Value=serde_json::from_str(&response).unwrap();
+        assert_eq!(value["result"]["process_id"],std::process::id());
+        assert!(rx.try_recv().is_err());
+        let response=dispatch_local_payload(r#"{"command":"quit_local"}"#,&tx,&context,&receipts,"Pealayer",None);
+        assert!(response.contains("accepted"));
+        assert_eq!(rx.try_recv().unwrap(),InteropCommand::QuitLocal);
+    }
 
     #[test]
     fn live_frame_config_projects_only_render_loop_inputs() {

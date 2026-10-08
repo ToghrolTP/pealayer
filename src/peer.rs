@@ -646,10 +646,7 @@ pub fn validate_config_expectations(
     }
     Ok(())
 }
-pub fn connect(value: &str, local_port: u16) -> Result<(), String> {
-    if local_port == 0 {
-        return Err("Client Web port must be nonzero".into());
-    }
+pub(crate) fn probe_session(value: &str) -> Result<(url::Url, reqwest::blocking::Client, Session, Duration), String> {
     let origin = endpoint(value)?;
     let http = reqwest::blocking::Client::builder()
         .no_proxy()
@@ -666,6 +663,7 @@ pub fn connect(value: &str, local_port: u16) -> Result<(), String> {
                 .join("/api/peer/session")
                 .map_err(|error| error.to_string())?,
         )
+        .header("X-Pealayer-Route", instance_id())
         .send()
         .map_err(|error| error.to_string())?;
     if !response.status().is_success() {
@@ -680,6 +678,14 @@ pub fn connect(value: &str, local_port: u16) -> Result<(), String> {
         return Err("A Pealayer instance cannot connect to itself".into());
     }
     session.config.validate()?;
+    Ok((origin, http, session, started.elapsed()))
+}
+
+pub fn connect(value: &str, local_port: u16) -> Result<(), String> {
+    if local_port == 0 {
+        return Err("Client Web port must be nonzero".into());
+    }
+    let (origin, http, session, round_trip) = probe_session(value)?;
     let (tx, rx) = mpsc::sync_channel::<(String, Value, Instant)>(64);
     let client = Arc::new(Client {
         origin,
@@ -688,7 +694,7 @@ pub fn connect(value: &str, local_port: u16) -> Result<(), String> {
         latest: Mutex::new(ReceivedSession {
             session,
             received: Instant::now(),
-            round_trip: started.elapsed(),
+            round_trip,
             revision: 1,
         }),
         pending: tx,
@@ -805,6 +811,36 @@ fn preserve_geometry(new: &mut Value, old: Option<&Value>) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn process_probe_requires_a_valid_foreign_session_and_sends_loop_identity() {
+        use std::io::{Read, Write};
+        for (id, expected) in [("foreign-instance", true), (instance_id(), false)] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let address=listener.local_addr().unwrap();
+            let session=Session {
+                instance_id:id.into(), config:crate::config::AppConfig::default(),status:serde_json::json!({}),
+                hardware:None,media:None,media_view:None,position:0.0,paused:true,speed:1.0,
+                sampled_unix_ms:0,timeline:None,config_path:String::new(),consumers:vec![],
+            };
+            let body=serde_json::to_string(&session).unwrap();
+            let worker=std::thread::spawn(move || {
+                let (mut stream, _)=listener.accept().unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+                let mut bytes=Vec::new();
+                loop {
+                    let mut chunk=[0u8;1024]; let count=stream.read(&mut chunk).unwrap();
+                    if count==0 { break; } bytes.extend_from_slice(&chunk[..count]);
+                    if bytes.windows(4).any(|window|window==b"\r\n\r\n") {break;}
+                }
+                let request=String::from_utf8(bytes).unwrap().to_ascii_lowercase();
+                assert!(request.starts_with("get /api/peer/session "));
+                assert!(request.contains(&format!("x-pealayer-route: {}",instance_id())));
+                write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",body.len(),body).unwrap();
+            });
+            assert_eq!(probe_session(&format!("pealayer://{address}")).is_ok(), expected);
+            worker.join().unwrap();
+        }
+    }
     use super::*;
     #[test]
     fn stale_peer_link_is_not_a_board_disconnect_or_initial_connection_failure() {

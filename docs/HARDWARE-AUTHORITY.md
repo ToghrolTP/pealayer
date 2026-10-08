@@ -63,3 +63,59 @@ destination's actual runtime manifest before submitting an update.
 
 Verification and deployment results belong in the dated deployment checkpoint.
 Do not infer that a source build, test, or staged package is installed.
+
+## API-first process control
+
+Session control and process lifecycle are deliberately different. `quit` in a
+remote consumer operates the authoritative session; `pealayer.process.quit`
+gracefully closes only the process receiving the request. Never use session Quit
+to restart or update a consumer.
+
+`GET /api/process/status` reports the actual receiving process ID, executable
+source/runtime identity, local control port, peer diagnostics, effective local
+handoff permission, and any current connection operation. It is not a relayed
+copy of the server's application identity. `/api/client/status` remains the
+smaller local peer diagnostic snapshot.
+
+Send `pealayer.process.connect` through native IPC, `/api/rpc`, `/api/ipc`,
+`/api/process/command`, or `/ws`. All paths use the same validated Rust command;
+the native connection dialog uses it too. For example:
+
+```powershell
+$request = @{
+    jsonrpc = '2.0'; id = 1; method = 'pealayer.process.connect'
+    params = @{
+        operation_id = [guid]::NewGuid().ToString()
+        endpoint = 'pealayer://publisher.example:8080'
+        client_port = 8080
+    }
+} | ConvertTo-Json -Depth 4
+Invoke-RestMethod http://127.0.0.1:8080/api/process/command `
+    -Method Post -ContentType application/json -Body $request
+```
+
+The response acknowledges dispatch, not a completed role change. Poll local
+process status. The connection operation checks the current peer session and
+rejects self-connections before closing anything. An existing healthy connection
+to the same origin/port is a no-op. A direct publishing owner must already be
+paused and production-unlocked; the controller must acknowledge publication
+release. Raw serial hardware must be disconnected first. Observers do not
+release another client's authority.
+
+Changing role uses a graceful process restart so the existing decoder, event
+loop and hardware engine are not duplicated. A helper waits for the current
+process to exit; it never force-kills it or writes replacement files. Failed
+initial consumer startup restores the previous command-line mode. Repeating an
+operation ID within the receiving process does not restart it again; changing
+the payload under the same ID is rejected. After restart, verify the new PID,
+peer server, connected/fresh sample and `local_hardware_scheduler: false`, not
+just the earlier accepted response. Loss of network connectivity is not proof
+that physical hardware was unplugged.
+
+`pealayer.process.status` is the equivalent RPC/native query. Process commands
+remain local even when submitted to a consumer's ordinary RPC/IPC/command
+endpoint. They cannot be nested in a forwarded session launch. The dedicated
+process command endpoint rejects session commands; Web mutations require the
+existing Web control permission and origin checks. Consumer Preferences and
+session configuration still belong to the server. This is not a new authentication
+or production-lock bypass.

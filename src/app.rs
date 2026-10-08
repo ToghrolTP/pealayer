@@ -1890,7 +1890,9 @@ impl eframe::App for PealayerApp {
                 crate::ui::audio::draw_settings_dialog(self, ui);
                 crate::ui::preferences::draw(self, ui);
                 crate::ui::peer_browser::draw(self,ui);
-                crate::ui::peer_browser::draw_connection(ui);
+                if let Some(request) = crate::ui::peer_browser::draw_connection(ui) {
+                    self.apply_interop_command(ui.ctx(), crate::platform::interop::InteropCommand::ConnectPeer { request }, "ui");
+                }
                 crate::ui::effects_library::draw_editor(self, ui);
                 crate::ui::board_info::draw(self, ui);
                 crate::ui::rf::draw(self, ui);
@@ -3735,6 +3737,7 @@ impl PealayerApp {
         // Dialogs and physical client-window placement remain local. Everything
         // that operates the session goes through the authority's unified engine.
         if let Some(client)=crate::peer::client() && !crate::peer::mirroring()
+            && !command.is_process_local()
             && !matches!(&command,InteropCommand::QuitLocal|InteropCommand::OpenPreferences|InteropCommand::OpenMediaInformation|InteropCommand::OpenBoardInformation{..}|InteropCommand::OpenRfManager|InteropCommand::Activate|InteropCommand::Minimize|InteropCommand::Maximize|InteropCommand::Restore|InteropCommand::SetFullscreen{..}|InteropCommand::ToggleFullscreen|InteropCommand::GetStatus) {
             if matches!(&command,InteropCommand::OpenMediaFolder){crate::ui::peer_browser::open(ctx,crate::ui::peer_browser::Purpose::Media,None);return;}
             if let Err(error)=serde_json::to_value(&command).map_err(|error|error.to_string()).and_then(|value|client.queue("/api/player/command",value)){self.show_error=Some(error);}
@@ -3939,6 +3942,15 @@ impl PealayerApp {
             }
             InteropCommand::DismissToast { id } => {
                 crate::messaging::dismiss(&id); ctx.request_repaint(); return;
+            }
+            InteropCommand::ConnectPeer { request } => {
+                if let Err(error) = crate::process_control::connect(request, ctx.clone(),
+                    self.engine_handle.is_connected.clone(), self.engine_handle.serial_port.clone(), self.mpv.0) {
+                    let _ = crate::messaging::publish(crate::messaging::ToastRequest {
+                        id:Some("peer.connect".into()), title:"Remote connection change failed".into(),
+                        message:error,severity:crate::messaging::Severity::Error,timeout_ms:10000,
+                    },source);
+                }
             }
             InteropCommand::Quit | InteropCommand::QuitLocal => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             InteropCommand::SetWorkspace { profile } => {
@@ -4496,7 +4508,7 @@ impl PealayerApp {
                     return;
                 }
             },
-            InteropCommand::GetStatus => {}
+            InteropCommand::GetStatus | InteropCommand::GetProcessStatus => {}
         }
         if !matches!(source, "keyboard" | "menu") {
             self.set_osd(format!("{source}: command applied"));

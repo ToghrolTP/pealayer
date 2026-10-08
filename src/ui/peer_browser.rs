@@ -68,21 +68,22 @@ pub fn connection_dialog_to(ctx: &egui::Context, endpoint: Option<&str>) {
             Connection {
                 open: true,
                 endpoint: endpoint.unwrap_or("pealayer://").into(),
-                port: crate::config::control_port().saturating_add(1),
+                port: crate::config::control_port(),
                 error: None,
             },
         )
     });
 }
-pub fn draw_connection(ui: &mut egui::Ui) {
+pub fn draw_connection(ui: &mut egui::Ui) -> Option<crate::process_control::ConnectRequest> {
     let id = egui::Id::new("peer_connection_dialog");
     let Some(mut state) = ui.ctx().data_mut(|data| data.get_temp::<Connection>(id)) else {
-        return;
+        return None;
     };
     if !state.open {
-        return;
+        return None;
     }
     let mut open = state.open;
+    let mut request = None;
     egui::Window::new(format!("{} Connect to Pealayer", crate::ui::icons::GLOBE))
         .id(id)
         .open(&mut open)
@@ -106,28 +107,18 @@ pub fn draw_connection(ui: &mut egui::Ui) {
             if crate::ui::dialog::primary_action_button(ui, crate::ui::icons::PLUG, "Connect")
                 .clicked()
             {
-                let result = crate::peer::endpoint(&state.endpoint).and_then(|_| {
-                    std::env::current_exe()
-                        .map_err(|error| error.to_string())
-                        .and_then(|exe| {
-                            std::process::Command::new(exe)
-                                .arg("--connect")
-                                .arg(&state.endpoint)
-                                .arg("--client-port")
-                                .arg(state.port.to_string())
-                                .spawn()
-                                .map(|_| ())
-                                .map_err(|error| error.to_string())
-                        })
-                });
-                match result {
-                    Ok(()) => state.open = false,
+                let value = crate::process_control::ConnectRequest {
+                    operation_id: uuid::Uuid::new_v4().to_string(), endpoint:state.endpoint.clone(), client_port:state.port,
+                };
+                match value.validate() {
+                    Ok(()) => { state.open = false; request = Some(value); }
                     Err(error) => state.error = Some(error),
                 }
             }
         });
     state.open = state.open && open;
     ui.ctx().data_mut(|data| data.insert_temp(id, state));
+    request
 }
 
 pub fn open(ctx: &egui::Context, purpose: Purpose, path: Option<String>) {

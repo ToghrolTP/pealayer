@@ -49,6 +49,13 @@ widths, and has been exercised against live state rather than sample data.
 
 ## Completed acceptance checkpoints
 
+- **API-first local lifecycle:** Native connection UI, native IPC, JSON-RPC,
+  HTTP and WebSocket use one process connection command. Process status,
+  graceful local quit and consumer-role changes do not relay to the authority;
+  normal session operations still do. A role change validates the target first
+  and requires a paused/unlocked, acknowledged publication release when needed.
+  Installed-host verification is tracked separately in the deployment ledger.
+
 - **Publishing handoff policy and remote alternative:** Native and Web
   Preferences share the owner's opt-in unattended-handoff setting. The Rust
   observer pauses actual playback and requires a fresh matching clock echo

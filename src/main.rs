@@ -15,6 +15,7 @@ pub mod messaging;
 pub mod mpv;
 pub mod network;
 pub mod peer;
+pub mod process_control;
 pub mod platform;
 pub mod preferences_contract;
 pub mod remote_location;
@@ -54,6 +55,13 @@ fn subtitle_font_directory() -> Option<std::path::PathBuf> {
 fn main() -> eframe::Result {
     crate::diagnostics::install_panic_reporter();
     let startup_args: Vec<String> = std::env::args().collect();
+    if let Some(payload) = crate::process_control::helper_invocation(&startup_args) {
+        if let Err(error) = crate::process_control::run_helper(payload) {
+            crate::cli_eprintln!("Pealayer process connection helper failed: {error}");
+            std::process::exit(4);
+        }
+        return Ok(());
+    }
     for action in crate::platform::windows_quick_actions::WINDOWS_QUICK_ACTIONS {
         if startup_args.iter().any(|argument| argument == action.arguments) {
             crate::diagnostics::record_shell_action("launch_requested", action.arguments);
