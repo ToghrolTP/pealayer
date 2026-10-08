@@ -940,7 +940,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             app.scrub_to(current_pos);
                             ui.ctx().request_repaint();
                         }
-                        if can_seek && response.drag_stopped() {
+                        if can_seek
+                            && (response.drag_stopped()
+                                || response.clicked()
+                                || (app.is_scrubbing && !ui.input(|i| i.pointer.primary_down())))
+                        {
                             app.finish_scrub(current_pos);
                         }
                     },

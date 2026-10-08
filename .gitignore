@@ -10,3 +10,4 @@ graphify-out/
 .superpowers/
 *.bin
 /.cargo/config.toml
+*.4d.json

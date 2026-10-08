@@ -460,9 +460,17 @@ impl EngineHandle {
     }
     pub(crate) fn playback_lifecycle(&self) -> std::sync::Weak<()> { Arc::downgrade(&self.lifecycle) }
     pub fn attach_playback_clock(&self, mpv:&'static libmpv2::Mpv) {super::media_timeline::observe_mpv(self,mpv);}
-    pub fn request_prepared_play(&self)->bool {
-        if !self.serial_port.lock().is_ok_and(|endpoint| super::controller::is_controller_endpoint(&endpoint)) {return false}
-        if let Ok(mut plan)=self.prepared_timeline.lock() && plan.has_items() {plan.play_requested=true;return true}
+    pub fn request_prepared_play(&self) -> bool {
+        if !self.is_connected.load(std::sync::atomic::Ordering::Acquire) {
+            return false;
+        }
+        if !self.serial_port.lock().is_ok_and(|endpoint| super::controller::is_controller_endpoint(&endpoint)) {
+            return false;
+        }
+        if let Ok(mut plan) = self.prepared_timeline.lock() && plan.has_items() {
+            plan.play_requested = true;
+            return true;
+        }
         false
     }
     pub fn controller_push_target(&self) -> ControllerPushTarget {
@@ -2753,5 +2761,26 @@ mod tests {
         assert_eq!(capabilities.host_instance_id, "new-host");
         assert_eq!(capabilities.status_led_revision, 1);
         assert_eq!(capabilities.status_led.as_ref().unwrap().red, 1);
+    }
+
+    #[test]
+    fn prepared_play_requires_active_connection() {
+        let handle = spawn_engine();
+        *handle.serial_port.lock().unwrap() = crate::four_d::controller::DEFAULT_ENDPOINT.to_string();
+        if let Ok(mut plan) = handle.prepared_timeline.lock() {
+            plan.replace(Ok(serde_json::json!({
+                "cues": [{"id": "cue-1", "reference": "effect:1", "time_ms": 100, "duration_ms": 500}],
+                "actions": [],
+                "max_lateness_ms": 50
+            })));
+        }
+        assert!(handle.prepared_timeline.lock().unwrap().has_items());
+        assert!(!handle.is_connected.load(Ordering::Relaxed));
+        // Disconnected controller endpoint must NEVER gate or pause media playback
+        assert!(!handle.request_prepared_play());
+
+        // When connected, prepared play request gates playback until armed
+        handle.is_connected.store(true, Ordering::Release);
+        assert!(handle.request_prepared_play());
     }
 }

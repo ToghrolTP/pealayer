@@ -1516,3 +1516,145 @@ fn test_e2e_template_isolation_under_repeated_operations() {
     );
     assert_eq!(app.timeline.templates[0].duration_ms, 1200);
 }
+
+#[test]
+fn test_dropped_effects_are_resizable_by_grabbing_handles() {
+    let mut app = PealayerApp::default();
+    app.duration = 60.0;
+    app.timeline_zoom = 100.0;
+    let mut capabilities = pealayer::four_d::controller::HardwareCapabilities::default();
+    capabilities.board_connected = true;
+    capabilities.strip_effects = vec![
+        pealayer::four_d::controller::HardwareStripEffect {
+            id: "strip.strobe".into(),
+            name: "Strobe".into(),
+            engine: "builtin".into(),
+            category: "Lighting".into(),
+            icon: "sparkle".into(),
+            group_icon: String::new(),
+            default_duration_ms: Some(2000),
+            ..Default::default()
+        }
+    ];
+    app.update_hardware_capabilities(Some(capabilities));
+
+    let payload = pealayer::app::EffectDragPayload {
+        name: "Strobe".into(),
+        icon: "sparkle".into(),
+        duration_ms: 2000,
+        target: pealayer::four_d::models::HardwareTarget::ControllerMacro,
+        actions: Vec::new(),
+        controller_macro: None,
+        controller_strip_effect: Some(pealayer::four_d::models::ControllerStripEffectCue {
+            id: "strip.strobe".into(),
+        }),
+        controller_lane: Some(pealayer::four_d::models::ControllerEffectLane::Lighting),
+    };
+
+    // Drop on Lighting lane (index 0) at 1.0s (1000ms)
+    assert!(app.handle_effect_drop(&payload, 0, 1.0));
+    assert_eq!(app.timeline.instances.len(), 1);
+    let inst = &app.timeline.instances[0];
+    assert_eq!(inst.start_time_ms, 1000);
+    let tmpl = app.timeline.templates.iter().find(|t| t.id == inst.effect_id).unwrap();
+    assert_eq!(tmpl.duration_ms, 2000);
+    assert_eq!(tmpl.duration_policy, pealayer::four_d::models::CueDurationPolicy::Resizable);
+    assert!(tmpl.duration_resizable());
+
+    // Verify handle classification:
+    // start = 1000ms, dur = 2000ms -> end = 3000ms
+    // at zoom = 100.0 (px_per_ms = 0.1), clip_left = 100.0, clip_right = 300.0
+    let clip_left = 100.0;
+    let clip_right = 300.0;
+    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, 105.0), DragMode::ResizeLeft);
+    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, 295.0), DragMode::ResizeRight);
+    assert_eq!(classify_clip_drag_mode(clip_left, clip_right, 200.0), DragMode::Move);
+
+    // Resize Right: increase duration from 2000ms to 4500ms
+    app.undo_stack.push(app.snapshot_timeline());
+    app.isolate_template_for_instance(inst.id);
+    let tmpl_mut = app.timeline.templates.iter_mut().find(|t| t.id == app.timeline.instances[0].effect_id).unwrap();
+    update_effect_duration(tmpl_mut, 4500);
+    assert_eq!(app.timeline.templates[0].duration_ms, 4500);
+
+    // Resize Left: move start earlier from 1000ms to 500ms and extend duration to 5000ms
+    app.undo_stack.push(app.snapshot_timeline());
+    app.timeline.instances[0].start_time_ms = 500;
+    let tmpl_mut = app.timeline.templates.iter_mut().find(|t| t.id == app.timeline.instances[0].effect_id).unwrap();
+    update_effect_duration(tmpl_mut, 5000);
+    assert_eq!(app.timeline.instances[0].start_time_ms, 500);
+    assert_eq!(app.timeline.templates[0].duration_ms, 5000);
+
+    // Undo step 2
+    let cur = app.snapshot_timeline();
+    let snap = app.undo_stack.undo(cur).unwrap();
+    app.restore_timeline_snapshot(snap);
+    assert_eq!(app.timeline.instances[0].start_time_ms, 1000);
+    assert_eq!(app.timeline.templates[0].duration_ms, 4500);
+
+    // Undo step 1
+    let cur = app.snapshot_timeline();
+    let snap = app.undo_stack.undo(cur).unwrap();
+    app.restore_timeline_snapshot(snap);
+    assert_eq!(app.timeline.instances[0].start_time_ms, 1000);
+    assert_eq!(app.timeline.templates[0].duration_ms, 2000);
+}
+
+#[test]
+fn test_dropped_macro_sequence_is_resizable_and_survives_catalog_reconciliation() {
+    let mut app = PealayerApp::default();
+    app.duration = 60.0;
+    let mut capabilities = pealayer::four_d::controller::HardwareCapabilities::default();
+    capabilities.board_connected = true;
+    capabilities.macros = vec![
+        pealayer::four_d::controller::HardwareMacro {
+            id: 42,
+            name: "Vibration Sequence".into(),
+            category: "Motion".into(),
+            mode: "automatic".into(),
+            duration_ms: 1500,
+            icon: "sparkle".into(),
+            group_icon: String::new(),
+            steps: Vec::new(),
+            ..Default::default()
+        }
+    ];
+    app.update_hardware_capabilities(Some(capabilities.clone()));
+
+    let payload = pealayer::app::EffectDragPayload {
+        name: "Vibration Sequence".into(),
+        icon: "sparkle".into(),
+        duration_ms: 1500,
+        target: pealayer::four_d::models::HardwareTarget::ControllerMacro,
+        actions: Vec::new(),
+        controller_macro: Some(pealayer::four_d::models::ControllerMacroCue {
+            id: 42,
+            mode: "automatic".into(),
+        }),
+        controller_strip_effect: None,
+        controller_lane: Some(pealayer::four_d::models::ControllerEffectLane::Sequence),
+    };
+
+    // Drop on Sequence lane at 2.0s (2000ms)
+    assert!(app.handle_effect_drop(&payload, 0, 2.0));
+    assert_eq!(app.timeline.instances.len(), 1);
+    let inst_id = app.timeline.instances[0].id;
+    let eff_id = app.timeline.instances[0].effect_id;
+    let tmpl = app.timeline.templates.iter().find(|t| t.id == eff_id).unwrap();
+    assert_eq!(tmpl.duration_ms, 1500);
+    assert_eq!(tmpl.duration_policy, pealayer::four_d::models::CueDurationPolicy::Resizable);
+    assert!(tmpl.duration_resizable());
+
+    // User resizes it on timeline to 3500ms
+    app.isolate_template_for_instance(inst_id);
+    let tmpl_mut = app.timeline.templates.iter_mut().find(|t| t.id == app.timeline.instances[0].effect_id).unwrap();
+    update_effect_duration(tmpl_mut, 3500);
+    assert_eq!(tmpl_mut.duration_ms, 3500);
+
+    // PCController catalog metadata refreshes (e.g. board reconnect or catalog update)
+    app.update_hardware_capabilities(Some(capabilities));
+    // The user's deliberately resized cue on the timeline must preserve its 3500ms duration!
+    let tmpl_after = app.timeline.templates.iter().find(|t| t.id == app.timeline.instances[0].effect_id).unwrap();
+    assert_eq!(tmpl_after.duration_ms, 3500);
+    assert!(tmpl_after.duration_resizable());
+}

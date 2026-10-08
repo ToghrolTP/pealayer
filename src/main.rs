@@ -701,6 +701,8 @@ fn main() -> eframe::Result {
                 is_scrubbing: false,
                 pending_scrub_commit: None,
                 last_mouse_activity: std::time::Instant::now(),
+                frame_rate_tracker: crate::app::FrameRateTracker::default(),
+                display_refresh_rate: 60.0,
                 pin_controls: loaded_config.pin_controls,
                 show_error: None,
                 show_four_d_editor: loaded_config.workspace_session.nle,
@@ -803,6 +805,8 @@ fn main() -> eframe::Result {
                     .workspace_session
                     .dialogs
                     .workspace_profiles,
+                effect_controls_ping_at: None,
+                pending_tab_reveals: Vec::new(),
                 workspace_profile_name_draft: String::new(),
                 workspace_profile_icon_draft: "window".to_string(),
                 workspace_profiles,
