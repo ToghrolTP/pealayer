@@ -21,6 +21,15 @@ and pointer/keyboard UI gestures stay in the UI callback. This is also required
 for Web-only operation; do not work around it by making the window visible.
 A logic-only regression covers IPC/Web commands and status without painting.
 
+Service cutover exposed a second recovery issue: a peer RPC error was flattened
+without marking the command stream failed. Additionally, failures after the
+mid-pass cleanup could be overwritten by the next pass's `transport.is_some()`
+assignment. All typed RPC failure paths now share transport-failure recording;
+the same cleanup runs before deriving next-pass connectivity and after command
+processing. Domain rejections keep the connection. Failed mutations are returned
+once, never automatically replayed. Regression coverage includes peer reply,
+late wire failure and healthy domain rejection.
+
 Earlier checkpoint `4c6d85b` passed the full native MSVC release suite (644
 library tests, 644 binary tests and all integration tests), Web production/PWA
 checks, and Linux, Windows GNU and both macOS CI jobs. Integration servers now

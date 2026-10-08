@@ -43,6 +43,34 @@ fn controller_wire_failed(error: &str) -> bool {
     .any(|prefix| error.starts_with(prefix))
 }
 
+fn record_controller_transport_failure(
+    method: &str,
+    error: &super::controller::ControllerRpcError,
+    connected: &AtomicBool,
+    connection_error: &Mutex<Option<String>>,
+) {
+    if error.transport_failed {
+        connected.store(false, Ordering::Relaxed);
+        if let Ok(mut current) = connection_error.lock() {
+            *current = Some(format!("{method}: {error}"));
+        }
+    }
+}
+
+fn discard_failed_transport<T>(
+    transport: &mut Option<T>,
+    connected: &AtomicBool,
+    description: &Mutex<Option<String>>,
+    capabilities: &Mutex<Option<super::controller::HardwareCapabilities>>,
+) -> bool {
+    if !connected.load(Ordering::Relaxed) && transport.is_some() {
+        *transport = None;
+        if let Ok(mut current) = description.lock() { *current = None; }
+        if let Ok(mut current) = capabilities.lock() { *current = None; }
+    }
+    transport.is_some()
+}
+
 impl HardwareTransport {
     fn send(&mut self, command: Command) -> Result<(), String> {
         if matches!(command, Command::RelaySet { id: 0, .. }) {
@@ -828,7 +856,13 @@ pub fn spawn_engine() -> EngineHandle {
         loop {
             let estop_now = engine_estop.load(Ordering::SeqCst);
             let requested = engine_connection_requested.load(Ordering::Relaxed);
-            let mut connected = active_transport.is_some();
+            // A late capability/actuator failure can occur after the cleanup
+            // below. Discard it BEFORE deriving the next connected flag;
+            // otherwise this assignment resurrects the same aborted socket.
+            let mut connected = discard_failed_transport(
+                &mut active_transport, &engine_connected,
+                &engine_transport_description, &engine_capabilities,
+            );
             engine_connected.store(connected, Ordering::Relaxed);
 
             // Handle connection/disconnection transitions
@@ -1208,11 +1242,17 @@ pub fn spawn_engine() -> EngineHandle {
                     }
                     EngineMessage::ReplyControllerCall { method, params, reply } => {
                         let result = if engine_estop.load(Ordering::SeqCst) && !controller_call_allowed_during_estop(&method, &params) {
-                            Err("hardware command blocked while E-STOP is active".to_string())
+                            Err("hardware command blocked while E-STOP is active".to_string().into())
                         } else {
-                            active_transport.as_mut().ok_or_else(|| "PCController is not connected".to_string()).and_then(|transport| transport.call_controller(&method, params))
+                            active_transport.as_mut().ok_or_else(|| super::controller::ControllerRpcError::from("PCController is not connected".to_string()))
+                                .and_then(|transport| transport.call_controller_detailed(&method, params))
                         };
-                        let _ = reply.send(result);
+                        if let Err(error) = &result {
+                            record_controller_transport_failure(&method, error, &engine_connected, &engine_conn_error);
+                        }
+                        // The original caller gets the error exactly once.
+                        // Recovery reconnects; it never replays this RPC.
+                        let _ = reply.send(result.map_err(|error| error.message));
                     }
                     EngineMessage::ControllerCall { method, params } => {
                         if engine_estop.load(Ordering::SeqCst)
@@ -1226,7 +1266,7 @@ pub fn spawn_engine() -> EngineHandle {
                                     if let Ok(mut guard) = engine_conn_error.lock() {
                                         *guard = Some(format!("{method}: {error}"));
                                     }
-                                    if error.transport_failed { engine_connected.store(false, Ordering::Relaxed); }
+                                    record_controller_transport_failure(&method, &error, &engine_connected, &engine_conn_error);
                                     publish_controller_rejection(&method, &error);
                                 }
                             }
@@ -1249,15 +1289,8 @@ pub fn spawn_engine() -> EngineHandle {
                         } else {
                             Err("PCController is not connected".to_string().into())
                         };
-                        if let Err(error) = &result
-                            && error.transport_failed
-                        {
-                            if let Ok(mut guard) = engine_conn_error.lock() {
-                                *guard = Some(format!("{method}: {error}"));
-                            }
-                            // The shared cleanup below drops the stale stream;
-                            // normal connection recovery obtains a new one.
-                            engine_connected.store(false, Ordering::Relaxed);
+                        if let Err(error) = &result {
+                            record_controller_transport_failure(&method, error, &engine_connected, &engine_conn_error);
                         }
                         if result.is_ok()
                             && matches!(operation.as_str(), "macro-save" | "macro-discard")
@@ -1313,7 +1346,7 @@ pub fn spawn_engine() -> EngineHandle {
                         }
                         Ok(_) => {}
                         Err(error) => {
-                            if error.transport_failed { engine_connected.store(false, Ordering::Relaxed); }
+                            record_controller_transport_failure(&intent.method, &error, &engine_connected, &engine_conn_error);
                             publish_controller_rejection(&intent.method, &error);
                             if let Ok(mut guard) = engine_conn_error.lock() {
                                 *guard = Some(format!(
@@ -1325,16 +1358,10 @@ pub fn spawn_engine() -> EngineHandle {
                 }
             }
 
-            if !engine_connected.load(Ordering::Relaxed) && active_transport.is_some() {
-                active_transport = None;
-                if let Ok(mut guard) = engine_transport_description.lock() {
-                    *guard = None;
-                }
-                if let Ok(mut guard) = engine_capabilities.lock() {
-                    *guard = None;
-                }
-                connected = false;
-            }
+            connected = discard_failed_transport(
+                &mut active_transport, &engine_connected,
+                &engine_transport_description, &engine_capabilities,
+            );
 
             // A non-forced direct diagnostic connection must yield as soon as
             // PCController comes online. This continuously enforces the single
@@ -2540,6 +2567,43 @@ mod tests {
         assert!(!controller_wire_failed("RF binding name already exists"));
         assert!(!controller_wire_failed("virtual keyboard is disabled"));
         assert!(!controller_wire_failed("PCController is not connected"));
+    }
+
+    #[test]
+    fn peer_reply_wire_failure_drops_transport_without_replaying_request() {
+        let connected = AtomicBool::new(true);
+        let error = Mutex::new(None);
+        let description = Mutex::new(Some("external:tcp".to_string()));
+        let capabilities = Mutex::new(None);
+        let mut transport = Some(());
+        record_controller_transport_failure("controller.action.invoke",
+            &super::super::controller::ControllerRpcError::transport("socket aborted".into()),
+            &connected, &error);
+        assert!(!discard_failed_transport(&mut transport, &connected, &description, &capabilities));
+        assert!(transport.is_none());
+        assert!(description.lock().unwrap().is_none());
+        assert_eq!(error.lock().unwrap().as_deref(), Some("controller.action.invoke: socket aborted"));
+        // Only the transport is discarded; no action or retry queue is created.
+    }
+
+    #[test]
+    fn late_wire_failure_is_not_resurrected_but_domain_rejection_keeps_connection() {
+        let connected = AtomicBool::new(true);
+        let error = Mutex::new(None);
+        let description = Mutex::new(Some("external:tcp".to_string()));
+        let capabilities = Mutex::new(None);
+        let mut transport = Some(());
+        record_controller_transport_failure("controller.action.invoke",
+            &super::super::controller::ControllerRpcError::from("binding disabled".to_string()),
+            &connected, &error);
+        assert!(discard_failed_transport(&mut transport, &connected, &description, &capabilities));
+        assert!(error.lock().unwrap().is_none());
+        // Simulate failure in the late capability/dispatch phase of a pass.
+        connected.store(false, Ordering::Relaxed);
+        let next_connected = discard_failed_transport(&mut transport, &connected, &description, &capabilities);
+        connected.store(next_connected, Ordering::Relaxed);
+        assert!(!connected.load(Ordering::Relaxed));
+        assert!(transport.is_none());
     }
 
     #[test]
