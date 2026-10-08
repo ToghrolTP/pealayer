@@ -15,6 +15,16 @@ enum HardwareTransport {
     },
 }
 
+fn publish_controller_rejection(method: &str, error: &super::controller::ControllerRpcError) {
+    if error.transport_failed { return; } // Connection lifecycle emits the transport toast once.
+    let authority = error.resource.as_deref() == Some("media_authority");
+    let _ = crate::messaging::publish(crate::messaging::ToastRequest {
+        id: Some(if authority { "hardware.authority".into() } else { format!("hardware.command:{method}") }),
+        title: if authority { "Publishing authority" } else { "Hardware command rejected" }.into(),
+        message: error.message.clone(), severity: crate::messaging::Severity::Warning, timeout_ms: 8000,
+    }, "hardware");
+}
+
 // ControllerClient separates wire failures from server rejection messages.
 // A broken TCP stream must be discarded, but an invalid binding must not
 // disconnect a healthy coordinator. Never retry a mutation here: it may have
@@ -141,15 +151,21 @@ impl HardwareTransport {
         method: &str,
         params: serde_json::Value,
     ) -> Result<serde_json::Value, String> {
+        self.call_controller_detailed(method, params).map_err(|error|error.message)
+    }
+
+    fn call_controller_detailed(
+        &mut self, method: &str, params: serde_json::Value,
+    ) -> Result<serde_json::Value, super::controller::ControllerRpcError> {
         match self {
             Self::Controller(client) => {
                 if method.starts_with("controller.rf.") {
-                    client.verify_selected_coordinator()?;
+                    client.verify_selected_coordinator().map_err(super::controller::ControllerRpcError::transport)?;
                 }
-                client.call(method, params)
+                client.call_detailed(method, params)
             }
             Self::DirectSerial { .. } => {
-                Err("this hardware action requires the PCController coordinator".to_string())
+                Err("this hardware action requires the PCController coordinator".to_string().into())
             }
         }
     }
@@ -452,6 +468,7 @@ pub struct ControllerPushTarget {
         std::sync::Weak<Mutex<Option<crate::four_d::controller::HardwareCapabilities>>>,
     catalog_refresh_requested: std::sync::Weak<AtomicBool>,
     rf_catalog_refresh_requested: std::sync::Weak<AtomicBool>,
+    connection_error: std::sync::Weak<Mutex<Option<String>>>,
 }
 
 impl EngineHandle {
@@ -467,7 +484,7 @@ impl EngineHandle {
         if !self.serial_port.lock().is_ok_and(|endpoint| super::controller::is_controller_endpoint(&endpoint)) {
             return false;
         }
-        if let Ok(mut plan) = self.prepared_timeline.lock() && plan.has_items() {
+        if let Ok(mut plan) = self.prepared_timeline.lock() && plan.has_items() && plan.may_publish() {
             // A clock/transport fault deliberately pauses playback. An explicit
             // Play is the user's retry: invalidate the old arm and require the
             // normal paused -> prepare -> clock-ack handshake before unpausing.
@@ -486,6 +503,7 @@ impl EngineHandle {
     }
     pub fn controller_push_target(&self) -> ControllerPushTarget {
         ControllerPushTarget {
+            connection_error: Arc::downgrade(&self.connection_error),
             lifecycle: Arc::downgrade(&self.lifecycle),
             estop_active: Arc::downgrade(&self.estop_active),
             is_playing: Arc::downgrade(&self.is_playing),
@@ -681,15 +699,27 @@ impl ControllerPushTarget {
                 capabilities.apply_state_notification(params)
             }
             "controller.error" => {
-                // The coordinator transport can remain healthy while its board
-                // disappears (USB reset, cable fault, firmware reboot). Mark
-                // the cached board state unavailable immediately, but also
-                // request an authoritative refresh so recovery is discovered
-                // without restarting Pealayer or waiting for the slow baseline.
+                // Sampling failures are not evidence of physical disconnection.
+                // Preserve the last view unless the coordinator explicitly says
+                // the board is unavailable; always obtain an authoritative pull.
                 if let Some(refresh) = self.catalog_refresh_requested.upgrade() {
                     refresh.store(true, Ordering::Relaxed);
                 }
-                capabilities.mark_board_disconnected()
+                if let Some(message) = params.get("error").and_then(serde_json::Value::as_str)
+                    && let Some(slot) = self.connection_error.upgrade()
+                    && let Ok(mut slot) = slot.lock() {
+                        let changed = slot.as_deref() != Some(message);
+                        *slot = Some(message.into());
+                        if changed && params.get("board_connected").and_then(serde_json::Value::as_bool) != Some(false) {
+                            let _ = crate::messaging::publish(crate::messaging::ToastRequest {
+                                id:Some("hardware.status".into()),title:"Board status update failed".into(),message:message.into(),
+                                severity:crate::messaging::Severity::Warning,timeout_ms:8000,
+                            },"hardware");
+                        }
+                    }
+                if params.get("board_connected").and_then(serde_json::Value::as_bool) == Some(false) {
+                    capabilities.mark_board_disconnected()
+                } else { false }
             }
             _ => false,
         }
@@ -771,6 +801,7 @@ pub fn spawn_engine() -> EngineHandle {
     let engine_controller_call_results = Arc::clone(&controller_call_results);
     let engine_catalog_refresh_requested = Arc::clone(&catalog_refresh_requested);
     let engine_state_notifier = Arc::clone(&state_notifier);
+    let engine_prepared_timeline = Arc::clone(&prepared_timeline);
 
     thread::spawn(move || {
         let mut queue: Vec<CompiledAction> = Vec::new();
@@ -864,13 +895,8 @@ pub fn spawn_engine() -> EngineHandle {
                                     continue;
                                 }
                             }
-                            // A coordinator-side renderer can outlive a dropped
-                            // client socket. Reconnect starts from a known idle
-                            // strip state; playback will issue the next cue.
-                            let _ = transport.call_controller(
-                                "controller.command.execute",
-                                serde_json::json!({"command": "effect stop"}),
-                            );
+                            // Connecting a monitor is read-only. Cancellation
+                            // belongs to explicit stop/handoff, not reconnection.
                             if matches!(transport, HardwareTransport::Controller(_)) {
                                 let local_active = engine_estop.load(Ordering::SeqCst);
                                 match transport
@@ -951,7 +977,8 @@ pub fn spawn_engine() -> EngineHandle {
                 }
             } else if !requested && active_transport.is_some() {
                 // Graceful disconnect: send AllOff
-                if let Some(ref mut transport) = active_transport {
+                if let Some(ref mut transport) = active_transport
+                    && (transport.is_direct_serial() || engine_prepared_timeline.lock().is_ok_and(|plan|plan.may_publish())) {
                     let _ = transport.call_controller(
                         "controller.command.execute",
                         serde_json::json!({"command": "effect cancel"}),
@@ -1194,11 +1221,12 @@ pub fn spawn_engine() -> EngineHandle {
                         }
                         if connected {
                             if let Some(ref mut transport) = active_transport {
-                                if let Err(error) = transport.call_controller(&method, params) {
+                                if let Err(error) = transport.call_controller_detailed(&method, params) {
                                     if let Ok(mut guard) = engine_conn_error.lock() {
                                         *guard = Some(format!("{method}: {error}"));
                                     }
-                                    engine_connected.store(false, Ordering::Relaxed);
+                                    if error.transport_failed { engine_connected.store(false, Ordering::Relaxed); }
+                                    publish_controller_rejection(&method, &error);
                                 }
                             }
                         }
@@ -1211,17 +1239,17 @@ pub fn spawn_engine() -> EngineHandle {
                         let result = if engine_estop.load(Ordering::SeqCst)
                             && !controller_call_allowed_during_estop(&method, &params)
                         {
-                            Err("hardware command blocked while E-STOP is active".to_string())
+                            Err("hardware command blocked while E-STOP is active".to_string().into())
                         } else if connected {
                             active_transport
                                 .as_mut()
-                                .ok_or_else(|| "PCController transport is unavailable".to_string())
-                                .and_then(|transport| transport.call_controller(&method, params))
+                                .ok_or_else(|| "PCController transport is unavailable".to_string().into())
+                                .and_then(|transport| transport.call_controller_detailed(&method, params))
                         } else {
-                            Err("PCController is not connected".to_string())
+                            Err("PCController is not connected".to_string().into())
                         };
                         if let Err(error) = &result
-                            && controller_wire_failed(error)
+                            && error.transport_failed
                         {
                             if let Ok(mut guard) = engine_conn_error.lock() {
                                 *guard = Some(format!("{method}: {error}"));
@@ -1236,7 +1264,7 @@ pub fn spawn_engine() -> EngineHandle {
                             engine_catalog_refresh_requested.store(true, Ordering::Relaxed);
                         }
                         if let Ok(mut results) = engine_controller_call_results.lock() {
-                            results.push_back(ControllerCallResult { operation, result });
+                            results.push_back(ControllerCallResult { operation, result: result.map_err(|error|error.message) });
                         }
                     }
                     EngineMessage::CoalescedControllerIntent {
@@ -1275,7 +1303,7 @@ pub fn spawn_engine() -> EngineHandle {
                 } else if connected
                     && let Some(ref mut transport) = active_transport
                 {
-                    match transport.call_controller(&intent.method, intent.params) {
+                    match transport.call_controller_detailed(&intent.method, intent.params) {
                         Ok(_) if intent.refresh_catalog => {
                             // Push events remain the lowest-latency path. The
                             // authoritative pull self-corrects a dropped or
@@ -1284,6 +1312,8 @@ pub fn spawn_engine() -> EngineHandle {
                         }
                         Ok(_) => {}
                         Err(error) => {
+                            if error.transport_failed { engine_connected.store(false, Ordering::Relaxed); }
+                            publish_controller_rejection(&intent.method, &error);
                             if let Ok(mut guard) = engine_conn_error.lock() {
                                 *guard = Some(format!(
                                     "apply controller intent for {control_key}: {error}"
@@ -1824,6 +1854,7 @@ fn spawn_peer_engine() -> EngineHandle {
     let results=handle.controller_call_results.clone();
     let errors=handle.connection_error.clone();
     let notifier=handle.state_notifier.clone();
+    let peer_timeline=handle.prepared_timeline.clone();
     thread::spawn(move || {
         let client=crate::peer::client().unwrap();
         let mut revision=0;
@@ -1834,6 +1865,10 @@ fn spawn_peer_engine() -> EngineHandle {
                 connected.store(snapshot.received.elapsed()<Duration::from_secs(2),Ordering::Relaxed);
                 if snapshot.revision!=revision {
                 revision=snapshot.revision;
+                if let Ok(mut plan)=peer_timeline.lock() {
+                    plan.authority=snapshot.session.status.pointer("/hardware_sync/authority").cloned().and_then(|value|serde_json::from_value(value).ok());
+                    if let Some(actor)=snapshot.session.status.pointer("/hardware_sync/authority_client_id").and_then(serde_json::Value::as_str){plan.authority_client_id=actor.into();}
+                }
                 if let Ok(mut value)=capabilities.lock(){*value=snapshot.session.hardware;}
                 estop.store(snapshot.session.status.get("estop_active").and_then(serde_json::Value::as_bool).unwrap_or(false),Ordering::SeqCst);
                 if let Ok(mut error)=errors.lock(){*error=client.error.lock().ok().and_then(|value|value.clone());}
@@ -2699,12 +2734,22 @@ mod tests {
         assert!(!handle.catalog_refresh_requested.load(Ordering::Relaxed));
         assert!(target.apply_notification(
             "controller.error",
-            &serde_json::json!({"message": "board disconnected"}),
+            &serde_json::json!({"error": "serial read failed", "board_connected":false}),
         ));
         let capabilities = handle.hardware_capabilities.lock().unwrap();
         let capabilities = capabilities.as_ref().unwrap();
         assert!(!capabilities.board_connected);
         assert!(capabilities.status_led.is_none());
+        assert!(handle.catalog_refresh_requested.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn failed_status_sample_does_not_invent_a_board_disconnect() {
+        let handle = spawn_engine();
+        *handle.hardware_capabilities.lock().unwrap() = Some(crate::four_d::controller::HardwareCapabilities { board_connected:true, ..Default::default() });
+        assert!(!handle.controller_push_target().apply_notification("controller.error", &serde_json::json!({"error":"status deadline exceeded","board_connected":true})));
+        assert!(handle.hardware_capabilities.lock().unwrap().as_ref().unwrap().board_connected);
+        assert_eq!(handle.connection_error.lock().unwrap().as_deref(),Some("status deadline exceeded"));
         assert!(handle.catalog_refresh_requested.load(Ordering::Relaxed));
     }
 

@@ -12612,6 +12612,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             }
                     }
                     PealayerTab::HardwareMonitor => {
+                        crate::four_d::authority::draw_controls(self.app,ui);
                         let capabilities = self.app.advertised_hardware();
                         ui.horizontal(|ui| {
                             ui.heading(self.app.tr("Hardware Monitor Dashboard"));

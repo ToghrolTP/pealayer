@@ -18,8 +18,11 @@ const effectGroupDialog = read('src/components/EffectGroupDialog.tsx');
 const css = read('src/styles.css');
 const preferences = read('src/components/PreferencesTab.tsx');
 const filePicker = read('src/components/ServerFilePicker.tsx');
+const authority = read('src/components/PublishingAuthority.tsx');
 
 const contracts = [
+  [app.includes('<PublishingAuthority') && hardware.includes('<PublishingAuthority') && authority.includes("sendCmd('pealayer.hardware.authority'") && authority.includes('authority.owner_id === actor'), 'publishing authority uses the same server reservation in controls and the global conflict dialog'],
+  [authority.includes('disabled={!paused || authority.exclusive}') && authority.includes("change('accept', request.client_id)") && authority.includes("change('unlock'") === false && authority.includes("'unlock' : 'lock'"), 'owner-consented handoff requires paused playback and production can be explicitly unlocked'],
   [preferences.includes('icon: string') && preferences.includes('controlIcons[control.icon]') && !preferences.includes('controlIcons[control.kind]'), 'preference row icons use semantic Rust metadata instead of input type'],
   [preferences.includes("control.kind === 'file'") && preferences.includes('<ServerFilePicker') && preferences.includes('FolderOpenOutlined'), 'file preferences expose a real Browse action'],
   [preferences.includes('contract?.groups.filter') && preferences.includes('group.default_open') && preferences.includes('<Collapse'), 'preference cards use shared ordering and optional disclosure'],

@@ -302,6 +302,11 @@ pub enum InteropCommand {
         percent: f64,
     },
     RefreshHardwareCatalog,
+    HardwareAuthority {
+        operation: String,
+        #[serde(default)]
+        requester_id: String,
+    },
     PlayHardwareMelody {
         name: String,
         repeats: u8,
@@ -581,6 +586,10 @@ impl InteropCommand {
                     }) =>
             {
                 Err("hardware action ID is invalid".to_string())
+            }
+            Self::HardwareAuthority { operation, requester_id }
+                if !matches!(operation.as_str(), "request" | "accept" | "reject" | "release" | "lock" | "unlock") || requester_id.len()>180 => {
+                Err("publishing authority operation or requester is invalid".into())
             }
             Self::UpdateHardwarePresentation { key, fields }
                 if key.trim().is_empty()
@@ -1977,6 +1986,16 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         "hardware.catalog.refresh" | "pealayer.hardware.catalog.refresh" => {
             Some(InteropCommand::RefreshHardwareCatalog)
         }
+        "pealayer.hardware.authority" => {
+            let operation = string(&["operation"])?;
+            if !matches!(operation.as_str(), "request" | "accept" | "reject" | "release" | "lock" | "unlock") {
+                return Err("invalid authority operation".into());
+            }
+            Some(InteropCommand::HardwareAuthority {
+                operation,
+                requester_id: request.params.get("requester_id").and_then(Value::as_str).unwrap_or_default().into(),
+            })
+        }
         "hardware.buzzer.melody" | "pealayer.hardware.buzzer.melody" => {
             let repeats = request
                 .params
@@ -2835,7 +2854,13 @@ fn controller_rpc(id: u64, method: &str, params: Value) -> tungstenite::Message 
 }
 
 pub(crate) fn controller_instance_id() -> String {
-    format!("pealayer:desktop-{}", std::process::id())
+    format!("pealayer:{}:{}", controller_host_name(), crate::config::control_port())
+}
+
+fn controller_host_name() -> String {
+    std::env::var("COMPUTERNAME").or_else(|_|std::env::var("HOSTNAME"))
+        .unwrap_or_else(|_|format!("desktop-{}",std::process::id()))
+        .chars().filter(|c| c.is_ascii_alphanumeric() || *c=='-' || *c=='_').take(100).collect()
 }
 
 pub(crate) fn controller_instance_identity(instance_id: &str, name: &str) -> Value {
@@ -2847,7 +2872,7 @@ pub(crate) fn controller_instance_identity(instance_id: &str, name: &str) -> Val
             "ipc":format!("http://127.0.0.1:{}/api/ipc",crate::config::control_port()),
             "web_ui":format!("http://127.0.0.1:{}/",crate::config::control_port())}},
         "values":{"application":name,"version":env!("CARGO_PKG_VERSION"),"commit":env!("PEALAYER_GIT_COMMIT"),
-            "os":std::env::consts::OS,"arch":std::env::consts::ARCH,
+            "os":std::env::consts::OS,"arch":std::env::consts::ARCH,"host":controller_host_name(),
             "app_actions":PCCONTROLLER_ACTIONS,"control_contract":"pealayer.control",
             "control_transports":"native,http,websocket,json-rpc","coordinator":"pccontroller","serial_owner":"pccontroller"}
     })

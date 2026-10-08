@@ -4,6 +4,8 @@ use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 
 pub struct PreparedTimeline {
+    pub authority: Option<super::authority::Status>,
+    pub authority_client_id: String,
     pub revision: u64,
     pub payload: Value,
     pub acknowledged_revision: u64,
@@ -22,6 +24,8 @@ pub struct PreparedTimeline {
 impl Default for PreparedTimeline {
     fn default() -> Self {
         Self {
+            authority: None,
+            authority_client_id: crate::platform::interop::controller_instance_id(),
             revision: 0,
             payload: json!({"cues":[],"actions":[],"max_lateness_ms":50}),
             acknowledged_revision: 0,
@@ -38,6 +42,9 @@ impl Default for PreparedTimeline {
     }
 }
 impl PreparedTimeline {
+    pub fn may_publish(&self) -> bool {
+        self.authority.as_ref().is_none_or(|authority|authority.may_publish(&crate::platform::interop::controller_instance_id()))
+    }
     pub fn has_items(&self) -> bool {
         self.revision != self.acknowledged_revision
             || self.compilation_error.is_some()
@@ -259,6 +266,7 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
                 .ok()
                 .filter(|value| value.is_finite() && *value > 0.0);
             let coordinator = connected.load(std::sync::atomic::Ordering::Acquire)
+                && plan.lock().is_ok_and(|plan|plan.may_publish())
                 && endpoint
                     .lock()
                     .is_ok_and(|value| super::controller::is_controller_endpoint(&value));

@@ -12,6 +12,7 @@ import {
 import { HeaderBar } from './components/HeaderBar';
 import { ApplicationStatusBar, StatusBarVisibility } from './components/ApplicationStatusBar';
 import { SharedToasts } from './components/SharedToasts';
+import { PublishingAuthority } from './components/PublishingAuthority';
 import { FujiLoader } from './components/FujiLoader';
 import { WebViewBoundary } from './components/WebViewBoundary';
 import { RemoteLocationDialog } from './components/RemoteLocationDialog';
@@ -551,6 +552,7 @@ const App: React.FC = () => {
       }}
     >
       <SharedToasts snapshot={state.messages} connected={connected} dismiss={id => sendCmd('pealayer.toast.dismiss', { id })} />
+      <PublishingAuthority state={state} sendCmd={sendCmd} />
       <RemoteLocationDialog state={state.remote_browser} connected={connected} base={apiBaseUrl} sendCmd={sendCmd} />
       <Layout className="app-shell">
         <HeaderBar

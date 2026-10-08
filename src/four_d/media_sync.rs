@@ -85,6 +85,9 @@ pub fn spawn(
         let mut preparation_retry_at = Instant::now();
         let mut preparation_retry_revision = 0_u64;
         let mut last_error = String::new();
+        let mut authority_at = Instant::now()-Duration::from_secs(2);
+        let mut automatic_claim_attempted = false;
+        let mut authority_ready = false;
         loop {
             let alive = lifecycle.strong_count() > 0;
             let requested_endpoint = endpoint.lock().map(|s| s.clone()).unwrap_or_default();
@@ -99,6 +102,8 @@ pub fn spawn(
                     let _ = old.call("controller.app.instance.remove", json!({"id":id}));
                 }
                 previous = None;
+                authority_ready = false;
+                authority_at = Instant::now() - Duration::from_secs(2);
                 if let Ok(mut plan) = timeline.lock() {
                     plan.acknowledged_revision = 0;
                     plan.last_ack = None;
@@ -134,6 +139,48 @@ pub fn spawn(
                         }
                         retry_at = Instant::now() + Duration::from_secs(2);
                     }
+                }
+            }
+            if let Some(ref mut rpc)=client {
+                if authority_at.elapsed()>=Duration::from_secs(1) {
+                    authority_at=Instant::now();
+                    let result=rpc.call("controller.media.authority.get",json!({})).and_then(|value|
+                        serde_json::from_value::<super::authority::Status>(value).map_err(|error|format!("Invalid publishing authority state: {error}")));
+                    match result {
+                        Ok(mut status)=>{
+                            authority_ready = true;
+                            if !automatic_claim_attempted && current.loaded {
+                                automatic_claim_attempted=true;
+                                if status.owner_id.is_empty() {
+                                    if let Ok(value)=rpc.call("controller.media.authority.change",json!({"client_id":id,"operation":"request"})) {
+                                        if let Ok(updated)=serde_json::from_value(value){status=updated;}
+                                    }
+                                }
+                            }
+                            if let Ok(mut plan)=timeline.lock() {
+                                let old_owner=plan.authority.as_ref().map(|value|value.owner_id.clone());
+                                if old_owner.as_deref()!=Some(&status.owner_id) {
+                                    plan.acknowledged_revision=0;plan.clock_ack_revision=0;plan.last_ack=None;
+                                    plan.play_requested=false;plan.feedback=serde_json::Value::Null;
+                                    plan.error=plan.compilation_error.clone();plan.deferred_reason=None;
+                                    plan.revision=plan.revision.saturating_add(1);
+                                    previous=None;
+                                }
+                                plan.authority=Some(status);
+                            }
+                        }
+                        Err(error)=>{
+                            authority_ready = false;
+                            if let Ok(mut plan)=timeline.lock(){plan.error=Some(format!("Publishing authority unavailable: {error}"));plan.play_requested=false;}
+                            std::thread::sleep(Duration::from_millis(100));continue;
+                        }
+                    }
+                }
+                if !authority_ready || timeline.lock().is_ok_and(|plan|!plan.may_publish()) {
+                    if reported_at.elapsed()>=Duration::from_secs(10) {
+                        let _=rpc.call("controller.app.instance.report",identity(&id,&current.name));reported_at=Instant::now();
+                    }
+                    std::thread::sleep(Duration::from_millis(20));continue;
                 }
             }
             // A prepared hardware timeline does not make a paused media clock

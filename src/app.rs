@@ -1338,7 +1338,8 @@ impl eframe::App for PealayerApp {
                     .and_then(|transport| transport.clone()),
                 hardware_connected,
                 hardware_sync: self.engine_handle.prepared_timeline.try_lock().ok()
-                    .filter(|plan|plan.has_items()).map(|plan|serde_json::json!({
+                    .filter(|plan|plan.has_items() || plan.authority.is_some()).map(|plan|serde_json::json!({
+                        "authority":plan.authority,"authority_client_id":plan.authority_client_id,
                         "revision":plan.revision,"prepared_revision":plan.acknowledged_revision,
                         "clock_ack_revision":plan.clock_ack_revision,"clock_ack_epoch":plan.clock_ack_epoch,
                         "ack_age_ms":plan.last_ack.map(|ack|ack.elapsed().as_millis() as u64),
@@ -1618,19 +1619,33 @@ impl eframe::App for PealayerApp {
             && self
                 .advertised_hardware()
                 .is_some_and(|capabilities| capabilities.board_connected);
-        let hardware_lost = hardware_connection_was_lost(
+        // A consumer's transport is the Pealayer peer link, not the board.
+        // Losing that link must never pause the authority or invent a USB loss.
+        let hardware_lost = !crate::peer::active() && hardware_connection_was_lost(
             self.was_hardware_connected,
             connected_now,
             self.was_board_connected,
             board_connected_now,
         );
         if hardware_lost {
+            let title = if !connected_now { "PCController connection lost" } else { "Board unavailable" };
+            let detail = self.engine_handle.connection_error.lock().ok().and_then(|error| error.clone())
+                .filter(|error| !error.trim().is_empty())
+                .unwrap_or_else(|| if !connected_now {
+                    "The controller connection is unavailable; the board's physical connection is unknown.".into()
+                } else {
+                    "PCController reports that the board is unavailable.".into()
+                });
             let message = if self.pause_on_hardware_disconnect {
                 self.pause();
-                self.tr("Hardware disconnected — playback paused")
+                format!("{detail} Playback paused.")
             } else {
-                self.tr("Hardware disconnected")
+                detail
             };
+            let _ = crate::messaging::publish(crate::messaging::ToastRequest {
+                id: Some("hardware.connection".into()), title: title.into(), message: message.clone(),
+                severity: crate::messaging::Severity::Warning, timeout_ms: 8000,
+            }, "hardware");
             self.set_osd(message.clone());
             if let Some(hwnd) = self.window_handle {
                 let _ = crate::platform::windows::show_system_notification(
@@ -1640,11 +1655,11 @@ impl eframe::App for PealayerApp {
                 );
             }
         }
-        if connected_now && !self.was_hardware_connected {
+        if !crate::peer::active() && connected_now && !self.was_hardware_connected {
             self.connection_notice = None;
             self.save_config();
         }
-        self.is_connected = connected_now;
+        if !crate::peer::active() { self.is_connected = connected_now; }
         self.was_hardware_connected = connected_now;
         self.was_board_connected = board_connected_now;
         let update = crate::update::manager().status();
@@ -1965,6 +1980,7 @@ impl eframe::App for PealayerApp {
                     crate::ui::about::draw(self, ui);
                 }
             });
+        crate::four_d::authority::draw_warning(self,ui.ctx());
         crate::ui::toasts::draw(ui.ctx());
         crate::ui::remote_location::draw(self, ui.ctx());
     }
@@ -3450,6 +3466,15 @@ impl PealayerApp {
             .map(|mut queue| queue.drain(..).collect::<Vec<_>>())
             .unwrap_or_default();
         for result in results {
+            if result.operation=="hardware-authority" {
+                if let Err(error)=result.result {
+                    let _=crate::messaging::publish(crate::messaging::ToastRequest {
+                        id:Some("hardware.authority".into()),title:"Publishing authority".into(),message:error,
+                        severity:crate::messaging::Severity::Warning,timeout_ms:8000,
+                    },"hardware");
+                }
+                continue;
+            }
             if result.operation.starts_with("rf-") {
                 if self.rf.complete(&result.operation, result.result) {
                     if let Err(error) = self.request_rf("catalog", serde_json::json!({"read_board":true})) { self.rf.error = error; }
@@ -4308,6 +4333,9 @@ impl PealayerApp {
             }
             InteropCommand::RefreshHardwareCatalog => {
                 self.engine_handle.request_catalog_refresh();
+            }
+            InteropCommand::HardwareAuthority { operation, requester_id } => {
+                crate::four_d::authority::request(self, &operation, &requester_id);
             }
             InteropCommand::PlayHardwareMelody { name, repeats } => {
                 if let Err(error) = self.play_buzzer_melody(&name, repeats) {
@@ -6731,11 +6759,23 @@ impl PealayerApp {
             state.timeline=snapshot.session.timeline.clone();
         }
         let fresh=snapshot.received.elapsed()<std::time::Duration::from_secs(2);
+        let link_lost = crate::peer::peer_link_was_lost(state.link_connected, fresh);
+        state.link_connected = Some(fresh);
         self.is_connected=fresh;
         self.serial_port=client.origin.as_str().replacen("http://","pealayer://",1).trim_end_matches('/').into();
         if !fresh {
             let _=self.mpv.0.set_property("pause",true);
-            self.connection_notice=Some("Remote Pealayer disconnected; controls are not redirected to local hardware".into());
+            let detail = client.error.lock().ok().and_then(|value| value.clone())
+                .unwrap_or_else(|| "No fresh state received from the remote Pealayer for two seconds.".into());
+            self.connection_notice=Some(detail.clone());
+            if link_lost {
+                let _ = crate::messaging::publish(crate::messaging::ToastRequest {
+                    id: Some("peer.connection".into()), title: "Remote Pealayer link interrupted".into(),
+                    message: format!("{detail} Local preview and controls are suspended; the remote board connection is unknown."),
+                    severity: crate::messaging::Severity::Warning, timeout_ms: 8000,
+                }, "peer");
+            }
+            ctx.data_mut(|data|data.insert_temp(id,state));
             return;
         }
         self.connection_notice=client.error.lock().ok().and_then(|value|value.clone()).or_else(||client.command_error.lock().ok().and_then(|value|value.clone()));

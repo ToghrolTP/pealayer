@@ -777,12 +777,17 @@ pub fn connect(value: &str, local_port: u16) -> Result<(), String> {
 
 #[derive(Clone, Default)]
 pub(crate) struct PeerUiState {
+    pub link_connected: Option<bool>,
     pub config: Option<crate::config::AppConfig>,
     pub loaded_media: Option<String>,
     pub media_error: Option<String>,
     pub timeline: Option<TimelineState>,
     pub last_correction: Option<Instant>,
     pub attached_external: std::collections::BTreeSet<String>,
+}
+
+pub(crate) fn peer_link_was_lost(previous: Option<bool>, fresh: bool) -> bool {
+    previous == Some(true) && !fresh
 }
 
 fn preserve_geometry(new: &mut Value, old: Option<&Value>) {
@@ -801,6 +806,13 @@ fn preserve_geometry(new: &mut Value, old: Option<&Value>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn stale_peer_link_is_not_a_board_disconnect_or_initial_connection_failure() {
+        assert!(peer_link_was_lost(Some(true), false));
+        assert!(!peer_link_was_lost(None, false));
+        assert!(!peer_link_was_lost(Some(false), false));
+        assert!(!peer_link_was_lost(Some(false), true));
+    }
     #[test]
     fn peer_session_polling_slows_only_while_paused() {
         assert_eq!(
