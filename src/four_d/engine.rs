@@ -2784,4 +2784,3 @@ mod tests {
         assert!(handle.request_prepared_play());
     }
 }
-
