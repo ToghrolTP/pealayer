@@ -81,6 +81,31 @@ impl PreparedTimeline {
             && self.feedback["armed_epoch"].as_u64() == Some(epoch)
             && matches!(self.feedback["state"].as_str(), Some("paused" | "playing"))
     }
+
+    /// Explicit Play may retry a cancelled/faulted controller executor, but
+    /// must obtain a new revision and arm acknowledgement before unpausing.
+    /// Reusing the old revision only returns its terminal state on the peer.
+    pub fn request_play(&mut self) -> bool {
+        if self.compilation_error.is_some() {
+            self.play_requested = false;
+            return false;
+        }
+        let reprepare = self.requires_reprepare
+            || matches!(self.feedback["state"].as_str(), Some("stopped" | "faulted"));
+        if reprepare {
+            self.revision = self.revision.saturating_add(1);
+            self.acknowledged_revision = 0;
+            self.clock_ack_revision = 0;
+            self.clock_ack_epoch = 0;
+            self.last_ack = None;
+            self.error = None;
+            self.deferred_reason = None;
+            self.requires_reprepare = false;
+            self.feedback = Value::Null;
+        }
+        self.play_requested = true;
+        reprepare
+    }
 }
 
 pub fn compile_plan(
@@ -357,6 +382,46 @@ mod tests {
         plan.replace(Err("too many actions".into()));
         assert!(plan.has_items());
         assert!(!plan.ready_for(1));
+        assert!(!plan.request_play());
+        assert!(!plan.play_requested);
+        assert!(plan.compilation_error.is_some());
+    }
+
+    #[test]
+    fn explicit_play_reprepares_a_stopped_controller_without_reusing_its_arm() {
+        let mut plan = PreparedTimeline::default();
+        plan.replace(Ok(json!({"cues":[],"actions":[{"id":"a"}]})));
+        plan.acknowledged_revision = 1;
+        plan.clock_ack_revision = 1;
+        plan.clock_ack_epoch = 3;
+        plan.feedback = json!({"state":"stopped","armed_epoch":3});
+        plan.last_ack = Some(Instant::now());
+
+        assert!(plan.request_play());
+        assert_eq!(plan.revision, 2);
+        assert_eq!(plan.acknowledged_revision, 0);
+        assert_eq!(plan.clock_ack_revision, 0);
+        assert_eq!(plan.clock_ack_epoch, 0);
+        assert!(plan.last_ack.is_none());
+        assert!(plan.play_requested);
+        assert!(!plan.ready_for(3));
+        // Repeated Play while preparation is pending must not churn revisions.
+        assert!(!plan.request_play());
+        assert_eq!(plan.revision, 2);
+    }
+
+    #[test]
+    fn explicit_play_retries_faults_but_not_a_healthy_paused_executor() {
+        let mut plan = PreparedTimeline::default();
+        plan.replace(Ok(json!({"cues":[],"actions":[{"id":"a"}]})));
+        plan.feedback = json!({"state":"paused"});
+        assert!(!plan.request_play());
+        assert_eq!(plan.revision, 1);
+        plan.feedback = json!({"state":"faulted"});
+        plan.error = Some("executor cancelled".into());
+        assert!(plan.request_play());
+        assert_eq!(plan.revision, 2);
+        assert!(plan.error.is_none());
     }
     #[test]
     fn retryable_resource_wait_is_distinct_from_a_timing_fault() {
