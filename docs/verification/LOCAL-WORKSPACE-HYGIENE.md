@@ -62,8 +62,12 @@ The first peer update stalled at graceful shutdown. The subsequent pass preserve
 a private hang dump, used the user's standing permission for the exact hung
 process after IPC/HTTP Quit failed, and resumed the already verified native
 update helper in the signed-in desktop session. The candidate is now installed;
-its live manifest and saved paused position were verified. Playback acceptance
-still fails because the running PCController lacks the media-clock RPC. See
-[deployment and merge checkpoint](DEPLOYMENT-AND-MERGE-CHECKPOINT.md) for current
-evidence and Erfan-Gaming's separately staged, policy-blocked update. Installation
-and smoke tests must not be substituted for successful playback acceptance.
+its live manifest and saved paused position were verified. Subsequent primary-
+owned PCController and protected firmware updates restored media-clock support
+and actual playback. A fresh-revision replay fix was built incrementally on
+David and installed through Cafe's updater. Do not rebuild on Cafe or replace
+its validated DLL. See
+[deployment and merge checkpoint](DEPLOYMENT-AND-MERGE-CHECKPOINT.md) for the
+remaining measured cue-timing failure, David's cache-only consumer and Erfan's
+KMPlayer launch constraint. Installation and smoke tests must not be substituted
+for successful playback or physical-output acceptance.

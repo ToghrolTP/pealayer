@@ -11,16 +11,18 @@ historical requests or branches are complete.
 | Compact custom app icons, Browse, no repeated cards/help, Config file last in Advanced | Shared Preferences implementation; 46 focused tests and inspected native dark/light captures | Native Browse selection still needs interaction testing |
 | Semantic row icons; Language below Fullscreen background | Rust-owned icon metadata rendered by egui and React; inspected screenshot | Installed Web/native cross-surface interaction audit |
 | Vertically center single-line input text, not multiline/wrapped text | Shared native helper at all 44 single-line call sites; actual galley geometry tested | Broader dialog visual audit |
-| Deploy Cafe and verify real playback state | Exact candidate installed through its own verified updater; saved paused position restored | Playback is blocked by the running PCController's missing media-clock RPC, not verified working |
-| Deploy Erfan-Gaming | Destination runtime independently identified; installed and candidate smoke tests passed; candidate uploaded to canonical staging | Updater invocation policy-blocked; installed build is still the previous version |
+| Deploy Cafe and verify real playback state | Current host-compatible build installed through its updater; PCController and protected firmware update completed; Play advances time, Pause and remote seek verified | A cue acknowledgement exceeded the timing limit; sustained precise hardware playback remains unaccepted |
+| Deploy Erfan-Gaming | Destination runtime independently identified; installed and candidate smoke tests passed; candidate uploaded to canonical staging | KMPlayer is running: user explicitly prohibits launching Pealayer there; installed build remains the previous version |
+| Keep David running and synchronized to Cafe | Canonical installation updated, running as a cache-only consumer; no local hardware scheduler; remote seek, mute, pause, preferences and WebSocket snapshot verified | Latest replay fix is staged locally but not installed while the healthy consumer remains open; native close must not be confused with remote Quit |
+| PCController startup service | Single interactive coordinator recovered and updated; no competing TUI owner remains | A real Windows service has not been installed; an interactive recovery task is not a service or boot-start proof |
 | Consolidate useful work and merge safe PRs | Peer polling PR #82 and Vite PR #83 reviewed and merged; combined Preferences branch includes main plus exact PR #77/#79 heads | Remaining CI faults, experiment integration and old-ref/stash reconciliation |
 | Keep D3D11 optional and disabled | Preserved experiment already defines renderer selection with OpenGL default and detached video disabled | Not integrated into main Preferences yet; do not activate or silently deploy the experimental executable |
 
-## Cafe: installed, but playback acceptance failed
+## Cafe: real playback recovered; precise cue timing remains open
 
-The live manifest identifies source `f49db607e51f5ea3d806f6c80570edc737c7f3ad`,
+The latest live manifest identifies source `2821f994e005e2bdeb232cdcb94dc1550c272baf`,
 with a clean build and executable SHA-256
-`fcd6b9dded88029d0220040591bfba3de5a241dd260b75c04c7c56107fe2a8bd`.
+`69d21778159ccb8f8d76b053b46cf50230245c22617b90cc18c34552a5e60e8d`.
 The package uses Cafe's own previously identified runtime, not David's DLL.
 The updater verified the complete upload before replacement.
 
@@ -31,28 +33,75 @@ Its existing verified update journal/helper was resumed in the signed-in
 interactive session; the helper completed successfully. No manual overwrite of
 a running executable occurred. The new process is in interactive session 1.
 
-Saved media and its paused position restored. A Play request did **not** advance
-the position: the hardware synchronization error is
-`Hardware clock acknowledgement failed: method not found`.
-An independent read-only call to the running PCController confirmed that
-`controller.media.playback.get` is also absent. Current PCController source
-implements the media playback/timeline methods. The deployed counterpart must
-be reconciled through its bridge-owned update, without bypassing prepared-cue
-arming or flashing firmware without a separate need/authorization. The user
-was asked for direction on that host update. Paused-state restoration is proven;
-successful play/pause/seek and precise board synchronization are not.
+The missing media RPC was traced to the old deployed controller. Its first
+host-update acknowledgement did not prove delivery: a competing TUI process
+became coordinator during replacement, and the update journal rolled back.
+After graceful shutdown of that secondary owner, the primary-owned second
+transaction committed the new executable. The updated host then exposed a
+separate board fault: the old firmware rejected the media-clock opcode. The
+user authorized host and firmware updates; the protected firmware transaction
+completed with readback/reconnect verification and restored board settings.
+No EEPROM reinitialization was requested.
+
+Cafe now owns the only hardware scheduler. Actual Play advanced media time by
+1.48 seconds during a three-second observation, with live board acknowledgements
+and no synchronization error. Pause applied. A later cue test reported a
+58.1 ms acknowledgement against the 50 ms limit and correctly paused playback;
+the guard was not relaxed. Physical output-edge timing and sustained cue
+playback are therefore not accepted yet. The original paused position was
+restored through David's remote client and matched on both sides exactly.
+
+The replay fix creates a fresh prepared revision after a stopped/faulted
+executor, instead of repeatedly accepting the terminal state of an old revision.
+Seven focused media-timeline tests passed, including compilation-error
+fail-closed behavior and avoiding revision churn on repeated Play. The release
+package and Web/PWA guards passed on David; the package intentionally skipped
+the full native suite, whose Windows binary-test access violation is still a
+merge gate. The new build was delivered to Cafe using its own updater.
+
+Measured three-second CPU samples after coordinator consolidation were 1.5%
+for PCController and 7.7% for Pealayer, normalized across four logical CPUs.
+These are short observations, not a sustained-playback performance certificate.
+
+Controller evidence and next owner actions are on
+[startup/recovery issue #598](https://github.com/atomicdeploy/PCController/issues/598#issuecomment-6065386655)
+and [media synchronization issue #554](https://github.com/atomicdeploy/PCController/issues/554#issuecomment-6065387269).
+
+## David: synchronized consumer, not a second controller
+
+The canonical application remains running as a consumer of Cafe. A separately
+scoped Chisel reverse link was authorized by the user and binds the server-side
+forward only to loopback. Existing remote-access tunnels were preserved; no
+Codex execution policy or system-wide security policy was changed.
+
+Live client diagnostics report `local_storage=cache_only`,
+`local_hardware_scheduler=false` and no transport/command error. Remote mute,
+pause and exact seek reached Cafe. Changing one preference through David
+updated both API views while David's local config-file hash stayed unchanged;
+the original value was restored. David's local WebSocket returned a complete
+authoritative snapshot. Paused preview drift measured zero. Sample round trips
+of roughly 0.5–1.1 seconds mean playing-preview synchronization is not certified
+frame-exact over this tunnel.
+
+David currently runs the preceding clean canonical build, not the latest replay
+fix above. The new candidate is staged. Native window close closes only the
+consumer; API/IPC session Quit is forwarded to Cafe. Do not send remote Quit to
+install a local consumer update. Reconnect after the scoped local update and
+verify the installed manifest before marking David's latest fix delivered.
 
 ## Erfan-Gaming: staged, not delivered
 
 The existing canonical installation and logged-in user were discovered through
 the established SSH route. The current destination DLL stayed unchanged.
 Both the old installed executable and the new candidate exited 0 in runtime
-smoke tests. The candidate's full executable hash matches Cafe's candidate.
-The old installed application was started in its signed-in interactive session
-so its updater could be used. The candidate updater invocation was rejected by
-execution policy before running; do not reroute that blocked invocation or claim
-the upload/smoke checks constitute installation. The live manifest remains the
-previous source `95be0c4c31d0263e1ec8d2a15c853d595c522aad`.
+smoke tests. The staged preceding candidate's full executable hash was verified;
+the latest Cafe replay fix has not yet been delivered to Erfan.
+The old installed application was initially started before the user's KMPlayer
+constraint arrived, then exited gracefully. The latest process inventory shows
+KMPlayer running and no Pealayer process. Do not launch Pealayer while KMPlayer
+is running. Upload and smoke checks do not constitute installation. The last
+verified installed manifest remains source
+`95be0c4c31d0263e1ec8d2a15c853d595c522aad`.
 
 ## Main and remaining merge gates
 
@@ -79,14 +128,16 @@ previous source `95be0c4c31d0263e1ec8d2a15c853d595c522aad`.
 
 ## Next owner steps
 
-1. Obtain direction for the Cafe PCController bridge-managed replacement;
-   verify the advertised current RPC contract, then real Play, advancing media
-   time, Pause, stable paused time, seek, graceful reopen/restoration and board
-   acknowledgement. Keep the original paused state after verification.
-2. Complete Erfan's own updater through an allowed operator action and verify
-   the live source/runtime identity, media decoding and controller behavior.
-3. Diagnose Windows binary-test access violation; review/fix #84 and #86.
-4. Merge the verified consolidation, then integrate D3D11 opt-in without
+1. Finish David's scoped consumer update and reconnect without stopping Cafe or
+   creating a second hardware scheduler. Verify the running manifest.
+2. Instrument/fix the controller cue acknowledgement lateness without weakening
+   the safety limit; verify physical outputs and sustained playback. Implement
+   and verify the requested real startup service with correct user/config and
+   updater ownership. Recovery scheduled tasks alone do not satisfy this.
+3. Complete Erfan's own updater only when its KMPlayer constraint permits it;
+   verify live source/runtime identity, media decoding and controller behavior.
+4. Diagnose Windows binary-test access violation; review/fix #84 and #86.
+5. Merge the verified consolidation, then integrate D3D11 opt-in without
    discarding newer Preferences/media/hardware work. Audit old refs and stash
    hunks before closing superseded PRs or retiring branches.
 
