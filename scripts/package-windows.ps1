@@ -91,7 +91,7 @@ if (-not $upxPath) {
 }
 
 if (-not $SkipTests) {
-    & cargo test --locked --jobs 1
+    & cargo test --locked --jobs 1 -- --test-threads=1
     if ($LASTEXITCODE -ne 0) { throw "cargo test failed with exit code $LASTEXITCODE" }
 }
 

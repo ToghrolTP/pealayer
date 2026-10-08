@@ -60,7 +60,10 @@ impl PreparedTimeline {
         changed
     }
     pub fn may_publish(&self) -> bool {
-        self.authority.as_ref().is_none_or(|authority|authority.may_publish(&crate::platform::interop::controller_instance_id()))
+        // Identity is fixed when the engine is created (or supplied by the
+        // authority for a remote consumer). Re-resolving it here reloads and
+        // validates the entire config under this lock on every clock sample.
+        self.authority.as_ref().is_none_or(|authority|authority.may_publish(&self.authority_client_id))
     }
     pub fn has_items(&self) -> bool {
         self.revision != self.acknowledged_revision
@@ -392,6 +395,23 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
 mod tests {
     use super::*;
     use crate::four_d::models::{Effect, EffectInstance, Timeline};
+    #[test]
+    fn publication_uses_the_prepared_engines_stable_identity() {
+        let mut plan = PreparedTimeline::default();
+        plan.authority_client_id = "publisher:stable-engine".into();
+        plan.authority = Some(super::super::authority::Status {
+            owner_id: plan.authority_client_id.clone(), owner_label: "Publisher".into(),
+            exclusive: false, revision: 1, pending: vec![], owner_endpoint: None,
+        });
+        assert!(plan.may_publish());
+        plan.authority.as_mut().unwrap().exclusive = true;
+        assert!(plan.may_publish());
+        plan.authority.as_mut().unwrap().owner_id = "another-publisher".into();
+        assert!(!plan.may_publish());
+        plan.authority.as_mut().unwrap().owner_id.clear();
+        assert!(!plan.may_publish());
+    }
+
     #[test]
     fn authority_handoff_invalidates_old_arm_but_metadata_refresh_does_not() {
         let status = super::super::authority::Status {

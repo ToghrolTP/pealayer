@@ -26,6 +26,9 @@ coordinator timing contract.
 3. An independent libmpv observer samples actual playback every 20 ms; the
    telemetry thread sends clock updates about every 40 ms while hardware is armed.
    Repainting, Web UI connection, and GPU callbacks do not own this clock.
+   Authority checks compare the engine's already-established client identity;
+   they must not load/parse/validate configuration while holding the timeline
+   mutex in the sampling or publishing path.
 4. Playback waits for both plan preparation and a matching paused-clock/epoch
    arming acknowledgement. PCController schedules commands itself, rather than
    receiving a new play RPC at every cue boundary.

@@ -194,7 +194,10 @@ jobs:
         if: runner.os == 'Windows'
         env:
           CARGO_BUILD_JOBS: "1"
-        run: cargo test --locked --jobs 1 --target x86_64-pc-windows-gnu
+        # Native tests share process-wide libmpv and application state. Use the
+        # same serial test policy as Linux/macOS; --jobs controls compilation,
+        # not the number of concurrently executing tests.
+        run: cargo test --locked --jobs 1 --target x86_64-pc-windows-gnu -- --test-threads=1
       - name: "🚀 Build release binary"
         if: runner.os != 'Windows'
         run: cargo build --release --locked

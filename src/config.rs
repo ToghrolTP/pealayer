@@ -960,9 +960,13 @@ pub fn detect_executable_dir() -> PathBuf {
 }
 
 pub fn detect_storage_mode(exe_dir: &std::path::Path) -> StorageMode {
-    if std::env::var("PEALAYER_PORTABLE")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
+    storage_mode_with_setting(exe_dir, std::env::var("PEALAYER_PORTABLE").ok().as_deref())
+}
+
+// Pass the setting explicitly so tests never mutate the process environment
+// underneath libmpv/native threads or other storage/configuration tests.
+fn storage_mode_with_setting(exe_dir: &std::path::Path, portable: Option<&str>) -> StorageMode {
+    if portable.is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
         || exe_dir.join("portable.flag").exists()
         || exe_dir.join("pealayer.json").exists()
         || exe_dir.join("portable.dat").exists()
@@ -2262,7 +2266,7 @@ mod tests {
             std::env::temp_dir().join(format!("pealayer_test_sys_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&temp_dir).unwrap();
 
-        let mode = detect_storage_mode(&temp_dir);
+        let mode = storage_mode_with_setting(&temp_dir, None);
         assert_eq!(mode, StorageMode::System);
 
         let sys_path = resolve_system_config_path();
@@ -2301,19 +2305,12 @@ mod tests {
     fn test_detect_storage_mode_env_var() {
         let temp_dir =
             std::env::temp_dir().join(format!("pealayer_test_env_{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&temp_dir).unwrap();
-
-        unsafe {
-            std::env::set_var("PEALAYER_PORTABLE", "1");
+        for setting in ["1", "true", "TRUE", "TrUe"] {
+            assert_eq!(storage_mode_with_setting(&temp_dir, Some(setting)), StorageMode::Portable);
         }
-        let mode = detect_storage_mode(&temp_dir);
-        assert_eq!(mode, StorageMode::Portable);
-
-        unsafe {
-            std::env::remove_var("PEALAYER_PORTABLE");
+        for setting in [None, Some("0"), Some("false"), Some("invalid")] {
+            assert_eq!(storage_mode_with_setting(&temp_dir, setting), StorageMode::System);
         }
-
-        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
