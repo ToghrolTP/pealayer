@@ -696,14 +696,14 @@ impl Default for AppConfig {
             compact_hardware_controls: false,
             compact_timeline_tracks: true,
             timeline_header_wheel_vertical_scroll: true,
-            timeline_plain_wheel_action: TimelineWheelBehavior::Zoom,
-            timeline_ctrl_wheel_action: TimelineWheelBehavior::VerticalScroll,
+            timeline_plain_wheel_action: TimelineWheelBehavior::VerticalScroll,
+            timeline_ctrl_wheel_action: TimelineWheelBehavior::Zoom,
             timeline_shift_wheel_action: TimelineWheelBehavior::HorizontalScroll,
             timeline_alt_wheel_action: TimelineWheelBehavior::Zoom,
             timeline_middle_button_pan: true,
             timeline_middle_axis_lock_modifiers: true,
             timeline_animated_navigation: true,
-            timeline_navigation_transition_ms: 220,
+            timeline_navigation_transition_ms: 100,
             non_user_control_visibility: NonUserControlVisibility::Dimmed,
             prefix_relay_identifiers: true,
             live_pwm_updates: true,
@@ -734,10 +734,9 @@ impl Default for AppConfig {
             windows_video_taskbar_thumbnail: true,
             windows_thumbnail_toolbar: true,
             windows_jump_list_quick_actions: true,
-            // Reactive egui rendering does not require a continuously synced
-            // swap loop. Some Windows OpenGL drivers flicker with V-Sync, so
-            // keep it opt-in while retaining the persisted preference.
-            opengl_vsync: false,
+            // Enable V-Sync by default to lock frame presentation to the monitor refresh rate
+            // and eliminate tearing or runaway swap loops.
+            opengl_vsync: true,
             // Winit delivers WM_PAINT while the Windows move/resize modal loop
             // is active. Keep the decoder frame callback driving those paints;
             // only redundant property wakeups are suppressed during the drag.

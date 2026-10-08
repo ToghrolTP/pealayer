@@ -25,23 +25,26 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         ui.with_layout(
             crate::ui::i18n::layout(app.rtl, egui::Align::Center),
             |ui| {
-                if app.status_bar.media_rate
-                    && app.current_video_path.is_some()
-                    && app.media_fps.is_finite()
-                    && app.media_fps > 0.0
-                {
-                    let response = ui.label(format!("{:.2} fps", app.media_fps));
-                    if hide_item_menu(app, response, app.tr("Media frame rate")) {
-                        app.status_bar.media_rate = false;
-                        app.save_config();
+                if app.status_bar.media_rate {
+                    if let Some(fps_info) = app.current_fps_display(std::time::Instant::now()) {
+                        let response = ui
+                            .label(&fps_info.formatted)
+                            .on_hover_text(&fps_info.tooltip);
+                        if hide_item_menu(app, response, app.tr("Frame rate")) {
+                            app.status_bar.media_rate = false;
+                            app.save_config();
+                        }
+                        ui.separator();
                     }
-                    ui.separator();
                 }
 
                 if app.status_bar.hardware {
                     draw_hardware_status(app, ui);
                 }
-                if let Ok(plan)=app.engine_handle.prepared_timeline.try_lock() && plan.has_items() {
+                if app.is_connected
+                    && let Ok(plan) = app.engine_handle.prepared_timeline.try_lock()
+                    && plan.has_items()
+                {
                     ui.separator();
                     let state=if plan.error.is_some(){"Hardware timing fault"}
                         else if plan.acknowledged_revision!=plan.revision{"Preparing hardware"}
@@ -92,7 +95,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         .interact(egui::Sense::click())
         .context_menu(|ui| {
             let title = app.tr("Status bar");
-            let media_rate = app.tr("Media frame rate");
+            let media_rate = app.tr("Frame rate");
             let hardware = app.tr("Hardware connection");
             let telemetry = app.tr("Hardware telemetry");
             let status_rgb = app.tr("Physical status RGB");
@@ -344,6 +347,7 @@ mod tests {
 
     #[test]
     fn status_bar_message_uses_the_same_lifetime_as_osd() {
+        let _lock = crate::app::tests::lock_app_tests();
         let mut app = PealayerApp::default();
         app.osd_timeout_seconds = 4.0;
         app.set_osd("Remote command accepted".to_string());
@@ -351,5 +355,21 @@ mod tests {
             current_status_message(&app).as_deref(),
             Some("Remote command accepted")
         );
+    }
+
+    #[test]
+    fn status_bar_fps_indicator_reflects_app_fps_display() {
+        let _lock = crate::app::tests::lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.status_bar.media_rate = true;
+        let now = std::time::Instant::now();
+        let display = app.current_fps_display(now);
+        assert!(display.is_some());
+        let info = display.unwrap();
+        assert_eq!(info.is_ui_rate, true);
+        assert!(info.formatted.contains("60"));
+
+        app.status_bar.media_rate = false;
+        assert!(!app.status_bar.media_rate);
     }
 }

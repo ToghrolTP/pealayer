@@ -37,14 +37,16 @@ fn test_timeline_zoom_scaling_and_clamping() {
     let mut app = PealayerApp::default();
     assert_eq!(app.timeline_zoom, 100.0);
 
-    // Zoom clamping bounds [20.0, 500.0]
-    let scroll_in = 5000.0;
-    app.timeline_zoom = (app.timeline_zoom + scroll_in * 0.2).clamp(20.0, 500.0);
-    assert_eq!(app.timeline_zoom, 500.0);
+    // Zoom clamping bounds [TIMELINE_MIN_ZOOM, TIMELINE_MAX_ZOOM]
+    let scroll_in = 15000.0;
+    app.timeline_zoom = (app.timeline_zoom + scroll_in * 0.2)
+        .clamp(pealayer::ui::layout::TIMELINE_MIN_ZOOM, pealayer::ui::layout::TIMELINE_MAX_ZOOM);
+    assert_eq!(app.timeline_zoom, pealayer::ui::layout::TIMELINE_MAX_ZOOM);
 
-    let scroll_out = -5000.0;
-    app.timeline_zoom = (app.timeline_zoom + scroll_out * 0.2).clamp(20.0, 500.0);
-    assert_eq!(app.timeline_zoom, 20.0);
+    let scroll_out = -15000.0;
+    app.timeline_zoom = (app.timeline_zoom + scroll_out * 0.2)
+        .clamp(pealayer::ui::layout::TIMELINE_MIN_ZOOM, pealayer::ui::layout::TIMELINE_MAX_ZOOM);
+    assert_eq!(app.timeline_zoom, pealayer::ui::layout::TIMELINE_MIN_ZOOM);
 
     // Coordinate conversion at zoom = 100.0
     app.timeline_zoom = 100.0;

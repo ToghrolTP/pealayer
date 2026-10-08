@@ -100,6 +100,8 @@ const TIMELINE_COMPACT_TRACK_ROW_HEIGHT: f32 = 32.0;
 const TIMELINE_COMFORTABLE_TRACK_ROW_HEIGHT: f32 = 40.0;
 const TIMELINE_COMPACT_ANALOG_ROW_HEIGHT: f32 = 40.0;
 const TIMELINE_COMFORTABLE_ANALOG_ROW_HEIGHT: f32 = 48.0;
+pub const TIMELINE_MIN_ZOOM: f32 = 0.5;
+pub const TIMELINE_MAX_ZOOM: f32 = 2000.0;
 
 fn timeline_track_row_height(compact: bool) -> f32 {
     if compact {
@@ -560,7 +562,7 @@ fn timeline_zoom_from_wheel(current_zoom: f32, wheel_delta: f32) -> f32 {
     // Multiplicative zoom feels uniform at both ends of the range. A 120-unit
     // Windows wheel notch changes the scale by roughly 27%, while precision
     // touchpads still produce small, smooth increments.
-    (current_zoom * (wheel_delta * 0.002).exp()).clamp(20.0, 500.0)
+    (current_zoom * (wheel_delta * 0.002).exp()).clamp(TIMELINE_MIN_ZOOM, TIMELINE_MAX_ZOOM)
 }
 
 fn timeline_offset_for_pointer_zoom(
@@ -620,6 +622,14 @@ fn timeline_offset_to_reveal_x(
     revealed.clamp(0.0, max_offset)
 }
 
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct TimelineZoomAnchor {
+    pub pointer_x_in_viewport: f32,
+    pub media_time_seconds: f64,
+    pub duration_seconds: f64,
+    pub viewport_width: f32,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct TimelineNavigationTransition {
     start_offset: egui::Vec2,
@@ -628,6 +638,7 @@ struct TimelineNavigationTransition {
     target_zoom: f32,
     started_at_seconds: f64,
     duration_seconds: f32,
+    anchor: Option<TimelineZoomAnchor>,
 }
 
 fn sample_timeline_navigation_transition(
@@ -648,14 +659,53 @@ fn sample_timeline_navigation_transition(
     let interpolate = |start: f32, target: f32| {
         (f64::from(start) + f64::from(target - start) * eased) as f32
     };
+    let eased_zoom = interpolate(transition.start_zoom, transition.target_zoom);
+    let eased_offset_y = interpolate(transition.start_offset.y, transition.target_offset.y);
+    let eased_offset_x = if let Some(anchor) = transition.anchor {
+        let next_content_width = (anchor.duration_seconds.max(0.0) as f32 * eased_zoom).max(0.0);
+        let max_offset = (next_content_width - anchor.viewport_width).max(0.0);
+        let desired = anchor.media_time_seconds as f32 * eased_zoom - anchor.pointer_x_in_viewport;
+        desired.clamp(0.0, max_offset)
+    } else {
+        interpolate(transition.start_offset.x, transition.target_offset.x)
+    };
     (
-        egui::vec2(
-            interpolate(transition.start_offset.x, transition.target_offset.x),
-            interpolate(transition.start_offset.y, transition.target_offset.y),
-        ),
-        interpolate(transition.start_zoom, transition.target_zoom),
+        egui::vec2(eased_offset_x, eased_offset_y),
+        eased_zoom,
         complete,
     )
+}
+
+fn fit_timeline_to_window(
+    app: &mut PealayerApp,
+    ui: &mut egui::Ui,
+    viewport_width: f32,
+    total_seconds: f64,
+    timeline_scroll_state: &mut egui::scroll_area::State,
+    navigation_transition_id: egui::Id,
+) {
+    if total_seconds > 0.0 && viewport_width > 0.0 {
+        let fit_zoom = (viewport_width / total_seconds as f32)
+            .clamp(TIMELINE_MIN_ZOOM, TIMELINE_MAX_ZOOM);
+        if app.timeline_animated_navigation {
+            let transition = TimelineNavigationTransition {
+                start_offset: timeline_scroll_state.offset,
+                target_offset: egui::vec2(0.0, timeline_scroll_state.offset.y),
+                start_zoom: app.timeline_zoom,
+                target_zoom: fit_zoom,
+                started_at_seconds: ui.input(|input| input.time),
+                duration_seconds: app.timeline_navigation_transition_ms as f32 / 1_000.0,
+                anchor: None,
+            };
+            ui.data_mut(|data| {
+                data.insert_temp(navigation_transition_id, transition);
+            });
+            ui.ctx().request_repaint();
+        } else {
+            app.timeline_zoom = fit_zoom;
+            timeline_scroll_state.offset.x = 0.0;
+        }
+    }
 }
 
 fn timeline_frame_step_ms(media_fps: f64, frame_count: u32) -> u64 {
@@ -1088,9 +1138,37 @@ fn effect_controls_card<R>(
     emphasized: bool,
     add_contents: impl FnOnce(&mut egui::Ui) -> R,
 ) -> egui::InnerResponse<R> {
+    effect_controls_card_with_ping(
+        ui,
+        outer_width,
+        icon,
+        title,
+        subtitle,
+        emphasized,
+        0.0,
+        add_contents,
+    )
+}
+
+fn effect_controls_card_with_ping<R>(
+    ui: &mut egui::Ui,
+    outer_width: f32,
+    icon: &str,
+    title: &str,
+    subtitle: Option<&str>,
+    emphasized: bool,
+    ping_strength: f32,
+    add_contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::InnerResponse<R> {
     ui.set_width(outer_width);
     let visuals = ui.visuals();
-    let fill = if emphasized {
+    let fill = if ping_strength > 0.0 {
+        let base_mult = if visuals.dark_mode { 0.18 } else { 0.10 };
+        visuals
+            .selection
+            .bg_fill
+            .gamma_multiply((base_mult + 0.18 * ping_strength).min(1.0))
+    } else if emphasized {
         visuals
             .selection
             .bg_fill
@@ -1098,7 +1176,14 @@ fn effect_controls_card<R>(
     } else {
         visuals.widgets.noninteractive.bg_fill
     };
-    let stroke = if emphasized {
+    let stroke = if ping_strength > 0.0 {
+        let stroke_width = 1.0 + 2.0 * ping_strength;
+        let stroke_alpha = (0.72 + 0.28 * ping_strength).min(1.0);
+        egui::Stroke::new(
+            stroke_width,
+            visuals.selection.bg_fill.gamma_multiply(stroke_alpha),
+        )
+    } else if emphasized {
         egui::Stroke::new(1.0_f32, visuals.selection.bg_fill.gamma_multiply(0.72))
     } else {
         visuals.widgets.noninteractive.bg_stroke
@@ -1111,7 +1196,7 @@ fn effect_controls_card<R>(
         .show(ui, |ui| {
             ui.set_width(effect_controls_frame_content_width(outer_width));
             ui.horizontal(|ui| {
-                let icon_color = if emphasized {
+                let icon_color = if ping_strength > 0.0 || emphasized {
                     ui.visuals().selection.bg_fill
                 } else {
                     ui.visuals().strong_text_color()
@@ -5576,6 +5661,7 @@ mod timeline_row_tests {
             target_zoom: 200.0,
             started_at_seconds: 10.0,
             duration_seconds: 0.2,
+            anchor: None,
         };
 
         assert_eq!(
@@ -5590,6 +5676,45 @@ mod timeline_row_tests {
             sample_timeline_navigation_transition(transition, 10.2),
             (egui::vec2(500.0, 60.0), 200.0, true)
         );
+    }
+
+    #[test]
+    fn timeline_navigation_transition_preserves_anchor_focal_point_during_ease() {
+        let anchor = TimelineZoomAnchor {
+            pointer_x_in_viewport: 250.0,
+            media_time_seconds: 3.5,
+            duration_seconds: 100.0,
+            viewport_width: 800.0,
+        };
+        let start_zoom: f32 = 100.0;
+        let target_zoom: f32 = 250.0;
+        let start_offset_x = (3.5_f32 * start_zoom - 250.0).max(0.0);
+        let target_offset_x = (3.5_f32 * target_zoom - 250.0).max(0.0);
+        let transition = TimelineNavigationTransition {
+            start_offset: egui::vec2(start_offset_x, 0.0),
+            target_offset: egui::vec2(target_offset_x, 0.0),
+            start_zoom,
+            target_zoom,
+            started_at_seconds: 0.0,
+            duration_seconds: 1.0,
+            anchor: Some(anchor),
+        };
+
+        for step in 0..=10 {
+            let t = step as f64 * 0.1;
+            let (offset, zoom, _complete) = sample_timeline_navigation_transition(transition, t);
+            let time_under_pointer = (offset.x + 250.0) / zoom;
+            assert!(
+                (time_under_pointer - 3.5).abs() < 1e-4,
+                "Drift detected at t={t}: got {time_under_pointer}, expected 3.5"
+            );
+        }
+    }
+
+    #[test]
+    fn timeline_zoom_range_clamped_to_min_and_max() {
+        assert_eq!(timeline_zoom_from_wheel(1.0, -1000.0), TIMELINE_MIN_ZOOM);
+        assert_eq!(timeline_zoom_from_wheel(1500.0, 1000.0), TIMELINE_MAX_ZOOM);
     }
 
     #[test]
@@ -6123,6 +6248,59 @@ mod timeline_row_tests {
             &mut dock_state,
             PealayerTab::EffectControls
         ));
+    }
+
+    #[test]
+    fn cue_reveal_triggers_effect_controls_ping_and_calculates_decay() {
+        let mut app = PealayerApp::default();
+        assert_eq!(app.effect_controls_ping_strength(0.0), 0.0);
+
+        app.trigger_effect_controls_ping(10.0);
+        assert_eq!(app.effect_controls_ping_at, Some(10.0));
+        assert!((app.effect_controls_ping_strength(10.0) - 1.0).abs() < 1e-4);
+        assert!((app.effect_controls_ping_strength(10.6) - 0.5).abs() < 1e-2);
+        assert_eq!(app.effect_controls_ping_strength(11.2), 0.0);
+        assert_eq!(app.effect_controls_ping_strength(12.0), 0.0);
+    }
+
+    #[test]
+    fn cue_reveal_restores_closed_effect_controls_tab() {
+        let mut app = PealayerApp::default();
+        let path = app.dock_state.find_tab(&PealayerTab::EffectControls).expect("starts open");
+        app.dock_state.remove_tab(path);
+        assert!(app.dock_state.find_tab(&PealayerTab::EffectControls).is_none());
+
+        app.open_or_focus_tab(PealayerTab::EffectControls);
+        app.trigger_effect_controls_ping(5.0);
+
+        let restored = app.dock_state.find_tab(&PealayerTab::EffectControls).expect("restored tab");
+        let leaf = app.dock_state.leaf(restored.node_path()).expect("leaf");
+        assert_eq!(leaf.active, restored.tab);
+    }
+
+    #[test]
+    fn open_or_focus_tab_during_dock_render_persists_restored_tab() {
+        let mut app = PealayerApp::default();
+        let path = app.dock_state.find_tab(&PealayerTab::EffectControls).expect("starts open");
+        app.dock_state.remove_tab(path);
+        assert!(app.dock_state.find_tab(&PealayerTab::EffectControls).is_none());
+
+        // Simulate dock render: swap out dock_state like src/app.rs:1565
+        let dock_state = std::mem::replace(&mut app.dock_state, egui_dock::DockState::new(vec![]));
+
+        // Tab viewer calls open_or_focus_tab while swapped out
+        app.open_or_focus_tab(PealayerTab::EffectControls);
+
+        // Put back dock_state and process pending reveals like src/app.rs:1581
+        app.dock_state = dock_state;
+        for tab in std::mem::take(&mut app.pending_tab_reveals) {
+            reveal_and_focus_tab(&mut app.dock_state, tab);
+        }
+
+        assert!(
+            app.dock_state.find_tab(&PealayerTab::EffectControls).is_some(),
+            "Restored tab must not be lost when called during dock render"
+        );
     }
 
     #[test]
@@ -8582,6 +8760,88 @@ mod timeline_row_tests {
         assert!(timeline_track_picker_item_is_dimmed(&row(false, true)));
         assert!(timeline_track_picker_item_is_dimmed(&row(false, false)));
     }
+
+    #[test]
+    fn test_dropped_effect_hover_cursor_interaction() {
+        let mut app = PealayerApp::default();
+        app.duration = 60.0;
+        app.timeline_zoom = 100.0;
+        let mut capabilities = crate::four_d::controller::HardwareCapabilities::default();
+        capabilities.board_connected = true;
+        capabilities.relays = vec![
+            crate::four_d::controller::HardwareOutput {
+                id: 5,
+                key: "relay.5".into(),
+                name: "Relay 5".into(),
+                role: String::new(),
+                control: String::new(),
+            }
+        ];
+        capabilities.strip_effects = vec![
+            crate::four_d::controller::HardwareStripEffect {
+                id: "strip.strobe".into(),
+                name: "Strobe".into(),
+                engine: "builtin".into(),
+                category: "Lighting".into(),
+                icon: "sparkle".into(),
+                group_icon: String::new(),
+                default_duration_ms: Some(2000),
+                ..Default::default()
+            }
+        ];
+        app.update_hardware_capabilities(Some(capabilities));
+
+        let payload = EffectDragPayload {
+            name: "Strobe".into(),
+            icon: "sparkle".into(),
+            duration_ms: 2000,
+            target: crate::four_d::models::HardwareTarget::ControllerMacro,
+            actions: Vec::new(),
+            controller_macro: None,
+            controller_strip_effect: Some(crate::four_d::models::ControllerStripEffectCue {
+                id: "strip.strobe".into(),
+            }),
+            controller_lane: Some(crate::four_d::models::ControllerEffectLane::Lighting),
+        };
+        let dropped = app.handle_effect_drop(&payload, 0, 1.0);
+        assert!(dropped);
+
+        let context = egui::Context::default();
+        let mut time = 0.0;
+        let mut frame = |app: &mut PealayerApp, events: Vec<egui::Event>| {
+            time += 0.02;
+            let mut output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1000.0, 420.0),
+                    )),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ui| {
+                    PealayerTabViewer { app }.ui(ui, &mut PealayerTab::Timeline);
+                },
+            );
+            output.textures_delta.clear();
+            output
+        };
+
+        frame(&mut app, vec![]);
+
+        // Left handle area should give ResizeHorizontal
+        let out_left = frame(&mut app, vec![egui::Event::PointerMoved(egui::pos2(370.0, 52.0))]);
+        assert_eq!(out_left.platform_output.cursor_icon, egui::CursorIcon::ResizeHorizontal);
+
+        // Right handle area should give ResizeHorizontal
+        let out_right = frame(&mut app, vec![egui::Event::PointerMoved(egui::pos2(565.0, 52.0))]);
+        assert_eq!(out_right.platform_output.cursor_icon, egui::CursorIcon::ResizeHorizontal);
+
+        // Center should give Grab
+        let out_center = frame(&mut app, vec![egui::Event::PointerMoved(egui::pos2(460.0, 52.0))]);
+        assert_eq!(out_center.platform_output.cursor_icon, egui::CursorIcon::Grab);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -9107,7 +9367,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         self.app.scrub_to(current_pos);
                                         ui.ctx().request_repaint();
                                     }
-                                    if can_seek && response.drag_stopped() {
+                                    if can_seek
+                                        && (response.drag_stopped()
+                                            || response.clicked()
+                                            || (self.app.is_scrubbing && !ui.input(|i| i.pointer.primary_down())))
+                                    {
                                         self.app.finish_scrub(current_pos);
                                     }
                                 });
@@ -9138,6 +9402,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             .filter(|name| !name.trim().is_empty());
                         let selected_count = self.app.selected_instance_ids.len();
                         let panel_width = effect_controls_content_width(ui.available_width());
+                        let now = ui.input(|i| i.time);
+                        let ping_strength = self.app.effect_controls_ping_strength(now);
+                        if ping_strength > 0.0 {
+                            ui.ctx().request_repaint();
+                        }
                         ui.set_width(panel_width);
 
                         if selected_count == 1 {
@@ -9230,13 +9499,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         crate::ui::i18n::visual_text(display_language, &template.name)
                                     };
 
-                                    effect_controls_card(
+                                    effect_controls_card_with_ping(
                                         ui,
                                         panel_width,
                                         kind_icon,
                                         &summary_title,
                                         Some(&selected_cue_label),
                                         true,
+                                        ping_strength,
                                         |ui| {
                                             ui.horizontal_wrapped(|ui| {
                                                 effect_controls_badge(
@@ -9673,13 +9943,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             let mut delete_all = false;
                             let mut bulk_relay = None;
 
-                            effect_controls_card(
+                            effect_controls_card_with_ping(
                                 ui,
                                 panel_width,
                                 crate::ui::icons::SELECTION_ALL,
                                 &self.app.tr("Multiple cues selected"),
                                 Some(&self.app.tr("Changes apply to every compatible cue")),
                                 true,
+                                ping_strength,
                                 |ui| {
                                     let controller_owned = self
                                         .app
@@ -11043,8 +11314,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             crate::config::TimelineWheelBehavior::VerticalScroll
                                         } else { crate::config::TimelineWheelBehavior::None }
                                     } else { timeline_wheel_behavior(self.app, modifiers) };
-                                    pending_timeline_wheel = timeline_wheel_over_surface(ui, header_rect, behavior)
-                                        .map(|(action, _)| (action, header_rect.right()));
+                                    pending_timeline_wheel = timeline_wheel_over_surface(ui, header_rect, behavior);
                                 }
                                 // The canvas paints contiguous bands. Remove egui's default
                                 // inter-widget gap so the fixed header rows have the exact same
@@ -12603,7 +12873,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                         if self.app.is_scrubbing
                                             && (!ui.input(|i| i.pointer.primary_down())
-                                                || ruler_response.drag_stopped_by(egui::PointerButton::Primary))
+                                                || ruler_response.drag_stopped_by(egui::PointerButton::Primary)
+                                                || ruler_response.clicked())
                                         {
                                             let current_target = self.app.seek_pos.unwrap_or(self.app.playback_time);
                                             self.app.finish_scrub(current_target);
@@ -12862,7 +13133,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         .button(format!(
                                                             "{} {}",
                                                             crate::ui::icons::SLIDERS_HORIZONTAL,
-                                                            self.app.tr("Manage...")
+                                                            self.app.tr("Reveal in Effect Controls")
                                                         ))
                                                         .clicked()
                                                     {
@@ -13084,6 +13355,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             self.app.selected_keyframes.clear();
                                             self.app.selected_timeline_keyframe = None;
                                             self.app.open_or_focus_tab(PealayerTab::EffectControls);
+                                            self.app.trigger_effect_controls_ping(ui.input(|i| i.time));
                                             ui.ctx().request_repaint();
                                         }
                                         if let Some(cue_id) = jump_to_cue_id {
@@ -13359,8 +13631,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                         if drag_ended {
                                             self.app.active_drag = None;
-                                            let compiled = crate::four_d::engine::compile_timeline(&self.app.timeline, &self.app.track_muted, &self.app.track_soloed);
-                                            let _ = self.app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
+                                            self.app.sync_timeline_engine();
                                         }
 
                                         if self.app.active_drag.is_some() {
@@ -14301,21 +14572,43 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         });
                                     let mut target_zoom = active_navigation_transition
                                         .map_or(current_zoom, |transition| transition.target_zoom);
+                                    let mut zoom_anchor = None;
                                     match wheel_action {
                                         TimelineWheelAction::Zoom(delta) => {
                                             let next_zoom =
                                                 timeline_zoom_from_wheel(target_zoom, delta);
-                                            let pointer_x_in_viewport =
-                                                pointer_screen_x - timeline_viewport.left();
-                                            target_offset.x = timeline_offset_for_pointer_zoom(
-                                                target_offset.x,
-                                                pointer_x_in_viewport,
-                                                target_zoom,
-                                                next_zoom,
-                                                total_seconds,
-                                                timeline_viewport.width(),
-                                            );
+                                            let is_inside_viewport = pointer_screen_x >= timeline_viewport.left()
+                                                && pointer_screen_x <= timeline_viewport.right();
+                                            let pointer_x_in_viewport = if is_inside_viewport {
+                                                pointer_screen_x - timeline_viewport.left()
+                                            } else {
+                                                let playhead_x = self.app.playback_time as f32 * current_zoom - current_offset.x;
+                                                if playhead_x >= 0.0 && playhead_x <= timeline_viewport.width() {
+                                                    playhead_x
+                                                } else {
+                                                    timeline_viewport.width() * 0.5
+                                                }
+                                            };
+
+                                            let anchor_time = active_navigation_transition
+                                                .and_then(|t| t.anchor)
+                                                .filter(|a| (a.pointer_x_in_viewport - pointer_x_in_viewport).abs() < 1.0)
+                                                .map(|a| a.media_time_seconds)
+                                                .unwrap_or_else(|| {
+                                                    let clamped_x = pointer_x_in_viewport.clamp(0.0, timeline_viewport.width().max(0.0));
+                                                    ((current_offset.x + clamped_x) / current_zoom.max(f32::EPSILON)) as f64
+                                                });
+
+                                            let next_content_width = (total_seconds.max(0.0) as f32 * next_zoom).max(0.0);
+                                            let max_offset = (next_content_width - timeline_viewport.width()).max(0.0);
+                                            target_offset.x = (anchor_time as f32 * next_zoom - pointer_x_in_viewport).clamp(0.0, max_offset);
                                             target_zoom = next_zoom;
+                                            zoom_anchor = Some(TimelineZoomAnchor {
+                                                pointer_x_in_viewport,
+                                                media_time_seconds: anchor_time,
+                                                duration_seconds: total_seconds,
+                                                viewport_width: timeline_viewport.width(),
+                                            });
                                         }
                                         TimelineWheelAction::HorizontalScroll(delta) => {
                                             let max_offset = (total_seconds as f32 * target_zoom
@@ -14343,6 +14636,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             .timeline_navigation_transition_ms
                                             as f32
                                             / 1_000.0,
+                                        anchor: zoom_anchor,
                                     };
                                     ui.data_mut(|data| {
                                         data.insert_temp(navigation_transition_id, transition);
@@ -14358,8 +14652,18 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         TimelineWheelAction::Zoom(delta) => {
                                             let next_zoom =
                                                 timeline_zoom_from_wheel(zoom, delta);
-                                            let pointer_x_in_viewport =
-                                                pointer_screen_x - timeline_viewport.left();
+                                            let is_inside_viewport = pointer_screen_x >= timeline_viewport.left()
+                                                && pointer_screen_x <= timeline_viewport.right();
+                                            let pointer_x_in_viewport = if is_inside_viewport {
+                                                pointer_screen_x - timeline_viewport.left()
+                                            } else {
+                                                let playhead_x = self.app.playback_time as f32 * zoom - timeline_scroll_state.offset.x;
+                                                if playhead_x >= 0.0 && playhead_x <= timeline_viewport.width() {
+                                                    playhead_x
+                                                } else {
+                                                    timeline_viewport.width() * 0.5
+                                                }
+                                            };
                                             timeline_scroll_state.offset.x =
                                                 timeline_offset_for_pointer_zoom(
                                                     timeline_scroll_state.offset.x,
@@ -14699,6 +15003,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         .timeline_navigation_transition_ms
                                                         as f32
                                                         / 1_000.0,
+                                                    anchor: None,
                                                 },
                                             );
                                         });
@@ -14742,10 +15047,22 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 ui.separator();
                                 ui.horizontal(|ui| {
                                     ui.label(format!("{} {}", crate::ui::icons::MAGNIFYING_GLASS, self.app.tr("Zoom")));
-                                    ui.add(egui::Slider::new(&mut self.app.timeline_zoom, 20.0..=500.0).suffix(" px/s"));
+                                    ui.add(egui::Slider::new(&mut self.app.timeline_zoom, TIMELINE_MIN_ZOOM..=TIMELINE_MAX_ZOOM).logarithmic(true).suffix(" px/s"));
                                 });
                                 if ui.button(format!("{} {}", crate::ui::icons::ARROW_COUNTER_CLOCKWISE, self.app.tr("Reset zoom"))).clicked() {
                                     self.app.timeline_zoom = 100.0;
+                                    ui.close();
+                                }
+                                if ui.button(format!("{} {}", crate::ui::icons::ARROWS_OUT, self.app.tr("Fit to window (Shift+Z)"))).clicked() {
+                                    fit_timeline_to_window(
+                                        self.app,
+                                        ui,
+                                        timeline_viewport.width(),
+                                        total_seconds,
+                                        &mut timeline_scroll_state,
+                                        navigation_transition_id,
+                                    );
+                                    timeline_scroll_changed = true;
                                     ui.close();
                                 }
                                 ui.separator();
@@ -14845,6 +15162,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 let page_right_pressed = ui.input(|i| i.key_pressed(egui::Key::PageDown));
                                 let home_pressed = ui.input(|i| i.key_pressed(egui::Key::Home));
                                 let end_pressed = ui.input(|i| i.key_pressed(egui::Key::End));
+                                let fit_timeline_pressed = ui.input(|i| {
+                                    i.key_pressed(egui::Key::Z)
+                                        && i.modifiers.shift
+                                        && !i.modifiers.ctrl
+                                        && !i.modifiers.command
+                                        && !i.modifiers.alt
+                                });
 
                                 let num_modifier_free = ui.input(|i| !i.modifiers.ctrl && !i.modifiers.alt && !i.modifiers.command && !i.modifiers.shift);
                                 let key_1_pressed = ui.input(|i| i.key_pressed(egui::Key::Num1)) && num_modifier_free;
@@ -14982,6 +15306,16 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     } else {
                                         (timeline_content_size.x - timeline_viewport.width()).max(0.0)
                                     };
+                                } else if fit_timeline_pressed {
+                                    fit_timeline_to_window(
+                                        self.app,
+                                        ui,
+                                        timeline_viewport.width(),
+                                        total_seconds,
+                                        &mut timeline_scroll_state,
+                                        navigation_transition_id,
+                                    );
+                                    timeline_scroll_changed = true;
                                 } else if playhead_left_pressed || playhead_right_pressed {
                                     let direction = if playhead_left_pressed { -1.0 } else { 1.0 };
                                     let step_seconds = timeline_frame_step_ms(
@@ -15180,6 +15514,7 @@ pub fn restore_tab_to_canonical_slot(
             if let Some(anchor_path) = dock_state
                 .find_tab(&PealayerTab::ProgramMonitor)
                 .or_else(|| dock_state.find_tab(&PealayerTab::Timeline))
+                .or_else(|| dock_state.iter_all_tabs().map(|(path, _)| path).next())
             {
                 let node_index = anchor_path.node;
                 dock_state
@@ -15417,6 +15752,7 @@ impl PealayerApp {
                 existing.icon.clone_from(&payload.icon);
                 existing.duration_ms = payload.duration_ms.max(1);
                 existing.controller_lane = Some(lane);
+                existing.duration_policy = crate::four_d::models::CueDurationPolicy::Resizable;
                 existing.id
             } else {
                 let mut effect = if let Some(controller_macro) = payload.controller_macro.as_ref() {
@@ -15440,6 +15776,7 @@ impl PealayerApp {
                     )
                 };
                 effect.controller_lane = Some(lane);
+                effect.duration_policy = crate::four_d::models::CueDurationPolicy::Resizable;
                 let id = effect.id;
                 self.timeline.templates.push(effect);
                 id
@@ -15519,12 +15856,13 @@ impl PealayerApp {
         self.undo_stack.push(self.snapshot_timeline());
 
         // Check or create template targeting target_relay with payload.target
-        let template_id = if let Some(existing) = self.timeline.templates.iter().find(|t| {
+        let template_id = if let Some(existing) = self.timeline.templates.iter_mut().find(|t| {
             t.name == payload.name
                 && t.duration_ms == payload.duration_ms
                 && t.target == payload.target
                 && t.actions.first().map(|a| a.relay_id) == Some(target_relay)
         }) {
+            existing.duration_policy = crate::four_d::models::CueDurationPolicy::Resizable;
             existing.id
         } else {
             let actions = if !payload.actions.is_empty() {
@@ -15536,13 +15874,14 @@ impl PealayerApp {
             } else {
                 crate::four_d::patterns::generate_constant(target_relay, true, payload.duration_ms)
             };
-            let new_effect = crate::four_d::models::Effect::with_target(
+            let mut new_effect = crate::four_d::models::Effect::with_target(
                 payload.name.clone(),
                 payload.icon.clone(),
                 payload.duration_ms,
                 payload.target,
                 actions,
             );
+            new_effect.duration_policy = crate::four_d::models::CueDurationPolicy::Resizable;
             let id = new_effect.id;
             self.timeline.templates.push(new_effect);
             id
@@ -15631,7 +15970,7 @@ fn render_clip_handles(
     right_active: bool,
     alpha: u8,
 ) {
-    if clip_rect.width() < 14.0 {
+    if clip_rect.width() < 12.0 {
         return;
     }
     let handle_w = (clip_rect.width() * 0.35).min(10.0);
@@ -15657,7 +15996,7 @@ fn render_clip_handles(
                 ne: 0,
                 se: 0,
             },
-            egui::Color32::from_rgba_unmultiplied(0, 220, 255, (50.0 * alpha_scale) as u8),
+            egui::Color32::from_rgba_unmultiplied(0, 220, 255, (60.0 * alpha_scale) as u8),
         );
         painter.line_segment(
             [
@@ -15681,7 +16020,7 @@ fn render_clip_handles(
                 ne: 4,
                 se: 4,
             },
-            egui::Color32::from_rgba_unmultiplied(0, 220, 255, (50.0 * alpha_scale) as u8),
+            egui::Color32::from_rgba_unmultiplied(0, 220, 255, (60.0 * alpha_scale) as u8),
         );
         painter.line_segment(
             [
@@ -15704,7 +16043,7 @@ fn render_clip_handles(
         let left_notch_color = if left_active {
             egui::Color32::from_rgba_unmultiplied(cyan.r(), cyan.g(), cyan.b(), alpha)
         } else {
-            egui::Color32::from_rgba_unmultiplied(255, 255, 255, (70.0 * alpha_scale) as u8)
+            egui::Color32::from_rgba_unmultiplied(255, 255, 255, (120.0 * alpha_scale) as u8)
         };
         painter.line_segment(
             [
@@ -15726,7 +16065,7 @@ fn render_clip_handles(
         let right_notch_color = if right_active {
             egui::Color32::from_rgba_unmultiplied(cyan.r(), cyan.g(), cyan.b(), alpha)
         } else {
-            egui::Color32::from_rgba_unmultiplied(255, 255, 255, (70.0 * alpha_scale) as u8)
+            egui::Color32::from_rgba_unmultiplied(255, 255, 255, (120.0 * alpha_scale) as u8)
         };
         painter.line_segment(
             [

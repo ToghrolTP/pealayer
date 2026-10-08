@@ -216,6 +216,7 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Hardware Monitor Dashboard" => "داشبورد پایش سخت‌افزار",
         "Hardware control" => "کنترل سخت‌افزار",
         "Manage..." => "مدیریت…",
+        "Reveal in Effect Controls" => "نمایش در کنترل‌های جلوه",
         "Manage channels" => "مدیریت کانال‌ها",
         "All board channels" => "همهٔ کانال‌های برد",
         "Order" => "ترتیب",

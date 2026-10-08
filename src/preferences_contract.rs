@@ -1390,7 +1390,7 @@ mod tests {
         let config = crate::config::AppConfig::default();
         let previous: crate::config::AppConfig = serde_json::from_str(r#"{"timeline_ctrl_wheel_zoom":true}"#).unwrap();
         use crate::config::TimelineWheelBehavior as Wheel;
-        assert_eq!(previous.timeline_ctrl_wheel_action, Wheel::VerticalScroll);
+        assert_eq!(previous.timeline_ctrl_wheel_action, Wheel::Zoom);
         let changed = crate::config::AppConfig {
             timeline_plain_wheel_action: Wheel::VerticalScroll,
             timeline_ctrl_wheel_action: Wheel::Zoom,
@@ -1421,14 +1421,14 @@ mod tests {
         })).is_ok());
         assert!(serde_json::from_str::<crate::config::AppConfig>(r#"{"timeline_alt_wheel_action":"invalid"}"#).is_err());
         assert!(config.timeline_header_wheel_vertical_scroll);
-        assert_eq!(config.timeline_plain_wheel_action, Wheel::Zoom);
-        assert_eq!(config.timeline_ctrl_wheel_action, Wheel::VerticalScroll);
+        assert_eq!(config.timeline_plain_wheel_action, Wheel::VerticalScroll);
+        assert_eq!(config.timeline_ctrl_wheel_action, Wheel::Zoom);
         assert_eq!(config.timeline_shift_wheel_action, Wheel::HorizontalScroll);
         assert_eq!(config.timeline_alt_wheel_action, Wheel::Zoom);
         assert!(config.timeline_middle_button_pan);
         assert!(config.timeline_middle_axis_lock_modifiers);
         assert!(config.timeline_animated_navigation);
-        assert_eq!(config.timeline_navigation_transition_ms, 220);
+        assert_eq!(config.timeline_navigation_transition_ms, 100);
 
         let controls = preference_controls(&config);
         for key in [

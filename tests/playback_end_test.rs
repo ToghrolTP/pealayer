@@ -167,3 +167,56 @@ fn test_app_playback_finish_scrub_and_move_around() {
         app.playback_time
     );
 }
+
+#[test]
+fn test_paused_seek_clears_seek_pos_and_advances_display_time_when_playback_resumes() {
+    let _lock = lock_playback_tests();
+    let mut app = PealayerApp::default();
+    let video_path = PathBuf::from("test-data/jellyfish.mp4");
+    assert!(video_path.exists(), "test video must exist");
+
+    app.load_video_file(video_path);
+
+    for _ in 0..20 {
+        thread::sleep(Duration::from_millis(50));
+        app.process_events();
+        if app.duration > 0.0 {
+            break;
+        }
+    }
+    assert!(app.duration > 0.0);
+
+    // Pause the video
+    app.pause();
+    assert!(
+        wait_for_app_state(&mut app, Duration::from_secs(2), |app| app.is_paused),
+        "App must be paused"
+    );
+
+    // Scrub while paused to 2.0s and finish scrub
+    app.scrub_to(2.0);
+    app.finish_scrub(2.0);
+
+    // Wait for the scrub commit to settle
+    assert!(
+        wait_for_app_state(&mut app, Duration::from_secs(3), |app| {
+            app.seek_pos == Some(2.0)
+        }),
+        "Scrub commit should settle with seek_pos Some(2.0)"
+    );
+
+    // Now resume playback
+    app.play();
+    assert!(!app.is_paused, "App should now be playing");
+
+    // During playback, seek_pos must be cleared and resolve_display_time must advance past 2.0s
+    assert!(
+        wait_for_app_state(&mut app, Duration::from_secs(3), |app| {
+            let display_time = pealayer::ui::controls::resolve_display_time(app.seek_pos, app.playback_time);
+            app.seek_pos.is_none() && display_time > 2.2
+        }),
+        "Playback display time must advance past seek_pos (was stuck: {:?}, playback_time: {})",
+        app.seek_pos,
+        app.playback_time
+    );
+}
