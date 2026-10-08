@@ -42,6 +42,23 @@ impl Default for PreparedTimeline {
     }
 }
 impl PreparedTimeline {
+    pub fn update_authority(&mut self, status: super::authority::Status) -> bool {
+        let changed = self.authority.as_ref().map(|value| value.owner_id.as_str())
+            != Some(status.owner_id.as_str());
+        if changed {
+            self.acknowledged_revision = 0;
+            self.clock_ack_revision = 0;
+            self.clock_ack_epoch = 0;
+            self.last_ack = None;
+            self.play_requested = false;
+            self.feedback = Value::Null;
+            self.error = self.compilation_error.clone();
+            self.deferred_reason = None;
+            self.revision = self.revision.saturating_add(1);
+        }
+        self.authority = Some(status);
+        changed
+    }
     pub fn may_publish(&self) -> bool {
         self.authority.as_ref().is_none_or(|authority|authority.may_publish(&crate::platform::interop::controller_instance_id()))
     }
@@ -233,6 +250,7 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
         let mut previous_path = String::new();
         let mut seeking = false;
         while lifecycle.strong_count() > 0 {
+            let unattended = crate::platform::interop::allow_unattended_hardware_takeover();
             let mut restarted = false;
             for _ in 0..128 {
                 match client.wait_event(0.0) {
@@ -276,6 +294,8 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
                 && !buffering
                 && !estop.load(std::sync::atomic::Ordering::Acquire);
             let mut set_pause = None;
+            let handoff_pause = plan.lock().is_ok_and(|plan| plan.authority.as_ref()
+                .is_some_and(|state| state.unattended_claim(&plan.authority_client_id, unattended).is_some()));
             if let Ok(mut clock) = sample.lock() {
                 let next = position
                     .unwrap_or(clock.position_ms as f64 / 1000.)
@@ -352,6 +372,12 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
                     }
                 }
                 clock.playing = playing;
+                if handoff_pause {
+                    // This is a real libmpv pause, not a fabricated paused clock.
+                    // The publisher accepts only after observing and ACKing it.
+                    set_pause = Some(true);
+                    if let Ok(mut prepared) = plan.lock() { prepared.play_requested = false; }
+                }
             }
             // Never hold shared state while waiting for an mpv command.
             if let Some(paused) = set_pause {
@@ -366,6 +392,31 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
 mod tests {
     use super::*;
     use crate::four_d::models::{Effect, EffectInstance, Timeline};
+    #[test]
+    fn authority_handoff_invalidates_old_arm_but_metadata_refresh_does_not() {
+        let status = super::super::authority::Status {
+            owner_id: "owner".into(), owner_label: "Publisher".into(),
+            exclusive: false, revision: 1, pending: vec![], owner_endpoint: None,
+        };
+        let mut plan = PreparedTimeline::default();
+        plan.authority = Some(status.clone());
+        plan.acknowledged_revision = 7;
+        plan.clock_ack_revision = 7;
+        plan.clock_ack_epoch = 4;
+        plan.last_ack = Some(Instant::now());
+        plan.play_requested = true;
+        let mut refresh = status;
+        refresh.owner_endpoint = Some("http://publisher.example:8080/".into());
+        assert!(!plan.update_authority(refresh.clone()));
+        assert_eq!(plan.clock_ack_revision, 7);
+        refresh.owner_id = "requester".into();
+        assert!(plan.update_authority(refresh));
+        assert_eq!(plan.acknowledged_revision, 0);
+        assert_eq!(plan.clock_ack_revision, 0);
+        assert_eq!(plan.clock_ack_epoch, 0);
+        assert!(plan.last_ack.is_none());
+        assert!(!plan.play_requested);
+    }
     #[test]
     fn revision_is_content_driven_and_requires_clock_arming_ack() {
         let mut plan = PreparedTimeline::default();

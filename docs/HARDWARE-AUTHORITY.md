@@ -21,6 +21,34 @@ one Rust command `pealayer.hardware.authority` and PCController's authority cont
 Production reservation is runtime-resident, survives clock expiry, but does not
 survive a PCController restart in this implementation. It is not authentication.
 
+## Unattended handoff and remote alternative
+
+Preferences > Hardware > Publishing authority contains **Allow unattended
+publishing handoffs** (`allow_unattended_hardware_takeover`), off by default.
+This is the current owner's consent, not a requester's force-takeover permission.
+When enabled, the libmpv observer pauses actual playback; only a fresh observed
+pause and matching clock acknowledgement allow automatic acceptance. PCController
+then completes its existing acknowledged output cleanup before transferring
+ownership. Production lock always blocks the handoff. A failed acceptance is not
+replayed automatically; playback remains paused and the user sees the real error.
+The path is independent of modal rendering and works with the existing headless
+playback observer too. Controller authentication/access policy remains required.
+
+**Connect to authority** offers the other approach: use the publisher's Pealayer
+session instead of becoming a competing hardware scheduler. Native opens the
+existing remote-client connection dialog with the registered origin prefilled
+and editable. Web navigates to the owner's Web application. Origins come from
+the matching registered Pealayer instance and are validated against credentials,
+paths, queries and unsupported schemes; display labels and client IDs are never
+parsed into addresses. A loopback-only/disabled Web server advertises no remote
+origin. Web then disables the action with an explanation; native allows manual
+entry for a separately configured tunnel or route.
+
+A remote consumer's Preferences belong to its server. To opt in a different
+machine for its later direct-publisher role, edit that machine's own stored
+configuration, not the consumer's forwarded Preferences. Enabling a consumer's
+local policy does not grant takeover of its server or bypass production lock.
+
 Connection notices distinguish **Remote Pealayer link interrupted**,
 **PCController connection lost**, **Board unavailable**, **Board status update
 failed**, and **Hardware command rejected**. They carry the actual transport or

@@ -66,6 +66,11 @@ fn playback_publish_interval(sample: &PlaybackSample) -> Duration {
     }
 }
 
+fn handoff_pause_acknowledged(sample: &PlaybackSample, valid_echo: bool) -> bool {
+    valid_echo && !sample.playing && !sample.buffering
+        && sample.observed_at.elapsed() < Duration::from_millis(250)
+}
+
 pub fn spawn(
     lifecycle: Weak<()>,
     sample: Arc<Mutex<PlaybackSample>>,
@@ -88,6 +93,9 @@ pub fn spawn(
         let mut authority_at = Instant::now()-Duration::from_secs(2);
         let mut automatic_claim_attempted = false;
         let mut authority_ready = false;
+        let mut owner_endpoint_cache: (String, Option<String>) = (String::new(), None);
+        let mut owner_endpoint_at = Instant::now() - Duration::from_secs(10);
+        let mut unattended_attempt: Option<(String, String)> = None;
         loop {
             let alive = lifecycle.strong_count() > 0;
             let requested_endpoint = endpoint.lock().map(|s| s.clone()).unwrap_or_default();
@@ -157,16 +165,20 @@ pub fn spawn(
                                     }
                                 }
                             }
+                            if status.owner_id != owner_endpoint_cache.0 || owner_endpoint_at.elapsed() >= Duration::from_secs(10) {
+                                owner_endpoint_at = Instant::now();
+                                // Only observers need the remote alternative. Do not
+                                // add an address lookup to the active publisher's clock path.
+                                owner_endpoint_cache = (status.owner_id.clone(), if status.owner_id.is_empty() || status.owner_id == id { None } else {
+                                    rpc.call("controller.app.instance.get", json!({"id": status.owner_id}))
+                                        .ok().and_then(|value| super::authority::owner_endpoint(&status.owner_id, &value))
+                                });
+                            }
+                            status.owner_endpoint = owner_endpoint_cache.1.clone();
                             if let Ok(mut plan)=timeline.lock() {
-                                let old_owner=plan.authority.as_ref().map(|value|value.owner_id.clone());
-                                if old_owner.as_deref()!=Some(&status.owner_id) {
-                                    plan.acknowledged_revision=0;plan.clock_ack_revision=0;plan.last_ack=None;
-                                    plan.play_requested=false;plan.feedback=serde_json::Value::Null;
-                                    plan.error=plan.compilation_error.clone();plan.deferred_reason=None;
-                                    plan.revision=plan.revision.saturating_add(1);
+                                if plan.update_authority(status) {
                                     previous=None;
                                 }
-                                plan.authority=Some(status);
                             }
                         }
                         Err(error)=>{
@@ -300,12 +312,12 @@ pub fn spawn(
                     "duration_ms":current.duration_ms,"playing":outgoing_playing,"loaded":current.loaded,"rate":current.rate,"epoch":current.epoch,"plan_revision":revision}));
                 match result {
                     Ok(feedback) => {
+                        let valid_echo = feedback["sequence"].as_u64() == Some(sequence)
+                            && feedback["client_id"] == id
+                            && feedback["epoch"].as_u64() == Some(current.epoch)
+                            && feedback["plan_revision"].as_u64().unwrap_or(0) == revision;
                         if let Ok(mut plan) = timeline.lock() {
-                            if feedback["sequence"].as_u64() != Some(sequence)
-                                || feedback["client_id"] != id
-                                || feedback["epoch"].as_u64() != Some(current.epoch)
-                                || feedback["plan_revision"].as_u64().unwrap_or(0) != revision
-                            {
+                            if !valid_echo {
                                 plan.error =
                                     Some("Hardware clock echo mismatch; playback paused".into());
                                 plan.play_requested = false;
@@ -334,6 +346,43 @@ pub fn spawn(
                         previous = Some(current.clone());
                         sent_at = Instant::now();
                         last_error.clear();
+                        // Owner consent is configured locally. A real observed pause
+                        // and its successful echo precede PCController's existing
+                        // acknowledged cleanup/transfer. Never replay a failed accept.
+                        let claim = if handoff_pause_acknowledged(&current, valid_echo) {
+                            let enabled = crate::platform::interop::allow_unattended_hardware_takeover();
+                            timeline.lock().ok().and_then(|plan| plan.authority.as_ref()
+                                .and_then(|status| status.unattended_claim(&id, enabled)).cloned())
+                        } else { None };
+                        if let Some(claim) = claim {
+                            let key = (claim.client_id.clone(), claim.requested_at.clone());
+                            if unattended_attempt.as_ref() != Some(&key) {
+                                unattended_attempt = Some(key);
+                                let result = rpc.call("controller.media.authority.change", json!({
+                                    "client_id": id, "operation": "accept", "requester_id": claim.client_id
+                                })).and_then(|value| serde_json::from_value::<super::authority::Status>(value)
+                                    .map_err(|error| format!("Invalid authority handoff acknowledgement: {error}")));
+                                match result {
+                                    Ok(status) => {
+                                        if let Ok(mut plan) = timeline.lock() { plan.update_authority(status); }
+                                        previous = None;
+                                        authority_at = Instant::now() - Duration::from_secs(2);
+                                        let _ = crate::messaging::publish(crate::messaging::ToastRequest {
+                                            id: Some("hardware.authority".into()), title: "Publishing handoff completed".into(),
+                                            message: format!("Playback paused. {} now owns hardware publishing.", claim.label),
+                                            severity: crate::messaging::Severity::Info, timeout_ms: 6000,
+                                        }, "hardware");
+                                    }
+                                    Err(error) => {
+                                        let _ = crate::messaging::publish(crate::messaging::ToastRequest {
+                                            id: Some("hardware.authority".into()), title: "Unattended handoff failed".into(),
+                                            message: format!("{error}. Playback remains paused; review the handoff manually."),
+                                            severity: crate::messaging::Severity::Error, timeout_ms: 10000,
+                                        }, "hardware");
+                                    }
+                                }
+                            }
+                        }
                     }
                     Err(error) => {
                         if let Ok(mut plan) = timeline.lock() {
@@ -442,5 +491,20 @@ mod tests {
             playback_publish_interval(&value),
             Duration::from_millis(40)
         );
+    }
+
+    #[test]
+    fn unattended_handoff_requires_fresh_observed_pause_and_matching_echo() {
+        let mut value = PlaybackSample::default();
+        assert!(handoff_pause_acknowledged(&value, true));
+        assert!(!handoff_pause_acknowledged(&value, false));
+        value.playing = true;
+        assert!(!handoff_pause_acknowledged(&value, true));
+        value.playing = false;
+        value.buffering = true;
+        assert!(!handoff_pause_acknowledged(&value, true));
+        value.buffering = false;
+        value.observed_at = Instant::now() - Duration::from_secs(1);
+        assert!(!handoff_pause_acknowledged(&value, true));
     }
 }

@@ -58,13 +58,17 @@ struct Connection {
     error: Option<String>,
 }
 pub fn connection_dialog(ctx: &egui::Context) {
+    connection_dialog_to(ctx, None);
+}
+
+pub fn connection_dialog_to(ctx: &egui::Context, endpoint: Option<&str>) {
     ctx.data_mut(|data| {
         data.insert_temp(
             egui::Id::new("peer_connection_dialog"),
             Connection {
                 open: true,
-                endpoint: "pealayer://".into(),
-                port: 8081,
+                endpoint: endpoint.unwrap_or("pealayer://").into(),
+                port: crate::config::control_port().saturating_add(1),
                 error: None,
             },
         )

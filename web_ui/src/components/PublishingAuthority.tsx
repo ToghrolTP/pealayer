@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { Alert, Button, Modal, Space, Typography } from 'antd';
-import { LockOutlined, UnlockOutlined, SwapOutlined, WarningOutlined } from '@ant-design/icons';
+import { LockOutlined, UnlockOutlined, SwapOutlined, WarningOutlined, LinkOutlined } from '@ant-design/icons';
 import type { PlayerState } from './RemoteControlTab';
 
 interface Props {
@@ -22,6 +22,13 @@ export const PublishingAuthority: React.FC<Props> = ({ state, sendCmd, controls 
   const conflict = Boolean(authority.owner_id && !owner);
   const paused = state.playing === false;
   const change = (operation: string, requester_id = '') => sendCmd('pealayer.hardware.authority', { operation, requester_id });
+  // Origin is validated in Rust against the exact registered owner identity.
+  // Web clients navigate to that server, not launch an app on the Web host.
+  const connect = conflict ? <Button icon={<LinkOutlined />} disabled={!authority.owner_endpoint}
+    href={authority.owner_endpoint || undefined} title={authority.owner_endpoint
+      ? "Use the authority's synchronized Web application without another publisher"
+      : "The authority has not advertised a remotely accessible Web address"}>
+    Connect to authority</Button> : null;
   if (controls) return <Alert type={conflict ? 'warning' : 'info'} showIcon icon={<SwapOutlined />}
     message={authority.owner_label || 'No hardware publisher'}
     description={<Space wrap>
@@ -33,6 +40,7 @@ export const PublishingAuthority: React.FC<Props> = ({ state, sendCmd, controls 
       </> : authority.exclusive ? <Typography.Text type="secondary">Production locked · monitoring only</Typography.Text>
         : <Button icon={<SwapOutlined />} disabled={Boolean(pending)} onClick={() => change('request')}>
           {pending ? 'Handoff requested' : 'Request authority'}</Button>}
+      {connect}
     </Space>} />;
   const visible = (conflict || (owner && Boolean(request))) && dismissed !== authority.revision;
   return <Modal open={visible} title={<Space><WarningOutlined />Publishing authority</Space>}
@@ -42,6 +50,7 @@ export const PublishingAuthority: React.FC<Props> = ({ state, sendCmd, controls 
         onClick={() => change('accept', request.client_id)}>Accept handoff</Button>
     </Space> : <Space wrap>
       <Button onClick={() => setDismissed(authority.revision)}>Monitor</Button>
+      {connect}
       {!authority.exclusive && <Button type="primary" disabled={Boolean(pending)} onClick={() => change('request')}>
         {pending ? 'Handoff requested' : 'Request handoff'}</Button>}
     </Space>}>

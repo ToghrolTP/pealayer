@@ -70,6 +70,7 @@ export interface PlayerState {
   hardware_sync?: { revision: number; prepared_revision: number; error?: string | null; ack_age_ms?: number | null;
     authority_client_id?: string;
     authority?: { owner_id: string; owner_label: string; exclusive: boolean; revision: number;
+      owner_endpoint?: string | null;
       pending: Array<{ client_id: string; label: string; requested_at: string }> } | null;
     timeline?: { state?: string; acknowledged?: number; step_count?: number; max_ack_lateness_ms?: number } } | null;
   controller_effect_groups?: Array<{ name: string; icon: string }>;

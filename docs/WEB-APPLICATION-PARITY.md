@@ -49,6 +49,15 @@ widths, and has been exercised against live state rather than sample data.
 
 ## Completed acceptance checkpoints
 
+- **Publishing handoff policy and remote alternative:** Native and Web
+  Preferences share the owner's opt-in unattended-handoff setting. The Rust
+  observer pauses actual playback and requires a fresh matching clock echo
+  before using PCController's existing safe acceptance contract. Production
+  lock is never overridden. Conflict controls offer Connect to authority using
+  the registered owner's validated Web origin; native permits editing the
+  address for a tunnel. Host deployment and live acceptance are tracked in the
+  [deployment checkpoint](verification/DEPLOYMENT-AND-MERGE-CHECKPOINT.md),
+  separately from source and automated verification.
 - **Shared media-track selection:** Rust publishes the current libmpv video,
   audio and subtitle inventory with selected/default/forced/external metadata.
   Simple and NLE Web layouts reuse one selector component and the validated

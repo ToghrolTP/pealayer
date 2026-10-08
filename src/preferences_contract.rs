@@ -638,6 +638,14 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "Preferred endpoint",
             "pccontroller://host:port, tcp://host:port, or direct:<device>",
         ),
+        {
+            let mut control = PreferenceControl::boolean(
+                "allow_unattended_hardware_takeover", "hardware", "Publishing authority",
+                "Allow unattended publishing handoffs",
+            );
+            control.description = Some("Automatically pause this publisher and accept an incoming handoff. Production lock always prevents takeover. Enable only with trusted controller access.");
+            control
+        },
         PreferenceControl::select(
             "motion_control_mode",
             "hardware",

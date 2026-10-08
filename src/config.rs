@@ -623,6 +623,8 @@ pub struct AppConfig {
     pub hardware_endpoint: Option<String>,
     pub auto_connect_hardware: bool,
     pub pause_on_hardware_disconnect: bool,
+    /// Owner consent policy; never overrides PCController's production lock.
+    pub allow_unattended_hardware_takeover: bool,
     pub click_player_to_toggle: bool,
     pub playback_speed: f64,
     pub temporary_fast_forward_speed: f64,
@@ -803,6 +805,7 @@ impl Default for AppConfig {
             hardware_endpoint: None,
             auto_connect_hardware: true,
             pause_on_hardware_disconnect: true,
+            allow_unattended_hardware_takeover: false,
             click_player_to_toggle: true,
             playback_speed: 1.0,
             temporary_fast_forward_speed: 2.0,
