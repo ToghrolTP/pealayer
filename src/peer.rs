@@ -5,6 +5,17 @@ use serde_json::Value;
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
+const ACTIVE_SESSION_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const IDLE_SESSION_POLL_INTERVAL: Duration = Duration::from_secs(1);
+
+fn session_poll_interval(paused: bool) -> Duration {
+    if paused {
+        IDLE_SESSION_POLL_INTERVAL
+    } else {
+        ACTIVE_SESSION_POLL_INTERVAL
+    }
+}
+
 pub const USER_AGENT: &str = concat!("Pealayer/", env!("CARGO_PKG_VERSION"), " peer-client");
 static CLIENT: OnceLock<Arc<Client>> = OnceLock::new();
 static INSTANCE: OnceLock<String> = OnceLock::new();
@@ -706,6 +717,14 @@ pub fn connect(value: &str, local_port: u16) -> Result<(), String> {
     });
     std::thread::spawn(move || {
         loop {
+            // Keep precise position synchronization while playing, but do not
+            // serialize and transfer the full session/config ten times per
+            // second while paused. The one-second idle snapshot also bounds
+            // remote health detection without a permanent high-rate poll.
+            let poll_interval = client
+                .snapshot()
+                .map(|snapshot| session_poll_interval(snapshot.session.paused))
+                .unwrap_or(ACTIVE_SESSION_POLL_INTERVAL);
             let started = Instant::now();
             let next = client
                 .request(reqwest::Method::GET, "/api/peer/session")
@@ -750,7 +769,7 @@ pub fn connect(value: &str, local_port: u16) -> Result<(), String> {
                     }
                 }
             }
-            std::thread::sleep(Duration::from_millis(100));
+            std::thread::sleep(poll_interval);
         }
     });
     Ok(())
@@ -782,6 +801,19 @@ fn preserve_geometry(new: &mut Value, old: Option<&Value>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn peer_session_polling_slows_only_while_paused() {
+        assert_eq!(
+            session_poll_interval(false),
+            Duration::from_millis(100)
+        );
+        assert_eq!(
+            session_poll_interval(true),
+            Duration::from_secs(1)
+        );
+        assert!(session_poll_interval(true) <= Duration::from_secs(1));
+    }
+
     #[test]
     fn endpoint_validation() {
         assert_eq!(
