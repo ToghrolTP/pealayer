@@ -4,6 +4,37 @@ Owning tracker: [Pealayer issue #80](https://github.com/ToghrolTP/pealayer/issue
 Observed on 8 October 2026. This is an acceptance ledger, not a claim that all
 historical requests or branches are complete.
 
+## Cue-clock and startup-service follow-through (9 October)
+
+The cue-timing acceptance remains physical/live, not a compiler-only gate.
+The user authorized Relay 5 through 7 for this pass; Relay 8 and seat/motion
+outputs are excluded. Preserve paused media and existing timeline state, use
+compare-and-swap when removing temporary test cues, and never overwrite a
+concurrent user's edits.
+
+The first baseline stopped before creating or actuating a cue: Cafe accepted
+an API seek but did not move the paused media. The cause is the native lifecycle:
+eframe 0.36 invokes `App::logic`, not `App::ui`, for minimized/occluded windows.
+Commands, device results, media event processing, status publication, shell
+state and disconnect safety now use that single shared logic callback. Painting
+and pointer/keyboard UI gestures stay in the UI callback. This is also required
+for Web-only operation; do not work around it by making the window visible.
+A logic-only regression covers IPC/Web commands and status without painting.
+
+Earlier checkpoint `4c6d85b` passed the full native MSVC release suite (644
+library tests, 644 binary tests and all integration tests), Web production/PWA
+checks, and Linux, Windows GNU and both macOS CI jobs. Integration servers now
+own ephemeral listeners instead of fixed ports that could hit a running app.
+The extra logic fix needs its own test/package/deployment proof; the preceding
+green checkpoint must not be substituted for that proof.
+
+PCController's existing owner is implementing the real delayed-auto-start SCM
+service and separating dispatch, board ACK and total cue lateness. The 50 ms
+safety limit is unchanged; dispatch consumes that same budget. Root owns
+Pealayer verification/deployment. Do not deploy a competing controller or call
+an interactive recovery task a startup service. Live SCM restart, sole board
+ownership, preserved user data, and restored media clock are acceptance gates.
+
 ## Recent requests reconciled
 
 | Request | Source and verification | Remaining acceptance |
