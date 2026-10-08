@@ -59,7 +59,12 @@ impl FrameCache {
     pub fn query_exact(&self, target_pts: f64, tolerance: f64) -> Option<CachedFrame> {
         self.frames
             .iter()
-            .find(|f| (f.pts - target_pts).abs() <= tolerance)
+            .filter(|f| (f.pts - target_pts).abs() <= tolerance)
+            .min_by(|a, b| {
+                (a.pts - target_pts)
+                    .abs()
+                    .total_cmp(&(b.pts - target_pts).abs())
+            })
             .cloned()
     }
 

@@ -1,7 +1,18 @@
 use std::collections::VecDeque;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
-use std::sync::{Arc, Condvar, Mutex};
+use std::sync::{Arc, Condvar, Mutex, RwLock};
 use std::thread;
+
+use crate::mpv::frame_cache::{CachedFrame, FrameCache};
+
+/// Result of a scrub request: either served immediately from the frame cache
+/// or dispatched to the background worker.
+#[derive(Debug, Clone)]
+pub enum ScrubResult {
+    Cached(CachedFrame),
+    Dispatched(u64),
+}
+
 
 /// The seek mode distinguishing high-frequency scrubbing previews from final exact commits.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,11 +69,8 @@ impl SeekBackend for MpvSeekBackend {
         let t_str = t.to_string();
         match mode {
             SeekMode::Scrub => {
-                // Preview seeks must stay cheap enough to follow the pointer.
-                // Plain `absolute` is precise by default in mpv and can spend
-                // long enough decoding from a previous keyframe that a drag
-                // appears frozen. The exact frame is requested on release.
-                let _ = self.mpv.command("seek", &[&t_str, "absolute+keyframes"]);
+                // High-precision scrubbing via absolute+exact seek with decoder frame-drop
+                let _ = self.mpv.command("seek", &[&t_str, "absolute+exact"]);
             }
             SeekMode::Commit => {
                 // "absolute+exact" performs precision seek to exact frame on release
@@ -80,10 +88,22 @@ pub struct SeekController {
     next_request_id: AtomicU64,
     is_running: Arc<AtomicBool>,
     worker_handle: Option<thread::JoinHandle<()>>,
+    frame_cache: Option<Arc<RwLock<FrameCache>>>,
 }
 
 impl SeekController {
     pub fn new<B: SeekBackend>(backend: B) -> Self {
+        Self::with_cache_internal(backend, None)
+    }
+
+    pub fn with_cache<B: SeekBackend>(backend: B, cache: Arc<RwLock<FrameCache>>) -> Self {
+        Self::with_cache_internal(backend, Some(cache))
+    }
+
+    fn with_cache_internal<B: SeekBackend>(
+        backend: B,
+        frame_cache: Option<Arc<RwLock<FrameCache>>>,
+    ) -> Self {
         let state: Arc<(Mutex<Option<PendingSeek>>, Condvar)> =
             Arc::new((Mutex::new(None), Condvar::new()));
         let is_running = Arc::new(AtomicBool::new(true));
@@ -121,12 +141,24 @@ impl SeekController {
             next_request_id: AtomicU64::new(1),
             is_running,
             worker_handle: Some(worker_handle),
+            frame_cache,
         }
     }
 
-    /// Submits a scrub preview request. Rapid successive calls are coalesced so
-    /// intermediate targets are skipped if the backend is currently busy decoding.
-    pub fn request_scrub(&self, target_time: f64) -> u64 {
+    /// Submits a scrub preview request. Checks the frame cache first for an exact
+    /// match (within 20ms tolerance). If found, returns the cached frame immediately.
+    /// Otherwise, rapid successive calls are coalesced so intermediate targets are skipped
+    /// if the backend is currently busy decoding.
+    pub fn request_scrub(&self, target_time: f64) -> ScrubResult {
+        if let Some(cache_lock) = &self.frame_cache {
+            if let Ok(cache) = cache_lock.read() {
+                // 20ms tolerance (covers 30/60fps frame matches)
+                if let Some(frame) = cache.query_exact(target_time, 0.02) {
+                    return ScrubResult::Cached(frame);
+                }
+            }
+        }
+
         let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
         let (lock, cvar) = &*self.state;
         let mut guard = lock.lock().unwrap();
@@ -136,7 +168,7 @@ impl SeekController {
             mode: SeekMode::Scrub,
         });
         cvar.notify_one();
-        request_id
+        ScrubResult::Dispatched(request_id)
     }
 
     /// Submits a final commit seek request. Overwrites any pending scrub requests.

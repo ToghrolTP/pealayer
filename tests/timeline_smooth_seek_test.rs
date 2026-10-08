@@ -1,6 +1,7 @@
-use pealayer::mpv::seek::{SeekBackend, SeekController, SeekMode};
+use pealayer::mpv::frame_cache::{CachedFrame, FrameCache};
+use pealayer::mpv::seek::{ScrubResult, SeekBackend, SeekController, SeekMode};
 use pealayer::ui::controls::resolve_display_time;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -127,3 +128,41 @@ fn test_display_time_isolation_during_scrub() {
     playback_time = 30.0;
     assert_eq!(resolve_display_time(seek_pos, playback_time), 30.0);
 }
+
+#[test]
+fn test_seek_controller_serves_cache_hits_without_backend_dispatch() {
+    let backend = MockSeekBackend::default();
+    let seeks = backend.seeks.clone();
+    let cache = Arc::new(RwLock::new(FrameCache::new(10 * 1024 * 1024)));
+
+    // Prepopulate cache with frame at 5.0s
+    let frame = CachedFrame::new(5.0, 320, 180, vec![42u8; 320 * 180 * 4]);
+    cache.write().unwrap().insert(frame, 5.0);
+
+    let controller = SeekController::with_cache(backend, cache);
+
+    // Scrub to cached frame (within 20ms tolerance)
+    let result = controller.request_scrub(5.01);
+    match result {
+        ScrubResult::Cached(hit) => {
+            assert_eq!(hit.pts, 5.0);
+        }
+        ScrubResult::Dispatched(_) => panic!("Expected cache hit, got dispatched seek"),
+    }
+
+    thread::sleep(Duration::from_millis(30));
+    assert!(
+        seeks.lock().unwrap().is_empty(),
+        "Backend should not receive seek command on cache hit"
+    );
+
+    // Scrub to uncached frame
+    let miss_result = controller.request_scrub(12.0);
+    match miss_result {
+        ScrubResult::Dispatched(_) => {}
+        ScrubResult::Cached(_) => panic!("Expected cache miss, got cache hit"),
+    }
+
+    wait_for_seek_target(&seeks, 12.0);
+}
+
