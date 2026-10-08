@@ -2,6 +2,9 @@ export type UiLocale = 'en' | 'fa';
 
 const fa: Record<string, string> = {
   'Application icons': 'نمادهای برنامه',
+  'Application icon': 'نماد برنامه',
+  'Current': 'کنونی',
+  'Classic (previous)': 'کلاسیک (قبلی)',
   'Default icon': 'نماد پیش‌فرض',
   'Bundled application icon': 'نماد همراه برنامه',
   'Use default icon': 'استفاده از نماد پیش‌فرض',

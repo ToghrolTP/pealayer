@@ -277,9 +277,8 @@ fn main() -> eframe::Result {
         launch_config.compositor_paced_window_move,
     );
     let initial_window_title = app_name.clone();
-    let icon_data = (!crate::peer::active()).then(||crate::branding::resolved_icon_path(&launch_config, crate::branding::PlaybackIconState::Stopped)).flatten()
-        .and_then(|path| std::fs::read(path).ok())
-        .and_then(|bytes| crate::branding::icon_data_from_bytes(&bytes))
+    let icon_data = (!crate::peer::active()).then(||crate::branding::icon_bytes(&launch_config, crate::branding::PlaybackIconState::Stopped)).flatten()
+        .and_then(|(_, bytes)| crate::branding::icon_data_from_bytes(&bytes))
         .or_else(|| {
             eframe::icon_data::from_png_bytes(include_bytes!("../assets/pealayer-icon.png")).ok()
         });

@@ -31,6 +31,13 @@ Advanced ends with **Config file**, including automatic reload and the existing
 path, context menu, Import, Export and Reload operations. Native-only File
 associations comes immediately before Config file, not after it.
 
+Interface also exposes **Application icon**: Current or Classic (previous).
+Both are bundled; the exact previous artwork is preserved under `assets/icons`.
+Custom icons remain in their existing optional section and take precedence over
+the bundled choice. Native/window and Web/PWA resolution share `src/branding.rs`;
+the Web status revision refreshes imagery when settings change, without waiting
+for a play/pause transition. See [bundled icon provenance](../assets/icons/README.md).
+
 Release builds serve their embedded Web assets unless `PEALAYER_WEB_ROOT` is
 explicitly configured. This prevents stale adjacent assets from obscuring new
 controls after an executable-only peer update. Development asset overrides are

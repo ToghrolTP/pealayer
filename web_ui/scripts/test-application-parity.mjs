@@ -19,8 +19,10 @@ const css = read('src/styles.css');
 const preferences = read('src/components/PreferencesTab.tsx');
 const filePicker = read('src/components/ServerFilePicker.tsx');
 const authority = read('src/components/PublishingAuthority.tsx');
+const webPlatform = read('src/webPlatform.ts');
 
 const contracts = [
+  [app.includes('revision=${state.app_icon_revision') && webPlatform.includes('revision=${state.app_icon_revision'), 'runtime branding changes refresh the header, favicon, PWA and media-session imagery without a playback change'],
   [authority.includes('Connect to authority') && authority.includes('authority.owner_endpoint') && authority.includes('disabled={!authority.owner_endpoint}'), 'conflicts offer the validated remote authority without inventing an endpoint'],
   [app.includes('<PublishingAuthority') && hardware.includes('<PublishingAuthority') && authority.includes("sendCmd('pealayer.hardware.authority'") && authority.includes('authority.owner_id === actor'), 'publishing authority uses the same server reservation in controls and the global conflict dialog'],
   [authority.includes('disabled={!paused || authority.exclusive}') && authority.includes("change('accept', request.client_id)") && authority.includes("change('unlock'") === false && authority.includes("'unlock' : 'lock'"), 'owner-consented handoff requires paused playback and production can be explicitly unlocked'],

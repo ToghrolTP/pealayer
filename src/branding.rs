@@ -89,8 +89,30 @@ pub fn resolved_icon_path(config: &AppConfig, state: PlaybackIconState) -> Optio
 }
 
 pub fn icon_bytes(config: &AppConfig, state: PlaybackIconState) -> Option<(PathBuf, Vec<u8>)> {
-    let path = resolved_icon_path(config, state)?;
-    std::fs::read(&path).ok().map(|bytes| (path, bytes))
+    if let Some(path) = resolved_icon_path(config, state)
+        && let Ok(bytes) = std::fs::read(&path)
+        && image::load_from_memory(&bytes).is_ok()
+    {
+        return Some((path, bytes));
+    }
+    let (name, bytes) = builtin_icon_bytes(config.app_icon_preset);
+    Some((PathBuf::from(name), bytes.to_vec()))
+}
+
+/// Native Windows artwork stays multi-resolution ICO; other surfaces use PNG.
+/// These assets are embedded so selecting a preset never creates a disk cache.
+pub fn builtin_icon_bytes(preset: crate::config::AppIconPreset) -> (&'static str, &'static [u8]) {
+    use crate::config::AppIconPreset;
+    match preset {
+        #[cfg(target_os = "windows")]
+        AppIconPreset::Current => ("current.ico", include_bytes!("../assets/icon.ico")),
+        #[cfg(target_os = "windows")]
+        AppIconPreset::Classic => ("classic.ico", include_bytes!("../assets/icons/classic.ico")),
+        #[cfg(not(target_os = "windows"))]
+        AppIconPreset::Current => ("current.png", include_bytes!("../assets/pealayer-icon.png")),
+        #[cfg(not(target_os = "windows"))]
+        AppIconPreset::Classic => ("classic.png", include_bytes!("../assets/icons/classic.png")),
+    }
 }
 
 pub fn icon_image(config: &AppConfig, state: PlaybackIconState) -> Option<image::DynamicImage> {
@@ -137,8 +159,15 @@ pub fn sync_native_window_icon(ctx: &egui::Context, state: PlaybackIconState) {
 
     let config = crate::platform::interop::get_live_config();
     let key = resolved_icon_path(&config, state)
-        .map(|path| format!("{}:{}", state.as_str(), path.display()))
-        .unwrap_or_else(|| format!("{}:<builtin>", state.as_str()));
+        .map(|path| {
+            format!(
+                "{}:{:?}:{}",
+                state.as_str(),
+                config.app_icon_preset,
+                path.display()
+            )
+        })
+        .unwrap_or_else(|| format!("{}:<builtin:{:?}>", state.as_str(), config.app_icon_preset));
     let changed = ctx.data_mut(|data| {
         let id = egui::Id::new("pealayer-playback-window-icon");
         if data.get_temp::<String>(id).as_deref() == Some(&key) {
@@ -175,6 +204,111 @@ pub fn sync_native_window_icon(ctx: &egui::Context, state: PlaybackIconState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn builtin_presets_are_distinct_decodable_and_need_no_files() {
+        use crate::config::AppIconPreset;
+        let (current_name, current) = builtin_icon_bytes(AppIconPreset::Current);
+        let (classic_name, classic) = builtin_icon_bytes(AppIconPreset::Classic);
+        assert_ne!(current, classic);
+        assert_ne!(current_name, classic_name);
+        for bytes in [current, classic] {
+            assert!(icon_data_from_bytes(bytes).is_some());
+        }
+        // Both surface formats are preserved, with release-safe native sizes.
+        for (ico, png) in [
+            (
+                &include_bytes!("../assets/icon.ico")[..],
+                &include_bytes!("../assets/pealayer-icon.png")[..],
+            ),
+            (
+                &include_bytes!("../assets/icons/classic.ico")[..],
+                &include_bytes!("../assets/icons/classic.png")[..],
+            ),
+        ] {
+            let native = image::load_from_memory(ico).unwrap();
+            let web = image::load_from_memory(png).unwrap();
+            assert_eq!(native.width(), native.height());
+            assert!(native.width() >= 128);
+            assert_eq!((web.width(), web.height()), (512, 512));
+            let count = u16::from_le_bytes([ico[4], ico[5]]);
+            assert!(count > 1, "Windows icons must contain multiple resolutions");
+        }
+    }
+
+    #[test]
+    fn preset_round_trip_and_unknown_value_validation() {
+        let mut config = AppConfig::default();
+        assert_eq!(
+            config.app_icon_preset,
+            crate::config::AppIconPreset::Current
+        );
+        config.app_icon_preset = crate::config::AppIconPreset::Classic;
+        let mut value = serde_json::to_value(&config).unwrap();
+        assert_eq!(value["app_icon_preset"], "classic");
+        let restored: AppConfig = serde_json::from_value(value.clone()).unwrap();
+        assert_eq!(restored.app_icon_preset, config.app_icon_preset);
+        value["app_icon_preset"] = serde_json::json!("unknown");
+        assert!(serde_json::from_value::<AppConfig>(value).is_err());
+    }
+
+    #[test]
+    fn invalid_custom_icon_falls_back_to_selected_preset() {
+        let config = AppConfig {
+            app_icon: Some(PathBuf::from("missing-pealayer-test-icon.ico")),
+            app_icon_preset: crate::config::AppIconPreset::Classic,
+            ..AppConfig::default()
+        };
+        for state in [
+            PlaybackIconState::Stopped,
+            PlaybackIconState::Paused,
+            PlaybackIconState::Playing,
+        ] {
+            let (name, bytes) = icon_bytes(&config, state).unwrap();
+            let (expected_name, expected_bytes) = builtin_icon_bytes(config.app_icon_preset);
+            assert_eq!(name, PathBuf::from(expected_name));
+            assert_eq!(bytes, expected_bytes);
+        }
+    }
+
+    #[test]
+    fn custom_and_state_overrides_keep_precedence_over_bundled_choice() {
+        let mut config = AppConfig {
+            app_icon_preset: crate::config::AppIconPreset::Classic,
+            app_icon: Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/icon.ico")),
+            ..AppConfig::default()
+        };
+        let (_, bytes) = icon_bytes(&config, PlaybackIconState::Playing).unwrap();
+        assert_eq!(bytes.as_slice(), &include_bytes!("../assets/icon.ico")[..]);
+        config.app_icon_playing =
+            Some(PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("assets/icons/classic.ico"));
+        let (_, bytes) = icon_bytes(&config, PlaybackIconState::Playing).unwrap();
+        assert_eq!(bytes.as_slice(), &include_bytes!("../assets/icons/classic.ico")[..]);
+    }
+
+    #[test]
+    fn changing_builtin_preset_publishes_a_new_window_icon() {
+        let ctx = egui::Context::default();
+        let mut config = AppConfig::default();
+        crate::platform::interop::set_live_config(config.clone());
+        let mut output = ctx.run_ui(egui::RawInput::default(), |_ui| {
+            sync_native_window_icon(&ctx, PlaybackIconState::Stopped);
+        });
+        output.textures_delta.clear();
+        config.app_icon_preset = crate::config::AppIconPreset::Classic;
+        crate::platform::interop::set_live_config(config);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |_ui| {
+            sync_native_window_icon(&ctx, PlaybackIconState::Stopped);
+        });
+        output.textures_delta.clear();
+        assert!(output.viewport_output.values().any(|viewport| {
+            viewport
+                .commands
+                .iter()
+                .any(|command| matches!(command, egui::ViewportCommand::Icon(Some(_))))
+        }));
+        crate::platform::interop::set_live_config(AppConfig::default());
+    }
 
     #[test]
     fn icon_sync_records_unrelated_config_revisions() {

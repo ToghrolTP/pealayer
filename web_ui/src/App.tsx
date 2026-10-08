@@ -260,7 +260,7 @@ const App: React.FC = () => {
   }, [apiEndpoint, completeRequest]);
 
   const playbackIconState = !state.current_video ? 'stopped' : state.playing ? 'playing' : 'paused';
-  const stateAppIconPath = `${runtime?.appIconPath || '/api/runtime/app-icon'}?state=${playbackIconState}`;
+  const stateAppIconPath = `${runtime?.appIconPath || '/api/runtime/app-icon'}?state=${playbackIconState}&revision=${state.app_icon_revision ?? 0}`;
   const platform = useWebPlatform(
     state,
     rawSendCmd,

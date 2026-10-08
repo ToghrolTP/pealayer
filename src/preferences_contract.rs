@@ -371,6 +371,10 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             &[("native", "Neutral (default)"), ("studio", "Studio")],
         ),
         application_icon_control("app_icon", "Default icon", "Bundled application icon"),
+        PreferenceControl::select(
+            "app_icon_preset", "appearance", "Interface", "Application icon",
+            &[("current", "Current"), ("classic", "Classic (previous)")],
+        ),
         application_icon_control("app_icon_playing", "Playing", "Use default icon"),
         application_icon_control("app_icon_paused", "Paused", "Use default icon"),
         application_icon_control("app_icon_stopped", "Stopped", "Use default icon"),
@@ -1142,6 +1146,7 @@ fn semantic_preference_icon(control: &PreferenceControl) -> &'static str {
         "osd_position" => "target",
         "osd_timeout_seconds" => "clock",
         "app_icon" => "image",
+        "app_icon_preset" => "image",
         "app_icon_playing" => "play",
         "app_icon_paused" => "pause",
         "app_icon_stopped" => "stop-circle",
@@ -1217,9 +1222,9 @@ mod tests {
         let controls = preference_controls(&crate::config::AppConfig::default());
         let interface: Vec<_> = controls.iter().filter(|control| control.section == "appearance" && control.group == "Interface").collect();
         assert_eq!(interface.iter().map(|control| control.key).collect::<Vec<_>>(),
-            ["theme", "accent_color", "color_palette", "fullscreen_video_background", "language"]);
+            ["theme", "accent_color", "color_palette", "app_icon_preset", "fullscreen_video_background", "language"]);
         assert_eq!(interface.iter().map(|control| control.icon).collect::<Vec<_>>(),
-            ["circle-half", "palette", "swatches", "frame-corners", "translate"]);
+            ["circle-half", "palette", "swatches", "image", "frame-corners", "translate"]);
         for (key, icon) in [("always_on_top", "push-pin"), ("osd_position", "target"), ("osd_timeout_seconds", "clock"),
             ("app_icon_playing", "play"), ("app_icon_paused", "pause"), ("app_icon_stopped", "stop-circle")] {
             assert_eq!(controls.iter().find(|control| control.key == key).unwrap().icon, icon);
@@ -1272,6 +1277,21 @@ mod tests {
         config.app_icon_paused = Some("  ".into());
         let empty = preferences_contract(&config);
         assert!(!empty.groups.iter().find(|group| group.name == "Application icons").unwrap().default_open);
+    }
+
+    #[test]
+    fn bundled_icon_choices_are_shared_without_expanding_custom_overrides() {
+        let mut config = crate::config::AppConfig::default();
+        config.app_icon_preset = crate::config::AppIconPreset::Classic;
+        let contract = preferences_contract(&config);
+        let control = contract.controls.iter().find(|control| control.key == "app_icon_preset").unwrap();
+        assert!(matches!(control.kind, PreferenceControlKind::Select));
+        assert_eq!(control.section, "appearance");
+        assert_eq!(control.group, "Interface");
+        assert_eq!(control.options.iter().map(|option| option.value.as_str().unwrap()).collect::<Vec<_>>(),
+            ["current", "classic"]);
+        assert_eq!(contract.values["app_icon_preset"], "classic");
+        assert!(!contract.groups.iter().find(|group| group.name == "Application icons").unwrap().default_open);
     }
 
     #[test]

@@ -1179,6 +1179,8 @@ pub struct PlayerStatusResponse {
     pub status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub appearance: Option<AppearanceState>,
+    #[serde(default)]
+    pub app_icon_revision: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeline_wheel_preferences: Option<crate::config::TimelineWheelPreferences>,
     pub playing: bool,
@@ -1498,6 +1500,7 @@ impl Default for PlayerStatusResponse {
             messages: crate::messaging::MessageSnapshot::default(),
             remote_browser: crate::remote_location::BrowserState::default(),
             appearance: None,
+            app_icon_revision: 0,
             timeline_wheel_preferences: None,
             playing: false,
             volume: 0.0,

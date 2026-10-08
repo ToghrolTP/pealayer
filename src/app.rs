@@ -1245,6 +1245,7 @@ impl eframe::App for PealayerApp {
                 remote_browser: crate::remote_location::snapshot(),
                 messages,
                 appearance: Some(appearance),
+                app_icon_revision: crate::platform::interop::live_config_revision(),
                 timeline_wheel_preferences: Some(crate::config::TimelineWheelPreferences {
                     plain: self.timeline_plain_wheel_action,
                     ctrl: self.timeline_ctrl_wheel_action,

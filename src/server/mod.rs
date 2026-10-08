@@ -1118,7 +1118,11 @@ fn runtime_app_icon_response(target: &str) -> HttpResponse {
 
 fn runtime_pwa_icon_response(target: &str, size: u32) -> HttpResponse {
     let config = crate::platform::interop::get_live_config();
-    let configured = crate::branding::icon_image(&config, requested_icon_state(target));
+    pwa_icon_response(&config, requested_icon_state(target), size)
+}
+
+fn pwa_icon_response(config: &crate::config::AppConfig, state: crate::branding::PlaybackIconState, size: u32) -> HttpResponse {
+    let configured = crate::branding::icon_image(config, state);
     let source = configured
         .or_else(|| image::load_from_memory(include_bytes!("../../assets/pealayer-icon.png")).ok());
     let Some(source) = source else {
@@ -1874,6 +1878,25 @@ mod tests {
             assert_eq!(response.content_type, "image/png");
             let icon = image::load_from_memory(&response.body).unwrap();
             assert_eq!((icon.width(), icon.height()), (size, size));
+        }
+    }
+
+    #[test]
+    fn pwa_icon_response_respects_the_bundled_preset() {
+        use crate::{branding::PlaybackIconState, config::AppIconPreset};
+        let mut config = crate::config::AppConfig::default();
+        let mut previous = None;
+        for preset in [AppIconPreset::Current, AppIconPreset::Classic] {
+            config.app_icon_preset = preset;
+            let response = pwa_icon_response(&config, PlaybackIconState::Stopped, 192);
+            assert_eq!(response.status, 200);
+            assert_eq!(response.content_type, "image/png");
+            let icon = image::load_from_memory(&response.body).unwrap();
+            assert_eq!((icon.width(), icon.height()), (192, 192));
+            if let Some(previous) = previous {
+                assert_ne!(response.body, previous);
+            }
+            previous = Some(response.body);
         }
     }
 

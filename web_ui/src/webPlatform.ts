@@ -148,10 +148,11 @@ export function useWebPlatform(
       favicon.rel = 'icon';
       document.head.appendChild(favicon);
     }
-    favicon.type = 'image/png';
+    // The runtime endpoint serves the configured image, including native ICO.
+    favicon.removeAttribute('type');
     favicon.href = href;
     const touchIcon = document.querySelector<HTMLLinkElement>('link[rel="apple-touch-icon"]');
-    if (touchIcon) touchIcon.href = `/api/runtime/app-icon-192.png?state=${stateName}`;
+    if (touchIcon) touchIcon.href = `/api/runtime/app-icon-192.png?state=${stateName}&revision=${state.app_icon_revision ?? 0}`;
   }, [appIconPath, state.current_video, state.playing]);
 
   useEffect(() => {
@@ -162,8 +163,8 @@ export function useWebPlatform(
       artist: appName,
       album: state.live ? 'Live stream' : 'Pealayer media',
       artwork: [
-        { src: `/api/runtime/app-icon-192.png?state=${stateName}`, sizes: '192x192', type: 'image/png' },
-        { src: `/api/runtime/app-icon-512.png?state=${stateName}`, sizes: '512x512', type: 'image/png' },
+        { src: `/api/runtime/app-icon-192.png?state=${stateName}&revision=${state.app_icon_revision ?? 0}`, sizes: '192x192', type: 'image/png' },
+        { src: `/api/runtime/app-icon-512.png?state=${stateName}&revision=${state.app_icon_revision ?? 0}`, sizes: '512x512', type: 'image/png' },
       ],
     });
     navigator.mediaSession.playbackState = state.playing ? 'playing' : 'paused';

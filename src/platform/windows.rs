@@ -2104,10 +2104,19 @@ unsafe extern "system" fn shell_window_proc(
 ) -> windows::Win32::Foundation::LRESULT {
     use windows::Win32::Foundation::LRESULT;
     use windows::Win32::UI::WindowsAndMessaging::{
-        WM_APPCOMMAND, WM_COMMAND, WM_CONTEXTMENU, WM_LBUTTONDBLCLK, WM_RBUTTONUP,
+        WM_APPCOMMAND, WM_COMMAND, WM_CONTEXTMENU, WM_LBUTTONDBLCLK, WM_RBUTTONUP, WM_SETICON,
     };
 
     observe_native_window_message(message);
+
+    if message == WM_SETICON {
+        // eframe owns the HICON lifetime. Shell copies it; do not destroy it.
+        let result = unsafe { DefSubclassProc(hwnd, message, wparam, lparam) };
+        if lparam.0 != 0 {
+            let _ = refresh_system_tray_window_icon(hwnd.0 as isize, lparam.0);
+        }
+        return result;
+    }
 
     if matches!(message, 0x02e0 | 0x031a | 0x001a) { // DPI/theme/system settings
         THUMBNAIL_METRICS_DIRTY.store(true, Ordering::Release);
@@ -2338,7 +2347,7 @@ pub fn register_system_tray_icon(hwnd_raw: isize, tip: &str) -> Result<(), Strin
         NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_MODIFY, NOTIFYICONDATAW,
         Shell_NotifyIconW,
     };
-    use windows::Win32::UI::WindowsAndMessaging::{GCLP_HICON, GetClassLongPtrW, HICON, LoadIconW};
+    use windows::Win32::UI::WindowsAndMessaging::{GCLP_HICON, GetClassLongPtrW, HICON, LoadIconW, SendMessageW, WM_GETICON, ICON_SMALL2};
     use windows::core::PCWSTR;
 
     if hwnd_raw == 0 {
@@ -2350,8 +2359,14 @@ pub fn register_system_tray_icon(hwnd_raw: isize, tip: &str) -> Result<(), Strin
         let module =
             GetModuleHandleW(None).map_err(|error| format!("GetModuleHandleW failed: {error}"))?;
         let instance: windows::Win32::Foundation::HINSTANCE = module.into();
-        let hicon = LoadIconW(Some(instance), PCWSTR(1usize as *const u16))
-            .unwrap_or_else(|_| HICON(GetClassLongPtrW(hwnd, GCLP_HICON) as *mut _));
+        let window_icon = SendMessageW(hwnd, WM_GETICON,
+            Some(windows::Win32::Foundation::WPARAM(ICON_SMALL2 as usize)), None).0;
+        let hicon = if window_icon != 0 {
+            HICON(window_icon as *mut _)
+        } else {
+            LoadIconW(Some(instance), PCWSTR(1usize as *const u16))
+                .unwrap_or_else(|_| HICON(GetClassLongPtrW(hwnd, GCLP_HICON) as *mut _))
+        };
         if hicon.0.is_null() {
             return Err("packaged application icon is unavailable".to_string());
         }
@@ -2380,6 +2395,24 @@ pub fn register_system_tray_icon(hwnd_raw: isize, tip: &str) -> Result<(), Strin
             Err("Shell_NotifyIconW NIM_ADD and NIM_MODIFY failed".to_string())
         }
     }
+}
+
+#[cfg(target_os = "windows")]
+fn refresh_system_tray_window_icon(hwnd_raw: isize, icon_raw: isize) -> Result<(), String> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::Shell::{NIF_ICON, NIM_MODIFY, NOTIFYICONDATAW, Shell_NotifyIconW};
+    use windows::Win32::UI::WindowsAndMessaging::HICON;
+    let mut nid = NOTIFYICONDATAW {
+        cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+        hWnd: HWND(hwnd_raw as *mut _),
+        uID: 1,
+        uFlags: NIF_ICON,
+        hIcon: HICON(icon_raw as *mut _),
+        ..Default::default()
+    };
+    unsafe { Shell_NotifyIconW(NIM_MODIFY, &mut nid) }.as_bool()
+        .then_some(())
+        .ok_or_else(|| "Shell_NotifyIconW icon refresh failed".to_string())
 }
 
 #[cfg(target_os = "windows")]

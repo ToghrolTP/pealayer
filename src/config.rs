@@ -6,6 +6,15 @@ use std::sync::mpsc::{Receiver, channel};
 pub const DEFAULT_PLAYBACK_POSITION_HISTORY_LIMIT: u32 = 50;
 pub const MAX_PLAYBACK_POSITION_HISTORY_LIMIT: u32 = 500;
 
+/// Bundled application artwork; custom deployment/state icons take precedence.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AppIconPreset {
+    #[default]
+    Current,
+    Classic,
+}
+
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AlwaysOnTopMode {
@@ -609,6 +618,7 @@ pub struct AppConfig {
     pub playback_positions: Vec<PlaybackPositionEntry>,
     pub app_name: Option<String>,
     pub app_icon: Option<PathBuf>,
+    pub app_icon_preset: AppIconPreset,
     pub app_icon_playing: Option<PathBuf>,
     pub app_icon_paused: Option<PathBuf>,
     pub app_icon_stopped: Option<PathBuf>,
@@ -791,6 +801,7 @@ impl Default for AppConfig {
             playback_positions: Vec::new(),
             app_name: None,
             app_icon: None,
+            app_icon_preset: AppIconPreset::Current,
             app_icon_playing: None,
             app_icon_paused: None,
             app_icon_stopped: None,
@@ -1299,6 +1310,7 @@ impl AppConfig {
         self.color_palette = source.color_palette;
         self.accent_color = source.accent_color;
         self.custom_accent_color = source.custom_accent_color.clone();
+        self.app_icon_preset = source.app_icon_preset;
     }
 
     pub(crate) fn normalize_playback_positions(&mut self) {

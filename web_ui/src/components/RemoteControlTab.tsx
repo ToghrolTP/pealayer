@@ -23,6 +23,7 @@ import type { HardwareMelody } from '../melodyCatalog';
 import { MediaTrackSelectors } from './MediaTrackSelectors';
 
 export interface PlayerState {
+  app_icon_revision?: number;
   rf?: RfSnapshot;
   remote_browser?: import('./RemoteLocationDialog').RemoteBrowser;
   status?: string;
