@@ -18,7 +18,68 @@ historical requests or branches are complete.
 | Consolidate useful work and merge safe PRs | Peer polling PR #82 and Vite PR #83 reviewed and merged; combined Preferences branch includes main plus exact PR #77/#79 heads | Remaining CI faults, experiment integration and old-ref/stash reconciliation |
 | Keep D3D11 optional and disabled | Preserved experiment already defines renderer selection with OpenGL default and detached video disabled | Not integrated into main Preferences yet; do not activate or silently deploy the experimental executable |
 
-## Unattended handoff and authority connection: tested, deployment blocked
+## API-first remote role change: source ready, installation acceptance pending
+
+Source `1cdf1fe125d3408d75ebc93b6467c88b43135b0e` on PR #87 implements
+`pealayer.process.connect/status/quit` through native IPC, HTTP, JSON-RPC and
+WebSocket. Process commands stay local on a consumer's gateway; normal session
+commands still reach the authority. The native connection dialog no longer
+launches a competing app through a separate implementation. The connection
+checks the target's real session and loop identity first, deduplicates operation
+IDs, and gracefully restarts the same executable. A direct publisher must be
+paused/unlocked and receive publication-release acknowledgement; an observer
+never releases somebody else's ownership. Session-launch batches cannot hide
+local lifecycle commands. See [API usage](../HARDWARE-AUTHORITY.md#api-first-process-control).
+
+Verification: 7 focused lifecycle/probe/transport tests plus 17 authority,
+media-sync, prepared-timeline and consumer-routing regressions passed. React/PWA
+build passed with 35 parity and 24 responsive contracts. These are bounded
+automated checks, not proof of physical handoff, all historical API coverage, or
+installed-host role-transition acceptance. All six existing Pealayer worktrees
+were inspected and preserved. No controller checkout/branch was changed and no
+build was run on production Cafe.
+
+The clean Windows release build completed on David. Existing canonical staging
+was reused for both destination runtimes; both libmpv smoke tests exited 0.
+The executable is 43,161,088 bytes, SHA-256
+`0e507c7df5e4e70f7bd0ed8aeebd9a5d9c44b503a3f2bd6c5018627b3a3d740e`.
+Private host manifests were updated without copying the large DLLs again.
+
+An isolated headless consumer briefly exercised the compiled APIs against Cafe.
+REST/RPC/WebSocket returned its own PID 48852 and source `1cdf1fe`, not Cafe's.
+`pealayer.process.connect` to its existing origin/port reached `connected`;
+`pealayer.process.quit` through IPC closed only that verification process.
+Read-back confirmed Cafe retained PID 17292, paused position 1196.24 and both
+controller/board connection flags. The verification process exited normally and
+no extra Pealayer instance remained. This verifies the live no-op connection and
+local shutdown path, not a canonical installation or a full role-change restart.
+
+A fresh read-back now confirms Cafe installed the preceding `ce630d1` package,
+not the older package recorded below: actual PID 17292, executable SHA-256
+`ac2f5ed4f6b306636997265edd4c0520f527d4e143ec148439ae04df224b7622`,
+runtime SHA-256
+`872827614ed0adfca11e68def5273bcfcaea6acf38bbf1950c35980b59f43a5f`.
+Its unattended policy is false; board/controller connected flags were true and
+media remained paused. This establishes the earlier package's installation,
+not a deployment of the new process APIs.
+
+David's canonical PID 44980 remains a cache-only consumer of Cafe with
+`local_hardware_scheduler: false`. Its current peer sample age crosses the
+two-second freshness bound intermittently, and diagnostics retain a failed
+media-command transport error. A connected snapshot was seen, but the link is
+not accepted as continuously healthy. Do not suppress that error or describe a
+peer transport lapse as a physical board unplug.
+
+Remaining delivery gate: install the new host-compatible package and read local
+process status on both hosts, then use the process connection API on David,
+verify the fresh consumer snapshot/no scheduler, and prove Cafe's PID/session
+and publisher remain intact. David's older executable forwards update APIs to
+Cafe and lacks the safe local lifecycle API; do not send session Quit or trust
+its relayed updater identity for a local bootstrap. A prior updater launch was
+tool-policy blocked; do not route around that denial. Preserve both running
+apps until an approved/bootstrap path is available.
+
+## Earlier unattended handoff and authority connection checkpoint
 
 On 8 October, source `ce630d14e2f47e2060c913564702c8f16f5e481a` on
 `release/preferences-organization` / PR #87 implements the owner's opt-in
