@@ -1,3 +1,4 @@
+use std::sync::Arc;
 use pealayer::mpv::frame_cache::{CachedFrame, FrameCache};
 
 #[test]
@@ -85,4 +86,18 @@ fn test_frame_cache_replacement_and_clear() {
     assert_eq!(cache.len(), 0);
     assert_eq!(cache.current_bytes(), 0);
     assert!(cache.query_nearest(5.0).is_none());
+}
+
+#[test]
+fn test_app_initializes_and_clears_frame_cache() {
+    let cache = Arc::new(std::sync::RwLock::new(FrameCache::new(128 * 1024 * 1024)));
+    assert_eq!(cache.read().unwrap().len(), 0);
+    assert_eq!(cache.read().unwrap().max_bytes(), 128 * 1024 * 1024);
+
+    let dummy = CachedFrame::new(0.0, 10, 10, vec![0; 400]);
+    cache.write().unwrap().insert(dummy, 0.0);
+    assert_eq!(cache.read().unwrap().len(), 1);
+
+    cache.write().unwrap().clear();
+    assert_eq!(cache.read().unwrap().len(), 0);
 }
