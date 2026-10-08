@@ -13,3 +13,9 @@
 - Preserve and coordinate unpushed or separate host work before replacement. Package against the host's actual libmpv runtime and validate the manifest and runtime smoke test.
 - Use application IPC/RPC to request graceful quit before replacement; use the peer updater rather than manually replacing a running executable. The user permits terminating an already-confirmed hung Pealayer process after graceful exit fails; preserve diagnostics first. This is not permission to terminate healthy unrelated processes.
 - Never invoke egui Context accessors, widgets, or repaint callbacks from inside input/data/memory/output transactions; the context lock is non-reentrant. Snapshot inputs first, then perform the narrow transaction.
+# Continuity and native Windows assets
+
+- GitHub is the source of truth. Before each handoff, audit all relevant worktrees and local-only commits, push useful source/tests/docs/scripts to named branches, verify exact GitHub refs, and record the owning issue/PR, tests, blockers and next action. Preserve concurrent/user work; never reset or clean it away.
+- Never publish credentials, private settings/media URLs, user artwork, caches, logs or generated-only artifacts. Back up private runtime state separately before proposing a machine wipe; clean repository worktrees alone do not establish wipe readiness.
+- Windows custom application, playback-state, taskbar, titlebar, shortcut and executable-resource icons must use native multi-resolution ICO files, generated with high-quality resampling. Private raster masters may remain as authoring inputs; browser/PWA assets may use web-required formats. Patch executable resources before signing.
+- Consult `docs/verification/agent-handoff.md` for the current continuation checklist, production-host build restriction and host-specific runtime safety rules. Treat its runtime observations as dated evidence, not current health.

@@ -209,7 +209,9 @@ pub fn spawn(
                             let retry_ms = error.retry_after_ms.unwrap_or(2_000).clamp(500, 10_000);
                             preparation_retry_at = Instant::now() + Duration::from_millis(retry_ms);
                             if let Ok(mut plan) = timeline.lock() {
-                                plan.error = None;
+                                if !plan.requires_reprepare {
+                                    plan.error = None;
+                                }
                                 plan.deferred_reason = Some(format!("Hardware timeline is waiting: {}", error.message));
                                 plan.play_requested = false;
                             }
@@ -265,9 +267,12 @@ pub fn spawn(
                                 plan.clock_ack_revision = revision;
                                 plan.clock_ack_epoch = current.epoch;
                                 plan.feedback = feedback["timeline"].clone();
-                                // A transient transport failure must not remain visible once
-                                // the controller has acknowledged a newer clock sample.
-                                plan.error = None;
+                                // A transient transport failure can clear on a fresh
+                                // acknowledgement. A discontinuity fault is different:
+                                // keep it latched until explicit Play requests re-arming.
+                                if !plan.requires_reprepare {
+                                    plan.error = None;
+                                }
                                 if plan.feedback["state"] == "faulted" {
                                     plan.error = Some(
                                         plan.feedback["error"]

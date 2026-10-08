@@ -13,6 +13,9 @@ pub struct PreparedTimeline {
     pub error: Option<String>,
     pub deferred_reason: Option<String>,
     pub compilation_error: Option<String>,
+    /// A timing discontinuity invalidated the controller's previous arm. Keep
+    /// the media paused until an explicit Play requests a new prepare/ack cycle.
+    pub requires_reprepare: bool,
     pub last_ack: Option<Instant>,
     pub play_requested: bool,
 }
@@ -28,6 +31,7 @@ impl Default for PreparedTimeline {
             error: None,
             deferred_reason: None,
             compilation_error: None,
+            requires_reprepare: false,
             last_ack: None,
             play_requested: false,
         }
@@ -51,6 +55,7 @@ impl PreparedTimeline {
                 self.compilation_error = None;
                 self.error = None;
                 self.deferred_reason = None;
+                self.requires_reprepare = false;
                 self.last_ack = None;
             }
             Err(error) => {
@@ -60,6 +65,7 @@ impl PreparedTimeline {
                 self.compilation_error = Some(error.clone());
                 self.error = Some(error);
                 self.deferred_reason = None;
+                self.requires_reprepare = false;
                 self.last_ack = None;
             }
             _ => {}
@@ -256,6 +262,7 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
                     prepared.error = Some(
                         "Media clock discontinuity without a seek; hardware playback paused".into(),
                     );
+                    prepared.requires_reprepare = true;
                     prepared.play_requested = false;
                 }
                 if rebase {
@@ -267,6 +274,7 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
                         prepared.revision = prepared.revision.saturating_add(1);
                         prepared.error = prepared.compilation_error.clone();
                         prepared.deferred_reason = None;
+                        prepared.requires_reprepare = false;
                         prepared.last_ack = None;
                         prepared.play_requested |= playing;
                     }
@@ -293,6 +301,7 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
                         }
                         if ready && !fresh {
                             prepared.error = Some("Hardware clock acknowledgement expired; playback paused. Seek and reprepare before retrying.".into());
+                            prepared.requires_reprepare = true;
                             prepared.play_requested = false;
                         }
                         set_pause = Some(true);
