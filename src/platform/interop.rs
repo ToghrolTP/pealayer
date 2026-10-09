@@ -2332,6 +2332,7 @@ pub fn live_config_revision() -> u64 {
 
 #[derive(Clone)]
 pub struct LiveFrameConfig {
+    pub web_enabled: bool,
     pub web_sync_interval_ms: u32,
     pub remote_folder_auto_next: bool,
     pub remote_folder_thumbnails: bool,
@@ -2341,6 +2342,7 @@ pub struct LiveFrameConfig {
 impl LiveFrameConfig {
     fn from_config(config: &crate::config::AppConfig, dark: bool) -> Self {
         Self {
+            web_enabled: crate::config::resolved_web_enabled(config),
             web_sync_interval_ms: config.web_sync_interval_ms,
             remote_folder_auto_next: config.remote_folder_auto_next,
             remote_folder_thumbnails: config.remote_folder_thumbnails,

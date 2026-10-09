@@ -213,7 +213,7 @@ pub(crate) fn paint_seekbar_markers(
     let pointer = ui.ctx().pointer_hover_pos().filter(|point| rect.contains(*point));
     let nearest_chapter = pointer.and_then(|point| chapter_near_pointer(&chapters, rect, duration, point.x));
     let half_height = ui.spacing().slider_rail_height * 0.35;
-    for chapter in &chapters {
+    for chapter in chapters {
         if !chapter.time_seconds.is_finite()
             || !(0.0..=duration).contains(&chapter.time_seconds)
         {

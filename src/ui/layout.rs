@@ -5311,6 +5311,9 @@ pub(crate) fn set_control_order(
         && let Some(current) = current.as_mut()
     {
         let _ = current.apply_control_reorder(&control.key, order);
+        app.engine_handle
+            .hardware_revision
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
     app.set_osd(app.tr("Saving channel order..."));
 }
@@ -11862,47 +11865,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
         let display_language = self.app.language;
-        let replay_label = self.app.tr("Replay");
-        let play_label = self.app.tr("Play");
-        let pause_label = self.app.tr("Pause");
-        let stop_label = self.app.tr("Stop");
-        let timeline_delete_cue_label = self.app.tr("Delete Cue");
-        let estop_banner_label = self.app.tr("EMERGENCY STOP ACTIVE - ALL OUTPUTS DISABLED");
-        let relay_mute_help = self
-            .app
-            .tr("Mute Track (M)\nMutes relay physical output during playback.");
-        let relay_solo_help = self
-            .app
-            .tr("Solo Track (S)\nSolos this relay track output during playback.");
-        let lock_help = self
-            .app
-            .tr("Lock Track (L)\nPrevents moving or modifying effects on this track.");
-        let actuator_mute_help = self
-            .app
-            .tr("Mute Track (M)\nMutes actuator physical output during playback.");
-        let record_arm_help = self
-            .app
-            .tr("Record Arm (R)\nArms this track for real-time motion capture gesture recording.");
-        let live_fader_help = self
-            .app
-            .tr("Live Actuator Fader\nControl actuator intensity in real time (0% - 100%).");
-        let add_keyframe_help = self
-            .app
-            .tr("Add Keyframe\nInserts a keyframe at the current playhead position.");
-        let timeline_ruler_help = self
-            .app
-            .tr("Timeline Ruler\nClick or drag to scrub playhead. Scroll to zoom time.");
-        let linear_label = self.app.tr("Linear");
-        let smooth_label = self.app.tr("Smooth (Hermite)");
-        let step_label = self.app.tr("Step");
-        let delete_keyframe_label = self.app.tr("Delete Keyframe");
-        let deselect_keyframe_label = self.app.tr("Deselect keyframe");
-        let keyframe_label = self.app.tr("Keyframe");
-        let interpolation_label = self.app.tr("Interpolation");
-        let time_label = self.app.tr("Time");
-        let value_label = self.app.tr("Value");
-        let analog_track_label = self.app.tr("Analog Track");
-        let port_channel_label = self.app.tr("Port/Channel");
         // High density styling for text elements
         ui.style_mut().override_text_style = Some(egui::TextStyle::Body);
 
@@ -11936,6 +11898,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 && self.app.duration > 0.0;
                             ui.add_enabled_ui(has_video, |ui| {
                                 ui.horizontal_wrapped(|ui| {
+                                    let replay_label = self.app.tr("Replay");
+                                    let play_label = self.app.tr("Play");
+                                    let pause_label = self.app.tr("Pause");
+                                    let stop_label = self.app.tr("Stop");
                                     let play_icon = if self.app.is_playback_finished() {
                                         crate::ui::icons::ARROW_COUNTER_CLOCKWISE
                                     } else if self.app.is_paused {
@@ -12862,6 +12828,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             }
                         }
                         if self.app.estop_active {
+                            let estop_banner_label =
+                                self.app.tr("EMERGENCY STOP ACTIVE - ALL OUTPUTS DISABLED");
                             ui.horizontal(|ui| {
                                 let time = ui.input(|i| i.time);
                                 let is_flash = (time * 4.0).sin() > 0.0;
@@ -13261,6 +13229,42 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                         // unlimited GPU render loop when V-Sync was disabled.
                     }
                     PealayerTab::Timeline => {
+                        let timeline_delete_cue_label = self.app.tr("Delete Cue");
+                        let relay_mute_help = self
+                            .app
+                            .tr("Mute Track (M)\nMutes relay physical output during playback.");
+                        let relay_solo_help = self
+                            .app
+                            .tr("Solo Track (S)\nSolos this relay track output during playback.");
+                        let lock_help = self
+                            .app
+                            .tr("Lock Track (L)\nPrevents moving or modifying effects on this track.");
+                        let actuator_mute_help = self
+                            .app
+                            .tr("Mute Track (M)\nMutes actuator physical output during playback.");
+                        let record_arm_help = self
+                            .app
+                            .tr("Record Arm (R)\nArms this track for real-time motion capture gesture recording.");
+                        let live_fader_help = self
+                            .app
+                            .tr("Live Actuator Fader\nControl actuator intensity in real time (0% - 100%).");
+                        let add_keyframe_help = self
+                            .app
+                            .tr("Add Keyframe\nInserts a keyframe at the current playhead position.");
+                        let timeline_ruler_help = self
+                            .app
+                            .tr("Timeline Ruler\nClick or drag to scrub playhead. Scroll to zoom time.");
+                        let linear_label = self.app.tr("Linear");
+                        let smooth_label = self.app.tr("Smooth (Hermite)");
+                        let step_label = self.app.tr("Step");
+                        let delete_keyframe_label = self.app.tr("Delete Keyframe");
+                        let deselect_keyframe_label = self.app.tr("Deselect keyframe");
+                        let keyframe_label = self.app.tr("Keyframe");
+                        let interpolation_label = self.app.tr("Interpolation");
+                        let time_label = self.app.tr("Time");
+                        let value_label = self.app.tr("Value");
+                        let analog_track_label = self.app.tr("Analog Track");
+                        let port_channel_label = self.app.tr("Port/Channel");
                         let timeline_track_height =
                             timeline_track_row_height(self.app.compact_timeline_tracks);
                         let timeline_analog_height =
@@ -13912,6 +13916,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         self.app.track_soloed.insert(*relay);
                                                     }
                                                 }
+                                                self.app.bump_timeline_revision();
                                                 let compiled = crate::four_d::engine::compile_timeline(&self.app.timeline, &self.app.track_muted, &self.app.track_soloed);
                                                 let _ = self.app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
                                             }
@@ -13927,6 +13932,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         self.app.track_muted.insert(*relay);
                                                     }
                                                 }
+                                                self.app.bump_timeline_revision();
                                                 let compiled = crate::four_d::engine::compile_timeline(&self.app.timeline, &self.app.track_muted, &self.app.track_soloed);
                                                 let _ = self.app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
                                             }
@@ -14978,10 +14984,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             });
                                         }
 
-                                        let media_chapters = self.app.media_chapters();
+                                        let mut clicked_chapter = None;
                                         let active_chapter_index =
                                             self.app.active_media_chapter().map(|chapter| chapter.index);
-                                        for chapter in &media_chapters {
+                                        for chapter in self.app.media_chapters() {
                                             let marker_x =
                                                 rect.min.x + chapter.time_seconds as f32 * zoom;
                                             if marker_x < rect.min.x || marker_x > rect.max.x || marker_x < viewport_clip.min.x - 20.0 || marker_x > viewport_clip.max.x + 20.0 {
@@ -15007,7 +15013,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 ));
                                             if chapter_response.clicked() {
                                                 clicked_any_keyframe = true;
-                                                self.app.jump_to_media_chapter(chapter.index);
+                                                clicked_chapter = Some(chapter.index);
                                             }
                                             chapter_response.context_menu(|ui| {
                                                 ui.label(
@@ -15024,11 +15030,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     ))
                                                     .clicked()
                                                 {
-                                                    self.app
-                                                        .jump_to_media_chapter(chapter.index);
+                                                    clicked_chapter = Some(chapter.index);
                                                     ui.close();
                                                 }
                                             });
+                                        }
+                                        if let Some(index) = clicked_chapter {
+                                            self.app.jump_to_media_chapter(index);
                                         }
 
                                         if let Some(pos) = pointer_pos {
@@ -16493,7 +16501,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         // distinct from editable project keyframes. Render them
                                         // as subtle amber flags spanning the timeline so chapter
                                         // boundaries remain useful without looking editable.
-                                        for chapter in &media_chapters {
+                                        for chapter in self.app.media_chapters() {
                                             let marker_x =
                                                 rect.min.x + chapter.time_seconds as f32 * zoom;
                                             if marker_x < rect.min.x || marker_x > rect.max.x || marker_x < viewport_clip.min.x - 20.0 || marker_x > viewport_clip.max.x + 20.0 {
