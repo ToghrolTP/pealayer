@@ -695,7 +695,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     endpoint_changed |= ui
                                         .add_sized(
                                             [240.0, 22.0],
-                                            egui::TextEdit::singleline(&mut app.serial_port)
+                                            crate::ui::dialog::singleline_text_edit(&mut app.serial_port)
                                                 .hint_text(endpoint_hint),
                                         )
                                         .on_hover_text(app.tr(

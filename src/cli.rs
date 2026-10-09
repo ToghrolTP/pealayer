@@ -106,6 +106,7 @@ APPLICATION OPTIONS:
   --unregister-associations  Unregister Pealayer file associations
   -h, --help                 Print help information
   -V, --version              Print version information
+  --build-info               Print embedded build identity as JSON; no player is started
 "#,
         env!("CARGO_PKG_VERSION")
     )
@@ -146,6 +147,11 @@ pub fn parse_cli_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliActi
                     "pealayer {}",
                     env!("CARGO_PKG_VERSION")
                 )));
+            }
+            "--build-info" => {
+                return Ok(CliAction::PrintVersion(serde_json::to_string(
+                    &crate::platform::interop::ApplicationIdentity::current("Pealayer"),
+                ).map_err(|error| error.to_string())?));
             }
             "--web-only" | "--headless" => {
                 web_only = true;
@@ -372,8 +378,14 @@ pub fn try_forward_launch_request(request: &LaunchRequest) -> bool {
         Ok(payload) => payload,
         Err(_) => return false,
     };
-    send_unified_request(&payload, Duration::from_millis(500))
-        .is_ok_and(|response| response.contains("\"status\":\"accepted\""))
+    let accepted = send_unified_request(&payload, Duration::from_millis(500))
+        .is_ok_and(|response| response.contains("\"status\":\"accepted\""));
+    if request.commands.iter().any(|command| matches!(command, InteropCommand::OpenPreferences)) {
+        crate::diagnostics::record_shell_action(
+            if accepted { "forward_accepted" } else { "forward_failed" }, "preferences",
+        );
+    }
+    accepted
 }
 
 fn send_unified_request(payload: &str, timeout: Duration) -> Result<String, String> {
@@ -511,6 +523,13 @@ mod tests {
             parse_cli_args(args_v).unwrap(),
             CliAction::PrintVersion(_)
         ));
+
+        let CliAction::PrintVersion(identity) = parse_cli_args(vec![
+            "pealayer".into(), "--build-info".into(),
+        ]).unwrap() else { panic!("build identity must exit before starting a player") };
+        let identity: crate::platform::interop::ApplicationIdentity = serde_json::from_str(&identity).unwrap();
+        assert_eq!(identity.commit, env!("PEALAYER_GIT_COMMIT"));
+        assert_eq!(identity.dirty, env!("PEALAYER_GIT_DIRTY") == "true");
 
         let message = parse_cli_args(vec![
             "pealayer".to_string(),

@@ -132,7 +132,7 @@ impl PreferencesDraft {
 }
 
 impl NativePreferencesController {
-    fn spawn(owner_hwnd: isize, tab: usize) -> Result<Self, String> {
+    fn spawn(owner_hwnd: isize, tab: usize, ctx: &egui::Context) -> Result<Self, String> {
         let executable = std::env::current_exe()
             .map_err(|error| format!("resolve Pealayer executable: {error}"))?;
         let child = std::process::Command::new(executable)
@@ -142,6 +142,30 @@ impl NativePreferencesController {
             .arg(tab.to_string())
             .spawn()
             .map_err(|error| format!("open native Preferences window: {error}"))?;
+        crate::diagnostics::record_shell_action("helper_spawned", "preferences");
+        #[cfg(target_os = "windows")]
+        {
+            use windows::Win32::{Foundation::CloseHandle, System::Threading::{
+                OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject, INFINITE,
+            }};
+            // A closed helper must cause a parent frame even when playback is
+            // paused. Wait on an independent OS handle, not a Child mutex that
+            // would block the GUI's try_wait(). No repaint polling is needed.
+            if let Ok(handle) = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, child.id()) } {
+                let process_handle = handle.0 as usize;
+                let repaint = ctx.clone();
+                let watcher = std::thread::Builder::new()
+                    .name("pealayer-preferences-exit".to_owned())
+                    .spawn(move || {
+                        let handle = windows::Win32::Foundation::HANDLE(process_handle as *mut _);
+                        unsafe { WaitForSingleObject(handle, INFINITE); let _ = CloseHandle(handle); }
+                        crate::platform::interop::wake_command_dispatcher(&repaint);
+                    });
+                if watcher.is_err() { unsafe { let _ = CloseHandle(handle); } }
+            }
+        }
+        #[cfg(not(target_os = "windows"))]
+        let _ = ctx;
         Ok(Self { child })
     }
 
@@ -153,6 +177,24 @@ impl NativePreferencesController {
         let _ = self.child.kill();
         let _ = self.child.wait();
     }
+}
+
+/// All UI/IPC entry points share the same native/embedded lifecycle.
+pub(crate) fn open(app: &mut PealayerApp, ctx: &egui::Context) {
+    crate::diagnostics::record_shell_action("gui_open_requested", "preferences");
+    if reap_exited_controller(&mut app.native_preferences) {
+        if let Err(error) = app.cancel_preference_preview(ctx) { app.config_status = error; }
+    }
+    app.show_preferences_dialog = true;
+    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+    ctx.request_repaint();
+}
+
+fn reap_exited_controller(controller: &mut Option<NativePreferencesController>) -> bool {
+    let exited = controller.as_mut().is_some_and(|controller| !controller.is_open());
+    if exited { *controller = None; }
+    exited
 }
 
 impl Drop for NativePreferencesController {
@@ -369,6 +411,7 @@ impl eframe::App for StandalonePreferencesApp {
                 crate::platform::windows::register_window_hwnd(hwnd);
                 let _ = crate::platform::windows::set_window_owner(hwnd, self.owner_hwnd);
                 self.native_window_initialized = true;
+                crate::diagnostics::record_shell_action("helper_window_ready", "preferences");
             }
         }
         #[cfg(not(target_os = "windows"))]
@@ -490,7 +533,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             let owner = app
                 .window_handle
                 .unwrap_or_else(crate::platform::windows::get_registered_hwnd);
-            match NativePreferencesController::spawn(owner, app.preferences_tab) {
+            match NativePreferencesController::spawn(owner, app.preferences_tab, ui.ctx()) {
                 Ok(controller) => app.native_preferences = Some(controller),
                 Err(error) => {
                     app.config_status = error;
@@ -632,6 +675,7 @@ fn native_tr(language: AppLanguage, key: &'static str) -> String {
 }
 
 fn draw_preferences_editor(draft: &mut PreferencesDraft, ui: &mut egui::Ui) -> PreferencesOutcome {
+    crate::ui::sync_elegance_theme(ui.ctx());
     let language = crate::config::resolved_language_preference(&draft.config);
     let tr = |key: &'static str| native_tr(language, key);
     let rtl = crate::config::resolve_language(language) == AppLanguage::Persian;
@@ -755,44 +799,37 @@ fn draw_preferences_editor(draft: &mut PreferencesDraft, ui: &mut egui::Ui) -> P
         });
     });
     if draft.confirm_close {
-        egui::Window::new(format!(
-            "{} {}",
-            crate::ui::icons::WARNING,
-            tr("Unsaved preferences")
-        ))
-        .id(egui::Id::new("preferences-confirm-close"))
-        .anchor(egui::Align2::CENTER_CENTER, egui::Vec2::ZERO)
-        .collapsible(false)
-        .resizable(false)
-        .movable(false)
-        .show(ui.ctx(), |ui| {
-            ui.set_min_width(360.0);
-            ui.label(tr("Save your changes before closing Preferences?"));
-            ui.add_space(10.0);
-            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                if crate::ui::dialog::action_button(ui, crate::ui::icons::X, &tr("Cancel"))
-                    .clicked()
-                {
-                    draft.confirm_close = false;
+        let mut confirm_open = true;
+        let mut cancel = false;
+        let mut discard = false;
+        let mut save = false;
+        elegance::Modal::new("preferences-confirm-close", &mut confirm_open)
+            .heading(tr("Unsaved preferences"))
+            .header_icon(crate::ui::icons::WARNING)
+            .header_accent(elegance::Accent::Amber)
+            .alert(true)
+            .close_on_backdrop(false)
+            .footer(|ui| {
+                if ui.add(elegance::Button::new(tr("Save")).accent(elegance::Accent::Green)).clicked() {
+                    save = true;
                 }
-                if crate::ui::dialog::action_button(ui, crate::ui::icons::TRASH, &tr("Discard"))
-                    .clicked()
-                {
-                    outcome.discard = true;
-                    draft.confirm_close = false;
+                if ui.add(elegance::Button::new(tr("Discard")).accent(elegance::Accent::Red)).clicked() {
+                    discard = true;
                 }
-                if crate::ui::dialog::primary_action_button(
-                    ui,
-                    crate::ui::icons::FLOPPY_DISK,
-                    &tr("Save"),
-                )
-                .clicked()
-                {
-                    outcome.request_save();
-                    draft.confirm_close = false;
+                if ui.add(elegance::Button::new(tr("Cancel")).outline()).clicked() {
+                    cancel = true;
                 }
+            })
+            .show(ui.ctx(), |ui| {
+                ui.label(tr("Save your changes before closing Preferences?"));
             });
-        });
+        if save {
+            outcome.request_save();
+        }
+        if discard {
+            outcome.discard = true;
+        }
+        draft.confirm_close = confirm_open && !cancel && !save && !discard;
     }
     outcome
 }
@@ -812,14 +849,19 @@ fn draw_contract_section(
     let mut changed = false;
     let mut clear_remote_history = false;
     let mut clear_playback_positions = false;
-    let groups = unique_preference_groups(&controls, section.id);
-    for group in groups {
+    let groups = crate::preferences_contract::preference_groups(&controls, &values);
+    for presentation in groups.iter().filter(|group| group.section == section.id) {
+        let group = presentation.name;
         let group_controls = controls
             .iter()
             .filter(|control| control.section == section.id && control.group == group)
             .collect::<Vec<_>>();
         let label_width = preference_label_column_width(ui, &group_controls, tr);
-        preference_section(ui, group_icon(group), &tr(group), |ui| {
+        if section.id == "advanced" && group == "Config file" {
+            draw_advanced_actions(draft, ui, tr);
+        }
+        preference_section_with_disclosure(ui, group_icon(group), &tr(group),
+            presentation.collapsible.then_some(presentation.default_open), |ui| {
             ui.spacing_mut().item_spacing.y = PREFERENCE_ROW_GAP;
             for control in group_controls {
                 changed |=
@@ -890,20 +932,13 @@ fn draw_contract_section(
     if clear_playback_positions {
         draft.config.playback_positions.clear();
     }
-    if section.id == "advanced" {
-        draw_advanced_actions(draft, ui, tr);
-    }
     changed
 }
 
+#[cfg(test)]
 fn unique_preference_groups(controls: &[PreferenceControl], section: &str) -> Vec<&'static str> {
-    let mut groups = Vec::new();
-    for control in controls.iter().filter(|control| control.section == section) {
-        if !groups.contains(&control.group) {
-            groups.push(control.group);
-        }
-    }
-    groups
+    crate::preferences_contract::preference_groups(controls, &serde_json::Value::Null)
+        .into_iter().filter(|group| group.section == section).map(|group| group.name).collect()
 }
 
 fn render_contract_control(
@@ -920,7 +955,7 @@ fn render_contract_control(
     let mut replacement = None;
     let mut companion_changed = false;
     let mut description_rendered = false;
-    let control_icon = preference_control_icon(&control.kind);
+    let control_icon = preference_control_icon(control.icon);
     match control.kind {
         PreferenceControlKind::Accent => {
             let selected = current.as_str().unwrap_or("system");
@@ -928,7 +963,7 @@ fn render_contract_control(
                 .options
                 .iter()
                 .find(|option| option.value.as_str() == Some(selected))
-                .map(|option| tr(option.label))
+                .map(|option| option.description.clone().unwrap_or_else(|| tr(option.label)))
                 .unwrap_or_else(|| selected.to_string());
             preference_row(ui, control_icon, &tr(control.label), label_width, |ui| {
                 let control_width = ui.available_width().min(PREFERENCE_CONTROL_MAX_WIDTH);
@@ -1029,7 +1064,10 @@ fn render_contract_control(
                     .show_ui(ui, |ui| {
                         for option in &control.options {
                             if ui
-                                .selectable_label(option.value == current, tr(option.label))
+                                .selectable_label(
+                                    option.value == current,
+                                    option.description.clone().unwrap_or_else(|| tr(option.label)),
+                                )
                                 .clicked()
                             {
                                 replacement = Some(option.value.clone());
@@ -1164,7 +1202,7 @@ fn render_contract_control(
                                 changed |= ui
                                     .add_sized(
                                         [field_width, PREFERENCE_ROW_HEIGHT],
-                                        egui::TextEdit::singleline(&mut item.from)
+                                        crate::ui::dialog::singleline_text_edit(&mut item.from)
                                             .horizontal_align(from_align)
                                             .hint_text(tr("Source text")),
                                     )
@@ -1173,7 +1211,7 @@ fn render_contract_control(
                                 changed |= ui
                                     .add_sized(
                                         [field_width, PREFERENCE_ROW_HEIGHT],
-                                        egui::TextEdit::singleline(&mut item.to)
+                                        crate::ui::dialog::singleline_text_edit(&mut item.to)
                                             .horizontal_align(to_align)
                                             .hint_text(tr("Replacement")),
                                     )
@@ -1216,13 +1254,58 @@ fn render_contract_control(
                 replacement = serde_json::to_value(replacements).ok();
             }
         }
+        PreferenceControlKind::File => {
+            let mut text = current.as_str().unwrap_or_default().to_string();
+            let mut edited = false;
+            if let Some(selected) = crate::ui::peer_browser::take_preference_file(ui.ctx(), control.key) {
+                text = selected;
+                edited = true;
+            }
+            preference_row(ui, control_icon, &tr(control.label), label_width, |ui| {
+                let width = ui.available_width().min(PREFERENCE_CONTROL_MAX_WIDTH);
+                let browse_width = 85.0;
+                let clear_width = 24.0;
+                edited |= ui.add_sized(
+                    [(width - browse_width - clear_width - PREFERENCE_COLUMN_GAP * 2.0).max(55.0), PREFERENCE_ROW_HEIGHT],
+                    crate::ui::dialog::singleline_text_edit(&mut text).hint_text(tr(control.placeholder.unwrap_or_default())),
+                ).on_hover_text(&text).changed();
+                if ui.add_sized([browse_width, 26.0], egui::Button::new(format!(
+                    "{} {}", crate::ui::icons::FOLDER_OPEN, tr("Browse..."),
+                ))).on_hover_text(tr("Choose an image file")).clicked() {
+                    if crate::peer::active() {
+                        crate::ui::peer_browser::open(ui.ctx(), crate::ui::peer_browser::Purpose::PreferenceFile {
+                            key: control.key.to_owned(), extensions: control.file_extensions.iter().map(|extension| (*extension).to_owned()).collect(),
+                        }, None);
+                    } else {
+                        let mut dialog = rfd::FileDialog::new().set_title(tr("Choose an image file"))
+                            .add_filter("Images", &control.file_extensions);
+                        if let Some(parent) = std::path::Path::new(&text).parent().filter(|parent| parent.is_dir()) {
+                            dialog = dialog.set_directory(parent);
+                        }
+                        if let Some(path) = dialog.pick_file() {
+                            text = path.to_string_lossy().into_owned();
+                            edited = true;
+                        }
+                    }
+                }
+                if ui.add_enabled(!text.is_empty(), egui::Button::new(crate::ui::icons::ARROW_COUNTER_CLOCKWISE).small())
+                    .on_hover_text(tr("Use default icon")).clicked() {
+                    text.clear();
+                    edited = true;
+                }
+            });
+            if edited {
+                replacement = Some(if text.trim().is_empty() { serde_json::Value::Null }
+                    else { serde_json::Value::String(text.trim().to_owned()) });
+            }
+        }
         PreferenceControlKind::Text => {
             let mut text = current.as_str().unwrap_or_default().to_string();
             let text_align = crate::ui::i18n::input_alignment(rtl_ui, &text);
             preference_row(ui, control_icon, &tr(control.label), label_width, |ui| {
                 let control_width = ui.available_width().min(PREFERENCE_CONTROL_MAX_WIDTH);
                 let response = ui.add(
-                    egui::TextEdit::singleline(&mut text)
+                    crate::ui::dialog::singleline_text_edit(&mut text)
                         .horizontal_align(text_align)
                         .desired_width(control_width)
                         .hint_text(control.placeholder.unwrap_or_default()),
@@ -1672,15 +1755,33 @@ fn preference_label_column_width(
     (text_width + 34.0).max(128.0)
 }
 
-fn preference_control_icon(kind: &PreferenceControlKind) -> &'static str {
-    match kind {
-        PreferenceControlKind::Accent => crate::ui::icons::PALETTE,
-        PreferenceControlKind::Boolean => crate::ui::icons::CHECK_SQUARE,
-        PreferenceControlKind::Number => crate::ui::icons::SLIDERS_HORIZONTAL,
-        PreferenceControlKind::MultiSelect => crate::ui::icons::GLOBE,
-        PreferenceControlKind::ReplacementList => crate::ui::icons::TEXT_ALIGN_LEFT,
-        PreferenceControlKind::Select => crate::ui::icons::LIST_CHECKS,
-        PreferenceControlKind::Text => crate::ui::icons::PENCIL_SIMPLE,
+fn preference_control_icon(name: &str) -> &'static str {
+    use egui_phosphor::regular::*;
+    match name {
+        "circle-half" => CIRCLE_HALF,
+        "palette" => PALETTE,
+        "swatches" => SWATCHES,
+        "translate" => TRANSLATE,
+        "frame-corners" => FRAME_CORNERS,
+        "push-pin" => PUSH_PIN,
+        "arrows-out" => ARROWS_OUT,
+        "target" => TARGET,
+        "clock" => CLOCK,
+        "image" => IMAGE,
+        "play" => PLAY,
+        "pause" => PAUSE,
+        "stop-circle" => STOP_CIRCLE,
+        "speaker-high" => SPEAKER_HIGH,
+        "subtitles" => SUBTITLES,
+        "waveform" => WAVEFORM,
+        "globe" => GLOBE,
+        "keyboard" => KEYBOARD,
+        "check-square" => CHECK_SQUARE,
+        "sliders-horizontal" => SLIDERS_HORIZONTAL,
+        "text-align-left" => TEXT_ALIGN_LEFT,
+        "list-checks" => LIST_CHECKS,
+        "pencil-simple" => PENCIL_SIMPLE,
+        _ => GEAR,
     }
 }
 
@@ -1702,6 +1803,16 @@ fn preference_section(
     title: &str,
     body: impl FnOnce(&mut egui::Ui),
 ) {
+    preference_section_with_disclosure(ui, icon, title, None, body);
+}
+
+fn preference_section_with_disclosure(
+    ui: &mut egui::Ui,
+    icon: &str,
+    title: &str,
+    default_open: Option<bool>,
+    body: impl FnOnce(&mut egui::Ui),
+) {
     egui::Frame::new()
         .fill(ui.visuals().faint_bg_color.gamma_multiply(0.42))
         .stroke(egui::Stroke::new(
@@ -1712,6 +1823,13 @@ fn preference_section(
         .inner_margin(egui::Margin::same(12))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
+            if let Some(default_open) = default_open {
+                egui::CollapsingHeader::new(egui::RichText::new(format!("{icon}  {title}")).size(15.0).strong())
+                    .id_salt(("preferences-optional-group", title))
+                    .default_open(default_open)
+                    .show(ui, body);
+                return;
+            }
             ui.label(
                 egui::RichText::new(format!("{icon}  {title}"))
                     .size(15.0)
@@ -1748,6 +1866,7 @@ fn group_icon(group: &str) -> &'static str {
     match group {
         "Interface" => crate::ui::icons::SPARKLE,
         "On-screen display" => crate::ui::icons::MONITOR_PLAY,
+        "Application icons" => crate::ui::icons::IMAGE,
         "Player controls" => crate::ui::icons::PLAY,
         "Playback history" => crate::ui::icons::CLOCK_COUNTER_CLOCKWISE,
         "Config file" => crate::ui::icons::FLOPPY_DISK,
@@ -1780,6 +1899,39 @@ fn section_heading(section: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn application_icons_optional_card_does_not_render_unconfigured_fields() {
+        for configured in [false, true] {
+            let ctx = egui::Context::default();
+            let mut rendered = false;
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                preference_section_with_disclosure(ui, crate::ui::icons::IMAGE, "Application icons",
+                    Some(configured), |_| { rendered = true; });
+            });
+            output.textures_delta.clear();
+            assert_eq!(rendered, configured);
+        }
+    }
+
+    #[test]
+    fn preferences_reopen_reaps_an_exited_helper_before_setting_open() {
+        #[cfg(windows)]
+        let mut command = {
+            use std::os::windows::process::CommandExt;
+            let mut command = std::process::Command::new("cmd.exe");
+            command.args(["/c", "exit", "0"]).creation_flags(0x08000000);
+            command
+        };
+        #[cfg(not(windows))]
+        let mut command = std::process::Command::new("true");
+        let mut child = command.spawn().unwrap();
+        child.wait().unwrap();
+        let mut controller = Some(NativePreferencesController { child });
+        assert!(reap_exited_controller(&mut controller));
+        assert!(controller.is_none());
+        assert!(!reap_exited_controller(&mut controller));
+    }
 
     #[test]
     fn preferences_helper_bypasses_the_primary_single_instance_path() {

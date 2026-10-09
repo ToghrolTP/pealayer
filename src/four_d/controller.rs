@@ -1099,11 +1099,13 @@ enum ControllerBackend {
 pub struct ControllerClient {
     endpoint: String,
     backend: ControllerBackend,
+    identity_registered: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ControllerRpcError {
     pub message: String,
+    pub transport_failed: bool,
     pub kind: Option<String>,
     pub resource: Option<String>,
     pub retryable: bool,
@@ -1112,13 +1114,17 @@ pub(crate) struct ControllerRpcError {
 
 impl ControllerRpcError {
     fn from_message(message: String) -> Self {
-        Self { message, kind: None, resource: None, retryable: false, retry_after_ms: None }
+        Self { message, transport_failed: false, kind: None, resource: None, retryable: false, retry_after_ms: None }
     }
+    pub(crate) fn transport(message: String) -> Self { Self { transport_failed: true, ..Self::from_message(message) } }
     pub(crate) fn is_resource_busy(&self, resource: &str) -> bool {
         self.kind.as_deref() == Some("resource_busy")
             && self.resource.as_deref() == Some(resource)
             && self.retryable
     }
+}
+impl std::fmt::Display for ControllerRpcError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { formatter.write_str(&self.message) }
 }
 impl From<String> for ControllerRpcError {
     fn from(message: String) -> Self { Self::from_message(message) }
@@ -1141,10 +1147,11 @@ fn controller_json_rpc_error_message(error: &Value) -> String {
         .to_string()
 }
 
-fn controller_json_rpc_error(error: &Value) -> ControllerRpcError {
+pub(crate) fn controller_json_rpc_error(error: &Value) -> ControllerRpcError {
     let data = error.get("data");
     ControllerRpcError {
         message: controller_json_rpc_error_message(error),
+        transport_failed: false,
         kind: data.and_then(|value| value.get("kind")).and_then(Value::as_str).map(str::to_string),
         resource: data.and_then(|value| value.get("resource")).and_then(Value::as_str).map(str::to_string),
         retryable: data.and_then(|value| value.get("retryable")).and_then(Value::as_bool).unwrap_or(false),
@@ -1195,6 +1202,7 @@ impl ControllerClient {
                     return Ok(Self {
                         endpoint: endpoint.to_string(),
                         backend: ControllerBackend::Embedded(host),
+                        identity_registered: false,
                     });
                 }
                 Err(embedded_error) => {
@@ -1238,6 +1246,7 @@ impl ControllerClient {
         );
         let mut client = Self {
             endpoint: endpoint.to_string(),
+            identity_registered: false,
             backend: ControllerBackend::Tcp {
                 writer,
                 reader,
@@ -1284,8 +1293,14 @@ impl ControllerClient {
         self.call_detailed(method, params).map_err(|error| error.message)
     }
     pub(crate) fn call_detailed(&mut self, method: &str, params: Value) -> Result<Value, ControllerRpcError> {
+        if !self.identity_registered && method != "controller.app.instance.report" && method != "controller.ping" {
+            let id = crate::platform::interop::controller_instance_id();
+            self.call_detailed("controller.app.instance.report", crate::platform::interop::controller_instance_identity(
+                &id, &crate::config::resolved_app_name(&crate::platform::interop::get_live_config())))?;
+            self.identity_registered = true;
+        }
         let (writer, reader, next_id) = match &mut self.backend {
-            ControllerBackend::Embedded(host) => return host.call(method, params).map_err(ControllerRpcError::from_message),
+            ControllerBackend::Embedded(host) => return host.call_detailed(method, params),
             ControllerBackend::Tcp {
                 writer,
                 reader,
@@ -1307,24 +1322,25 @@ impl ControllerClient {
             "id": id,
             "method": method,
             "params": params,
+            "client_id": if self.identity_registered {Some(crate::platform::interop::controller_instance_id())} else {None},
         });
         serde_json::to_writer(&mut *writer, &request)
-            .map_err(|error| format!("encode PCController JSON-RPC request: {error}"))?;
+            .map_err(|error| ControllerRpcError::transport(format!("encode PCController JSON-RPC request: {error}")))?;
         writer
             .write_all(b"\n")
             .and_then(|_| writer.flush())
-            .map_err(|error| format!("write PCController JSON-RPC request: {error}"))?;
+            .map_err(|error| ControllerRpcError::transport(format!("write PCController JSON-RPC request: {error}")))?;
 
         loop {
             let mut line = String::new();
             let read = reader
                 .read_line(&mut line)
-                .map_err(|error| format!("read PCController JSON-RPC response: {error}"))?;
+                .map_err(|error| ControllerRpcError::transport(format!("read PCController JSON-RPC response: {error}")))?;
             if read == 0 {
-                return Err("PCController closed the JSON-RPC connection".to_string().into());
+                return Err(ControllerRpcError::transport("PCController closed the JSON-RPC connection".into()));
             }
             let response: Value = serde_json::from_str(line.trim())
-                .map_err(|error| format!("decode PCController JSON-RPC response: {error}"))?;
+                .map_err(|error| ControllerRpcError::transport(format!("decode PCController JSON-RPC response: {error}")))?;
             if response.get("id").and_then(Value::as_u64) != Some(id) {
                 continue;
             }
@@ -2686,6 +2702,14 @@ mod tests {
         assert_eq!(error.retry_after_ms, Some(2000));
         assert!(!error.is_resource_busy("relay"));
     }
+
+    #[test]
+    fn authority_denial_is_not_a_transport_failure() {
+        let error = controller_json_rpc_error(&json!({"code":-32009,"message":"read PCController JSON-RPC response: not your publisher", "data":{"kind":"authority_conflict","resource":"media_authority"}}));
+        assert!(!error.transport_failed);
+        assert_eq!(error.kind.as_deref(),Some("authority_conflict"));
+        assert!(ControllerRpcError::transport("socket closed".into()).transport_failed);
+    }
     #[test]
     fn json_rpc_error_message_has_safe_string_and_missing_message_fallbacks() {
         assert_eq!(
@@ -3045,10 +3069,12 @@ mod tests {
         let server = thread::spawn(move || {
             let (mut stream, _) = listener.accept().unwrap();
             let mut reader = BufReader::new(stream.try_clone().unwrap());
-            for _ in 0..2 {
+            for expected in ["controller.ping", "controller.app.instance.report", "controller.snapshot"] {
                 let mut line = String::new();
                 reader.read_line(&mut line).unwrap();
                 let request: Value = serde_json::from_str(line.trim()).unwrap();
+                assert_eq!(request["method"],expected);
+                if expected == "controller.snapshot" { assert!(request["client_id"].as_str().is_some_and(|id|id.starts_with("pealayer:"))); }
                 let response = json!({"jsonrpc":"2.0","id":request["id"],"result":{"ok":true}});
                 writeln!(stream, "{response}").unwrap();
             }
@@ -3069,19 +3095,20 @@ mod tests {
             let mut reader = BufReader::new(stream.try_clone().unwrap());
             let expected = [
                 "controller.ping",
+                "controller.app.instance.report",
                 "controller.snapshot",
                 "controller.peripherals.get",
                 "controller.melodies.list",
                 "controller.pwm.values",
             ];
-            for call in 0..5 {
+            for call in 0..expected.len() {
                 let mut line = String::new();
                 reader.read_line(&mut line).unwrap();
                 let request: Value = serde_json::from_str(line.trim()).unwrap();
                 assert_eq!(request["method"], expected[call]);
-                let response = match call {
-                    0 => json!({"jsonrpc":"2.0","id":request["id"],"result":{"ok":true}}),
-                    1 => json!({"jsonrpc":"2.0","id":request["id"],"result":{
+                let response = match expected[call] {
+                    "controller.ping" | "controller.app.instance.report" => json!({"jsonrpc":"2.0","id":request["id"],"result":{"ok":true}}),
+                    "controller.snapshot" => json!({"jsonrpc":"2.0","id":request["id"],"result":{
                         "connected": true,
                         "hello": {"capabilities": CAPABILITY_ADDRESSABLE_LED | CAPABILITY_SEGMENTS},
                         "have_front_panel": true,
@@ -3091,12 +3118,12 @@ mod tests {
                         },
                         "outputs": {"melody_id": 17, "melody_name": "attention"}
                     }}),
-                    2 => json!({"jsonrpc":"2.0","id":request["id"],"result":{"peripherals":[]}}),
-                    3 => json!({"jsonrpc":"2.0","id":request["id"],"result":[{
+                    "controller.peripherals.get" => json!({"jsonrpc":"2.0","id":request["id"],"result":{"peripherals":[]}}),
+                    "controller.melodies.list" => json!({"jsonrpc":"2.0","id":request["id"],"result":[{
                         "name": "attention",
                         "notes": [{"frequency_hz": 880, "duration_ms": 100, "gap_ms": 25}]
                     }]}),
-                    4 => json!({"jsonrpc":"2.0","id":request["id"],"result":{"values":[]}}),
+                    "controller.pwm.values" => json!({"jsonrpc":"2.0","id":request["id"],"result":{"values":[]}}),
                     _ => unreachable!(),
                 };
                 writeln!(stream, "{response}").unwrap();

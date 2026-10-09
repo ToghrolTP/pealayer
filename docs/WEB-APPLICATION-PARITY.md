@@ -28,7 +28,7 @@ widths, and has been exercised against live state rather than sample data.
 | Effect editor and recording | In progress | Sequence editing and board/app recording share PCController effect contracts | Complete professional multi-lane editor, selection, easing, fades, repeat/blink authoring, offline drafts and conflict handling |
 | Timeline | In progress | Web receives the native ordered track inventory and its authoritative selected, linked, visible, muted, soloed and locked state; row selection, action buttons and right-click menus invoke the same validated Rust commands as egui; cues move and conditionally resize | Complete keyframe editing, browser-native manage dialogs, track routing/selectors, keyboard editing, snapping, vertical reordering and exact scroll/navigation behavior |
 | Media library | In progress | Browse/play/thumbnails and native path requests work; Windows extended path prefixes are removed from breadcrumbs; file and folder rows expose open/play/copy/refresh context actions | Add metadata, safe rename workflows and richer remote-folder parity |
-| Preferences | In progress | Rust-generated preference contract drives the Web controls and appearance is synchronized | Ensure every native setting/control type and import/export workflow is represented and visually verified |
+| Preferences | In progress | Rust-generated controls and ordered groups drive both surfaces; Current and Classic application-icon presets share resolution and live refresh, while custom application icons share file metadata, optional disclosure, Browse and Reset; duplicate cards/help are guarded and Config file closes Advanced | Finish import/export parity and visual acceptance of the deployed native/Web layout at responsive widths; see [Preferences organization](PREFERENCES-ORGANIZATION.md) |
 | Dialogs | In progress | Connection, remote location, channel management, RF management, effect editing and workspace management exist | Add full About, media/track properties, audio, subtitles, board information, update, bindings and remaining native dialogs without duplicating state logic |
 | Messaging and OSD | Mostly complete | Shared toasts and the native configurable OSD contract render across Web, egui, HTTP, JSON-RPC and WebSocket | Complete icon-name coverage and visual acceptance for every custom anchor/color combination |
 | Updates | In progress | URL update and truthful byte progress exist | Replace explanatory filler with contextual state/actions and complete peer/CI source selection parity |
@@ -49,6 +49,22 @@ widths, and has been exercised against live state rather than sample data.
 
 ## Completed acceptance checkpoints
 
+- **API-first local lifecycle:** Native connection UI, native IPC, JSON-RPC,
+  HTTP and WebSocket use one process connection command. Process status,
+  graceful local quit and consumer-role changes do not relay to the authority;
+  normal session operations still do. A role change validates the target first
+  and requires a paused/unlocked, acknowledged publication release when needed.
+  Installed-host verification is tracked separately in the deployment ledger.
+
+- **Publishing handoff policy and remote alternative:** Native and Web
+  Preferences share the owner's opt-in unattended-handoff setting. The Rust
+  observer pauses actual playback and requires a fresh matching clock echo
+  before using PCController's existing safe acceptance contract. Production
+  lock is never overridden. Conflict controls offer Connect to authority using
+  the registered owner's validated Web origin; native permits editing the
+  address for a tunnel. Host deployment and live acceptance are tracked in the
+  [deployment checkpoint](verification/DEPLOYMENT-AND-MERGE-CHECKPOINT.md),
+  separately from source and automated verification.
 - **Shared media-track selection:** Rust publishes the current libmpv video,
   audio and subtitle inventory with selected/default/forced/external metadata.
   Simple and NLE Web layouts reuse one selector component and the validated

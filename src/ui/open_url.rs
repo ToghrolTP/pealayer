@@ -519,7 +519,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     .desired_rows(3)
                                     .hint_text("https://...")
                             } else {
-                                egui::TextEdit::singleline(&mut app.url_input_buffer)
+                                crate::ui::dialog::singleline_text_edit(&mut app.url_input_buffer)
                                     .id(edit_id)
                                     .desired_width(f32::INFINITY)
                                     .hint_text("https://...")
@@ -721,7 +721,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     if configure_proxy_requested {
         app.show_open_url_dialog = false;
         app.preferences_tab = 1;
-        app.show_preferences_dialog = true;
+        crate::ui::preferences::open(app, ui.ctx());
         return;
     }
     let keyboard_open = ui.ctx().input(|input| {

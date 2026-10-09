@@ -6,6 +6,50 @@ use std::path::{Path, PathBuf};
 
 const MAX_REPORT_BYTES: usize = 256 * 1024;
 
+#[macro_export]
+macro_rules! cli_println {
+    ($($argument:tt)*) => { $crate::diagnostics::cli_output(format_args!($($argument)*), false) };
+}
+
+#[macro_export]
+macro_rules! cli_eprintln {
+    ($($argument:tt)*) => { $crate::diagnostics::cli_output(format_args!($($argument)*), true) };
+}
+
+pub fn cli_output(arguments: std::fmt::Arguments<'_>, error: bool) {
+    // Explorer and GUI launchers need not provide stdout/stderr, and an
+    // inherited terminal may close before a peer upload finishes. Reporting
+    // must never abort the operation or bypass orderly process shutdown.
+    if error { let _ = write_cli_line(&mut std::io::stderr(), arguments); }
+    else { let _ = write_cli_line(&mut std::io::stdout(), arguments); }
+}
+
+fn write_cli_line(writer: &mut impl Write, arguments: std::fmt::Arguments<'_>) -> std::io::Result<()> {
+    writeln!(writer, "{arguments}")
+}
+
+/// Bounded local evidence for short-lived Explorer launches. Do not record
+/// media URLs, command payloads, configuration contents or credentials.
+pub fn record_shell_action(phase: &str, action: &str) {
+    let path = crate::server::thumbnails::get_thumbnail_cache_dir()
+        .with_file_name("diagnostics").join("shell-actions.jsonl");
+    let event = serde_json::json!({
+        "unix_ms": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default().as_millis(),
+        "pid": std::process::id(), "phase": phase, "action": action,
+        "commit": env!("PEALAYER_GIT_COMMIT"),
+    });
+    let _ = append_shell_event(&path, &event);
+}
+
+fn append_shell_event(path: &Path, event: &serde_json::Value) -> std::io::Result<()> {
+    if let Some(parent) = path.parent() { std::fs::create_dir_all(parent)?; }
+    let full = std::fs::metadata(path).is_ok_and(|metadata| metadata.len() >= 64 * 1024);
+    let mut file = std::fs::OpenOptions::new().create(true).write(true)
+        .append(!full).truncate(full).open(path)?;
+    writeln!(file, "{event}")
+}
+
 pub fn panic_report_path() -> PathBuf {
     crate::config::AppConfig::get_config_path()
         .with_file_name("diagnostics")
@@ -58,6 +102,37 @@ pub fn install_panic_reporter() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn disconnected_cli_output_returns_an_error_without_panicking() {
+        struct ClosedPipe;
+        impl Write for ClosedPipe {
+            fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+                Err(std::io::ErrorKind::BrokenPipe.into())
+            }
+            fn flush(&mut self) -> std::io::Result<()> { Ok(()) }
+        }
+        assert_eq!(write_cli_line(&mut ClosedPipe, format_args!("progress")).unwrap_err().kind(),
+            std::io::ErrorKind::BrokenPipe);
+        let mut bytes = Vec::new();
+        write_cli_line(&mut bytes, format_args!("{}", 42)).unwrap();
+        assert_eq!(bytes, b"42\n");
+    }
+
+    #[test]
+    fn shell_action_evidence_is_bounded_and_valid_jsonl() {
+        let directory = std::env::temp_dir().join(format!("pealayer-shell-evidence-{}", uuid::Uuid::new_v4()));
+        let path = directory.join("shell-actions.jsonl");
+        write_report(&path, &"x".repeat(64 * 1024)).unwrap();
+        let event = serde_json::json!({"phase":"forward_accepted","action":"preferences"});
+        append_shell_event(&path, &event).unwrap();
+        let saved = std::fs::read_to_string(&path).unwrap();
+        assert_eq!(serde_json::from_str::<serde_json::Value>(saved.trim()).unwrap(), event);
+        append_shell_event(&path, &event).unwrap();
+        assert_eq!(std::fs::read_to_string(&path).unwrap().lines().count(), 2);
+        std::fs::remove_file(path).unwrap();
+        std::fs::remove_dir(directory).unwrap();
+    }
 
     #[test]
     fn panic_report_is_bounded_utf8_and_replaces_previous_report() {

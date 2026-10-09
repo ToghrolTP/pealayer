@@ -39,6 +39,32 @@ pub fn configure_interaction_style(style: &mut eframe::egui::Style) {
     style.interaction.multi_widget_text_select = false;
 }
 
+/// Match Elegance widgets to Pealayer's active palette without replacing the
+/// app-wide egui style. The host continues to own its spacing and typography.
+pub fn sync_elegance_theme(ctx: &eframe::egui::Context) {
+    let style = ctx.global_style();
+    let visuals = &style.visuals;
+    let mut theme = if visuals.dark_mode {
+        elegance::Theme::charcoal()
+    } else {
+        elegance::Theme::paper()
+    };
+    theme.palette.bg = visuals.panel_fill;
+    theme.palette.card = visuals.window_fill;
+    theme.palette.input_bg = visuals.extreme_bg_color;
+    theme.palette.border = visuals.window_stroke.color;
+    theme.palette.text = visuals.text_color();
+    theme.palette.text_muted = visuals.weak_text_color();
+    theme.palette.focus = visuals.selection.bg_fill;
+    theme.palette.danger = visuals.error_fg_color;
+    theme.palette.warning = visuals.warn_fg_color;
+
+    if elegance::Theme::current(ctx) != theme {
+        theme.install(ctx);
+        ctx.set_global_style(style);
+    }
+}
+
 pub fn platform_accent_rgb(config: &crate::config::AppConfig) -> [u8; 3] {
     match config.accent_color {
         crate::config::AccentColor::PealayerGreen => [56, 210, 122],

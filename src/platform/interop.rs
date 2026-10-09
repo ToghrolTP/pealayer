@@ -56,6 +56,9 @@ impl LaunchRequest {
             return Err("launch request must not contain more than 64 commands".to_string());
         }
         for command in &self.commands {
+            if command.is_process_local() {
+                return Err("Process lifecycle commands must be sent individually, not in a session launch".into());
+            }
             if matches!(command, InteropCommand::Launch { .. }) {
                 return Err("launch request must not contain a nested launch command".to_string());
             }
@@ -198,6 +201,13 @@ pub enum InteropCommand {
     },
     HideOsd,
     Quit,
+    /// Process-local lifecycle: close this process, never its remote authority.
+    QuitLocal,
+    GetProcessStatus,
+    ConnectPeer {
+        #[serde(flatten)]
+        request: crate::process_control::ConnectRequest,
+    },
     SetWorkspace {
         profile: String,
     },
@@ -302,6 +312,11 @@ pub enum InteropCommand {
         percent: f64,
     },
     RefreshHardwareCatalog,
+    HardwareAuthority {
+        operation: String,
+        #[serde(default)]
+        requester_id: String,
+    },
     PlayHardwareMelody {
         name: String,
         repeats: u8,
@@ -487,8 +502,22 @@ fn valid_timeline_track_key(value: &str) -> bool {
 }
 
 impl InteropCommand {
+    pub fn is_process_local(&self) -> bool {
+        matches!(self, Self::QuitLocal | Self::GetProcessStatus | Self::ConnectPeer { .. })
+    }
+
+    pub fn query_result(&self) -> Option<Value> {
+        match self {
+            Self::GetStatus => Some(serde_json::to_value(get_live_status())
+                .unwrap_or_else(|_| serde_json::json!({"status":"initializing"}))),
+            Self::GetProcessStatus => Some(crate::process_control::status()),
+            _ => None,
+        }
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         match self {
+            Self::ConnectPeer { request } => request.validate(),
             Self::RfControl { operation, params } => {
                 if !crate::ui::rf::OPERATIONS.contains(&operation.as_str()) || !params.is_object() || params.to_string().len() > 32768 {
                     Err("Invalid RF operation or parameters".to_string())
@@ -581,6 +610,10 @@ impl InteropCommand {
                     }) =>
             {
                 Err("hardware action ID is invalid".to_string())
+            }
+            Self::HardwareAuthority { operation, requester_id }
+                if !matches!(operation.as_str(), "request" | "accept" | "reject" | "release" | "lock" | "unlock") || requester_id.len()>180 => {
+                Err("publishing authority operation or requester is invalid".into())
             }
             Self::UpdateHardwarePresentation { key, fields }
                 if key.trim().is_empty()
@@ -764,6 +797,7 @@ pub fn command_catalog() -> Value {
     serde_json::json!({
         "contract": "pealayer.control",
         "transports": ["native", "http", "json-rpc", "websocket"],
+        "process": { "status": "/api/process/status", "command": "/api/process/command", "methods": ["pealayer.process.status", "pealayer.process.connect", "pealayer.process.quit"], "scope": "local process, never relayed to authority", "connect": "validated, idempotent, graceful restart; poll local status after reconnect" },
         "messaging": { "contract": "pealayer.messages.v1", "snapshot": "/api/messages", "subscription": "/ws", "publish": "pealayer.toast.show", "dismiss": "pealayer.toast.dismiss", "state": "pealayer.messages.state", "surfaces": ["egui", "web", "terminal"], "persistent_timeout_ms": 0 },
         "remote_folders": { "browse": "pealayer.remote.browse", "select": "pealayer.remote.select", "sort": "pealayer.remote.sort", "close": "pealayer.remote.close", "state": "/api/remote/state", "thumbnail": "/api/remote/thumbnail", "subscription": "/ws" },
         "commands": [
@@ -1145,6 +1179,8 @@ pub struct PlayerStatusResponse {
     pub status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub appearance: Option<AppearanceState>,
+    #[serde(default)]
+    pub app_icon_revision: u64,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeline_wheel_preferences: Option<crate::config::TimelineWheelPreferences>,
     pub playing: bool,
@@ -1464,6 +1500,7 @@ impl Default for PlayerStatusResponse {
             messages: crate::messaging::MessageSnapshot::default(),
             remote_browser: crate::remote_location::BrowserState::default(),
             appearance: None,
+            app_icon_revision: 0,
             timeline_wheel_preferences: None,
             playing: false,
             volume: 0.0,
@@ -1553,6 +1590,11 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
             .ok_or_else(|| format!("missing string parameter: {}", names.join(" or ")))
     };
     let command = match request.method.as_str() {
+        "pealayer.process.status" => Some(InteropCommand::GetProcessStatus),
+        "pealayer.process.quit" => Some(InteropCommand::QuitLocal),
+        "pealayer.process.connect" => Some(InteropCommand::ConnectPeer {
+            request: serde_json::from_value(request.params.clone()).map_err(|error|error.to_string())?,
+        }),
         "pealayer.rf" | "rf_control" => Some(InteropCommand::RfControl { operation: string(&["operation"])?, params: request.params.get("params").cloned().unwrap_or_else(||serde_json::json!({})) }),
         "pealayer.rf.open" => Some(InteropCommand::OpenRfManager),
         "play" | "pealayer.play" => Some(InteropCommand::Play),
@@ -1977,6 +2019,16 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         "hardware.catalog.refresh" | "pealayer.hardware.catalog.refresh" => {
             Some(InteropCommand::RefreshHardwareCatalog)
         }
+        "pealayer.hardware.authority" => {
+            let operation = string(&["operation"])?;
+            if !matches!(operation.as_str(), "request" | "accept" | "reject" | "release" | "lock" | "unlock") {
+                return Err("invalid authority operation".into());
+            }
+            Some(InteropCommand::HardwareAuthority {
+                operation,
+                requester_id: request.params.get("requester_id").and_then(Value::as_str).unwrap_or_default().into(),
+            })
+        }
         "hardware.buzzer.melody" | "pealayer.hardware.buzzer.melody" => {
             let repeats = request
                 .params
@@ -2250,6 +2302,13 @@ pub fn get_live_config() -> crate::config::AppConfig {
         .unwrap_or_else(crate::config::AppConfig::load)
 }
 
+/// Small live-policy read for the media observer; no config/disk clone per tick.
+pub(crate) fn allow_unattended_hardware_takeover() -> bool {
+    !crate::peer::active() && LIVE_CONFIG.read().ok()
+        .and_then(|config| config.as_ref().map(|config| config.allow_unattended_hardware_takeover))
+        .unwrap_or(false)
+}
+
 pub fn get_socket_path() -> PathBuf {
     if let Ok(path) = std::env::var("PEALAYER_SOCKET_PATH") {
         return PathBuf::from(path);
@@ -2507,6 +2566,15 @@ pub fn format_interop_error(id: Option<serde_json::Value>, code: i32, message: &
     }
 }
 
+/// Commands from IPC/HTTP must wake an inactive Windows owner as well as egui.
+/// The native edge is scheduled on the shared shell worker, never under a
+/// context transaction or on the receiving window's message callback.
+pub(crate) fn wake_command_dispatcher(ctx: &eframe::egui::Context) {
+    ctx.request_repaint();
+    #[cfg(target_os = "windows")]
+    crate::platform::taskbar_preview::request_repaint();
+}
+
 #[cfg(any(unix, windows, test))]
 fn dispatch_local_payload(
     payload: &str,
@@ -2520,9 +2588,7 @@ fn dispatch_local_payload(
         Ok(parsed) => parsed,
         Err(error) => return format_interop_error(None, -32600, &error),
     };
-    if matches!(command, InteropCommand::GetStatus) {
-        let value = serde_json::to_value(get_live_status())
-            .unwrap_or_else(|_| serde_json::json!({"status":"initializing"}));
+    if let Some(value) = command.query_result() {
         return format_interop_response(id, &value);
     }
     let operation_id = match &command {
@@ -2556,7 +2622,7 @@ fn dispatch_local_payload(
     } else if tx.send(command).is_err() {
         return format_interop_error(id, -32000, "application dispatcher is unavailable");
     }
-    egui_ctx.request_repaint();
+    wake_command_dispatcher(egui_ctx);
     format_interop_response(id, &serde_json::json!({"status":"accepted"}))
 }
 
@@ -2826,10 +2892,23 @@ fn controller_rpc(id: u64, method: &str, params: Value) -> tungstenite::Message 
 }
 
 pub(crate) fn controller_instance_id() -> String {
-    format!("pealayer:desktop-{}", std::process::id())
+    format!("pealayer:{}:{}", controller_host_name(), crate::config::control_port())
+}
+
+fn controller_host_name() -> String {
+    std::env::var("COMPUTERNAME").or_else(|_|std::env::var("HOSTNAME"))
+        .unwrap_or_else(|_|format!("desktop-{}",std::process::id()))
+        .chars().filter(|c| c.is_ascii_alphanumeric() || *c=='-' || *c=='_').take(100).collect()
 }
 
 pub(crate) fn controller_instance_identity(instance_id: &str, name: &str) -> Value {
+    let config = get_live_config();
+    let remotely_listening = crate::config::resolved_web_enabled(&config)
+        && crate::config::resolved_web_bind_addresses(&config)
+            .is_ok_and(|addresses| addresses.iter().any(|address| !address.is_loopback()));
+    let peer_origin = if remotely_listening {
+        format!("http://{}:{}/", controller_host_name(), crate::config::control_port())
+    } else { String::new() };
     serde_json::json!({
         "id": instance_id, "surface":"pealayer", "page":"player", "state":"active", "lease_seconds":45,
         "self":{"kind":"native","pid":std::process::id(),"vars":{
@@ -2838,7 +2917,8 @@ pub(crate) fn controller_instance_identity(instance_id: &str, name: &str) -> Val
             "ipc":format!("http://127.0.0.1:{}/api/ipc",crate::config::control_port()),
             "web_ui":format!("http://127.0.0.1:{}/",crate::config::control_port())}},
         "values":{"application":name,"version":env!("CARGO_PKG_VERSION"),"commit":env!("PEALAYER_GIT_COMMIT"),
-            "os":std::env::consts::OS,"arch":std::env::consts::ARCH,
+            "peer_origin":peer_origin,
+            "os":std::env::consts::OS,"arch":std::env::consts::ARCH,"host":controller_host_name(),
             "app_actions":PCCONTROLLER_ACTIONS,"control_contract":"pealayer.control",
             "control_transports":"native,http,websocket,json-rpc","coordinator":"pccontroller","serial_owner":"pccontroller"}
     })
@@ -3124,6 +3204,21 @@ pub fn spawn_pccontroller_action_bridge(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn process_status_and_quit_use_the_native_dispatcher_without_session_forwarding() {
+        let (tx,rx)=std::sync::mpsc::channel();
+        let context=eframe::egui::Context::default();
+        let receipts=Arc::new(Mutex::new(LaunchReceiptCache::default()));
+        let query=r#"{"jsonrpc":"2.0","id":1,"method":"pealayer.process.status"}"#;
+        let response=dispatch_local_payload(query,&tx,&context,&receipts,"Pealayer",None);
+        let value:Value=serde_json::from_str(&response).unwrap();
+        assert_eq!(value["result"]["process_id"],std::process::id());
+        assert!(rx.try_recv().is_err());
+        let response=dispatch_local_payload(r#"{"command":"quit_local"}"#,&tx,&context,&receipts,"Pealayer",None);
+        assert!(response.contains("accepted"));
+        assert_eq!(rx.try_recv().unwrap(),InteropCommand::QuitLocal);
+    }
 
     #[test]
     fn live_frame_config_projects_only_render_loop_inputs() {

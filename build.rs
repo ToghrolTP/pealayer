@@ -1,4 +1,12 @@
 #[cfg(target_os = "windows")]
+#[allow(dead_code)]
+#[path = "src/platform/windows_quick_actions.rs"]
+mod windows_quick_actions;
+#[cfg(target_os = "windows")]
+#[path = "src/platform/windows_shell_icons.rs"]
+mod windows_shell_icons;
+
+#[cfg(target_os = "windows")]
 fn main() {
     emit_build_metadata();
     for name in [
@@ -110,25 +118,29 @@ fn main() {
     if std::path::Path::new(&icon).exists() {
         res.set_icon(&icon);
     }
+    let out_dir = std::path::PathBuf::from(
+        std::env::var_os("OUT_DIR").expect("Cargo did not provide OUT_DIR"),
+    );
+    for action in windows_quick_actions::WINDOWS_QUICK_ACTIONS {
+        let task_icon = out_dir.join(format!("quick-action-{}.ico", action.icon_resource_id));
+        std::fs::write(&task_icon, windows_shell_icons::shell_icon_ico(action.icon_glyph))
+            .expect("write generated Windows task icon");
+        res.set_icon_with_id(&task_icon.to_string_lossy(), &action.icon_resource_id.to_string());
+    }
+    println!("cargo:rerun-if-changed=src/platform/windows_quick_actions.rs");
+    println!("cargo:rerun-if-changed=src/platform/windows_shell_icons.rs");
     res.compile().expect("failed to compile Windows resources");
 
-    // This package exposes both a library and a binary. Resource-only archives
-    // have no symbols for the executable to reference, so both GNU ld and
-    // MSVC's linker may discard them. Attach the generated resource object on
-    // GNU and retain the entire resource library on MSVC explicitly.
+    // The thin executable links the library. winres's MSVC directive already
+    // propagates its COFF resource object through that library; attaching it
+    // again to the binary causes duplicate VERSION/icon resources. GNU emits a
+    // symbol-less archive instead, so attach its object directly to the binary.
     let out_dir = std::path::PathBuf::from(
         std::env::var_os("OUT_DIR").expect("Cargo did not provide OUT_DIR"),
     );
     match std::env::var("CARGO_CFG_TARGET_ENV").as_deref() {
         Ok("gnu") => {
             let resource = out_dir.join("resource.o");
-            println!("cargo:rustc-link-arg-bin=pealayer={}", resource.display());
-        }
-        Ok("msvc") => {
-            // winres names the rc.exe output resource.lib, but it is a COFF
-            // resource object rather than an archive. Pass it directly to
-            // link.exe; treating it as an archive lets /OPT:REF discard it.
-            let resource = out_dir.join("resource.lib");
             println!("cargo:rustc-link-arg-bin=pealayer={}", resource.display());
         }
         _ => {}
@@ -231,19 +243,15 @@ fn emit_build_metadata() {
         "cargo:rustc-env=PEALAYER_SOURCE_DATE_EPOCH={}",
         std::env::var("SOURCE_DATE_EPOCH").unwrap_or_else(|_| "not supplied".to_string())
     );
-    println!("cargo:rerun-if-changed=.git/HEAD");
-    if let Some(git_dir) = git_output(&["rev-parse", "--git-dir"]) {
-        let head = std::fs::read_to_string(std::path::Path::new(&git_dir).join("HEAD")).ok();
-        if let Some(reference) = head.and_then(|value| {
-            value
-                .strip_prefix("ref: ")
-                .map(str::trim)
-                .map(str::to_string)
-        }) {
-            println!(
-                "cargo:rerun-if-changed={}",
-                std::path::Path::new(&git_dir).join(reference).display()
-            );
+    // Linked worktrees keep HEAD/index locally but branch refs in the common
+    // Git directory. Joining a ref onto --git-dir watches a nonexistent file.
+    let mut git_paths = vec!["HEAD".to_string(), "index".to_string(), "packed-refs".to_string()];
+    if let Some(reference) = git_output(&["symbolic-ref", "-q", "HEAD"]) {
+        git_paths.push(reference);
+    }
+    for path in git_paths {
+        if let Some(resolved) = git_output(&["rev-parse", "--git-path", &path]) {
+            println!("cargo:rerun-if-changed={resolved}");
         }
     }
 }
