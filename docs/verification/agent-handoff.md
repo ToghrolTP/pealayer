@@ -2,7 +2,13 @@
 
 Owning tracker: [issue #80](https://github.com/ToghrolTP/pealayer/issues/80). Post subsequent checkpoints and child-issue links there.
 
-Current continuation: [production deployment and consolidation checkpoint](DEPLOYMENT-AND-MERGE-CHECKPOINT.md).
+Current continuation: [current acceptance and next steps](CURRENT-ACCEPTANCE.md).
+PRs #77/#79 and subsequent consolidation/features through #108 are merged;
+SFX, copied-link browsing and external mpv are now implemented and deployed.
+The unchecked historical checklist below must be reconciled against that current
+index, not treated as evidence that these implementations are still missing.
+The [production deployment and consolidation checkpoint](DEPLOYMENT-AND-MERGE-CHECKPOINT.md)
+is historical technical evidence.
 It reconciles the latest Preferences requests, Cafe's installed candidate and
 controller-contract playback blocker, Erfan's staged update, merged PRs #82/#83,
 and remaining CI/branch gates. Older observations below are historical and must
