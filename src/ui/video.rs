@@ -654,7 +654,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         .and_then(|rtt| rtt.video_texture_id);
 
     let pseudo_tex_id = egui::Id::new("active_pseudo_frame_texture");
-    let pseudo_rendered = if app.is_scrubbing {
+    let pseudo_rendered = if app.is_scrubbing || app.pending_scrub_commit.is_some() {
         if let Some(pseudo_frame) = &app.active_pseudo_frame {
             if pseudo_frame.rgba.len()
                 == (pseudo_frame.width as usize) * (pseudo_frame.height as usize) * 4

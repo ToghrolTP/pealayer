@@ -687,6 +687,30 @@ fn timeline_wheel_delta(events: &[egui::Event], line_speed: f32, page_height: f3
     }).fold(egui::Vec2::ZERO, |sum, delta| sum + delta)
 }
 
+fn ruler_wheel_step(event: &egui::Event) -> i32 {
+    if let egui::Event::MouseWheel { delta, unit, modifiers, .. } = event {
+        if modifiers.ctrl || modifiers.shift || modifiers.alt || modifiers.command { return 0; }
+        if delta.y == 0.0 || (matches!(unit, egui::MouseWheelUnit::Point) && delta.y.abs() < 1.0) { return 0; }
+        return if delta.y > 0.0 { 1 } else { -1 };
+    }
+    0
+}
+
+fn timeline_ruler_scroll_steps(ui: &egui::Ui) -> i32 {
+    let (steps, consumed) = ui.input(|input| (input.events.iter().map(ruler_wheel_step).fold(0_i32, i32::saturating_add),
+        input.events.iter().any(|event| ruler_wheel_step(event) != 0)));
+    if consumed {
+        ui.ctx().input_mut(|input| {
+            input.smooth_scroll_delta.y = 0.0;
+            for event in &mut input.events {
+                if ruler_wheel_step(event) != 0 && let egui::Event::MouseWheel { delta, .. } = event { delta.y = 0.0; }
+            }
+            input.events.retain(|event| !matches!(event, egui::Event::MouseWheel { delta, .. } if *delta == egui::Vec2::ZERO));
+        });
+    }
+    steps
+}
+
 fn timeline_zoom_from_wheel(current_zoom: f32, wheel_delta: f32) -> f32 {
     // Multiplicative zoom feels uniform at both ends of the range. A 120-unit
     // Windows wheel notch changes the scale by roughly 27%, while precision
@@ -5326,7 +5350,7 @@ fn draw_addressable_strip_tool(
                 "solid" => {
                     ui.horizontal_wrapped(|ui| {
                         ui.label(app.tr("Color"));
-                        ui.color_edit_button_srgba(&mut color);
+                        crate::ui::color_picker::color_button_srgba(ui, &mut color);
                         ui.label(app.tr("Brightness"));
                         ui.add(egui::Slider::new(&mut brightness, 0..=255).show_value(true));
                     });
@@ -5356,7 +5380,7 @@ fn draw_addressable_strip_tool(
                             egui::DragValue::new(&mut pixel).range(0..=pixels.saturating_sub(1)),
                         );
                         ui.label(app.tr("Color"));
-                        ui.color_edit_button_srgba(&mut color);
+                        crate::ui::color_picker::color_button_srgba(ui, &mut color);
                     });
                     ui.horizontal_wrapped(|ui| {
                         ui.label(app.tr("Brightness"));
@@ -5388,9 +5412,9 @@ fn draw_addressable_strip_tool(
                 "frame" => {
                     ui.horizontal_wrapped(|ui| {
                         ui.label(app.tr("Start color"));
-                        ui.color_edit_button_srgba(&mut color);
+                        crate::ui::color_picker::color_button_srgba(ui, &mut color);
                         ui.label(app.tr("End color"));
-                        ui.color_edit_button_srgba(&mut second_color);
+                        crate::ui::color_picker::color_button_srgba(ui, &mut second_color);
                     });
                     ui.horizontal_wrapped(|ui| {
                         ui.label(app.tr("Brightness"));
@@ -7034,6 +7058,18 @@ mod timeline_row_tests {
             egui::Event::Zoom(1.1), egui::Event::Zoom(1.2)]), Some(1.32));
         assert_eq!(timeline_pinch_factor(&[egui::Event::Zoom(f32::NAN)]), None);
         assert_eq!(timeline_pinch_factor(&[egui::Event::Zoom(0.0)]), None);
+    }
+
+    #[test]
+    fn ruler_wheel_steps_once_per_event_and_preserves_horizontal_and_modifiers() {
+        let wheel = |unit, delta, modifiers| egui::Event::MouseWheel {
+            unit, delta, modifiers, phase: egui::TouchPhase::Move,
+        };
+        assert_eq!(ruler_wheel_step(&wheel(egui::MouseWheelUnit::Line, egui::vec2(0.0,120.0), egui::Modifiers::NONE)), 1);
+        assert_eq!(ruler_wheel_step(&wheel(egui::MouseWheelUnit::Line, egui::vec2(0.0,-3.0), egui::Modifiers::NONE)), -1);
+        assert_eq!(ruler_wheel_step(&wheel(egui::MouseWheelUnit::Point, egui::vec2(0.0,0.4), egui::Modifiers::NONE)), 0);
+        assert_eq!(ruler_wheel_step(&wheel(egui::MouseWheelUnit::Line, egui::vec2(2.0,0.0), egui::Modifiers::NONE)), 0);
+        assert_eq!(ruler_wheel_step(&wheel(egui::MouseWheelUnit::Line, egui::vec2(0.0,1.0), egui::Modifiers::CTRL)), 0);
     }
 
     #[test]
@@ -11127,10 +11163,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 as f32,
                                         );
                                     }
-                                    crate::ui::controls::paint_seekbar_chapters(
-                                        ui, &response, self.app.duration, &self.app.media_chapters(),
-                                        self.app.active_media_chapter().map(|chapter| chapter.index),
-                                    );
+                                    if let Some(chapter_time) = crate::ui::controls::paint_seekbar_markers(ui, &response, self.app) {
+                                        current_pos = chapter_time;
+                                    }
                                     let show_seek_preview =
                                         self.app.nle_seekbar_hover_thumbnails;
                                     crate::ui::seek_preview::draw(
@@ -14688,11 +14723,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         keyframe_context_owned = keyframe_hit || keyframe_candidates.iter()
                                             .any(|(target, _)| egui::Popup::is_id_open(ui.ctx(), target.menu_id()));
 
-                                        if ui.rect_contains_pointer(viewport_clip) {
-                                            pending_timeline_wheel = timeline_wheel_over_surface(ui, viewport_clip,
-                                                timeline_wheel_behavior(self.app, scroll_modifiers));
-                                        }
-
                                         let ruler_response = ui.interact(ruler_rect, egui::Id::new("timeline_ruler"), egui::Sense::click_and_drag())
                                             .on_hover_text(&timeline_ruler_help);
 
@@ -14784,6 +14814,17 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         }
                                         held_timeline_pan = toolbar.held_pan;
 
+                                        let ruler_hovered = ui.rect_contains_pointer(ruler_rect.intersect(viewport_clip))
+                                            && !ui.rect_contains_pointer(toolbar_rect);
+                                        if ruler_hovered {
+                                            let steps = timeline_ruler_scroll_steps(ui);
+                                            if steps != 0 { self.app.step_timeline_frame(steps); ui.ctx().request_repaint(); }
+                                        }
+                                        if ui.rect_contains_pointer(viewport_clip) {
+                                            pending_timeline_wheel = timeline_wheel_over_surface(ui, viewport_clip,
+                                                timeline_wheel_behavior(self.app, scroll_modifiers));
+                                        }
+
                                         let mut clicked_any_keyframe = keyframe_context_owned && ui.input(|input|
                                             input.pointer.any_down() || input.pointer.any_released());
                                         for marker in self.app.timeline.keyframes.clone() {
@@ -14806,8 +14847,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             let marker_response = ui
                                                 .interact(marker_rect, egui::Id::new(("timeline-keyframe", marker.id)), egui::Sense::click())
                                                 .on_hover_text(format!(
-                                                    "{} · {}",
+                                                    "{}{} · {}",
                                                     self.app.tr("Exact timeline keyframe"),
+                                                    if marker.label.is_empty() { String::new() } else { format!(" · {}", marker.label) },
                                                     crate::duration::format_time_value_ms(marker.time_ms)
                                                 ));
                                             let target = TimelineKeyframeTarget::Marker(marker.id);
@@ -14822,6 +14864,17 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             }
                                             keyframe_context_menu(ui, &marker_response, target, targeted, |ui| {
                                                 ui.label(egui::RichText::new(self.app.tr("Exact timeline keyframe")).strong());
+                                                let mut label = marker.label.clone();
+                                                ui.horizontal(|ui| {
+                                                    ui.label(self.app.tr("Name"));
+                                                    if ui.add(crate::ui::dialog::singleline_text_edit(&mut label).desired_width(160.0)).changed() {
+                                                        self.app.undo_stack.push(self.app.snapshot_timeline());
+                                                        if let Some(keyframe) = self.app.timeline.keyframes.iter_mut().find(|keyframe| keyframe.id == marker.id) {
+                                                            keyframe.label = label;
+                                                        }
+                                                        self.app.commit_timeline_edit();
+                                                    }
+                                                });
                                                 let mut exact_time = marker.time_ms;
                                                 ui.horizontal(|ui| {
                                                     ui.label(self.app.tr("Time"));

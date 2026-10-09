@@ -1,10 +1,10 @@
 import React, { useMemo, useState } from 'react';
+import { ColorPicker } from './ColorPicker';
 import {
   Button,
   Card,
   Collapse,
   ConfigProvider,
-  ColorPicker,
   Dropdown,
   Empty,
   Input,

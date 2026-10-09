@@ -456,11 +456,11 @@ fn seek_target_reached(actual_time: f64, target_time: f64, media_fps: f64) -> bo
         return false;
     }
     let frame_tolerance = if media_fps.is_finite() && media_fps > 0.0 {
-        2.0 / media_fps
+        1.0 / media_fps + 0.002
     } else {
         0.1
     };
-    (actual_time - target_time).abs() <= frame_tolerance.max(0.05)
+    (actual_time - target_time).abs() <= frame_tolerance
 }
 
 /// Resolve the logical timeline position after mpv has decoded a seek.
@@ -480,6 +480,16 @@ fn settled_seek_position(
     } else {
         target_time
     }
+}
+
+/// Quantized ruler navigation from the advertised media rate. Native mpv
+/// frame-step remains the decoder-owned path for variable-rate media.
+pub fn calculate_frame_step_target(current: f64, fps: f64, steps: i32, duration: f64) -> f64 {
+    if !current.is_finite() || !duration.is_finite() { return 0.0; }
+    if !fps.is_finite() || fps <= 0.0 || steps == 0 { return current.clamp(0.0, duration.max(0.0)); }
+    let base = if steps > 0 { (current * fps + 0.0001).floor() } else { (current * fps - 0.0001).ceil() };
+    let target = (base as i64).saturating_add(i64::from(steps)).max(0);
+    (target as f64 / fps).clamp(0.0, duration.max(0.0))
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -556,6 +566,8 @@ pub struct PealayerApp {
     pub(crate) seek_controller: crate::mpv::seek::SeekController,
     pub(crate) frame_cache: std::sync::Arc<std::sync::RwLock<crate::mpv::frame_cache::FrameCache>>,
     pub(crate) active_pseudo_frame: Option<crate::mpv::frame_cache::CachedFrame>,
+    pub(crate) settled_seek_revision: u64,
+    pub(crate) settled_seek_target: Option<f64>,
     pub(crate) was_playing_before_scrub: bool,
     pub(crate) is_scrubbing: bool,
     pub(crate) pending_scrub_commit: Option<PendingScrubCommit>,
@@ -719,6 +731,7 @@ pub struct PealayerApp {
     pub(crate) human_readable_time_units: bool,
     pub(crate) seekbar_hover_thumbnails: bool,
     pub(crate) nle_seekbar_hover_thumbnails: bool,
+    pub(crate) seekbar_markers: crate::config::SeekbarMarkersConfig,
     pub(crate) seekbar_thumbnail_preview: crate::ui::seek_preview::SeekbarThumbnailPreview,
     pub(crate) quick_seek_seconds: f64,
     pub(crate) frame_step_count: u32,
@@ -1425,6 +1438,11 @@ impl eframe::App for PealayerApp {
                     })
                     .collect(),
                 current_chapter_index,
+                seekbar_markers: self.seekbar_markers.clone(),
+                timeline_keyframes: self.timeline.keyframes.clone(),
+                seek_pending: self.is_scrubbing || self.pending_scrub_commit.is_some(),
+                settled_seek_revision: self.settled_seek_revision,
+                settled_seek_target: self.settled_seek_target,
                 seekable: self.is_seekable,
                 live: self.is_live_media(),
                 buffered_until: self.buffered_until(),
@@ -3859,6 +3877,11 @@ impl PealayerApp {
                     self.finish_scrub(target);
                 }
             }
+            InteropCommand::ScrubTo { seconds } => self.scrub_to(seconds),
+            InteropCommand::FinishScrub { seconds } => {
+                if !self.is_scrubbing { self.scrub_to(seconds); }
+                self.finish_scrub(seconds);
+            }
             InteropCommand::SeekAbs { percentage } => {
                 if self.is_seekable {
                     let clamped = percentage.clamp(0.0, 100.0);
@@ -4585,14 +4608,12 @@ impl PealayerApp {
         let Some(pending) = self.pending_scrub_commit else {
             return;
         };
-        if !pending.dispatched || !pending.playback_restarted {
+        if !pending.dispatched || !pending.playback_restarted
+            || self.mpv.get_property::<bool>("seeking").unwrap_or(true) {
             return;
         }
 
-        let actual_time = self
-            .mpv
-            .get_property::<f64>("time-pos")
-            .unwrap_or(pending.target_time);
+        let Ok(actual_time) = self.mpv.get_property::<f64>("time-pos") else { return; };
         if !seek_target_reached(actual_time, pending.target_time, self.media_fps) {
             // A PlaybackRestart from an older preview seek can arrive after the
             // final commit was queued. Require the restart for the committed
@@ -4612,6 +4633,9 @@ impl PealayerApp {
         self.playback_time = settled_time;
         self.seek_pos = retain_exact_target.then_some(pending.target_time);
         self.pending_scrub_commit = None;
+        self.active_pseudo_frame = None;
+        self.settled_seek_revision = self.settled_seek_revision.wrapping_add(1);
+        self.settled_seek_target = Some(pending.target_time);
         self.engine_handle.playback_time_ms.store(
             (settled_time * 1_000.0).max(0.0) as u64,
             std::sync::atomic::Ordering::Relaxed,
@@ -5573,6 +5597,22 @@ impl PealayerApp {
         self.jump_to_media_chapter(chapters[target_position].index);
     }
 
+    /// Ruler navigation pauses once and shares exact scrub/commit settlement.
+    pub fn step_timeline_frame(&mut self, steps: i32) {
+        if self.current_video_path.is_none() || !self.is_seekable || steps == 0 { return; }
+        if !self.media_fps.is_finite() || self.media_fps <= 0.0 {
+            self.seek_pos = None;
+            let command = if steps > 0 { "frame-step" } else { "frame-back-step" };
+            for _ in 0..steps.unsigned_abs().min(120) { let _ = self.mpv.command(command, &[]); }
+            return;
+        }
+        let current = crate::ui::controls::resolve_display_time(self.seek_pos, self.playback_time);
+        let target = calculate_frame_step_target(current, self.media_fps, steps, self.duration);
+        self.scrub_to(target);
+        self.was_playing_before_scrub = false;
+        self.finish_scrub(target);
+    }
+
     /// Advances or reverses playback by the configured number of frames.
     pub fn step_frames(&mut self, direction: i32) {
         if self.current_video_path.is_none() || direction == 0 {
@@ -5637,9 +5677,7 @@ impl PealayerApp {
                 self.active_pseudo_frame = Some(frame);
             }
             crate::mpv::seek::ScrubResult::Dispatched(_) => {
-                if let Ok(cache) = self.frame_cache.read() {
-                    self.active_pseudo_frame = cache.query_nearest(clamped);
-                }
+                self.active_pseudo_frame = None;
             }
         }
     }
@@ -5673,7 +5711,8 @@ impl PealayerApp {
         // PlaybackRestart for this exact committed target. Playback is resumed
         // by settle_scrub_commit_if_ready, never against the stale old frame.
         self.is_scrubbing = false;
-        self.active_pseudo_frame = None;
+        self.active_pseudo_frame = self.active_pseudo_frame.take()
+            .filter(|frame| (frame.pts - clamped).abs() <= 0.000_001);
     }
 
     fn selected_subtitle_is_bitmap(&self) -> bool {
@@ -6295,6 +6334,7 @@ impl PealayerApp {
         cfg.human_readable_time_units = self.human_readable_time_units;
         cfg.seekbar_hover_thumbnails = self.seekbar_hover_thumbnails;
         cfg.nle_seekbar_hover_thumbnails = self.nle_seekbar_hover_thumbnails;
+        cfg.seekbar_markers = self.seekbar_markers.clone();
         cfg.consistent_video_aspect_ratio = self.consistent_video_aspect_ratio;
         cfg.always_on_top = self.always_on_top;
         cfg.quick_seek_seconds = self.quick_seek_seconds;
@@ -6655,6 +6695,7 @@ impl PealayerApp {
         self.human_readable_time_units = config.human_readable_time_units;
         self.seekbar_hover_thumbnails = config.seekbar_hover_thumbnails;
         self.nle_seekbar_hover_thumbnails = config.nle_seekbar_hover_thumbnails;
+        self.seekbar_markers = config.seekbar_markers.clone();
         let aspect_lock_enabled =
             !self.consistent_video_aspect_ratio && config.consistent_video_aspect_ratio;
         self.consistent_video_aspect_ratio = config.consistent_video_aspect_ratio;
@@ -8398,6 +8439,8 @@ impl Default for PealayerApp {
             ),
             frame_cache,
             active_pseudo_frame: None,
+            settled_seek_revision: 0,
+            settled_seek_target: None,
             was_playing_before_scrub: false,
             is_scrubbing: false,
             pending_scrub_commit: None,
@@ -8552,6 +8595,7 @@ impl Default for PealayerApp {
             human_readable_time_units: true,
             seekbar_hover_thumbnails: false,
             nle_seekbar_hover_thumbnails: false,
+            seekbar_markers: crate::config::SeekbarMarkersConfig::default(),
             seekbar_thumbnail_preview: crate::ui::seek_preview::SeekbarThumbnailPreview::default(),
             quick_seek_seconds: 10.0,
             frame_step_count: 1,
@@ -8964,7 +9008,19 @@ pub(crate) mod tests {
     fn exact_seek_settlement_accepts_the_committed_frame() {
         assert!(seek_target_reached(48.0, 48.0, 24.0));
         assert!(seek_target_reached(48.04, 48.0, 24.0));
-        assert!(seek_target_reached(48.08, 48.0, 24.0));
+        assert!(!seek_target_reached(48.08, 48.0, 24.0));
+        assert!(!seek_target_reached(48.03, 48.0, 60.0));
+    }
+
+    #[test]
+    fn ruler_frame_steps_quantize_and_clamp_without_inventing_unknown_rate() {
+        let first = calculate_frame_step_target(0.0, 24.0, 1, 10.0);
+        assert!((first - 1.0 / 24.0).abs() < 0.000_001);
+        assert_eq!(calculate_frame_step_target(first, 24.0, -1, 10.0), 0.0);
+        assert!((calculate_frame_step_target(1.01, 24.0, 1, 10.0) - 25.0 / 24.0).abs() < 0.000_001);
+        assert_eq!(calculate_frame_step_target(1.01, 24.0, -1, 10.0), 1.0);
+        assert_eq!(calculate_frame_step_target(10.0, 24.0, 1, 10.0), 10.0);
+        assert_eq!(calculate_frame_step_target(2.0, 0.0, 1, 10.0), 2.0);
     }
 
     #[test]
@@ -9966,9 +10022,9 @@ pub(crate) mod tests {
         assert!(app.active_pseudo_frame.is_some());
         assert_eq!(app.active_pseudo_frame.as_ref().unwrap().pts, 5.0);
 
-        // finish_scrub clears active_pseudo_frame
+        // Retain the exact cached preview until the final decoder frame is ready.
         app.finish_scrub(5.0);
-        assert!(app.active_pseudo_frame.is_none());
+        assert!(app.active_pseudo_frame.is_some());
 
         // clear_frame_cache clears cache and active_pseudo_frame
         app.frame_cache.write().unwrap().insert(

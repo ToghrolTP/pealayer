@@ -708,7 +708,7 @@ fn settings(
                     .checkbox(&mut override_enabled, app.tr("Override with custom color"))
                     .changed();
                 ui.add_enabled_ui(override_enabled, |ui| {
-                    ui.color_edit_button_srgb(&mut override_color)
+                    crate::ui::color_picker::color_button_srgb(ui, &mut override_color)
                         .on_hover_text(app.tr("Choose the live status-light color"));
                 });
                 let busy = app.board_operation.is_some();

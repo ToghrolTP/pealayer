@@ -60,9 +60,9 @@ fn test_rapid_scrub_stress_across_cache_boundaries() {
         match controller.request_scrub(target) {
             ScrubResult::Cached(frame) => {
                 cached_count += 1;
-                // Cached result must be within the 20ms tolerance window
+                // Cache previews must match the exact requested timestamp.
                 assert!(
-                    (frame.pts - target).abs() <= 0.02,
+                    (frame.pts - target).abs() <= 0.000_001,
                     "Cached frame PTS {} deviated from target {}",
                     frame.pts,
                     target

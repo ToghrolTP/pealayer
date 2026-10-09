@@ -62,7 +62,8 @@ impl MpvSeekBackend {
 impl SeekBackend for MpvSeekBackend {
     fn execute_seek(&self, target_time: f64, mode: SeekMode) {
         if let Some(client)=crate::peer::client() {
-            let _=client.queue("/api/player/command",serde_json::json!({"command":"seek_to","seconds":target_time.max(0.0)}));
+            let command = match mode { SeekMode::Scrub => "scrub_to", SeekMode::Commit => "finish_scrub" };
+            let _=client.queue("/api/player/command",serde_json::json!({"command":command,"seconds":target_time.max(0.0)}));
             return;
         }
         let t = target_time.max(0.0);
@@ -145,19 +146,12 @@ impl SeekController {
         }
     }
 
-    /// Submits a scrub preview request. Checks the frame cache first for an exact
-    /// match (within 20ms tolerance). If found, returns the cached frame immediately.
-    /// Otherwise, rapid successive calls are coalesced so intermediate targets are skipped
-    /// if the backend is currently busy decoding.
+    /// Cached previews must be exact and must still move the decoder. A nearby
+    /// cached frame otherwise changes to a different frame when the gesture ends.
     pub fn request_scrub(&self, target_time: f64) -> ScrubResult {
-        if let Some(cache_lock) = &self.frame_cache {
-            if let Ok(cache) = cache_lock.read() {
-                // 20ms tolerance (covers 30/60fps frame matches)
-                if let Some(frame) = cache.query_exact(target_time, 0.02) {
-                    return ScrubResult::Cached(frame);
-                }
-            }
-        }
+        let cached = self.frame_cache.as_ref().and_then(|cache| {
+            cache.read().ok().and_then(|cache| cache.query_exact(target_time, 0.000_001))
+        });
 
         let request_id = self.next_request_id.fetch_add(1, Ordering::Relaxed);
         let (lock, cvar) = &*self.state;
@@ -168,7 +162,7 @@ impl SeekController {
             mode: SeekMode::Scrub,
         });
         cvar.notify_one();
-        ScrubResult::Dispatched(request_id)
+        cached.map_or(ScrubResult::Dispatched(request_id), ScrubResult::Cached)
     }
 
     /// Submits a final commit seek request. Overwrites any pending scrub requests.

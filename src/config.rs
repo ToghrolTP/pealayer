@@ -698,6 +698,37 @@ impl Default for WorkspaceProfile {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
+pub struct SeekbarMarkersConfig {
+    pub chapter_color: String,
+    pub active_chapter_color: String,
+    pub keyframe_color: String,
+}
+
+impl Default for SeekbarMarkersConfig {
+    fn default() -> Self {
+        Self { chapter_color: "#969696".into(), active_chapter_color: "#B0B0B0".into(), keyframe_color: "#EF4444".into() }
+    }
+}
+
+#[cfg(test)]
+mod seekbar_marker_tests {
+    use super::*;
+    #[test]
+    fn marker_defaults_validation_and_roundtrip() {
+        let mut config = AppConfig::default();
+        assert_eq!(config.seekbar_markers.chapter_color, "#969696");
+        assert_eq!(config.seekbar_markers.keyframe_color, "#EF4444");
+        config.seekbar_markers.chapter_color = "#F59E0B".into();
+        assert!(config.validate().is_ok());
+        let roundtrip: AppConfig = serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
+        assert_eq!(roundtrip.seekbar_markers, config.seekbar_markers);
+        config.seekbar_markers.keyframe_color = "invalid".into();
+        assert!(config.validate().unwrap_err().contains("seekbar_markers.keyframe_color"));
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
 pub struct AppConfig {
     pub volume: f64,
     pub is_muted: bool,
@@ -759,6 +790,7 @@ pub struct AppConfig {
     pub show_subseconds: bool,
     pub seekbar_hover_thumbnails: bool,
     pub nle_seekbar_hover_thumbnails: bool,
+    pub seekbar_markers: SeekbarMarkersConfig,
     pub consistent_video_aspect_ratio: bool,
     pub always_on_top: AlwaysOnTopMode,
     pub quick_seek_seconds: f64,
@@ -940,6 +972,7 @@ impl Default for AppConfig {
             show_subseconds: true,
             seekbar_hover_thumbnails: false,
             nle_seekbar_hover_thumbnails: false,
+            seekbar_markers: SeekbarMarkersConfig::default(),
             consistent_video_aspect_ratio: true,
             always_on_top: AlwaysOnTopMode::Never,
             quick_seek_seconds: 10.0,
@@ -1727,6 +1760,11 @@ impl AppConfig {
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        for (key, value) in [("chapter_color", &self.seekbar_markers.chapter_color),
+            ("active_chapter_color", &self.seekbar_markers.active_chapter_color),
+            ("keyframe_color", &self.seekbar_markers.keyframe_color)] {
+            if parse_rgb_hex(value).is_none() { return Err(format!("seekbar_markers.{key} must be an RGB hex color")); }
+        }
         for (key, device) in [
             ("audio_device", &self.audio_device),
             ("sfx_audio_device", &self.sfx_audio_device),

@@ -100,44 +100,98 @@ pub(crate) fn paint_buffered_seekbar(
         .rect_filled(buffered_rect, buffered_rect.height() / 2.0, color);
 }
 
-/// Paint chapter landmarks over the slider's actual thumb travel range.
-pub(crate) fn paint_seekbar_chapters(
+pub(crate) fn seekbar_value_range(rect: egui::Rect) -> std::ops::RangeInclusive<f32> {
+    let radius = rect.height() / 2.5;
+    rect.left() + radius..=rect.right() - radius
+}
+
+pub(crate) fn chapter_hover_label(chapters: &[crate::media_info::MediaChapter], seconds: f64) -> Option<String> {
+    let chapter = chapters.iter().filter(|chapter| chapter.time_seconds.is_finite() && chapter.time_seconds >= 0.0 && chapter.time_seconds <= seconds)
+        .max_by(|a,b| a.time_seconds.total_cmp(&b.time_seconds))?;
+    Some(format!("Chapter {}{}", chapter.index + 1,
+        if chapter.title.trim().is_empty() { String::new() } else { format!(" · {}", chapter.title) }))
+}
+
+fn chapter_near_pointer(chapters: &[crate::media_info::MediaChapter], rect: egui::Rect, duration: f64, pointer_x: f32) -> Option<&crate::media_info::MediaChapter> {
+    if !duration.is_finite() || duration <= 0.0 { return None; }
+    let range = seekbar_value_range(rect);
+    if range.end() <= range.start() { return None; }
+    let distance = |chapter: &crate::media_info::MediaChapter| (egui::lerp(range.clone(), (chapter.time_seconds / duration) as f32) - pointer_x).abs();
+    chapters.iter().filter(|chapter| chapter.time_seconds.is_finite() && (0.0..=duration).contains(&chapter.time_seconds))
+        .filter(|chapter| distance(chapter) <= 6.0)
+        .min_by(|a,b| distance(a).total_cmp(&distance(b)))
+}
+
+/// Chapters are subtle contained ticks; exact project keyframes retain taller
+/// red dividers. Geometry, hover and chapter snapping share the thumb range.
+pub(crate) fn paint_seekbar_markers(
     ui: &egui::Ui,
     response: &egui::Response,
-    duration: f64,
-    chapters: &[crate::media_info::MediaChapter],
-    active_index: Option<i64>,
-) {
-    if duration <= 0.0 || !duration.is_finite() || chapters.is_empty() {
-        return;
+    app: &PealayerApp,
+) -> Option<f64> {
+    let duration = app.duration;
+    if duration <= 0.0 || !duration.is_finite() {
+        return None;
     }
+    let chapters = app.media_chapters();
     let rect = response.rect;
-    let handle_radius = rect.height() / 2.5;
-    let range = rect.left() + handle_radius..=rect.right() - handle_radius;
+    let range = seekbar_value_range(rect);
     if range.end() <= range.start() {
-        return;
+        return None;
     }
-    let half_height = (ui.spacing().slider_rail_height * 0.5 + 3.0)
-        .min(rect.height() * 0.5);
-    for chapter in chapters {
+    let rgb = |hex: &str, fallback| { let [r,g,b] = crate::config::parse_rgb_hex(hex).unwrap_or(fallback); egui::Color32::from_rgb(r,g,b) };
+    let chapter_color = rgb(&app.seekbar_markers.chapter_color, [150,150,150]);
+    let active_color = rgb(&app.seekbar_markers.active_chapter_color, [176,176,176]);
+    let keyframe_color = rgb(&app.seekbar_markers.keyframe_color, [239,68,68]);
+    let x_for = |time: f64| egui::lerp(range.clone(), (time / duration).clamp(0.0,1.0) as f32);
+    let current_time = app.seek_pos.unwrap_or(app.playback_time);
+    if let Some(active) = chapters.iter().filter(|chapter| chapter.time_seconds.is_finite()
+        && (0.0..=duration).contains(&chapter.time_seconds) && chapter.time_seconds <= current_time)
+        .max_by(|a,b| a.time_seconds.total_cmp(&b.time_seconds)) {
+        let end = chapters.iter().filter(|chapter| chapter.time_seconds > active.time_seconds)
+            .map(|chapter| chapter.time_seconds).min_by(f64::total_cmp).unwrap_or(duration);
+        let active_rect = egui::Rect::from_min_max(egui::pos2(x_for(active.time_seconds), rect.center().y - ui.spacing().slider_rail_height * 0.4),
+            egui::pos2(x_for(end), rect.center().y + ui.spacing().slider_rail_height * 0.4));
+        ui.painter().rect_filled(active_rect, 1.0, active_color.gamma_multiply(0.24));
+    }
+    let pointer = ui.ctx().pointer_hover_pos().filter(|point| rect.contains(*point));
+    let nearest_chapter = pointer.and_then(|point| chapter_near_pointer(&chapters, rect, duration, point.x));
+    let half_height = ui.spacing().slider_rail_height * 0.35;
+    for chapter in &chapters {
         if !chapter.time_seconds.is_finite()
             || !(0.0..=duration).contains(&chapter.time_seconds)
         {
             continue;
         }
-        let x = egui::lerp(range.clone(), (chapter.time_seconds / duration) as f32);
-        let active = active_index == Some(chapter.index);
-        let color = if active {
-            egui::Color32::from_rgb(255, 193, 75)
-        } else {
-            egui::Color32::from_rgb(216, 162, 56)
-        };
+        let x = x_for(chapter.time_seconds);
         ui.painter().line_segment(
             [egui::pos2(x, rect.center().y - half_height),
              egui::pos2(x, rect.center().y + half_height)],
-            egui::Stroke::new(if active { 2.0 } else { 1.5 }, color),
+            egui::Stroke::new(1.0, chapter_color),
         );
     }
+    for marker in &app.timeline.keyframes {
+        let time = marker.time_ms as f64 / 1000.0;
+        if time > duration { continue; }
+        let x = x_for(time);
+        let height = (ui.spacing().slider_rail_height * 0.5 + 3.0).min(rect.height() * 0.5);
+        ui.painter().line_segment([egui::pos2(x,rect.center().y-height),egui::pos2(x,rect.center().y+height)], egui::Stroke::new(1.5,keyframe_color));
+    }
+    if let Some(point) = pointer {
+        let nearest_keyframe = app.timeline.keyframes.iter().filter(|marker| marker.time_ms as f64 / 1000.0 <= duration)
+            .filter(|marker| (x_for(marker.time_ms as f64/1000.0)-point.x).abs() <= 6.0)
+            .min_by_key(|marker| ((x_for(marker.time_ms as f64/1000.0)-point.x).abs()*100.0) as u64);
+        let label = if let Some(marker) = nearest_keyframe {
+            format!("Keyframe{}\n{}", if marker.label.is_empty() { String::new() } else { format!(" · {}", marker.label) },
+                crate::duration::format_time_value_ms(marker.time_ms))
+        } else {
+            let time = nearest_chapter.map_or_else(|| duration * ((point.x-range.start()) / (range.end()-range.start())).clamp(0.0,1.0) as f64, |chapter| chapter.time_seconds);
+            chapter_hover_label(&chapters,time).unwrap_or_default()
+        };
+        if !label.is_empty() && !response.dragged() { response.clone().on_hover_text(label); }
+    }
+    let operating = response.changed() || response.clicked() || response.drag_stopped();
+    nearest_chapter.filter(|_| operating).map(|chapter| chapter.time_seconds)
 }
 
 fn compact_number(value: f64) -> String {
@@ -917,13 +971,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 (buffered_until / app.duration).clamp(0.0, 1.0) as f32,
                             );
                         }
-                        paint_seekbar_chapters(
-                            ui,
-                            &response,
-                            app.duration,
-                            &app.media_chapters(),
-                            app.active_media_chapter().map(|chapter| chapter.index),
-                        );
+                        if let Some(chapter_time) = paint_seekbar_markers(ui, &response, app) { current_pos = chapter_time; }
                         let show_seek_preview = app.seekbar_hover_thumbnails;
                         crate::ui::seek_preview::draw(
                             app,
@@ -1177,6 +1225,18 @@ pub fn parse_timecode(value: &str) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn chapter_snapping_uses_thumb_range_and_preserves_exact_timestamp() {
+        let chapters = vec![crate::media_info::MediaChapter { index: 0, title: "Opening".into(), time_seconds: 10.125 }];
+        let rect = egui::Rect::from_min_size(egui::pos2(100.0,20.0), egui::vec2(400.0,20.0));
+        let x = egui::lerp(seekbar_value_range(rect), 10.125 / 120.0);
+        assert_eq!(chapter_near_pointer(&chapters, rect, 120.0, x + 5.5).unwrap().time_seconds, 10.125);
+        assert!(chapter_near_pointer(&chapters, rect, 120.0, x + 6.1).is_none());
+        assert!(chapter_near_pointer(&chapters, rect, f64::NAN, x).is_none());
+        assert_eq!(chapter_hover_label(&chapters, 11.0).as_deref(), Some("Chapter 1 · Opening"));
+        assert!(chapter_hover_label(&chapters, 9.0).is_none());
+    }
 
     #[test]
     fn test_multiply_style_opacity_handles_none_override_text_color() {

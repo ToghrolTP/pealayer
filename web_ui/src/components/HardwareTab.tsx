@@ -1,11 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { RfManager } from './RfManager';
 import { PublishingAuthority } from './PublishingAuthority';
+import { ColorPicker } from './ColorPicker';
 import {
   Alert,
   Button,
   Card,
-  ColorPicker,
   Collapse,
   Divider,
   Dropdown,

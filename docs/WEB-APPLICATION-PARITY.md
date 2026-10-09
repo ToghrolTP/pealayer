@@ -147,6 +147,14 @@ policy blocker is not a completed deployment and must not be bypassed.
 
 ## Regression rules
 
+- **Seekbar markers and scrub settlement:** Simple and NLE share typed
+  `scrub_to` / `finish_scrub` gestures, live coalesced previews, and correlated
+  decoder settlement before discarding the local thumb position. Shared Rust
+  configuration supplies subdued chapter ticks, active-chapter background and
+  red named project keyframes. Native/Web color pickers share semantic
+  swatches. Source/build progress and pending installed-host acceptance are
+  described in [Seekbar markers and seeking](SEEKBAR-MARKERS-AND-SEEKING.md).
+
 - Hardware state changes occur on primary pointer-down; keyboard activation
   remains click/Enter/Space compatible and commands fire exactly once.
 - Right click opens item-specific actions and never starts dragging.

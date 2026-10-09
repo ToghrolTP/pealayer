@@ -845,7 +845,7 @@ fn sequence_cue_context_menu(
                 step.green.unwrap_or_default(),
                 step.blue.unwrap_or_default(),
             );
-            if ui.color_edit_button_srgba(&mut color).changed() {
+            if crate::ui::color_picker::color_button_srgba(ui, &mut color).changed() {
                 step.red = Some(color.r());
                 step.green = Some(color.g());
                 step.blue = Some(color.b());
@@ -1589,7 +1589,7 @@ fn draw_timeline_authoring_fields(
                     step.to_green.unwrap_or_default(),
                     step.to_blue.unwrap_or_default(),
                 );
-                if ui.color_edit_button_srgba(&mut color).changed() {
+                if crate::ui::color_picker::color_button_srgba(ui, &mut color).changed() {
                     step.to_red = Some(color.r());
                     step.to_green = Some(color.g());
                     step.to_blue = Some(color.b());
@@ -2007,7 +2007,7 @@ fn draw_sequence_step_editor(
                                     step.green.unwrap_or_default(),
                                     step.blue.unwrap_or_default(),
                                 );
-                                if ui.color_edit_button_srgba(&mut color).changed() {
+                                if crate::ui::color_picker::color_button_srgba(ui, &mut color).changed() {
                                     step.red = Some(color.r());
                                     step.green = Some(color.g());
                                     step.blue = Some(color.b());
@@ -2046,7 +2046,7 @@ fn draw_sequence_step_editor(
                                     step.green.unwrap_or_default(),
                                     step.blue.unwrap_or_default(),
                                 );
-                                if ui.color_edit_button_srgba(&mut color).changed() {
+                                if crate::ui::color_picker::color_button_srgba(ui, &mut color).changed() {
                                     step.red = Some(color.r());
                                     step.green = Some(color.g());
                                     step.blue = Some(color.b());

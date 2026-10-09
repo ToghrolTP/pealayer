@@ -130,7 +130,7 @@ fn test_display_time_isolation_during_scrub() {
 }
 
 #[test]
-fn test_seek_controller_serves_cache_hits_without_backend_dispatch() {
+fn test_exact_cache_preview_still_moves_decoder_and_rejects_nearby_frames() {
     let backend = MockSeekBackend::default();
     let seeks = backend.seeks.clone();
     let cache = Arc::new(RwLock::new(FrameCache::new(10 * 1024 * 1024)));
@@ -141,8 +141,8 @@ fn test_seek_controller_serves_cache_hits_without_backend_dispatch() {
 
     let controller = SeekController::with_cache(backend, cache);
 
-    // Scrub to cached frame (within 20ms tolerance)
-    let result = controller.request_scrub(5.01);
+    // Only the exact target can be displayed without a release-frame change.
+    let result = controller.request_scrub(5.0);
     match result {
         ScrubResult::Cached(hit) => {
             assert_eq!(hit.pts, 5.0);
@@ -150,11 +150,11 @@ fn test_seek_controller_serves_cache_hits_without_backend_dispatch() {
         ScrubResult::Dispatched(_) => panic!("Expected cache hit, got dispatched seek"),
     }
 
-    thread::sleep(Duration::from_millis(30));
-    assert!(
-        seeks.lock().unwrap().is_empty(),
-        "Backend should not receive seek command on cache hit"
-    );
+    wait_for_seek_target(&seeks, 5.0);
+
+    assert!(matches!(controller.request_scrub(5.01), ScrubResult::Dispatched(_)),
+        "A nearby cached PTS must not masquerade as the requested frame");
+    wait_for_seek_target(&seeks, 5.01);
 
     // Scrub to uncached frame
     let miss_result = controller.request_scrub(12.0);

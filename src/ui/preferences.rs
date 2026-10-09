@@ -1299,6 +1299,14 @@ fn render_contract_control(
                     else { serde_json::Value::String(text.trim().to_owned()) });
             }
         }
+        PreferenceControlKind::Color => {
+            let mut hex = current.as_str().unwrap_or("#969696").to_string();
+            preference_row(ui, control_icon, &tr(control.label), label_width, |ui| {
+                if crate::ui::color_picker::color_field(ui, &mut hex, [150,150,150], 154.0).changed() {
+                    replacement = Some(serde_json::Value::String(hex));
+                }
+            });
+        }
         PreferenceControlKind::Text => {
             let mut text = current.as_str().unwrap_or_default().to_string();
             let text_align = crate::ui::i18n::input_alignment(rtl_ui, &text);
