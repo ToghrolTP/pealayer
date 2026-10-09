@@ -220,3 +220,45 @@ fn test_paused_seek_clears_seek_pos_and_advances_display_time_when_playback_resu
         app.playback_time
     );
 }
+
+#[test]
+fn test_23fps_media_playback_decoupled_framerate_and_zero_timing_offset() {
+    let _lock = lock_playback_tests();
+    let mut app = PealayerApp::default();
+
+    let video_path = PathBuf::from("test-data/jellyfish.mp4");
+    assert!(video_path.exists());
+    app.load_video_file(video_path);
+
+    // Process events until loaded
+    for _ in 0..20 {
+        thread::sleep(Duration::from_millis(50));
+        app.process_events();
+        if app.duration > 0.0 {
+            break;
+        }
+    }
+    assert!(app.duration > 0.0);
+    assert!(app.is_active_playback());
+
+    // Pacing must pace at display refresh rate (e.g. 60Hz or 144Hz) regardless of video framerate
+    app.display_refresh_rate = 144.0;
+    match app.playback_repaint_pacing() {
+        Some(pealayer::app::PlaybackRepaintPacing::Paced(dur)) => {
+            let ms = dur.as_secs_f64() * 1000.0;
+            assert!((ms - (1000.0 / 144.0)).abs() < 0.1);
+        }
+        other => panic!("Expected 144Hz paced interval, got {other:?}"),
+    }
+
+    // Verify record_mpv_render_duration updates latency metrics correctly
+    pealayer::ui::video::record_mpv_render_duration(Duration::from_micros(1500));
+    let last_micros = pealayer::ui::video::LAST_MPV_RENDER_MICROS
+        .load(std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(last_micros, 1500);
+
+    let fps_info = app
+        .current_fps_display(Instant::now())
+        .expect("fps display available");
+    assert!(fps_info.tooltip.contains("MPV render time: 1.50 ms"));
+}

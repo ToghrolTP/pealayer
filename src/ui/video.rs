@@ -3,6 +3,30 @@ use crate::mpv::render::GetProcAddress;
 use eframe::egui;
 use std::sync::Arc;
 
+pub static MPV_RENDER_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static LAST_MPV_RENDER_MICROS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static MAX_MPV_RENDER_MICROS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn record_mpv_render_duration(dur: std::time::Duration) {
+    let micros = dur.as_micros() as u64;
+    LAST_MPV_RENDER_MICROS.store(micros, std::sync::atomic::Ordering::Relaxed);
+    MAX_MPV_RENDER_MICROS.fetch_max(micros, std::sync::atomic::Ordering::Relaxed);
+    let count = MPV_RENDER_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    if dur >= std::time::Duration::from_millis(5) {
+        log::warn!(
+            "libmpv render pass blocked the UI thread for {:.2}ms (> 5ms)",
+            dur.as_secs_f64() * 1000.0
+        );
+    }
+    if std::env::var_os("PEALAYER_DEBUG_PERF").is_some() || (count % 120 == 0 && log::log_enabled!(log::Level::Debug)) {
+        let last_ms = micros as f64 / 1000.0;
+        let max_ms = MAX_MPV_RENDER_MICROS.load(std::sync::atomic::Ordering::Relaxed) as f64 / 1000.0;
+        log::debug!(
+            "[PERF] mpv render pass #{count}: last={last_ms:.2}ms, max={max_ms:.2}ms"
+        );
+    }
+}
+
 const DEFAULT_VIDEO_ASPECT_RATIO: f64 = 16.0 / 9.0;
 
 fn resolved_video_aspect_ratio(aspect_ratio: f64) -> f32 {
@@ -862,12 +886,14 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
                             // Render MPV frame at physical pixel size
                             let fbo_id = video_fbo.0.get() as i32;
+                            let render_start = std::time::Instant::now();
                             let _ = rc.0.render::<GetProcAddress>(
                                 fbo_id,
                                 target_phys_w,
                                 target_phys_h,
                                 false,
                             );
+                            record_mpv_render_duration(render_start.elapsed());
 
                             #[cfg(target_os = "windows")]
                             if let Some(media) = taskbar_media.as_deref() {

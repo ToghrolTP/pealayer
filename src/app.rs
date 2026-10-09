@@ -5013,8 +5013,15 @@ impl PealayerApp {
         let formatted = rate.map(|rate| format!("{rate:.2} fps")).unwrap_or_else(|| "— fps".into());
         let ui_rate = self.frame_rate_tracker.live_fps().map(|rate| format!("{rate:.2} fps")).unwrap_or_else(|| "—".into());
         let media_rate = if self.current_video_path.is_some() && self.media_fps > 0.0 { format!("{:.2} fps", self.media_fps) } else { "—".into() };
-        let tooltip = format!("{}: {}\n{}: {}\n{}: {}\n{}", self.tr("Media frame rate"), media_rate,
-            self.tr("UI render rate"), ui_rate, self.tr("Active mode"), active_mode_label,
+        let render_micros = crate::ui::video::LAST_MPV_RENDER_MICROS.load(std::sync::atomic::Ordering::Relaxed);
+        let max_render_micros = crate::ui::video::MAX_MPV_RENDER_MICROS.load(std::sync::atomic::Ordering::Relaxed);
+        let render_stat = if render_micros > 0 {
+            format!("\n{}: {:.2} ms (max: {:.2} ms)", self.tr("MPV render time"), render_micros as f64 / 1000.0, max_render_micros as f64 / 1000.0)
+        } else {
+            String::new()
+        };
+        let tooltip = format!("{}: {}\n{}: {}\n{}: {}{}\n{}", self.tr("Media frame rate"), media_rate,
+            self.tr("UI render rate"), ui_rate, self.tr("Active mode"), active_mode_label, render_stat,
             self.tr("Click to switch frame rate source"));
         Some(FpsDisplayInfo { value: rate.unwrap_or(0.0), formatted, active_mode_label, tooltip, is_ui_rate })
     }
@@ -8389,6 +8396,7 @@ fn get_shared_mpv() -> &'static libmpv2::Mpv {
         libmpv2::Mpv::with_initializer(|init| {
             let _ = init.set_option("vo", "null");
             let _ = init.set_option("ao", "null");
+            let _ = init.set_option("video-timing-offset", 0.0);
             let _ = init.set_option("keep-open", "always");
             Ok(())
         })
@@ -10161,5 +10169,19 @@ pub(crate) mod tests {
         // Pseudo-frame must hit cache immediately
         assert!(app.active_pseudo_frame.is_some());
         assert_eq!(app.active_pseudo_frame.as_ref().unwrap().pts, target_pts);
+    }
+
+    #[test]
+    fn mpv_timing_offset_is_zero_to_prevent_render_thread_blocking() {
+        let _lock = lock_app_tests();
+        let app = PealayerApp::default();
+        let offset = app
+            .mpv
+            .get_property::<f64>("video-timing-offset")
+            .expect("video-timing-offset must be readable");
+        assert_eq!(
+            offset, 0.0,
+            "video-timing-offset must be 0.0 to prevent libmpv from sleeping the UI render thread"
+        );
     }
 }
