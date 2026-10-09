@@ -13942,6 +13942,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         self.app.track_soloed.insert(*relay);
                                                     }
                                                 }
+                                                self.app.bump_timeline_revision();
                                                 let compiled = crate::four_d::engine::compile_timeline(&self.app.timeline, &self.app.track_muted, &self.app.track_soloed);
                                                 let _ = self.app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
                                             }
@@ -13957,6 +13958,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         self.app.track_muted.insert(*relay);
                                                     }
                                                 }
+                                                self.app.bump_timeline_revision();
                                                 let compiled = crate::four_d::engine::compile_timeline(&self.app.timeline, &self.app.track_muted, &self.app.track_soloed);
                                                 let _ = self.app.engine_handle.sender.send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
                                             }

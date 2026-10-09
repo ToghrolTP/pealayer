@@ -1,6 +1,9 @@
 use crate::mpv::render::RenderContextWrapper;
 use eframe::egui;
-use std::sync::{Arc, Mutex};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, Mutex,
+};
 
 const IDLE_WEB_SYNC_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
@@ -627,6 +630,10 @@ pub struct PealayerApp {
     pub(crate) media_tracks: Vec<MediaTrackInfo>,
     pub(crate) media_file_info: crate::media_info::MediaFileInfo,
     pub(crate) cached_media_chapters: Vec<crate::media_info::MediaChapter>,
+    pub(crate) timeline_revision: AtomicU64,
+    pub(crate) last_published_timeline_revision: AtomicU64,
+    pub(crate) media_view_revision: AtomicU64,
+    pub(crate) last_published_media_view_revision: AtomicU64,
     pub(crate) media_track_properties: Option<MediaTrackKey>,
     pub(crate) selected_timeline_track: Option<String>,
 
@@ -1269,7 +1276,15 @@ impl eframe::App for PealayerApp {
         let web_config = crate::platform::interop::get_live_frame_config(
             ctx.theme() == egui::Theme::Dark,
         );
-        crate::peer::publish_timeline(crate::peer::TimelineState{timeline:self.timeline.clone(),muted:self.track_muted.clone(),soloed:self.track_soloed.clone()});
+        let timeline_rev = self.timeline_revision.load(Ordering::Relaxed);
+        if timeline_rev != self.last_published_timeline_revision.load(Ordering::Relaxed) {
+            self.last_published_timeline_revision.store(timeline_rev, Ordering::Relaxed);
+            crate::peer::publish_timeline(crate::peer::TimelineState {
+                timeline: self.timeline.clone(),
+                muted: self.track_muted.clone(),
+                soloed: self.track_soloed.clone(),
+            });
+        }
         let appearance = web_config.appearance.clone();
         let configured_web_sync_interval =
             std::time::Duration::from_millis(u64::from(web_config.web_sync_interval_ms));
@@ -1652,10 +1667,17 @@ impl eframe::App for PealayerApp {
                 }),
                 update: crate::update::manager().status(),
             };
-            crate::peer::publish_media_view(crate::peer::MediaView {
-                tracks:self.media_tracks.clone(), file:self.media_file_info.clone(),
-                vid:self.current_vid.clone(), aid:self.current_aid.clone(), sid:self.current_sid.clone(),
-            });
+            let media_rev = self.media_view_revision.load(Ordering::Relaxed);
+            if media_rev != self.last_published_media_view_revision.load(Ordering::Relaxed) {
+                self.last_published_media_view_revision.store(media_rev, Ordering::Relaxed);
+                crate::peer::publish_media_view(crate::peer::MediaView {
+                    tracks: self.media_tracks.clone(),
+                    file: self.media_file_info.clone(),
+                    vid: self.current_vid.clone(),
+                    aid: self.current_aid.clone(),
+                    sid: self.current_sid.clone(),
+                });
+            }
             crate::platform::interop::set_live_status(status_resp.clone());
             if let Ok(json) = serde_json::to_string(&status_resp) {
                 let authoritative=crate::peer::client().and_then(|client|client.snapshot()).map(|value|value.session.status.to_string()).unwrap_or(json);
@@ -4770,17 +4792,20 @@ impl PealayerApp {
                         self.sync_subtitle_rendering();
                     }
                     (8, PropertyData::Double(v)) => self.sub_delay = v,
-                    (9, PropertyData::Str(v)) => {
-                        self.current_sid = v.to_string();
-                        self.sync_subtitle_rendering();
-                    }
-                    (9, PropertyData::OsdStr(v)) => {
-                        self.current_sid = v.to_string();
+                    (9, PropertyData::Str(v) | PropertyData::OsdStr(v)) => {
+                        if self.current_sid != v {
+                            self.current_sid = v.to_string();
+                            self.bump_media_view_revision();
+                        }
                         self.sync_subtitle_rendering();
                     }
                     (10, PropertyData::Double(v)) => self.audio_delay = v,
-                    (11, PropertyData::Str(v)) => self.current_aid = v.to_string(),
-                    (11, PropertyData::OsdStr(v)) => self.current_aid = v.to_string(),
+                    (11, PropertyData::Str(v) | PropertyData::OsdStr(v)) => {
+                        if self.current_aid != v {
+                            self.current_aid = v.to_string();
+                            self.bump_media_view_revision();
+                        }
+                    }
                     (12, PropertyData::Flag(v)) => {
                         let advance = v && !self.is_eof;
                         self.is_eof = v;
@@ -4795,8 +4820,12 @@ impl PealayerApp {
                         self.cache_buffering_percent = Some((v as f64).clamp(0.0, 100.0));
                     }
                     (17, PropertyData::Double(v)) => self.playback_rate = v,
-                    (18, PropertyData::Str(v)) => self.current_vid = v.to_string(),
-                    (18, PropertyData::OsdStr(v)) => self.current_vid = v.to_string(),
+                    (18, PropertyData::Str(v) | PropertyData::OsdStr(v)) => {
+                        if self.current_vid != v {
+                            self.current_vid = v.to_string();
+                            self.bump_media_view_revision();
+                        }
+                    }
                     (19, PropertyData::Str(v)) => {
                         self.subtitle_text = v.to_string();
                         self.sync_subtitle_rendering();
@@ -5568,9 +5597,18 @@ impl PealayerApp {
         ));
     }
 
+    pub(crate) fn bump_timeline_revision(&self) {
+        self.timeline_revision.fetch_add(1, Ordering::Relaxed);
+    }
+
+    pub(crate) fn bump_media_view_revision(&self) {
+        self.media_view_revision.fetch_add(1, Ordering::Relaxed);
+    }
+
     pub(crate) fn set_media_file_info(&mut self, info: crate::media_info::MediaFileInfo) {
         self.cached_media_chapters = crate::media_info::chapters(&info);
         self.media_file_info = info;
+        self.bump_media_view_revision();
     }
 
     pub(crate) fn media_chapters(&self) -> &[crate::media_info::MediaChapter] {
@@ -6031,6 +6069,7 @@ impl PealayerApp {
                     track.selected = Some(track.id == selection.id);
                 }
             }
+            self.bump_media_view_revision();
         }
     }
 
@@ -6064,6 +6103,7 @@ impl PealayerApp {
                     track.selected = Some(false);
                 }
             }
+            self.bump_media_view_revision();
         }
     }
 
@@ -7746,6 +7786,8 @@ impl PealayerApp {
             }
             return;
         }
+        let next_rev = self.timeline_revision.fetch_add(1, Ordering::Relaxed) + 1;
+        self.last_published_timeline_revision.store(next_rev, Ordering::Relaxed);
         crate::peer::publish_timeline(state);
         let mut muted_tracks = self.track_muted.clone();
         for (key, state) in &self.timeline.track_states {
@@ -7988,6 +8030,7 @@ impl PealayerApp {
             inst.effect_id = new_id;
         }
 
+        self.bump_timeline_revision();
         Some(new_id)
     }
 }
@@ -8540,6 +8583,10 @@ impl Default for PealayerApp {
             media_tracks: Vec::new(),
             media_file_info: crate::media_info::MediaFileInfo::default(),
             cached_media_chapters: Vec::new(),
+            timeline_revision: AtomicU64::new(1),
+            last_published_timeline_revision: AtomicU64::new(0),
+            media_view_revision: AtomicU64::new(1),
+            last_published_media_view_revision: AtomicU64::new(0),
             media_track_properties: None,
             selected_timeline_track: None,
             show_four_d_editor: true,
@@ -10251,4 +10298,33 @@ pub(crate) mod tests {
         assert!(app.media_chapters().is_empty());
         assert!(app.active_media_chapter().is_none());
     }
+
+    #[test]
+    fn timeline_and_media_view_publishing_is_revision_gated() {
+        let app = PealayerApp::default();
+        // Initial state has timeline_revision != last_published_timeline_revision
+        assert_eq!(app.timeline_revision.load(Ordering::Relaxed), 1);
+        assert_eq!(app.last_published_timeline_revision.load(Ordering::Relaxed), 0);
+        assert_eq!(app.media_view_revision.load(Ordering::Relaxed), 1);
+        assert_eq!(app.last_published_media_view_revision.load(Ordering::Relaxed), 0);
+
+        // sync_timeline_engine increments timeline_revision and brings last_published in sync
+        app.sync_timeline_engine();
+        let synced_rev = app.timeline_revision.load(Ordering::Relaxed);
+        assert!(synced_rev > 1);
+        assert_eq!(app.last_published_timeline_revision.load(Ordering::Relaxed), synced_rev);
+
+        // Bumping timeline revision puts them out of sync until published
+        app.bump_timeline_revision();
+        assert_ne!(
+            app.timeline_revision.load(Ordering::Relaxed),
+            app.last_published_timeline_revision.load(Ordering::Relaxed)
+        );
+
+        // Bumping media view revision puts them out of sync until published
+        let m_rev = app.media_view_revision.load(Ordering::Relaxed);
+        app.bump_media_view_revision();
+        assert_eq!(app.media_view_revision.load(Ordering::Relaxed), m_rev + 1);
+    }
 }
+
