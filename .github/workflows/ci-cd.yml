@@ -289,6 +289,10 @@ jobs:
       contents: write
       id-token: write
     steps:
+      - name: "📖 Read curated version notes"
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
       - name: "⬇️ Download release packages"
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
@@ -300,7 +304,9 @@ jobs:
         shell: bash
         run: |
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
-            { echo "tag=$GITHUB_REF_NAME"; echo "name=Pealayer $GITHUB_REF_NAME"; echo 'prerelease=false'; } >> "$GITHUB_OUTPUT"
+            prerelease=false
+            [[ "$GITHUB_REF_NAME" == *-* ]] && prerelease=true
+            { echo "tag=$GITHUB_REF_NAME"; echo "name=Pealayer $GITHUB_REF_NAME"; echo "prerelease=$prerelease"; } >> "$GITHUB_OUTPUT"
           else
             safe="${GITHUB_REF_NAME//\//-}"
             { echo "tag=branch-$safe"; echo "name=Pealayer branch build ($safe)"; echo 'prerelease=true'; } >> "$GITHUB_OUTPUT"
@@ -315,13 +321,19 @@ jobs:
           mapfile -t archives < <(find release-assets -maxdepth 1 -type f \( -name '*.zip' -o -name '*.tar.gz' \) -printf '%f\n' | sort)
           [[ ${#archives[@]} -eq 4 ]] || { echo "Expected 4 archives, found ${#archives[@]}" >&2; exit 1; }
           jq -n --arg tag "$RELEASE_TAG" --arg sha "$GITHUB_SHA" --arg run "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" --argjson assets "$(printf '%s\n' "${archives[@]}" | jq -R . | jq -s .)" '{format:"pealayer-release-manifest-v1",product:"Pealayer",tag:$tag,sourceSha:$sha,runUrl:$run,assets:$assets,integrity:{algorithm:"SHA-256",provenance:"GitHub artifact attestation"}}' > release-assets/release-manifest.json
+          notes=docs/releases/next.md
+          if [[ "$GITHUB_REF" == refs/tags/* ]]; then
+            [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+(-[A-Za-z0-9.-]+)?$ ]] || { echo 'Release tags must be semantic versions' >&2; exit 1; }
+            notes="docs/releases/$RELEASE_TAG.md"
+          fi
+          [[ -s "$notes" ]] || { echo "Missing curated change list: $notes" >&2; exit 1; }
           {
-            echo "# 🚀 $RELEASE_NAME"; echo
+            cat "$notes"; echo; echo
             echo '> [!IMPORTANT]'; echo '> Every native package passed its platform test/build matrix and carries GitHub build provenance.'; echo
             echo '| Platform package | Verification |'; echo '|---|---|'
             for archive in "${archives[@]}"; do echo "| \`$archive\` | SHA-256 + attestation |"; done
             echo; echo '## 🔐 Verify'; echo; echo '```bash'; echo 'sha256sum --check SHA256SUMS.txt'; echo "gh attestation verify Pealayer-ARCHIVE --repo $GITHUB_REPOSITORY"; echo '```'; echo
-            echo "Built from [\`${GITHUB_SHA:0:12}\`]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/commit/$GITHUB_SHA) · [workflow run]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID)"
+            echo "[Build verification]($GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID) · Exact source and integrity details are in the attached release manifest."
           } > release-assets/RELEASE-NOTES.md
           (
             cd release-assets
