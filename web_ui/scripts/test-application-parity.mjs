@@ -50,7 +50,8 @@ const contracts = [
   [hardware.includes('optimisticActive') && hardware.includes('invokeAction'), 'hardware actions acknowledge pointer-down immediately while awaiting board state'],
   [hardware.includes('controlIcon(control.kind, control.icon)'), 'hardware controls honor the shared custom icon contract'],
   [hardware.includes('Buzzer & melodies') && hardware.includes("hardware.buzzer.melody") && hardware.includes("hardware.buzzer.tone") && hardware.includes("hardware.buzzer.stop"), 'hardware monitor exposes live melody, tone, and stop controls'],
-  [hardware.includes("onOpenChange={(open) => { if (open) void sendCmd('hardware.catalog.refresh'); }}"), 'opening a melody picker refreshes the controller catalog'],
+  [hardware.includes('<MelodySelect') && hardware.includes("refresh={() => { void sendCmd('hardware.catalog.refresh'); }}") &&
+    read('src/components/MelodySelect.tsx').includes('onOpenChange={(open) => { if (open) refresh(); }}'), 'shared melody picker refreshes the controller catalog on opening'],
   [css.includes('.hardware-estop.ant-btn-primary'), 'E-STOP owns its filled danger styling'],
   [sevenSegment.includes("mask & (1 << bit)") && hardware.includes('<SevenSegmentDisplay'), 'front-panel masks render as live seven-segment glyphs'],
   [remote.includes('<MediaSurface') && studio.includes('<MediaSurface'), 'both player surfaces share the native media element'],

@@ -5876,8 +5876,8 @@ fn draw_buzzer_tool(
             .clamp(1, 60_000)
     });
     let pending = app.board_operation.is_some();
-    let can_start = !pending && !app.estop_active;
-    let can_stop = !pending;
+    let can_start = capabilities.board_connected && !pending && !app.estop_active;
+    let can_stop = capabilities.board_connected && !pending;
     let playing = capabilities.buzzer.is_playing();
     let board_silent = capabilities
         .settings
@@ -5891,11 +5891,11 @@ fn draw_buzzer_tool(
     board_tool_card(
         ui,
         crate::ui::icons::SPEAKER_HIGH,
-        &app.tr("Buzzer & melodies"),
+        &app.tr("Melody playback"),
         |ui| {
             ui.horizontal_wrapped(|ui| {
                 let state_color = if playing {
-                    egui::Color32::from_rgb(34, 197, 94)
+                    crate::ui::palette::color(app.color_palette, ui.visuals().dark_mode, "green")
                 } else {
                     ui.visuals().weak_text_color()
                 };
@@ -5941,8 +5941,11 @@ fn draw_buzzer_tool(
                 } else {
                     melody.clone()
                 };
+                let combo_id = ui.make_persistent_id("hardware_buzzer_melody_combo");
+                let was_open = egui::ComboBox::is_open(ui.ctx(), combo_id);
                 let response = egui::ComboBox::from_id_salt("hardware_buzzer_melody_combo")
-                    .width(210.0)
+                    .width((ui.available_width() - 32.0).max(1.0))
+                    .wrap_mode(egui::TextWrapMode::Truncate)
                     .selected_text(selected_text)
                     .show_ui(ui, |ui| {
                         if capabilities.melodies.is_empty() {
@@ -5967,7 +5970,7 @@ fn draw_buzzer_tool(
                         }
                     })
                     .response;
-                refresh_catalog |= response.clicked();
+                refresh_catalog |= !was_open && egui::ComboBox::is_open(ui.ctx(), response.id);
                 if ui
                     .small_button(crate::ui::icons::ARROW_CLOCKWISE)
                     .on_hover_text(app.tr("Refresh melody catalog"))
@@ -6017,7 +6020,9 @@ fn draw_buzzer_tool(
             ui.add_space(4.0);
             ui.separator();
             ui.add_space(4.0);
-            ui.label(egui::RichText::new(app.tr("Tone test")).strong());
+            egui::CollapsingHeader::new(format!("{} {}", crate::ui::icons::WAVEFORM, app.tr("Tone test")))
+                .id_salt("buzzer_tone_test")
+                .show(ui, |ui| {
             egui::Grid::new("hardware_buzzer_tone_grid")
                 .num_columns(2)
                 .spacing([10.0, 6.0])
@@ -6047,6 +6052,7 @@ fn draw_buzzer_tool(
                     )),
                 )
                 .clicked();
+                });
             if board_silent {
                 ui.add_space(4.0);
                 ui.colored_label(
@@ -6070,19 +6076,22 @@ fn draw_buzzer_tool(
     if refresh_catalog {
         // Push events keep this catalog current; opening or explicitly
         // refreshing the picker is also a user-visible freshness boundary.
-        app.engine_handle.request_catalog_refresh();
+        app.apply_interop_command(&ui.ctx().clone(),
+            crate::platform::interop::InteropCommand::RefreshHardwareCatalog, "Buzzer catalog");
     }
-    let result = if stop {
-        app.stop_buzzer()
+    let command = if stop {
+        Some(crate::platform::interop::InteropCommand::StopHardwareBuzzer)
     } else if play_melody {
-        app.play_buzzer_melody(&melody, repeats)
+        Some(crate::platform::interop::InteropCommand::PlayHardwareMelody { name: melody, repeats })
     } else if play_tone {
-        app.play_buzzer_tone(frequency_hz, duration_ms)
+        Some(crate::platform::interop::InteropCommand::PlayHardwareTone { frequency_hz, duration_ms })
     } else {
-        Ok(())
+        None
     };
-    if let Err(error) = result {
-        app.set_osd(error);
+    if let Some(command) = command {
+        // Session actions must reach the authority in Pealayer-consumer mode,
+        // not its deliberately disconnected local hardware engine.
+        app.apply_interop_command(&ui.ctx().clone(), command, "Buzzer control");
     }
 }
 
@@ -8903,7 +8912,7 @@ mod timeline_row_tests {
             })
             .collect::<Vec<_>>()
             .join(" ");
-        assert!(text.contains("Buzzer & melodies"));
+        assert!(text.contains("Melody playback"));
         assert!(text.contains("Playing: attention"));
         assert!(text.contains("Board muted"));
         assert!(text.contains("Play melody"));
