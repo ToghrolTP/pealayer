@@ -144,6 +144,8 @@ pub enum InteropCommand {
     SeekTo {
         seconds: f64,
     },
+    ScrubTo { seconds: f64 },
+    FinishScrub { seconds: f64 },
     SeekAbs {
         percentage: f64,
     },
@@ -284,6 +286,8 @@ pub enum InteropCommand {
         reference: String,
     },
     StopControllerEffect,
+    StopAudioPreview,
+    RefreshAudioOutputs,
     SaveControllerEffectGroup {
         original_name: String,
         name: String,
@@ -535,7 +539,8 @@ impl InteropCommand {
             Self::Seek { seconds } if !seconds.is_finite() => {
                 Err("seek value must be finite".to_string())
             }
-            Self::SeekTo { seconds } if !seconds.is_finite() || *seconds < 0.0 => {
+            Self::SeekTo { seconds } | Self::ScrubTo { seconds } | Self::FinishScrub { seconds }
+                if !seconds.is_finite() || *seconds < 0.0 => {
                 Err("absolute seek time must be a finite non-negative value".to_string())
             }
             Self::SeekAbs { percentage }
@@ -817,14 +822,14 @@ pub fn command_catalog() -> Value {
             "open", "play", "pause", "toggle_pause", "stop", "next", "previous",
             "browse_remote", "select_remote", "sort_remote", "close_remote_browser",
             "chapter_previous", "chapter_next", "set_chapter",
-            "seek", "seek_to", "seek_abs", "set_volume", "set_mute", "toggle_mute",
+            "seek", "seek_to", "seek_abs", "scrub_to", "finish_scrub", "set_volume", "set_mute", "toggle_mute",
             "set_rate", "set_fullscreen", "toggle_fullscreen", "activate", "minimize",
             "maximize", "restore", "open_preferences", "open_media_information", "open_media_folder", "edit_configuration", "open_board_information", "show_message", "show_osd", "hide_osd", "set_workspace",
             "create_workspace_profile", "update_workspace_profile", "delete_workspace_profile",
             "move_workspace_profile", "timeline.track.update", "timeline.track.manage", "update_config",
             "reload_config", "add_effect_cue", "update_effect_cue", "remove_effect_cue", "set_recording",
             "get_status", "publish_toast", "dismiss_toast", "quit", "controller_effect_cue.add", "controller_effect.play",
-            "controller_effect.stop", "controller_effect.save", "controller_effect.delete",
+            "controller_effect.stop", "controller_effect.save", "controller_effect.delete", "audio_effect.stop", "audio.outputs.refresh",
             "controller_effect.group.save",
             "controller_effect.record.start", "controller_effect.record.status",
             "controller_effect.record.save", "controller_effect.record.discard",
@@ -910,6 +915,8 @@ pub fn parse_text_command(input: &str) -> Result<InteropCommand, String> {
         "seek_to" | "seek-to" => InteropCommand::SeekTo {
             seconds: number("seek-to")?,
         },
+        "scrub_to" => InteropCommand::ScrubTo { seconds: number("scrub_to")? },
+        "finish_scrub" => InteropCommand::FinishScrub { seconds: number("finish_scrub")? },
         "seek_abs" | "seek-abs" => InteropCommand::SeekAbs {
             percentage: number("seek-abs")?,
         },
@@ -1181,6 +1188,8 @@ pub fn runtime_identity() -> RuntimeIdentity {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerStatusResponse {
     #[serde(default)]
+    pub external_mpv: crate::mpv::external::Status,
+    #[serde(default)]
     pub application: ApplicationIdentity,
     #[serde(default)]
     pub runtime: RuntimeIdentity,
@@ -1215,6 +1224,11 @@ pub struct PlayerStatusResponse {
     pub chapters: Vec<WebMediaChapter>,
     #[serde(default)]
     pub current_chapter_index: Option<i64>,
+    pub seekbar_markers: crate::config::SeekbarMarkersConfig,
+    pub timeline_keyframes: Vec<crate::four_d::models::TimelineKeyframe>,
+    pub seek_pending: bool,
+    pub settled_seek_revision: u64,
+    pub settled_seek_target: Option<f64>,
     #[serde(default)]
     pub seekable: bool,
     #[serde(default)]
@@ -1262,6 +1276,14 @@ pub struct PlayerStatusResponse {
     pub effects: Vec<WebEffectProfile>,
     #[serde(default)]
     pub controller_effects: Vec<WebControllerEffect>,
+    #[serde(default)]
+    pub audio_devices: Vec<crate::mpv::audio_output::AudioDevice>,
+    #[serde(default)]
+    pub audio_import_pending: bool,
+    #[serde(default)]
+    pub audio_preview_ids: Vec<String>,
+    #[serde(default)]
+    pub audio_voices: Vec<crate::mpv::sfx::AudioVoiceState>,
     #[serde(default)]
     pub controller_effect_groups: Vec<crate::four_d::controller::HardwareEffectGroup>,
     #[serde(default)]
@@ -1480,6 +1502,11 @@ impl WebControllerEffectDraft {
             field("effect icon", &self.icon)?;
         }
         match self.kind.as_str() {
+            "audio" => {
+                uuid::Uuid::parse_str(&self.id).map_err(|_| "SFX ID must be a UUID")?;
+                let program: crate::mpv::sfx::AudioProgram = serde_json::from_value(self.program.clone()).map_err(|e| format!("Invalid SFX settings: {e}"))?;
+                program.validate()
+            }
             "sequence" => {
                 self.id.parse::<u8>()
                     .map_err(|_| "sequence effect id must be from 0 to 255".to_string())?;
@@ -1498,7 +1525,7 @@ impl WebControllerEffectDraft {
                 }
                 Ok(())
             }
-            _ => Err("effect kind must be sequence or strip-stream".to_string()),
+            _ => Err("effect kind must be sequence, strip-stream or audio".to_string()),
         }
     }
 }
@@ -1510,6 +1537,7 @@ fn default_playback_rate() -> f64 {
 impl Default for PlayerStatusResponse {
     fn default() -> Self {
         Self {
+            external_mpv: crate::mpv::external::Status::default(),
             application: ApplicationIdentity::default(),
             runtime: RuntimeIdentity::default(),
             rf: Value::Null,
@@ -1531,6 +1559,11 @@ impl Default for PlayerStatusResponse {
             media_tracks: Vec::new(),
             chapters: Vec::new(),
             current_chapter_index: None,
+            seekbar_markers: crate::config::SeekbarMarkersConfig::default(),
+            timeline_keyframes: Vec::new(),
+            seek_pending: false,
+            settled_seek_revision: 0,
+            settled_seek_target: None,
             seekable: false,
             live: false,
             buffered_until: None,
@@ -1553,6 +1586,10 @@ impl Default for PlayerStatusResponse {
             recordable_track_count: 0,
             effects: Vec::new(),
             controller_effects: Vec::new(),
+            audio_devices: Vec::new(),
+            audio_import_pending: false,
+            audio_preview_ids: Vec::new(),
+            audio_voices: Vec::new(),
             controller_effect_groups: Vec::new(),
             effect_recording: WebEffectRecording::default(),
             cues: Vec::new(),
@@ -1652,6 +1689,8 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
                 percentage: number(&["percentage"])?,
             })
         }
+        "scrub_to" | "pealayer.scrub_to" => Some(InteropCommand::ScrubTo { seconds: number(&["seconds"])? }),
+        "finish_scrub" | "pealayer.finish_scrub" => Some(InteropCommand::FinishScrub { seconds: number(&["seconds"])? }),
         "volume" | "set_volume" | "pealayer.volume.set" => {
             Some(InteropCommand::SetVolume {
                 value: number(&["value"])?,
@@ -1948,6 +1987,8 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         "controller_effect.stop" | "pealayer.controller_effect.stop" => {
             Some(InteropCommand::StopControllerEffect)
         }
+        "audio_effect.stop" => Some(InteropCommand::StopAudioPreview),
+        "audio.outputs.refresh" => Some(InteropCommand::RefreshAudioOutputs),
         "controller_effect.group.save" | "pealayer.controller_effect.group.save" => {
             Some(InteropCommand::SaveControllerEffectGroup {
                 original_name: request
@@ -2331,6 +2372,10 @@ pub fn get_live_config() -> crate::config::AppConfig {
 }
 
 /// Small live-policy read for the media observer; no config/disk clone per tick.
+pub(crate) fn external_mpv_settings() -> crate::mpv::external::Settings {
+    LIVE_CONFIG.read().ok().and_then(|config|config.as_ref().map(|config|config.external_mpv.clone())).unwrap_or_default()
+}
+
 pub(crate) fn allow_unattended_hardware_takeover() -> bool {
     !crate::peer::active() && LIVE_CONFIG.read().ok()
         .and_then(|config| config.as_ref().map(|config| config.allow_unattended_hardware_takeover))
@@ -3344,6 +3389,21 @@ mod tests {
             parse_text_command("emergency-stop off").unwrap(),
             InteropCommand::SetEmergencyStop { active: false }
         );
+    }
+
+    #[test]
+    fn scrub_gestures_have_shared_text_json_and_rpc_contracts() {
+        for (name, expected) in [("scrub_to", InteropCommand::ScrubTo { seconds: 10.125 }),
+            ("finish_scrub", InteropCommand::FinishScrub { seconds: 10.125 })] {
+            assert_eq!(parse_text_command(&format!("{name} 10.125")).unwrap(), expected);
+            let parsed: InteropCommand = serde_json::from_value(serde_json::json!({"command":name,"seconds":10.125})).unwrap();
+            assert_eq!(parsed, expected);
+            let request = JsonRpcRequest { jsonrpc: Some("2.0".into()), id: Value::Null,
+                method: format!("pealayer.{name}"), params: serde_json::json!({"seconds":10.125}) };
+            assert_eq!(command_from_json_rpc(&request).unwrap(), Some(expected));
+        }
+        assert!(InteropCommand::ScrubTo { seconds: f64::NAN }.validate().is_err());
+        assert!(InteropCommand::FinishScrub { seconds: -1.0 }.validate().is_err());
     }
 
     #[test]

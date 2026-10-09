@@ -153,7 +153,16 @@ export function useWebPlatform(
     favicon.href = href;
     const touchIcon = document.querySelector<HTMLLinkElement>('link[rel="apple-touch-icon"]');
     if (touchIcon) touchIcon.href = `/api/runtime/app-icon-192.png?state=${stateName}&revision=${state.app_icon_revision ?? 0}`;
-  }, [appIconPath, state.current_video, state.playing]);
+    const manifest = document.querySelector<HTMLLinkElement>('link[rel="manifest"]');
+    if (manifest) manifest.href = `/manifest.webmanifest?revision=${state.app_icon_revision ?? 0}`;
+    let appTitle = document.querySelector<HTMLMetaElement>('meta[name="apple-mobile-web-app-title"]');
+    if (!appTitle) {
+      appTitle = document.createElement('meta');
+      appTitle.name = 'apple-mobile-web-app-title';
+      document.head.appendChild(appTitle);
+    }
+    appTitle.content = appName;
+  }, [appIconPath, appName, state.current_video, state.playing, state.app_icon_revision]);
 
   useEffect(() => {
     if (!('mediaSession' in navigator)) return;
@@ -161,7 +170,7 @@ export function useWebPlatform(
     navigator.mediaSession.metadata = new MediaMetadata({
       title: mediaTitle(state, appName),
       artist: appName,
-      album: state.live ? 'Live stream' : 'Pealayer media',
+      album: state.live ? 'Live stream' : `${appName} media`,
       artwork: [
         { src: `/api/runtime/app-icon-192.png?state=${stateName}&revision=${state.app_icon_revision ?? 0}`, sizes: '192x192', type: 'image/png' },
         { src: `/api/runtime/app-icon-512.png?state=${stateName}&revision=${state.app_icon_revision ?? 0}`, sizes: '512x512', type: 'image/png' },

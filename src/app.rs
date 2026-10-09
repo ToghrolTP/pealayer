@@ -1,4 +1,5 @@
 use crate::mpv::render::RenderContextWrapper;
+use crate::platform::interop::InteropCommand;
 use eframe::egui;
 use std::sync::{
     atomic::{AtomicU64, Ordering},
@@ -95,6 +96,7 @@ pub struct EffectPreset {
 pub enum EffectPresetSource {
     ControllerMacro(u64),
     ControllerStrip,
+    Audio(uuid::Uuid),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -281,6 +283,7 @@ pub struct EffectDragPayload {
     pub controller_macro: Option<crate::four_d::models::ControllerMacroCue>,
     pub controller_strip_effect: Option<crate::four_d::models::ControllerStripEffectCue>,
     pub controller_lane: Option<crate::four_d::models::ControllerEffectLane>,
+    pub audio_effect: Option<crate::mpv::sfx::AudioEffect>,
 }
 
 #[derive(Debug)]
@@ -461,11 +464,11 @@ fn seek_target_reached(actual_time: f64, target_time: f64, media_fps: f64) -> bo
         return false;
     }
     let frame_tolerance = if media_fps.is_finite() && media_fps > 0.0 {
-        2.0 / media_fps
+        1.0 / media_fps + 0.002
     } else {
         0.1
     };
-    (actual_time - target_time).abs() <= frame_tolerance.max(0.05)
+    (actual_time - target_time).abs() <= frame_tolerance
 }
 
 /// Resolve the logical timeline position after mpv has decoded a seek.
@@ -487,37 +490,14 @@ fn settled_seek_position(
     }
 }
 
-/// Calculates the exact target timestamp when stepping by `steps` frames on the timeline.
-pub fn calculate_frame_step_target(
-    current_time: f64,
-    media_fps: f64,
-    steps: i32,
-    duration: f64,
-) -> f64 {
-    if !current_time.is_finite() || !duration.is_finite() {
-        return 0.0;
-    }
-    if steps == 0 {
-        return current_time.clamp(0.0, duration.max(0.0));
-    }
-    let fps = if media_fps.is_finite() && media_fps > 0.0 {
-        media_fps
-    } else {
-        30.0
-    };
-
-    let target_frame = if steps > 0 {
-        let base = (current_time * fps + 1e-4).floor() as i64;
-        base + steps as i64
-    } else {
-        let base = (current_time * fps - 1e-4).ceil() as i64;
-        base + steps as i64
-    };
-
-    let max_frame = (duration.max(0.0) * fps).round() as i64;
-    let clamped_frame = target_frame.clamp(0, max_frame);
-
-    (clamped_frame as f64 / fps).clamp(0.0, duration.max(0.0))
+/// Quantized ruler navigation from the advertised media rate. Native mpv
+/// frame-step remains the decoder-owned path for variable-rate media.
+pub fn calculate_frame_step_target(current: f64, fps: f64, steps: i32, duration: f64) -> f64 {
+    if !current.is_finite() || !duration.is_finite() { return 0.0; }
+    if !fps.is_finite() || fps <= 0.0 || steps == 0 { return current.clamp(0.0, duration.max(0.0)); }
+    let base = if steps > 0 { (current * fps + 0.0001).floor() } else { (current * fps - 0.0001).ceil() };
+    let target = (base as i64).saturating_add(i64::from(steps)).max(0);
+    (target as f64 / fps).clamp(0.0, duration.max(0.0))
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -567,6 +547,10 @@ pub struct PealayerApp {
     pub(crate) rtl: bool,
     pub(crate) mpv: crate::mpv::player::Player,
     pub(crate) mpv_client: libmpv2::Mpv,
+    pub(crate) external_catalog_revision: u64,
+    pub(crate) external_seek_revision: u64,
+    pub(crate) pending_external_media: Option<String>,
+    pub(crate) pending_external_pause: bool,
     pub(crate) render_context: Arc<Mutex<Option<RenderContextWrapper>>>,
 
     pub playback_time: f64,
@@ -594,6 +578,8 @@ pub struct PealayerApp {
     pub(crate) seek_controller: crate::mpv::seek::SeekController,
     pub(crate) frame_cache: std::sync::Arc<std::sync::RwLock<crate::mpv::frame_cache::FrameCache>>,
     pub(crate) active_pseudo_frame: Option<crate::mpv::frame_cache::CachedFrame>,
+    pub(crate) settled_seek_revision: u64,
+    pub(crate) settled_seek_target: Option<f64>,
     pub(crate) was_playing_before_scrub: bool,
     pub(crate) is_scrubbing: bool,
     pub(crate) pending_scrub_commit: Option<PendingScrubCommit>,
@@ -762,6 +748,7 @@ pub struct PealayerApp {
     pub(crate) human_readable_time_units: bool,
     pub(crate) seekbar_hover_thumbnails: bool,
     pub(crate) nle_seekbar_hover_thumbnails: bool,
+    pub(crate) seekbar_markers: crate::config::SeekbarMarkersConfig,
     pub(crate) seekbar_thumbnail_preview: crate::ui::seek_preview::SeekbarThumbnailPreview,
     pub(crate) quick_seek_seconds: f64,
     pub(crate) frame_step_count: u32,
@@ -1010,6 +997,11 @@ impl eframe::App for PealayerApp {
             self.process_shell_commands(ctx);
         }
         self.process_controller_call_results();
+        crate::mpv::external::configure(self.mpv.0, ctx, crate::platform::interop::external_mpv_settings());
+        if crate::mpv::sfx::initialize(self.engine_handle.media_playback.clone(), self.engine_handle.estop_active.clone(), ctx) {
+            crate::mpv::sfx::update_plan(&self.timeline);
+        }
+        self.process_audio_effect_results();
         if !self.rf.pending && self.engine_handle.take_rf_catalog_refresh_request() {
             if let Err(error) = self.request_rf(
                 "catalog",
@@ -1046,6 +1038,12 @@ impl eframe::App for PealayerApp {
             }
         }
 
+        if self.media_controls.as_ref().is_some_and(|controls| !controls.has_branding(&self.app_name)) {
+            // Re-register a renamed native session (not a second listener).
+            // MPRIS Identity is fixed at registration; metadata alone cannot
+            // change it. Drop invalidates callbacks before the replacement.
+            self.media_controls = None;
+        }
         if !self.media_keys_enabled {
             // Drop unregisters the native session and invalidates old callbacks.
             self.media_controls = None;
@@ -1060,6 +1058,7 @@ impl eframe::App for PealayerApp {
                     hwnd,
                     self.media_cmd_tx.clone(),
                     ctx.clone(),
+                    &self.app_name,
                 );
                 let title = self.current_video_path.as_deref()
                     .map(|path| crate::media::media_target_label(&path.to_string_lossy()));
@@ -1242,6 +1241,14 @@ impl eframe::App for PealayerApp {
 
         // Reconcile the workspace with the viewport before publishing status.
         crate::remote_location::install_context(ctx);
+        if let Some(target) = crate::platform::clipboard_urls::take(ctx) {
+            if self.show_open_url_dialog {
+                self.url_input_buffer = target;
+                self.url_inspector = crate::ui::open_url::UrlInspector::default();
+            } else if let Err(error) = crate::remote_location::request(&target, None, false, ctx) {
+                self.set_osd(error);
+            }
+        }
         if let Some(playback) = crate::remote_location::take_playback() { self.play_remote_location(playback); }
         crate::remote_location::set_current(self.current_video_path.as_ref().and_then(|path|path.to_str()));
         // A fullscreen request can be observed in this same frame; preserving
@@ -1336,7 +1343,7 @@ impl eframe::App for PealayerApp {
             let hardware_details = hardware
                 .as_ref()
                 .map(|capabilities| web_hardware_details(capabilities, self.motion_control_mode));
-            let controller_effects = hardware
+            let mut controller_effects: Vec<crate::platform::interop::WebControllerEffect> = hardware
                 .as_ref()
                 .map(|capabilities| {
                     capabilities
@@ -1401,6 +1408,7 @@ impl eframe::App for PealayerApp {
                         .collect()
                 })
                 .unwrap_or_default();
+            controller_effects.extend(self.audio_effects().iter().map(|effect| self.web_audio_effect(effect)));
             let controller_connected = self
                 .engine_handle
                 .is_connected
@@ -1415,6 +1423,7 @@ impl eframe::App for PealayerApp {
             let chapters = self.media_chapters();
             let current_chapter_index = self.active_media_chapter().map(|chapter| chapter.index);
             let status_resp = crate::platform::interop::PlayerStatusResponse {
+                external_mpv: crate::mpv::external::status(),
                 application: crate::platform::interop::ApplicationIdentity::current(&self.app_name),
                 runtime: crate::platform::interop::runtime_identity(),
                 rf: self.rf.snapshot(),
@@ -1480,6 +1489,11 @@ impl eframe::App for PealayerApp {
                     })
                     .collect(),
                 current_chapter_index,
+                seekbar_markers: self.seekbar_markers.clone(),
+                timeline_keyframes: self.timeline.keyframes.clone(),
+                seek_pending: self.is_scrubbing || self.pending_scrub_commit.is_some(),
+                settled_seek_revision: self.settled_seek_revision,
+                settled_seek_target: self.settled_seek_target,
                 seekable: self.is_seekable,
                 live: self.is_live_media(),
                 buffered_until: self.buffered_until(),
@@ -1608,6 +1622,10 @@ impl eframe::App for PealayerApp {
                     })
                     .collect(),
                 controller_effects,
+                audio_devices: crate::mpv::audio_output::available_audio_devices(),
+                audio_import_pending: crate::mpv::sfx::importing(),
+                audio_preview_ids: self.audio_effects().iter().filter(|e| crate::mpv::sfx::previewing(e.id)).map(|e| e.id.to_string()).collect(),
+                audio_voices: crate::mpv::sfx::active_voices(),
                 controller_effect_groups: hardware
                     .as_ref()
                     .map(|hardware| hardware.effect_groups.clone())
@@ -2109,6 +2127,7 @@ impl eframe::App for PealayerApp {
     fn persist_egui_memory(&self)->bool { !crate::peer::active() }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        crate::mpv::external::shutdown();
         // Never leave a press-and-hold channel active merely because Pealayer
         // was closed before the operating system delivered the key-up event.
         self.release_active_hardware_bindings();
@@ -2900,11 +2919,7 @@ impl PealayerApp {
     }
 
     pub fn advertised_effect_presets(&self) -> Vec<EffectPreset> {
-        let Some(capabilities) = self.advertised_hardware() else {
-            return Vec::new();
-        };
-
-        capabilities
+        let mut presets: Vec<EffectPreset> = self.advertised_hardware().map(|capabilities| capabilities
             .macros
             .iter()
             .map(controller_macro_effect_preset)
@@ -2914,7 +2929,12 @@ impl PealayerApp {
                     .iter()
                     .map(controller_strip_effect_preset),
             )
-            .collect()
+            .collect()).unwrap_or_default();
+        presets.extend(self.audio_effects().iter().map(|effect| EffectPreset {
+            category: effect.group.clone(), group_icon: "speaker-high".into(),
+            effect: effect.template(), source: EffectPresetSource::Audio(effect.id),
+        }));
+        presets
     }
 
     /// Refreshes every placed controller-owned cue from PCController's latest
@@ -3198,6 +3218,22 @@ impl PealayerApp {
     }
 
     pub(crate) fn save_controller_effect(&mut self) -> Result<(), String> {
+        if self.effect_library_draft.kind == "audio" {
+            let draft = &self.effect_library_draft;
+            let program: crate::mpv::sfx::AudioProgram = serde_json::from_str(&draft.program_json).map_err(|e| format!("Invalid SFX settings: {e}"))?;
+            let command = InteropCommand::SaveControllerEffect { effect: crate::platform::interop::WebControllerEffectDraft {
+                reference: draft.reference.clone(), id: draft.id.clone(), name: draft.name.clone(), icon: draft.icon.clone(),
+                category: draft.category.clone(), description: draft.description.clone(), kind: "audio".into(),
+                program: serde_json::to_value(&program).unwrap(), color: String::new(), default_fps: 0,
+                duration_ms: 0, default_pixels: 0, is_new: draft.is_new,
+            }};
+            if self.route_audio_command(command)? { return Ok(()); }
+            return crate::mpv::sfx::import(crate::mpv::sfx::AudioEffect {
+                id: uuid::Uuid::parse_str(&draft.id).map_err(|_| "Invalid SFX ID")?,
+                name: draft.name.clone(), group: draft.category.clone(), icon: draft.icon.clone(),
+                description: draft.description.clone(), duration_ms: 0, program,
+            });
+        }
         if self.hardware_effect_authoring.active || self.advertised_hardware().is_some_and(|hardware| hardware.effect_recording.active) {
             return Err("Finish or discard capture before publishing edits".into());
         }
@@ -3283,6 +3319,10 @@ impl PealayerApp {
     }
 
     pub(crate) fn delete_controller_effect(&mut self) -> Result<(), String> {
+        if let Some(effect) = self.audio_effects().into_iter().find(|e| e.reference() == self.effect_library_draft.reference) {
+            if !self.route_audio_command(InteropCommand::DeleteControllerEffect { reference: effect.reference() })? { self.delete_audio_effect(effect.id); }
+            return Ok(());
+        }
         let reference = self.effect_library_draft.reference.trim();
         if reference.is_empty() || self.effect_library_draft.is_new {
             return Err("Select a saved PCController effect first".to_string());
@@ -3317,6 +3357,11 @@ impl PealayerApp {
     }
 
     pub(crate) fn play_controller_effect(&mut self, reference: &str) -> Result<(), String> {
+        if let Some(effect) = self.audio_effects().into_iter().find(|e| e.reference() == reference) {
+            if self.estop_active { return Err("Release E-STOP before playing audio effects".into()); }
+            if self.route_audio_command(InteropCommand::PlayControllerEffect { reference: reference.into() })? { return Ok(()); }
+            return crate::mpv::sfx::preview(effect);
+        }
         if reference.trim().is_empty() {
             return Err("Select a PCController effect first".to_string());
         }
@@ -3359,6 +3404,9 @@ impl PealayerApp {
         &mut self,
         reference: &str,
     ) -> ControllerEffectPreviewPhase {
+        if let Some(effect) = self.audio_effects().iter().find(|e| e.reference() == reference) {
+            return if self.audio_previewing(effect.id) { ControllerEffectPreviewPhase::Stop } else { ControllerEffectPreviewPhase::Run };
+        }
         self.hardware_effect_authoring
             .effect_preview_phase(reference, std::time::Instant::now())
     }
@@ -3411,6 +3459,10 @@ impl PealayerApp {
     }
 
     pub(crate) fn stop_controller_effect(&mut self, reference: &str) -> Result<(), String> {
+        if self.audio_effects().iter().any(|e| e.reference() == reference) {
+            if self.route_audio_command(InteropCommand::StopAudioPreview)? { return Ok(()); }
+            return crate::mpv::sfx::stop_preview();
+        }
         if reference.trim().is_empty() {
             return Err("Select a PCController effect first".to_string());
         }
@@ -3924,7 +3976,12 @@ impl PealayerApp {
             InteropCommand::Play => self.play(),
             InteropCommand::Pause => self.pause(),
             InteropCommand::TogglePause => self.toggle_playback(),
-            InteropCommand::Stop => self.close_video(),
+            InteropCommand::Stop => {
+                // Preserve the NLE stop button's recording punch-out at the
+                // session authority, including when requested by a consumer.
+                self.commit_recorded_samples();
+                self.close_video();
+            }
             InteropCommand::Next => {
                 if let Some(next) = self.remote_neighbor(1, false) { self.play_remote_location(next); }
                 else if !self.has_remote_playlist() { let _ = self.mpv.command("playlist-next", &["force"]); }
@@ -3943,6 +4000,11 @@ impl PealayerApp {
                     self.scrub_to(target);
                     self.finish_scrub(target);
                 }
+            }
+            InteropCommand::ScrubTo { seconds } => self.scrub_to(seconds),
+            InteropCommand::FinishScrub { seconds } => {
+                if !self.is_scrubbing { self.scrub_to(seconds); }
+                self.finish_scrub(seconds);
             }
             InteropCommand::SeekAbs { percentage } => {
                 if self.is_seekable {
@@ -4263,6 +4325,7 @@ impl PealayerApp {
             } => {
                 let preset = self.advertised_effect_presets().into_iter().find(|preset| {
                     let candidate = match preset.source {
+                        EffectPresetSource::Audio(id) => format!("sfx:{id}"),
                         EffectPresetSource::ControllerMacro(id) => format!("effect:{id}"),
                         EffectPresetSource::ControllerStrip => preset
                             .effect
@@ -4278,7 +4341,9 @@ impl PealayerApp {
                     return;
                 };
                 let effect_id = preset.effect.id;
-                self.timeline.templates.push(preset.effect);
+                if !self.timeline.templates.iter().any(|effect| effect.id == effect_id) {
+                    self.timeline.templates.push(preset.effect);
+                }
                 let instance = crate::four_d::models::EffectInstance::new(effect_id, start_time_ms);
                 self.selected_instance_ids.clear();
                 self.selected_instance_ids.insert(instance.id);
@@ -4292,6 +4357,7 @@ impl PealayerApp {
                 }
             }
             InteropCommand::StopControllerEffect => {
+                let _ = crate::mpv::sfx::stop_preview();
                 if let Err(error) = self.stop_strip_preview() {
                     self.set_osd(error);
                     return;
@@ -4304,6 +4370,11 @@ impl PealayerApp {
                     self.set_osd(error);
                     return;
                 }
+            }
+            InteropCommand::StopAudioPreview => { let _ = crate::mpv::sfx::stop_preview(); }
+            InteropCommand::RefreshAudioOutputs => {
+                let ctx = ctx.clone();
+                std::thread::spawn(move || { crate::mpv::audio_output::refresh_devices(); ctx.request_repaint(); });
             }
             InteropCommand::SaveControllerEffectGroup {
                 original_name,
@@ -4670,14 +4741,12 @@ impl PealayerApp {
         let Some(pending) = self.pending_scrub_commit else {
             return;
         };
-        if !pending.dispatched || !pending.playback_restarted {
+        if !pending.dispatched || !pending.playback_restarted
+            || self.mpv.get_property::<bool>("seeking").unwrap_or(true) {
             return;
         }
 
-        let actual_time = self
-            .mpv
-            .get_property::<f64>("time-pos")
-            .unwrap_or(pending.target_time);
+        let Ok(actual_time) = self.mpv.get_property::<f64>("time-pos") else { return; };
         if !seek_target_reached(actual_time, pending.target_time, self.media_fps) {
             // A PlaybackRestart from an older preview seek can arrive after the
             // final commit was queued. Require the restart for the committed
@@ -4698,6 +4767,8 @@ impl PealayerApp {
         self.seek_pos = retain_exact_target.then_some(pending.target_time);
         self.pending_scrub_commit = None;
         self.active_pseudo_frame = None;
+        self.settled_seek_revision = self.settled_seek_revision.wrapping_add(1);
+        self.settled_seek_target = Some(pending.target_time);
         self.engine_handle.playback_time_ms.store(
             (settled_time * 1_000.0).max(0.0) as u64,
             std::sync::atomic::Ordering::Relaxed,
@@ -4742,6 +4813,24 @@ impl PealayerApp {
     /// Polls and processes all pending MPV events and updates application state.
     pub fn process_events(&mut self) {
         use libmpv2::events::{Event, PropertyData};
+
+        if crate::mpv::external::active() {
+            if crate::mpv::external::status().connected && let Some(target) = self.pending_external_media.take() {self.load_media_target(&target);}
+            while let Some(event) = self.mpv_client.wait_event(0.0) {
+                if matches!(event, Ok(Event::EndFile(4))) && crate::mpv::external::preview() {
+                    crate::mpv::external::set_preview_error("Internal preview could not decode the media; external playback and controls remain available".into());
+                }
+            }
+            self.process_external_mpv();
+            self.update_seek_completion_state();
+            self.settle_scrub_commit_if_ready();
+            if self.last_playback_position_checkpoint.elapsed() >= std::time::Duration::from_secs(5) {
+                self.last_playback_position_checkpoint = std::time::Instant::now();
+                if self.capture_current_playback_position() {self.save_config();}
+            }
+            self.update_shell_state();
+            return;
+        }
 
         self.update_seek_completion_state();
         loop {
@@ -5002,6 +5091,56 @@ impl PealayerApp {
             }
         }
         self.update_shell_state();
+    }
+
+    /// Adopt external playback events without dispatching them back to mpv.
+    fn process_external_mpv(&mut self) {
+        let s = crate::mpv::external::status();
+        let path = s.properties.get("path").and_then(serde_json::Value::as_str).filter(|p| !p.is_empty()).map(|p|std::path::PathBuf::from(crate::mpv::external::resolve_path(&s,p)));
+        if s.connected && path != self.current_video_path {
+            self.current_video_path = path;
+            self.reset_scrub_state();
+            self.clear_frame_cache();
+            self.show_error = None;
+        }
+        self.is_paused = !s.connected || self.mpv.get_property::<bool>("pause").unwrap_or(true);
+        let previous_eof=self.is_eof;
+        self.is_eof = self.mpv.get_property::<bool>("eof-reached").unwrap_or(false);
+        if !self.is_scrubbing && self.pending_scrub_commit.is_none() {
+            self.playback_time = self.mpv.get_property::<f64>("time-pos").unwrap_or(self.playback_time);
+        }
+        self.duration = self.mpv.get_property::<f64>("duration").unwrap_or(0.0);
+        self.is_seekable = self.mpv.get_property::<bool>("seekable").unwrap_or(false);
+        self.volume = self.mpv.get_property::<f64>("volume").unwrap_or(self.volume);
+        self.is_muted = self.mpv.get_property::<bool>("mute").unwrap_or(self.is_muted);
+        self.playback_rate = self.mpv.get_property::<f64>("speed").unwrap_or(self.playback_rate);
+        self.media_fps = self.mpv.get_property::<f64>("container-fps").unwrap_or(0.0);
+        self.cache_duration = self.mpv.get_property::<f64>("demuxer-cache-duration").ok();
+        self.cache_buffering_percent = self.mpv.get_property::<i64>("cache-buffering-state").ok().map(|v|v as f64);
+        let previous_subtitle=(self.subtitle_text.clone(),self.sub_font_size,self.sub_position_percent);
+        if !self.uses_processed_subtitle_overlay() {self.sub_visibility = self.mpv.get_property::<bool>("sub-visibility").unwrap_or(true);}
+        self.subtitle_text = self.mpv.get_property::<String>("sub-text").unwrap_or_default();
+        self.sub_font_size = self.mpv.get_property::<f64>("sub-font-size").unwrap_or(self.sub_font_size);
+        self.sub_position_percent = self.mpv.get_property::<f64>("sub-pos").unwrap_or(self.sub_position_percent);
+        self.sub_delay = self.mpv.get_property::<f64>("sub-delay").unwrap_or(self.sub_delay);
+        self.audio_delay = self.mpv.get_property::<f64>("audio-delay").unwrap_or(self.audio_delay);
+        if let Ok(aspect) = self.mpv.get_property::<f64>("video-out-params/aspect")
+            && aspect.is_finite() && (0.05..=20.0).contains(&aspect) && (aspect-self.video_aspect_ratio).abs()>f64::EPSILON {
+            self.video_aspect_ratio = aspect; self.pending_video_aspect_resize = true;
+        }
+        if s.seek_revision != self.external_seek_revision {
+            self.external_seek_revision = s.seek_revision;
+            if let Some(pending) = self.pending_scrub_commit.as_mut() {pending.playback_restarted = true;}
+        }
+        if s.connected && s.catalog_revision != self.external_catalog_revision {
+            self.external_catalog_revision = s.catalog_revision;
+            self.media_metadata_loaded = self.current_video_path.is_some();
+            self.refresh_media_tracks();
+        }
+        if s.connected && previous_subtitle!=(self.subtitle_text.clone(),self.sub_font_size,self.sub_position_percent) {self.sync_subtitle_rendering();}
+        if self.is_eof && !previous_eof && let Some(next)=self.remote_neighbor(1,true) {self.play_remote_location(next);}
+        self.engine_handle.is_playing.store(s.connected && !self.is_paused && !self.is_eof && !self.mpv.get_property::<bool>("paused-for-cache").unwrap_or(false), std::sync::atomic::Ordering::Relaxed);
+        self.engine_handle.playback_time_ms.store((self.playback_time.max(0.0)*1000.0) as u64, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Returns true if video playback has finished (at EOF or at duration limit while paused).
@@ -5694,81 +5833,44 @@ impl PealayerApp {
         self.jump_to_media_chapter(target_index);
     }
 
-    /// Advances or reverses playback by `steps` frames on the timeline.
-    /// Uses high-precision timestamp seeking and the decoded frame cache,
-    /// avoiding MPV unpause/pause oscillation, UI thread blocking, and OSD flicker.
+    /// Ruler navigation pauses once and shares exact scrub/commit settlement.
     pub fn step_timeline_frame(&mut self, steps: i32) {
-        if self.current_video_path.is_none() || !self.is_seekable || steps == 0 {
+        if self.current_video_path.is_none() || !self.is_seekable || steps == 0 { return; }
+        if !self.media_fps.is_finite() || self.media_fps <= 0.0 {
+            self.seek_pos = None;
+            let command = if steps > 0 { "frame-step" } else { "frame-back-step" };
+            for _ in 0..steps.unsigned_abs().min(120) { let _ = self.mpv.command(command, &[]); }
             return;
         }
-
-        // 1. Ensure playback is paused cleanly without MPV unpause/pause oscillation
-        if !self.is_paused {
-            let _ = self.mpv.set_property("pause", true);
-            self.is_paused = true;
-            self.engine_handle
-                .is_playing
-                .store(false, std::sync::atomic::Ordering::Relaxed);
-        }
-
-        // 2. Compute exact frame target time based on media FPS
-        let current_time =
-            crate::ui::controls::resolve_display_time(self.seek_pos, self.playback_time);
-        let target_time =
-            calculate_frame_step_target(current_time, self.media_fps, steps, self.duration);
-
-        if target_time < self.duration {
-            self.is_eof = false;
-        }
-
-        // 3. Immediately update display time so timeline playhead and timecode advance
-        self.seek_pos = Some(target_time);
-
-        // 4. Intercept frame cache for 0ms viewport presentation
-        if let Ok(cache) = self.frame_cache.read() {
-            if let Some(frame) = cache.query_exact(target_time, 0.02) {
-                self.active_pseudo_frame = Some(frame);
-            } else {
-                self.active_pseudo_frame = cache.query_nearest(target_time);
-            }
-        }
-
-        // 5. Asynchronously dispatch exact seek to the background worker thread
-        let request_id = self.seek_controller.request_commit(target_time);
-        self.pending_scrub_commit = Some(PendingScrubCommit {
-            request_id,
-            target_time,
-            dispatched: false,
-            playback_restarted: false,
-        });
+        let current = crate::ui::controls::resolve_display_time(self.seek_pos, self.playback_time);
+        let target = calculate_frame_step_target(current, self.media_fps, steps, self.duration);
+        self.scrub_to(target);
+        self.was_playing_before_scrub = false;
+        self.finish_scrub(target);
     }
 
     /// Advances or reverses playback by the configured number of frames.
     pub fn step_frames(&mut self, direction: i32) {
-        if direction == 0 {
+        if self.current_video_path.is_none() || direction == 0 {
             return;
         }
-        let count = self.frame_step_count.clamp(1, 120) as i32;
-        self.step_timeline_frame(direction.signum() * count);
+        // Frame stepping explicitly returns control to mpv's decoded-frame
+        // clock, replacing any paused sub-frame timeline position.
+        self.seek_pos = None;
+        let command = if direction > 0 {
+            "frame-step"
+        } else {
+            "frame-back-step"
+        };
+        let count = self.frame_step_count.clamp(1, 120);
+        for _ in 0..count {
+            let _ = self.mpv.command(command, &[]);
+        }
         self.set_osd(format!(
             "{}: {:+}",
             self.tr("Frame step"),
-            direction.signum() * count
+            direction.signum() * count as i32
         ));
-    }
-
-    /// Advances or reverses playback by an explicit number of frames.
-    pub fn step_frames_n(&mut self, direction: i32, count: usize) {
-        if direction == 0 || count == 0 {
-            return;
-        }
-        let count = (count as i32).clamp(1, 120);
-        self.step_timeline_frame(direction.signum() * count);
-    }
-
-    /// Advances or reverses playback by exactly one single frame.
-    pub fn step_single_frame(&mut self, direction: i32) {
-        self.step_timeline_frame(direction.signum());
     }
 
     /// Begins or updates an active scrub session.
@@ -5811,9 +5913,7 @@ impl PealayerApp {
                 self.active_pseudo_frame = Some(frame);
             }
             crate::mpv::seek::ScrubResult::Dispatched(_) => {
-                if let Ok(cache) = self.frame_cache.read() {
-                    self.active_pseudo_frame = cache.query_nearest(clamped);
-                }
+                self.active_pseudo_frame = None;
             }
         }
     }
@@ -5847,7 +5947,8 @@ impl PealayerApp {
         // PlaybackRestart for this exact committed target. Playback is resumed
         // by settle_scrub_commit_if_ready, never against the stale old frame.
         self.is_scrubbing = false;
-        self.active_pseudo_frame = None;
+        self.active_pseudo_frame = self.active_pseudo_frame.take()
+            .filter(|frame| (frame.pts - clamped).abs() <= 0.000_001);
     }
 
     fn selected_subtitle_is_bitmap(&self) -> bool {
@@ -5870,6 +5971,9 @@ impl PealayerApp {
     }
 
     fn clear_subtitle_overlay(&self) {
+        if crate::mpv::external::active() && crate::mpv::external::status().connected {
+            let _=crate::mpv::external::command("osd-overlay", &["7301","none","","0","720","10"]);
+        }
         let _ = self
             .mpv_client
             .command("osd-overlay", &["7301", "none", "", "0", "720", "10"]);
@@ -5906,6 +6010,9 @@ impl PealayerApp {
             self.sub_font_size,
             self.sub_position_percent,
         );
+        if crate::mpv::external::active() {
+            let _=crate::mpv::external::command("osd-overlay", &["7301","ass-events",&event,"1280","720","10"]);
+        }
         let _ = self.mpv_client.command(
             "osd-overlay",
             &["7301", "ass-events", &event, "1280", "720", "10"],
@@ -6164,6 +6271,9 @@ impl PealayerApp {
     }
 
     pub fn load_video_file(&mut self, path: std::path::PathBuf) {
+        if crate::mpv::external::active() && !crate::mpv::external::status().connected {
+            self.load_media_target(&path.to_string_lossy()); return;
+        }
         if crate::peer::active(){self.load_media_target(&path.to_string_lossy());return;}
         let path_str = path.to_str().unwrap_or("");
         if !path_str.is_empty() {
@@ -6175,7 +6285,13 @@ impl PealayerApp {
             self.capture_current_playback_position();
             self.pending_resume_position = self.resume_position_for(path_str);
             let _ = self.mpv.set_property("keep-open", "always");
-            let _ = self.mpv.command("loadfile", &[path_str, "replace"]);
+            let _ = if crate::mpv::external::active() {
+                // Supply the resume point with this load, not a later seek
+                // against cached properties from the previously loaded file.
+                let start=self.pending_resume_position.take().unwrap_or(0.0);
+                let pause=std::mem::take(&mut self.pending_external_pause);
+                self.mpv.command("loadfile", &[path_str,"replace","-1",&format!("start={start},pause={}",if pause {"yes"} else {"no"})])
+            } else {self.mpv.command("loadfile", &[path_str, "replace"])};
             self.current_video_path = Some(path.clone());
             self.last_media_target = Some(path.clone());
             self.is_eof = false;
@@ -6277,6 +6393,9 @@ impl PealayerApp {
     }
 
     pub fn load_url(&mut self, url: &str) {
+        if crate::mpv::external::active() && !crate::mpv::external::status().connected {
+            self.load_media_target(url); return;
+        }
         if crate::peer::active() && !crate::peer::mirroring() { self.load_media_target(url); return; }
         let trimmed = url.trim();
         if !trimmed.is_empty() {
@@ -6285,7 +6404,13 @@ impl PealayerApp {
             self.capture_current_playback_position();
             self.pending_resume_position = self.resume_position_for(trimmed);
             let _ = self.mpv.set_property("keep-open", "always");
-            let _ = if crate::media::prefers_rtsp_tcp(trimmed) {
+            let _ = if crate::mpv::external::active() {
+                let start=self.pending_resume_position.take().unwrap_or(0.0);
+                let pause=std::mem::take(&mut self.pending_external_pause);
+                let mut options=format!("start={start},pause={}",if pause {"yes"} else {"no"});
+                if crate::media::prefers_rtsp_tcp(trimmed) {options.push_str(",demuxer-lavf-o=rtsp_transport=tcp");}
+                self.mpv.command("loadfile", &[trimmed,"replace","-1",&options])
+            } else if crate::media::prefers_rtsp_tcp(trimmed) {
                 // TCP interleaving is materially more reliable for surveillance
                 // cameras crossing Windows firewalls/NAT and avoids short UDP
                 // sessions being mistaken for finite clips.
@@ -6322,7 +6447,7 @@ impl PealayerApp {
     }
 
     pub(crate) fn synchronize_playback_proxy(&self) -> Result<(), String> {
-        crate::mpv::proxy::apply_runtime(
+        crate::mpv::proxy::apply_player_runtime(
             &self.mpv,
             self.open_url_use_proxy,
             &self.open_url_proxy_url,
@@ -6330,6 +6455,11 @@ impl PealayerApp {
     }
 
     pub fn load_media_target(&mut self, target: &str) {
+        if crate::mpv::external::active() && !crate::mpv::external::status().connected {
+            self.pending_external_media = Some(target.to_string());
+            self.set_osd("Waiting for external mpv to connect".into());
+            return;
+        }
         if let Some(client)=crate::peer::client() && !crate::peer::mirroring() {
             if let Err(error)=client.queue("/api/player/command",serde_json::json!({"command":"open","target":target})) {self.set_osd(error)}
             return;
@@ -6364,7 +6494,7 @@ impl PealayerApp {
     }
 
     pub fn play_remote_location(&mut self, playback: crate::remote_location::Playback) {
-        if let Err(error) = crate::mpv::proxy::apply_runtime(&self.mpv, playback.use_proxy, &self.open_url_proxy_url) { self.set_osd(error.to_string()); return; }
+        if let Err(error) = crate::mpv::proxy::apply_player_runtime(&self.mpv, playback.use_proxy, &self.open_url_proxy_url) { self.set_osd(error.to_string()); return; }
         let _ = self.mpv.set_property("options/user-agent", crate::remote_location::USER_AGENT);
         self.load_url(&playback.target);
         // loadfile inherits MPV's pause flag. A browser Play/Next command must
@@ -6474,6 +6604,7 @@ impl PealayerApp {
         cfg.human_readable_time_units = self.human_readable_time_units;
         cfg.seekbar_hover_thumbnails = self.seekbar_hover_thumbnails;
         cfg.nle_seekbar_hover_thumbnails = self.nle_seekbar_hover_thumbnails;
+        cfg.seekbar_markers = self.seekbar_markers.clone();
         cfg.consistent_video_aspect_ratio = self.consistent_video_aspect_ratio;
         cfg.always_on_top = self.always_on_top;
         cfg.quick_seek_seconds = self.quick_seek_seconds;
@@ -6834,6 +6965,7 @@ impl PealayerApp {
         self.human_readable_time_units = config.human_readable_time_units;
         self.seekbar_hover_thumbnails = config.seekbar_hover_thumbnails;
         self.nle_seekbar_hover_thumbnails = config.nle_seekbar_hover_thumbnails;
+        self.seekbar_markers = config.seekbar_markers.clone();
         let aspect_lock_enabled =
             !self.consistent_video_aspect_ratio && config.consistent_video_aspect_ratio;
         self.consistent_video_aspect_ratio = config.consistent_video_aspect_ratio;
@@ -6944,9 +7076,11 @@ impl PealayerApp {
             self.dock_state = dock_state;
         }
 
+        let audio_device = if config.audio_device.trim().is_empty() { "auto" } else { config.audio_device.as_str() };
+        crate::mpv::sfx::outputs(audio_device, &config.sfx_audio_device);
+        if !crate::mpv::external::active() || crate::mpv::external::status().connected {
         let _ = self.mpv.set_property("volume", self.volume);
         let _ = self.mpv.set_property("mute", self.is_muted);
-        let audio_device = if config.audio_device.trim().is_empty() { "auto" } else { config.audio_device.as_str() };
         if let Err(error) = self.mpv.set_property("audio-device", audio_device) {
             log::warn!("{error}; falling back to the system default audio output");
             self.mpv.set_property("audio-device", "auto")
@@ -6957,11 +7091,12 @@ impl PealayerApp {
         let _ = self.mpv.set_property("sub-pos", self.sub_position_percent);
         let _ = self.mpv.set_property("audio-delay", self.audio_delay);
         self.sync_subtitle_rendering();
-        crate::mpv::proxy::apply_runtime(
+        crate::mpv::proxy::apply_player_runtime(
             &self.mpv,
             self.open_url_use_proxy,
             &self.open_url_proxy_url,
         )?;
+        }
         if !crate::peer::active(){crate::platform::windows::sync_windows_jump_list_with_options(
             &self.recent_media,
             self.windows_jump_list_quick_actions,
@@ -6982,6 +7117,7 @@ impl PealayerApp {
             );
         }
         crate::platform::interop::set_live_config(config);
+        crate::mpv::external::configure(self.mpv.0, ctx, crate::platform::interop::get_live_config().external_mpv);
         Ok(())
     }
 
@@ -7615,6 +7751,15 @@ impl PealayerApp {
                     .linked
             })
             .cloned()
+            .map(|mut track| {
+                // Relay and PWM solo are one hardware selection, not two
+                // independent solo buses. Keep the track so the live engine
+                // can transmit zero when its previous value was latched.
+                if !self.track_soloed.is_empty() && !track.soloed {
+                    track.muted = true;
+                }
+                track
+            })
             .collect()
     }
 
@@ -7690,6 +7835,13 @@ impl PealayerApp {
         // instead of being overwritten by a success notification.
         self.persist_timeline_track_preferences();
         (id, true)
+    }
+
+    /// Editing uses the visible logical head during decoder settlement. This
+    /// reads position only: inserting a guide must never issue a seek.
+    pub(crate) fn timeline_playhead_time_ms(&self) -> u64 {
+        let position = self.seek_pos.unwrap_or(self.playback_time);
+        if position.is_finite() { (position.max(0.0) * 1_000.0).round() as u64 } else { 0 }
     }
 
     /// Persist and publish a timeline edit that has already mutated the model.
@@ -7806,6 +7958,7 @@ impl PealayerApp {
     /// Keeping relay edges and controller-owned macro cues together prevents
     /// load, undo, delete, and drag operations from updating only one lane.
     pub fn sync_timeline_engine(&self) {
+        crate::mpv::sfx::update_plan(&self.timeline);
         let state=crate::peer::TimelineState{timeline:self.timeline.clone(),muted:self.track_muted.clone(),soloed:self.track_soloed.clone()};
         if let Some(client)=crate::peer::client(){
             if !crate::peer::mirroring() && let Some(snapshot)=client.snapshot() && snapshot.session.timeline.as_ref()!=Some(&state){
@@ -7834,9 +7987,11 @@ impl PealayerApp {
         );
         let macros = crate::four_d::engine::compile_controller_macros(&self.timeline);
         let strip_effects = crate::four_d::engine::compile_controller_strip_effects(&self.timeline);
-        let direct_pwm = crate::four_d::engine::compile_direct_pwm_cues(&self.timeline);
         let analog=self.linked_analog_tracks();
-        let payload=crate::four_d::media_timeline::compile_plan(&self.timeline,&relays,&analog);
+        let mut output_timeline = self.timeline.clone();
+        output_timeline.analog_tracks = analog.clone();
+        let direct_pwm = crate::four_d::engine::compile_direct_pwm_cues(&output_timeline);
+        let payload=crate::four_d::media_timeline::compile_plan(&output_timeline,&relays,&analog);
         if let Ok(mut plan)=self.engine_handle.prepared_timeline.lock(){plan.replace(payload);}
         let _ = self
             .engine_handle
@@ -8239,16 +8394,16 @@ fn web_hardware_details(
                 .iter()
                 .find(|output| output.key == control.key)
                 .map(|output| output.id);
+            let direction = crate::ui::layout::motion_control_direction(capabilities, control);
+            let indicator_color = crate::ui::layout::active_control_indicator_color(capabilities, control);
             let active = relay_id
                 .map(|relay| capabilities.active_relays.contains(&relay))
                 .or_else(|| {
-                    crate::ui::layout::is_motion_control(control).then(|| {
-                        matches!(
-                            crate::ui::layout::motion_control_direction(capabilities, control),
-                            crate::ui::layout::MotionDirectionState::Up
-                                | crate::ui::layout::MotionDirectionState::Down
-                        )
-                    })
+                    match direction {
+                        crate::ui::layout::MotionDirectionState::Up | crate::ui::layout::MotionDirectionState::Down => Some(true),
+                        crate::ui::layout::MotionDirectionState::Stopped => Some(false),
+                        crate::ui::layout::MotionDirectionState::Unknown => None,
+                    }
                 });
             let pwm_percent = pwm_channel.and_then(|channel| {
                 let status_component = capabilities.status_led.as_ref().and_then(|status| {
@@ -8292,6 +8447,15 @@ fn web_hardware_details(
                 "control": control.control,
                 "icon": control.icon,
                 "color": control.color,
+                "up_color": control.up_color,
+                "down_color": control.down_color,
+                "indicator_color": format!("#{:02X}{:02X}{:02X}", indicator_color.r(), indicator_color.g(), indicator_color.b()),
+                "direction": match direction {
+                    crate::ui::layout::MotionDirectionState::Up => Some("up"),
+                    crate::ui::layout::MotionDirectionState::Down => Some("down"),
+                    crate::ui::layout::MotionDirectionState::Stopped => Some("stop"),
+                    crate::ui::layout::MotionDirectionState::Unknown => None,
+                },
                 "group": control.group,
                 "hidden": control.hidden,
                 "locked": control.locked,
@@ -8552,6 +8716,10 @@ impl Default for PealayerApp {
                 crate::config::resolve_language(crate::config::AppLanguage::System),
             ),
             mpv: crate::mpv::player::Player(mpv),
+            external_catalog_revision: 0,
+            external_seek_revision: 0,
+            pending_external_media: None,
+            pending_external_pause: false,
             mpv_client,
             render_context: Arc::new(Mutex::new(None)),
             playback_time: 0.0,
@@ -8581,6 +8749,8 @@ impl Default for PealayerApp {
             ),
             frame_cache,
             active_pseudo_frame: None,
+            settled_seek_revision: 0,
+            settled_seek_target: None,
             was_playing_before_scrub: false,
             is_scrubbing: false,
             pending_scrub_commit: None,
@@ -8741,6 +8911,7 @@ impl Default for PealayerApp {
             human_readable_time_units: true,
             seekbar_hover_thumbnails: false,
             nle_seekbar_hover_thumbnails: false,
+            seekbar_markers: crate::config::SeekbarMarkersConfig::default(),
             seekbar_thumbnail_preview: crate::ui::seek_preview::SeekbarThumbnailPreview::default(),
             quick_seek_seconds: 10.0,
             frame_step_count: 1,
@@ -9176,7 +9347,19 @@ pub(crate) mod tests {
     fn exact_seek_settlement_accepts_the_committed_frame() {
         assert!(seek_target_reached(48.0, 48.0, 24.0));
         assert!(seek_target_reached(48.04, 48.0, 24.0));
-        assert!(seek_target_reached(48.08, 48.0, 24.0));
+        assert!(!seek_target_reached(48.08, 48.0, 24.0));
+        assert!(!seek_target_reached(48.03, 48.0, 60.0));
+    }
+
+    #[test]
+    fn ruler_frame_steps_quantize_and_clamp_without_inventing_unknown_rate() {
+        let first = calculate_frame_step_target(0.0, 24.0, 1, 10.0);
+        assert!((first - 1.0 / 24.0).abs() < 0.000_001);
+        assert_eq!(calculate_frame_step_target(first, 24.0, -1, 10.0), 0.0);
+        assert!((calculate_frame_step_target(1.01, 24.0, 1, 10.0) - 25.0 / 24.0).abs() < 0.000_001);
+        assert_eq!(calculate_frame_step_target(1.01, 24.0, -1, 10.0), 1.0);
+        assert_eq!(calculate_frame_step_target(10.0, 24.0, 1, 10.0), 10.0);
+        assert_eq!(calculate_frame_step_target(2.0, 0.0, 1, 10.0), 2.0);
     }
 
     #[test]
@@ -9986,6 +10169,32 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn web_motion_indicators_share_native_direction_and_configured_colors() {
+        use crate::four_d::controller::{HardwareCapabilities, HardwareControl, HardwareMotionState, HardwareMotionSide};
+        let mut capabilities = HardwareCapabilities {
+            board_connected: true,
+            controls: vec![HardwareControl { key: "seat.a".into(), kind: "motion".into(),
+                up_color: "#FF8800".into(), down_color: "#0088FF".into(), ..Default::default() }],
+            ..Default::default()
+        };
+        let unknown = web_hardware_details(&capabilities, Default::default());
+        assert!(unknown["controls"][0]["active"].is_null(), "unknown is not OFF");
+        capabilities.motion = Some(HardwareMotionState { left: HardwareMotionSide {
+            requested: "up".into(), applied: "up".into(), revision: 1, transitioning: false,
+        }, ..Default::default() });
+        let up = web_hardware_details(&capabilities, Default::default());
+        assert_eq!(up["controls"][0]["indicator_color"], "#FF8800");
+        assert_eq!(up["controls"][0]["direction"], "up");
+        assert_eq!(up["controls"][0]["active"], true);
+        let side = &mut capabilities.motion.as_mut().unwrap().left;
+        side.requested = "down".into();
+        side.transitioning = true;
+        let down = web_hardware_details(&capabilities, Default::default());
+        assert_eq!(down["controls"][0]["indicator_color"], "#0088FF");
+        assert_eq!(down["controls"][0]["direction"], "down");
+    }
+
+    #[test]
     fn active_playback_decouples_ui_frame_rate_without_idle_spin() {
         let _lock = lock_app_tests();
         let mut app = PealayerApp::default();
@@ -10188,9 +10397,9 @@ pub(crate) mod tests {
         assert!(app.active_pseudo_frame.is_some());
         assert_eq!(app.active_pseudo_frame.as_ref().unwrap().pts, 5.0);
 
-        // finish_scrub clears active_pseudo_frame
+        // Retain the exact cached preview until the final decoder frame is ready.
         app.finish_scrub(5.0);
-        assert!(app.active_pseudo_frame.is_none());
+        assert!(app.active_pseudo_frame.is_some());
 
         // clear_frame_cache clears cache and active_pseudo_frame
         app.frame_cache.write().unwrap().insert(
@@ -10206,16 +10415,16 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn step_single_frame_and_step_frames_n_handle_unloaded_and_edge_inputs() {
+    fn frame_step_entrypoints_handle_unloaded_and_edge_inputs() {
         let _lock = lock_app_tests();
         let mut app = PealayerApp::default();
         // With no video loaded, stepping should be a safe no-op without panics
-        app.step_single_frame(1);
-        app.step_single_frame(-1);
-        app.step_frames_n(1, 5);
-        app.step_frames_n(-1, 5);
-        app.step_frames_n(0, 5);
-        app.step_frames_n(1, 0);
+        app.step_timeline_frame(1);
+        app.step_timeline_frame(-1);
+        app.step_timeline_frame(0);
+        app.step_frames(1);
+        app.step_frames(-1);
+        app.step_frames(0);
     }
 
     #[test]

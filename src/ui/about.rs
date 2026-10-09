@@ -71,21 +71,25 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 }
 
 fn ensure_icon(app: &mut PealayerApp, ctx: &egui::Context) {
-    if app.about_icon.is_some() {
+    let stamp = (crate::branding::current_state(), crate::platform::interop::live_config_revision());
+    let id = egui::Id::new("about-branding-stamp");
+    if app.about_icon.is_some() && ctx.data(|data| data.get_temp::<(crate::branding::PlaybackIconState, u64)>(id)) == Some(stamp) {
         return;
     }
-    if let Ok(icon) =
-        eframe::icon_data::from_png_bytes(include_bytes!("../../assets/pealayer-icon.png"))
-    {
+    let config = crate::platform::interop::get_live_config();
+    if let Some(icon) = crate::branding::icon_bytes(&config, stamp.0)
+        .and_then(|(_, bytes)| crate::branding::icon_data_from_bytes(&bytes)) {
         let image = egui::ColorImage::from_rgba_unmultiplied(
             [icon.width as usize, icon.height as usize],
             &icon.rgba,
         );
-        app.about_icon = Some(ctx.load_texture(
-            "pealayer_about_icon",
-            image,
-            egui::TextureOptions::LINEAR.with_mipmap_mode(Some(egui::TextureFilter::Linear)),
-        ));
+        let options = egui::TextureOptions::LINEAR.with_mipmap_mode(Some(egui::TextureFilter::Linear));
+        if let Some(texture) = &mut app.about_icon {
+            texture.set(image, options);
+        } else {
+            app.about_icon = Some(ctx.load_texture("pealayer_about_icon", image, options));
+        }
+        ctx.data_mut(|data| data.insert_temp(id, stamp));
     }
 }
 
@@ -178,7 +182,7 @@ fn overview(app: &PealayerApp, ui: &mut egui::Ui) {
     section(ui, "Project", |ui| {
         ui.add(egui::Label::new(env!("CARGO_PKG_DESCRIPTION")).wrap());
         ui.add_space(5.0);
-        ui.add(egui::Label::new("Pealayer combines media playback, a non-linear physical-effect timeline, live hardware monitoring, and PCController integration for immersive cinema production and playback.").wrap());
+        ui.add(egui::Label::new(format!("{} combines media playback, a non-linear physical-effect timeline, live hardware monitoring, and PCController integration for immersive cinema production and playback.", app.app_name)).wrap());
     });
     section(ui, "Release identity", |ui| {
         egui::Grid::new("about_release_identity")

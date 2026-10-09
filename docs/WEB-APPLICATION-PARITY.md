@@ -16,6 +16,51 @@ widths, and has been exercised against live state rather than sample data.
 
 ## Current product ledger
 
+External mpv (9 October): [modes and protocol](external-mpv.md) adds the same
+event-driven player adapter to native/Web/IPC/peer controls and the hardware
+clock: external-only, managed or attached dual preview, and remote control of
+existing mpv. Preferences use the shared contract; player snapshots expose
+actual connection/ownership/errors. Real Windows IPC tests verified bidirectional
+state, muted preview, reconnect/no replay, owned-process cleanup and 32 command
+acknowledgements in about 21 ms. Linux/macOS and human visual/audio acceptance
+remain explicit; no claim of frame-locked independent decoders or complete parity.
+[Delivery evidence](verification/EXTERNAL-MPV-DELIVERY.md) records the installed
+David/Cafe/Erfan package, retained host runtimes and remaining acceptance checks.
+
+Copied links and source browsing (9 October): [remote-location workflow](remote-folders.md)
+adds default-enabled text-only clipboard URL observation, debounced live inputs,
+parallel proxy/direct validation with manual overrides, a stable refresh/loading
+region and in-list Back navigation. Browser permission boundaries remain explicit;
+deployment and actual clipboard/dialog acceptance are recorded in the focused PR.
+
+Sound effects (9 October): [SFX and audio routing](SOUND-EFFECTS.md) adds a
+shared host audio-effect catalog, native/Web import and preview editors,
+intrinsic Audio-effects cues, main/SFX/per-effect output selection and live
+output discovery. [Delivery evidence](verification/SFX-AUDIO-DELIVERY.md) records
+the installed David/Cafe/Erfan package and live Cafe preview, EOF, timeline and
+remote-command checks. Human listening and interactive mobile acceptance remain
+explicit; this does not declare overall parity done.
+
+Live branding (9 October): [surface reconciliation](verification/LIVE-BRANDING-SURFACES.md)
+removes stale tray tooltips, the built-in-only About logo and startup-only Web/PWA
+identity. Preferences and native media sessions use configured branding; browser
+updates reuse authoritative config revisions without disconnecting controls.
+OS-managed pinned/installed branding remains a packaging/cache boundary, not a
+reason to rewrite the running executable.
+The installed David/Cafe builds passed a reversible API preview with native
+title/icon and live runtime/manifest verification; Erfan is installed without
+launching alongside KMPlayer. Tray hover and dialog visual acceptance are pending
+the user's confirmation, not inferred from compilation.
+
+NLE volume (9 October): [responsive transport correction](verification/NLE-VOLUME-AND-RESPONSIVE-TRANSPORT.md)
+separates seeking from the native action row and exposes a full-width volume
+strip on narrow monitor panels. Web Simple/NLE now share volume, mute and
+percentage controls using the same session commands. The build is installed on
+David and Cafe with live volume/mute synchronization verified; Erfan is installed
+without launching alongside KMPlayer. Narrow native layout was inspected through
+a DPI-aware Win32 capture. Phone/tablet Web gesture acceptance remains pending
+human verification; deferred test suites are not claimed as executed.
+
 Hardware cue modes (9 October): [authoring and execution contract](HARDWARE-CUE-MODES.md)
 separates compact move-only Set and keep markers from resizable timed holds and
 linear PWM ramps, with explicit exit values, native/Web editors and shared
@@ -147,6 +192,38 @@ policy blocker is not a completed deployment and must not be bypassed.
 
 ## Regression rules
 
+- **Buzzer catalog and control:** PCController owns configured melodies. Native
+  and Web selectors refresh whenever opened, including keyboard activation;
+  catalog events and low-rate output edges obtain authoritative state. Native
+  controls use the same session commands as Web/API so remote consumers reach
+  their authority instead of an inactive local engine. Searchable Web choices
+  share icons/duration details with the effects editor, and diagnostic tones
+  collapse. Malformed refreshes preserve the last-good list rather than render
+  false-empty state. See [delivery and remaining physical/UI gates](verification/BUZZER-LIVE-CATALOG.md).
+
+- **Elapsed-time editing:** Native and both Web transports use a fixed
+  `HH:MM:SS.sss` segment mask. Unchanged blur does not seek; changed blur and
+  explicit Enter use the existing seek path, while Escape always cancels.
+  Group navigation, separator skipping, invalid-input rejection and local-digit
+  normalization preserve the format. Native selection is painted in the same
+  frame as edits. See [installed checkpoint and input acceptance](verification/ELAPSED-TIME-SEGMENT-EDITOR.md).
+
+- **Channel feedback and track-state controls:** Web consumes Rust's computed
+  indicator color and semantic motion direction rather than painting every
+  active output green. Fixed-size Mute/Solo/Lock actions use shared track updates,
+  semantic colors and track exclusion. Direct PWM mute/solo exclusions are also
+  applied to live and prepared playback. Native insert-first cue properties now
+  reuse the dock editor; Web cue-editor consolidation is still a follow-up.
+  See [checkpoint and remaining installed acceptance](verification/CHANNEL-FEEDBACK-AND-CUE-PROPERTIES.md).
+
+- **Seekbar markers and scrub settlement:** Simple and NLE share typed
+  `scrub_to` / `finish_scrub` gestures, live coalesced previews, and correlated
+  decoder settlement before discarding the local thumb position. Shared Rust
+  configuration supplies subdued chapter ticks, active-chapter background and
+  red named project keyframes. Native/Web color pickers share semantic
+  swatches. Source/build progress and pending installed-host acceptance are
+  described in [Seekbar markers and seeking](SEEKBAR-MARKERS-AND-SEEKING.md).
+
 - Hardware state changes occur on primary pointer-down; keyboard activation
   remains click/Enter/Space compatible and commands fire exactly once.
 - Right click opens item-specific actions and never starts dragging.
@@ -155,3 +232,23 @@ policy blocker is not a completed deployment and must not be bypassed.
 - Persistent prose must be actionable; obvious update narration is omitted.
 - A visually similar control is not parity unless it calls the same command and
   reacts to the same authoritative event stream.
+
+## Effect Controls refinement
+
+The native dock inspector and cue modal retain one shared renderer with compact,
+responsive exact-time fields, semantic values, fixed-duration rules and collapsed
+identifiers. The Web direct-cue modal now follows the same timing/output grouping
+and state colors. Full controller/sequence inspector parity remains outstanding;
+this visual refinement is not that broader completion claim. See
+[scope and verification](verification/EFFECT-CONTROLS-INSPECTOR.md).
+
+## Mobile button centering
+
+Shared Web button roots, icon wrappers and SVGs now use centered flex geometry,
+including portal actions. The icon baseline spacer and inconsistent transport
+grid overrides are removed; existing collapsed navigation centering is retained.
+The focused responsive guardrails passed, and the combined package is installed
+on Cafe and David with the corrected CSS confirmed over HTTP. Erfan is updated
+without launching over KMPlayer. These are delivery checks, not visual proof.
+Current mobile visual acceptance is still pending, not inferred from CSS/build.
+See [cause, scope and verification](verification/MOBILE-BUTTON-CENTERING.md).

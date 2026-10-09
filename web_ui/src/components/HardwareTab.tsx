@@ -1,11 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { RfManager } from './RfManager';
 import { PublishingAuthority } from './PublishingAuthority';
+import { ColorPicker } from './ColorPicker';
 import {
   Alert,
   Button,
   Card,
-  ColorPicker,
   Collapse,
   Divider,
   Dropdown,
@@ -52,6 +52,7 @@ import { tr, UiLocale } from '../i18n';
 import { GroupSelect } from './GroupSelect';
 import { effectGlyph } from '../effectIcons';
 import { SevenSegmentDisplay } from './SevenSegmentDisplay';
+import { MelodySelect } from './MelodySelect';
 
 interface HardwareTabProps {
   state: PlayerState;
@@ -354,8 +355,9 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
             </div> : <button
               type="button"
               className={`hardware-control__indicator ${active ? 'is-on' : ''}`}
-              aria-label={active ? tr(locale, 'On') : tr(locale, 'Off')}
-              title={tr(locale, active ? 'Turn off' : 'Turn on')}
+              style={{ '--indicator-color': control.indicator_color || control.color || 'var(--green)' } as React.CSSProperties}
+              aria-label={tr(locale, isMotionControl(control) ? control.direction === 'up' ? 'Up' : control.direction === 'down' ? 'Down' : control.direction === 'stop' ? 'Stopped' : 'State unavailable from the board' : active ? 'On' : 'Off')}
+              title={tr(locale, isMotionControl(control) ? control.direction === 'up' ? 'Up' : control.direction === 'down' ? 'Down' : control.direction === 'stop' ? 'Stopped' : 'State unavailable from the board' : active ? 'Turn off' : 'Turn on')}
               disabled={!immediateToggle || control.locked || !state.hardware_connected || Boolean(state.estop_active)}
               {...(immediateToggle ? actionInputProps(control, immediateToggle) : {})}
             />}
@@ -516,7 +518,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
                       setDropKey(null);
                     }}
                   >
-                    <span className={`hardware-control__indicator ${active ? 'is-on' : ''}`} />
+                    <span className={`hardware-control__indicator ${active ? 'is-on' : ''}`} style={{ '--indicator-color': control.indicator_color || control.color || 'var(--green)' } as React.CSSProperties} />
                     <span
                       className="channel-manager__drag"
                       draggable
@@ -664,15 +666,13 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
       <div className="buzzer-control__melody">
         <label>
           <span>{tr(locale, 'Configured melody')}</span>
-          <Select
+          <MelodySelect
             value={selectedMelody || undefined}
-            placeholder={tr(locale, 'No configured melodies')}
-            options={melodies.map((melody) => ({
-              value: melody.name,
-              label: `${melody.name} · ${melody.duration_ms} ms · ${melody.notes.length} ${tr(locale, 'notes')}`,
-            }))}
+            melodies={melodies}
+            locale={locale}
+            disabled={!state.controller_connected}
             onChange={setMelodyName}
-            onOpenChange={(open) => { if (open) void sendCmd('hardware.catalog.refresh'); }}
+            refresh={() => { void sendCmd('hardware.catalog.refresh'); }}
           />
         </label>
         <label>
@@ -696,26 +696,24 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
         <Button
           type="primary"
           icon={<PlayCircleOutlined />}
-          disabled={!selectedMelody || Boolean(state.estop_active)}
+          disabled={!state.hardware_connected || !selectedMelody || Boolean(state.estop_active)}
           onClick={() => sendCmd('hardware.buzzer.melody', { name: selectedMelody, repeats: melodyLoop ? 0 : melodyRepeats })}
         >{tr(locale, 'Play melody')}</Button>
-        <Button icon={<StopOutlined />} onClick={() => sendCmd('hardware.buzzer.stop')}>{tr(locale, 'Stop buzzer')}</Button>
+        <Button danger disabled={!state.hardware_connected} icon={<StopOutlined />} onClick={() => sendCmd('hardware.buzzer.stop')}>{tr(locale, 'Stop buzzer')}</Button>
       </div>
 
-      <Divider />
+      <Collapse className="buzzer-control__diagnostics" ghost items={[{
+        key: 'tone', label: <Space><SoundOutlined />{tr(locale, 'Tone tester')}</Space>, children:
       <div className="buzzer-control__tone">
-        <div>
-          <Typography.Text strong>{tr(locale, 'Tone tester')}</Typography.Text>
-          <Typography.Text type="secondary">{tr(locale, 'Send a precise diagnostic tone to the board')}</Typography.Text>
-        </div>
         <label><span>{tr(locale, 'Frequency')}</span><InputNumber min={20} max={20000} addonAfter="Hz" value={toneFrequency} onChange={(value) => setToneFrequency(value ?? 440)} /></label>
         <label><span>{tr(locale, 'Duration')}</span><InputNumber min={1} max={65535} addonAfter="ms" value={toneDuration} onChange={(value) => setToneDuration(value ?? 250)} /></label>
         <Button
           icon={<SoundOutlined />}
-          disabled={Boolean(state.estop_active)}
+          disabled={!state.hardware_connected || Boolean(state.estop_active)}
           onClick={() => sendCmd('hardware.buzzer.tone', { frequency_hz: toneFrequency, duration_ms: toneDuration })}
         >{tr(locale, 'Play tone')}</Button>
       </div>
+      }]} />
 
       {details.buzzer?.board_silent && <Alert type="warning" showIcon message={tr(locale, 'The physical board is muted; playback requests will be accepted but may not be audible.')} />}
     </Card>

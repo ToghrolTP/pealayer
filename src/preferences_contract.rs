@@ -19,6 +19,7 @@ fn is_false(value: &bool) -> bool {
 #[serde(rename_all = "snake_case")]
 pub enum PreferenceControlKind {
     Accent,
+    Color,
     Boolean,
     File,
     Number,
@@ -318,8 +319,14 @@ fn application_icon_control(key: &'static str, label: &'static str, placeholder:
     control
 }
 
+fn seekbar_color_control(key: &'static str, label: &'static str) -> PreferenceControl {
+    let mut control = PreferenceControl::text(key, "playback", "Seekbar markers", label, "#RRGGBB");
+    control.kind = PreferenceControlKind::Color;
+    control
+}
+
 pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceControl> {
-    let audio_devices = crate::mpv::audio_output::available_audio_devices();
+    let audio_devices = crate::peer::client().and_then(|client| client.snapshot()).and_then(|snapshot| serde_json::from_value::<Vec<crate::mpv::audio_output::AudioDevice>>(snapshot.session.status.get("audio_devices")?.clone()).ok()).unwrap_or_else(crate::mpv::audio_output::available_audio_devices);
     let audio_output_control = |key, label, selected: &str, follow_media: bool| {
         let mut control = PreferenceControl::select(key, "playback", "Audio output", label, &[]);
         control.description = Some(if follow_media {
@@ -341,7 +348,7 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             label: "Audio device",
             color: None,
             description: Some(device.description.clone()),
-            icon: None,
+            icon: Some("speaker-high"),
         }));
         if !selected.is_empty() && !control.options.iter().any(|option| option.value.as_str() == Some(selected)) {
             control.options.push(PreferenceOption {
@@ -355,6 +362,19 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
         control
     };
     let mut controls = vec![
+        PreferenceControl::select("external_mpv.mode", "playback", "External mpv", "Player mode", &[("internal", "Internal player (default)"), ("external", "External mpv only"), ("dual", "External mpv + internal preview"), ("remote", "Control existing mpv")]),
+        PreferenceControl::boolean("external_mpv.use_mpv_config", "playback", "External mpv", "Load mpv's own configuration and scripts when launching"),
+        {
+            let mut c = PreferenceControl::text("external_mpv.executable", "playback", "External mpv", "mpv executable", "mpv or full executable path");
+            c.kind = PreferenceControlKind::File;
+            #[cfg(windows)] {c.file_extensions = vec!["exe"];}
+            c
+        },
+        {
+            let mut c = PreferenceControl::text("external_mpv.endpoint", "playback", "External mpv", "IPC endpoint", "Blank to launch; named pipe / Unix socket to attach");
+            c.description = Some("For an existing player, start mpv with --input-ipc-server at this endpoint. No Lua helper is required. Dual mode uses a muted internal preview.");
+            c
+        },
         PreferenceControl::select(
             "theme",
             "appearance",
@@ -504,6 +524,9 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
                 Some("Disabled by default so the NLE transport and timeline remain unobstructed");
             control
         },
+        seekbar_color_control("seekbar_markers.chapter_color", "Chapter markers"),
+        seekbar_color_control("seekbar_markers.active_chapter_color", "Active chapter background"),
+        seekbar_color_control("seekbar_markers.keyframe_color", "Keyframe markers"),
         PreferenceControl::number(
             "quick_seek_seconds",
             "playback",
@@ -602,6 +625,8 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "Open Location / URL",
             "Fetch remote media information automatically",
         ),
+        PreferenceControl::boolean("clipboard_url_detection", "playback", "Open Location / URL", "Inspect newly copied HTTP(S) links"),
+        PreferenceControl::boolean("open_url_auto_proxy", "playback", "Open Location / URL", "Automatically choose a working proxy or direct connection"),
         PreferenceControl::boolean(
             "open_url_fetch_remote_thumbnail",
             "playback",
@@ -1168,7 +1193,7 @@ fn semantic_preference_icon(control: &PreferenceControl) -> &'static str {
         key if key.starts_with("web_") => "globe",
         key if key.starts_with("keyboard_") || key.starts_with("shortcut_") => "keyboard",
         _ => match control.kind {
-            PreferenceControlKind::Accent => "palette",
+            PreferenceControlKind::Accent | PreferenceControlKind::Color => "palette",
             PreferenceControlKind::Boolean => "check-square",
             PreferenceControlKind::File => "image",
             PreferenceControlKind::Number => "sliders-horizontal",

@@ -1549,6 +1549,7 @@ fn test_dropped_effects_are_resizable_by_grabbing_handles() {
             id: "strip.strobe".into(),
         }),
         controller_lane: Some(pealayer::four_d::models::ControllerEffectLane::Lighting),
+        audio_effect: None,
     };
 
     // Drop on Lighting lane (index 0) at 1.0s (1000ms)
@@ -1633,6 +1634,7 @@ fn test_dropped_macro_sequence_is_resizable_and_survives_catalog_reconciliation(
         }),
         controller_strip_effect: None,
         controller_lane: Some(pealayer::four_d::models::ControllerEffectLane::Sequence),
+        audio_effect: None,
     };
 
     // Drop on Sequence lane at 2.0s (2000ms)

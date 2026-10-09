@@ -81,7 +81,7 @@ pub fn diagnostics() -> Value {
     let snapshot = client.snapshot();
     let decoded = SERVER
         .get()
-        .and_then(|server| server.mpv.get_property::<f64>("time-pos").ok());
+        .and_then(|server| crate::mpv::player::Player(server.mpv).get_property::<f64>("time-pos").ok());
     let position = snapshot.as_ref().map(|value| {
         value.session.position
             + if value.session.paused {
@@ -264,10 +264,11 @@ pub fn playback_clock_diagnostics() -> Value {
 }
 pub fn server_session() -> Result<Session, String> {
     let server = SERVER.get().ok_or("Pealayer session is initializing")?;
-    let media = server
-        .mpv
+    let player = crate::mpv::player::Player(server.mpv);
+    let media = player
         .get_property::<String>("path")
         .ok()
+        .map(|path|if crate::mpv::external::active(){crate::mpv::external::resolve_path(&crate::mpv::external::status(),&path)}else{path})
         .filter(|value| {
             !value.is_empty() && crate::platform::interop::get_live_config().web_allow_file_access
         });
@@ -283,9 +284,9 @@ pub fn server_session() -> Result<Session, String> {
             .and_then(|value| value.clone()),
         media,
         media_view: MEDIA_VIEW.lock().ok().and_then(|view| view.clone()),
-        position: server.mpv.get_property::<f64>("time-pos").unwrap_or(0.0),
-        paused: server.mpv.get_property::<bool>("pause").unwrap_or(true),
-        speed: server.mpv.get_property::<f64>("speed").unwrap_or(1.0),
+        position: player.get_property::<f64>("time-pos").unwrap_or(0.0),
+        paused: player.get_property::<bool>("pause").unwrap_or(true),
+        speed: player.get_property::<f64>("speed").unwrap_or(1.0),
         sampled_unix_ms: std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -326,7 +327,7 @@ pub enum MediaOperation {
     SetProperty { name: String, value: Value },
 }
 pub fn apply_media_operation(operation: MediaOperation) -> Result<(), String> {
-    let mpv = SERVER.get().ok_or("Pealayer session is initializing")?.mpv;
+    let mpv = crate::mpv::player::Player(SERVER.get().ok_or("Pealayer session is initializing")?.mpv);
     match operation {
         MediaOperation::Command { name, args } => {
             if !matches!(

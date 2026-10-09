@@ -214,46 +214,12 @@ fn native_preferences_viewport(title: String) -> egui::ViewportBuilder {
         .with_minimize_button(false)
         .with_maximize_button(false)
         .with_clamp_size_to_monitor_size(true);
-    let icon = phosphor_preferences_icon().or_else(|| {
-        eframe::icon_data::from_png_bytes(include_bytes!("../../assets/pealayer-icon.png")).ok()
-    });
+    let icon = crate::branding::icon_bytes(&crate::platform::interop::get_live_config(), crate::branding::PlaybackIconState::Stopped)
+        .and_then(|(_, bytes)| crate::branding::icon_data_from_bytes(&bytes));
     if let Some(icon) = icon {
         builder = builder.with_icon(icon);
     }
     builder
-}
-
-fn phosphor_preferences_icon() -> Option<egui::IconData> {
-    use ab_glyph::{Font, FontRef, PxScale, point};
-
-    const SIZE: usize = 32;
-    let font = FontRef::try_from_slice(egui_phosphor::Variant::Regular.font_bytes()).ok()?;
-    let character = crate::ui::icons::GEAR.chars().next()?;
-    let glyph_id = font.glyph_id(character);
-    let scale = PxScale::from(24.0);
-    let initial = font.outline_glyph(glyph_id.with_scale(scale))?;
-    let bounds = initial.px_bounds();
-    let position = point(
-        (SIZE as f32 - bounds.width()) * 0.5 - bounds.min.x,
-        (SIZE as f32 - bounds.height()) * 0.5 - bounds.min.y,
-    );
-    let outlined = font.outline_glyph(glyph_id.with_scale_and_position(scale, position))?;
-    let mut rgba = vec![0_u8; SIZE * SIZE * 4];
-    let pixel_bounds = outlined.px_bounds();
-    outlined.draw(|x, y, coverage| {
-        let px = pixel_bounds.min.x.floor() as i32 + x as i32;
-        let py = pixel_bounds.min.y.floor() as i32 + y as i32;
-        if px >= 0 && py >= 0 && px < SIZE as i32 && py < SIZE as i32 {
-            let offset = (py as usize * SIZE + px as usize) * 4;
-            rgba[offset..offset + 3].copy_from_slice(&[236, 241, 247]);
-            rgba[offset + 3] = (coverage * 255.0).round() as u8;
-        }
-    });
-    Some(egui::IconData {
-        rgba,
-        width: SIZE as u32,
-        height: SIZE as u32,
-    })
 }
 
 pub(crate) fn preferences_helper_owner(args: &[String]) -> Option<isize> {
@@ -276,6 +242,7 @@ struct StandalonePreferencesApp {
     applied_appearance: Option<(AppTheme, bool, bool, [u8; 3], crate::config::ColorPalette)>,
     config_watcher: Option<crate::config::ConfigFileWatcher>,
     config_reload_due: Option<std::time::Instant>,
+    branding_config: Option<AppConfig>,
 }
 
 impl StandalonePreferencesApp {
@@ -323,6 +290,17 @@ impl StandalonePreferencesApp {
     }
 
     fn apply_appearance(&mut self, ctx: &egui::Context) {
+        if self.branding_config.as_ref() != Some(&self.draft.config) {
+            let config = &self.draft.config;
+            let name = crate::config::resolved_app_name(config);
+            let language = crate::config::resolve_language(crate::config::resolved_language_preference(config));
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("{} — {name}", native_tr(language, "Preferences"))));
+            if let Some(icon) = crate::branding::icon_bytes(config, crate::branding::PlaybackIconState::Stopped)
+                .and_then(|(_, bytes)| crate::branding::icon_data_from_bytes(&bytes)) {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Icon(Some(std::sync::Arc::new(icon))));
+            }
+            self.branding_config = Some(config.clone());
+        }
         let appearance = (
             crate::config::resolved_theme(&self.draft.config),
             self.draft.config.windows_dwm_theming,
@@ -513,6 +491,7 @@ pub(crate) fn run_native_preferences(owner_hwnd: isize) -> eframe::Result {
                 applied_appearance: None,
                 config_watcher: None,
                 config_reload_due: None,
+                branding_config: None,
             }))
         }),
     )
@@ -1049,16 +1028,17 @@ fn render_contract_control(
             }
         }
         PreferenceControlKind::Select => {
+            let audio_output = matches!(control.key, "audio_device" | "sfx_audio_device");
             let selected = current.as_str().unwrap_or_default();
             let selected_label = control
                 .options
                 .iter()
                 .find(|option| option.value.as_str() == Some(selected))
-                .map(|option| tr(option.label))
+                .map(|option| if audio_output { option.description.clone().unwrap_or_else(|| tr(option.label)) } else { tr(option.label) })
                 .unwrap_or_else(|| selected.to_string());
             preference_row(ui, control_icon, &tr(control.label), label_width, |ui| {
                 let control_width = ui.available_width().min(PREFERENCE_CONTROL_MAX_WIDTH);
-                egui::ComboBox::from_id_salt(("preference", control.key))
+                let popup = egui::ComboBox::from_id_salt(("preference", control.key))
                     .width(control_width)
                     .selected_text(selected_label)
                     .show_ui(ui, |ui| {
@@ -1066,7 +1046,7 @@ fn render_contract_control(
                             if ui
                                 .selectable_label(
                                     option.value == current,
-                                    option.description.clone().unwrap_or_else(|| tr(option.label)),
+                                    if audio_output { option.description.clone().unwrap_or_else(|| tr(option.label)) } else { tr(option.label) },
                                 )
                                 .clicked()
                             {
@@ -1074,6 +1054,19 @@ fn render_contract_control(
                             }
                         }
                     });
+                if audio_output {
+                    let id = ui.id().with(("audio-output-open", control.key));
+                    let was_open = ui.data_mut(|d| d.get_temp::<bool>(id).unwrap_or(false));
+                    if popup.inner.is_some() && !was_open {
+                        if let Some(client) = crate::peer::client() {
+                            let _ = client.queue("/api/player/command", serde_json::to_value(crate::platform::interop::InteropCommand::RefreshAudioOutputs).unwrap());
+                        } else {
+                            let ctx = ui.ctx().clone();
+                            std::thread::spawn(move || { crate::mpv::audio_output::refresh_devices(); ctx.request_repaint(); });
+                        }
+                    }
+                    ui.data_mut(|d| d.insert_temp(id, popup.inner.is_some()));
+                }
             });
         }
         PreferenceControlKind::MultiSelect => {
@@ -1298,6 +1291,14 @@ fn render_contract_control(
                 replacement = Some(if text.trim().is_empty() { serde_json::Value::Null }
                     else { serde_json::Value::String(text.trim().to_owned()) });
             }
+        }
+        PreferenceControlKind::Color => {
+            let mut hex = current.as_str().unwrap_or("#969696").to_string();
+            preference_row(ui, control_icon, &tr(control.label), label_width, |ui| {
+                if crate::ui::color_picker::color_field(ui, &mut hex, [150,150,150], 154.0).changed() {
+                    replacement = Some(serde_json::Value::String(hex));
+                }
+            });
         }
         PreferenceControlKind::Text => {
             let mut text = current.as_str().unwrap_or_default().to_string();
@@ -1869,7 +1870,8 @@ fn group_icon(group: &str) -> &'static str {
         "Interface" => crate::ui::icons::SPARKLE,
         "On-screen display" => crate::ui::icons::MONITOR_PLAY,
         "Application icons" => crate::ui::icons::IMAGE,
-        "Player controls" => crate::ui::icons::PLAY,
+          "Player controls" => crate::ui::icons::PLAY,
+          "External mpv" => crate::ui::icons::MONITOR_PLAY,
         "Playback history" => crate::ui::icons::CLOCK_COUNTER_CLOCKWISE,
         "Config file" => crate::ui::icons::FLOPPY_DISK,
         "Open Location / URL" => crate::ui::icons::LINK_SIMPLE,
@@ -1962,11 +1964,12 @@ mod tests {
     }
 
     #[test]
-    fn native_preferences_use_a_dedicated_phosphor_style_icon() {
-        let icon = phosphor_preferences_icon().expect("preferences icon");
-        assert_eq!((icon.width, icon.height), (32, 32));
-        assert!(icon.rgba.chunks_exact(4).any(|pixel| pixel[3] == 255));
-        assert!(icon.rgba.chunks_exact(4).any(|pixel| pixel[3] == 0));
+    fn native_preferences_use_configured_branding() {
+        let builder = native_preferences_viewport("Preferences — Custom".to_string());
+        assert!(builder.icon.is_some());
+        let source = include_str!("preferences.rs");
+        assert!(source.contains("branding_config = Some(config.clone())"));
+        assert!(source.contains("ViewportCommand::Title"));
     }
 
     #[test]
@@ -2136,6 +2139,7 @@ mod tests {
             applied_appearance: None,
             config_watcher: None,
             config_reload_due: None,
+            branding_config: None,
         };
         let ctx = egui::Context::default();
         helper.apply_appearance(&ctx);

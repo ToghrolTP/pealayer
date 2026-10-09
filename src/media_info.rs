@@ -1,4 +1,4 @@
-use libmpv2::Mpv;
+use crate::mpv::player::Player as Mpv;
 use std::collections::BTreeMap;
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -133,6 +133,11 @@ const PROPERTY_GROUPS: &[(&str, &[&str])] = &[
         ],
     ),
 ];
+
+pub(crate) fn observed_roots() -> std::collections::BTreeSet<&'static str> {
+    PROPERTY_GROUPS.iter().flat_map(|(_, keys)| keys.iter().map(|key| key.split('/').next().unwrap_or(key)))
+        .chain(["filtered-metadata", "edition-list", "playlist"]).collect()
+}
 
 fn property_text(mpv: &Mpv, name: &str) -> Option<String> {
     mpv.get_property::<String>(name)

@@ -16,6 +16,7 @@ import { PublishingAuthority } from './components/PublishingAuthority';
 import { FujiLoader } from './components/FujiLoader';
 import { WebViewBoundary } from './components/WebViewBoundary';
 import { RemoteLocationDialog } from './components/RemoteLocationDialog';
+import { useClipboardUrls } from './clipboardUrls';
 import './remote-location.css';
 import type { PlayerState } from './components/RemoteControlTab';
 import type { MediaGesturePreferences } from './components/MediaSurface';
@@ -296,6 +297,11 @@ const App: React.FC = () => {
       }
     }).catch((error) => void message.error(String(error)));
   }, [apiEndpoint]);
+  const browseClipboard = useCallback((target: string) => {
+    if (state.remote_browser?.visible && state.remote_browser.target === target) return;
+    void sendCmd('pealayer.remote.browse', { target });
+  }, [sendCmd, state.remote_browser?.target, state.remote_browser?.visible]);
+  useClipboardUrls(appConfig?.clipboard_url_detection === true, connected, browseClipboard);
 
   const resolveWebSocketUrl = useCallback(() => {
     const fallbackProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -312,7 +318,7 @@ const App: React.FC = () => {
     } catch {
       return connectionTarget;
     }
-  }, [connectionTarget, runtime]);
+  }, [connectionTarget, runtime?.websocketPath]);
 
   const apiBaseUrl = (() => {
     try {
@@ -336,13 +342,14 @@ const App: React.FC = () => {
       })
       .then((value: RuntimeConfig) => {
         if (!disposed) {
-          setRuntime(value);
+          setRuntime((previous) => JSON.stringify(previous) === JSON.stringify(value) ? previous : value);
           persistJson(STORAGE.runtime, value);
         }
       })
       .catch(() => {});
     return () => { disposed = true; };
-  }, [apiEndpoint]);
+    // Reuse the authoritative status revision, not a separate polling loop.
+  }, [apiEndpoint, state.app_icon_revision]);
 
   useEffect(() => {
     if (!runtime) return;
@@ -465,7 +472,8 @@ const App: React.FC = () => {
       wsRef.current = null;
       window.removeEventListener('online', reconnectNow);
     };
-  }, [runtime, connectionTarget, resolveWebSocketUrl, apiEndpoint, completeRequest]);
+  // Branding/theme changes must not disconnect an active control socket.
+  }, [Boolean(runtime), connectionTarget, resolveWebSocketUrl, apiEndpoint, completeRequest]);
 
   useEffect(() => () => {
     for (const pending of pendingRequests.current.values()) {
@@ -553,7 +561,7 @@ const App: React.FC = () => {
     >
       <SharedToasts snapshot={state.messages} connected={connected} dismiss={id => sendCmd('pealayer.toast.dismiss', { id })} />
       <PublishingAuthority state={state} sendCmd={sendCmd} />
-      <RemoteLocationDialog state={state.remote_browser} connected={connected} base={apiBaseUrl} sendCmd={sendCmd} />
+      <RemoteLocationDialog state={state.remote_browser} connected={connected} base={apiBaseUrl} sendCmd={sendCmd} autoInspect={appConfig?.open_url_fetch_remote_info !== false} />
       <Layout className="app-shell">
         <HeaderBar
           collapsed={collapsed}
@@ -653,7 +661,7 @@ const App: React.FC = () => {
                 apiBaseUrl={apiBaseUrl}
               />
             )}
-            {activeTab === 'effects' && <EffectsTab state={state} sendCmd={sendCmd} locale={runtime?.locale || 'en'} />}
+            {activeTab === 'effects' && <EffectsTab state={state} sendCmd={sendCmd} locale={runtime?.locale || 'en'} apiBaseUrl={apiBaseUrl} />}
             {activeTab === 'hardware' && <HardwareTab state={state} sendCmd={sendCmd} locale={runtime?.locale || 'en'} />}
             {activeTab === 'about' && (
               <PlayerInfoTab state={state} connectionMode={connectionMode} runtime={runtime} locale={runtime?.locale || 'en'} apiBaseUrl={apiBaseUrl} websocketUrl={resolveWebSocketUrl()} platform={platform} />

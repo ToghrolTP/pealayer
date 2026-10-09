@@ -1,10 +1,18 @@
-import React, { useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
+
+// getRandomValues also works on LAN HTTP origins, unlike randomUUID.
+const newAudioId = () => {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 15) | 64; bytes[8] = (bytes[8] & 63) | 128;
+  const hex = Array.from(bytes, (value) => value.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
+};
+import { ColorPicker } from './ColorPicker';
 import {
   Button,
   Card,
   Collapse,
   ConfigProvider,
-  ColorPicker,
   Dropdown,
   Empty,
   Input,
@@ -42,11 +50,14 @@ import { GroupSelect } from './GroupSelect';
 import { EffectGroupDialog, EffectGroupDraft } from './EffectGroupDialog';
 import recordingColors from '../../../assets/themes/recording-colors.json';
 import { appendMelodySteps, sequenceDurationMs } from '../melodyCatalog';
+import { MelodySelect } from './MelodySelect';
+import { SoundEffectFields } from './SoundEffectFields';
 
 interface EffectsTabProps {
   state: PlayerState;
   sendCmd: (command: string, payload?: Record<string, unknown>) => Promise<boolean>;
   locale: UiLocale;
+  apiBaseUrl: string;
 }
 
 type EffectStep = {
@@ -78,7 +89,7 @@ type EffectDraft = {
   icon: string;
   category: string;
   description: string;
-  kind: 'sequence' | 'strip-stream';
+  kind: 'sequence' | 'strip-stream' | 'audio';
   duration_ms: number;
   color: string;
   default_fps: number;
@@ -115,10 +126,19 @@ const draftPayload = (draft: EffectDraft): Record<string, unknown> => ({
   } : JSON.parse(draft.programText || '{}'),
 });
 
-export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }) => {
+export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale, apiBaseUrl }) => {
   const effects = state.controller_effects ?? [];
   const [draft, setDraft] = useState<EffectDraft | null>(null);
   const [saving, setSaving] = useState(false);
+  useEffect(() => {
+    if (draft?.kind !== 'audio') return;
+    const saved = effects.find((effect) => effect.kind === 'audio' && effect.id === draft.id);
+    if (saved && (draft.reference !== saved.reference || draft.duration_ms !== saved.duration_ms)) {
+      setDraft((current) => current?.id === saved.id ? { ...current, reference: saved.reference, is_new: false, duration_ms: saved.duration_ms } : current);
+    }
+  }, [effects, draft?.id, draft?.reference, draft?.duration_ms, draft?.kind]);
+  const updateAudio = (patch: Record<string, unknown>) => setDraft((current) => current ? { ...current, programText: JSON.stringify({ ...JSON.parse(current.programText || '{}'), ...patch }) } : current);
+  const audioProgram = draft?.kind === 'audio' ? JSON.parse(draft.programText || '{}') as { source?: string; volume?: number; output_device?: string } : {};
   const [selected, setSelected] = useState<string | null>(null);
   const [inlineEdit, setInlineEdit] = useState<InlineEffectEdit | null>(null);
   const [groupDraft, setGroupDraft] = useState<EffectGroupDraft | null>(null);
@@ -158,7 +178,7 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
       default_pixels: effect.default_pixels ?? 100,
       steps: parts.steps,
       properties: parts.properties,
-      programText: effect.kind === 'strip-stream' ? JSON.stringify(effect.program ?? {}, null, 2) : '{}',
+      programText: effect.kind !== 'sequence' ? JSON.stringify(effect.program ?? {}, null, 2) : '{}',
       is_new: false,
     } : {
       reference: '', id: String(Array.from({ length: 256 }, (_, id) => id).find((id) => !effects.some((effect) => effect.id === String(id))) ?? ''), name: '', icon: 'plug', category: category ?? 'Motion', description: '', kind: 'sequence',
@@ -175,9 +195,16 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
       icon: group?.icon || 'folder',
     });
   };
+  const newAudio = () => {
+    openEditor();
+    setDraft((current) => current ? { ...current, id: newAudioId(), kind: 'audio', category: 'Audio', icon: 'speaker-high', programText: JSON.stringify({ source: '', volume: 100, output_device: '' }) } : current);
+  };
 
   const saveGroup = async () => {
     if (!groupDraft?.name.trim()) return;
+    if (draft?.kind === 'audio' && !groupDraft.original_name) {
+      setDraft({ ...draft, category: groupDraft.name.trim() }); setGroupDraft(null); return;
+    }
     if (await sendCmd('controller_effect.group.save', {
       original_name: groupDraft.original_name,
       name: groupDraft.name.trim(),
@@ -211,7 +238,7 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
     setSaving(true);
     try {
       if (!await sendCmd('controller_effect.save', draftPayload(draft))) return;
-      setDraft(null);
+      if (draft.kind !== 'audio') setDraft(null);
     }
     catch { void message.error(tr(locale, 'Program must be valid JSON')); return; }
     finally { setSaving(false); }
@@ -276,6 +303,8 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
         {state.hardware_details?.strip?.running && <Button icon={<StopOutlined />} onClick={() => sendCmd('controller_effect.stop')}>{tr(locale, 'Stop preview')}</Button>}
         <Button icon={<FolderAddOutlined />} onClick={() => openGroupEditor()}>{tr(locale, 'New group')}</Button>
         <Button type="primary" icon={<PlusOutlined />} onClick={() => openEditor()}>{tr(locale, 'New effect')}</Button>
+        <Button icon={<SoundOutlined />} onClick={newAudio}>{tr(locale, 'New audio effect')}</Button>
+        {Boolean(state.audio_preview_ids?.length) && <Button icon={<StopOutlined />} onClick={() => sendCmd('audio_effect.stop')}>{tr(locale, 'Stop audio preview')}</Button>}
       </Space>
     </header>
 
@@ -324,7 +353,7 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
           ];
           const run = (key: string) => {
             if (key === 'rename') beginInlineEdit();
-            if (key === 'play') sendCmd('controller_effect.play', { reference: effect.reference });
+            if (key === 'play') sendCmd(effect.kind === 'audio' && state.audio_preview_ids?.includes(effect.id) ? 'audio_effect.stop' : 'controller_effect.play', { reference: effect.reference });
             if (key === 'manage') openEditor(effect);
             if (key === 'cue') sendCmd('controller_effect_cue.add', { reference: effect.reference, start_time_ms: Math.max(0, Math.round((state.playback_time ?? 0) * 1000)) });
             if (key === 'delete') sendCmd('controller_effect.delete', { reference: effect.reference });
@@ -425,30 +454,27 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale }
     >
       {draft && <div className="effect-editor">
         <ConfigProvider componentDisabled={captureBusy}><div className="effect-editor__identity">
-          <label><span>{tr(locale, 'Type')}</span><Select value={draft.kind} options={[{ value: 'sequence', label: tr(locale, 'Sequence') }, { value: 'strip-stream', label: tr(locale, 'Lighting') }]} onChange={(kind) => setDraft({ ...draft, kind })} /></label>
-          <label><span>{tr(locale, 'ID')}</span><Input value={draft.id} onChange={(event) => setDraft({ ...draft, id: event.target.value })} /></label>
+          <label><span>{tr(locale, 'Type')}</span><Select disabled={!draft.is_new} value={draft.kind} options={[{ value: 'sequence', label: tr(locale, 'Sequence') }, { value: 'strip-stream', label: tr(locale, 'Lighting') }, { value: 'audio', label: tr(locale, 'Audio effect') }]} onChange={(kind) => setDraft({ ...draft, kind, ...(kind === 'audio' ? { id: newAudioId(), icon: 'speaker-high', category: 'Audio', programText: JSON.stringify({ source: '', volume: 100, output_device: '' }) } : {}) })} /></label>
+          {draft.kind !== 'audio' && <label><span>{tr(locale, 'ID')}</span><Input value={draft.id} onChange={(event) => setDraft({ ...draft, id: event.target.value })} /></label>}
           <label><span>{tr(locale, 'Name')}</span><Input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} /></label>
           <label><span>{tr(locale, 'Icon')}</span><EffectIconPicker value={draft.icon} searchPlaceholder={tr(locale, 'Search icons...')} presetsLabel={tr(locale, 'Presets')} emptyLabel={tr(locale, 'No matching icons')} onChange={(icon) => setDraft({ ...draft, icon })} /></label>
-          <label><span>{tr(locale, 'Group')}</span><GroupSelect value={draft.category} groups={(state.controller_effect_groups ?? []).map((group) => group.name)} locale={locale} onChange={(category) => setDraft({ ...draft, category })} onCreate={() => openGroupEditor()} /></label>
+          <label><span>{tr(locale, 'Group')}</span><GroupSelect value={draft.category} groups={[...new Set([...(state.controller_effect_groups ?? []).map((group) => group.name), ...effects.map((effect) => effect.category)])]} locale={locale} onChange={(category) => setDraft({ ...draft, category })} onCreate={() => openGroupEditor()} /></label>
           <label className="effect-editor__wide"><span>{tr(locale, 'Description')}</span><Input value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></label>
-          <label><span>{tr(locale, 'Duration')}</span><InputNumber min={1} addonAfter="ms" value={draft.duration_ms} onChange={(duration_ms) => setDraft({ ...draft, duration_ms: duration_ms ?? 1 })} /></label>
-          <label><span>{tr(locale, 'Color')}</span>{draft.kind === 'sequence' ? <Select disabled={captureBusy} value={draft.color} onChange={(color) => setDraft({ ...draft, color })} options={recordingColors.map((color) => ({ value: color.id, label: <span className="recording-color-option"><span className="recording-color-swatch" style={{ backgroundColor: color.hex }} />{tr(locale, color.label)}</span> }))} /> : <ColorPicker value={draft.color} disabledAlpha onChangeComplete={(color) => setDraft({ ...draft, color: color.toHexString().toUpperCase() })} />}</label>
+          <label><span>{tr(locale, 'Duration')}</span>{draft.kind === 'audio' ? <Typography.Text type="secondary">{draft.is_new ? tr(locale, 'Read from audio on Save') : `${(draft.duration_ms / 1000).toFixed(3)} s`}</Typography.Text> : <InputNumber min={1} addonAfter="ms" value={draft.duration_ms} onChange={(duration_ms) => setDraft({ ...draft, duration_ms: duration_ms ?? 1 })} />}</label>
+          {draft.kind !== 'audio' && <label><span>{tr(locale, 'Color')}</span>{draft.kind === 'sequence' ? <Select disabled={captureBusy} value={draft.color} onChange={(color) => setDraft({ ...draft, color })} options={recordingColors.map((color) => ({ value: color.id, label: <span className="recording-color-option"><span className="recording-color-swatch" style={{ backgroundColor: color.hex }} />{tr(locale, color.label)}</span> }))} /> : <ColorPicker value={draft.color} disabledAlpha onChangeComplete={(color) => setDraft({ ...draft, color: color.toHexString().toUpperCase() })} />}</label>}
         </div></ConfigProvider>
-        {draft.kind === 'sequence' ? <>
+        {draft.kind === 'audio' ? <SoundEffectFields program={audioProgram} onChange={updateAudio} state={state} reference={draft.reference} apiBaseUrl={apiBaseUrl} locale={locale} sendCmd={sendCmd} /> : draft.kind === 'sequence' ? <>
           <div className="effect-editor__toolbar"><strong>{tr(locale, 'Sequence steps')}</strong><Space wrap>
             <EffectRecorder state={state} sendCmd={sendCmd} locale={locale} effect={draftPayload(draft)} onSequenceChange={(steps, id) => setDraft((current) => current ? { ...current, id: String(id), reference: `effect:${id}`, is_new: false, steps } : current)} />
             <Button disabled={captureBusy} icon={<PlusOutlined />} onClick={() => setDraft({ ...draft, steps: [...draft.steps, defaultStep()] })}>{tr(locale, 'Add step')}</Button>
-            <Select
+            <MelodySelect
               className="effect-melody-picker"
               disabled={captureBusy || !state.controller_connected}
               placeholder={<><SoundOutlined /> {tr(locale, 'Add melody')}</>}
               value={undefined}
-              options={(state.hardware_details?.melodies ?? []).map((melody) => ({
-                value: melody.name,
-                label: `${melody.name} · ${melody.duration_ms} ms`,
-              }))}
-              notFoundContent={tr(locale, 'No configured melodies')}
-              onOpenChange={(open) => { if (open) void sendCmd('hardware.catalog.refresh'); }}
+              melodies={state.hardware_details?.melodies ?? []}
+              locale={locale}
+              refresh={() => { void sendCmd('hardware.catalog.refresh'); }}
               onChange={addMelody}
             />
             <Popconfirm title={tr(locale, 'Delete all sequence steps?')} onConfirm={() => setDraft({ ...draft, steps: [] })}><Button disabled={captureBusy || draft.steps.length === 0} icon={<DeleteOutlined />}>{tr(locale, 'Clear steps')}</Button></Popconfirm>

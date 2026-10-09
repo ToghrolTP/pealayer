@@ -145,8 +145,13 @@ pub(crate) fn select_advertised_effect(
     source: crate::app::EffectPresetSource,
     strip_id: Option<&str>,
 ) -> Option<String> {
+    if let crate::app::EffectPresetSource::Audio(id) = source {
+        app.select_audio_effect(id);
+        return Some(format!("sfx:{id}"));
+    }
     let capabilities = app.advertised_hardware()?;
     match source {
+        crate::app::EffectPresetSource::Audio(_) => unreachable!(),
         crate::app::EffectPresetSource::ControllerMacro(id) => {
             let effect = capabilities.macros.iter().find(|effect| effect.id == id)?;
             let reference = format!("effect:{id}");
@@ -189,7 +194,9 @@ pub(crate) fn move_dragged_effect_to_group(
     if category.is_empty() || category.len() > 64 || category.chars().any(char::is_control) {
         return Err("Effect group must be a bounded printable value".to_string());
     }
-    let selected = if let Some(effect) = payload.controller_macro.as_ref() {
+    let selected = if let Some(effect) = payload.audio_effect.as_ref() {
+        select_advertised_effect(app, crate::app::EffectPresetSource::Audio(effect.id), None)
+    } else if let Some(effect) = payload.controller_macro.as_ref() {
         select_advertised_effect(
             app,
             crate::app::EffectPresetSource::ControllerMacro(effect.id),
@@ -228,6 +235,8 @@ pub(crate) fn duplicate_selected(app: &mut PealayerApp) {
             .find(|candidate| !used.contains(&u64::from(*candidate)))
             .unwrap_or(0)
             .to_string()
+    } else if app.effect_library_draft.kind == "audio" {
+        uuid::Uuid::new_v4().to_string()
     } else {
         format!("{}-copy", app.effect_library_draft.id)
     };
@@ -845,7 +854,7 @@ fn sequence_cue_context_menu(
                 step.green.unwrap_or_default(),
                 step.blue.unwrap_or_default(),
             );
-            if ui.color_edit_button_srgba(&mut color).changed() {
+            if crate::ui::color_picker::color_button_srgba(ui, &mut color).changed() {
                 step.red = Some(color.r());
                 step.green = Some(color.g());
                 step.blue = Some(color.b());
@@ -1589,7 +1598,7 @@ fn draw_timeline_authoring_fields(
                     step.to_green.unwrap_or_default(),
                     step.to_blue.unwrap_or_default(),
                 );
-                if ui.color_edit_button_srgba(&mut color).changed() {
+                if crate::ui::color_picker::color_button_srgba(ui, &mut color).changed() {
                     step.to_red = Some(color.r());
                     step.to_green = Some(color.g());
                     step.to_blue = Some(color.b());
@@ -2007,7 +2016,7 @@ fn draw_sequence_step_editor(
                                     step.green.unwrap_or_default(),
                                     step.blue.unwrap_or_default(),
                                 );
-                                if ui.color_edit_button_srgba(&mut color).changed() {
+                                if crate::ui::color_picker::color_button_srgba(ui, &mut color).changed() {
                                     step.red = Some(color.r());
                                     step.green = Some(color.g());
                                     step.blue = Some(color.b());
@@ -2046,7 +2055,7 @@ fn draw_sequence_step_editor(
                                     step.green.unwrap_or_default(),
                                     step.blue.unwrap_or_default(),
                                 );
-                                if ui.color_edit_button_srgba(&mut color).changed() {
+                                if crate::ui::color_picker::color_button_srgba(ui, &mut color).changed() {
                                     step.red = Some(color.r());
                                     step.green = Some(color.g());
                                     step.blue = Some(color.b());
@@ -2221,7 +2230,7 @@ fn record_action_color() -> egui::Color32 {
 }
 
 fn paint_recording_swatch(ui: &egui::Ui, rect: egui::Rect, value: &str) {
-    let center = egui::pos2(rect.left() + 12.0, rect.center().y);
+    let center = egui::pos2(rect.left() + ui.spacing().button_padding.x + 5.0, rect.center().y);
     ui.painter()
         .circle_filled(center, 5.0, recording_color(value));
     // White must remain distinguishable on light popup surfaces too.
@@ -2235,7 +2244,7 @@ fn recording_color_label(ui: &egui::Ui, label: &str) -> egui::text::LayoutJob {
     // font and selected/hover formatting, making the label visibly jump.
     job.append(
         label,
-        28.0,
+        24.0,
         egui::TextFormat::simple(
             egui::TextStyle::Button.resolve(ui.style()),
             ui.visuals().text_color(),
@@ -2253,9 +2262,22 @@ fn recording_color_picker(ui: &mut egui::Ui, value: &mut String) -> egui::Respon
         .selected_text(recording_color_label(ui, &selected.label))
         .show_ui(ui, |ui| {
             for color in recording_colors() {
-                let label = recording_color_label(ui, &color.label);
-                let row = ui.selectable_value(value, color.id.clone(), label);
+                let (rect, row) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), ui.spacing().interact_size.y.max(26.0)),
+                    egui::Sense::click(),
+                );
+                let selected = *value == color.id;
+                let visuals = ui.style().interact_selectable(&row, selected);
+                ui.painter().rect_filled(rect, 4.0, visuals.weak_bg_fill);
+                ui.painter().rect_stroke(rect, 4.0, egui::Stroke::new(1.0,
+                    if selected { visuals.bg_stroke.color } else { egui::Color32::TRANSPARENT }), egui::StrokeKind::Inside);
+                ui.painter().text(egui::pos2(rect.left() + ui.spacing().button_padding.x + 24.0, rect.center().y),
+                    egui::Align2::LEFT_CENTER, &color.label, egui::TextStyle::Button.resolve(ui.style()), visuals.text_color());
                 paint_recording_swatch(ui, row.rect, &color.id);
+                if row.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                    *value = color.id.clone();
+                    ui.close();
+                }
             }
         })
         .response;
@@ -2325,6 +2347,8 @@ pub(crate) fn draw_effect_capture_controls(app: &mut PealayerApp, ui: &mut egui:
         }
         ui.add_enabled_ui(!active && !busy && connected, |ui| {
             let has_melodies = hardware.as_ref().is_some_and(|value| !value.melodies.is_empty());
+            let combo_id = ui.make_persistent_id("effect_add_melody");
+            let was_open = egui::ComboBox::is_open(ui.ctx(), combo_id);
             let response = egui::ComboBox::from_id_salt("effect_add_melody")
                 .selected_text(if has_melodies {
                     format!("{} Add melody", crate::ui::icons::MUSIC_NOTE)
@@ -2354,7 +2378,7 @@ pub(crate) fn draw_effect_capture_controls(app: &mut PealayerApp, ui: &mut egui:
                     }
                 })
                 .response;
-            refresh_melodies = response.clicked();
+            refresh_melodies = !was_open && egui::ComboBox::is_open(ui.ctx(), response.id);
         });
         ui.add_enabled_ui(!active && !busy, |ui| {
             egui::ComboBox::from_id_salt("effect_capture_clock").width(160.0)
@@ -2389,7 +2413,8 @@ pub(crate) fn draw_effect_capture_controls(app: &mut PealayerApp, ui: &mut egui:
     if refresh_melodies {
         // Events keep this catalog current in the background; opening the
         // picker is also an explicit freshness boundary for user choice.
-        app.engine_handle.request_catalog_refresh();
+        app.apply_interop_command(&ui.ctx().clone(),
+            crate::platform::interop::InteropCommand::RefreshHardwareCatalog, "Effect melody catalog");
     }
     if let Some(melody) = selected_melody
         && let Some(first) = append_melody_steps(&mut app.effect_library_draft.steps, &melody)
@@ -2412,6 +2437,10 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
     if !app.show_effect_library_editor {
         return;
     }
+    if app.effect_library_draft.kind == "audio" {
+        crate::ui::audio::draw_sfx_editor(app, ui);
+        return;
+    }
     let mut open = app.show_effect_library_editor;
     let display_language = app.language;
     let human_readable_time_units = app.human_readable_time_units;
@@ -2429,6 +2458,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
         .as_ref()
         .map(|value| value.strip_effects.clone())
         .unwrap_or_default();
+    let audio_effects = app.audio_effects();
     let groups = capabilities
         .as_ref()
         .map(|hardware| hardware.effect_groups.clone())
@@ -2466,6 +2496,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 |ui| {
                     if capture_locked { ui.disable(); }
                     ui.horizontal_wrapped(|ui| {
+                        if ui.button(format!("{} {}", crate::ui::icons::SPEAKER_HIGH, app.tr("Audio"))).clicked() { app.begin_audio_effect(); }
                         if ui
                             .button(format!("{} {}", crate::ui::icons::PLUS, app.tr("Sequence")))
                             .clicked()
@@ -2485,6 +2516,10 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
                             if capture_locked { ui.disable(); }
+                            for effect in &audio_effects {
+                                let response = effect_navigation_button(ui, app.effect_library_selection.as_deref() == Some(effect.reference().as_str()), crate::ui::icons::SPEAKER_HIGH, &effect.name, &format!("{} · {}", effect.group, crate::duration::format_effect_duration_for_language(display_language, effect.duration_ms)));
+                                if response.clicked() { app.select_audio_effect(effect.id); }
+                            }
                             for effect in &sequences {
                                 let reference = format!("effect:{}", effect.id);
                                 let payload = crate::app::EffectDragPayload {
@@ -2501,6 +2536,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     ),
                                     controller_strip_effect: None,
                                     controller_lane: Some(crate::app::controller_macro_lane(effect)),
+                                    audio_effect: None,
                                 };
                                 let selected = app.effect_library_selection.as_deref()
                                     == Some(reference.as_str());
@@ -2549,6 +2585,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     controller_lane: Some(
                                         crate::four_d::models::ControllerEffectLane::Lighting,
                                     ),
+                                    audio_effect: None,
                                 };
                                 let selected = app.effect_library_selection.as_deref()
                                     == Some(reference.as_str());

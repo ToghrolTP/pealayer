@@ -170,11 +170,18 @@ pub fn compile_plan(
     let solo = analog.iter().any(|track| track.enabled && track.soloed);
     let pwm_channels = analog
         .iter()
-        .filter(|track| track.allows_output(solo))
         .map(|track| track.channel)
         .chain(direct_pwm.iter().map(|cue| cue.channel))
         .collect::<std::collections::BTreeSet<_>>();
     for channel in pwm_channels {
+        // Prepared playback needs an explicit zero just like the live engine;
+        // omitting a muted/solo-excluded track leaves its old value latched.
+        if analog.iter().rev().find(|track| track.channel == channel)
+            .is_some_and(|track| !track.allows_output(solo)) {
+            actions.push(json!({"id":format!("pwm-{channel}-muted"),"time_ms":0,
+                "step":{"kind":"pwm","target":channel,"value":0}}));
+            continue;
+        }
         let track = analog
             .iter()
             .rev()
@@ -252,13 +259,16 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
     std::thread::spawn(move || {
         let mut previous_path = String::new();
         let mut seeking = false;
+        let source = crate::mpv::player::Player(mpv);
+        let mut external_seek_revision = 0;
         while lifecycle.strong_count() > 0 {
             let unattended = crate::platform::interop::allow_unattended_hardware_takeover();
             let mut restarted = false;
+            let external = crate::mpv::external::active();
             for _ in 0..128 {
                 match client.wait_event(0.0) {
-                    Some(Ok(libmpv2::events::Event::Seek)) => seeking = true,
-                    Some(Ok(libmpv2::events::Event::PlaybackRestart)) => {
+                    Some(Ok(libmpv2::events::Event::Seek)) if !external => seeking = true,
+                    Some(Ok(libmpv2::events::Event::PlaybackRestart)) if !external => {
                         restarted = seeking;
                         seeking = false;
                     }
@@ -266,23 +276,29 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
                     None => break,
                 }
             }
-            let path = client.get_property::<String>("path").unwrap_or_default();
-            let position = client
+            if external {
+                let revision = crate::mpv::external::seek_revision();
+                restarted |= revision != external_seek_revision;
+                external_seek_revision = revision;
+                seeking = source.get_property::<bool>("seeking").unwrap_or(false);
+            }
+            let path = source.get_property::<String>("path").unwrap_or_default();
+            let position = source
                 .get_property::<f64>("time-pos")
                 .ok()
                 .filter(|value| value.is_finite());
             let loaded = !path.is_empty() && position.is_some();
-            let paused = client.get_property::<bool>("pause").unwrap_or(true);
-            let eof = client.get_property::<bool>("eof-reached").unwrap_or(false);
+            let paused = source.get_property::<bool>("pause").unwrap_or(true);
+            let eof = source.get_property::<bool>("eof-reached").unwrap_or(false);
             let buffering = seeking
-                || client
+                || source
                     .get_property::<bool>("paused-for-cache")
                     .unwrap_or(false);
-            let rate = client
+            let rate = source
                 .get_property::<f64>("speed")
                 .unwrap_or(1.0)
                 .clamp(0.25, 4.0);
-            let duration = client
+            let duration = source
                 .get_property::<f64>("duration")
                 .ok()
                 .filter(|value| value.is_finite() && *value > 0.0);
@@ -384,7 +400,7 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
             }
             // Never hold shared state while waiting for an mpv command.
             if let Some(paused) = set_pause {
-                let _ = client.set_property("pause", paused);
+                let _ = source.set_property("pause", paused);
             }
             std::thread::sleep(Duration::from_millis(20));
         }
@@ -597,5 +613,19 @@ mod tests {
         assert_eq!(actions.last().unwrap()["time_ms"], 11_000);
         assert_eq!(actions.last().unwrap()["step"]["value"], 4095);
         assert!(actions.iter().any(|action| action["step"]["value"].as_u64().is_some_and(|value| value > 0 && value < 4095)));
+    }
+
+    #[test]
+    fn prepared_muted_pwm_track_explicitly_clears_latched_output() {
+        let mut track = AnalogTrack::new("House light", 3);
+        track.muted = true;
+        let mut timeline = Timeline::new();
+        timeline.analog_tracks.push(track.clone());
+        let plan = compile_plan(&timeline, &[], &[track]).unwrap();
+        let actions = plan["actions"].as_array().unwrap();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0]["time_ms"], 0);
+        assert_eq!(actions[0]["step"]["target"], 3);
+        assert_eq!(actions[0]["step"]["value"], 0);
     }
 }

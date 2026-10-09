@@ -19,8 +19,8 @@ import {
   LinkOutlined,
   LockOutlined,
   MoreOutlined,
-  PauseOutlined,
   PlusOutlined,
+  PoweroffOutlined,
   RadarChartOutlined,
   SaveOutlined,
   SettingOutlined,
@@ -33,17 +33,24 @@ import { Button, ConfigProvider, Divider, Dropdown, Empty, Input, InputNumber, m
 import type { PlayerState } from './RemoteControlTab';
 import { tr, UiLocale } from '../i18n';
 import { EffectIconPicker, effectGlyph as configuredEffectGlyph } from '../effectIcons';
+import { SoundEffectFields } from './SoundEffectFields';
+import { Typography } from 'antd';
+import { GroupSelect } from './GroupSelect';
 import { EffectRecorder } from './EffectRecorder';
 import recordingColors from '../../../assets/themes/recording-colors.json';
 import { mediaBasename } from '../mediaLabel';
 import { formatTimelineTime } from '../timelineTime';
 import { SeekThumbnailPreview } from './SeekThumbnailPreview';
+import { SeekbarMarkers, useSeekbar } from './seekbar';
 import { MediaSurface } from './MediaSurface';
+import { VolumeControl } from './VolumeControl';
+import { ElapsedTimeInput } from './ElapsedTimeInput';
 import type { MediaGesturePreferences } from './MediaSurface';
 import { defaultTimelineWheelPreferences, timelineWheelAction, timelineZoomAtPointer } from '../timelineWheel';
 import type { TimelineWheelPreferences } from '../timelineWheel';
 import { appendMelodySteps, sequenceDurationMs } from '../melodyCatalog';
 import { MediaTrackSelectors } from './MediaTrackSelectors';
+import { PlaybackButton } from './PlaybackButton';
 
 interface StudioTabProps {
   state: PlayerState;
@@ -245,7 +252,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
       steps: steps ?? [], properties: { ...(draft.program?.properties ?? {}), mode: engine ?? 'auto', ...(draft.color ? { color: draft.color } : {}) },
     } : JSON.parse(programText || '{}') };
   };
-  const [seekDraft, setSeekDraft] = useState<number | null>(null);
+  const seek = useSeekbar(state, sendCmd);
   const [workspaceManagerOpen, setWorkspaceManagerOpen] = useState(false);
   const [workspaceName, setWorkspaceName] = useState('');
   const [workspaceIcon, setWorkspaceIcon] = useState('window');
@@ -290,8 +297,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
   const mediaName = state.current_video
     ? mediaBasename(state.current_video, tr(locale, 'Untitled'))
     : tr(locale, 'No Media Playing');
-  const seekPercent = durationSeconds > 0 ? (currentSeconds / durationSeconds) * 100 : 0;
-  const activeSeek = seekDraft ?? seekPercent;
+  const activeSeek = seek.value;
   const directControls = useMemo(
     () => (state.hardware_details?.controls ?? []).filter((control) =>
       !control.hidden && (control.kind === 'relay' || control.kind === 'pwm' || control.kind === 'mosfet')),
@@ -542,7 +548,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
           try {
             if (!await sendCmd('controller_effect.save', effectPayload(effectDraft))) return;
             window.localStorage.removeItem('pealayer.effect-working-draft');
-            setEffectEditorOpen(false);
+            if (effectDraft.kind !== 'audio') setEffectEditorOpen(false);
           }
           catch { void message.error(tr(locale, 'Program must be valid JSON')); return; }
           finally { setSavingEffect(false); }
@@ -550,13 +556,17 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
       >
         {effectDraft && (
           <ConfigProvider componentDisabled={captureBusy}><div className="effect-editor-grid">
-            <label><span>{tr(locale, 'Type')}</span><Select value={effectDraft.kind} options={[{ value: 'sequence', label: tr(locale, 'Timed sequence') }, { value: 'strip-stream', label: tr(locale, 'Addressable lighting') }]} onChange={(kind) => setEffectDraft({ ...effectDraft, kind })} /></label>
-            <label><span>{tr(locale, 'ID')}</span><Input value={effectDraft.id} onChange={(event) => setEffectDraft({ ...effectDraft, id: event.target.value })} /></label>
+            <label><span>{tr(locale, 'Type')}</span><Select disabled={effectDraft.kind === 'audio'} value={effectDraft.kind} options={[{ value: 'sequence', label: tr(locale, 'Timed sequence') }, { value: 'strip-stream', label: tr(locale, 'Addressable lighting') }, ...(effectDraft.kind === 'audio' ? [{ value: 'audio', label: tr(locale, 'Audio effect') }] : [])]} onChange={(kind) => setEffectDraft({ ...effectDraft, kind })} /></label>
+            {effectDraft.kind !== 'audio' && <label><span>{tr(locale, 'ID')}</span><Input value={effectDraft.id} onChange={(event) => setEffectDraft({ ...effectDraft, id: event.target.value })} /></label>}
             <label><span>{tr(locale, 'Name')}</span><Input value={effectDraft.name} onChange={(event) => setEffectDraft({ ...effectDraft, name: event.target.value })} /></label>
             <label><span>{tr(locale, 'Icon')}</span><EffectIconPicker value={effectDraft.icon} searchPlaceholder={tr(locale, 'Search icons...')} presetsLabel={tr(locale, 'Presets')} emptyLabel={tr(locale, 'No matching icons')} onChange={(icon) => setEffectDraft({ ...effectDraft, icon })} /></label>
-            <label><span>{tr(locale, 'Category')}</span><Input value={effectDraft.category} onChange={(event) => setEffectDraft({ ...effectDraft, category: event.target.value })} /></label>
+            <label><span>{tr(locale, 'Group')}</span><GroupSelect value={effectDraft.category} groups={[...new Set(controllerEffects.map((effect) => effect.category))]} locale={locale} onChange={(category) => setEffectDraft({ ...effectDraft, category })} onCreate={() => {
+              let name = '';
+              Modal.confirm({ title: tr(locale, 'New group'), content: <Input maxLength={64} onChange={(event) => { name = event.target.value.trim(); }} />, onOk: () => { if (!name) return Promise.reject(); setEffectDraft({ ...effectDraft, category: name }); } });
+            }} /></label>
             <label className="effect-editor-grid__wide"><span>{tr(locale, 'Description')}</span><Input value={effectDraft.description} onChange={(event) => setEffectDraft({ ...effectDraft, description: event.target.value })} /></label>
-            <label><span>{tr(locale, 'Duration (ms)')}</span><InputNumber min={1} value={effectDraft.duration_ms} onChange={(duration_ms) => setEffectDraft({ ...effectDraft, duration_ms: duration_ms ?? 1 })} /></label>
+            <label><span>{tr(locale, 'Duration (ms)')}</span>{effectDraft.kind === 'audio' ? <Typography.Text type="secondary">{controllerEffects.find((effect) => effect.id === effectDraft.id)?.duration_display || effectDraft.duration_ms}</Typography.Text> : <InputNumber min={1} value={effectDraft.duration_ms} onChange={(duration_ms) => setEffectDraft({ ...effectDraft, duration_ms: duration_ms ?? 1 })} />}</label>
+            {effectDraft.kind === 'audio' && <SoundEffectFields program={JSON.parse(effectDraft.programText || '{}')} onChange={(patch) => setEffectDraft({ ...effectDraft, programText: JSON.stringify({ ...JSON.parse(effectDraft.programText || '{}'), ...patch }) })} state={state} reference={effectDraft.reference} apiBaseUrl={apiBaseUrl} locale={locale} sendCmd={sendCmd} />}
             {effectDraft.kind === 'strip-stream' && <label><span>{tr(locale, 'Frames per second')}</span><InputNumber min={1} max={120} value={effectDraft.default_fps} onChange={(default_fps) => setEffectDraft({ ...effectDraft, default_fps: default_fps ?? 20 })} /></label>}
             {effectDraft.kind === 'strip-stream' && <label><span>{tr(locale, 'Pixels')}</span><InputNumber min={1} value={effectDraft.default_pixels} onChange={(default_pixels) => setEffectDraft({ ...effectDraft, default_pixels: default_pixels ?? 100 })} /></label>}
             {effectDraft.kind === 'sequence' && <label><span>{tr(locale, 'Color')}</span><Select disabled={captureBusy} value={effectDraft.color} onChange={(color) => setEffectDraft({ ...effectDraft, color })} options={recordingColors.map((color) => ({ value: color.id, label: <span className="recording-color-option"><span className="recording-color-swatch" style={{ backgroundColor: color.hex }} />{tr(locale, color.label)}</span> }))} /></label>}
@@ -761,15 +771,19 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
           <Tooltip title={`${tr(locale, 'Seek backward')} ${quickSeekSeconds}s`}>
             <Button icon={<FastBackwardOutlined />} onClick={() => sendCmd('seek', { seconds: -quickSeekSeconds })} />
           </Tooltip>
-          <Button
+          <PlaybackButton
             className="studio-transport__play"
-            icon={state.playing ? <PauseOutlined /> : <CaretRightFilled />}
+            playing={state.playing}
+            loaded={Boolean(state.current_video)}
+            locale={locale}
             onClick={() => sendCmd('toggle_pause')}
           />
           <Tooltip title={`${tr(locale, 'Seek forward')} ${quickSeekSeconds}s`}>
             <Button icon={<FastForwardOutlined />} onClick={() => sendCmd('seek', { seconds: quickSeekSeconds })} />
           </Tooltip>
-          <span className="studio-timecode">{formatTime(currentSeconds)}</span>
+          <ElapsedTimeInput className="studio-timecode" seconds={currentSeconds}
+            disabled={!state.current_video || !state.seekable || durationSeconds <= 0}
+            mediaIdentity={state.current_video} locale={locale} onCommit={seek.commitSeconds} />
           <SeekThumbnailPreview
             enabled={seekbarHoverThumbnails && Boolean(state.seekable) && durationSeconds > 0}
             duration={durationSeconds}
@@ -777,41 +791,24 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
             apiBaseUrl={apiBaseUrl}
             unavailableLabel={tr(locale, 'Preview unavailable')}
             className="studio-scrubber"
+            chapters={state.chapters}
+            keyframes={state.timeline_keyframes}
           >
             <Slider
               min={0}
               max={100}
               value={activeSeek}
               disabled={!state.seekable || durationSeconds <= 0}
-              onChange={(value) => setSeekDraft(value)}
-              onChangeComplete={(value) => {
-                setSeekDraft(null);
-                sendCmd('seek_abs', { percentage: value });
-              }}
+              onChange={seek.change}
+              onChangeComplete={seek.commit}
               tooltip={seekbarHoverThumbnails ? { open: false } : { formatter: (value) => formatTime(((value ?? 0) / 100) * durationSeconds) }}
             />
-            {durationSeconds > 0 && chapters
-              .filter((chapter) => chapter.time_seconds >= 0 && chapter.time_seconds <= durationSeconds)
-              .map((chapter) => (
-                <span
-                  key={chapter.index}
-                  aria-hidden="true"
-                  className={`studio-scrubber__chapter${state.current_chapter_index === chapter.index ? ' is-active' : ''}`}
-                  style={{ left: `${(chapter.time_seconds / durationSeconds) * 100}%` }}
-                />
-              ))}
+            <SeekbarMarkers state={state} seconds={activeSeek / 100 * durationSeconds} onChapter={seek.commitSeconds} />
           </SeekThumbnailPreview>
           <span className="studio-timecode studio-timecode--muted">
             {state.live ? tr(locale, 'LIVE') : formatTime(durationSeconds)}
           </span>
-          <SoundOutlined className="volume-icon" />
-          <Slider
-            className="studio-volume"
-            min={0}
-            max={130}
-            value={state.muted ? 0 : (state.volume ?? 0)}
-            onChange={(value) => sendCmd('set_volume', { value })}
-          />
+          <VolumeControl className="studio-volume" state={state} sendCmd={sendCmd} locale={locale} />
         </div>
         <MediaTrackSelectors state={state} sendCmd={sendCmd} locale={locale} compact />
       </section>
@@ -952,6 +949,17 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                 >
                   <span>{trackIcon}</span>
                   <span className="timeline-row__identity"><strong>{track.name}</strong>{track.detail && <small title={track.detail}>{track.detail}</small>}</span>
+                  {([
+                    { key: 'muted', supported: track.supports_mute, active: track.muted, title: track.muted ? 'Unmute' : 'Mute', icon: <StopOutlined /> },
+                    { key: 'soloed', supported: track.supports_solo, active: track.soloed, title: track.soloed ? 'Unsolo' : 'Solo', icon: <AimOutlined /> },
+                    { key: 'locked', supported: track.supports_lock, active: track.locked, title: track.locked ? 'Unlock' : 'Lock', icon: track.locked ? <UnlockOutlined /> : <LockOutlined /> },
+                  ] as const).filter((action) => action.supported).map((action) => <Tooltip key={action.key} title={tr(locale, action.title)}>
+                    <button type="button" aria-label={tr(locale, action.title)} aria-pressed={action.active}
+                      className={`timeline-track-state is-${action.key} ${action.active ? 'is-active' : ''}`}
+                      onClick={(event) => { event.stopPropagation(); void updateTrack({ [action.key]: !action.active }); }}>
+                      {action.icon}
+                    </button>
+                  </Tooltip>)}
                   {directControl && (
                     <Dropdown
                       trigger={['click']}
@@ -1084,6 +1092,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
         </div>
       </section>
       <Modal
+        className="cue-inspector-modal"
         open={directCueControl !== null}
         title={tr(locale, editingDirectCue ? 'Manage cue' : 'Add hardware cue')}
         okText={tr(locale, editingDirectCue ? 'Save' : 'Add cue')}
@@ -1096,25 +1105,51 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
             control_key: directCueControl,
             value_basis_points: Math.round(directCuePercent * 100),
             start_time_ms: Math.max(0, Math.round(directCueStart * 1000)),
-            duration_ms: Math.max(100, Math.round(directCueDuration * 1000)),
+            duration_ms: Math.max(50, Math.round(directCueDuration * 1000)),
             behavior: directCueBehavior,
             end_value_basis_points: Math.round(directCueEndPercent * 100),
           });
           if (!saved) return;
           if (editingDirectCue && !await sendCmd('pealayer.timeline.effect.update', {
             instance_id: editingDirectCue, start_time_ms: Math.round(directCueStart * 1000),
-            duration_ms: Math.max(100, Math.round(directCueDuration * 1000)),
+            duration_ms: Math.max(50, Math.round(directCueDuration * 1000)),
           })) return;
           setDirectCueControl(null);
         }}
       >
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+        <div className="cue-inspector">
+        <section className="cue-inspector__section cue-inspector__identity">
+          <span className="cue-inspector__icon" aria-hidden="true">{configuredEffectGlyph(state.hardware_details?.controls.find(control => control.key === directCueControl)?.icon ?? (directCueControl?.startsWith('relay.') ? 'plug' : 'lightbulb'))}</span>
+          <div>
+            <strong>{cues.find(cue => cue.id === editingDirectCue)?.name ?? state.hardware_details?.controls.find(control => control.key === directCueControl)?.name ?? directCueControl}</strong>
+            <div className="cue-inspector__detail">{directCueControl}</div>
+          </div>
+        </section>
+        <section className="cue-inspector__section">
+        <h3><ClockCircleOutlined /> {tr(locale, 'Timing')}</h3>
+        <div className="cue-inspector__timing">
+          <label>{tr(locale, 'Starts')}
+            <InputNumber aria-label={tr(locale, 'Start time')} addonAfter="s" min={0} max={Math.max(durationSeconds, directCueStart, 60)} step={.001} value={directCueStart} onChange={(value) => setDirectCueStart(Number(value ?? 0))} />
+          </label>
+          <label>{tr(locale, 'Duration')}
+            {directCueBehavior === 'set-keep' ? <span className="cue-inspector__read-only">{tr(locale, 'Until next command')}</span> :
+              <InputNumber aria-label={tr(locale, 'Duration')} addonAfter="s" min={.05} max={3600} step={.05} value={directCueDuration} onChange={(value) => setDirectCueDuration(Number(value ?? 1))} />}
+          </label>
+        </div>
+        {directCueBehavior !== 'set-keep' && <div className="cue-inspector__detail">{tr(locale, 'Ends at')} {formatTime(directCueStart + directCueDuration)}</div>}
+        </section>
+        <section className="cue-inspector__section">
+        <h3>{configuredEffectGlyph(directCueControl?.startsWith('relay.') ? 'plug' : 'lightbulb')} {tr(locale, 'Direct channel value')}</h3>
+        <label className="cue-inspector__field">{tr(locale, 'Behavior')}
         <Select aria-label={tr(locale, 'Cue behavior')} style={{ width: '100%' }} value={directCueBehavior} onChange={setDirectCueBehavior}
           options={[{ value: 'set-keep', label: tr(locale, 'Set and keep') }, { value: 'hold', label: tr(locale, 'Timed hold') },
             ...(directCueControl?.startsWith('pwm.') ? [{ value: 'ramp', label: tr(locale, 'PWM ramp') }] : [])]} />
-        <InputNumber aria-label={tr(locale, 'Start time')} addonBefore={tr(locale, 'Starts')} addonAfter="s" min={0} max={86400} step={.001} value={directCueStart} onChange={(value) => setDirectCueStart(Number(value ?? 0))} />
-        {directCueControl?.startsWith('relay.') ? <Select aria-label={tr(locale, 'State')} value={directCuePercent}
-          onChange={setDirectCuePercent} options={[{ value: 100, label: tr(locale, 'On') }, { value: 0, label: tr(locale, 'Off') }]} /> :
+        </label>
+        <label className="cue-inspector__field">{tr(locale, directCueBehavior === 'ramp' ? 'Start value' : 'Value')}
+        {directCueControl?.startsWith('relay.') ? <div className="cue-inspector__states" role="group" aria-label={tr(locale, 'State')}>
+          <Button icon={<PoweroffOutlined />} aria-pressed={directCuePercent >= 50} className={directCuePercent >= 50 ? 'cue-inspector__state--on' : ''} onClick={() => setDirectCuePercent(100)}>{tr(locale, 'On')}</Button>
+          <Button icon={<StopOutlined />} aria-pressed={directCuePercent < 50} className={directCuePercent < 50 ? 'cue-inspector__state--off' : ''} onClick={() => setDirectCuePercent(0)}>{tr(locale, 'Off')}</Button>
+        </div> :
         <Space.Compact block>
           <Slider
             style={{ flex: 1 }}
@@ -1135,13 +1170,16 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
           />
         </Space.Compact>
         }
+        </label>
         {directCueBehavior !== 'set-keep' && <>
-          <InputNumber aria-label={tr(locale, 'Duration')} addonBefore={tr(locale, 'Duration')} addonAfter="s" min={.1} max={86400} step={.1} value={directCueDuration} onChange={(value) => setDirectCueDuration(Number(value ?? 1))} />
+          <label className="cue-inspector__field">{tr(locale, directCueBehavior === 'ramp' ? 'Ramp to' : 'On exit')}
           {directCueControl?.startsWith('relay.') ? <Select aria-label={tr(locale, 'On exit')} value={directCueEndPercent}
             onChange={setDirectCueEndPercent} options={[{ value: 0, label: tr(locale, 'Exit: Off') }, { value: 100, label: tr(locale, 'Exit: On') }]} /> :
-            <InputNumber aria-label={tr(locale, 'End value')} addonBefore={tr(locale, directCueBehavior === 'ramp' ? 'Ramp to' : 'On exit')} addonAfter="%" min={0} max={100} value={directCueEndPercent} onChange={(value) => setDirectCueEndPercent(Number(value ?? 0))} />}
+            <InputNumber aria-label={tr(locale, 'End value')} addonAfter="%" min={0} max={100} step={.01} value={directCueEndPercent} onChange={(value) => setDirectCueEndPercent(Number(value ?? 0))} />}
+          </label>
         </>}
-        </Space>
+        </section>
+        </div>
       </Modal>
     </div>
   );

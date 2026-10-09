@@ -59,7 +59,7 @@ pub fn register_private_font(_path: &std::path::Path) -> Result<u32, String> {
 #[cfg(target_os = "windows")]
 pub fn configure_config_directory(
     config_path: &std::path::Path,
-    app_name: &str,
+    config: &crate::config::AppConfig,
 ) -> Result<(), String> {
     use windows::Win32::Storage::FileSystem::{
         FILE_ATTRIBUTE_HIDDEN, FILE_ATTRIBUTE_READONLY, FILE_ATTRIBUTE_SYSTEM, SetFileAttributesW,
@@ -78,13 +78,18 @@ pub fn configure_config_directory(
             directory.display()
         )
     })?;
-    let executable = std::env::current_exe()
-        .map_err(|error| format!("resolve application icon executable: {error}"))?;
+    // A single native ICO derivative, written only when branding actually
+    // changes. Do not rewrite/sign the running executable or cache one copy
+    // per playback state. Explorer needs a persistent icon location.
+    let icon_path = directory.join("application.ico");
+    let icon_bytes = crate::branding::native_icon_bytes(config, crate::branding::PlaybackIconState::Stopped)?;
+    let icon_changed = write_if_changed(&icon_path, &icon_bytes)?;
+    let app_name = crate::config::resolved_app_name(config);
     let safe_name = app_name.trim().replace(['\r', '\n'], " ");
     let desktop_ini = directory.join("desktop.ini");
     let contents = format!(
         "[.ShellClassInfo]\r\nIconResource=\"{}\",0\r\nInfoTip={} configuration and workspace settings\r\nConfirmFileOp=0\r\n",
-        executable.display(),
+        icon_path.display(),
         if safe_name.is_empty() {
             "Pealayer"
         } else {
@@ -93,8 +98,7 @@ pub fn configure_config_directory(
     );
     let mut encoded = vec![0xff, 0xfe];
     encoded.extend(contents.encode_utf16().flat_map(u16::to_le_bytes));
-    std::fs::write(&desktop_ini, encoded)
-        .map_err(|error| format!("write {}: {error}", desktop_ini.display()))?;
+    let metadata_changed = write_if_changed(&desktop_ini, &encoded)?;
 
     let desktop_ini_wide = wide_null_path(&desktop_ini);
     unsafe {
@@ -122,13 +126,30 @@ pub fn configure_config_directory(
             directory.display()
         )
     })?;
+    if icon_changed || metadata_changed {
+        use windows::Win32::UI::Shell::{SHChangeNotify, SHCNE_UPDATEITEM, SHCNF_PATHW};
+        unsafe { SHChangeNotify(SHCNE_UPDATEITEM, SHCNF_PATHW, Some(directory_wide.as_ptr().cast()), None); }
+    }
     Ok(())
+}
+
+#[cfg(target_os = "windows")]
+fn write_if_changed(path: &std::path::Path, bytes: &[u8]) -> Result<bool, String> {
+    use std::io::Write;
+    if std::fs::read(path).ok().as_deref() == Some(bytes) { return Ok(false); }
+    // OPEN_EXISTING, not CREATE_ALWAYS, preserves hidden/system file attributes.
+    let result = if path.exists() {
+        std::fs::OpenOptions::new().write(true).truncate(true).open(path)
+            .and_then(|mut file| file.write_all(bytes))
+    } else { std::fs::write(path, bytes) };
+    result.map_err(|error| format!("write {}: {error}", path.display()))?;
+    Ok(true)
 }
 
 #[cfg(not(target_os = "windows"))]
 pub fn configure_config_directory(
     _config_path: &std::path::Path,
-    _app_name: &str,
+    _config: &crate::config::AppConfig,
 ) -> Result<(), String> {
     Ok(())
 }
@@ -2461,7 +2482,9 @@ pub fn show_system_notification(
 #[cfg(target_os = "windows")]
 pub fn update_system_tray_icon(hwnd_raw: isize, tip: &str) -> Result<(), String> {
     use windows::Win32::Foundation::HWND;
-    use windows::Win32::UI::Shell::{NIF_TIP, NIM_MODIFY, NOTIFYICONDATAW, Shell_NotifyIconW};
+    use windows::Win32::UI::Shell::{NIF_ICON, NIF_TIP, NIM_MODIFY, NOTIFYICONDATAW, Shell_NotifyIconW};
+    use windows::Win32::UI::WindowsAndMessaging::{HICON, ICON_SMALL2, SendMessageW, WM_GETICON};
+    use windows::Win32::Foundation::{LPARAM, WPARAM};
 
     if hwnd_raw == 0 {
         return Err("invalid window handle (HWND is 0)".to_string());
@@ -2469,11 +2492,13 @@ pub fn update_system_tray_icon(hwnd_raw: isize, tip: &str) -> Result<(), String>
     let hwnd = HWND(hwnd_raw as *mut _);
 
     unsafe {
+        let icon = SendMessageW(hwnd, WM_GETICON, Some(WPARAM(ICON_SMALL2 as usize)), Some(LPARAM(0))).0;
         let mut nid = NOTIFYICONDATAW {
             cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
             hWnd: hwnd,
             uID: 1,
-            uFlags: NIF_TIP,
+            uFlags: if icon == 0 { NIF_TIP } else { NIF_TIP | NIF_ICON },
+            hIcon: HICON(icon as *mut _),
             szTip: str_to_u16_buf_128(tip),
             ..Default::default()
         };
