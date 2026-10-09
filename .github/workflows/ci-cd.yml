@@ -116,6 +116,17 @@ jobs:
         with:
           name: web-ui-${{ github.sha }}
           path: web_ui/dist
+      - name: "🔏 Prove generated Web artifact is the only tree difference"
+        shell: bash
+        run: |
+          set -euo pipefail
+          changed="$(git status --porcelain --untracked-files=no -- . ':(exclude)web_ui/dist/**')"
+          if [[ -n "$changed" ]]; then
+            printf '%s\n' "$changed"
+            echo 'Tracked source outside web_ui/dist changed before compilation.' >&2
+            exit 1
+          fi
+          echo 'PEALAYER_CI_VERIFIED_SOURCE_CLEAN=true' >> "$GITHUB_ENV"
       - name: "🦀 Install stable Rust toolchain"
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:

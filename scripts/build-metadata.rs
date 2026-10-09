@@ -6,6 +6,8 @@ pub fn emit_build_metadata() {
         "SOURCE_DATE_EPOCH",
         "GITHUB_SHA",
         "GITHUB_REF_NAME",
+        "GITHUB_ACTIONS",
+        "PEALAYER_CI_VERIFIED_SOURCE_CLEAN",
     ] {
         println!("cargo:rerun-if-env-changed={name}");
     }
@@ -28,12 +30,19 @@ pub fn emit_build_metadata() {
         .filter(|value| !value.trim().is_empty())
         .or_else(|| git_output(&["rev-parse", "--abbrev-ref", "HEAD"]))
         .unwrap_or_else(|| "unknown".to_string());
-    let dirty = std::process::Command::new("git")
-        .args(["status", "--porcelain", "--untracked-files=no"])
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .is_some_and(|output| !output.stdout.is_empty());
+    // Platform jobs replace only the tracked generated Web bundle with the
+    // artifact produced and tested by this same workflow. The workflow proves
+    // that no source outside that bundle changed before setting this override;
+    // ordinary/local builds must still derive dirtiness from Git directly.
+    let ci_verified_clean = std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true")
+        && std::env::var("PEALAYER_CI_VERIFIED_SOURCE_CLEAN").as_deref() == Ok("true");
+    let dirty = !ci_verified_clean
+        && std::process::Command::new("git")
+            .args(["status", "--porcelain", "--untracked-files=no"])
+            .output()
+            .ok()
+            .filter(|output| output.status.success())
+            .is_some_and(|output| !output.stdout.is_empty());
     let rustc =
         std::process::Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()))
             .arg("--version")
