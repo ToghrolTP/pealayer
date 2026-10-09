@@ -7082,8 +7082,16 @@ mod timeline_row_tests {
                 action: TimelineCueDraftAction::Relay { enabled: true }, error: None,
             }));
             let mut clicked = false;
+            // Area fades its painter on opening. Advance a deterministic clock
+            // beyond that animation before asserting the final backdrop color.
+            let frame_time = std::cell::Cell::new(0.0);
             let mut render = |events| context.run_ui(egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 800.0))),
+                time: Some({
+                    let time = frame_time.get();
+                    frame_time.set(time + 1.0);
+                    time
+                }),
                 events, ..Default::default()
             }, |ui| {
                 let layer = crate::ui::dialog::workspace_overlay_layer(ui, "timeline-ruler-toolbar-layer");
