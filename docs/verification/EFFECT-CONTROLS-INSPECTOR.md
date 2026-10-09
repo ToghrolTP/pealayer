@@ -37,3 +37,34 @@ checkpoint below when verified, not inferred from source.
 This is not a claim that every Web sequence/controller-effect editor is now
 equivalent to the native dock inspector. This pass refines the existing direct
 cue editor; remaining full-editor parity stays tracked in #63.
+
+## Installed checkpoint — 9 October 2026
+
+Runtime source: `5db40781b9be238d3fdd5f5f5c4650f7d0c9acaa`, clean.
+PR: [#100](https://github.com/ToghrolTP/pealayer/pull/100), based on main after
+the branding PR and its test-constructor repair were integrated without rebase.
+
+- TypeScript, production bundle and PWA generation passed. Final PWA identity:
+  `8ff4f6138520ee78`, 39 precached resources. Existing chunk-size warning remains.
+- Locked native release builds on David took 1m 38s and 1m 22s; the second includes
+  the exact 50 ms Web save correction. Fourteen existing compiler warnings remain.
+- Seven Windows quick-action resources verified. Packed executable integrity
+  passed; both independent David/Cafe staged runtime smoke checks exited 0.
+- Executable: 11,145,728 bytes; SHA-256
+  `c48aae7de89214e4dba2cc51c891cb69e9cce4542bd4f21880d95e01e3b128aa`.
+- Cafe then David installed through destination-runtime-validated API uploads
+  and graceful updater restarts. Their live manifests independently report the
+  exact clean runtime source and executable above, retaining their different DLLs.
+- Cafe's interactive-session process responds, controller service is Running,
+  hardware is connected, and paused media position plus all three cues persisted.
+  David responds and remains a connected cache-only Cafe consumer, no local
+  hardware scheduler, matching paused position and zero reported preview drift.
+  No playback or physical output activation was requested for this UI pass.
+- Erfan installed the same executable atomically while Pealayer was stopped,
+  retained its own DLL, verified a rollback, and left KMPlayer running. Launch and
+  playback acceptance there remain deferred under the user's explicit rule.
+- Unit regressions remain unexecuted as requested; no slow CI was awaited.
+- Native live visual acceptance and phone/tablet/desktop interactive visual
+  checks remain pending. The read-only capture refused to capture a non-foreground
+  window instead of changing focus or operating the user's desktop. The user was
+  asked to bring an existing cue's Effect Controls into view for that check.
