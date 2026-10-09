@@ -626,6 +626,7 @@ pub struct PealayerApp {
     pub(crate) audio_tracks: Vec<AudioTrack>,
     pub(crate) media_tracks: Vec<MediaTrackInfo>,
     pub(crate) media_file_info: crate::media_info::MediaFileInfo,
+    pub(crate) cached_media_chapters: Vec<crate::media_info::MediaChapter>,
     pub(crate) media_track_properties: Option<MediaTrackKey>,
     pub(crate) selected_timeline_track: Option<String>,
 
@@ -1452,10 +1453,10 @@ impl eframe::App for PealayerApp {
                     })
                     .collect(),
                 chapters: chapters
-                    .into_iter()
+                    .iter()
                     .map(|chapter| crate::platform::interop::WebMediaChapter {
                         index: chapter.index,
-                        title: chapter.title,
+                        title: chapter.title.clone(),
                         time_seconds: chapter.time_seconds,
                     })
                     .collect(),
@@ -4867,7 +4868,7 @@ impl PealayerApp {
                     self.media_fps = 0.0;
                     self.is_seekable = false;
                     self.media_metadata_loaded = false;
-                    self.media_file_info = crate::media_info::MediaFileInfo::default();
+                    self.set_media_file_info(crate::media_info::MediaFileInfo::default());
                     self.cache_duration = None;
                     self.cache_buffering_percent = None;
                     self.video_aspect_ratio = 16.0 / 9.0;
@@ -5567,57 +5568,65 @@ impl PealayerApp {
         ));
     }
 
-    pub(crate) fn media_chapters(&self) -> Vec<crate::media_info::MediaChapter> {
-        crate::media_info::chapters(&self.media_file_info)
+    pub(crate) fn set_media_file_info(&mut self, info: crate::media_info::MediaFileInfo) {
+        self.cached_media_chapters = crate::media_info::chapters(&info);
+        self.media_file_info = info;
     }
 
-    pub(crate) fn active_media_chapter(&self) -> Option<crate::media_info::MediaChapter> {
+    pub(crate) fn media_chapters(&self) -> &[crate::media_info::MediaChapter] {
+        &self.cached_media_chapters
+    }
+
+    pub(crate) fn active_media_chapter(&self) -> Option<&crate::media_info::MediaChapter> {
         let position = self.seek_pos.unwrap_or(self.playback_time);
-        self.media_chapters()
-            .into_iter()
+        self.cached_media_chapters
+            .iter()
             .rev()
             .find(|chapter| chapter.time_seconds <= position + 0.001)
     }
 
     pub(crate) fn jump_to_media_chapter(&mut self, index: i64) {
-        let Some(chapter) = self
-            .media_chapters()
-            .into_iter()
+        let Some((time_seconds, title)) = self
+            .cached_media_chapters
+            .iter()
             .find(|chapter| chapter.index == index)
+            .map(|chapter| (chapter.time_seconds, chapter.title.clone()))
         else {
             return;
         };
-        self.seek_absolute(chapter.time_seconds);
-        self.set_osd(format!("{}: {}", self.tr("Chapter"), chapter.title));
+        self.seek_absolute(time_seconds);
+        self.set_osd(format!("{}: {}", self.tr("Chapter"), title));
     }
 
     pub(crate) fn next_media_chapter(&mut self) {
         let position = self.seek_pos.unwrap_or(self.playback_time);
-        if let Some(chapter) = self
-            .media_chapters()
-            .into_iter()
+        if let Some(index) = self
+            .cached_media_chapters
+            .iter()
             .find(|chapter| chapter.time_seconds > position + 0.05)
+            .map(|chapter| chapter.index)
         {
-            self.jump_to_media_chapter(chapter.index);
+            self.jump_to_media_chapter(index);
         }
     }
 
     pub(crate) fn previous_media_chapter(&mut self) {
         let position = self.seek_pos.unwrap_or(self.playback_time);
-        let chapters = self.media_chapters();
-        let Some(active_position) = chapters
+        let Some(active_position) = self
+            .cached_media_chapters
             .iter()
             .rposition(|chapter| chapter.time_seconds <= position + 0.001)
         else {
             return;
         };
-        let active = &chapters[active_position];
+        let active = &self.cached_media_chapters[active_position];
         let target_position = if position - active.time_seconds > 3.0 {
             active_position
         } else {
             active_position.saturating_sub(1)
         };
-        self.jump_to_media_chapter(chapters[target_position].index);
+        let target_index = self.cached_media_chapters[target_position].index;
+        self.jump_to_media_chapter(target_index);
     }
 
     /// Advances or reverses playback by `steps` frames on the timeline.
@@ -5974,7 +5983,7 @@ impl PealayerApp {
             })
             .collect();
         self.media_tracks = media_tracks;
-        self.media_file_info = crate::media_info::capture(&self.mpv);
+        self.set_media_file_info(crate::media_info::capture(&self.mpv));
         if self.media_track_properties.is_some_and(|selection| {
             !self
                 .media_tracks
@@ -6335,7 +6344,7 @@ impl PealayerApp {
         self.duration = 0.0;
         self.is_seekable = false;
         self.media_metadata_loaded = false;
-        self.media_file_info = crate::media_info::MediaFileInfo::default();
+        self.set_media_file_info(crate::media_info::MediaFileInfo::default());
         self.cache_duration = None;
         self.cache_buffering_percent = None;
         self.video_aspect_ratio = 16.0 / 9.0;
@@ -7188,7 +7197,7 @@ impl PealayerApp {
         self.video_tracks=view.tracks.iter().filter(|track|track.kind==MediaTrackType::Video).map(|track|VideoTrack{id:track.id,title:track.title.clone(),lang:track.language.clone()}).collect();
         self.audio_tracks=view.tracks.iter().filter(|track|track.kind==MediaTrackType::Audio).map(|track|AudioTrack{id:track.id,title:track.title.clone(),lang:track.language.clone()}).collect();
         self.sub_tracks=view.tracks.iter().filter(|track|track.kind==MediaTrackType::Subtitle).map(|track|SubtitleTrack{id:track.id,title:track.title.clone(),lang:track.language.clone()}).collect();
-        self.media_tracks=view.tracks;self.media_file_info=view.file;
+        self.media_tracks=view.tracks;self.set_media_file_info(view.file);
         self.current_vid=view.vid;self.current_aid=view.aid;self.current_sid=view.sid;
     }
 
@@ -8530,6 +8539,7 @@ impl Default for PealayerApp {
             audio_tracks: Vec::new(),
             media_tracks: Vec::new(),
             media_file_info: crate::media_info::MediaFileInfo::default(),
+            cached_media_chapters: Vec::new(),
             media_track_properties: None,
             selected_timeline_track: None,
             show_four_d_editor: true,
@@ -10203,5 +10213,42 @@ pub(crate) mod tests {
             offset, 0.0,
             "video-timing-offset must be 0.0 to prevent libmpv from sleeping the UI render thread"
         );
+    }
+
+    #[test]
+    fn cached_media_chapters_is_updated_on_media_file_info_set_and_borrows_without_allocation() {
+        let mut app = PealayerApp::default();
+        assert!(app.media_chapters().is_empty());
+        assert!(app.active_media_chapter().is_none());
+
+        let mut entry1 = crate::media_info::MediaCollectionEntry::default();
+        entry1.properties.insert("title".to_string(), "Intro".to_string());
+        entry1.properties.insert("time".to_string(), "0.0".to_string());
+
+        let mut entry2 = crate::media_info::MediaCollectionEntry::default();
+        entry2.index = 1;
+        entry2.properties.insert("title".to_string(), "Main Scene".to_string());
+        entry2.properties.insert("time".to_string(), "120.5".to_string());
+
+        let file_info = crate::media_info::MediaFileInfo {
+            loaded: true,
+            chapters: vec![entry1, entry2],
+            ..Default::default()
+        };
+
+        app.set_media_file_info(file_info);
+        assert_eq!(app.media_chapters().len(), 2);
+        assert_eq!(app.media_chapters()[0].title, "Intro");
+        assert_eq!(app.media_chapters()[1].title, "Main Scene");
+
+        app.playback_time = 0.0;
+        assert_eq!(app.active_media_chapter().map(|c| c.index), Some(0));
+
+        app.playback_time = 130.0;
+        assert_eq!(app.active_media_chapter().map(|c| c.index), Some(1));
+
+        app.set_media_file_info(crate::media_info::MediaFileInfo::default());
+        assert!(app.media_chapters().is_empty());
+        assert!(app.active_media_chapter().is_none());
     }
 }

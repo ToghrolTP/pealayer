@@ -11236,7 +11236,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         );
                                     }
                                     crate::ui::controls::paint_seekbar_chapters(
-                                        ui, &response, self.app.duration, &self.app.media_chapters(),
+                                        ui, &response, self.app.duration, self.app.media_chapters(),
                                         self.app.active_media_chapter().map(|chapter| chapter.index),
                                     );
                                     let show_seek_preview =
@@ -15005,10 +15005,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             });
                                         }
 
-                                        let media_chapters = self.app.media_chapters();
+                                        let mut clicked_chapter = None;
                                         let active_chapter_index =
                                             self.app.active_media_chapter().map(|chapter| chapter.index);
-                                        for chapter in &media_chapters {
+                                        for chapter in self.app.media_chapters() {
                                             let marker_x =
                                                 rect.min.x + chapter.time_seconds as f32 * zoom;
                                             if marker_x < rect.min.x || marker_x > rect.max.x || marker_x < viewport_clip.min.x - 20.0 || marker_x > viewport_clip.max.x + 20.0 {
@@ -15034,7 +15034,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 ));
                                             if chapter_response.clicked() {
                                                 clicked_any_keyframe = true;
-                                                self.app.jump_to_media_chapter(chapter.index);
+                                                clicked_chapter = Some(chapter.index);
                                             }
                                             chapter_response.context_menu(|ui| {
                                                 ui.label(
@@ -15051,11 +15051,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     ))
                                                     .clicked()
                                                 {
-                                                    self.app
-                                                        .jump_to_media_chapter(chapter.index);
+                                                    clicked_chapter = Some(chapter.index);
                                                     ui.close();
                                                 }
                                             });
+                                        }
+                                        if let Some(index) = clicked_chapter {
+                                            self.app.jump_to_media_chapter(index);
                                         }
 
                                         if let Some(pos) = pointer_pos {
@@ -16520,7 +16522,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         // distinct from editable project keyframes. Render them
                                         // as subtle amber flags spanning the timeline so chapter
                                         // boundaries remain useful without looking editable.
-                                        for chapter in &media_chapters {
+                                        for chapter in self.app.media_chapters() {
                                             let marker_x =
                                                 rect.min.x + chapter.time_seconds as f32 * zoom;
                                             if marker_x < rect.min.x || marker_x > rect.max.x || marker_x < viewport_clip.min.x - 20.0 || marker_x > viewport_clip.max.x + 20.0 {

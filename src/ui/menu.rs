@@ -396,12 +396,17 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     }
                 });
 
+                enum ChapterAction {
+                    Previous,
+                    Next,
+                    Jump(i64),
+                }
+
                 top_menu_button(ui, app.tr("Chapters"), |ui| {
-                    let chapters = app.media_chapters();
-                    let current = app.active_media_chapter().map(|chapter| chapter.index);
-                    if chapters.is_empty() {
+                    if app.media_chapters().is_empty() {
                         ui.add_enabled(false, egui::Label::new(app.tr("No chapters")));
                     } else {
+                        let mut action = None;
                         ui.horizontal(|ui| {
                             if ui
                                 .button(format!(
@@ -411,7 +416,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 ))
                                 .clicked()
                             {
-                                app.previous_media_chapter();
+                                action = Some(ChapterAction::Previous);
                                 ui.close();
                             }
                             if ui
@@ -422,12 +427,13 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 ))
                                 .clicked()
                             {
-                                app.next_media_chapter();
+                                action = Some(ChapterAction::Next);
                                 ui.close();
                             }
                         });
                         ui.separator();
-                        for chapter in chapters {
+                        let current = app.active_media_chapter().map(|chapter| chapter.index);
+                        for chapter in app.media_chapters() {
                             let label = format!(
                                 "{}  {}",
                                 crate::duration::format_time_value_ms(
@@ -439,9 +445,15 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 .selectable_label(current == Some(chapter.index), label)
                                 .clicked()
                             {
-                                app.jump_to_media_chapter(chapter.index);
+                                action = Some(ChapterAction::Jump(chapter.index));
                                 ui.close();
                             }
+                        }
+                        match action {
+                            Some(ChapterAction::Previous) => app.previous_media_chapter(),
+                            Some(ChapterAction::Next) => app.next_media_chapter(),
+                            Some(ChapterAction::Jump(index)) => app.jump_to_media_chapter(index),
+                            None => {}
                         }
                     }
                 });

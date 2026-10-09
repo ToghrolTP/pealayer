@@ -921,7 +921,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             ui,
                             &response,
                             app.duration,
-                            &app.media_chapters(),
+                            app.media_chapters(),
                             app.active_media_chapter().map(|chapter| chapter.index),
                         );
                         let show_seek_preview = app.seekbar_hover_thumbnails;

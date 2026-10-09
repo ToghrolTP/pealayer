@@ -685,6 +685,7 @@ pub fn run() -> eframe::Result {
                 audio_tracks: Vec::new(),
                 media_tracks: Vec::new(),
                 media_file_info: crate::media_info::MediaFileInfo::default(),
+                cached_media_chapters: Vec::new(),
                 media_track_properties: None,
                 selected_timeline_track: None,
                 seek_pos: None,
