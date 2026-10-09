@@ -358,7 +358,10 @@ pub fn run() -> eframe::Result {
                 // By default video-timing-offset is 0.050s, which forces mpv_render_context_render
                 // to sleep until the next frame's presentation timestamp (e.g. ~41.7ms for 23.976 fps),
                 // truncating the entire UI event loop to the video's frame rate.
-                init.set_property("video-timing-offset", 0.0)?;
+                init.set_property(
+                    "video-timing-offset",
+                    crate::app::MPV_VIDEO_TIMING_OFFSET_SECONDS,
+                )?;
                 let audio_device = if loaded_config.audio_device.trim().is_empty() {
                     "auto"
                 } else {
