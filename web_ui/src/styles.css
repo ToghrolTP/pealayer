@@ -403,6 +403,12 @@ body {
 }
 .studio-timecode { color: var(--text); font: 600 11px ui-monospace, SFMono-Regular, Consolas, monospace; white-space: nowrap; }
 .studio-timecode--muted { color: var(--muted); }
+.elapsed-time-input { box-sizing: border-box; width: 104px; height: 26px; padding: 2px 4px; border: 1px solid var(--line); border-radius: 5px; background: var(--surface-0); color: var(--text); font: 600 11px/20px ui-monospace, SFMono-Regular, Consolas, monospace; text-align: center; }
+.elapsed-time-input[readonly] { cursor: pointer; border-color: transparent; background: transparent; }
+.elapsed-time-input[readonly]:hover:not(:disabled) { background: var(--surface-2); }
+.elapsed-time-input:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.elapsed-time-input:disabled { color: var(--subtle); cursor: default; }
+.elapsed-time-input::selection { color: var(--text); background: color-mix(in srgb, var(--accent) 30%, var(--surface-1)); }
 .studio-scrubber { margin: 0 5px !important; }
 .seek-thumbnail-host { position: relative; min-width: 0; width: 100%; }
 .seek-thumbnail-host > .ant-slider { width: 100%; margin: 0; }
@@ -945,11 +951,13 @@ body {
 }
 
 @container (max-width: 620px) {
-  .studio-transport { grid-template-columns: 32px 38px 32px minmax(0, 1fr) auto; row-gap: 9px; }
-  .studio-timecode { grid-column: 4; grid-row: 1; }
-  .studio-timecode--muted { grid-column: 5; grid-row: 1; }
-  .studio-scrubber { grid-column: 1 / -1; grid-row: 2; }
-  .studio-volume { grid-column: 1 / -1; grid-row: 3; width: 100%; }
+  .studio-transport { grid-template-columns: 32px 38px 32px minmax(0, 1fr); row-gap: 9px; }
+  .studio-transport > .ant-btn { justify-self: start; width: 32px; }
+  .studio-transport > .studio-transport__play { width: 38px; }
+  .studio-timecode { grid-column: 1 / 4; grid-row: 2; }
+  .studio-timecode--muted { grid-column: 4; grid-row: 2; justify-self: end; }
+  .studio-scrubber { grid-column: 1 / -1; grid-row: 3; }
+  .studio-volume { grid-column: 1 / -1; grid-row: 4; width: 100%; }
 }
 /* Short landscape screens need the same reachable dialog footer as phones. */
 @media (max-width: 560px), (max-height: 560px) {

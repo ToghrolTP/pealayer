@@ -20,6 +20,7 @@ import type { HardwareMelody } from '../melodyCatalog';
 import { MediaTrackSelectors } from './MediaTrackSelectors';
 import { PlaybackButton } from './PlaybackButton';
 import { VolumeControl } from './VolumeControl';
+import { ElapsedTimeInput } from './ElapsedTimeInput';
 
 export interface PlayerState {
   app_icon_revision?: number;
@@ -294,7 +295,9 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
       </header>
 
       <div className="remote-player__timeline">
-        <span>{formatTime(state.playback_time)}</span>
+        <ElapsedTimeInput seconds={state.playback_time ?? 0} locale={locale}
+          disabled={!state.current_video || !state.seekable || !state.duration}
+          mediaIdentity={state.current_video} onCommit={seek.commitSeconds} />
         <SeekThumbnailPreview
           enabled={seekbarHoverThumbnails && Boolean(state.seekable) && Boolean(state.duration)}
           duration={state.duration || 0}
