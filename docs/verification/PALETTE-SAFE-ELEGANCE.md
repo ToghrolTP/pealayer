@@ -57,6 +57,41 @@ and after integration, unchanged System preference, cached unchanged style,
 filled-button contrast, opaque cards and stable widths at 180/280/520 points.
 An external-player notice regression covers actual observed states and errors.
 
-These checks establish source behavior, not physical hardware or human visual
-acceptance. Runtime deployment receipts and any remaining acceptance checks are
-recorded in the owning PR; do not infer deployment from a library test alone.
+## Installed build (9 October)
+
+Implementation: [PR #108](https://github.com/ToghrolTP/pealayer/pull/108).
+Installed source: `1a6943c8fe3b9a2a1ed5f8fec337f28e3fe8d433`; subsequent
+documentation-only commits do not change the package's embedded identity.
+Executable SHA-256:
+`5b74194ad0f18b314ff813822ffa820cd25d38d65550e7987d92f19ec13a57ca`.
+Packed/unpacked sizes: 11,319,808 / 45,293,056 bytes.
+
+- David and Cafe installed through the existing graceful chunked updater.
+  Fresh local manifest/process APIs confirm the exact source/hash and responsive
+  interactive processes. Cafe is still the hardware authority; David is a
+  connected consumer with no competing local hardware scheduler.
+- Cafe remained paused at 660.8 seconds with all three original cues intact,
+  connected hardware and null hardware/sync errors. Theme `dark`, palette
+  `native` and accent `system` were preserved; no production appearance settings
+  were changed merely for the checks.
+- David retained DLL `e56ce67cd00f06a59dc7ed5b97a49a9182a381554c755dc4570a52af1ef30e65`;
+  Cafe retained `872827614ed0adfca11e68def5273bcfcaea6acf38bbf1950c35980b59f43a5f`.
+  Both host-specific staged runtime smoke checks returned 0.
+- Erfan received a stopped-app atomic replacement, retaining DLL
+  `0a81c004aae0ee7d512b9a26e38f66281f9591e84e1663215cc3a36a4bde6f6a`.
+  Its installed hash matched and runtime smoke returned 0; no GUI was launched.
+  Temporary upload/previous-build files were removed after verification; the
+  existing pre-feature rollback was preserved. Cafe's temporary upload was also
+  removed after its live installed receipt matched.
+- Release compilation on David took 1 minute 27 seconds. The four focused
+  tests, shared crate-boundary guard, whitespace, seven Windows task icon
+  resources and UPX integrity checks passed. No compilation ran on Cafe.
+  At inspection, Linux, one Apple-silicon run, Web TypeScript, repository health,
+  Actions validation and CodeQL passed; remaining Windows/macOS matrix jobs were
+  still running, not waited on or claimed passed.
+
+Human visual review of native Appearance/Audio/Subtitle sections was requested
+after installation and remains pending. No new physical-output or audible
+acceptance test was performed for this presentation-only pass. These API/build
+receipts are not substitutes for interactive visual acceptance or wider Web
+parity completion. Existing Web colors/contracts were reused, not redesigned.
