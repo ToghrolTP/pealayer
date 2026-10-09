@@ -492,6 +492,7 @@ pub struct EngineHandle {
     pub active_transport: Arc<Mutex<Option<String>>>,
     pub connection_error: Arc<Mutex<Option<String>>>,
     pub hardware_capabilities: Arc<Mutex<Option<crate::four_d::controller::HardwareCapabilities>>>,
+    pub hardware_revision: Arc<AtomicU64>,
     pub controller_call_results: Arc<Mutex<std::collections::VecDeque<ControllerCallResult>>>,
     catalog_refresh_requested: Arc<AtomicBool>,
     rf_catalog_refresh_requested: Arc<AtomicBool>,
@@ -511,6 +512,7 @@ pub struct ControllerPushTarget {
     serial_port: std::sync::Weak<Mutex<String>>,
     hardware_capabilities:
         std::sync::Weak<Mutex<Option<crate::four_d::controller::HardwareCapabilities>>>,
+    hardware_revision: std::sync::Weak<AtomicU64>,
     catalog_refresh_requested: std::sync::Weak<AtomicBool>,
     rf_catalog_refresh_requested: std::sync::Weak<AtomicBool>,
     connection_error: std::sync::Weak<Mutex<Option<String>>>,
@@ -555,6 +557,7 @@ impl EngineHandle {
             connection_requested: Arc::downgrade(&self.connection_requested),
             serial_port: Arc::downgrade(&self.serial_port),
             hardware_capabilities: Arc::downgrade(&self.hardware_capabilities),
+            hardware_revision: Arc::downgrade(&self.hardware_revision),
             catalog_refresh_requested: Arc::downgrade(&self.catalog_refresh_requested),
             rf_catalog_refresh_requested: Arc::downgrade(&self.rf_catalog_refresh_requested),
         }
@@ -722,7 +725,7 @@ impl ControllerPushTarget {
         let Some(capabilities) = capabilities.as_mut() else {
             return false;
         };
-        match method {
+        let changed = match method {
             "controller.status" => {
                 // A status push proves that the coordinator can hear the board,
                 // but it does not carry the board identity or capability
@@ -767,7 +770,11 @@ impl ControllerPushTarget {
                 } else { false }
             }
             _ => false,
+        };
+        if changed && let Some(rev) = self.hardware_revision.upgrade() {
+            rev.fetch_add(1, Ordering::Relaxed);
         }
+        changed
     }
 
     /// Accepts the authoritative host identity from a fresh WebSocket
@@ -795,6 +802,9 @@ impl ControllerPushTarget {
         if source_changed {
             capabilities.status_led = None;
             capabilities.status_led_revision = 0;
+            if let Some(rev) = self.hardware_revision.upgrade() {
+                rev.fetch_add(1, Ordering::Relaxed);
+            }
         }
         source_changed
     }
@@ -825,6 +835,7 @@ pub fn spawn_engine() -> EngineHandle {
     let active_transport_description = Arc::new(Mutex::new(None));
     let connection_error = Arc::new(Mutex::new(None));
     let hardware_capabilities = Arc::new(Mutex::new(None));
+    let hardware_revision = Arc::new(AtomicU64::new(1));
     let controller_call_results = Arc::new(Mutex::new(std::collections::VecDeque::new()));
     let catalog_refresh_requested = Arc::new(AtomicBool::new(false));
     let rf_catalog_refresh_requested = Arc::new(AtomicBool::new(false));
@@ -844,6 +855,7 @@ pub fn spawn_engine() -> EngineHandle {
     let engine_transport_description = Arc::clone(&active_transport_description);
     let engine_conn_error = Arc::clone(&connection_error);
     let engine_capabilities = Arc::clone(&hardware_capabilities);
+    let engine_hardware_revision = Arc::clone(&hardware_revision);
     let engine_controller_call_results = Arc::clone(&controller_call_results);
     let engine_catalog_refresh_requested = Arc::clone(&catalog_refresh_requested);
     let engine_state_notifier = Arc::clone(&state_notifier);
@@ -931,6 +943,7 @@ pub fn spawn_engine() -> EngineHandle {
                                     if let Ok(mut guard) = engine_capabilities.lock() {
                                         *guard = capabilities;
                                     }
+                                    engine_hardware_revision.fetch_add(1, Ordering::Relaxed);
                                     if let Ok(mut guard) = engine_conn_error.lock() {
                                         *guard = None;
                                     }
@@ -1049,6 +1062,7 @@ pub fn spawn_engine() -> EngineHandle {
                 if let Ok(mut guard) = engine_capabilities.lock() {
                     *guard = None;
                 }
+                engine_hardware_revision.fetch_add(1, Ordering::Relaxed);
                 engine_connected.store(false, Ordering::Relaxed);
                 connected = false;
                 println!("[Engine] Disconnected hardware transport");
@@ -1251,6 +1265,7 @@ pub fn spawn_engine() -> EngineHandle {
                         if let Ok(mut guard) = engine_capabilities.lock() {
                             *guard = None;
                         }
+                        engine_hardware_revision.fetch_add(1, Ordering::Relaxed);
                         if let Ok(mut guard) = engine_port.lock() {
                             *guard = endpoint;
                         }
@@ -1410,6 +1425,7 @@ pub fn spawn_engine() -> EngineHandle {
                     if let Ok(mut guard) = engine_capabilities.lock() {
                         *guard = None;
                     }
+                    engine_hardware_revision.fetch_add(1, Ordering::Relaxed);
                     if let Ok(mut guard) = engine_conn_error.lock() {
                         *guard = Some("direct diagnostic transport released because PCController became reachable and owns the UART".to_string());
                     }
@@ -1460,6 +1476,7 @@ pub fn spawn_engine() -> EngineHandle {
                                 }
                                 *guard = capabilities;
                             }
+                            engine_hardware_revision.fetch_add(1, Ordering::Relaxed);
                             if board_connected {
                                 if let Ok(mut guard) = engine_conn_error.lock() {
                                     *guard = None;
@@ -1737,6 +1754,7 @@ pub fn spawn_engine() -> EngineHandle {
         active_transport: active_transport_description,
         connection_error,
         hardware_capabilities,
+        hardware_revision,
         controller_call_results,
         catalog_refresh_requested,
         rf_catalog_refresh_requested,
@@ -1913,7 +1931,7 @@ fn spawn_peer_engine() -> EngineHandle {
         prepared_timeline:Arc::new(Mutex::new(super::media_timeline::PreparedTimeline::default())),media_clock_owned:Arc::new(AtomicBool::new(false)),
         is_playing:Arc::new(AtomicBool::new(false)),estop_active:Arc::new(AtomicBool::new(false)),connection_requested:Arc::new(AtomicBool::new(true)),is_connected:Arc::new(AtomicBool::new(false)),
         serial_port:Arc::new(Mutex::new(crate::peer::client().unwrap().origin.to_string())),active_transport:Arc::new(Mutex::new(Some("pealayer:remote".into()))),
-        connection_error:Arc::new(Mutex::new(None)),hardware_capabilities:Arc::new(Mutex::new(None)),controller_call_results:Arc::new(Mutex::new(VecDeque::new())),
+        connection_error:Arc::new(Mutex::new(None)),hardware_capabilities:Arc::new(Mutex::new(None)),hardware_revision:Arc::new(AtomicU64::new(1)),controller_call_results:Arc::new(Mutex::new(VecDeque::new())),
         catalog_refresh_requested:Arc::new(AtomicBool::new(false)),rf_catalog_refresh_requested:Arc::new(AtomicBool::new(false)),state_notifier:Arc::new(Mutex::new(None)),sender:tx,
     };
     let owner=Arc::downgrade(&lifecycle);

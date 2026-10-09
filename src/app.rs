@@ -834,6 +834,8 @@ pub struct PealayerApp {
     pub(crate) web_cmd_rx: std::sync::mpsc::Receiver<crate::platform::interop::InteropCommand>,
     pub(crate) last_web_broadcast: Option<std::time::Instant>,
     pub(crate) last_web_hardware: Option<crate::four_d::controller::HardwareCapabilities>,
+    pub(crate) last_web_hardware_revision: u64,
+    pub(crate) cached_hardware_capabilities: Mutex<(u64, Option<crate::four_d::controller::HardwareCapabilities>)>,
     pub(crate) media_controls: Option<crate::platform::media_controls::MediaControlsManager>,
     pub(crate) media_cmd_tx: std::sync::mpsc::Sender<souvlaki::MediaControlEvent>,
     pub(crate) media_cmd_rx: std::sync::mpsc::Receiver<souvlaki::MediaControlEvent>,
@@ -1288,8 +1290,8 @@ impl eframe::App for PealayerApp {
         let appearance = web_config.appearance.clone();
         let configured_web_sync_interval =
             std::time::Duration::from_millis(u64::from(web_config.web_sync_interval_ms));
-        let hardware = self.advertised_hardware();
-        let hardware_changed = hardware != self.last_web_hardware;
+        let hardware_rev = self.engine_handle.hardware_revision.load(Ordering::Acquire);
+        let hardware_changed = hardware_rev != self.last_web_hardware_revision;
         let web_sync_active = hardware_changed || (self.current_video_path.is_some() && !self.is_paused)
             || self.is_scrubbing
             || self.pending_scrub_commit.is_some()
@@ -1328,6 +1330,8 @@ impl eframe::App for PealayerApp {
 
         if should_broadcast {
             self.last_web_broadcast = Some(now);
+            self.last_web_hardware_revision = hardware_rev;
+            let hardware = self.advertised_hardware();
             self.last_web_hardware = hardware.clone();
             let hardware_details = hardware
                 .as_ref()
@@ -2817,14 +2821,30 @@ impl PealayerApp {
         if let Ok(mut current) = self.engine_handle.hardware_capabilities.lock() {
             *current = capabilities;
         }
+        self.engine_handle.hardware_revision.fetch_add(1, Ordering::Relaxed);
     }
 
     pub fn advertised_hardware(&self) -> Option<crate::four_d::controller::HardwareCapabilities> {
-        self.engine_handle
-            .hardware_capabilities
-            .lock()
-            .ok()
-            .and_then(|capabilities| capabilities.clone())
+        let rev = self.engine_handle.hardware_revision.load(Ordering::Acquire);
+        if let Ok(mut cache) = self.cached_hardware_capabilities.lock() {
+            if cache.0 == rev && rev > 0 {
+                return cache.1.clone();
+            }
+            let fresh = self.engine_handle
+                .hardware_capabilities
+                .lock()
+                .ok()
+                .and_then(|capabilities| capabilities.clone());
+            cache.0 = rev;
+            cache.1 = fresh.clone();
+            fresh
+        } else {
+            self.engine_handle
+                .hardware_capabilities
+                .lock()
+                .ok()
+                .and_then(|capabilities| capabilities.clone())
+        }
     }
 
     pub fn connected_board_display_name(&self) -> Option<String> {
@@ -8788,6 +8808,8 @@ impl Default for PealayerApp {
             web_cmd_rx,
             last_web_broadcast: None,
             last_web_hardware: None,
+            last_web_hardware_revision: 0,
+            cached_hardware_capabilities: Mutex::new((0, None)),
             media_controls: None,
             media_cmd_tx,
             media_cmd_rx,
@@ -8923,11 +8945,11 @@ pub(crate) mod tests {
         app.web_state_tx = sender;
         let mut hardware = crate::four_d::controller::HardwareCapabilities::default();
         hardware.board_connected = true;
-        *app.engine_handle.hardware_capabilities.lock().unwrap() = Some(hardware.clone());
+        app.update_hardware_capabilities(Some(hardware.clone()));
         let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| eframe::App::logic(&mut app, ctx, &mut frame));
         let _ = receiver.try_recv().unwrap();
         hardware.telemetry.bus_mv = Some(12123);
-        *app.engine_handle.hardware_capabilities.lock().unwrap() = Some(hardware);
+        app.update_hardware_capabilities(Some(hardware));
         app.last_web_broadcast = Some(std::time::Instant::now() - std::time::Duration::from_millis(300));
         let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| eframe::App::logic(&mut app, ctx, &mut frame));
         let status: serde_json::Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
@@ -10326,5 +10348,37 @@ pub(crate) mod tests {
         app.bump_media_view_revision();
         assert_eq!(app.media_view_revision.load(Ordering::Relaxed), m_rev + 1);
     }
+
+    #[test]
+    fn advertised_hardware_is_cached_and_invalidates_on_revision_bump() {
+        let app = PealayerApp::default();
+        // Initial state has None
+        assert!(app.advertised_hardware().is_none());
+
+        // Install a capability snapshot in the engine handle
+        let mut caps = crate::four_d::controller::HardwareCapabilities::default();
+        caps.board_connected = true;
+        caps.board_name = "TestBoard".to_string();
+
+        *app.engine_handle.hardware_capabilities.lock().unwrap() = Some(caps.clone());
+        app.engine_handle.hardware_revision.fetch_add(1, Ordering::Release);
+
+        // First call populates cache
+        let fetched = app.advertised_hardware();
+        assert!(fetched.is_some());
+        assert_eq!(fetched.as_ref().unwrap().board_name, "TestBoard");
+
+        // Mutate engine capabilities without bumping revision: cache should still return cached copy
+        caps.board_name = "MutatedBoard".to_string();
+        *app.engine_handle.hardware_capabilities.lock().unwrap() = Some(caps.clone());
+        let cached = app.advertised_hardware();
+        assert_eq!(cached.as_ref().unwrap().board_name, "TestBoard");
+
+        // Bump revision: cache invalidates and returns new copy
+        app.engine_handle.hardware_revision.fetch_add(1, Ordering::Release);
+        let updated = app.advertised_hardware();
+        assert_eq!(updated.as_ref().unwrap().board_name, "MutatedBoard");
+    }
 }
+
 

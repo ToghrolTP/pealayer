@@ -939,6 +939,8 @@ pub fn run() -> eframe::Result {
                 web_cmd_rx,
                 last_web_broadcast: None,
                 last_web_hardware: None,
+                last_web_hardware_revision: 0,
+                cached_hardware_capabilities: std::sync::Mutex::new((0, None)),
                 media_controls: None,
                 media_cmd_tx,
                 media_cmd_rx,

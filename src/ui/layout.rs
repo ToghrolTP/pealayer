@@ -4420,6 +4420,7 @@ pub(crate) fn set_control_order(
         && let Some(current) = current.as_mut()
     {
         let _ = current.apply_control_reorder(&control.key, order);
+        app.engine_handle.hardware_revision.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
     app.set_osd(app.tr("Saving channel order..."));
 }
