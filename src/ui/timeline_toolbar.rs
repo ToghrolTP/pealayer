@@ -125,12 +125,15 @@ pub(super) fn draw(
     // egui also marks a stationary long press as a drag after its click
     // timeout. Reordering needs real movement, otherwise held Pan buttons
     // would turn into a drag payload and stop panning after 800 ms.
+    let drag_distance = ui
+        .ctx()
+        .options(|options| options.input_options.max_click_dist);
     let moved_for_drag = ui.input(|input| {
         input
             .pointer
             .press_origin()
             .zip(input.pointer.interact_pos())
-            .is_some_and(|(start, current)| start.distance(current) > input.options.max_click_dist)
+            .is_some_and(|(start, current)| start.distance(current) > drag_distance)
     });
     let mut changed = false;
 
