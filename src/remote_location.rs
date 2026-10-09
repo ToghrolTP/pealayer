@@ -78,6 +78,58 @@ struct Browser {
     playlist_proxy: bool,
     thumbnail_paths: BTreeMap<String, std::path::PathBuf>,
     thumbnail_workers: usize,
+    proxy_override: Option<bool>,
+}
+
+/// Bounded parallel routing. Explicit checkbox choices bypass auto probing.
+/// Return the first validated success without waiting for a failing other route.
+/// The losing bounded HTTP request releases its slot when its timeout expires.
+#[derive(Debug)]
+pub enum RouteProbeError { Busy, Failed(String) }
+impl std::fmt::Display for RouteProbeError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { match self { Self::Busy => formatter.write_str("Remote inspection is busy"), Self::Failed(message) => formatter.write_str(message) } }
+}
+pub fn probe_routes<T: Send + 'static>(
+    preferred: bool, automatic: bool,
+    probe: impl Fn(bool) -> Result<T, String> + Send + Sync + 'static,
+) -> Result<(bool, T), RouteProbeError> {
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    static ACTIVE: AtomicUsize = AtomicUsize::new(0);
+    let count = if automatic { 2 } else { 1 };
+    ACTIVE.fetch_update(Ordering::AcqRel, Ordering::Acquire, |n| (n + count <= 8).then_some(n + count))
+        .map_err(|_| RouteProbeError::Busy)?;
+    struct Slot;
+    impl Drop for Slot { fn drop(&mut self) { ACTIVE.fetch_sub(1, Ordering::AcqRel); } }
+    let probe = std::sync::Arc::new(probe);
+    let (tx, rx) = std::sync::mpsc::channel();
+    for proxy in [preferred, !preferred].into_iter().take(count) {
+        let tx = tx.clone(); let probe = probe.clone();
+        std::thread::spawn(move || { let _slot = Slot; let _ = tx.send((proxy, probe(proxy))); });
+    }
+    drop(tx);
+    let mut errors = Vec::new();
+    for (proxy, result) in rx {
+        match result { Ok(value) => return Ok((proxy, value)), Err(error) => errors.push(format!("{}: {error}", if proxy {"Proxy"} else {"Direct"})) }
+    }
+    Err(RouteProbeError::Failed(if errors.is_empty() { "Remote inspection did not produce a response".into() } else { errors.join("; ") }))
+}
+
+pub fn accept_listing(mut listing: RemoteListing, use_proxy: bool, ctx: &eframe::egui::Context) {
+    if crate::peer::active() { let _ = request(&listing.requested_url, Some(use_proxy), false, ctx); return; }
+    if let Ok(mut b) = browser().lock() {
+        b.generation += 1;
+        b.state.request_id = b.generation;
+        b.state.visible = true;
+        b.state.loading = false;
+        b.state.target = listing.requested_url.clone();
+        b.state.use_proxy = use_proxy;
+        b.state.error = None;
+        sort_entries(&mut listing.entries, b.state.sort, b.state.descending);
+        b.state.selected = listing.file.as_ref().map(|e| e.url.clone());
+        b.state.listing = Some(listing);
+        b.state.revision += 1;
+    }
+    ctx.request_repaint();
 }
 fn browser() -> &'static Mutex<Browser> {
     static BROWSER: OnceLock<Mutex<Browser>> = OnceLock::new();
@@ -490,7 +542,7 @@ pub fn client(
     if !use_proxy {
         builder = builder.no_proxy();
     } else if let Some(proxy) = custom_proxy.filter(|s| !s.trim().is_empty()) {
-        builder = builder.proxy(reqwest::Proxy::all(proxy).map_err(|e| e.to_string())?);
+        builder = builder.proxy(reqwest::Proxy::all(proxy).map_err(|_| "Configured proxy is invalid".to_string())?);
     }
     builder
         .build()
@@ -590,6 +642,7 @@ pub fn discover(
         let folder = final_url.join(".").map_err(|e| e.to_string())?;
         let sibling_result = client
             .get(folder.clone())
+            .timeout(Duration::from_secs(2))
             .header(reqwest::header::ACCEPT, "text/html")
             .send()
             .map_err(|e| e.to_string())
@@ -649,10 +702,13 @@ fn request_inner(
         normalize(target)?;
     }
     let config = crate::platform::interop::get_live_config();
-    let use_proxy = use_proxy.unwrap_or(config.open_url_use_proxy);
     let mut browser = browser()
         .lock()
         .map_err(|_| "Remote browser unavailable".to_string())?;
+    let manual = use_proxy.or_else(|| if browser.state.visible && !background { browser.proxy_override } else { None });
+    let automatic = manual.is_none() && config.open_url_auto_proxy;
+    let use_proxy = manual.unwrap_or(config.open_url_use_proxy);
+    if !background { browser.proxy_override = manual; }
     browser.generation += 1;
     let generation = browser.generation;
     browser.state.request_id = generation;
@@ -663,7 +719,8 @@ fn request_inner(
     browser.state.thumbnails = config.remote_folder_thumbnails;
     browser.state.loading = !target.trim().is_empty();
     browser.state.error = None;
-    browser.state.listing = None;
+    // Keep the last successful listing mounted during refresh; it cannot be
+    // acted on while loading. Fast replies no longer flash an empty table.
     browser.state.selected = None;
     browser.state.thumbnail_status.clear();
     browser.pending_play = None;
@@ -681,14 +738,22 @@ fn request_inner(
     let ctx = ctx.clone();
     drop(browser);
     std::thread::spawn(move || {
-        let result = discover(&target, use_proxy, config.open_url_proxy_url.as_deref());
+        let result = loop {
+            if self::browser().lock().is_ok_and(|b| b.generation != generation) { return; }
+            let target = target.clone(); let custom = config.open_url_proxy_url.clone();
+            match probe_routes(use_proxy, automatic, move |proxy| discover(&target, proxy, custom.as_deref())) {
+                Err(RouteProbeError::Busy) => std::thread::sleep(Duration::from_millis(250)),
+                result => break result,
+            }
+        };
         if let Ok(mut b) = self::browser().lock() {
             if b.generation != generation {
                 return;
             }
             b.state.loading = false;
             match result {
-                Ok(mut listing) => {
+                Ok((use_proxy, mut listing)) => {
+                    b.state.use_proxy = use_proxy;
                     sort_entries(&mut listing.entries, b.state.sort, b.state.descending);
                     b.state.selected = listing.file.as_ref().map(|f| f.url.clone());
                     if background && listing.file.is_some() {
@@ -710,7 +775,7 @@ fn request_inner(
                     }
                     b.state.listing = Some(listing);
                 }
-                Err(error) => b.state.error = Some(error),
+                Err(error) => b.state.error = Some(error.to_string()),
             }
             b.state.revision += 1;
         }
@@ -725,6 +790,7 @@ pub fn close() {
         b.generation += 1;
         b.state.loading = false;
         b.pending_play = None;
+        b.proxy_override = None;
         b.state.revision += 1;
     }
 }
@@ -737,11 +803,15 @@ pub fn select(target: &str, play: bool) -> Result<(), String> {
     let mut b = browser()
         .lock()
         .map_err(|_| "Remote browser unavailable".to_string())?;
+    if b.state.loading { return Err("Wait for the current location to finish loading.".into()); }
     let listing = b
         .state
         .listing
         .as_ref()
         .ok_or("No remote listing is loaded")?;
+    if !b.state.target.is_empty() && listing.requested_url != normalize(&b.state.target)?.as_str() {
+        return Err("This listing belongs to the previous location; reload before selecting a file.".into());
+    }
     let entry = listing
         .entries
         .iter()
@@ -892,6 +962,21 @@ pub fn thumbnail(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn route_probe_uses_first_valid_response_and_respects_manual_choice() {
+        let both = std::sync::Arc::new(std::sync::Barrier::new(2));
+        let start = std::time::Instant::now();
+        let (proxy, value) = probe_routes(true, true, move |proxy| {
+            both.wait();
+            if proxy { std::thread::sleep(Duration::from_millis(250)); Err("Unavailable".into()) } else { Ok(42) }
+        }).unwrap();
+        assert!(!proxy); assert_eq!(value, 42);
+        assert!(start.elapsed() < Duration::from_millis(200));
+        let (proxy, _) = probe_routes(false, false, |proxy| { assert!(!proxy); Ok(()) }).unwrap();
+        assert!(!proxy);
+        let error = probe_routes::<()>(true, true, |_| Err("Rejected".into())).unwrap_err();
+        assert!(error.to_string().contains("Proxy: Rejected") && error.to_string().contains("Direct: Rejected"));
+    }
     #[test]
     fn parses_table_metadata_and_episode_order() {
         let url = normalize("https://files.invalid/show/").unwrap();

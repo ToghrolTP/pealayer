@@ -1226,6 +1226,14 @@ impl eframe::App for PealayerApp {
 
         // Reconcile the workspace with the viewport before publishing status.
         crate::remote_location::install_context(ctx);
+        if let Some(target) = crate::platform::clipboard_urls::take(ctx) {
+            if self.show_open_url_dialog {
+                self.url_input_buffer = target;
+                self.url_inspector = crate::ui::open_url::UrlInspector::default();
+            } else if let Err(error) = crate::remote_location::request(&target, None, false, ctx) {
+                self.set_osd(error);
+            }
+        }
         if let Some(playback) = crate::remote_location::take_playback() { self.play_remote_location(playback); }
         crate::remote_location::set_current(self.current_video_path.as_ref().and_then(|path|path.to_str()));
         // A fullscreen request can be observed in this same frame; preserving

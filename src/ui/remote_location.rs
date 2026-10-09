@@ -6,21 +6,30 @@ use eframe::egui;
 #[derive(Clone, Default)]
 struct View {
     target: String,
-    revision: u64,
+    request_id: u64,
     filter: String,
+    edited_at: Option<std::time::Instant>,
+    loading_at: Option<std::time::Instant>,
+    proxy_override: Option<bool>,
+    last_sent_target: String,
 }
 
 pub fn draw(app: &mut PealayerApp, ctx: &egui::Context) {
     let state = remote::snapshot();
+    let id = egui::Id::new("remote-folder-view");
     if !state.visible {
+        ctx.data_mut(|d| { if let Some(mut view) = d.get_temp::<View>(id) { view.proxy_override = None; view.edited_at = None; d.insert_temp(id, view); } });
         return;
     }
-    let id = egui::Id::new("remote-folder-view");
     let mut view = ctx.data_mut(|d| d.get_temp::<View>(id)).unwrap_or_default();
-    if view.revision != state.revision && view.target != state.target && !state.loading {
-        view.target = state.target.clone();
+    if view.request_id != state.request_id {
+        if !(view.edited_at.is_some() && state.target == view.last_sent_target) {
+            view.target = state.target.clone();
+            view.edited_at = None;
+        }
     }
-    view.revision = state.revision;
+    view.request_id = state.request_id;
+    if state.loading { view.loading_at.get_or_insert_with(std::time::Instant::now); } else { view.loading_at = None; }
     let geometry = dialog::bounded_geometry(
         ctx.content_rect(),
         20.0,
@@ -41,11 +50,12 @@ pub fn draw(app: &mut PealayerApp, ctx: &egui::Context) {
             ui.horizontal(|ui| {
                 ui.label(icons::LINK);
                 let response = ui.add(crate::ui::dialog::singleline_text_edit(&mut view.target).hint_text("https://host/folder/").desired_width((ui.available_width() - 88.0).max(90.0)));
+                if response.changed() { view.edited_at = Some(std::time::Instant::now()); }
                 response.context_menu(|ui| { if ui.button(format!("{}  Copy", icons::COPY)).clicked() { ui.ctx().copy_text(view.target.clone()); ui.close(); } if ui.button("Paste").clicked() { ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste); ui.close(); } });
                 if ui.add_enabled(!state.loading && remote::normalize(&view.target).is_ok(), egui::Button::new(format!("{} Browse", icons::MAGNIFYING_GLASS))).clicked() || response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) { navigate = Some(view.target.clone()); }
             });
             ui.horizontal(|ui| {
-                ui.checkbox(&mut proxy, "Use proxy").on_hover_text("Off bypasses system and custom proxies for discovery, thumbnails and playback.");
+                if ui.checkbox(&mut proxy, "Use proxy").on_hover_text("A manual choice overrides automatic route selection for this dialog. Off bypasses system and custom proxies.").changed() { view.proxy_override = Some(proxy); }
                 if let Some(listing) = &state.listing {
                     ui.separator(); ui.label(format!("{} {}", icons::GLOBE, listing.host));
                     if let Some(server) = &listing.server { ui.label(egui::RichText::new(server).weak()); }
@@ -53,7 +63,13 @@ pub fn draw(app: &mut PealayerApp, ctx: &egui::Context) {
                 }
             });
             if proxy != state.use_proxy && !view.target.is_empty() { navigate = Some(view.target.clone()); }
-            if state.loading { ui.horizontal(|ui| { ui.spinner(); ui.label("Reading remote directory..."); }); ui.ctx().request_repaint_after(std::time::Duration::from_millis(200)); }
+            // Reserve one stable status row, but do not flash a spinner for fast replies.
+            let show_loading = view.loading_at.is_some_and(|t| t.elapsed() >= std::time::Duration::from_millis(250));
+            ui.allocate_ui(egui::vec2(ui.available_width(), 24.0), |ui| {
+                let alpha = ui.ctx().animate_bool(egui::Id::new("remote-loading-fade"), show_loading);
+                if alpha > 0.0 { ui.multiply_opacity(alpha); ui.horizontal(|ui| {ui.spinner(); ui.label("Reading remote location…");}); }
+            });
+            if state.loading { ui.ctx().request_repaint_after(std::time::Duration::from_millis(50)); }
             if let Some(error) = &state.error { ui.colored_label(ui.visuals().error_fg_color, error); }
             if let Some(listing) = &state.listing {
                 if let Some(warning) = &listing.warning { ui.label(egui::RichText::new(warning).weak()); }
@@ -66,7 +82,8 @@ pub fn draw(app: &mut PealayerApp, ctx: &egui::Context) {
                     }
                     ui.label(egui::RichText::new(if state.descending { "Descending" } else { "Ascending" }).weak());
                 });
-                let entries: Vec<_> = listing.entries.iter().filter(|e| e.name.to_lowercase().contains(&view.filter.to_lowercase())).collect();
+                let parent = listing.parent_url.as_ref().map(|url| remote::RemoteEntry { name: "Back · Parent folder".into(), url: url.clone(), is_dir: true, playable: false, size_bytes: None, modified: None });
+                let entries: Vec<_> = parent.iter().chain(listing.entries.iter().filter(|e| e.name.to_lowercase().contains(&view.filter.to_lowercase()))).collect();
                 egui::ScrollArea::vertical().id_salt("remote-files").max_height((ui.available_height()-95.0).clamp(100.0,500.0)).auto_shrink([false,false]).show_rows(ui, 52.0, entries.len(), |ui, range| {
                     for index in range {
                         let entry = entries[index];
@@ -93,10 +110,10 @@ pub fn draw(app: &mut PealayerApp, ctx: &egui::Context) {
                                 ui.label(egui::RichText::new(format!("{}    {}",entry.modified.as_deref().unwrap_or("Date unavailable"),format_bytes(entry.size_bytes))).small().weak());
                             });
                             ui.scope_builder(egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(egui::pos2(rect.right()-70.0,rect.top()+10.0),egui::vec2(65.0,30.0))), |ui| {
-                                if ui.add_enabled(entry.playable || entry.is_dir,egui::Button::new(if entry.is_dir {icons::ARROW_RIGHT} else {icons::PLAY})).on_hover_text(if entry.is_dir {"Open folder"} else {"Play"}).clicked() { if entry.is_dir {navigate=Some(entry.url.clone());} else {selected=Some((entry.url.clone(),true));} }
+                                if ui.add_enabled(!state.loading && (entry.playable || entry.is_dir),egui::Button::new(if entry.is_dir {icons::ARROW_RIGHT} else {icons::PLAY})).on_hover_text(if entry.is_dir {"Open folder"} else {"Play"}).clicked() { if entry.is_dir {navigate=Some(entry.url.clone());} else {selected=Some((entry.url.clone(),true));} }
                             });
-                            if response.clicked() { selected=Some((entry.url.clone(),false)); }
-                            if response.double_clicked() { if entry.is_dir {navigate=Some(entry.url.clone());} else if entry.playable {selected=Some((entry.url.clone(),true));} }
+                            if !state.loading && response.clicked() { if parent.as_ref().is_some_and(|p| p.url == entry.url) { navigate=Some(entry.url.clone()); } else { selected=Some((entry.url.clone(),false)); } }
+                            if !state.loading && response.double_clicked() { if entry.is_dir {navigate=Some(entry.url.clone());} else if entry.playable {selected=Some((entry.url.clone(),true));} }
                             response.context_menu(|ui| {
                                 if ui.add_enabled(entry.playable,egui::Button::new(format!("{} Play",icons::PLAY))).clicked(){selected=Some((entry.url.clone(),true));ui.close();}
                                 if entry.is_dir && ui.button(format!("{} Open folder",icons::FOLDER_OPEN)).clicked(){navigate=Some(entry.url.clone());ui.close();}
@@ -115,7 +132,7 @@ pub fn draw(app: &mut PealayerApp, ctx: &egui::Context) {
             if auto_next!=state.auto_next||thumbnails!=state.thumbnails {app.apply_interop_command(ctx,crate::platform::interop::InteropCommand::UpdateConfig {values:serde_json::json!({"remote_folder_auto_next":auto_next,"remote_folder_thumbnails":thumbnails})},"Remote browser");}
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if dialog::action_button(ui,icons::X,"Close").clicked(){close=true;}
-                ui.add_enabled_ui(state.selected.as_ref().is_some_and(|url|state.listing.as_ref().is_some_and(|l|l.entries.iter().any(|e|&e.url==url&&e.playable))), |ui| {if dialog::primary_action_button(ui,icons::PLAY,"Play selected").clicked(){selected=state.selected.clone().map(|url|(url,true));}});
+                ui.add_enabled_ui(!state.loading && state.selected.as_ref().is_some_and(|url|state.listing.as_ref().is_some_and(|l|l.entries.iter().any(|e|&e.url==url&&e.playable))), |ui| {if dialog::primary_action_button(ui,icons::PLAY,"Play selected").clicked(){selected=state.selected.clone().map(|url|(url,true));}});
                 if state.previous_file.is_some() || state.next_file.is_some() {
                     for (enabled, icon, label, command) in [(state.next_file.is_some(), icons::SKIP_FORWARD, "Next file", crate::platform::interop::InteropCommand::Next), (state.previous_file.is_some(), icons::SKIP_BACK, "Previous file", crate::platform::interop::InteropCommand::Previous)] {
                         if ui.add_enabled(enabled,egui::Button::new(icon)).on_hover_text(label).clicked() { app.apply_interop_command(ctx,command,"Remote browser"); }
@@ -123,12 +140,21 @@ pub fn draw(app: &mut PealayerApp, ctx: &egui::Context) {
                 }
             });
         });
+    if let Some(edited) = view.edited_at {
+        if edited.elapsed() >= std::time::Duration::from_millis(500) {
+            if remote::normalize(&view.target).is_ok() && crate::platform::interop::get_live_config().open_url_fetch_remote_info { navigate = Some(view.target.clone()); }
+            view.edited_at = None;
+        } else { ctx.request_repaint_after(std::time::Duration::from_millis(500) - edited.elapsed()); }
+    }
+    if let Some(target) = &navigate { view.last_sent_target = target.clone(); }
+    let proxy_override = view.proxy_override;
     ctx.data_mut(|d| d.insert_temp(id, view));
     if !open || close || dialog::escape_pressed(ctx) {
         remote::close();
+        return;
     }
     if let Some(target) = navigate {
-        if let Err(error) = remote::request(&target, Some(proxy), false, ctx) {
+        if let Err(error) = remote::request(&target, proxy_override, false, ctx) {
             app.set_osd(error);
         }
     }

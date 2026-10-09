@@ -10,4 +10,8 @@
 .remote-file-info { margin-top: 12px; }
 .remote-location-modal .ant-table-row { cursor: pointer; }
 .remote-location-modal .ant-typography-secondary { color: var(--muted); }
+.remote-location-modal .ant-spin-container { min-height: 320px; }
+.remote-location-modal .ant-btn { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; border-width: 1px; transform: none; }
+.remote-location-modal .ant-table-row > td { transition: background-color 160ms ease; }
+@media (prefers-reduced-motion: reduce) { .remote-location-modal .ant-table-row > td { transition: none; } }
 @media (max-width: 600px) { .remote-location-options { gap: 6px !important; } .remote-location-modal .ant-modal-body { max-height: calc(100dvh - 190px) !important; } }

@@ -16,6 +16,7 @@ import { PublishingAuthority } from './components/PublishingAuthority';
 import { FujiLoader } from './components/FujiLoader';
 import { WebViewBoundary } from './components/WebViewBoundary';
 import { RemoteLocationDialog } from './components/RemoteLocationDialog';
+import { useClipboardUrls } from './clipboardUrls';
 import './remote-location.css';
 import type { PlayerState } from './components/RemoteControlTab';
 import type { MediaGesturePreferences } from './components/MediaSurface';
@@ -296,6 +297,11 @@ const App: React.FC = () => {
       }
     }).catch((error) => void message.error(String(error)));
   }, [apiEndpoint]);
+  const browseClipboard = useCallback((target: string) => {
+    if (state.remote_browser?.visible && state.remote_browser.target === target) return;
+    void sendCmd('pealayer.remote.browse', { target });
+  }, [sendCmd, state.remote_browser?.target, state.remote_browser?.visible]);
+  useClipboardUrls(appConfig?.clipboard_url_detection === true, connected, browseClipboard);
 
   const resolveWebSocketUrl = useCallback(() => {
     const fallbackProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -555,7 +561,7 @@ const App: React.FC = () => {
     >
       <SharedToasts snapshot={state.messages} connected={connected} dismiss={id => sendCmd('pealayer.toast.dismiss', { id })} />
       <PublishingAuthority state={state} sendCmd={sendCmd} />
-      <RemoteLocationDialog state={state.remote_browser} connected={connected} base={apiBaseUrl} sendCmd={sendCmd} />
+      <RemoteLocationDialog state={state.remote_browser} connected={connected} base={apiBaseUrl} sendCmd={sendCmd} autoInspect={appConfig?.open_url_fetch_remote_info !== false} />
       <Layout className="app-shell">
         <HeaderBar
           collapsed={collapsed}

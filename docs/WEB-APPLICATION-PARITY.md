@@ -16,6 +16,12 @@ widths, and has been exercised against live state rather than sample data.
 
 ## Current product ledger
 
+Copied links and source browsing (9 October): [remote-location workflow](remote-folders.md)
+adds default-enabled text-only clipboard URL observation, debounced live inputs,
+parallel proxy/direct validation with manual overrides, a stable refresh/loading
+region and in-list Back navigation. Browser permission boundaries remain explicit;
+deployment and actual clipboard/dialog acceptance are recorded in the focused PR.
+
 Sound effects (9 October): [SFX and audio routing](SOUND-EFFECTS.md) adds a
 shared host audio-effect catalog, native/Web import and preview editors,
 intrinsic Audio-effects cues, main/SFX/per-effect output selection and live
