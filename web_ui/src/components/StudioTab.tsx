@@ -40,6 +40,7 @@ import { SeekThumbnailPreview } from './SeekThumbnailPreview';
 import { SeekbarMarkers, useSeekbar } from './seekbar';
 import { MediaSurface } from './MediaSurface';
 import { VolumeControl } from './VolumeControl';
+import { ElapsedTimeInput } from './ElapsedTimeInput';
 import type { MediaGesturePreferences } from './MediaSurface';
 import { defaultTimelineWheelPreferences, timelineWheelAction, timelineZoomAtPointer } from '../timelineWheel';
 import type { TimelineWheelPreferences } from '../timelineWheel';
@@ -772,7 +773,9 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
           <Tooltip title={`${tr(locale, 'Seek forward')} ${quickSeekSeconds}s`}>
             <Button icon={<FastForwardOutlined />} onClick={() => sendCmd('seek', { seconds: quickSeekSeconds })} />
           </Tooltip>
-          <span className="studio-timecode">{formatTime(currentSeconds)}</span>
+          <ElapsedTimeInput className="studio-timecode" seconds={currentSeconds}
+            disabled={!state.current_video || !state.seekable || durationSeconds <= 0}
+            mediaIdentity={state.current_video} locale={locale} onCommit={seek.commitSeconds} />
           <SeekThumbnailPreview
             enabled={seekbarHoverThumbnails && Boolean(state.seekable) && durationSeconds > 0}
             duration={durationSeconds}

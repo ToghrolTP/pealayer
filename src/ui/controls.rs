@@ -403,12 +403,43 @@ pub fn draw_contextual_transport_nudge(
 
 pub fn begin_elapsed_edit(app: &mut PealayerApp) {
     let elapsed = resolve_display_time(app.seek_pos, app.playback_time);
-    app.elapsed_time_input = format_player_time(elapsed, app.duration >= 3600.0, true);
+    app.elapsed_time_input = format_elapsed_edit_time(elapsed);
     app.elapsed_time_original = app.elapsed_time_input.clone();
     app.elapsed_time_group = 0;
     app.elapsed_time_group_digits = 0;
     app.editing_elapsed_time = true;
     app.elapsed_edit_focus_requested = true;
+}
+
+const ELAPSED_AUTOMATIC_ADVANCE: usize = usize::MAX;
+
+fn format_elapsed_edit_time(seconds: f64) -> String {
+    let seconds = if seconds.is_finite() { seconds.clamp(0.0, 359_999.999) } else { 0.0 };
+    format_player_time(seconds, true, true)
+}
+
+fn normalize_timecode_digits(text: &str) -> String {
+    text.chars().map(|character| match character {
+        '۰'..='۹' => char::from(b'0' + (character as u32 - '۰' as u32) as u8),
+        '٠'..='٩' => char::from(b'0' + (character as u32 - '٠' as u32) as u8),
+        '٫' => '.',
+        _ => character,
+    }).collect()
+}
+
+fn parse_elapsed_edit_time(text: &str) -> Option<f64> {
+    let normalized = normalize_timecode_digits(text);
+    let text = normalized.trim();
+    if !text.bytes().all(|byte| byte.is_ascii_digit() || byte == b':' || byte == b'.') {
+        return None;
+    }
+    if text.split(':').any(|field| !field.as_bytes().first().is_some_and(u8::is_ascii_digit)
+        || !field.as_bytes().last().is_some_and(u8::is_ascii_digit)) { return None; }
+    parse_timecode(text).filter(|seconds| (0.0..=359_999.999).contains(seconds))
+}
+
+fn elapsed_edit_should_commit(original: &str, value: &str, enter: bool, blur: bool, escape: bool) -> bool {
+    !escape && (enter || (blur && value != original))
 }
 
 fn timecode_groups(value: &str) -> Vec<std::ops::Range<usize>> {
@@ -452,15 +483,39 @@ fn edit_timecode_segment(value: &mut String, group: &mut usize, digits: &mut usi
             *group = groups.len() - 1;
             *digits = 0;
         }
-        egui::Event::Key { key: egui::Key::Backspace | egui::Key::Delete, pressed: true, .. } => {
+        egui::Event::Key { key: egui::Key::Backspace, pressed: true, .. } => {
+            if *digits == ELAPSED_AUTOMATIC_ADVANCE {
+                *group = group.saturating_sub(1);
+                *digits = groups[*group].len();
+            }
+            let range = groups[*group].clone();
+            let next = if *digits > 0 {
+                *digits -= 1;
+                value[range.clone()].parse::<u32>().unwrap_or(0) / 10
+            } else { 0 };
+            value.replace_range(range.clone(), &format!("{next:0width$}", width = range.len()));
+        }
+        egui::Event::Key { key: egui::Key::Delete, pressed: true, .. } => {
             let range = groups[*group].clone();
             value.replace_range(range.clone(), &"0".repeat(range.len()));
             *digits = 0;
         }
-        egui::Event::Text(text) => {
-            for character in text.chars() {
+        egui::Event::Key { key: key @ (egui::Key::ArrowUp | egui::Key::ArrowDown), pressed: true, .. } => {
+            let range = groups[*group].clone();
+            let maximum = if *group == groups.len() - 1 { 999 } else if groups.len() == 4 && *group == 0 { 99 } else { 59 };
+            let previous = value[range.clone()].parse::<u32>().unwrap_or(0);
+            let next = if *key == egui::Key::ArrowUp { (previous + 1).min(maximum) } else { previous.saturating_sub(1) };
+            value.replace_range(range.clone(), &format!("{next:0width$}", width = range.len()));
+            *digits = 0;
+        }
+        egui::Event::Text(text) | egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
+            for character in normalize_timecode_digits(text).chars() {
                 if character == ':' || character == '.' {
-                    *group = (*group + 1).min(groups.len() - 1);
+                    // A completed group already skipped its separator. Typing
+                    // that separator must not accidentally skip another group.
+                    if *digits != ELAPSED_AUTOMATIC_ADVANCE {
+                        *group = (*group + 1).min(groups.len() - 1);
+                    }
                     *digits = 0;
                     continue;
                 }
@@ -468,26 +523,23 @@ fn edit_timecode_segment(value: &mut String, group: &mut usize, digits: &mut usi
                     continue;
                 };
                 let range = groups[*group].clone();
+                if *digits == ELAPSED_AUTOMATIC_ADVANCE || *digits >= range.len() { *digits = 0; }
                 let previous = if *digits == 0 { 0 } else { value[range.clone()].parse::<u32>().unwrap_or(0) };
                 let maximum = if *group == groups.len() - 1 { 999 } else if groups.len() == 4 && *group == 0 { 99 } else { 59 };
                 let next = (previous * 10 + digit).min(maximum);
                 value.replace_range(range.clone(), &format!("{next:0width$}", width = range.len()));
                 *digits += 1;
-                if *digits >= range.len() {
-                    *group = (*group + 1).min(groups.len() - 1);
-                    *digits = 0;
+                if *digits >= range.len() && *group + 1 < groups.len() {
+                    *group += 1;
+                    *digits = ELAPSED_AUTOMATIC_ADVANCE;
                 }
             }
         }
         egui::Event::Paste(text) => {
-            if let Some(seconds) = parse_timecode(text) {
-                let has_hours = groups.len() == 4;
-                let limit = if has_hours { 360_000.0 } else { 3_600.0 };
-                if seconds < limit {
-                    *value = format_player_time(seconds, has_hours, true);
-                    *group = groups.len() - 1;
-                    *digits = 0;
-                }
+            if let Some(seconds) = parse_elapsed_edit_time(text) {
+                *value = format_elapsed_edit_time(seconds);
+                *group = 3;
+                *digits = 0;
             }
         }
         _ => {}
@@ -504,19 +556,31 @@ pub fn draw_elapsed_editor(
     enabled: bool,
 ) -> egui::Response {
     let elapsed = resolve_display_time(app.seek_pos, app.playback_time);
-    let rendered = format_player_time(elapsed, app.duration >= 3600.0, app.show_subseconds);
-    let desired_width = if app.duration >= 3600.0 { 104.0 } else { 82.0 };
+    let rendered = format_player_time(elapsed, true, app.show_subseconds);
+    let desired_width = 104.0;
     let edit_id = ui.make_persistent_id(id_source);
-    let editing = app.editing_elapsed_time && enabled;
+    let owner_key = egui::Id::new("elapsed-editor-owner");
+    if app.editing_elapsed_time && app.elapsed_edit_focus_requested && enabled {
+        ui.data_mut(|data| data.insert_temp(owner_key, edit_id));
+        ui.memory_mut(|memory| memory.request_focus(edit_id));
+        app.elapsed_edit_focus_requested = false;
+    }
+    let owns_edit = ui.data(|data| data.get_temp::<egui::Id>(owner_key)) == Some(edit_id);
+    let editing = app.editing_elapsed_time && owns_edit && enabled;
+    if app.editing_elapsed_time && owns_edit && !enabled {
+        app.editing_elapsed_time = false;
+        ui.memory_mut(|memory| memory.surrender_focus(edit_id));
+    }
     // When this editor owns keyboard focus, intercept text actions before
     // TextEdit can alter the fixed separators or length. Pointer events remain
     // with egui so clicking still selects a segment naturally.
     let mut timecode_events = Vec::new();
-    if editing && ui.memory(|memory| memory.has_focus(edit_id)) {
+    let has_focus = ui.memory(|memory| memory.has_focus(edit_id));
+    if editing {
         ui.input_mut(|input| input.events.retain(|event| {
             let captured = match event {
-                egui::Event::Text(_) | egui::Event::Paste(_) | egui::Event::Cut | egui::Event::Ime(_) => true,
-                egui::Event::Key { key, .. } => *key != egui::Key::Tab,
+                egui::Event::Text(_) | egui::Event::Paste(_) | egui::Event::Cut | egui::Event::Ime(_) => has_focus,
+                egui::Event::Key { key, .. } => *key == egui::Key::Escape || (has_focus && *key != egui::Key::Tab),
                 _ => false,
             };
             if captured { timecode_events.push(event.clone()); }
@@ -525,6 +589,7 @@ pub fn draw_elapsed_editor(
     }
     let mut escape = false;
     let mut enter = false;
+    let before_edit = app.elapsed_time_input.clone();
     for event in &timecode_events {
         match event {
             egui::Event::Key { key: egui::Key::Escape, pressed: true, .. } => escape = true,
@@ -535,6 +600,16 @@ pub fn draw_elapsed_editor(
                 &mut app.elapsed_time_group_digits,
                 event,
             ),
+        }
+    }
+    if editing {
+        // Set selection before painting, not after it. Otherwise a paused
+        // application can keep the old selection until an unrelated repaint.
+        if let Some(range) = timecode_groups(&app.elapsed_time_input).get(app.elapsed_time_group) {
+            let mut state = egui::TextEdit::load_state(ui.ctx(), edit_id).unwrap_or_default();
+            state.cursor.set_char_range(Some(egui::text::CCursorRange::two(
+                egui::text::CCursor::new(range.start), egui::text::CCursor::new(range.end))));
+            state.store(ui.ctx(), edit_id);
         }
     }
     let mut display_buffer = rendered;
@@ -572,10 +647,8 @@ pub fn draw_elapsed_editor(
             response.on_hover_text(app.tr(
                 "Type digits in each time group; Left/Right switches groups. Enter seeks; Escape cancels.",
             ));
-        if app.elapsed_edit_focus_requested {
-            response.request_focus();
-            app.elapsed_edit_focus_requested = false;
-        }
+        if before_edit != app.elapsed_time_input { response.mark_changed(); }
+        if !timecode_events.is_empty() { ui.ctx().request_repaint(); }
         if response.has_focus() {
             if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), edit_id) {
                 let groups = timecode_groups(&app.elapsed_time_input);
@@ -594,27 +667,27 @@ pub fn draw_elapsed_editor(
                         egui::text::CCursor::new(range.end),
                     )));
                     state.store(ui.ctx(), edit_id);
+                    if response.clicked() { ui.ctx().request_repaint(); }
                 }
             }
         }
         if escape {
             app.elapsed_time_input = app.elapsed_time_original.clone();
             app.editing_elapsed_time = false;
-        } else if enter {
-            match parse_timecode(&app.elapsed_time_input) {
+            response.surrender_focus();
+        } else if elapsed_edit_should_commit(&app.elapsed_time_original, &app.elapsed_time_input,
+            enter, response.lost_focus(), escape) {
+            match parse_elapsed_edit_time(&app.elapsed_time_input) {
                 Some(seconds) => {
                     app.seek_absolute(seconds);
                     app.editing_elapsed_time = false;
+                    response.surrender_focus();
                 }
                 None => app.set_osd(app.tr("Enter a valid playback time")),
             }
         } else if response.lost_focus() {
-            if app.elapsed_time_input != app.elapsed_time_original {
-                if let Some(seconds) = parse_timecode(&app.elapsed_time_input) {
-                    app.seek_absolute(seconds);
-                }
-            }
             app.editing_elapsed_time = false;
+            response.surrender_focus();
         }
     } else {
         // A non-interactive TextEdit deliberately has no click sense. Layer a
@@ -631,6 +704,8 @@ pub fn draw_elapsed_editor(
         response = response.on_hover_text(app.tr("Click to enter an exact playback time."));
         if response.clicked() {
             begin_elapsed_edit(app);
+            ui.data_mut(|data| data.insert_temp(owner_key, edit_id));
+            ui.ctx().request_repaint();
         }
     }
 
@@ -640,7 +715,7 @@ pub fn draw_elapsed_editor(
         } else {
             format_player_time(
                 resolve_display_time(app.seek_pos, app.playback_time),
-                app.duration >= 3600.0,
+                true,
                 app.show_subseconds,
             )
         };
@@ -665,6 +740,8 @@ pub fn draw_elapsed_editor(
             if !app.editing_elapsed_time {
                 begin_elapsed_edit(app);
             }
+            ui.data_mut(|data| data.insert_temp(owner_key, edit_id));
+            app.elapsed_edit_focus_requested = false;
             ui.ctx().memory_mut(|memory| memory.request_focus(edit_id));
             ui.ctx()
                 .send_viewport_cmd(egui::ViewportCommand::RequestPaste);
@@ -1436,6 +1513,37 @@ mod tests {
         assert_eq!(value, "01:45:07.004");
         edit_timecode_segment(&mut value, &mut group, &mut digits, &egui::Event::Paste("00:01:20.250".into()));
         assert_eq!(value, "00:01:20.250");
+        assert_eq!(timecode_groups(&value), vec![0..2, 3..5, 6..8, 9..12]);
+    }
+
+    #[test]
+    fn elapsed_commit_is_explicit_or_changed_blur_and_escape_wins() {
+        let value = "00:01:02.003";
+        assert!(!elapsed_edit_should_commit(value, value, false, true, false));
+        assert!(elapsed_edit_should_commit(value, value, true, false, false));
+        assert!(elapsed_edit_should_commit(value, "00:01:02.004", false, true, false));
+        assert!(!elapsed_edit_should_commit(value, "00:01:02.004", true, true, true));
+    }
+
+    #[test]
+    fn elapsed_mask_accepts_local_digits_and_rejects_invalid_paste() {
+        assert_eq!(format_elapsed_edit_time(3.125), "00:00:03.125");
+        assert_eq!(parse_elapsed_edit_time("۰۰:۰۱:۰۲.۰۰۳"), Some(62.003));
+        for value in ["00:-1", "1e2", "NaN", "1.", ".5", "00:60:00", "100:00:00"] {
+            assert_eq!(parse_elapsed_edit_time(value), None, "{value}");
+        }
+    }
+
+    #[test]
+    fn elapsed_typed_separators_do_not_double_advance_and_backspace_preserves_mask() {
+        let mut value = "00:00:00.000".to_owned();
+        let (mut group, mut digits) = (0, 0);
+        edit_timecode_segment(&mut value, &mut group, &mut digits, &egui::Event::Text("01:23:45.678".into()));
+        assert_eq!(value, "01:23:45.678");
+        edit_timecode_segment(&mut value, &mut group, &mut digits, &egui::Event::Key {
+            key: egui::Key::Backspace, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE,
+        });
+        assert_eq!(value, "01:23:45.067");
         assert_eq!(timecode_groups(&value), vec![0..2, 3..5, 6..8, 9..12]);
     }
 
