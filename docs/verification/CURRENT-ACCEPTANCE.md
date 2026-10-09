@@ -36,8 +36,9 @@ statements are not the present product state.
   ledger, including negotiated low-latency video fallback.
 - [ ] Confirm SFX audibility, output routing/hotplug and interactive editor use.
   Real decoder/EOF/seek checks do not prove which physical speaker produced sound.
-- [ ] Recheck restart/reconnect and prepared timeline re-arming with the controller
-  owner; preserve the paused session and existing cues.
+- [x] Installed-runtime service restart/reconnect and prepared timeline re-arming
+  passed with the same Pealayer process, paused position and current cues retained.
+  See [cue/startup acceptance](CUE-STARTUP-ACCEPTANCE.md).
 - [ ] Complete safe authorized physical cue testing and sustained timing/load
   checks. VirtualBoard ACK timing is not physical edge measurement. Only the
   currently authorized R5–R7 may be used; no seat or R8 test is implied.
