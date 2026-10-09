@@ -547,7 +547,7 @@ pub struct PealayerApp {
     pub(crate) color_palette: crate::config::ColorPalette,
     pub(crate) rtl: bool,
     pub(crate) mpv: crate::mpv::player::Player,
-    pub(crate) mpv_client: libmpv2::Mpv,
+    pub(crate) mpv_client: Arc<libmpv2::Mpv>,
     pub(crate) external_catalog_revision: u64,
     pub(crate) external_seek_revision: u64,
     pub(crate) pending_external_media: Option<String>,
@@ -8664,34 +8664,68 @@ fn get_shared_mpv() -> &'static libmpv2::Mpv {
     })
 }
 
+fn observe_default_mpv_client(mpv_client: &libmpv2::Mpv) {
+    let _ = mpv_client.observe_property("time-pos", libmpv2::Format::Double, 1);
+    let _ = mpv_client.observe_property("duration", libmpv2::Format::Double, 2);
+    let _ = mpv_client.observe_property("pause", libmpv2::Format::Flag, 3);
+    let _ = mpv_client.observe_property("volume", libmpv2::Format::Double, 4);
+    let _ = mpv_client.observe_property("mute", libmpv2::Format::Flag, 5);
+    let _ = mpv_client.observe_property("sub-visibility", libmpv2::Format::Flag, 6);
+    let _ = mpv_client.observe_property("sub-font-size", libmpv2::Format::Double, 7);
+    let _ = mpv_client.observe_property("sub-delay", libmpv2::Format::Double, 8);
+    let _ = mpv_client.observe_property("sid", libmpv2::Format::String, 9);
+    let _ = mpv_client.observe_property("audio-delay", libmpv2::Format::Double, 10);
+    let _ = mpv_client.observe_property("aid", libmpv2::Format::String, 11);
+    let _ = mpv_client.observe_property("eof-reached", libmpv2::Format::Flag, 12);
+    let _ = mpv_client.observe_property("container-fps", libmpv2::Format::Double, 13);
+    let _ = mpv_client.observe_property("seekable", libmpv2::Format::Flag, 14);
+    let _ = mpv_client.observe_property("demuxer-cache-duration", libmpv2::Format::Double, 15);
+    let _ = mpv_client.observe_property("cache-buffering-state", libmpv2::Format::Int64, 16);
+    let _ = mpv_client.observe_property("vid", libmpv2::Format::String, 18);
+    let _ = mpv_client.observe_property("sub-text", libmpv2::Format::String, 19);
+    let _ = mpv_client.observe_property("sub-pos", libmpv2::Format::Double, 20);
+    let _ = mpv_client.observe_property("video-out-params/aspect", libmpv2::Format::Double, 21);
+    let _ = mpv_client.observe_property("paused-for-cache", libmpv2::Format::Flag, 22);
+}
+
+#[cfg(not(test))]
+fn default_mpv_client(mpv: &libmpv2::Mpv) -> Arc<libmpv2::Mpv> {
+    let mpv_client = Arc::new(
+        mpv.create_client(None)
+            .expect("Failed to create mpv client"),
+    );
+    observe_default_mpv_client(&mpv_client);
+    mpv_client
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static TEST_MPV_CLIENT: Arc<libmpv2::Mpv> = {
+        let mpv_client = Arc::new(
+            get_shared_mpv()
+                .create_client(None)
+                .expect("Failed to create shared test mpv client"),
+        );
+        observe_default_mpv_client(&mpv_client);
+        mpv_client
+    };
+}
+
+#[cfg(test)]
+fn default_mpv_client(_mpv: &libmpv2::Mpv) -> Arc<libmpv2::Mpv> {
+    let mpv_client = TEST_MPV_CLIENT.with(Arc::clone);
+    // Every unit fixture starts with an empty client event queue. The player
+    // core was already process-global; sharing this client only avoids the
+    // native create/destroy churn that can crash the Windows GNU harness.
+    while mpv_client.wait_event(0.0).is_some() {}
+    mpv_client
+}
+
 impl Default for PealayerApp {
     fn default() -> Self {
         let mpv = get_shared_mpv();
         let _ = mpv.set_property("keep-open", "always");
-        let mpv_client = mpv
-            .create_client(None)
-            .expect("Failed to create mpv client");
-        let _ = mpv_client.observe_property("time-pos", libmpv2::Format::Double, 1);
-        let _ = mpv_client.observe_property("duration", libmpv2::Format::Double, 2);
-        let _ = mpv_client.observe_property("pause", libmpv2::Format::Flag, 3);
-        let _ = mpv_client.observe_property("volume", libmpv2::Format::Double, 4);
-        let _ = mpv_client.observe_property("mute", libmpv2::Format::Flag, 5);
-        let _ = mpv_client.observe_property("sub-visibility", libmpv2::Format::Flag, 6);
-        let _ = mpv_client.observe_property("sub-font-size", libmpv2::Format::Double, 7);
-        let _ = mpv_client.observe_property("sub-delay", libmpv2::Format::Double, 8);
-        let _ = mpv_client.observe_property("sid", libmpv2::Format::String, 9);
-        let _ = mpv_client.observe_property("audio-delay", libmpv2::Format::Double, 10);
-        let _ = mpv_client.observe_property("aid", libmpv2::Format::String, 11);
-        let _ = mpv_client.observe_property("eof-reached", libmpv2::Format::Flag, 12);
-        let _ = mpv_client.observe_property("container-fps", libmpv2::Format::Double, 13);
-        let _ = mpv_client.observe_property("seekable", libmpv2::Format::Flag, 14);
-        let _ = mpv_client.observe_property("demuxer-cache-duration", libmpv2::Format::Double, 15);
-        let _ = mpv_client.observe_property("cache-buffering-state", libmpv2::Format::Int64, 16);
-        let _ = mpv_client.observe_property("vid", libmpv2::Format::String, 18);
-        let _ = mpv_client.observe_property("sub-text", libmpv2::Format::String, 19);
-        let _ = mpv_client.observe_property("sub-pos", libmpv2::Format::Double, 20);
-        let _ = mpv_client.observe_property("video-out-params/aspect", libmpv2::Format::Double, 21);
-        let _ = mpv_client.observe_property("paused-for-cache", libmpv2::Format::Flag, 22);
+        let mpv_client = default_mpv_client(mpv);
         let (_interop_tx, interop_rx) = std::sync::mpsc::channel();
         let (_controller_cmd_tx, controller_cmd_rx) =
             std::sync::mpsc::channel::<crate::platform::interop::ControllerDelivery>();
@@ -10586,6 +10620,14 @@ pub(crate) mod tests {
             MPV_VIDEO_TIMING_OFFSET_SECONDS, 0.0,
             "video-timing-offset must be 0.0 to prevent libmpv from sleeping the UI render thread"
         );
+    }
+
+    #[test]
+    fn unit_app_fixtures_reuse_one_observed_mpv_client_per_test_thread() {
+        let _lock = lock_app_tests();
+        let first = PealayerApp::default();
+        let second = PealayerApp::default();
+        assert!(Arc::ptr_eq(&first.mpv_client, &second.mpv_client));
     }
 
     #[test]

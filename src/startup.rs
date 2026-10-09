@@ -645,7 +645,7 @@ pub fn run() -> eframe::Result {
                 color_palette: loaded_config.color_palette,
                 rtl,
                 mpv: crate::mpv::player::Player(mpv_static),
-                mpv_client,
+                mpv_client: Arc::new(mpv_client),
                 external_catalog_revision: 0,
                 external_seek_revision: 0,
                 pending_external_media: None,
