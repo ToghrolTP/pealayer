@@ -207,3 +207,12 @@ policy blocker is not a completed deployment and must not be bypassed.
 - Persistent prose must be actionable; obvious update narration is omitted.
 - A visually similar control is not parity unless it calls the same command and
   reacts to the same authoritative event stream.
+
+## Effect Controls refinement
+
+The native dock inspector and cue modal retain one shared renderer with compact,
+responsive exact-time fields, semantic values, fixed-duration rules and collapsed
+identifiers. The Web direct-cue modal now follows the same timing/output grouping
+and state colors. Full controller/sequence inspector parity remains outstanding;
+this visual refinement is not that broader completion claim. See
+[scope and verification](verification/EFFECT-CONTROLS-INSPECTOR.md).
