@@ -16,6 +16,15 @@ widths, and has been exercised against live state rather than sample data.
 
 ## Current product ledger
 
+External mpv (9 October): [modes and protocol](external-mpv.md) adds the same
+event-driven player adapter to native/Web/IPC/peer controls and the hardware
+clock: external-only, managed or attached dual preview, and remote control of
+existing mpv. Preferences use the shared contract; player snapshots expose
+actual connection/ownership/errors. Real Windows IPC tests verified bidirectional
+state, muted preview, reconnect/no replay, owned-process cleanup and 32 command
+acknowledgements in about 21 ms. Linux/macOS and human visual/audio acceptance
+remain explicit; no claim of frame-locked independent decoders or complete parity.
+
 Copied links and source browsing (9 October): [remote-location workflow](remote-folders.md)
 adds default-enabled text-only clipboard URL observation, debounced live inputs,
 parallel proxy/direct validation with manual overrides, a stable refresh/loading

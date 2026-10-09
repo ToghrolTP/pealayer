@@ -1188,6 +1188,8 @@ pub fn runtime_identity() -> RuntimeIdentity {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerStatusResponse {
     #[serde(default)]
+    pub external_mpv: crate::mpv::external::Status,
+    #[serde(default)]
     pub application: ApplicationIdentity,
     #[serde(default)]
     pub runtime: RuntimeIdentity,
@@ -1535,6 +1537,7 @@ fn default_playback_rate() -> f64 {
 impl Default for PlayerStatusResponse {
     fn default() -> Self {
         Self {
+            external_mpv: crate::mpv::external::Status::default(),
             application: ApplicationIdentity::default(),
             runtime: RuntimeIdentity::default(),
             rf: Value::Null,
@@ -2367,6 +2370,10 @@ pub fn get_live_config() -> crate::config::AppConfig {
 }
 
 /// Small live-policy read for the media observer; no config/disk clone per tick.
+pub(crate) fn external_mpv_settings() -> crate::mpv::external::Settings {
+    LIVE_CONFIG.read().ok().and_then(|config|config.as_ref().map(|config|config.external_mpv.clone())).unwrap_or_default()
+}
+
 pub(crate) fn allow_unattended_hardware_takeover() -> bool {
     !crate::peer::active() && LIVE_CONFIG.read().ok()
         .and_then(|config| config.as_ref().map(|config| config.allow_unattended_hardware_takeover))

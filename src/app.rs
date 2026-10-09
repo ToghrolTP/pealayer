@@ -544,6 +544,10 @@ pub struct PealayerApp {
     pub(crate) rtl: bool,
     pub(crate) mpv: crate::mpv::player::Player,
     pub(crate) mpv_client: libmpv2::Mpv,
+    pub(crate) external_catalog_revision: u64,
+    pub(crate) external_seek_revision: u64,
+    pub(crate) pending_external_media: Option<String>,
+    pub(crate) pending_external_pause: bool,
     pub(crate) render_context: Arc<Mutex<Option<RenderContextWrapper>>>,
 
     pub playback_time: f64,
@@ -983,6 +987,7 @@ impl eframe::App for PealayerApp {
             self.process_shell_commands(ctx);
         }
         self.process_controller_call_results();
+        crate::mpv::external::configure(self.mpv.0, ctx, crate::platform::interop::external_mpv_settings());
         if crate::mpv::sfx::initialize(self.engine_handle.media_playback.clone(), self.engine_handle.estop_active.clone(), ctx) {
             crate::mpv::sfx::update_plan(&self.timeline);
         }
@@ -1398,6 +1403,7 @@ impl eframe::App for PealayerApp {
             let chapters = self.media_chapters();
             let current_chapter_index = self.active_media_chapter().map(|chapter| chapter.index);
             let status_resp = crate::platform::interop::PlayerStatusResponse {
+                external_mpv: crate::mpv::external::status(),
                 application: crate::platform::interop::ApplicationIdentity::current(&self.app_name),
                 runtime: crate::platform::interop::runtime_identity(),
                 rf: self.rf.snapshot(),
@@ -2087,6 +2093,7 @@ impl eframe::App for PealayerApp {
     fn persist_egui_memory(&self)->bool { !crate::peer::active() }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        crate::mpv::external::shutdown();
         // Never leave a press-and-hold channel active merely because Pealayer
         // was closed before the operating system delivered the key-up event.
         self.release_active_hardware_bindings();
@@ -4757,6 +4764,24 @@ impl PealayerApp {
     pub fn process_events(&mut self) {
         use libmpv2::events::{Event, PropertyData};
 
+        if crate::mpv::external::active() {
+            if crate::mpv::external::status().connected && let Some(target) = self.pending_external_media.take() {self.load_media_target(&target);}
+            while let Some(event) = self.mpv_client.wait_event(0.0) {
+                if matches!(event, Ok(Event::EndFile(4))) && crate::mpv::external::preview() {
+                    crate::mpv::external::set_preview_error("Internal preview could not decode the media; external playback and controls remain available".into());
+                }
+            }
+            self.process_external_mpv();
+            self.update_seek_completion_state();
+            self.settle_scrub_commit_if_ready();
+            if self.last_playback_position_checkpoint.elapsed() >= std::time::Duration::from_secs(5) {
+                self.last_playback_position_checkpoint = std::time::Instant::now();
+                if self.capture_current_playback_position() {self.save_config();}
+            }
+            self.update_shell_state();
+            return;
+        }
+
         self.update_seek_completion_state();
         loop {
             match self.mpv_client.wait_event(0.0) {
@@ -5009,6 +5034,56 @@ impl PealayerApp {
             }
         }
         self.update_shell_state();
+    }
+
+    /// Adopt external playback events without dispatching them back to mpv.
+    fn process_external_mpv(&mut self) {
+        let s = crate::mpv::external::status();
+        let path = s.properties.get("path").and_then(serde_json::Value::as_str).filter(|p| !p.is_empty()).map(|p|std::path::PathBuf::from(crate::mpv::external::resolve_path(&s,p)));
+        if s.connected && path != self.current_video_path {
+            self.current_video_path = path;
+            self.reset_scrub_state();
+            self.clear_frame_cache();
+            self.show_error = None;
+        }
+        self.is_paused = !s.connected || self.mpv.get_property::<bool>("pause").unwrap_or(true);
+        let previous_eof=self.is_eof;
+        self.is_eof = self.mpv.get_property::<bool>("eof-reached").unwrap_or(false);
+        if !self.is_scrubbing && self.pending_scrub_commit.is_none() {
+            self.playback_time = self.mpv.get_property::<f64>("time-pos").unwrap_or(self.playback_time);
+        }
+        self.duration = self.mpv.get_property::<f64>("duration").unwrap_or(0.0);
+        self.is_seekable = self.mpv.get_property::<bool>("seekable").unwrap_or(false);
+        self.volume = self.mpv.get_property::<f64>("volume").unwrap_or(self.volume);
+        self.is_muted = self.mpv.get_property::<bool>("mute").unwrap_or(self.is_muted);
+        self.playback_rate = self.mpv.get_property::<f64>("speed").unwrap_or(self.playback_rate);
+        self.media_fps = self.mpv.get_property::<f64>("container-fps").unwrap_or(0.0);
+        self.cache_duration = self.mpv.get_property::<f64>("demuxer-cache-duration").ok();
+        self.cache_buffering_percent = self.mpv.get_property::<i64>("cache-buffering-state").ok().map(|v|v as f64);
+        let previous_subtitle=(self.subtitle_text.clone(),self.sub_font_size,self.sub_position_percent);
+        if !self.uses_processed_subtitle_overlay() {self.sub_visibility = self.mpv.get_property::<bool>("sub-visibility").unwrap_or(true);}
+        self.subtitle_text = self.mpv.get_property::<String>("sub-text").unwrap_or_default();
+        self.sub_font_size = self.mpv.get_property::<f64>("sub-font-size").unwrap_or(self.sub_font_size);
+        self.sub_position_percent = self.mpv.get_property::<f64>("sub-pos").unwrap_or(self.sub_position_percent);
+        self.sub_delay = self.mpv.get_property::<f64>("sub-delay").unwrap_or(self.sub_delay);
+        self.audio_delay = self.mpv.get_property::<f64>("audio-delay").unwrap_or(self.audio_delay);
+        if let Ok(aspect) = self.mpv.get_property::<f64>("video-out-params/aspect")
+            && aspect.is_finite() && (0.05..=20.0).contains(&aspect) && (aspect-self.video_aspect_ratio).abs()>f64::EPSILON {
+            self.video_aspect_ratio = aspect; self.pending_video_aspect_resize = true;
+        }
+        if s.seek_revision != self.external_seek_revision {
+            self.external_seek_revision = s.seek_revision;
+            if let Some(pending) = self.pending_scrub_commit.as_mut() {pending.playback_restarted = true;}
+        }
+        if s.connected && s.catalog_revision != self.external_catalog_revision {
+            self.external_catalog_revision = s.catalog_revision;
+            self.media_metadata_loaded = self.current_video_path.is_some();
+            self.refresh_media_tracks();
+        }
+        if s.connected && previous_subtitle!=(self.subtitle_text.clone(),self.sub_font_size,self.sub_position_percent) {self.sync_subtitle_rendering();}
+        if self.is_eof && !previous_eof && let Some(next)=self.remote_neighbor(1,true) {self.play_remote_location(next);}
+        self.engine_handle.is_playing.store(s.connected && !self.is_paused && !self.is_eof && !self.mpv.get_property::<bool>("paused-for-cache").unwrap_or(false), std::sync::atomic::Ordering::Relaxed);
+        self.engine_handle.playback_time_ms.store((self.playback_time.max(0.0)*1000.0) as u64, std::sync::atomic::Ordering::Relaxed);
     }
 
     /// Returns true if video playback has finished (at EOF or at duration limit while paused).
@@ -5822,6 +5897,9 @@ impl PealayerApp {
     }
 
     fn clear_subtitle_overlay(&self) {
+        if crate::mpv::external::active() && crate::mpv::external::status().connected {
+            let _=crate::mpv::external::command("osd-overlay", &["7301","none","","0","720","10"]);
+        }
         let _ = self
             .mpv_client
             .command("osd-overlay", &["7301", "none", "", "0", "720", "10"]);
@@ -5858,6 +5936,9 @@ impl PealayerApp {
             self.sub_font_size,
             self.sub_position_percent,
         );
+        if crate::mpv::external::active() {
+            let _=crate::mpv::external::command("osd-overlay", &["7301","ass-events",&event,"1280","720","10"]);
+        }
         let _ = self.mpv_client.command(
             "osd-overlay",
             &["7301", "ass-events", &event, "1280", "720", "10"],
@@ -6114,6 +6195,9 @@ impl PealayerApp {
     }
 
     pub fn load_video_file(&mut self, path: std::path::PathBuf) {
+        if crate::mpv::external::active() && !crate::mpv::external::status().connected {
+            self.load_media_target(&path.to_string_lossy()); return;
+        }
         if crate::peer::active(){self.load_media_target(&path.to_string_lossy());return;}
         let path_str = path.to_str().unwrap_or("");
         if !path_str.is_empty() {
@@ -6125,7 +6209,13 @@ impl PealayerApp {
             self.capture_current_playback_position();
             self.pending_resume_position = self.resume_position_for(path_str);
             let _ = self.mpv.set_property("keep-open", "always");
-            let _ = self.mpv.command("loadfile", &[path_str, "replace"]);
+            let _ = if crate::mpv::external::active() {
+                // Supply the resume point with this load, not a later seek
+                // against cached properties from the previously loaded file.
+                let start=self.pending_resume_position.take().unwrap_or(0.0);
+                let pause=std::mem::take(&mut self.pending_external_pause);
+                self.mpv.command("loadfile", &[path_str,"replace","-1",&format!("start={start},pause={}",if pause {"yes"} else {"no"})])
+            } else {self.mpv.command("loadfile", &[path_str, "replace"])};
             self.current_video_path = Some(path.clone());
             self.last_media_target = Some(path.clone());
             self.is_eof = false;
@@ -6227,6 +6317,9 @@ impl PealayerApp {
     }
 
     pub fn load_url(&mut self, url: &str) {
+        if crate::mpv::external::active() && !crate::mpv::external::status().connected {
+            self.load_media_target(url); return;
+        }
         if crate::peer::active() && !crate::peer::mirroring() { self.load_media_target(url); return; }
         let trimmed = url.trim();
         if !trimmed.is_empty() {
@@ -6235,7 +6328,13 @@ impl PealayerApp {
             self.capture_current_playback_position();
             self.pending_resume_position = self.resume_position_for(trimmed);
             let _ = self.mpv.set_property("keep-open", "always");
-            let _ = if crate::media::prefers_rtsp_tcp(trimmed) {
+            let _ = if crate::mpv::external::active() {
+                let start=self.pending_resume_position.take().unwrap_or(0.0);
+                let pause=std::mem::take(&mut self.pending_external_pause);
+                let mut options=format!("start={start},pause={}",if pause {"yes"} else {"no"});
+                if crate::media::prefers_rtsp_tcp(trimmed) {options.push_str(",demuxer-lavf-o=rtsp_transport=tcp");}
+                self.mpv.command("loadfile", &[trimmed,"replace","-1",&options])
+            } else if crate::media::prefers_rtsp_tcp(trimmed) {
                 // TCP interleaving is materially more reliable for surveillance
                 // cameras crossing Windows firewalls/NAT and avoids short UDP
                 // sessions being mistaken for finite clips.
@@ -6272,7 +6371,7 @@ impl PealayerApp {
     }
 
     pub(crate) fn synchronize_playback_proxy(&self) -> Result<(), String> {
-        crate::mpv::proxy::apply_runtime(
+        crate::mpv::proxy::apply_player_runtime(
             &self.mpv,
             self.open_url_use_proxy,
             &self.open_url_proxy_url,
@@ -6280,6 +6379,11 @@ impl PealayerApp {
     }
 
     pub fn load_media_target(&mut self, target: &str) {
+        if crate::mpv::external::active() && !crate::mpv::external::status().connected {
+            self.pending_external_media = Some(target.to_string());
+            self.set_osd("Waiting for external mpv to connect".into());
+            return;
+        }
         if let Some(client)=crate::peer::client() && !crate::peer::mirroring() {
             if let Err(error)=client.queue("/api/player/command",serde_json::json!({"command":"open","target":target})) {self.set_osd(error)}
             return;
@@ -6314,7 +6418,7 @@ impl PealayerApp {
     }
 
     pub fn play_remote_location(&mut self, playback: crate::remote_location::Playback) {
-        if let Err(error) = crate::mpv::proxy::apply_runtime(&self.mpv, playback.use_proxy, &self.open_url_proxy_url) { self.set_osd(error.to_string()); return; }
+        if let Err(error) = crate::mpv::proxy::apply_player_runtime(&self.mpv, playback.use_proxy, &self.open_url_proxy_url) { self.set_osd(error.to_string()); return; }
         let _ = self.mpv.set_property("options/user-agent", crate::remote_location::USER_AGENT);
         self.load_url(&playback.target);
         // loadfile inherits MPV's pause flag. A browser Play/Next command must
@@ -6896,10 +7000,11 @@ impl PealayerApp {
             self.dock_state = dock_state;
         }
 
-        let _ = self.mpv.set_property("volume", self.volume);
-        let _ = self.mpv.set_property("mute", self.is_muted);
         let audio_device = if config.audio_device.trim().is_empty() { "auto" } else { config.audio_device.as_str() };
         crate::mpv::sfx::outputs(audio_device, &config.sfx_audio_device);
+        if !crate::mpv::external::active() || crate::mpv::external::status().connected {
+        let _ = self.mpv.set_property("volume", self.volume);
+        let _ = self.mpv.set_property("mute", self.is_muted);
         if let Err(error) = self.mpv.set_property("audio-device", audio_device) {
             log::warn!("{error}; falling back to the system default audio output");
             self.mpv.set_property("audio-device", "auto")
@@ -6910,11 +7015,12 @@ impl PealayerApp {
         let _ = self.mpv.set_property("sub-pos", self.sub_position_percent);
         let _ = self.mpv.set_property("audio-delay", self.audio_delay);
         self.sync_subtitle_rendering();
-        crate::mpv::proxy::apply_runtime(
+        crate::mpv::proxy::apply_player_runtime(
             &self.mpv,
             self.open_url_use_proxy,
             &self.open_url_proxy_url,
         )?;
+        }
         if !crate::peer::active(){crate::platform::windows::sync_windows_jump_list_with_options(
             &self.recent_media,
             self.windows_jump_list_quick_actions,
@@ -6935,6 +7041,7 @@ impl PealayerApp {
             );
         }
         crate::platform::interop::set_live_config(config);
+        crate::mpv::external::configure(self.mpv.0, ctx, crate::platform::interop::get_live_config().external_mpv);
         Ok(())
     }
 
@@ -8530,6 +8637,10 @@ impl Default for PealayerApp {
                 crate::config::resolve_language(crate::config::AppLanguage::System),
             ),
             mpv: crate::mpv::player::Player(mpv),
+            external_catalog_revision: 0,
+            external_seek_revision: 0,
+            pending_external_media: None,
+            pending_external_pause: false,
             mpv_client,
             render_context: Arc::new(Mutex::new(None)),
             playback_time: 0.0,

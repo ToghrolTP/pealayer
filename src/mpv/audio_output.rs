@@ -14,6 +14,10 @@ pub struct AudioDevice {
 static DEVICES: OnceLock<RwLock<Vec<AudioDevice>>> = OnceLock::new();
 static DISCOVERING: AtomicBool = AtomicBool::new(false);
 pub fn available_audio_devices() -> Vec<AudioDevice> {
+    if crate::mpv::external::active() {
+        return crate::mpv::external::property("audio-device-list")
+            .and_then(|v| serde_json::from_value(v).ok()).unwrap_or_else(default_devices);
+    }
     DEVICES
         .get_or_init(|| RwLock::new(default_devices()))
         .read()
