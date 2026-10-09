@@ -595,7 +595,7 @@ pub struct PealayerApp {
     pub(crate) is_scrubbing: bool,
     pub(crate) pending_scrub_commit: Option<PendingScrubCommit>,
     pub(crate) last_mouse_activity: std::time::Instant,
-    pub(crate) frame_rate_tracker: FrameRateTracker,
+    pub frame_rate_tracker: FrameRateTracker,
     pub display_refresh_rate: f64,
     pub(crate) pin_controls: bool,
 
@@ -801,7 +801,7 @@ pub struct PealayerApp {
     pub(crate) windows_video_taskbar_thumbnail: bool,
     pub(crate) windows_thumbnail_toolbar: bool,
     pub(crate) windows_jump_list_quick_actions: bool,
-    pub(crate) opengl_vsync: bool,
+    pub opengl_vsync: bool,
     pub(crate) live_video_during_window_move: bool,
     pub(crate) compositor_paced_window_move: bool,
     pub(crate) native_dialog_windows: bool,
@@ -4965,9 +4965,13 @@ impl PealayerApp {
         if !self.is_active_playback() {
             return None;
         }
-        let target_hz = self.display_refresh_rate.clamp(20.0, 360.0);
-        let target_interval = std::time::Duration::from_secs_f64(1.0 / target_hz);
-        Some(PlaybackRepaintPacing::Paced(target_interval))
+        if self.opengl_vsync {
+            Some(PlaybackRepaintPacing::VSync)
+        } else {
+            let target_hz = self.display_refresh_rate.clamp(20.0, 360.0);
+            let target_interval = std::time::Duration::from_secs_f64(1.0 / target_hz);
+            Some(PlaybackRepaintPacing::Paced(target_interval))
+        }
     }
 
     /// Requests repaints during active playback to decouple the UI frame rate from
@@ -9891,7 +9895,11 @@ pub(crate) mod tests {
         app.playback_time = 10.0;
         assert!(app.is_active_playback(), "Unpaused loaded media must be active playback");
 
-        // Playback pacing should adapt to the desktop display refresh rate
+        // When opengl_vsync is enabled (default), playback pacing delegates directly to hardware VSync
+        assert_eq!(app.playback_repaint_pacing(), Some(PlaybackRepaintPacing::VSync));
+
+        // When opengl_vsync is disabled, playback pacing adapts to the desktop display refresh rate
+        app.opengl_vsync = false;
         app.display_refresh_rate = 60.0;
         match app.playback_repaint_pacing() {
             Some(PlaybackRepaintPacing::Paced(dur)) => {
@@ -10022,6 +10030,12 @@ pub(crate) mod tests {
         app.current_video_path = Some(std::path::PathBuf::from("test.mp4"));
         app.is_paused = false;
         app.is_eof = false;
+
+        // VSync pacing when opengl_vsync is true (default)
+        assert_eq!(app.playback_repaint_pacing(), Some(PlaybackRepaintPacing::VSync));
+
+        // When VSync is disabled, desktop pacing adapts to display refresh rate
+        app.opengl_vsync = false;
 
         // 144 Hz display pacing
         app.display_refresh_rate = 144.0;

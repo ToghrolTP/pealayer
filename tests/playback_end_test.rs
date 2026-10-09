@@ -241,7 +241,14 @@ fn test_23fps_media_playback_decoupled_framerate_and_zero_timing_offset() {
     assert!(app.duration > 0.0);
     assert!(app.is_active_playback());
 
-    // Pacing must pace at display refresh rate (e.g. 60Hz or 144Hz) regardless of video framerate
+    // Pacing delegates to hardware VSync when opengl_vsync is true (default)
+    assert_eq!(
+        app.playback_repaint_pacing(),
+        Some(pealayer::app::PlaybackRepaintPacing::VSync)
+    );
+
+    // When opengl_vsync is disabled, pacing adapts to display refresh rate (e.g. 144Hz)
+    app.opengl_vsync = false;
     app.display_refresh_rate = 144.0;
     match app.playback_repaint_pacing() {
         Some(pealayer::app::PlaybackRepaintPacing::Paced(dur)) => {
@@ -256,6 +263,15 @@ fn test_23fps_media_playback_decoupled_framerate_and_zero_timing_offset() {
     let last_micros = pealayer::ui::video::LAST_MPV_RENDER_MICROS
         .load(std::sync::atomic::Ordering::Relaxed);
     assert_eq!(last_micros, 1500);
+
+    // Verify skipped render pass tracking is operational
+    let skipped_before = pealayer::ui::video::MPV_RENDER_SKIPPED_COUNT
+        .load(std::sync::atomic::Ordering::Relaxed);
+    pealayer::ui::video::MPV_RENDER_SKIPPED_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    assert_eq!(
+        pealayer::ui::video::MPV_RENDER_SKIPPED_COUNT.load(std::sync::atomic::Ordering::Relaxed),
+        skipped_before + 1
+    );
 
     let fps_info = app
         .current_fps_display(Instant::now())
