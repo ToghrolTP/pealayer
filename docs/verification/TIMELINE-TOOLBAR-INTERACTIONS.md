@@ -48,12 +48,19 @@ drawing are also deferred until the actual dock has been returned.
 
 ## Acceptance and delivery
 
-Implementation checkpoint: source regressions were added for narrow config
-patches, deferred dock saves, ordering, invariant button bounds, pixel-aligned
-toolbar geometry and held-pan timing. **They have not been run**, per the user's
-request to defer tests and slow CI waits. Formatting and diff hygiene are not
-runtime verification. An executable-only native build and host-specific graceful
-deployment remain required; record results below when actually observed.
+Implementation checkpoint: source regressions cover narrow config patches,
+deferred dock saves, ordering, invariant button bounds, pixel-aligned toolbar
+geometry and held-pan timing. A focused exact-head run initially found an egui
+test-output texture delta that was not explicitly cleared; the test harness now
+discards that headless font-atlas update. The repeated focused run passed 10/10,
+and the full Rust library suite passed 666/666 on Windows.
+
+An optimized Windows BuildOnly completed in 1 minute 48 seconds at combined
+source head `9f0f9f2c61723798c149beb6cb8860413dec696f`. `--build-info` reported that
+exact clean head and the executable SHA-256 was
+`908c43b9034fcd462ebf42fecb55299e1077d8a4f6c358dca8afe817c6d02d79`.
+The subsequent test-harness-only cleanup means the final merged `main` still
+requires its own build and graceful two-host deployment before completion.
 
 Manual acceptance on the deployed app (no hardware actuation required):
 
@@ -69,10 +76,10 @@ Manual acceptance on the deployed app (no hardware actuation required):
 5. Pan/zoom at the host's actual DPI. The toolbar stays flush right without
    one-pixel jitter or ruler ticks painted behind it; the menu remains compact.
 
-Build, deployment and visual acceptance: pending at this source checkpoint.
+Final-main build, deployment and visual acceptance: pending at this source checkpoint.
 
 The fix branch now includes a normal merge of consolidated main after the
 dependency and frame-accurate scrubbing PRs were merged. Both toolbar fields
 and the new frame-cache/active-preview startup fields are retained. No rebase
-or force-push was used. This pass does not repeat the consolidation owner's
-tests; the user's test/slow-CI deferral remains in force for this toolbar work.
+or force-push was used. The focused and full library test evidence above was
+collected by the consolidation owner after the feature implementation pass.

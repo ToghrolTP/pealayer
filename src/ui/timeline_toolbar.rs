@@ -438,7 +438,7 @@ mod tests {
         let rect = Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(CELL, CELL));
         for selected in [false, true] {
             let mut actual = Rect::NOTHING;
-            let output = context.run_ui(egui::RawInput::default(), |ui| {
+            let mut output = context.run_ui(egui::RawInput::default(), |ui| {
                 actual = control(
                     ui,
                     rect,
@@ -451,7 +451,10 @@ mod tests {
                 .rect;
             });
             assert_eq!(actual, rect);
-            drop(output);
+            // `control` renders an icon glyph, so this headless test owns an
+            // unapplied font-atlas texture update. Discard it explicitly just
+            // as an integration would upload it before dropping `FullOutput`.
+            output.textures_delta.clear();
         }
     }
 }
