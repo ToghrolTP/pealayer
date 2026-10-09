@@ -537,10 +537,11 @@ impl Client {
         use sha2::{Digest, Sha256};
         use std::io::Read;
         let directory = crate::server::thumbnails::get_thumbnail_cache_dir().join("peers");
-        let key = format!(
-            "{:x}",
-            Sha256::digest(format!("{}\n{target}", self.origin).as_bytes())
-        );
+        let digest = Sha256::digest(format!("{}\n{target}", self.origin).as_bytes());
+        let key = digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
         let path = directory.join(format!("{key}.jpg"));
         if path.is_file() {
             return Ok(path);
