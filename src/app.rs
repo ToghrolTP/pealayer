@@ -3857,7 +3857,12 @@ impl PealayerApp {
             InteropCommand::Play => self.play(),
             InteropCommand::Pause => self.pause(),
             InteropCommand::TogglePause => self.toggle_playback(),
-            InteropCommand::Stop => self.close_video(),
+            InteropCommand::Stop => {
+                // Preserve the NLE stop button's recording punch-out at the
+                // session authority, including when requested by a consumer.
+                self.commit_recorded_samples();
+                self.close_video();
+            }
             InteropCommand::Next => {
                 if let Some(next) = self.remote_neighbor(1, false) { self.play_remote_location(next); }
                 else if !self.has_remote_playlist() { let _ = self.mpv.command("playlist-next", &["force"]); }

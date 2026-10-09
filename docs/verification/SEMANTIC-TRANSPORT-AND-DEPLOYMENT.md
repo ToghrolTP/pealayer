@@ -18,6 +18,8 @@ overwrote local paused/time fields. A remote consumer could therefore stop its
 preview without stopping the authority. It now uses the existing session-owned
 `InteropCommand::Stop`, matching IPC, media keys and the Web command contract:
 Stop closes the current media. It does not create a second remote-only path.
+Recording punch-out is preserved at the session authority before closing media,
+so remote requests do not lose the NLE button's previous capture behavior.
 
 ## Current acceptance limits
 
