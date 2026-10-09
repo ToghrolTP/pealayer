@@ -8,6 +8,7 @@ pub fn emit_build_metadata() {
         "GITHUB_REF_NAME",
         "GITHUB_ACTIONS",
         "PEALAYER_CI_VERIFIED_SOURCE_CLEAN",
+        "PEALAYER_PACKAGE_VERIFIED_SOURCE_CLEAN",
     ] {
         println!("cargo:rerun-if-env-changed={name}");
     }
@@ -30,13 +31,16 @@ pub fn emit_build_metadata() {
         .filter(|value| !value.trim().is_empty())
         .or_else(|| git_output(&["rev-parse", "--abbrev-ref", "HEAD"]))
         .unwrap_or_else(|| "unknown".to_string());
-    // Platform jobs replace only the tracked generated Web bundle with the
-    // artifact produced and tested by this same workflow. The workflow proves
-    // that no source outside that bundle changed before setting this override;
-    // ordinary/local builds must still derive dirtiness from Git directly.
+    // Platform jobs and the Windows packager replace only the tracked generated
+    // Web bundle with an artifact produced and tested in the same run. Their
+    // callers prove that no source outside that bundle changed before setting
+    // these narrowly scoped overrides; ordinary builds still derive dirtiness
+    // from Git directly.
     let ci_verified_clean = std::env::var("GITHUB_ACTIONS").as_deref() == Ok("true")
         && std::env::var("PEALAYER_CI_VERIFIED_SOURCE_CLEAN").as_deref() == Ok("true");
-    let dirty = !ci_verified_clean
+    let package_verified_clean =
+        std::env::var("PEALAYER_PACKAGE_VERIFIED_SOURCE_CLEAN").as_deref() == Ok("true");
+    let dirty = !(ci_verified_clean || package_verified_clean)
         && std::process::Command::new("git")
             .args(["status", "--porcelain", "--untracked-files=no"])
             .output()
