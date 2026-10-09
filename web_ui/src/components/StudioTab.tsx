@@ -1098,14 +1098,14 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
             control_key: directCueControl,
             value_basis_points: Math.round(directCuePercent * 100),
             start_time_ms: Math.max(0, Math.round(directCueStart * 1000)),
-            duration_ms: Math.max(100, Math.round(directCueDuration * 1000)),
+            duration_ms: Math.max(50, Math.round(directCueDuration * 1000)),
             behavior: directCueBehavior,
             end_value_basis_points: Math.round(directCueEndPercent * 100),
           });
           if (!saved) return;
           if (editingDirectCue && !await sendCmd('pealayer.timeline.effect.update', {
             instance_id: editingDirectCue, start_time_ms: Math.round(directCueStart * 1000),
-            duration_ms: Math.max(100, Math.round(directCueDuration * 1000)),
+            duration_ms: Math.max(50, Math.round(directCueDuration * 1000)),
           })) return;
           setDirectCueControl(null);
         }}
