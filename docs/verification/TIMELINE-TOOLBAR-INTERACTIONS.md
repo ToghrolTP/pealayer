@@ -70,3 +70,9 @@ Manual acceptance on the deployed app (no hardware actuation required):
    one-pixel jitter or ruler ticks painted behind it; the menu remains compact.
 
 Build, deployment and visual acceptance: pending at this source checkpoint.
+
+The fix branch now includes a normal merge of consolidated main after the
+dependency and frame-accurate scrubbing PRs were merged. Both toolbar fields
+and the new frame-cache/active-preview startup fields are retained. No rebase
+or force-push was used. This pass does not repeat the consolidation owner's
+tests; the user's test/slow-CI deferral remains in force for this toolbar work.
