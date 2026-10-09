@@ -4820,6 +4820,7 @@ impl PealayerApp {
                     self.is_eof = false;
                     self.playback_time = 0.0;
                     self.duration = 0.0;
+                    self.media_fps = 0.0;
                     self.is_seekable = false;
                     self.media_metadata_loaded = false;
                     self.media_file_info = crate::media_info::MediaFileInfo::default();
@@ -8724,7 +8725,7 @@ pub(crate) mod tests {
         app.last_web_broadcast = Some(std::time::Instant::now() - std::time::Duration::from_millis(300));
         let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| eframe::App::logic(&mut app, ctx, &mut frame));
         let status: serde_json::Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
-        assert_eq!(status["hardware_details"]["telemetry"]["supply_mv"], 12123);
+        assert_eq!(status["hardware_details"]["telemetry"]["bus_mv"], 12123);
     }
 
     #[test]
