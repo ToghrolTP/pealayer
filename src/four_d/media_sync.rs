@@ -121,6 +121,34 @@ struct ControllerPlanIdentity {
     revision: u64,
 }
 
+#[derive(serde::Deserialize)]
+struct ControllerClockIdentity {
+    client_id: String,
+    sequence: u64,
+}
+
+fn reconcile_clock_sequence(
+    client_id: &str,
+    sequence: &mut u64,
+    feedback: serde_json::Value,
+) -> Result<(), String> {
+    let remote: ControllerClockIdentity = serde_json::from_value(feedback)
+        .map_err(|error| format!("Invalid hardware clock identity: {error}"))?;
+    let floor = if remote.client_id == client_id {
+        (*sequence).max(remote.sequence)
+    } else {
+        *sequence
+    };
+    floor.checked_add(1)
+        .ok_or_else(|| "Hardware clock sequence exhausted".to_string())?;
+    // A stable publisher can restart faster than its old clock lease expires.
+    // Continue only its own counter; do not release its exclusive authority,
+    // adopt another publisher's epoch, or replay any previous output.
+    // The next outgoing paused arm/update increments this floor before sending.
+    *sequence = floor;
+    Ok(())
+}
+
 fn reconcile_controller_revision(
     plan: &mut super::media_timeline::PreparedTimeline,
     feedback: serde_json::Value,
@@ -201,7 +229,7 @@ pub fn spawn(
         let mut authority_at = Instant::now()-Duration::from_secs(2);
         let mut automatic_claim = AutomaticClaim::default();
         let mut authority_ready = false;
-        let mut reconcile_revision = true;
+        let mut reconcile_session = true;
         let mut owner_endpoint_cache: (String, Option<String>) = (String::new(), None);
         let mut owner_endpoint_at = Instant::now() - Duration::from_secs(10);
         let mut unattended_attempt: Option<(String, String)> = None;
@@ -253,7 +281,7 @@ pub fn spawn(
                         authority_ready = false;
                         authority_at = Instant::now() - Duration::from_secs(2);
                         automatic_claim = AutomaticClaim::default();
-                        reconcile_revision = true;
+                        reconcile_session = true;
                     }
                     Err(error) => {
                         if error != last_error {
@@ -336,8 +364,11 @@ pub fn spawn(
                     std::thread::sleep(Duration::from_millis(20));continue;
                 }
             }
-            if reconcile_revision && let Some(ref mut rpc) = client {
-                let result = rpc.call("controller.media.timeline.get", json!({}))
+            if reconcile_session && let Some(ref mut rpc) = client {
+                let result = rpc.call("controller.media.playback.get", json!({}))
+                    .map_err(|error| format!("Playback clock snapshot: {error}"))
+                    .and_then(|feedback| reconcile_clock_sequence(&id, &mut sequence, feedback))
+                    .and_then(|_| rpc.call("controller.media.timeline.get", json!({})))
                     .and_then(|feedback| {
                         let mut plan = timeline.lock()
                             .map_err(|_| "Hardware timeline state unavailable".to_string())?;
@@ -345,7 +376,7 @@ pub fn spawn(
                     });
                 if let Err(error) = result {
                     if let Ok(mut plan) = timeline.lock() {
-                        plan.error = Some(format!("Hardware timeline state unavailable: {error}"));
+                        plan.error = Some(format!("Hardware coordinator state unavailable: {error}"));
                     }
                     let _ = take_coordinator_session(&mut client, &timeline);
                     authority_ready = false;
@@ -353,7 +384,7 @@ pub fn spawn(
                     retry_at = Instant::now() + Duration::from_secs(2);
                     continue;
                 }
-                reconcile_revision = false;
+                reconcile_session = false;
                 preparation_retry_revision = 0;
                 previous = None;
             }
@@ -721,6 +752,42 @@ mod tests {
         assert!(!plan.play_requested);
         assert!(plan.requires_reprepare);
         assert!(plan.feedback.is_null());
+    }
+
+    #[test]
+    fn restarted_publisher_continues_only_its_own_clock_counter_without_releasing_authority() {
+        let mut sequence = 0;
+        reconcile_clock_sequence("publisher", &mut sequence,
+            json!({"client_id":"publisher","sequence":7578,"epoch":99})).unwrap();
+        assert_eq!(sequence, 7578);
+        sequence += 1; // The first paused arm is strictly newer than the retained clock.
+        assert_eq!(sequence, 7579);
+        reconcile_clock_sequence("publisher", &mut sequence,
+            json!({"client_id":"publisher","sequence":7000})).unwrap();
+        assert_eq!(sequence, 7579, "A reconnect never moves the local counter backwards");
+    }
+
+    #[test]
+    fn clock_counter_reconciliation_ignores_other_actors_and_handles_an_empty_coordinator() {
+        let mut sequence = 0;
+        reconcile_clock_sequence("publisher", &mut sequence,
+            json!({"client_id":"other","sequence":u64::MAX})).unwrap();
+        assert_eq!(sequence, 0);
+        reconcile_clock_sequence("publisher", &mut sequence,
+            json!({"client_id":"","sequence":0})).unwrap();
+        sequence += 1;
+        assert_eq!(sequence, 1);
+    }
+
+    #[test]
+    fn clock_counter_reconciliation_rejects_malformed_or_exhausted_state_without_mutation() {
+        let mut sequence = 5;
+        for feedback in [json!({"sequence":7}), json!({"client_id":"publisher"}),
+            json!({"client_id":"publisher","sequence":"7"}),
+            json!({"client_id":"publisher","sequence":u64::MAX})] {
+            assert!(reconcile_clock_sequence("publisher", &mut sequence, feedback).is_err());
+            assert_eq!(sequence, 5);
+        }
     }
 
     #[test]

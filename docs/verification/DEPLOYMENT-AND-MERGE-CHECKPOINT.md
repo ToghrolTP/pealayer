@@ -1,7 +1,7 @@
 # Production deployment and consolidation checkpoint
 
 Owning tracker: [Pealayer issue #80](https://github.com/ToghrolTP/pealayer/issues/80).
-Observed on 8 October 2026. This is an acceptance ledger, not a claim that all
+Updated on 9 October 2026. This is an acceptance ledger, not a claim that all
 historical requests or branches are complete.
 
 ## Cue-clock and startup-service follow-through (9 October)
@@ -30,38 +30,66 @@ processing. Domain rejections keep the connection. Failed mutations are returned
 once, never automatically replayed. Regression coverage includes peer reply,
 late wire failure and healthy domain rejection.
 
-Earlier checkpoint `4c6d85b` passed the full native MSVC release suite (644
-library tests, 644 binary tests and all integration tests), Web production/PWA
-checks, and Linux, Windows GNU and both macOS CI jobs. Integration servers now
-own ephemeral listeners instead of fixed ports that could hit a running app.
-The extra logic fix needs its own test/package/deployment proof; the preceding
-green checkpoint must not be substituted for that proof.
+The stream-loss checkpoint passed the full native MSVC release suite: 654
+library tests and 112 integration tests across 26 targets. Startup now lives in
+the library, so the binary no longer duplicates the application's unit tests
+or process globals. MSVC resources are linked once through that library; GNU
+keeps its direct symbol-less resource object. All seven action icons, embedded
+clean-source identity, bundled runtime smoke and Web/PWA packaging passed.
+[Exact checkpoint CI](https://github.com/ToghrolTP/pealayer/actions/runs/37860873352)
+passed Web, Windows GNU, Linux and both macOS architectures, including the
+previously failing PWA icon test without skips. Integration tests own ephemeral
+listeners instead of fixed ports that could reach a running app.
 
 PCController's owner completed the delayed-auto-start SCM service in merged
-PRs #610/#611, including the owned-data-root correction. Cafe's `PCController`
+PRs [#610](https://github.com/atomicdeploy/PCController/pull/610) and
+[#611](https://github.com/atomicdeploy/PCController/pull/611), including the
+owned-data-root correction. Cafe's `PCController`
 service runs as `NT SERVICE\\PCController`, survives restart, owns the board,
 and has verified flash/EEPROM readback with settings preserved. Dispatch, board
 ACK and total cue lateness are separated; dispatch consumes the same 50 ms
 safety budget. Do not deploy a competing controller or call an interactive
-recovery task a startup service. The coordinated Pealayer reconnect test is
-still pending; keep the live SCM restart deferred until the media clock arms.
+recovery task a startup service. Independent SCM read-back confirmed Running,
+Auto, delayed-auto enabled and the service-owned account. During the later
+controller cutover, the same Cafe Pealayer process reconnected and re-armed
+without changing its paused position or three original cues. A deliberate
+restart acceptance test against the final Pealayer build remains required;
+this is not a reboot-test claim.
 
-Current Pealayer native release library verification passed 647 tests. Cafe's
-peer update replaced/restarted its canonical executable, but the embedded
-commit lagged behind the package manifest. Linked-worktree Git ref watches and
-package-time embedded-identity validation now guard that provenance boundary;
-`--build-info` prints identity without starting a player. The next clean package
-must prove this gate, not reuse the stale manifest as source verification.
+Two more controller fixes are merged: [fresh authority sequence reset](https://github.com/atomicdeploy/PCController/pull/612)
+and [serialized programming ownership](https://github.com/atomicdeploy/PCController/pull/613).
+The programmer must close the primary reconnect loop before claiming the serial
+port, then reconnect through the bounded current contract. A board HELLO failure
+was recovered through guarded flash/EEPROM backup, exact firmware write/readback
+and preserved settings; the original HELLO-loss cause is not proven merely by
+that recovery. Do not run a competing programmer or controller process.
 
-Live diagnostics further separated two faults: an API seek reaches actual
-libmpv, while the pending zero-position commit can leave UI time stale; a
-one-second seek settles correctly. Independently, the hardware clock remains
-unarmed. Process-local observer diagnostics expose loaded/playing/buffering,
-epoch and sample age without media paths, so this can be traced without
-restarting or actuating outputs. No temporary test cue or relay actuation has
-occurred in this baseline. The Windows GNU access violation was not reproduced
-by the controller owner: its exact PWA icon test and complete 647-test binary
-suite passed. Fresh CI is required; do not skip the failing test.
+Linked-worktree Git ref watches and package-time embedded-identity validation
+now prevent a manifest from claiming a newer commit than its executable.
+`--build-info` prints identity without starting a player; process-local observer
+diagnostics expose actual loaded/playing/buffering, epoch and sample age without
+media paths. Both canonical apps are running with the preserved paused session:
+Cafe publishes, David consumes with cache-only storage and no local hardware
+scheduler or clock observer. Their distinct host runtimes are preserved.
+
+Clock recovery is intentionally fail-closed. Every live-stream loss invalidates
+its arm and pending Play exactly once; disconnected polls cannot churn revisions.
+Semantic safety faults stay latched. On reconnect, only a matching publisher's
+retained timeline revision is advanced. A final source guard also reads that
+publisher's authoritative playback counter and continues above it, because
+registry removal and plan preparation do not reset the clock sequence on a fast
+same-ID restart. Never adopt another actor's counter or old epoch, nor release
+exclusive authority merely to reset a counter. A newly acknowledged plan and
+paused clock arm still precede Play. That last guard needs its own final test,
+package and deployment proof; the preceding green checkpoint is not a substitute.
+
+The tool policy blocked an ad-hoc Cafe-runtime smoke launch through SSH localhost
+before execution. The user was asked to perform that non-deploying check; no
+equivalent bypass was attempted. Final deployment and physical timing acceptance
+remain gated. No temporary cue, Play or relay actuation has occurred in this
+continuation. The safe test must observe Relay 5 ON for one second and OFF, both
+device acknowledgements within the unchanged 50 ms budget, then CAS-restore the
+original timeline and paused position. Stop before the original motion cues.
 
 ## Recent requests reconciled
 
@@ -72,12 +100,17 @@ suite passed. Fresh CI is required; do not skip the failing test.
 | Vertically center single-line input text, not multiline/wrapped text | Shared native helper at all 44 single-line call sites; actual galley geometry tested | Broader dialog visual audit |
 | Deploy Cafe and verify real playback state | Current host-compatible build installed through its updater; PCController and protected firmware update completed; Play advances time, Pause and remote seek verified | A cue acknowledgement exceeded the timing limit; sustained precise hardware playback remains unaccepted |
 | Deploy Erfan-Gaming | Destination runtime independently identified; installed and candidate smoke tests passed; candidate uploaded to canonical staging | KMPlayer is running: user explicitly prohibits launching Pealayer there; installed build remains the previous version |
-| Keep David running and synchronized to Cafe | Canonical installation updated, running as a cache-only consumer; no local hardware scheduler; remote seek, mute, pause, preferences and WebSocket snapshot verified | Latest replay fix is staged locally but not installed while the healthy consumer remains open; native close must not be confused with remote Quit |
-| PCController startup service | Single interactive coordinator recovered and updated; no competing TUI owner remains | A real Windows service has not been installed; an interactive recovery task is not a service or boot-start proof |
-| Consolidate useful work and merge safe PRs | Peer polling PR #82 and Vite PR #83 reviewed and merged; combined Preferences branch includes main plus exact PR #77/#79 heads | Remaining CI faults, experiment integration and old-ref/stash reconciliation |
+| Keep David running and synchronized to Cafe | Canonical app relaunched interactively as Cafe's cache-only consumer; process-local status verifies no local hardware scheduler or clock observer; paused state and three cues agree | Final counter-recovery package still needs deployment; native/local Quit must not be confused with remote session Quit |
+| PCController startup service | Real delayed-auto SCM service installed as `NT SERVICE\PCController`; Running/Auto/delayed-auto read-back and service restart/cutover verified | Final-build same-PID reconnect acceptance remains; no actual reboot test claimed |
+| Consolidate useful work and merge safe PRs | Peer polling PR #82 and Vite PR #83 merged; PR #87 preserves main and exact PR #77/#79 heads; preceding recovery checkpoint passes all desktop CI targets | Final counter-guard verification/deployment, experiment integration and old-ref/stash reconciliation |
 | Keep D3D11 optional and disabled | Preserved experiment already defines renderer selection with OpenGL default and detached video disabled | Not integrated into main Preferences yet; do not activate or silently deploy the experimental executable |
 
-## API-first remote role change: source ready, installation acceptance pending
+## API-first remote role change: implemented and running
+
+Current process-local read-back verifies David is an interactive cache-only
+consumer of Cafe, not a second publisher. The local updater/process prefix stays
+local; ordinary session commands reach Cafe. The detailed observations below
+are historical pre-cutover evidence, not current PIDs or deployment identities.
 
 Source `1cdf1fe125d3408d75ebc93b6467c88b43135b0e` on PR #87 implements
 `pealayer.process.connect/status/quit` through native IPC, HTTP, JSON-RPC and
