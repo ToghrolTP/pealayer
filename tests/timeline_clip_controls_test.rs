@@ -1602,7 +1602,7 @@ fn test_dropped_effects_are_resizable_by_grabbing_handles() {
 }
 
 #[test]
-fn test_dropped_macro_sequence_is_resizable_and_survives_catalog_reconciliation() {
+fn test_dropped_macro_sequence_is_move_only_and_survives_catalog_reconciliation() {
     let mut app = PealayerApp::default();
     app.duration = 60.0;
     let mut capabilities = pealayer::four_d::controller::HardwareCapabilities::default();
@@ -1644,19 +1644,33 @@ fn test_dropped_macro_sequence_is_resizable_and_survives_catalog_reconciliation(
     let eff_id = app.timeline.instances[0].effect_id;
     let tmpl = app.timeline.templates.iter().find(|t| t.id == eff_id).unwrap();
     assert_eq!(tmpl.duration_ms, 1500);
-    assert_eq!(tmpl.duration_policy, pealayer::four_d::models::CueDurationPolicy::Resizable);
-    assert!(tmpl.duration_resizable());
+    assert_eq!(tmpl.duration_policy, pealayer::four_d::models::CueDurationPolicy::Intrinsic);
+    assert!(!tmpl.duration_resizable());
 
-    // User resizes it on timeline to 3500ms
+    // Moving or isolating a finite recording never enables resize handles.
     app.isolate_template_for_instance(inst_id);
+    app.timeline.instances[0].start_time_ms = 4000;
     let tmpl_mut = app.timeline.templates.iter_mut().find(|t| t.id == app.timeline.instances[0].effect_id).unwrap();
-    update_effect_duration(tmpl_mut, 3500);
-    assert_eq!(tmpl_mut.duration_ms, 3500);
+    assert_eq!(tmpl_mut.duration_ms, 1500);
+    assert!(!tmpl_mut.duration_resizable());
+
+    // Reconcile a placement left with the old erroneous presentation flag and
+    // duration. PCController plays the finite source, not a stretched recording.
+    tmpl_mut.duration_policy = pealayer::four_d::models::CueDurationPolicy::Resizable;
+    tmpl_mut.duration_ms = 3500;
+    assert!(!tmpl_mut.duration_resizable());
 
     // PCController catalog metadata refreshes (e.g. board reconnect or catalog update)
     app.update_hardware_capabilities(Some(capabilities));
-    // The user's deliberately resized cue on the timeline must preserve its 3500ms duration!
+    let config_path = pealayer::config::AppConfig::get_config_path();
+    let config_before = std::fs::read(&config_path).ok();
+    assert!(app.refresh_controller_effect_timeline_metadata());
+    assert_eq!(std::fs::read(&config_path).ok(), config_before, "pure reconciliation must not persist the fixture");
+    // Source timing is authoritative, but the user's placement remains intact.
     let tmpl_after = app.timeline.templates.iter().find(|t| t.id == app.timeline.instances[0].effect_id).unwrap();
-    assert_eq!(tmpl_after.duration_ms, 3500);
-    assert!(tmpl_after.duration_resizable());
+    assert_eq!(tmpl_after.duration_ms, 1500);
+    assert_eq!(tmpl_after.duration_policy, pealayer::four_d::models::CueDurationPolicy::Intrinsic);
+    assert!(!tmpl_after.duration_resizable());
+    assert_eq!(app.timeline.instances[0].id, inst_id);
+    assert_eq!(app.timeline.instances[0].start_time_ms, 4000);
 }

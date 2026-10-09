@@ -9,6 +9,7 @@
 
 ## Verification and deployment
 
+- Tests that exercise persistence must receive an isolated `PEALAYER_CONFIG_FILE` from the parent process before startup; never point fixtures at the user's OS configuration or Registry mirror. Pure catalog/model reconciliation must not save configuration or publish engine commands. Do not mutate process environment underneath libmpv/native threads to retrofit isolation.
 - Every feature/fix pass includes a host-compatible Cafe-PC deployment and live verification, or an explicit deployment blocker. Do not call a local build delivered to Cafe-PC.
 - Preserve and coordinate unpushed or separate host work before replacement. Package against the host's actual libmpv runtime and validate the manifest and runtime smoke test.
 - Use application IPC/RPC to request graceful quit before replacement; use the peer updater rather than manually replacing a running executable. The user permits terminating an already-confirmed hung Pealayer process after graceful exit fails; preserve diagnostics first. This is not permission to terminate healthy unrelated processes.

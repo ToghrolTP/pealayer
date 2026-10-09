@@ -83,10 +83,16 @@ override that channel's underlying analog curve from their first edge onward.
 
 Source includes fixtures for persistent markers, relay persistence/mute/unlink,
 standalone Off, late single-edge PWM, exact timed exits and ramp endpoints.
-The behavior-based duration follow-up passed 715 Rust library tests, including
+The behavior-based duration follow-up passed 716 Rust library tests, including
 stored-policy priority, controller drop/reuse, independent placement edits,
 catalog refresh, prepared strip duration and actual egui pointer hover/resize
 coverage. Web application-parity and responsive-layout source guardrails passed.
+The timeline clip-controls integration suite also passed all 22 tests. Its
+recording regression now invokes real catalog reconciliation rather than merely
+publishing a snapshot, and checks that reconciliation leaves the config file
+untouched. Reconciliation returns changes; the native GUI separately owns
+persistence and engine publication. Persistence-capable test runs use a parent-
+provided isolated config path, never the user's OS configuration/Registry.
 These are not physical-hardware or installed-UI acceptance, and source guards
 are not interactive phone/tablet/desktop browser proof.
 The consolidation owner must review the focused PR, build final main, deploy

@@ -1019,7 +1019,11 @@ impl eframe::App for PealayerApp {
         {
             ctx.request_repaint_after(remaining);
         }
-        self.refresh_controller_effect_timeline_metadata();
+        if self.refresh_controller_effect_timeline_metadata() {
+            self.persist_timeline_track_preferences();
+            self.sync_timeline_engine();
+            self.save_config();
+        }
         self.poll_external_config(ctx);
 
         // PCController owns the shared latch. A second client or the Web/TUI
@@ -2946,20 +2950,19 @@ impl PealayerApp {
     /// overwritten on every frame. A real catalog edit, reconnect, or rename
     /// advances the snapshot and updates every template with the same durable
     /// controller reference, including isolated copies used by multiple cues.
-    fn refresh_controller_effect_timeline_metadata(&mut self) {
+    /// Returns whether placements changed. The caller owns persistence and
+    /// engine publication, so embedded/test reconciliation cannot save a
+    /// synthetic session into the user's configuration.
+    pub fn refresh_controller_effect_timeline_metadata(&mut self) -> bool {
         let Some(capabilities) = self.advertised_hardware() else {
-            return;
+            return false;
         };
         let catalog = controller_effect_catalog(&capabilities);
         if catalog == self.hardware_effect_authoring.timeline_catalog {
-            return;
+            return false;
         }
         self.hardware_effect_authoring.timeline_catalog = catalog.clone();
-        if reconcile_controller_effect_templates(&mut self.timeline, &catalog) {
-            self.persist_timeline_track_preferences();
-            self.sync_timeline_engine();
-            self.save_config();
-        }
+        reconcile_controller_effect_templates(&mut self.timeline, &catalog)
     }
 
     fn controller_command_argument(value: &str) -> Option<String> {
@@ -3881,8 +3884,6 @@ impl PealayerApp {
             return;
         }
         let effect_id = effect.id;
-        let mut effect = effect;
-        effect.duration_policy = crate::four_d::models::CueDurationPolicy::Resizable;
         self.undo_stack.push(self.snapshot_timeline());
         self.timeline.templates.push(effect);
         let instance = crate::four_d::models::EffectInstance::new(
@@ -9499,6 +9500,28 @@ pub(crate) mod tests {
             .undo(deleted_state)
             .expect("cue deletion should create one undo checkpoint");
         assert_eq!(restored.instances.len(), 3);
+    }
+
+    #[test]
+    fn saved_recording_insertion_retains_intrinsic_source_duration() {
+        let _lock = lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.update_hardware_capabilities(Some(crate::four_d::controller::HardwareCapabilities {
+            macros: vec![crate::four_d::controller::HardwareMacro {
+                id: 42, name: "Recording".into(), duration_ms: 1500,
+                mode: "host".into(), ..Default::default()
+            }],
+            ..Default::default()
+        }));
+        app.hardware_effect_authoring.pending_saved_macro_id = Some(42);
+        app.hardware_effect_authoring.anchor_ms = 10_000;
+        app.insert_pending_saved_macro();
+        let instance = app.timeline.instances.last().unwrap();
+        let template = app.timeline.templates.iter().find(|item| item.id == instance.effect_id).unwrap();
+        assert_eq!(instance.start_time_ms, 10_000);
+        assert_eq!(template.duration_ms, 1500);
+        assert_eq!(template.duration_policy, crate::four_d::models::CueDurationPolicy::Intrinsic);
+        assert!(!template.duration_resizable());
     }
 
     #[test]
