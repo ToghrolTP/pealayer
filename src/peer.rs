@@ -2,7 +2,7 @@
 //! Mutations are sent once: a lost acknowledgement must never replay actuation.
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::sync::{Arc, Mutex, OnceLock, mpsc};
+use std::sync::{Arc, Mutex, OnceLock, Condvar, mpsc, atomic::{AtomicBool, Ordering}};
 use std::time::{Duration, Instant};
 
 const ACTIVE_SESSION_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -435,12 +435,65 @@ pub struct Client {
     pub error: Mutex<Option<String>>,
     pub command_error: Mutex<Option<String>>,
     context: Mutex<Option<eframe::egui::Context>>,
+    session_wakeup: (Mutex<bool>, Condvar),
+    status_stream_connected: AtomicBool,
+}
+
+/// The existing WebSocket is a changed-state wakeup, not another session contract.
+/// Pull the typed authoritative session after an edge; retain slow idle health pulls.
+fn spawn_session_wakeups(client: Arc<Client>) {
+    std::thread::spawn(move || loop {
+        let run = || -> Result<(), String> {
+            use tungstenite::client::IntoClientRequest;
+            let mut url = client.url("/ws")?;
+            url.set_scheme(if client.origin.scheme() == "https" { "wss" } else { "ws" }).map_err(|_| "Invalid WebSocket scheme")?;
+            let mut request = url.as_str().into_client_request().map_err(|error| error.to_string())?;
+            request.headers_mut().insert("X-Pealayer-Route", instance_id().parse().map_err(|_| "Invalid peer identity")?);
+            let (mut socket, _) = tungstenite::connect(request).map_err(|error| error.to_string())?;
+            if let tungstenite::stream::MaybeTlsStream::Plain(stream) = socket.get_mut() {
+                stream.set_read_timeout(Some(Duration::from_millis(250))).map_err(|error| error.to_string())?;
+            }
+            client.status_stream_connected.store(true, Ordering::Release);
+            let mut previous = Value::Null;
+            loop {
+                match socket.read() {
+                    Ok(tungstenite::Message::Text(text)) => {
+                        let status: Value = serde_json::from_str(&text).map_err(|error| error.to_string())?;
+                        if !status.is_object() || status.get("playing").is_none() { continue; }
+                        let edge = serde_json::json!({"hardware":status.get("hardware_details"),
+                            "estop":status.get("estop_active"), "playing":status.get("playing"),
+                            "media":status.get("current_video"), "appearance":status.get("appearance")});
+                        if edge != previous {
+                            previous = edge;
+                            if let Ok(mut wake) = client.session_wakeup.0.lock() { *wake = true; }
+                            client.session_wakeup.1.notify_one();
+                        }
+                    }
+                    Ok(tungstenite::Message::Ping(payload)) => { socket.send(tungstenite::Message::Pong(payload)).map_err(|error| error.to_string())?; }
+                    Ok(tungstenite::Message::Close(_)) => return Err("Peer status stream closed".into()),
+                    Err(tungstenite::Error::Io(error)) if matches!(error.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {},
+                    Err(error) => return Err(error.to_string()),
+                    _ => {},
+                }
+            }
+        };
+        let _ = run(); // HTTP remains authoritative and reports link failures.
+        client.status_stream_connected.store(false, Ordering::Release);
+        std::thread::sleep(Duration::from_secs(1));
+    });
 }
 struct QueuedCommand {
     path: String,
     value: Value,
     created: Instant,
     reply: Option<mpsc::Sender<Result<Value, String>>>,
+}
+
+fn session_visual_changed(before: &Session, after: &Session) -> bool {
+    before.status != after.status || before.hardware != after.hardware
+        || before.paused != after.paused || before.speed != after.speed
+        || before.config != after.config || before.media != after.media
+        || before.media_view != after.media_view || before.timeline != after.timeline
 }
 impl Client {
     pub fn url(&self, path: &str) -> Result<url::Url, String> {
@@ -744,6 +797,8 @@ pub fn connect(value: &str, local_port: u16) -> Result<(), String> {
         error: Mutex::new(None),
         command_error: Mutex::new(None),
         context: Mutex::new(None),
+        session_wakeup: (Mutex::new(false), Condvar::new()),
+        status_stream_connected: AtomicBool::new(false),
     });
     CLIENT
         .set(client.clone())
@@ -765,6 +820,7 @@ pub fn connect(value: &str, local_port: u16) -> Result<(), String> {
             }
         }
     });
+    spawn_session_wakeups(client.clone());
     std::thread::spawn(move || {
         loop {
             // Keep precise position synchronization while playing, but do not
@@ -773,7 +829,14 @@ pub fn connect(value: &str, local_port: u16) -> Result<(), String> {
             // remote health detection without a permanent high-rate poll.
             let poll_interval = client
                 .snapshot()
-                .map(|snapshot| session_poll_interval(snapshot.session.paused))
+                .map(|snapshot| {
+                    // A disabled/lost status stream needs a bounded hardware
+                    // fallback even when media is paused. No fast idle poll
+                    // when no board is connected.
+                    let fallback = (!snapshot.session.config.web_sync_state || !client.status_stream_connected.load(Ordering::Acquire))
+                        && snapshot.session.hardware.as_ref().is_some_and(|hardware| hardware.board_connected);
+                    session_poll_interval(snapshot.session.paused && !fallback)
+                })
                 .unwrap_or(ACTIVE_SESSION_POLL_INTERVAL);
             let started = Instant::now();
             let next = client
@@ -793,11 +856,7 @@ pub fn connect(value: &str, local_port: u16) -> Result<(), String> {
                 Ok(session) => {
                     let mut changed = false;
                     if let Ok(mut latest) = client.latest.lock() {
-                        changed = latest.session.status != session.status
-                            || latest.session.config != session.config
-                            || latest.session.media != session.media
-                            || latest.session.media_view != session.media_view
-                            || latest.session.timeline != session.timeline;
+                        changed = session_visual_changed(&latest.session, &session);
                         latest.session = session;
                         latest.received = Instant::now();
                         latest.round_trip = started.elapsed();
@@ -819,7 +878,15 @@ pub fn connect(value: &str, local_port: u16) -> Result<(), String> {
                     }
                 }
             }
-            std::thread::sleep(poll_interval);
+            // Coalesce stream edges at no more than ten full session pulls/s.
+            let remaining = ACTIVE_SESSION_POLL_INTERVAL.saturating_sub(started.elapsed());
+            if !remaining.is_zero() { std::thread::sleep(remaining); }
+            if let Ok(wake) = client.session_wakeup.0.lock() {
+                let wait = poll_interval.saturating_sub(started.elapsed());
+                if let Ok((mut wake, _)) = client.session_wakeup.1.wait_timeout_while(wake, wait, |wake| !*wake) {
+                    *wake = false;
+                }
+            }
         }
     });
     Ok(())
@@ -904,6 +971,20 @@ mod tests {
             Duration::from_secs(1)
         );
         assert!(session_poll_interval(true) <= Duration::from_secs(1));
+    }
+    #[test]
+    fn hardware_only_peer_changes_wake_the_display() {
+        let before = Session {
+            instance_id:"test-authority".into(), config:Default::default(), status:Value::Null,
+            hardware:Some(Default::default()), media:None, media_view:None, position:0.0,
+            paused:true, speed:1.0, sampled_unix_ms:0, timeline:None, config_path:String::new(), consumers:vec![],
+        };
+        let mut after = before.clone();
+        assert!(!session_visual_changed(&before, &after));
+        after.sampled_unix_ms = 1;
+        assert!(!session_visual_changed(&before, &after), "A sample timestamp is not a visual change");
+        after.hardware.as_mut().unwrap().telemetry.bus_mv = Some(12123);
+        assert!(session_visual_changed(&before, &after));
     }
 
     #[test]

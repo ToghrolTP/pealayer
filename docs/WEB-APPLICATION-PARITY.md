@@ -56,6 +56,47 @@ draggable ruler controls; that counterpart remains part of timeline parity.
 
 ## Completed acceptance checkpoints
 
+### Explicit frame-rate source and reactive hardware status
+
+The footer's frame-rate source is now a persisted choice: **Media frame rate**
+(default, libmpv `container-fps`, unchanged by playback speed or pointer activity)
+or **UI render rate** (measured native frame cadence, not monitor refresh Hz).
+Click the indicator to toggle; its icon-bearing context menu selects either
+source or hides it. Preferences → Advanced → Status bar exposes visibility and
+source through the same Rust contract used by Web Preferences. Unavailable
+measurements display a dash rather than a fabricated 60 FPS. Web UI labels the
+native render measurement explicitly; it does not substitute browser RAF cadence.
+
+Regression evidence:
+
+- `ce85904` changed the native footer to automatic interaction-based switching
+  for 1.5 seconds and substituted display refresh Hz for missing measurements.
+  This made pointer movement change the meaning of an otherwise identical FPS
+  label. Source mode is now explicit; the existing stable container FPS observer
+  is retained. Remote consumers copy the authority's media FPS, not their local
+  decoder's incidental estimate.
+- The idle CPU reduction (`6510c35` and related publication changes) was valid,
+  but paused sessions were classified as idle even while hardware RGB/telemetry
+  changed. Web/peer status could therefore lag by a second. Hardware changes
+  now use the configured Web sync cadence, with a single trailing repaint for
+  a final rate-limited update; unchanged idle sessions retain the slow backstop.
+- Peer repaint comparison omitted the typed `session.hardware` snapshot, and
+  the consumer engine could install it after the UI's repaint. Both paths now
+  wake on real hardware changes, including after installation. The existing
+  WebSocket provides changed-state wakeups for authoritative session refreshes,
+  coalesced to at most ten full pulls per second. Paused idle health snapshots
+  stay at one second; unavailable/disabled status streaming falls back to fast
+  polling only while a board is connected.
+- Footer saves are narrow, acknowledged and asynchronous for consumers; a
+  click no longer waits for remote HTTP or re-applies the workspace/player.
+  Numeric widths are stable to prevent status values shifting neighboring items.
+
+Acceptance is intentionally split: TypeScript/Vite and native BuildOnly results
+belong in the linked PR checkpoint. Tests, responsive screenshots and installed
+Cafe/David verification remain pending until explicitly performed. No hardware
+actuation is required for these display changes. The prior updater execution-
+policy blocker is not a completed deployment and must not be bypassed.
+
 - **API-first local lifecycle:** Native connection UI, native IPC, JSON-RPC,
   HTTP and WebSocket use one process connection command. Process status,
   graceful local quit and consumer-role changes do not relay to the authority;

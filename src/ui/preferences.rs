@@ -1759,6 +1759,8 @@ fn preference_control_icon(name: &str) -> &'static str {
     use egui_phosphor::regular::*;
     match name {
         "circle-half" => CIRCLE_HALF,
+        "gauge" => GAUGE,
+        "film-strip" => FILM_STRIP,
         "palette" => PALETTE,
         "swatches" => SWATCHES,
         "translate" => TRANSLATE,

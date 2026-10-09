@@ -27,13 +27,31 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             |ui| {
                 if app.status_bar.media_rate {
                     if let Some(fps_info) = app.current_fps_display(std::time::Instant::now()) {
-                        let response = ui
-                            .label(&fps_info.formatted)
-                            .on_hover_text(&fps_info.tooltip);
-                        if hide_item_menu(app, response, app.tr("Frame rate")) {
-                            app.status_bar.media_rate = false;
-                            app.save_config();
+                        let icon = if fps_info.is_ui_rate { crate::ui::icons::GAUGE } else { crate::ui::icons::FILE_VIDEO };
+                        let response = ui.add_sized([110.0, ui.text_style_height(&egui::TextStyle::Body)],
+                            egui::Label::new(format!("{icon}  {}", fps_info.formatted)).sense(egui::Sense::click()).selectable(false))
+                            .on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(&fps_info.tooltip);
+                        let mut changed = false;
+                        if response.clicked() {
+                            app.status_bar.fps_mode = if fps_info.is_ui_rate { crate::config::StatusBarFpsMode::Media } else { crate::config::StatusBarFpsMode::Ui };
+                            changed = true;
                         }
+                        response.context_menu(|ui| {
+                            ui.strong(app.tr("Frame rate")); ui.separator();
+                            for (mode, icon, label) in [
+                                (crate::config::StatusBarFpsMode::Media, crate::ui::icons::FILE_VIDEO, "Media frame rate"),
+                                (crate::config::StatusBarFpsMode::Ui, crate::ui::icons::GAUGE, "UI render rate"),
+                            ] {
+                                if ui.selectable_label(app.status_bar.fps_mode == mode, format!("{icon}  {}", app.tr(label))).clicked() {
+                                    app.status_bar.fps_mode = mode; changed = true; ui.close();
+                                }
+                            }
+                            ui.separator();
+                            if ui.button(format!("{}  {}", crate::ui::icons::EYE_SLASH, app.tr("Hide"))).clicked() {
+                                app.status_bar.media_rate = false; changed = true; ui.close();
+                            }
+                        });
+                        if changed { app.request_status_bar_save(ui.ctx()); }
                         ui.separator();
                     }
                 }
@@ -83,7 +101,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         ));
                         if hide_item_menu(app, response, app.tr("Workspace mode")) {
                             app.status_bar.workspace = false;
-                            app.save_config();
+                            app.request_status_bar_save(ui.ctx());
                         }
                     });
                 }
@@ -124,7 +142,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 .checkbox(&mut app.status_bar.workspace, workspace)
                 .changed();
             if changed {
-                app.save_config();
+                app.request_status_bar_save(ui.ctx());
             }
         });
 }
@@ -228,7 +246,7 @@ fn draw_hardware_status(app: &mut PealayerApp, ui: &mut egui::Ui) {
     }
     if hide_item_menu(app, connection_label, app.tr("Hardware connection")) {
         app.status_bar.hardware = false;
-        app.save_config();
+        app.request_status_bar_save(ui.ctx());
         return;
     }
 
@@ -276,7 +294,7 @@ fn draw_hardware_status(app: &mut PealayerApp, ui: &mut egui::Ui) {
         }
         if hide_item_menu(app, led_response, app.tr("Physical status RGB")) {
             app.status_bar.status_rgb = false;
-            app.save_config();
+                app.request_status_bar_save(ui.ctx());
         }
     }
 
@@ -284,20 +302,20 @@ fn draw_hardware_status(app: &mut PealayerApp, ui: &mut egui::Ui) {
         let telemetry = &capabilities.telemetry;
         let mut telemetry_response = None;
         if let Some(bus_mv) = telemetry.bus_mv {
-            telemetry_response = Some(ui.label(format!("{:.2} V", f64::from(bus_mv) / 1000.0)));
+            telemetry_response = Some(ui.add_sized([65.0, ui.text_style_height(&egui::TextStyle::Body)], egui::Label::new(egui::RichText::new(format!("{:.2} V", f64::from(bus_mv) / 1000.0)).monospace())));
         }
         if let Some(current_ma) = telemetry.current_ma {
-            telemetry_response = Some(ui.label(format!("{current_ma} mA")));
+            telemetry_response = Some(ui.add_sized([80.0, ui.text_style_height(&egui::TextStyle::Body)], egui::Label::new(egui::RichText::new(format!("{current_ma} mA")).monospace())));
         }
         if let Some(temperature) = telemetry.led_temperature_centi_c {
             telemetry_response =
-                Some(ui.label(format!("{:.1} °C", f64::from(temperature) / 100.0)));
+                Some(ui.add_sized([75.0, ui.text_style_height(&egui::TextStyle::Body)], egui::Label::new(egui::RichText::new(format!("{:.1} °C", f64::from(temperature) / 100.0)).monospace())));
         }
         if let Some(response) = telemetry_response
             && hide_item_menu(app, response, app.tr("Hardware telemetry"))
         {
             app.status_bar.telemetry = false;
-            app.save_config();
+            app.request_status_bar_save(ui.ctx());
         }
     }
     if app.status_bar.warnings
@@ -315,7 +333,7 @@ fn draw_hardware_status(app: &mut PealayerApp, ui: &mut egui::Ui) {
         }
         if hide_item_menu(app, response, app.tr("Hardware warnings")) {
             app.status_bar.warnings = false;
-            app.save_config();
+                    app.request_status_bar_save(ui.ctx());
         }
     }
 }
@@ -367,8 +385,10 @@ mod tests {
         let display = app.current_fps_display(now);
         assert!(display.is_some());
         let info = display.unwrap();
-        assert_eq!(info.is_ui_rate, true);
-        assert!(info.formatted.contains("60"));
+        assert_eq!(info.is_ui_rate, false);
+        assert_eq!(info.formatted, "— fps");
+        app.status_bar.fps_mode = crate::config::StatusBarFpsMode::Ui;
+        assert_eq!(app.current_fps_display(now).unwrap().formatted, "— fps");
 
         app.status_bar.media_rate = false;
         assert!(!app.status_bar.media_rate);

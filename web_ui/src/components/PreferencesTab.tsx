@@ -49,6 +49,8 @@ import {
   GatewayOutlined,
   MenuOutlined,
   KeyOutlined,
+  DashboardOutlined,
+  VideoCameraOutlined,
 } from '@ant-design/icons';
 import { tr } from '../i18n';
 import { mergeAppearance } from '../appearance';
@@ -127,6 +129,8 @@ const sectionIcons: Record<string, React.ReactNode> = {
 
 const controlIcons: Record<string, React.ReactNode> = {
   'circle-half': <GatewayOutlined />,
+  gauge: <DashboardOutlined />,
+  'film-strip': <VideoCameraOutlined />,
   palette: <BgColorsOutlined />,
   swatches: <BgColorsOutlined />,
   translate: <TranslationOutlined />,
