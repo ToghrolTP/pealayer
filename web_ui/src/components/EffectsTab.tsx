@@ -51,7 +51,7 @@ import { EffectGroupDialog, EffectGroupDraft } from './EffectGroupDialog';
 import recordingColors from '../../../assets/themes/recording-colors.json';
 import { appendMelodySteps, sequenceDurationMs } from '../melodyCatalog';
 import { MelodySelect } from './MelodySelect';
-import { ServerFilePicker } from './ServerFilePicker';
+import { SoundEffectFields } from './SoundEffectFields';
 
 interface EffectsTabProps {
   state: PlayerState;
@@ -130,7 +130,6 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale, 
   const effects = state.controller_effects ?? [];
   const [draft, setDraft] = useState<EffectDraft | null>(null);
   const [saving, setSaving] = useState(false);
-  const [audioBrowse, setAudioBrowse] = useState(false);
   useEffect(() => {
     if (draft?.kind !== 'audio') return;
     const saved = effects.find((effect) => effect.kind === 'audio' && effect.id === draft.id);
@@ -464,12 +463,7 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale, 
           <label><span>{tr(locale, 'Duration')}</span>{draft.kind === 'audio' ? <Typography.Text type="secondary">{draft.is_new ? tr(locale, 'Read from audio on Save') : `${(draft.duration_ms / 1000).toFixed(3)} s`}</Typography.Text> : <InputNumber min={1} addonAfter="ms" value={draft.duration_ms} onChange={(duration_ms) => setDraft({ ...draft, duration_ms: duration_ms ?? 1 })} />}</label>
           {draft.kind !== 'audio' && <label><span>{tr(locale, 'Color')}</span>{draft.kind === 'sequence' ? <Select disabled={captureBusy} value={draft.color} onChange={(color) => setDraft({ ...draft, color })} options={recordingColors.map((color) => ({ value: color.id, label: <span className="recording-color-option"><span className="recording-color-swatch" style={{ backgroundColor: color.hex }} />{tr(locale, color.label)}</span> }))} /> : <ColorPicker value={draft.color} disabledAlpha onChangeComplete={(color) => setDraft({ ...draft, color: color.toHexString().toUpperCase() })} />}</label>}
         </div></ConfigProvider>
-        {draft.kind === 'audio' ? <div className="effect-editor__program">
-          <label className="effect-editor__wide"><span>{tr(locale, 'Audio file / URL')}</span><Space.Compact style={{ width: '100%' }}><Input value={audioProgram.source} onChange={(e) => updateAudio({ source: e.target.value })} /><Button onClick={() => setAudioBrowse(true)}>{tr(locale, 'Browse')}</Button></Space.Compact></label>
-          <label><span>{tr(locale, 'Volume')}</span><InputNumber min={0} max={100} addonAfter="%" value={audioProgram.volume ?? 100} onChange={(volume) => updateAudio({ volume: volume ?? 100 })} /></label>
-          <label><span>{tr(locale, 'Output device / backend')}</span><Select value={audioProgram.output_device ?? ''} onOpenChange={(open) => { if (open) void sendCmd('audio.outputs.refresh'); }} onChange={(output_device) => updateAudio({ output_device })} options={[{ value: '', label: tr(locale, 'Preferences SFX output') }, ...(state.audio_devices ?? []).map((d) => ({ value: d.name, label: d.description }))]} /></label>
-          <Space><Button disabled={draft.is_new || state.estop_active} icon={<PlayCircleOutlined />} onClick={() => sendCmd('controller_effect.play', { reference: draft.reference })}>{tr(locale, 'Preview')}</Button><Button icon={<StopOutlined />} onClick={() => sendCmd('audio_effect.stop')}>{tr(locale, 'Stop')}</Button>{state.audio_import_pending && <Typography.Text>{tr(locale, 'Reading audio…')}</Typography.Text>}</Space>
-        </div> : draft.kind === 'sequence' ? <>
+        {draft.kind === 'audio' ? <SoundEffectFields program={audioProgram} onChange={updateAudio} state={state} reference={draft.reference} apiBaseUrl={apiBaseUrl} locale={locale} sendCmd={sendCmd} /> : draft.kind === 'sequence' ? <>
           <div className="effect-editor__toolbar"><strong>{tr(locale, 'Sequence steps')}</strong><Space wrap>
             <EffectRecorder state={state} sendCmd={sendCmd} locale={locale} effect={draftPayload(draft)} onSequenceChange={(steps, id) => setDraft((current) => current ? { ...current, id: String(id), reference: `effect:${id}`, is_new: false, steps } : current)} />
             <Button disabled={captureBusy} icon={<PlusOutlined />} onClick={() => setDraft({ ...draft, steps: [...draft.steps, defaultStep()] })}>{tr(locale, 'Add step')}</Button>
@@ -518,6 +512,5 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale, 
         </div>}
       </div>}
     </Modal>
-    {audioBrowse && <ServerFilePicker apiBaseUrl={apiBaseUrl} locale={locale} extensions={['wav', 'mp3', 'ogg', 'flac', 'm4a', 'aac', 'opus']} initialFile={audioProgram.source} title={tr(locale, 'Choose sound effect')} onSelect={(source) => { updateAudio({ source }); setAudioBrowse(false); }} onCancel={() => setAudioBrowse(false)} />}
   </section>;
 };
