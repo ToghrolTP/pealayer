@@ -515,7 +515,7 @@ pub fn run() -> eframe::Result {
             let initial_volume = cli_options.volume.unwrap_or(loaded_config.volume);
             let startup_media_target = if crate::peer::active() { cli_options.target.clone() } else { crate::media::startup_media_target(
                 cli_options.target.as_deref(),
-                loaded_config.restore_last_media_on_startup,
+                loaded_config.restore_last_media_on_startup && (loaded_config.external_mpv.mode == crate::mpv::external::Mode::Internal || matches!(loaded_config.external_mpv.mode,crate::mpv::external::Mode::External|crate::mpv::external::Mode::Dual) && loaded_config.external_mpv.endpoint.is_empty()),
                 loaded_config.last_media_target.as_deref(),
                 &loaded_config.recent_media,
                 &loaded_config.playback_positions,
@@ -643,6 +643,10 @@ pub fn run() -> eframe::Result {
                 rtl,
                 mpv: crate::mpv::player::Player(mpv_static),
                 mpv_client,
+                external_catalog_revision: 0,
+                external_seek_revision: 0,
+                pending_external_media: None,
+                pending_external_pause: false,
                 render_context: Arc::new(Mutex::new(Some(RenderContextWrapper(render_context)))),
                 playback_time: 0.0,
                 duration: 0.0,
@@ -964,7 +968,9 @@ pub fn run() -> eframe::Result {
                 }
             }
 
+            crate::mpv::external::configure(mpv_static, &cc.egui_ctx, loaded_config.external_mpv.clone());
             if let Some(target) = startup_media_target {
+                app.pending_external_pause=restore_startup_pause;
                 app.load_media_target(&target);
                 // A matching sidecar project, when present, deliberately wins
                 // inside load_media_target. Otherwise these stable references

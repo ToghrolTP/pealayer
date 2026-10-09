@@ -945,7 +945,13 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         })),
     };
 
-    ui.painter().add(callback);
+    if !crate::mpv::external::active() || crate::mpv::external::preview() {
+        ui.painter().add(callback);
+    } else {
+        ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER,
+            if crate::mpv::external::status().connected {"Video is playing in external mpv"} else {"Waiting for external mpv"},
+            egui::FontId::proportional(16.0), ui.visuals().weak_text_color());
+    }
 
     let is_hovering_file = ui.input(|i| !i.raw.hovered_files.is_empty());
     if is_hovering_file {

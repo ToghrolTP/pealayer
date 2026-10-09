@@ -362,6 +362,19 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
         control
     };
     let mut controls = vec![
+        PreferenceControl::select("external_mpv.mode", "playback", "External mpv", "Player mode", &[("internal", "Internal player (default)"), ("external", "External mpv only"), ("dual", "External mpv + internal preview"), ("remote", "Control existing mpv")]),
+        PreferenceControl::boolean("external_mpv.use_mpv_config", "playback", "External mpv", "Load mpv's own configuration and scripts when launching"),
+        {
+            let mut c = PreferenceControl::text("external_mpv.executable", "playback", "External mpv", "mpv executable", "mpv or full executable path");
+            c.kind = PreferenceControlKind::File;
+            #[cfg(windows)] {c.file_extensions = vec!["exe"];}
+            c
+        },
+        {
+            let mut c = PreferenceControl::text("external_mpv.endpoint", "playback", "External mpv", "IPC endpoint", "Blank to launch; named pipe / Unix socket to attach");
+            c.description = Some("For an existing player, start mpv with --input-ipc-server at this endpoint. No Lua helper is required. Dual mode uses a muted internal preview.");
+            c
+        },
         PreferenceControl::select(
             "theme",
             "appearance",

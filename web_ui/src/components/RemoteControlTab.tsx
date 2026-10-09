@@ -23,6 +23,7 @@ import { VolumeControl } from './VolumeControl';
 import { ElapsedTimeInput } from './ElapsedTimeInput';
 
 export interface PlayerState {
+  external_mpv?: {mode: 'internal' | 'external' | 'dual' | 'remote'; connected: boolean; endpoint: string; error?: string | null};
   app_icon_revision?: number;
   rf?: RfSnapshot;
   remote_browser?: import('./RemoteLocationDialog').RemoteBrowser;
@@ -289,7 +290,7 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
 
       <header className="remote-player__title">
         <div>
-          <span className="eyebrow">{state.live ? tr(locale, 'LIVE') : tr(locale, 'Now playing')}</span>
+          <span className="eyebrow" title={state.external_mpv?.error ?? state.external_mpv?.endpoint}>{state.external_mpv?.mode && state.external_mpv.mode !== 'internal' ? `External mpv · ${state.external_mpv.connected ? tr(locale, 'Connected') : tr(locale, 'Disconnected')}` : state.live ? tr(locale, 'LIVE') : tr(locale, 'Now playing')}</span>
           <h2 title={videoName}>{videoName}</h2>
         </div>
         <span className={`transport-state ${state.playing ? 'is-playing' : ''}`}>

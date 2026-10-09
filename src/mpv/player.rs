@@ -9,6 +9,16 @@ impl std::ops::Deref for Player {
     }
 }
 impl Player {
+    pub fn get_property<T: libmpv2::GetData + serde::de::DeserializeOwned>(&self, name: &str) -> libmpv2::Result<T> {
+        if crate::mpv::external::active() {
+            let mut value = crate::mpv::external::property(name).ok_or(libmpv2::Error::Null)?;
+            if T::get_format() == libmpv2::Format::String && !value.is_string() {
+                value = serde_json::Value::String(match value {serde_json::Value::Bool(v) => if v {"yes"} else {"no"}.into(), v => v.to_string()});
+            }
+            return serde_json::from_value(value).map_err(|_| libmpv2::Error::Null);
+        }
+        self.0.get_property(name)
+    }
     pub fn command(&self, name: &str, args: &[&str]) -> libmpv2::Result<()> {
         if let Some(client) = crate::peer::client()
             && !crate::peer::mirroring()
@@ -29,6 +39,9 @@ impl Player {
                 return Err(libmpv2::Error::Null);
             }
             return Ok(());
+        }
+        if crate::mpv::external::active() && name != "osd-overlay" {
+            return crate::mpv::external::command(name, args).map_err(|error| {log::warn!("{error}");libmpv2::Error::Null});
         }
         self.0.command(name, args)
     }
@@ -66,6 +79,10 @@ impl Player {
                     libmpv2::Error::Null
                 })?;
             return Ok(());
+        }
+        if crate::mpv::external::active() {
+            let value = serde_json::to_value(value).map_err(|_| libmpv2::Error::Null)?;
+            return crate::mpv::external::send(serde_json::json!(["set_property",name,value])).map_err(|error| {log::warn!("{error}");libmpv2::Error::Null});
         }
         self.0.set_property(name, value)
     }

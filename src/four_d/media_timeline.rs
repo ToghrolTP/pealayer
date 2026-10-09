@@ -259,13 +259,16 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
     std::thread::spawn(move || {
         let mut previous_path = String::new();
         let mut seeking = false;
+        let source = crate::mpv::player::Player(mpv);
+        let mut external_seek_revision = 0;
         while lifecycle.strong_count() > 0 {
             let unattended = crate::platform::interop::allow_unattended_hardware_takeover();
             let mut restarted = false;
+            let external = crate::mpv::external::active();
             for _ in 0..128 {
                 match client.wait_event(0.0) {
-                    Some(Ok(libmpv2::events::Event::Seek)) => seeking = true,
-                    Some(Ok(libmpv2::events::Event::PlaybackRestart)) => {
+                    Some(Ok(libmpv2::events::Event::Seek)) if !external => seeking = true,
+                    Some(Ok(libmpv2::events::Event::PlaybackRestart)) if !external => {
                         restarted = seeking;
                         seeking = false;
                     }
@@ -273,23 +276,29 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
                     None => break,
                 }
             }
-            let path = client.get_property::<String>("path").unwrap_or_default();
-            let position = client
+            if external {
+                let revision = crate::mpv::external::seek_revision();
+                restarted |= revision != external_seek_revision;
+                external_seek_revision = revision;
+                seeking = source.get_property::<bool>("seeking").unwrap_or(false);
+            }
+            let path = source.get_property::<String>("path").unwrap_or_default();
+            let position = source
                 .get_property::<f64>("time-pos")
                 .ok()
                 .filter(|value| value.is_finite());
             let loaded = !path.is_empty() && position.is_some();
-            let paused = client.get_property::<bool>("pause").unwrap_or(true);
-            let eof = client.get_property::<bool>("eof-reached").unwrap_or(false);
+            let paused = source.get_property::<bool>("pause").unwrap_or(true);
+            let eof = source.get_property::<bool>("eof-reached").unwrap_or(false);
             let buffering = seeking
-                || client
+                || source
                     .get_property::<bool>("paused-for-cache")
                     .unwrap_or(false);
-            let rate = client
+            let rate = source
                 .get_property::<f64>("speed")
                 .unwrap_or(1.0)
                 .clamp(0.25, 4.0);
-            let duration = client
+            let duration = source
                 .get_property::<f64>("duration")
                 .ok()
                 .filter(|value| value.is_finite() && *value > 0.0);
@@ -391,7 +400,7 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
             }
             // Never hold shared state while waiting for an mpv command.
             if let Some(paused) = set_pause {
-                let _ = client.set_property("pause", paused);
+                let _ = source.set_property("pause", paused);
             }
             std::thread::sleep(Duration::from_millis(20));
         }

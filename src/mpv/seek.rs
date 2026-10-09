@@ -71,11 +71,11 @@ impl SeekBackend for MpvSeekBackend {
         match mode {
             SeekMode::Scrub => {
                 // High-precision scrubbing via absolute+exact seek with decoder frame-drop
-                let _ = self.mpv.command("seek", &[&t_str, "absolute+exact"]);
+                let _ = crate::mpv::player::Player(self.mpv).command("seek", &[&t_str, "absolute+exact"]);
             }
             SeekMode::Commit => {
                 // "absolute+exact" performs precision seek to exact frame on release
-                let _ = self.mpv.command("seek", &[&t_str, "absolute+exact"]);
+                let _ = crate::mpv::player::Player(self.mpv).command("seek", &[&t_str, "absolute+exact"]);
             }
         }
     }

@@ -730,6 +730,7 @@ mod seekbar_marker_tests {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct AppConfig {
+    pub external_mpv: crate::mpv::external::Settings,
     pub volume: f64,
     pub is_muted: bool,
     /// mpv audio-device name, including its backend prefix; `auto` uses OS default.
@@ -920,6 +921,7 @@ pub struct EffectCueSession {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            external_mpv: crate::mpv::external::Settings::default(),
             volume: 100.0,
             is_muted: false,
             audio_device: "auto".to_string(),
@@ -1766,6 +1768,7 @@ impl AppConfig {
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        self.external_mpv.validate()?;
         if self.audio_effects.len() > 256 { return Err("At most 256 audio effects may be saved".into()); }
         let mut audio_ids = std::collections::HashSet::new();
         for effect in &self.audio_effects {
