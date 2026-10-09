@@ -10133,16 +10133,16 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn step_single_frame_and_step_frames_n_handle_unloaded_and_edge_inputs() {
+    fn frame_step_entrypoints_handle_unloaded_and_edge_inputs() {
         let _lock = lock_app_tests();
         let mut app = PealayerApp::default();
         // With no video loaded, stepping should be a safe no-op without panics
-        app.step_single_frame(1);
-        app.step_single_frame(-1);
-        app.step_frames_n(1, 5);
-        app.step_frames_n(-1, 5);
-        app.step_frames_n(0, 5);
-        app.step_frames_n(1, 0);
+        app.step_timeline_frame(1);
+        app.step_timeline_frame(-1);
+        app.step_timeline_frame(0);
+        app.step_frames(1);
+        app.step_frames(-1);
+        app.step_frames(0);
     }
 
     #[test]
