@@ -693,7 +693,9 @@ pub fn run() -> eframe::Result {
                     frame_cache.clone(),
                 ),
                 frame_cache,
-                active_pseudo_frame: None,
+        active_pseudo_frame: None,
+        settled_seek_revision: 0,
+        settled_seek_target: None,
                 was_playing_before_scrub: false,
                 is_scrubbing: false,
                 pending_scrub_commit: None,
@@ -853,6 +855,7 @@ pub fn run() -> eframe::Result {
                 show_subseconds: loaded_config.show_subseconds,
                 seekbar_hover_thumbnails: loaded_config.seekbar_hover_thumbnails,
                 nle_seekbar_hover_thumbnails: loaded_config.nle_seekbar_hover_thumbnails,
+                seekbar_markers: loaded_config.seekbar_markers.clone(),
                 seekbar_thumbnail_preview:
                     crate::ui::seek_preview::SeekbarThumbnailPreview::default(),
                 quick_seek_seconds: loaded_config.quick_seek_seconds,

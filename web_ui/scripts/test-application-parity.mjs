@@ -6,6 +6,9 @@ const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
 const hardware = read('src/components/HardwareTab.tsx');
 const studio = read('src/components/StudioTab.tsx');
 const remote = read('src/components/RemoteControlTab.tsx');
+const playbackButton = read('src/components/PlaybackButton.tsx');
+const volumeControl = read('src/components/VolumeControl.tsx');
+const elapsedInput = read('src/components/ElapsedTimeInput.tsx');
 const media = read('src/components/MediaSurface.tsx');
 const library = read('src/components/MediaLibraryTab.tsx');
 const app = read('src/App.tsx');
@@ -16,12 +19,23 @@ const effects = read('src/components/EffectsTab.tsx');
 const effectRecorder = read('src/components/EffectRecorder.tsx');
 const effectGroupDialog = read('src/components/EffectGroupDialog.tsx');
 const css = read('src/styles.css');
+const seekbar = read('src/components/seekbar.tsx');
+const colorPicker = read('src/components/ColorPicker.tsx');
 const preferences = read('src/components/PreferencesTab.tsx');
 const filePicker = read('src/components/ServerFilePicker.tsx');
 const authority = read('src/components/PublishingAuthority.tsx');
 const webPlatform = read('src/webPlatform.ts');
 
 const contracts = [
+  [studio.includes('<VolumeControl') && remote.includes('<VolumeControl') && volumeControl.includes("sendCmd('set_volume'") && volumeControl.includes("sendCmd('set_mute'") && volumeControl.includes('aria-label={tr(locale, \'Volume\')}'), 'Simple and NLE share accessible horizontal volume and mute controls using session commands'],
+  [css.includes('grid-template-rows: auto minmax(0, 1fr) auto auto') && css.includes('.studio-volume { grid-column: 1 / -1; grid-row: 4; width: 100%; }'), 'the monitor reserves its selectors and gives narrow panels a full-width volume row'],
+  [studio.includes('<ElapsedTimeInput') && remote.includes('<ElapsedTimeInput') && elapsedInput.includes('setSelectionRange') && elapsedInput.includes('onPaste=') && elapsedInput.includes("event.key === 'Escape'"), 'both playback surfaces share an immutable segmented elapsed-time editor with paste and cancellation'],
+  [studio.includes('<PlaybackButton') && remote.includes('<PlaybackButton') && playbackButton.includes('disabled={!loaded || playing === undefined}') && playbackButton.includes("playing ? 'Pause' : 'Play'"), 'both playback surfaces render their action and enabled state from the authoritative snapshot'],
+  [css.includes('.transport-action--play { --transport-color: var(--green); }') && css.includes('.transport-action--pause { --transport-color: var(--amber); }') && css.includes('border: 1px solid') && !css.includes('transform: translateY(1px);\n  box-shadow:'), 'transport intents share semantic colors and fixed borders instead of moving on hover/press'],
+  [studio.includes('useSeekbar(state, sendCmd)') && remote.includes('useSeekbar(state, sendCmd)') && seekbar.includes("send('scrub_to'") && seekbar.includes("send('finish_scrub'"), 'Simple and NLE seekbars share ordered live preview and exact commit commands'],
+  [seekbar.includes('state.settled_seek_revision') && seekbar.includes('baselineRevision.current') && seekbar.includes('state.settled_seek_target'), 'seek drafts wait for a correlated decoder settlement, not stale or already-advancing position samples'],
+  [seekbar.includes("'#969696'") && seekbar.includes("'#EF4444'") && css.includes('.seekbar-markers__chapter::after') && css.includes('height: 4px'), 'chapter ticks remain subtle and contained while named keyframes retain red dividers'],
+  [preferences.includes("control.kind === 'color'") && colorPicker.includes('assets/themes/ui-colors.json') && effects.includes("import { ColorPicker } from './ColorPicker'") && hardware.includes("import { ColorPicker } from './ColorPicker'"), 'marker preferences and effect/hardware pickers share the semantic swatch catalog'],
   [app.includes('revision=${state.app_icon_revision') && webPlatform.includes('revision=${state.app_icon_revision'), 'runtime branding changes refresh the header, favicon, PWA and media-session imagery without a playback change'],
   [authority.includes('Connect to authority') && authority.includes('authority.owner_endpoint') && authority.includes('disabled={!authority.owner_endpoint}'), 'conflicts offer the validated remote authority without inventing an endpoint'],
   [app.includes('<PublishingAuthority') && hardware.includes('<PublishingAuthority') && authority.includes("sendCmd('pealayer.hardware.authority'") && authority.includes('authority.owner_id === actor'), 'publishing authority uses the same server reservation in controls and the global conflict dialog'],
@@ -36,7 +50,8 @@ const contracts = [
   [hardware.includes('optimisticActive') && hardware.includes('invokeAction'), 'hardware actions acknowledge pointer-down immediately while awaiting board state'],
   [hardware.includes('controlIcon(control.kind, control.icon)'), 'hardware controls honor the shared custom icon contract'],
   [hardware.includes('Buzzer & melodies') && hardware.includes("hardware.buzzer.melody") && hardware.includes("hardware.buzzer.tone") && hardware.includes("hardware.buzzer.stop"), 'hardware monitor exposes live melody, tone, and stop controls'],
-  [hardware.includes("onOpenChange={(open) => { if (open) void sendCmd('hardware.catalog.refresh'); }}"), 'opening a melody picker refreshes the controller catalog'],
+  [hardware.includes('<MelodySelect') && hardware.includes("refresh={() => { void sendCmd('hardware.catalog.refresh'); }}") &&
+    read('src/components/MelodySelect.tsx').includes('onOpenChange={(open) => { if (open) refresh(); }}'), 'shared melody picker refreshes the controller catalog on opening'],
   [css.includes('.hardware-estop.ant-btn-primary'), 'E-STOP owns its filled danger styling'],
   [sevenSegment.includes("mask & (1 << bit)") && hardware.includes('<SevenSegmentDisplay'), 'front-panel masks render as live seven-segment glyphs'],
   [remote.includes('<MediaSurface') && studio.includes('<MediaSurface'), 'both player surfaces share the native media element'],

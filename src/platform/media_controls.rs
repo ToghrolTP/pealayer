@@ -86,6 +86,7 @@ pub struct MediaControlsManager {
     title: Option<String>,
     duration: Option<Duration>,
     last_playback: Option<MediaPlayback>,
+    app_name: String,
     #[cfg(all(
         unix,
         not(any(target_os = "macos", target_os = "ios", target_os = "android"))
@@ -98,6 +99,7 @@ impl MediaControlsManager {
         hwnd_raw: isize,
         event_tx: Sender<MediaControlEvent>,
         egui_ctx: eframe::egui::Context,
+        app_name: &str,
     ) -> Self {
         let mut manager = Self {
             controls: None,
@@ -105,6 +107,7 @@ impl MediaControlsManager {
             title: None,
             duration: None,
             last_playback: None,
+            app_name: app_name.to_owned(),
             #[cfg(all(
                 unix,
                 not(any(target_os = "macos", target_os = "ios", target_os = "android"))
@@ -126,7 +129,7 @@ impl MediaControlsManager {
         };
         let config = PlatformConfig {
             dbus_name: "pealayer",
-            display_name: "Pealayer",
+            display_name: app_name,
             hwnd,
         };
         match MediaControls::new(config) {
@@ -147,8 +150,8 @@ impl MediaControlsManager {
     fn publish_metadata(&mut self) {
         if let Some(controls) = &mut self.controls {
             let _ = controls.set_metadata(MediaMetadata {
-                title: Some(self.title.as_deref().unwrap_or("")),
-                album: Some("Pealayer"),
+                title: Some(self.title.as_deref().unwrap_or(&self.app_name)),
+                album: Some(&self.app_name),
                 duration: self.duration,
                 ..Default::default()
             });
@@ -158,6 +161,10 @@ impl MediaControlsManager {
     pub fn update_metadata(&mut self, title: Option<&str>) {
         self.title = title.map(str::to_owned);
         self.publish_metadata();
+    }
+
+    pub fn has_branding(&self, app_name: &str) -> bool {
+        self.app_name == app_name
     }
 
     pub fn update_playback(&mut self, has_media: bool, paused: bool, time: f64, duration: f64) {
@@ -217,7 +224,7 @@ mod tests {
     #[test]
     fn missing_windows_window_does_not_panic_or_register() {
         let (tx, rx) = std::sync::mpsc::channel();
-        let manager = MediaControlsManager::new(0, tx, eframe::egui::Context::default());
+        let manager = MediaControlsManager::new(0, tx, eframe::egui::Context::default(), "Custom player");
         assert!(manager.controls.is_none());
         assert!(rx.try_recv().is_err());
     }
@@ -287,6 +294,7 @@ mod tests {
             title: None,
             duration: None,
             last_playback: None,
+            app_name: String::new(),
             #[cfg(all(
                 unix,
                 not(any(target_os = "macos", target_os = "ios", target_os = "android"))

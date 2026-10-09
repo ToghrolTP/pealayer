@@ -144,6 +144,8 @@ pub enum InteropCommand {
     SeekTo {
         seconds: f64,
     },
+    ScrubTo { seconds: f64 },
+    FinishScrub { seconds: f64 },
     SeekAbs {
         percentage: f64,
     },
@@ -535,7 +537,8 @@ impl InteropCommand {
             Self::Seek { seconds } if !seconds.is_finite() => {
                 Err("seek value must be finite".to_string())
             }
-            Self::SeekTo { seconds } if !seconds.is_finite() || *seconds < 0.0 => {
+            Self::SeekTo { seconds } | Self::ScrubTo { seconds } | Self::FinishScrub { seconds }
+                if !seconds.is_finite() || *seconds < 0.0 => {
                 Err("absolute seek time must be a finite non-negative value".to_string())
             }
             Self::SeekAbs { percentage }
@@ -817,7 +820,7 @@ pub fn command_catalog() -> Value {
             "open", "play", "pause", "toggle_pause", "stop", "next", "previous",
             "browse_remote", "select_remote", "sort_remote", "close_remote_browser",
             "chapter_previous", "chapter_next", "set_chapter",
-            "seek", "seek_to", "seek_abs", "set_volume", "set_mute", "toggle_mute",
+            "seek", "seek_to", "seek_abs", "scrub_to", "finish_scrub", "set_volume", "set_mute", "toggle_mute",
             "set_rate", "set_fullscreen", "toggle_fullscreen", "activate", "minimize",
             "maximize", "restore", "open_preferences", "open_media_information", "open_media_folder", "edit_configuration", "open_board_information", "show_message", "show_osd", "hide_osd", "set_workspace",
             "create_workspace_profile", "update_workspace_profile", "delete_workspace_profile",
@@ -910,6 +913,8 @@ pub fn parse_text_command(input: &str) -> Result<InteropCommand, String> {
         "seek_to" | "seek-to" => InteropCommand::SeekTo {
             seconds: number("seek-to")?,
         },
+        "scrub_to" => InteropCommand::ScrubTo { seconds: number("scrub_to")? },
+        "finish_scrub" => InteropCommand::FinishScrub { seconds: number("finish_scrub")? },
         "seek_abs" | "seek-abs" => InteropCommand::SeekAbs {
             percentage: number("seek-abs")?,
         },
@@ -1215,6 +1220,11 @@ pub struct PlayerStatusResponse {
     pub chapters: Vec<WebMediaChapter>,
     #[serde(default)]
     pub current_chapter_index: Option<i64>,
+    pub seekbar_markers: crate::config::SeekbarMarkersConfig,
+    pub timeline_keyframes: Vec<crate::four_d::models::TimelineKeyframe>,
+    pub seek_pending: bool,
+    pub settled_seek_revision: u64,
+    pub settled_seek_target: Option<f64>,
     #[serde(default)]
     pub seekable: bool,
     #[serde(default)]
@@ -1531,6 +1541,11 @@ impl Default for PlayerStatusResponse {
             media_tracks: Vec::new(),
             chapters: Vec::new(),
             current_chapter_index: None,
+            seekbar_markers: crate::config::SeekbarMarkersConfig::default(),
+            timeline_keyframes: Vec::new(),
+            seek_pending: false,
+            settled_seek_revision: 0,
+            settled_seek_target: None,
             seekable: false,
             live: false,
             buffered_until: None,
@@ -1652,6 +1667,8 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
                 percentage: number(&["percentage"])?,
             })
         }
+        "scrub_to" | "pealayer.scrub_to" => Some(InteropCommand::ScrubTo { seconds: number(&["seconds"])? }),
+        "finish_scrub" | "pealayer.finish_scrub" => Some(InteropCommand::FinishScrub { seconds: number(&["seconds"])? }),
         "volume" | "set_volume" | "pealayer.volume.set" => {
             Some(InteropCommand::SetVolume {
                 value: number(&["value"])?,
@@ -3342,6 +3359,21 @@ mod tests {
             parse_text_command("emergency-stop off").unwrap(),
             InteropCommand::SetEmergencyStop { active: false }
         );
+    }
+
+    #[test]
+    fn scrub_gestures_have_shared_text_json_and_rpc_contracts() {
+        for (name, expected) in [("scrub_to", InteropCommand::ScrubTo { seconds: 10.125 }),
+            ("finish_scrub", InteropCommand::FinishScrub { seconds: 10.125 })] {
+            assert_eq!(parse_text_command(&format!("{name} 10.125")).unwrap(), expected);
+            let parsed: InteropCommand = serde_json::from_value(serde_json::json!({"command":name,"seconds":10.125})).unwrap();
+            assert_eq!(parsed, expected);
+            let request = JsonRpcRequest { jsonrpc: Some("2.0".into()), id: Value::Null,
+                method: format!("pealayer.{name}"), params: serde_json::json!({"seconds":10.125}) };
+            assert_eq!(command_from_json_rpc(&request).unwrap(), Some(expected));
+        }
+        assert!(InteropCommand::ScrubTo { seconds: f64::NAN }.validate().is_err());
+        assert!(InteropCommand::FinishScrub { seconds: -1.0 }.validate().is_err());
     }
 
     #[test]

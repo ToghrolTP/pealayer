@@ -312,7 +312,7 @@ const App: React.FC = () => {
     } catch {
       return connectionTarget;
     }
-  }, [connectionTarget, runtime]);
+  }, [connectionTarget, runtime?.websocketPath]);
 
   const apiBaseUrl = (() => {
     try {
@@ -336,13 +336,14 @@ const App: React.FC = () => {
       })
       .then((value: RuntimeConfig) => {
         if (!disposed) {
-          setRuntime(value);
+          setRuntime((previous) => JSON.stringify(previous) === JSON.stringify(value) ? previous : value);
           persistJson(STORAGE.runtime, value);
         }
       })
       .catch(() => {});
     return () => { disposed = true; };
-  }, [apiEndpoint]);
+    // Reuse the authoritative status revision, not a separate polling loop.
+  }, [apiEndpoint, state.app_icon_revision]);
 
   useEffect(() => {
     if (!runtime) return;
@@ -465,7 +466,8 @@ const App: React.FC = () => {
       wsRef.current = null;
       window.removeEventListener('online', reconnectNow);
     };
-  }, [runtime, connectionTarget, resolveWebSocketUrl, apiEndpoint, completeRequest]);
+  // Branding/theme changes must not disconnect an active control socket.
+  }, [Boolean(runtime), connectionTarget, resolveWebSocketUrl, apiEndpoint, completeRequest]);
 
   useEffect(() => () => {
     for (const pending of pendingRequests.current.values()) {

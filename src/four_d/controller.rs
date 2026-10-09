@@ -1435,11 +1435,10 @@ fn parse_melodies(value: &Value) -> Result<Vec<HardwareMelody>, String> {
         .as_array()
         .ok_or_else(|| "PCController returned a non-array melody catalog".to_string())?;
     let mut names = std::collections::BTreeSet::new();
-    Ok(values
-        .iter()
-        .take(32)
-        .filter_map(|value| serde_json::from_value::<HardwareMelody>(value.clone()).ok())
-        .filter_map(|mut melody| {
+    if values.len() > 32 { return Err("PCController melody catalog exceeds 32 entries".into()); }
+    values.iter().enumerate().map(|(index, value)| {
+            let mut melody: HardwareMelody = serde_json::from_value(value.clone())
+                .map_err(|error| format!("Invalid PCController melody at index {index}: {error}"))?;
             melody.name = melody.name.trim().to_string();
             let normalized_name = melody.name.to_ascii_lowercase();
             let valid_notes = !melody.notes.is_empty()
@@ -1457,12 +1456,12 @@ fn parse_melodies(value: &Value) -> Result<Vec<HardwareMelody>, String> {
                 || !valid_notes
                 || !names.insert(normalized_name)
             {
-                None
+                Err(format!("Invalid or duplicate PCController melody at index {index}"))
             } else {
-                Some(melody)
+                Ok(melody)
             }
         })
-        .collect())
+        .collect()
 }
 
 fn apply_pwm_values(telemetry: &mut HardwareTelemetry, values: &Value) -> bool {
@@ -3146,19 +3145,23 @@ mod tests {
     }
 
     #[test]
-    fn melody_catalog_parser_keeps_only_valid_unique_definitions() {
+    fn melody_catalog_parser_normalizes_valid_definitions_and_rejects_partial_catalogs() {
         let parsed = parse_melodies(&json!([
             {"name":" Attention ","notes":[
                 {"frequency_hz":880,"duration_ms":100,"gap_ms":25},
                 {"frequency_hz":0,"duration_ms":40}
-            ]},
-            {"name":"attention","notes":[{"frequency_hz":440,"duration_ms":100}]},
-            {"name":"bad-frequency","notes":[{"frequency_hz":10,"duration_ms":100}]},
-            {"name":"bad-duration","notes":[{"frequency_hz":440,"duration_ms":0}]}
+            ]}
         ])).unwrap();
         assert_eq!(parsed.len(), 1);
         assert_eq!(parsed[0].name, "Attention");
         assert_eq!(parsed[0].duration_ms(), 165);
+        for invalid in [
+            json!({"name":"attention","notes":[{"frequency_hz":440,"duration_ms":100}]}),
+            json!({"name":"bad-frequency","notes":[{"frequency_hz":10,"duration_ms":100}]}),
+            json!({"name":"bad-duration","notes":[{"frequency_hz":440,"duration_ms":0}]})
+        ] {
+            assert!(parse_melodies(&json!([parsed[0], invalid])).is_err());
+        }
     }
 
     #[test]

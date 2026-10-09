@@ -161,7 +161,9 @@ fn hovered_seek_time(rect: egui::Rect, pointer_x: f32, duration: f64) -> Option<
     if rect.width() <= 0.0 || !duration.is_finite() || duration <= 0.0 {
         return None;
     }
-    let fraction = ((pointer_x - rect.left()) / rect.width()).clamp(0.0, 1.0) as f64;
+    let range = super::controls::seekbar_value_range(rect);
+    if range.end() <= range.start() { return None; }
+    let fraction = ((pointer_x - range.start()) / (range.end() - range.start())).clamp(0.0, 1.0) as f64;
     Some((duration * fraction).min((duration - 0.001).max(0.0)))
 }
 

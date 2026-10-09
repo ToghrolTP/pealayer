@@ -3,6 +3,62 @@ use eframe::egui;
 
 const CONTROL_FADE_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
+/// Transport intent is independent of the user's accent. All interaction
+/// states keep the same stroke width, so hover/focus cannot shift the glyph.
+pub(crate) fn transport_button<'a>(
+    palette: crate::config::ColorPalette,
+    ui: &egui::Ui,
+    icon: &'a str,
+    role: &str,
+) -> egui::Button<'a> {
+    let dark = ui.visuals().dark_mode;
+    let intent = crate::ui::palette::color(palette, dark, role);
+    let surface = crate::ui::palette::color(palette, dark, "surface-2");
+    egui::Button::new(egui::RichText::new(icon).color(intent))
+        .fill(egui::Color32::from_rgb(
+            ((surface.r() as u16 * 88 + intent.r() as u16 * 12) / 100) as u8,
+            ((surface.g() as u16 * 88 + intent.g() as u16 * 12) / 100) as u8,
+            ((surface.b() as u16 * 88 + intent.b() as u16 * 12) / 100) as u8,
+        ))
+        .stroke(egui::Stroke::new(1.0, intent.gamma_multiply(0.45)))
+}
+
+pub(crate) fn playback_button_role(app: &PealayerApp) -> &'static str {
+    if app.is_paused || app.is_playback_finished() { "green" } else { "amber" }
+}
+
+/// A bounded horizontal volume strip, shared by responsive monitor layouts.
+/// Session commands also control the authority when this app is a consumer.
+pub(crate) fn draw_volume_strip(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    let icon = if app.is_muted { crate::ui::icons::SPEAKER_SLASH } else { crate::ui::icons::SPEAKER_HIGH };
+    if ui.add_sized([30.0, 22.0], transport_button(app.color_palette, ui, icon,
+        if app.is_muted { "amber" } else { "muted" }))
+        .on_hover_text(app.tr(if app.is_muted { "Unmute" } else { "Mute" })).clicked() {
+        app.apply_interop_command(&ui.ctx().clone(), crate::platform::interop::InteropCommand::ToggleMute,
+            "Volume control");
+    }
+    let mut volume = app.volume;
+    let old_width = ui.spacing().slider_width;
+    // Reserve a stable percentage column, even when the value has fewer digits.
+    ui.spacing_mut().slider_width = (ui.available_width() - 44.0 - ui.spacing().item_spacing.x).max(1.0);
+    let response = ui.add(egui::Slider::new(&mut volume, 0.0..=130.0).show_value(false))
+        .on_hover_text(format!("{}: {:.0}%", app.tr("Volume"), volume));
+    ui.spacing_mut().slider_width = old_width;
+    let wheel = if response.hovered() {
+        ui.input(|input| input.smooth_scroll_delta.y)
+    } else { 0.0 };
+    if wheel != 0.0 {
+        volume = (volume + f64::from(wheel.signum()) * 2.0).clamp(0.0, 130.0);
+        ui.input_mut(|input| input.smooth_scroll_delta.y = 0.0);
+    }
+    if response.changed() || wheel != 0.0 {
+        app.apply_interop_command(&ui.ctx().clone(), crate::platform::interop::InteropCommand::SetVolume { value: volume },
+            "Volume control");
+    }
+    ui.add_sized([44.0, 22.0], egui::Label::new(timecode_text(format!("{:.0}%", volume))))
+        .on_hover_text(app.tr("Volume"));
+}
+
 pub fn timecode_text(value: impl Into<String>) -> egui::RichText {
     egui::RichText::new(value).monospace()
 }
@@ -100,44 +156,98 @@ pub(crate) fn paint_buffered_seekbar(
         .rect_filled(buffered_rect, buffered_rect.height() / 2.0, color);
 }
 
-/// Paint chapter landmarks over the slider's actual thumb travel range.
-pub(crate) fn paint_seekbar_chapters(
+pub(crate) fn seekbar_value_range(rect: egui::Rect) -> std::ops::RangeInclusive<f32> {
+    let radius = rect.height() / 2.5;
+    rect.left() + radius..=rect.right() - radius
+}
+
+pub(crate) fn chapter_hover_label(chapters: &[crate::media_info::MediaChapter], seconds: f64) -> Option<String> {
+    let chapter = chapters.iter().filter(|chapter| chapter.time_seconds.is_finite() && chapter.time_seconds >= 0.0 && chapter.time_seconds <= seconds)
+        .max_by(|a,b| a.time_seconds.total_cmp(&b.time_seconds))?;
+    Some(format!("Chapter {}{}", chapter.index + 1,
+        if chapter.title.trim().is_empty() { String::new() } else { format!(" · {}", chapter.title) }))
+}
+
+fn chapter_near_pointer(chapters: &[crate::media_info::MediaChapter], rect: egui::Rect, duration: f64, pointer_x: f32) -> Option<&crate::media_info::MediaChapter> {
+    if !duration.is_finite() || duration <= 0.0 { return None; }
+    let range = seekbar_value_range(rect);
+    if range.end() <= range.start() { return None; }
+    let distance = |chapter: &crate::media_info::MediaChapter| (egui::lerp(range.clone(), (chapter.time_seconds / duration) as f32) - pointer_x).abs();
+    chapters.iter().filter(|chapter| chapter.time_seconds.is_finite() && (0.0..=duration).contains(&chapter.time_seconds))
+        .filter(|chapter| distance(chapter) <= 6.0)
+        .min_by(|a,b| distance(a).total_cmp(&distance(b)))
+}
+
+/// Chapters are subtle contained ticks; exact project keyframes retain taller
+/// red dividers. Geometry, hover and chapter snapping share the thumb range.
+pub(crate) fn paint_seekbar_markers(
     ui: &egui::Ui,
     response: &egui::Response,
-    duration: f64,
-    chapters: &[crate::media_info::MediaChapter],
-    active_index: Option<i64>,
-) {
-    if duration <= 0.0 || !duration.is_finite() || chapters.is_empty() {
-        return;
+    app: &PealayerApp,
+) -> Option<f64> {
+    let duration = app.duration;
+    if duration <= 0.0 || !duration.is_finite() {
+        return None;
     }
+    let chapters = app.media_chapters();
     let rect = response.rect;
-    let handle_radius = rect.height() / 2.5;
-    let range = rect.left() + handle_radius..=rect.right() - handle_radius;
+    let range = seekbar_value_range(rect);
     if range.end() <= range.start() {
-        return;
+        return None;
     }
-    let half_height = (ui.spacing().slider_rail_height * 0.5 + 3.0)
-        .min(rect.height() * 0.5);
-    for chapter in chapters {
+    let rgb = |hex: &str, fallback| { let [r,g,b] = crate::config::parse_rgb_hex(hex).unwrap_or(fallback); egui::Color32::from_rgb(r,g,b) };
+    let chapter_color = rgb(&app.seekbar_markers.chapter_color, [150,150,150]);
+    let active_color = rgb(&app.seekbar_markers.active_chapter_color, [176,176,176]);
+    let keyframe_color = rgb(&app.seekbar_markers.keyframe_color, [239,68,68]);
+    let x_for = |time: f64| egui::lerp(range.clone(), (time / duration).clamp(0.0,1.0) as f32);
+    let current_time = app.seek_pos.unwrap_or(app.playback_time);
+    if let Some(active) = chapters.iter().filter(|chapter| chapter.time_seconds.is_finite()
+        && (0.0..=duration).contains(&chapter.time_seconds) && chapter.time_seconds <= current_time)
+        .max_by(|a,b| a.time_seconds.total_cmp(&b.time_seconds)) {
+        let end = chapters.iter().filter(|chapter| chapter.time_seconds > active.time_seconds)
+            .map(|chapter| chapter.time_seconds).min_by(f64::total_cmp).unwrap_or(duration);
+        let active_rect = egui::Rect::from_min_max(egui::pos2(x_for(active.time_seconds), rect.center().y - ui.spacing().slider_rail_height * 0.4),
+            egui::pos2(x_for(end), rect.center().y + ui.spacing().slider_rail_height * 0.4));
+        ui.painter().rect_filled(active_rect, 1.0, active_color.gamma_multiply(0.24));
+    }
+    let pointer = ui.ctx().pointer_hover_pos().filter(|point| rect.contains(*point));
+    let nearest_chapter = pointer.and_then(|point| chapter_near_pointer(&chapters, rect, duration, point.x));
+    let half_height = ui.spacing().slider_rail_height * 0.35;
+    for chapter in &chapters {
         if !chapter.time_seconds.is_finite()
             || !(0.0..=duration).contains(&chapter.time_seconds)
         {
             continue;
         }
-        let x = egui::lerp(range.clone(), (chapter.time_seconds / duration) as f32);
-        let active = active_index == Some(chapter.index);
-        let color = if active {
-            egui::Color32::from_rgb(255, 193, 75)
-        } else {
-            egui::Color32::from_rgb(216, 162, 56)
-        };
+        let x = x_for(chapter.time_seconds);
         ui.painter().line_segment(
             [egui::pos2(x, rect.center().y - half_height),
              egui::pos2(x, rect.center().y + half_height)],
-            egui::Stroke::new(if active { 2.0 } else { 1.5 }, color),
+            egui::Stroke::new(1.0, chapter_color),
         );
     }
+    for marker in &app.timeline.keyframes {
+        let time = marker.time_ms as f64 / 1000.0;
+        if time > duration { continue; }
+        let x = x_for(time);
+        let height = (ui.spacing().slider_rail_height * 0.5 + 3.0).min(rect.height() * 0.5);
+        ui.painter().line_segment([egui::pos2(x,rect.center().y-height),egui::pos2(x,rect.center().y+height)], egui::Stroke::new(1.5,keyframe_color));
+    }
+    if let Some(point) = pointer {
+        let nearest_keyframe = app.timeline.keyframes.iter().filter(|marker| marker.time_ms as f64 / 1000.0 <= duration)
+            .filter(|marker| (x_for(marker.time_ms as f64/1000.0)-point.x).abs() <= 6.0)
+            .min_by_key(|marker| ((x_for(marker.time_ms as f64/1000.0)-point.x).abs()*100.0) as u64);
+        let label = if let Some(marker) = nearest_keyframe {
+            format!("Keyframe{}\n{}", if marker.label.is_empty() { String::new() } else { format!(" · {}", marker.label) },
+                crate::duration::format_time_value_ms(marker.time_ms))
+        } else {
+            let time = nearest_chapter.map_or_else(|| duration * ((point.x-range.start()) / (range.end()-range.start())).clamp(0.0,1.0) as f64, |chapter| chapter.time_seconds);
+            chapter_hover_label(&chapters,time).unwrap_or_default()
+        };
+        if !label.is_empty() && !response.dragged() { response.clone().on_hover_text(label); }
+    }
+    let operating = response.changed() || response.clicked() || response.drag_stopped();
+    nearest_chapter.filter(|_| operating).map(|chapter| chapter.time_seconds)
 }
 
 fn compact_number(value: f64) -> String {
@@ -293,12 +403,43 @@ pub fn draw_contextual_transport_nudge(
 
 pub fn begin_elapsed_edit(app: &mut PealayerApp) {
     let elapsed = resolve_display_time(app.seek_pos, app.playback_time);
-    app.elapsed_time_input = format_player_time(elapsed, app.duration >= 3600.0, true);
+    app.elapsed_time_input = format_elapsed_edit_time(elapsed);
     app.elapsed_time_original = app.elapsed_time_input.clone();
     app.elapsed_time_group = 0;
     app.elapsed_time_group_digits = 0;
     app.editing_elapsed_time = true;
     app.elapsed_edit_focus_requested = true;
+}
+
+const ELAPSED_AUTOMATIC_ADVANCE: usize = usize::MAX;
+
+fn format_elapsed_edit_time(seconds: f64) -> String {
+    let seconds = if seconds.is_finite() { seconds.clamp(0.0, 359_999.999) } else { 0.0 };
+    format_player_time(seconds, true, true)
+}
+
+fn normalize_timecode_digits(text: &str) -> String {
+    text.chars().map(|character| match character {
+        '۰'..='۹' => char::from(b'0' + (character as u32 - '۰' as u32) as u8),
+        '٠'..='٩' => char::from(b'0' + (character as u32 - '٠' as u32) as u8),
+        '٫' => '.',
+        _ => character,
+    }).collect()
+}
+
+fn parse_elapsed_edit_time(text: &str) -> Option<f64> {
+    let normalized = normalize_timecode_digits(text);
+    let text = normalized.trim();
+    if !text.bytes().all(|byte| byte.is_ascii_digit() || byte == b':' || byte == b'.') {
+        return None;
+    }
+    if text.split(':').any(|field| !field.as_bytes().first().is_some_and(u8::is_ascii_digit)
+        || !field.as_bytes().last().is_some_and(u8::is_ascii_digit)) { return None; }
+    parse_timecode(text).filter(|seconds| (0.0..=359_999.999).contains(seconds))
+}
+
+fn elapsed_edit_should_commit(original: &str, value: &str, enter: bool, blur: bool, escape: bool) -> bool {
+    !escape && (enter || (blur && value != original))
 }
 
 fn timecode_groups(value: &str) -> Vec<std::ops::Range<usize>> {
@@ -342,15 +483,39 @@ fn edit_timecode_segment(value: &mut String, group: &mut usize, digits: &mut usi
             *group = groups.len() - 1;
             *digits = 0;
         }
-        egui::Event::Key { key: egui::Key::Backspace | egui::Key::Delete, pressed: true, .. } => {
+        egui::Event::Key { key: egui::Key::Backspace, pressed: true, .. } => {
+            if *digits == ELAPSED_AUTOMATIC_ADVANCE {
+                *group = group.saturating_sub(1);
+                *digits = groups[*group].len();
+            }
+            let range = groups[*group].clone();
+            let next = if *digits > 0 {
+                *digits -= 1;
+                value[range.clone()].parse::<u32>().unwrap_or(0) / 10
+            } else { 0 };
+            value.replace_range(range.clone(), &format!("{next:0width$}", width = range.len()));
+        }
+        egui::Event::Key { key: egui::Key::Delete, pressed: true, .. } => {
             let range = groups[*group].clone();
             value.replace_range(range.clone(), &"0".repeat(range.len()));
             *digits = 0;
         }
-        egui::Event::Text(text) => {
-            for character in text.chars() {
+        egui::Event::Key { key: key @ (egui::Key::ArrowUp | egui::Key::ArrowDown), pressed: true, .. } => {
+            let range = groups[*group].clone();
+            let maximum = if *group == groups.len() - 1 { 999 } else if groups.len() == 4 && *group == 0 { 99 } else { 59 };
+            let previous = value[range.clone()].parse::<u32>().unwrap_or(0);
+            let next = if *key == egui::Key::ArrowUp { (previous + 1).min(maximum) } else { previous.saturating_sub(1) };
+            value.replace_range(range.clone(), &format!("{next:0width$}", width = range.len()));
+            *digits = 0;
+        }
+        egui::Event::Text(text) | egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
+            for character in normalize_timecode_digits(text).chars() {
                 if character == ':' || character == '.' {
-                    *group = (*group + 1).min(groups.len() - 1);
+                    // A completed group already skipped its separator. Typing
+                    // that separator must not accidentally skip another group.
+                    if *digits != ELAPSED_AUTOMATIC_ADVANCE {
+                        *group = (*group + 1).min(groups.len() - 1);
+                    }
                     *digits = 0;
                     continue;
                 }
@@ -358,26 +523,23 @@ fn edit_timecode_segment(value: &mut String, group: &mut usize, digits: &mut usi
                     continue;
                 };
                 let range = groups[*group].clone();
+                if *digits == ELAPSED_AUTOMATIC_ADVANCE || *digits >= range.len() { *digits = 0; }
                 let previous = if *digits == 0 { 0 } else { value[range.clone()].parse::<u32>().unwrap_or(0) };
                 let maximum = if *group == groups.len() - 1 { 999 } else if groups.len() == 4 && *group == 0 { 99 } else { 59 };
                 let next = (previous * 10 + digit).min(maximum);
                 value.replace_range(range.clone(), &format!("{next:0width$}", width = range.len()));
                 *digits += 1;
-                if *digits >= range.len() {
-                    *group = (*group + 1).min(groups.len() - 1);
-                    *digits = 0;
+                if *digits >= range.len() && *group + 1 < groups.len() {
+                    *group += 1;
+                    *digits = ELAPSED_AUTOMATIC_ADVANCE;
                 }
             }
         }
         egui::Event::Paste(text) => {
-            if let Some(seconds) = parse_timecode(text) {
-                let has_hours = groups.len() == 4;
-                let limit = if has_hours { 360_000.0 } else { 3_600.0 };
-                if seconds < limit {
-                    *value = format_player_time(seconds, has_hours, true);
-                    *group = groups.len() - 1;
-                    *digits = 0;
-                }
+            if let Some(seconds) = parse_elapsed_edit_time(text) {
+                *value = format_elapsed_edit_time(seconds);
+                *group = 3;
+                *digits = 0;
             }
         }
         _ => {}
@@ -394,19 +556,31 @@ pub fn draw_elapsed_editor(
     enabled: bool,
 ) -> egui::Response {
     let elapsed = resolve_display_time(app.seek_pos, app.playback_time);
-    let rendered = format_player_time(elapsed, app.duration >= 3600.0, app.show_subseconds);
-    let desired_width = if app.duration >= 3600.0 { 104.0 } else { 82.0 };
+    let rendered = format_player_time(elapsed, true, app.show_subseconds);
+    let desired_width = 104.0;
     let edit_id = ui.make_persistent_id(id_source);
-    let editing = app.editing_elapsed_time && enabled;
+    let owner_key = egui::Id::new("elapsed-editor-owner");
+    if app.editing_elapsed_time && app.elapsed_edit_focus_requested && enabled {
+        ui.data_mut(|data| data.insert_temp(owner_key, edit_id));
+        ui.memory_mut(|memory| memory.request_focus(edit_id));
+        app.elapsed_edit_focus_requested = false;
+    }
+    let owns_edit = ui.data(|data| data.get_temp::<egui::Id>(owner_key)) == Some(edit_id);
+    let editing = app.editing_elapsed_time && owns_edit && enabled;
+    if app.editing_elapsed_time && owns_edit && !enabled {
+        app.editing_elapsed_time = false;
+        ui.memory_mut(|memory| memory.surrender_focus(edit_id));
+    }
     // When this editor owns keyboard focus, intercept text actions before
     // TextEdit can alter the fixed separators or length. Pointer events remain
     // with egui so clicking still selects a segment naturally.
     let mut timecode_events = Vec::new();
-    if editing && ui.memory(|memory| memory.has_focus(edit_id)) {
+    let has_focus = ui.memory(|memory| memory.has_focus(edit_id));
+    if editing {
         ui.input_mut(|input| input.events.retain(|event| {
             let captured = match event {
-                egui::Event::Text(_) | egui::Event::Paste(_) | egui::Event::Cut | egui::Event::Ime(_) => true,
-                egui::Event::Key { key, .. } => *key != egui::Key::Tab,
+                egui::Event::Text(_) | egui::Event::Paste(_) | egui::Event::Cut | egui::Event::Ime(_) => has_focus,
+                egui::Event::Key { key, .. } => *key == egui::Key::Escape || (has_focus && *key != egui::Key::Tab),
                 _ => false,
             };
             if captured { timecode_events.push(event.clone()); }
@@ -415,6 +589,7 @@ pub fn draw_elapsed_editor(
     }
     let mut escape = false;
     let mut enter = false;
+    let before_edit = app.elapsed_time_input.clone();
     for event in &timecode_events {
         match event {
             egui::Event::Key { key: egui::Key::Escape, pressed: true, .. } => escape = true,
@@ -425,6 +600,16 @@ pub fn draw_elapsed_editor(
                 &mut app.elapsed_time_group_digits,
                 event,
             ),
+        }
+    }
+    if editing {
+        // Set selection before painting, not after it. Otherwise a paused
+        // application can keep the old selection until an unrelated repaint.
+        if let Some(range) = timecode_groups(&app.elapsed_time_input).get(app.elapsed_time_group) {
+            let mut state = egui::TextEdit::load_state(ui.ctx(), edit_id).unwrap_or_default();
+            state.cursor.set_char_range(Some(egui::text::CCursorRange::two(
+                egui::text::CCursor::new(range.start), egui::text::CCursor::new(range.end))));
+            state.store(ui.ctx(), edit_id);
         }
     }
     let mut display_buffer = rendered;
@@ -462,10 +647,8 @@ pub fn draw_elapsed_editor(
             response.on_hover_text(app.tr(
                 "Type digits in each time group; Left/Right switches groups. Enter seeks; Escape cancels.",
             ));
-        if app.elapsed_edit_focus_requested {
-            response.request_focus();
-            app.elapsed_edit_focus_requested = false;
-        }
+        if before_edit != app.elapsed_time_input { response.mark_changed(); }
+        if !timecode_events.is_empty() { ui.ctx().request_repaint(); }
         if response.has_focus() {
             if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), edit_id) {
                 let groups = timecode_groups(&app.elapsed_time_input);
@@ -484,27 +667,27 @@ pub fn draw_elapsed_editor(
                         egui::text::CCursor::new(range.end),
                     )));
                     state.store(ui.ctx(), edit_id);
+                    if response.clicked() { ui.ctx().request_repaint(); }
                 }
             }
         }
         if escape {
             app.elapsed_time_input = app.elapsed_time_original.clone();
             app.editing_elapsed_time = false;
-        } else if enter {
-            match parse_timecode(&app.elapsed_time_input) {
+            response.surrender_focus();
+        } else if elapsed_edit_should_commit(&app.elapsed_time_original, &app.elapsed_time_input,
+            enter, response.lost_focus(), escape) {
+            match parse_elapsed_edit_time(&app.elapsed_time_input) {
                 Some(seconds) => {
                     app.seek_absolute(seconds);
                     app.editing_elapsed_time = false;
+                    response.surrender_focus();
                 }
                 None => app.set_osd(app.tr("Enter a valid playback time")),
             }
         } else if response.lost_focus() {
-            if app.elapsed_time_input != app.elapsed_time_original {
-                if let Some(seconds) = parse_timecode(&app.elapsed_time_input) {
-                    app.seek_absolute(seconds);
-                }
-            }
             app.editing_elapsed_time = false;
+            response.surrender_focus();
         }
     } else {
         // A non-interactive TextEdit deliberately has no click sense. Layer a
@@ -521,6 +704,8 @@ pub fn draw_elapsed_editor(
         response = response.on_hover_text(app.tr("Click to enter an exact playback time."));
         if response.clicked() {
             begin_elapsed_edit(app);
+            ui.data_mut(|data| data.insert_temp(owner_key, edit_id));
+            ui.ctx().request_repaint();
         }
     }
 
@@ -530,7 +715,7 @@ pub fn draw_elapsed_editor(
         } else {
             format_player_time(
                 resolve_display_time(app.seek_pos, app.playback_time),
-                app.duration >= 3600.0,
+                true,
                 app.show_subseconds,
             )
         };
@@ -555,6 +740,8 @@ pub fn draw_elapsed_editor(
             if !app.editing_elapsed_time {
                 begin_elapsed_edit(app);
             }
+            ui.data_mut(|data| data.insert_temp(owner_key, edit_id));
+            app.elapsed_edit_focus_requested = false;
             ui.ctx().memory_mut(|memory| memory.request_focus(edit_id));
             ui.ctx()
                 .send_viewport_cmd(egui::ViewportCommand::RequestPaste);
@@ -822,6 +1009,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 } else {
                     crate::ui::icons::SPEAKER_HIGH
                 };
+                let transport_palette = app.color_palette;
+                let mute_role = if app.is_muted { "amber" } else { "muted" };
                 let mut volume = app.volume;
                 let mut toggle_fullscreen = false;
                 let mut toggle_pin = false;
@@ -860,7 +1049,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 app.tr("Pause")
                             };
                             let play_response = ui
-                                .add_sized([30.0, 22.0], egui::Button::new(play_icon))
+                                .add_sized([30.0, 22.0], transport_button(transport_palette, ui, play_icon, playback_button_role(app)))
                                 .on_hover_text(play_tooltip);
                             play_response.context_menu(|ui| transport_context_menu(app, ui));
                             if play_response.clicked() {
@@ -917,13 +1106,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 (buffered_until / app.duration).clamp(0.0, 1.0) as f32,
                             );
                         }
-                        paint_seekbar_chapters(
-                            ui,
-                            &response,
-                            app.duration,
-                            &app.media_chapters(),
-                            app.active_media_chapter().map(|chapter| chapter.index),
-                        );
+                        if let Some(chapter_time) = paint_seekbar_markers(ui, &response, app) { current_pos = chapter_time; }
                         let show_seek_preview = app.seekbar_hover_thumbnails;
                         crate::ui::seek_preview::draw(
                             app,
@@ -998,7 +1181,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 }
                             }
                             toggle_mute = ui
-                                .add(egui::Button::new(mute_icon).frame(false))
+                                .add(transport_button(transport_palette, ui, mute_icon, mute_role))
                                 .on_hover_text(mute_tooltip)
                                 .clicked();
                         });
@@ -1179,6 +1362,18 @@ mod tests {
     use super::*;
 
     #[test]
+    fn chapter_snapping_uses_thumb_range_and_preserves_exact_timestamp() {
+        let chapters = vec![crate::media_info::MediaChapter { index: 0, title: "Opening".into(), time_seconds: 10.125 }];
+        let rect = egui::Rect::from_min_size(egui::pos2(100.0,20.0), egui::vec2(400.0,20.0));
+        let x = egui::lerp(seekbar_value_range(rect), 10.125 / 120.0);
+        assert_eq!(chapter_near_pointer(&chapters, rect, 120.0, x + 5.5).unwrap().time_seconds, 10.125);
+        assert!(chapter_near_pointer(&chapters, rect, 120.0, x + 6.1).is_none());
+        assert!(chapter_near_pointer(&chapters, rect, f64::NAN, x).is_none());
+        assert_eq!(chapter_hover_label(&chapters, 11.0).as_deref(), Some("Chapter 1 · Opening"));
+        assert!(chapter_hover_label(&chapters, 9.0).is_none());
+    }
+
+    #[test]
     fn test_multiply_style_opacity_handles_none_override_text_color() {
         let mut style = egui::Style::default();
         style.visuals.override_text_color = None;
@@ -1318,6 +1513,37 @@ mod tests {
         assert_eq!(value, "01:45:07.004");
         edit_timecode_segment(&mut value, &mut group, &mut digits, &egui::Event::Paste("00:01:20.250".into()));
         assert_eq!(value, "00:01:20.250");
+        assert_eq!(timecode_groups(&value), vec![0..2, 3..5, 6..8, 9..12]);
+    }
+
+    #[test]
+    fn elapsed_commit_is_explicit_or_changed_blur_and_escape_wins() {
+        let value = "00:01:02.003";
+        assert!(!elapsed_edit_should_commit(value, value, false, true, false));
+        assert!(elapsed_edit_should_commit(value, value, true, false, false));
+        assert!(elapsed_edit_should_commit(value, "00:01:02.004", false, true, false));
+        assert!(!elapsed_edit_should_commit(value, "00:01:02.004", true, true, true));
+    }
+
+    #[test]
+    fn elapsed_mask_accepts_local_digits_and_rejects_invalid_paste() {
+        assert_eq!(format_elapsed_edit_time(3.125), "00:00:03.125");
+        assert_eq!(parse_elapsed_edit_time("۰۰:۰۱:۰۲.۰۰۳"), Some(62.003));
+        for value in ["00:-1", "1e2", "NaN", "1.", ".5", "00:60:00", "100:00:00"] {
+            assert_eq!(parse_elapsed_edit_time(value), None, "{value}");
+        }
+    }
+
+    #[test]
+    fn elapsed_typed_separators_do_not_double_advance_and_backspace_preserves_mask() {
+        let mut value = "00:00:00.000".to_owned();
+        let (mut group, mut digits) = (0, 0);
+        edit_timecode_segment(&mut value, &mut group, &mut digits, &egui::Event::Text("01:23:45.678".into()));
+        assert_eq!(value, "01:23:45.678");
+        edit_timecode_segment(&mut value, &mut group, &mut digits, &egui::Event::Key {
+            key: egui::Key::Backspace, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE,
+        });
+        assert_eq!(value, "01:23:45.067");
         assert_eq!(timecode_groups(&value), vec![0..2, 3..5, 6..8, 9..12]);
     }
 

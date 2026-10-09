@@ -845,7 +845,7 @@ fn sequence_cue_context_menu(
                 step.green.unwrap_or_default(),
                 step.blue.unwrap_or_default(),
             );
-            if ui.color_edit_button_srgba(&mut color).changed() {
+            if crate::ui::color_picker::color_button_srgba(ui, &mut color).changed() {
                 step.red = Some(color.r());
                 step.green = Some(color.g());
                 step.blue = Some(color.b());
@@ -1589,7 +1589,7 @@ fn draw_timeline_authoring_fields(
                     step.to_green.unwrap_or_default(),
                     step.to_blue.unwrap_or_default(),
                 );
-                if ui.color_edit_button_srgba(&mut color).changed() {
+                if crate::ui::color_picker::color_button_srgba(ui, &mut color).changed() {
                     step.to_red = Some(color.r());
                     step.to_green = Some(color.g());
                     step.to_blue = Some(color.b());
@@ -2007,7 +2007,7 @@ fn draw_sequence_step_editor(
                                     step.green.unwrap_or_default(),
                                     step.blue.unwrap_or_default(),
                                 );
-                                if ui.color_edit_button_srgba(&mut color).changed() {
+                                if crate::ui::color_picker::color_button_srgba(ui, &mut color).changed() {
                                     step.red = Some(color.r());
                                     step.green = Some(color.g());
                                     step.blue = Some(color.b());
@@ -2046,7 +2046,7 @@ fn draw_sequence_step_editor(
                                     step.green.unwrap_or_default(),
                                     step.blue.unwrap_or_default(),
                                 );
-                                if ui.color_edit_button_srgba(&mut color).changed() {
+                                if crate::ui::color_picker::color_button_srgba(ui, &mut color).changed() {
                                     step.red = Some(color.r());
                                     step.green = Some(color.g());
                                     step.blue = Some(color.b());
@@ -2221,7 +2221,7 @@ fn record_action_color() -> egui::Color32 {
 }
 
 fn paint_recording_swatch(ui: &egui::Ui, rect: egui::Rect, value: &str) {
-    let center = egui::pos2(rect.left() + 12.0, rect.center().y);
+    let center = egui::pos2(rect.left() + ui.spacing().button_padding.x + 5.0, rect.center().y);
     ui.painter()
         .circle_filled(center, 5.0, recording_color(value));
     // White must remain distinguishable on light popup surfaces too.
@@ -2235,7 +2235,7 @@ fn recording_color_label(ui: &egui::Ui, label: &str) -> egui::text::LayoutJob {
     // font and selected/hover formatting, making the label visibly jump.
     job.append(
         label,
-        28.0,
+        24.0,
         egui::TextFormat::simple(
             egui::TextStyle::Button.resolve(ui.style()),
             ui.visuals().text_color(),
@@ -2253,9 +2253,22 @@ fn recording_color_picker(ui: &mut egui::Ui, value: &mut String) -> egui::Respon
         .selected_text(recording_color_label(ui, &selected.label))
         .show_ui(ui, |ui| {
             for color in recording_colors() {
-                let label = recording_color_label(ui, &color.label);
-                let row = ui.selectable_value(value, color.id.clone(), label);
+                let (rect, row) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), ui.spacing().interact_size.y.max(26.0)),
+                    egui::Sense::click(),
+                );
+                let selected = *value == color.id;
+                let visuals = ui.style().interact_selectable(&row, selected);
+                ui.painter().rect_filled(rect, 4.0, visuals.weak_bg_fill);
+                ui.painter().rect_stroke(rect, 4.0, egui::Stroke::new(1.0,
+                    if selected { visuals.bg_stroke.color } else { egui::Color32::TRANSPARENT }), egui::StrokeKind::Inside);
+                ui.painter().text(egui::pos2(rect.left() + ui.spacing().button_padding.x + 24.0, rect.center().y),
+                    egui::Align2::LEFT_CENTER, &color.label, egui::TextStyle::Button.resolve(ui.style()), visuals.text_color());
                 paint_recording_swatch(ui, row.rect, &color.id);
+                if row.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                    *value = color.id.clone();
+                    ui.close();
+                }
             }
         })
         .response;
@@ -2325,6 +2338,8 @@ pub(crate) fn draw_effect_capture_controls(app: &mut PealayerApp, ui: &mut egui:
         }
         ui.add_enabled_ui(!active && !busy && connected, |ui| {
             let has_melodies = hardware.as_ref().is_some_and(|value| !value.melodies.is_empty());
+            let combo_id = ui.make_persistent_id("effect_add_melody");
+            let was_open = egui::ComboBox::is_open(ui.ctx(), combo_id);
             let response = egui::ComboBox::from_id_salt("effect_add_melody")
                 .selected_text(if has_melodies {
                     format!("{} Add melody", crate::ui::icons::MUSIC_NOTE)
@@ -2354,7 +2369,7 @@ pub(crate) fn draw_effect_capture_controls(app: &mut PealayerApp, ui: &mut egui:
                     }
                 })
                 .response;
-            refresh_melodies = response.clicked();
+            refresh_melodies = !was_open && egui::ComboBox::is_open(ui.ctx(), response.id);
         });
         ui.add_enabled_ui(!active && !busy, |ui| {
             egui::ComboBox::from_id_salt("effect_capture_clock").width(160.0)
@@ -2389,7 +2404,8 @@ pub(crate) fn draw_effect_capture_controls(app: &mut PealayerApp, ui: &mut egui:
     if refresh_melodies {
         // Events keep this catalog current in the background; opening the
         // picker is also an explicit freshness boundary for user choice.
-        app.engine_handle.request_catalog_refresh();
+        app.apply_interop_command(&ui.ctx().clone(),
+            crate::platform::interop::InteropCommand::RefreshHardwareCatalog, "Effect melody catalog");
     }
     if let Some(melody) = selected_melody
         && let Some(first) = append_melody_steps(&mut app.effect_library_draft.steps, &melody)

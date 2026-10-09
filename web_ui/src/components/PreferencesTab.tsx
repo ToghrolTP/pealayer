@@ -1,9 +1,9 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { ColorPicker } from './ColorPicker';
 import {
   Alert,
   Button,
   Card,
-  ColorPicker,
   Collapse,
   Input,
   Select,
@@ -79,7 +79,7 @@ interface PreferenceControl {
   section: string;
   group: string;
   label: string;
-  kind: 'accent' | 'boolean' | 'file' | 'multi_select' | 'number' | 'replacement_list' | 'select' | 'text';
+  kind: 'accent' | 'color' | 'boolean' | 'file' | 'multi_select' | 'number' | 'replacement_list' | 'select' | 'text';
   icon: string;
   description?: string;
   options?: PreferenceOption[];
@@ -385,6 +385,12 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
           </div>
         </label>
       );
+    }
+    if (control.kind === 'color') {
+      return <label className="preference-control" key={control.key}><span>{commonLabel}</span>
+        <ColorPicker value={String(value)} disabledAlpha showText disabled={saving === control.key}
+          onChangeComplete={(color) => void update(control, color.toHexString().toUpperCase())} />
+      </label>;
     }
     if (control.kind === 'boolean') {
       return (

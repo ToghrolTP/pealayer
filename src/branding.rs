@@ -119,6 +119,37 @@ pub fn icon_image(config: &AppConfig, state: PlaybackIconState) -> Option<image:
     icon_bytes(config, state).and_then(|(_, bytes)| image::load_from_memory(&bytes).ok())
 }
 
+/// Preserve native ICO masters; convert other artwork once to a shell-ready
+/// multi-resolution ICO using high-quality, alpha-preserving resampling.
+#[cfg(target_os = "windows")]
+pub fn native_icon_bytes(config: &AppConfig, state: PlaybackIconState) -> Result<Vec<u8>, String> {
+    let (_, bytes) = icon_bytes(config, state).ok_or("Application icon unavailable")?;
+    if bytes.len() >= 6 && bytes[..4] == [0, 0, 1, 0] && u16::from_le_bytes([bytes[4], bytes[5]]) > 1 {
+        return Ok(bytes);
+    }
+    let image = image::load_from_memory(&bytes).map_err(|error| error.to_string())?;
+    let mut frames = Vec::new();
+    for size in [16u32, 24, 32, 48, 64, 128, 256] {
+        let resized = image.resize_exact(size, size, image::imageops::FilterType::Lanczos3);
+        let mut png = std::io::Cursor::new(Vec::new());
+        resized.write_to(&mut png, image::ImageFormat::Png).map_err(|error| error.to_string())?;
+        frames.push((size, png.into_inner()));
+    }
+    let mut ico = vec![0, 0, 1, 0];
+    ico.extend((frames.len() as u16).to_le_bytes());
+    let mut offset = 6 + frames.len() as u32 * 16;
+    for (size, png) in &frames {
+        ico.extend([*size as u8, *size as u8, 0, 0]);
+        ico.extend(1u16.to_le_bytes());
+        ico.extend(32u16.to_le_bytes());
+        ico.extend((png.len() as u32).to_le_bytes());
+        ico.extend(offset.to_le_bytes());
+        offset += png.len() as u32;
+    }
+    for (_, png) in frames { ico.extend(png); }
+    Ok(ico)
+}
+
 pub fn icon_data_from_bytes(bytes: &[u8]) -> Option<egui::IconData> {
     let image = image::load_from_memory(bytes).ok()?.into_rgba8();
     let (width, height) = image.dimensions();
@@ -158,22 +189,16 @@ pub fn sync_native_window_icon(ctx: &egui::Context, state: PlaybackIconState) {
     }
 
     let config = crate::platform::interop::get_live_config();
-    let key = resolved_icon_path(&config, state)
-        .map(|path| {
-            format!(
-                "{}:{:?}:{}",
-                state.as_str(),
-                config.app_icon_preset,
-                path.display()
-            )
-        })
-        .unwrap_or_else(|| format!("{}:<builtin:{:?}>", state.as_str(), config.app_icon_preset));
+    // Avoid decoding/rereading artwork for unrelated config changes (volume,
+    // telemetry settings, etc.). File metadata also catches replacing artwork
+    // at the same path when the configuration is next applied/reloaded.
+    let source = icon_source_signature(&config, state);
     let changed = ctx.data_mut(|data| {
         let id = egui::Id::new("pealayer-playback-window-icon");
-        if data.get_temp::<String>(id).as_deref() == Some(&key) {
+        if data.get_temp::<u64>(id) == Some(source) {
             false
         } else {
-            data.insert_temp(id, key);
+            data.insert_temp(id, source);
             true
         }
     });
@@ -184,26 +209,68 @@ pub fn sync_native_window_icon(ctx: &egui::Context, state: PlaybackIconState) {
     ctx.data_mut(|data| {
         data.insert_temp(egui::Id::new("pealayer-playback-window-icon-stamp"), stamp);
     });
+    // Title-only changes still update the notification area's tooltip. Windows
+    // copies the borrowed HWND icon; WM_SETICON updates it again after eframe
+    // processes the viewport command below.
+    let hwnd = crate::platform::windows::get_registered_hwnd();
+    if hwnd != 0 {
+        let _ = crate::platform::windows::update_system_tray_icon(
+            hwnd, &crate::config::resolved_app_name(&config),
+        );
+    }
     if !changed {
         return;
     }
 
-    let icon = icon_bytes(&config, state)
-        .and_then(|(_, bytes)| icon_data_from_bytes(&bytes))
+    let icon = icon_bytes(&config, state).and_then(|(_, bytes)| icon_data_from_bytes(&bytes))
         .or_else(|| {
             eframe::icon_data::from_png_bytes(include_bytes!("../assets/pealayer-icon.png")).ok()
         });
     if let Some(icon) = icon {
-        ctx.send_viewport_cmd_to(
-            egui::ViewportId::ROOT,
-            egui::ViewportCommand::Icon(Some(std::sync::Arc::new(icon))),
-        );
+        let icon = std::sync::Arc::new(icon);
+        let viewports = ctx.input(|input| input.raw.viewports.keys().copied().collect::<Vec<_>>());
+        for viewport in viewports {
+            ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::Icon(Some(icon.clone())));
+        }
     }
+}
+
+fn icon_source_signature(config: &AppConfig, state: PlaybackIconState) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hash = std::collections::hash_map::DefaultHasher::new();
+    format!("{:?}", config.app_icon_preset).hash(&mut hash);
+    let path = resolved_icon_path(config, state);
+    path.hash(&mut hash);
+    if let Some(path) = path && let Ok(metadata) = std::fs::metadata(path) {
+        metadata.len().hash(&mut hash);
+        metadata.modified().ok().hash(&mut hash);
+    }
+    hash.finish()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn unrelated_settings_do_not_force_icon_decoding() {
+        let mut config = AppConfig::default();
+        let before = icon_source_signature(&config, PlaybackIconState::Stopped);
+        config.volume = 42.0;
+        assert_eq!(before, icon_source_signature(&config, PlaybackIconState::Stopped));
+        config.app_icon_preset = crate::config::AppIconPreset::Classic;
+        assert_ne!(before, icon_source_signature(&config, PlaybackIconState::Stopped));
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn shell_derivative_preserves_native_master_and_multiple_resolutions() {
+        let config = AppConfig::default();
+        let bytes = native_icon_bytes(&config, PlaybackIconState::Stopped).unwrap();
+        assert_eq!(&bytes[..4], &[0, 0, 1, 0]);
+        assert!(u16::from_le_bytes([bytes[4], bytes[5]]) > 1);
+        assert!(image::load_from_memory(&bytes).is_ok());
+    }
 
     #[test]
     fn builtin_presets_are_distinct_decodable_and_need_no_files() {

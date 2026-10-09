@@ -1,13 +1,9 @@
-import React, { useState } from 'react';
+import React from 'react';
 import type { RfSnapshot } from './RfManager';
 import { Button, Select, Slider, Tooltip } from 'antd';
 import {
   FastBackwardOutlined,
   FastForwardOutlined,
-  MutedOutlined,
-  PauseOutlined,
-  PlayCircleFilled,
-  SoundOutlined,
   StepBackwardOutlined,
   StepForwardOutlined,
   VideoCameraOutlined,
@@ -17,10 +13,14 @@ import { mediaBasename } from '../mediaLabel';
 import { MediaSurface } from './MediaSurface';
 import type { MediaGesturePreferences } from './MediaSurface';
 import { SeekThumbnailPreview } from './SeekThumbnailPreview';
+import { SeekbarMarkers, useSeekbar } from './seekbar';
 import type { AppearanceState } from '../appearance';
 import type { TimelineWheelPreferences } from '../timelineWheel';
 import type { HardwareMelody } from '../melodyCatalog';
 import { MediaTrackSelectors } from './MediaTrackSelectors';
+import { PlaybackButton } from './PlaybackButton';
+import { VolumeControl } from './VolumeControl';
+import { ElapsedTimeInput } from './ElapsedTimeInput';
 
 export interface PlayerState {
   app_icon_revision?: number;
@@ -50,6 +50,11 @@ export interface PlayerState {
   }>;
   chapters?: Array<{ index: number; title: string; time_seconds: number }>;
   current_chapter_index?: number | null;
+  seek_pending?: boolean;
+  settled_seek_revision?: number;
+  settled_seek_target?: number | null;
+  seekbar_markers?: { chapter_color: string; active_chapter_color: string; keyframe_color: string };
+  timeline_keyframes?: Array<{ id: string; time_ms: number; label: string }>;
   seekable?: boolean;
   live?: boolean;
   muted?: boolean;
@@ -97,6 +102,8 @@ export interface PlayerState {
     controls: Array<{
       key: string; kind: string; order: number; name: string; default_name: string;
       control: string; icon: string; color: string; group: string; hidden: boolean;
+      up_color?: string; down_color?: string; indicator_color?: string;
+      direction?: 'up' | 'down' | 'stop' | null;
       locked: boolean; channel?: number | null; active?: boolean | null; percent?: number | null;
       actions: Array<{ id: string; verb: string; name: string; icon: string }>;
     }>;
@@ -257,14 +264,11 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
   seekbarHoverThumbnails,
   mediaGestures,
 }) => {
-  const [seekDraft, setSeekDraft] = useState<number | null>(null);
+  const seek = useSeekbar(state, sendCmd);
 
   const videoName = state.current_video
     ? mediaBasename(state.current_video, tr(locale, 'Untitled'))
     : state.current_video === null ? tr(locale, 'No Media Playing') : tr(locale, 'Initializing…');
-  const seekPercent = state.duration && state.duration > 0
-    ? ((state.playback_time || 0) / state.duration) * 100
-    : 0;
 
   return (
     <section className="remote-player">
@@ -291,26 +295,28 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
       </header>
 
       <div className="remote-player__timeline">
-        <span>{formatTime(state.playback_time)}</span>
+        <ElapsedTimeInput seconds={state.playback_time ?? 0} locale={locale}
+          disabled={!state.current_video || !state.seekable || !state.duration}
+          mediaIdentity={state.current_video} onCommit={seek.commitSeconds} />
         <SeekThumbnailPreview
           enabled={seekbarHoverThumbnails && Boolean(state.seekable) && Boolean(state.duration)}
           duration={state.duration || 0}
           mediaIdentity={state.current_video}
           apiBaseUrl={apiBaseUrl}
           unavailableLabel={tr(locale, 'Preview unavailable')}
+          chapters={state.chapters}
+          keyframes={state.timeline_keyframes}
         >
           <Slider
             min={0}
             max={100}
-            value={seekDraft ?? seekPercent}
+            value={seek.value}
             disabled={!state.current_video || !state.seekable || !state.duration}
-            onChange={setSeekDraft}
-            onChangeComplete={(value) => {
-              setSeekDraft(null);
-              sendCmd('seek_abs', { percentage: value });
-            }}
+            onChange={seek.change}
+            onChangeComplete={seek.commit}
             tooltip={seekbarHoverThumbnails ? { open: false } : { formatter: (value) => formatTime(((value || 0) / 100) * (state.duration || 0)) }}
           />
+          <SeekbarMarkers state={state} seconds={seek.value / 100 * (state.duration ?? 0)} onChapter={seek.commitSeconds} />
         </SeekThumbnailPreview>
         <span>{state.live ? tr(locale, 'LIVE') : formatTime(state.duration)}</span>
       </div>
@@ -320,14 +326,13 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
         <Tooltip title={`${tr(locale, 'Seek backward')} ${quickSeekSeconds}s`}>
           <Button shape="circle" icon={<FastBackwardOutlined />} disabled={!state.current_video || !state.seekable} onClick={() => sendCmd('seek', { seconds: -quickSeekSeconds })} />
         </Tooltip>
-        <Tooltip title={state.playing ? tr(locale, 'Pause') : tr(locale, 'Play')}>
-          <Button
-            shape="circle"
+          <PlaybackButton
             className="remote-player__play"
-            icon={state.playing ? <PauseOutlined /> : <PlayCircleFilled />}
+            playing={state.playing}
+            loaded={Boolean(state.current_video)}
+            locale={locale}
             onClick={() => sendCmd('toggle_pause')}
           />
-        </Tooltip>
         <Tooltip title={`${tr(locale, 'Seek forward')} ${quickSeekSeconds}s`}>
           <Button shape="circle" icon={<FastForwardOutlined />} disabled={!state.current_video || !state.seekable} onClick={() => sendCmd('seek', { seconds: quickSeekSeconds })} />
         </Tooltip>
@@ -356,22 +361,7 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
 
       <MediaTrackSelectors state={state} sendCmd={sendCmd} locale={locale} />
 
-      <div className="remote-player__volume">
-        <Button
-          type="text"
-          aria-label={state.muted ? tr(locale, 'Unmute') : tr(locale, 'Mute')}
-          icon={state.muted || state.volume === 0 ? <MutedOutlined /> : <SoundOutlined />}
-          onClick={() => sendCmd('set_mute', { muted: !state.muted })}
-        />
-        <Slider
-          min={0}
-          max={130}
-          value={state.muted ? 0 : (state.volume ?? 0)}
-          disabled={state.volume === undefined}
-          onChange={(value) => sendCmd('set_volume', { value })}
-        />
-        <output>{state.volume === undefined ? '—' : `${Math.round(state.muted ? 0 : state.volume)}%`}</output>
-      </div>
+      <VolumeControl className="remote-player__volume" state={state} sendCmd={sendCmd} locale={locale} />
     </section>
   );
 };
