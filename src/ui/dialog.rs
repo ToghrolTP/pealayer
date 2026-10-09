@@ -20,7 +20,10 @@ pub fn singleline_text_edit(text: &mut dyn egui::TextBuffer) -> egui::TextEdit<'
 
 /// Workspace overlays paint immediately above their panel, never above dialogs.
 /// Raising individual controls to Foreground lets them escape modal backdrops.
-pub fn workspace_overlay_layer(ui: &egui::Ui, id: impl std::hash::Hash) -> egui::LayerId {
+pub fn workspace_overlay_layer(
+    ui: &egui::Ui,
+    id: impl std::hash::Hash + std::fmt::Debug,
+) -> egui::LayerId {
     let parent = ui.layer_id();
     let child = egui::LayerId::new(parent.order, parent.id.with(id));
     ui.ctx().set_sublayer(parent, child);
