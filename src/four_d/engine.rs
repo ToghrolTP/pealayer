@@ -1897,9 +1897,13 @@ fn spawn_peer_engine() -> EngineHandle {
                     plan.authority=snapshot.session.status.pointer("/hardware_sync/authority").cloned().and_then(|value|serde_json::from_value(value).ok());
                     if let Some(actor)=snapshot.session.status.pointer("/hardware_sync/authority_client_id").and_then(serde_json::Value::as_str){plan.authority_client_id=actor.into();}
                 }
-                if let Ok(mut value)=capabilities.lock(){*value=snapshot.session.hardware;}
-                estop.store(snapshot.session.status.get("estop_active").and_then(serde_json::Value::as_bool).unwrap_or(false),Ordering::SeqCst);
+                let hardware_changed = if let Ok(mut value)=capabilities.lock(){let changed=*value!=snapshot.session.hardware;*value=snapshot.session.hardware;changed}else{false};
+                let next_estop=snapshot.session.status.get("estop_active").and_then(serde_json::Value::as_bool).unwrap_or(false);
+                let estop_changed=estop.swap(next_estop,Ordering::SeqCst)!=next_estop;
                 if let Ok(mut error)=errors.lock(){*error=client.error.lock().ok().and_then(|value|value.clone());}
+                // Wake after installing the authoritative hardware snapshot,
+                // not only before this worker has consumed the peer revision.
+                if hardware_changed || estop_changed { notify_state_change(&notifier); }
                 }
             }
             let mut incoming=Vec::new();

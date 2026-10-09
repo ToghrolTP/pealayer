@@ -1193,6 +1193,8 @@ pub struct PlayerStatusResponse {
     pub duration: f64,
     #[serde(default)]
     pub media_fps: f64,
+    /// Measured native UI cadence, not the monitor refresh rate or browser FPS.
+    pub ui_fps: Option<f64>,
     pub current_video: Option<String>,
     #[serde(default)]
     pub media_tracks: Vec<WebMediaTrack>,
@@ -1509,6 +1511,7 @@ impl Default for PlayerStatusResponse {
             playback_time: 0.0,
             duration: 0.0,
             media_fps: 0.0,
+            ui_fps: None,
             current_video: None,
             media_tracks: Vec::new(),
             chapters: Vec::new(),

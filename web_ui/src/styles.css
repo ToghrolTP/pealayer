@@ -807,6 +807,11 @@ body {
 .app-content .ant-btn-default { background: var(--surface-2); border-color: var(--line); color: var(--text); }
 .app-statusbar { flex: 0 0 27px; min-width: 0; height: 27px; padding: 0 12px; display: flex; align-items: center; gap: 14px; overflow: hidden; border-top: 1px solid var(--line); background: color-mix(in srgb, var(--surface-0) 96%, transparent); color: var(--subtle); font-size: 10px; user-select: none; }
 .app-statusbar > span { min-width: 0; display: inline-flex; align-items: center; gap: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.app-statusbar__fps { flex: 0 0 100px; min-width: 100px; height: 23px; padding: 0 4px; display: inline-flex; align-items: center; gap: 5px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: inherit; font: inherit; font-variant-numeric: tabular-nums; box-shadow: none; cursor: pointer; }
+.app-statusbar__fps:hover, .app-statusbar__fps:focus-visible { border-color: var(--line); background: var(--surface-1); box-shadow: none; outline: none; }
+.app-statusbar__rgb i, .app-statusbar__connection i { transition: background-color 80ms linear; }
+.app-statusbar { font-variant-numeric: tabular-nums; }
+@media (prefers-reduced-motion: reduce) { .app-statusbar__rgb i, .app-statusbar__connection i { transition: none; } }
 .app-statusbar__connection i { width: 7px; height: 7px; flex: 0 0 7px; border-radius: 50%; background: var(--red); box-shadow: 0 0 8px color-mix(in srgb, var(--red) 58%, transparent); }
 .app-statusbar__connection.is-online i { background: var(--green); box-shadow: 0 0 8px color-mix(in srgb, var(--green) 58%, transparent); }
 .app-statusbar__update { color: var(--amber); }

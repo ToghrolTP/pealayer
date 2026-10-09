@@ -1101,7 +1101,11 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "status_bar.media_rate",
             "advanced",
             "Status bar",
-            "Media rate",
+            "Show frame rate",
+        ),
+        PreferenceControl::select(
+            "status_bar.fps_mode", "advanced", "Status bar", "Frame rate source",
+            &[("media", "Media frame rate"), ("ui", "UI render rate")],
         ),
         PreferenceControl::boolean(
             "status_bar.telemetry",
@@ -1142,6 +1146,8 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
 
 fn semantic_preference_icon(control: &PreferenceControl) -> &'static str {
     match control.key {
+        "status_bar.fps_mode" => "gauge",
+        "status_bar.media_rate" => "film-strip",
         "theme" => "circle-half",
         "accent_color" | "accent" => "palette",
         "color_palette" => "swatches",

@@ -2,7 +2,7 @@
 //! Mutations are sent once: a lost acknowledgement must never replay actuation.
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::sync::{Arc, Mutex, OnceLock, mpsc};
+use std::sync::{Arc, Mutex, OnceLock, Condvar, mpsc, atomic::{AtomicBool, AtomicU64, Ordering}};
 use std::time::{Duration, Instant};
 
 const ACTIVE_SESSION_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -307,6 +307,18 @@ pub fn server_session() -> Result<Session, String> {
     })
 }
 
+/// Reuse the complete typed catalog/state contract without touching mpv,
+/// workspace layout, config persistence, or the UI request dispatcher.
+pub fn hardware_snapshot() -> Result<Value, String> {
+    if let Some(client) = client() {
+        let snapshot = client.snapshot().ok_or("Remote hardware snapshot unavailable")?;
+        return Ok(serde_json::json!({"instance_id":instance_id(), "hardware":snapshot.session.hardware}));
+    }
+    let server = SERVER.get().ok_or("Pealayer hardware session is initializing")?;
+    let hardware = server.capabilities.lock().map_err(|_| "Hardware snapshot lock unavailable")?.clone();
+    Ok(serde_json::json!({"instance_id":instance_id(), "hardware":hardware}))
+}
+
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "operation", rename_all = "snake_case")]
 pub enum MediaOperation {
@@ -435,12 +447,106 @@ pub struct Client {
     pub error: Mutex<Option<String>>,
     pub command_error: Mutex<Option<String>>,
     context: Mutex<Option<eframe::egui::Context>>,
+    session_wakeup: (Mutex<bool>, Condvar),
+    status_stream_connected: AtomicBool,
+    hardware_generation: AtomicU64,
+}
+
+fn install_hardware_snapshot(client: &Client, value: &Value) -> Result<(), String> {
+    let id = value.get("instance_id").and_then(Value::as_str).ok_or("Missing hardware source identity")?;
+    let raw = value.get("hardware").ok_or("Missing hardware snapshot")?;
+    if !raw.is_null() && ["board_connected", "host_instance_id", "controls", "telemetry"]
+        .iter().any(|key| raw.get(*key).is_none()) { return Err("Incomplete hardware snapshot; retaining previous state".into()); }
+    let hardware = serde_json::from_value::<Option<crate::four_d::controller::HardwareCapabilities>>(raw.clone()).map_err(|error|error.to_string())?;
+    let changed = {
+        let mut latest = client.latest.lock().map_err(|_| "Peer hardware cache unavailable")?;
+        if id != latest.session.instance_id { return Err("Hardware source identity changed; refresh session first".into()); }
+        client.hardware_generation.fetch_add(1, Ordering::AcqRel);
+        let changed = latest.session.hardware != hardware;
+        if changed { latest.session.hardware = hardware; latest.revision = latest.revision.wrapping_add(1); }
+        changed
+    };
+    if changed && let Some(context) = client.context.lock().ok().and_then(|value|value.clone()) { context.request_repaint(); }
+    Ok(())
+}
+
+/// Reuse the WebSocket and typed hardware contract. Live hardware is installed
+/// directly; media/appearance edges wake session refresh without polling idle UI.
+fn spawn_session_wakeups(client: Arc<Client>) {
+    std::thread::spawn(move || loop {
+        let run = || -> Result<(), String> {
+            use tungstenite::client::IntoClientRequest;
+            let mut url = client.url("/ws")?;
+            url.set_scheme(if client.origin.scheme() == "https" { "wss" } else { "ws" }).map_err(|_| "Invalid WebSocket scheme")?;
+            let mut request = url.as_str().into_client_request().map_err(|error| error.to_string())?;
+            request.headers_mut().insert("X-Pealayer-Route", instance_id().parse().map_err(|_| "Invalid peer identity")?);
+            let (mut socket, _) = tungstenite::connect(request).map_err(|error| error.to_string())?;
+            if let tungstenite::stream::MaybeTlsStream::Plain(stream) = socket.get_mut() {
+                stream.set_read_timeout(Some(Duration::from_millis(250))).map_err(|error| error.to_string())?;
+            }
+            socket.send(tungstenite::Message::Text(serde_json::json!({"jsonrpc":"2.0", "id":"hardware", "method":"peer.hardware.subscribe"}).to_string().into())).map_err(|error|error.to_string())?;
+            let mut previous = Value::Null;
+            loop {
+                match socket.read() {
+                    Ok(tungstenite::Message::Text(text)) => {
+                        let status: Value = serde_json::from_str(&text).map_err(|error| error.to_string())?;
+                        if status.get("method").and_then(Value::as_str) == Some("peer.hardware") {
+                            install_hardware_snapshot(&client, status.get("params").ok_or("Missing hardware notification payload")?)?;
+                            client.status_stream_connected.store(true, Ordering::Release);
+                            continue;
+                        }
+                        if !status.is_object() || status.get("playing").is_none() { continue; }
+                        let edge = serde_json::json!({"estop":status.get("estop_active"), "playing":status.get("playing"),
+                            "media":status.get("current_video"), "appearance":status.get("appearance")});
+                        if edge != previous {
+                            previous = edge;
+                            if let Ok(mut wake) = client.session_wakeup.0.lock() { *wake = true; }
+                            client.session_wakeup.1.notify_one();
+                        }
+                    }
+                    Ok(tungstenite::Message::Ping(payload)) => { socket.send(tungstenite::Message::Pong(payload)).map_err(|error| error.to_string())?; }
+                    Ok(tungstenite::Message::Close(_)) => return Err("Peer status stream closed".into()),
+                    Err(tungstenite::Error::Io(error)) if matches!(error.kind(), std::io::ErrorKind::WouldBlock | std::io::ErrorKind::TimedOut) => {},
+                    Err(error) => return Err(error.to_string()),
+                    _ => {},
+                }
+            }
+        };
+        let _ = run(); // HTTP remains authoritative and reports link failures.
+        client.status_stream_connected.store(false, Ordering::Release);
+        std::thread::sleep(Duration::from_secs(1));
+    });
+}
+
+fn spawn_hardware_fallback(client: Arc<Client>) {
+    std::thread::spawn(move || loop {
+        let fallback = client.snapshot().is_some_and(|snapshot|
+            snapshot.session.hardware.as_ref().is_some_and(|hardware| hardware.board_connected)
+                && (!snapshot.session.config.web_sync_state || !client.status_stream_connected.load(Ordering::Acquire)));
+        if fallback {
+            let generation = client.hardware_generation.load(Ordering::Acquire);
+            if let Ok(request) = client.request(reqwest::Method::GET, "/api/peer/hardware")
+                && let Ok(response) = request.send().and_then(|response|response.error_for_status())
+                && let Ok(value) = response.json::<Value>()
+                && generation == client.hardware_generation.load(Ordering::Acquire) {
+                let _ = install_hardware_snapshot(&client, &value);
+            }
+        }
+        std::thread::sleep(ACTIVE_SESSION_POLL_INTERVAL);
+    });
 }
 struct QueuedCommand {
     path: String,
     value: Value,
     created: Instant,
     reply: Option<mpsc::Sender<Result<Value, String>>>,
+}
+
+fn session_visual_changed(before: &Session, after: &Session) -> bool {
+    before.status != after.status || before.hardware != after.hardware
+        || before.paused != after.paused || before.speed != after.speed
+        || before.config != after.config || before.media != after.media
+        || before.media_view != after.media_view || before.timeline != after.timeline
 }
 impl Client {
     pub fn url(&self, path: &str) -> Result<url::Url, String> {
@@ -744,6 +850,9 @@ pub fn connect(value: &str, local_port: u16) -> Result<(), String> {
         error: Mutex::new(None),
         command_error: Mutex::new(None),
         context: Mutex::new(None),
+        session_wakeup: (Mutex::new(false), Condvar::new()),
+        status_stream_connected: AtomicBool::new(false),
+        hardware_generation: AtomicU64::new(0),
     });
     CLIENT
         .set(client.clone())
@@ -765,6 +874,8 @@ pub fn connect(value: &str, local_port: u16) -> Result<(), String> {
             }
         }
     });
+    spawn_session_wakeups(client.clone());
+    spawn_hardware_fallback(client.clone());
     std::thread::spawn(move || {
         loop {
             // Keep precise position synchronization while playing, but do not
@@ -776,6 +887,7 @@ pub fn connect(value: &str, local_port: u16) -> Result<(), String> {
                 .map(|snapshot| session_poll_interval(snapshot.session.paused))
                 .unwrap_or(ACTIVE_SESSION_POLL_INTERVAL);
             let started = Instant::now();
+            let hardware_generation = client.hardware_generation.load(Ordering::Acquire);
             let next = client
                 .request(reqwest::Method::GET, "/api/peer/session")
                 .and_then(|request| request.send().map_err(|error| error.to_string()))
@@ -790,14 +902,14 @@ pub fn connect(value: &str, local_port: u16) -> Result<(), String> {
                         .map_err(|error| error.to_string())
                 });
             match next {
-                Ok(session) => {
+                Ok(mut session) => {
                     let mut changed = false;
                     if let Ok(mut latest) = client.latest.lock() {
-                        changed = latest.session.status != session.status
-                            || latest.session.config != session.config
-                            || latest.session.media != session.media
-                            || latest.session.media_view != session.media_view
-                            || latest.session.timeline != session.timeline;
+                        // A full session response can arrive after a newer
+                        // hardware push. Never roll live values backwards.
+                        if session.instance_id == latest.session.instance_id
+                            && hardware_generation != client.hardware_generation.load(Ordering::Acquire) { session.hardware = latest.session.hardware.clone(); }
+                        changed = session_visual_changed(&latest.session, &session);
                         latest.session = session;
                         latest.received = Instant::now();
                         latest.round_trip = started.elapsed();
@@ -819,7 +931,15 @@ pub fn connect(value: &str, local_port: u16) -> Result<(), String> {
                     }
                 }
             }
-            std::thread::sleep(poll_interval);
+            // Coalesce stream edges at no more than ten full session pulls/s.
+            let remaining = ACTIVE_SESSION_POLL_INTERVAL.saturating_sub(started.elapsed());
+            if !remaining.is_zero() { std::thread::sleep(remaining); }
+            if let Ok(wake) = client.session_wakeup.0.lock() {
+                let wait = poll_interval.saturating_sub(started.elapsed());
+                if let Ok((mut wake, _)) = client.session_wakeup.1.wait_timeout_while(wake, wait, |wake| !*wake) {
+                    *wake = false;
+                }
+            }
         }
     });
     Ok(())
@@ -904,6 +1024,20 @@ mod tests {
             Duration::from_secs(1)
         );
         assert!(session_poll_interval(true) <= Duration::from_secs(1));
+    }
+    #[test]
+    fn hardware_only_peer_changes_wake_the_display() {
+        let before = Session {
+            instance_id:"test-authority".into(), config:Default::default(), status:Value::Null,
+            hardware:Some(Default::default()), media:None, media_view:None, position:0.0,
+            paused:true, speed:1.0, sampled_unix_ms:0, timeline:None, config_path:String::new(), consumers:vec![],
+        };
+        let mut after = before.clone();
+        assert!(!session_visual_changed(&before, &after));
+        after.sampled_unix_ms = 1;
+        assert!(!session_visual_changed(&before, &after), "A sample timestamp is not a visual change");
+        after.hardware.as_mut().unwrap().telemetry.bus_mv = Some(12123);
+        assert!(session_visual_changed(&before, &after));
     }
 
     #[test]

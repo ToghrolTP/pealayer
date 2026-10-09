@@ -581,10 +581,19 @@ impl Default for HardwareKeyBinding {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StatusBarFpsMode {
+    #[default]
+    Media,
+    Ui,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct StatusBarConfig {
     pub media_rate: bool,
+    pub fps_mode: StatusBarFpsMode,
     pub hardware: bool,
     pub telemetry: bool,
     pub status_rgb: bool,
@@ -596,6 +605,7 @@ impl Default for StatusBarConfig {
     fn default() -> Self {
         Self {
             media_rate: true,
+            fps_mode: StatusBarFpsMode::Media,
             hardware: true,
             telemetry: true,
             status_rgb: true,

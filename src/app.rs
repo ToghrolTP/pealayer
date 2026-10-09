@@ -9,6 +9,11 @@ pub(crate) struct PendingTimelineToolbarSave {
     flight: Option<TimelineToolbarSaveFlight>,
 }
 
+pub(crate) struct PendingStatusBarSave {
+    desired: crate::config::StatusBarConfig,
+    flight: Option<(crate::config::StatusBarConfig, std::sync::mpsc::Receiver<Result<serde_json::Value, String>>, std::time::Instant, bool)>,
+}
+
 struct TimelineToolbarSaveFlight {
     sent: crate::config::TimelineToolbarPreferences,
     reply: std::sync::mpsc::Receiver<Result<serde_json::Value, String>>,
@@ -215,6 +220,7 @@ impl FrameRateTracker {
                 // Gap was too long (reactive UI was idle); reset window so the long pause
                 // doesn't artificially drag down the measured active FPS.
                 self.samples.clear();
+                self.last_computed_fps = None;
             }
         }
         self.samples.push_back(now);
@@ -745,6 +751,7 @@ pub struct PealayerApp {
     pub(crate) timeline_toolbar_order: Vec<crate::config::TimelineToolbarAction>,
     pub(crate) timeline_toolbar_hidden: Vec<crate::config::TimelineToolbarAction>,
     pub(crate) pending_timeline_toolbar_save: Option<PendingTimelineToolbarSave>,
+    pub(crate) pending_status_bar_save: Option<PendingStatusBarSave>,
     pub(crate) workspace_rendering: bool,
     pub(crate) deferred_config_save: bool,
     pub(crate) non_user_control_visibility: crate::config::NonUserControlVisibility,
@@ -783,6 +790,7 @@ pub struct PealayerApp {
     pub(crate) web_state_tx: std::sync::mpsc::Sender<String>,
     pub(crate) web_cmd_rx: std::sync::mpsc::Receiver<crate::platform::interop::InteropCommand>,
     pub(crate) last_web_broadcast: Option<std::time::Instant>,
+    pub(crate) last_web_hardware: Option<crate::four_d::controller::HardwareCapabilities>,
     pub(crate) media_controls: Option<crate::platform::media_controls::MediaControlsManager>,
     pub(crate) media_cmd_tx: std::sync::mpsc::Sender<souvlaki::MediaControlEvent>,
     pub(crate) media_cmd_rx: std::sync::mpsc::Receiver<souvlaki::MediaControlEvent>,
@@ -911,6 +919,7 @@ pub struct MediaTrackInfo {
 impl eframe::App for PealayerApp {
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.flush_timeline_toolbar_save(ctx);
+        self.flush_status_bar_save(ctx);
         if std::mem::take(&mut self.deferred_config_save) {
             self.save_config();
         }
@@ -1228,7 +1237,9 @@ impl eframe::App for PealayerApp {
         let appearance = web_config.appearance.clone();
         let configured_web_sync_interval =
             std::time::Duration::from_millis(u64::from(web_config.web_sync_interval_ms));
-        let web_sync_active = (self.current_video_path.is_some() && !self.is_paused)
+        let hardware = self.advertised_hardware();
+        let hardware_changed = hardware != self.last_web_hardware;
+        let web_sync_active = hardware_changed || (self.current_video_path.is_some() && !self.is_paused)
             || self.is_scrubbing
             || self.pending_scrub_commit.is_some()
             || self.hardware_effect_authoring.pending_operation.is_some()
@@ -1266,7 +1277,7 @@ impl eframe::App for PealayerApp {
 
         if should_broadcast {
             self.last_web_broadcast = Some(now);
-            let hardware = self.advertised_hardware();
+            self.last_web_hardware = hardware.clone();
             let hardware_details = hardware
                 .as_ref()
                 .map(|capabilities| web_hardware_details(capabilities, self.motion_control_mode));
@@ -1377,6 +1388,7 @@ impl eframe::App for PealayerApp {
                 playback_time: self.playback_time,
                 duration: self.duration,
                 media_fps: self.media_fps,
+                ui_fps: self.frame_rate_tracker.live_fps(),
                 current_video: self
                     .current_video_path
                     .as_ref()
@@ -4808,6 +4820,7 @@ impl PealayerApp {
                     self.is_eof = false;
                     self.playback_time = 0.0;
                     self.duration = 0.0;
+                    self.media_fps = 0.0;
                     self.is_seekable = false;
                     self.media_metadata_loaded = false;
                     self.media_file_info = crate::media_info::MediaFileInfo::default();
@@ -4948,61 +4961,20 @@ impl PealayerApp {
         }
     }
 
-    /// Computes the dynamic FPS display information for the status bar indicator.
-    /// When interacting with the UI, this prioritizes the real UI rendering frame rate.
-    /// When passively watching video playback, this reflects the playback frame rate.
-    pub fn current_fps_display(&self, now: std::time::Instant) -> Option<FpsDisplayInfo> {
-        let ui_fps = self.frame_rate_tracker.live_fps().unwrap_or(self.display_refresh_rate);
-        let playback_fps = self.effective_playback_fps();
-        let is_interacting = self
-            .frame_rate_tracker
-            .is_interacting(now, std::time::Duration::from_millis(1500));
-        let is_active_playback = self.is_active_playback();
-
-        let show_ui_rate = is_interacting || (!is_active_playback && playback_fps.is_none());
-
-        let (value, formatted, active_mode_label, is_ui_rate) = if show_ui_rate {
-            (
-                ui_fps,
-                format!("{:.1} fps", ui_fps),
-                self.tr("UI interaction"),
-                true,
-            )
-        } else if let Some(media_rate) = playback_fps {
-            (
-                media_rate,
-                format!("{:.2} fps", media_rate),
-                self.tr("Video playback"),
-                false,
-            )
-        } else {
-            (
-                ui_fps,
-                format!("{:.1} fps", ui_fps),
-                self.tr("UI rendering"),
-                true,
-            )
-        };
-
-        let mut tooltip = format!("{}: {:.1} fps", self.tr("UI render rate"), ui_fps);
-        if let Some(media_rate) = playback_fps {
-            tooltip.push_str(&format!(
-                "\n{}: {:.2} fps (source: {:.2} fps @ {:.2}x)",
-                self.tr("Video playback rate"),
-                media_rate,
-                self.media_fps,
-                self.playback_rate
-            ));
-        }
-        tooltip.push_str(&format!("\n{}: {}", self.tr("Active mode"), active_mode_label));
-
-        Some(FpsDisplayInfo {
-            value,
-            formatted,
-            active_mode_label,
-            tooltip,
-            is_ui_rate,
-        })
+    /// Source media rate and measured native UI cadence are distinct metrics.
+    /// Interaction and playback speed never silently change the selected metric.
+    pub fn current_fps_display(&self, _now: std::time::Instant) -> Option<FpsDisplayInfo> {
+        let is_ui_rate = self.status_bar.fps_mode == crate::config::StatusBarFpsMode::Ui;
+        let rate = if is_ui_rate { self.frame_rate_tracker.live_fps() }
+            else { (self.current_video_path.is_some() && self.media_fps.is_finite() && self.media_fps > 0.0).then_some(self.media_fps) };
+        let active_mode_label = self.tr(if is_ui_rate { "UI render rate" } else { "Media frame rate" });
+        let formatted = rate.map(|rate| format!("{rate:.2} fps")).unwrap_or_else(|| "— fps".into());
+        let ui_rate = self.frame_rate_tracker.live_fps().map(|rate| format!("{rate:.2} fps")).unwrap_or_else(|| "—".into());
+        let media_rate = if self.current_video_path.is_some() && self.media_fps > 0.0 { format!("{:.2} fps", self.media_fps) } else { "—".into() };
+        let tooltip = format!("{}: {}\n{}: {}\n{}: {}\n{}", self.tr("Media frame rate"), media_rate,
+            self.tr("UI render rate"), ui_rate, self.tr("Active mode"), active_mode_label,
+            self.tr("Click to switch frame rate source"));
+        Some(FpsDisplayInfo { value: rate.unwrap_or(0.0), formatted, active_mode_label, tooltip, is_ui_rate })
     }
 
     /// Restarts playback of the current video from the beginning (0.0s).
@@ -6448,6 +6420,57 @@ impl PealayerApp {
         ctx.request_repaint();
     }
 
+    pub(crate) fn request_status_bar_save(&mut self, ctx: &egui::Context) {
+        if let Some(pending) = &mut self.pending_status_bar_save { pending.desired = self.status_bar; }
+        else { self.pending_status_bar_save = Some(PendingStatusBarSave { desired: self.status_bar, flight: None }); }
+        ctx.request_repaint();
+    }
+
+    /// Narrow, coalesced save outside painting; never serialize workspace state
+    /// or synchronously wait for the remote authority from a footer click.
+    fn flush_status_bar_save(&mut self, ctx: &egui::Context) {
+        let Some(mut pending) = self.pending_status_bar_save.take() else { return };
+        let result = (|| -> Result<bool, String> {
+            let Some(client) = crate::peer::client() else {
+                let mut config = crate::platform::interop::get_live_config();
+                config.status_bar = pending.desired;
+                config.save()?;
+                crate::platform::interop::set_live_config(config);
+                self.config_fingerprint = crate::config::AppConfig::fingerprint(&crate::config::AppConfig::get_config_path()).ok();
+                return Ok(true);
+            };
+            let current = client.snapshot().ok_or("Remote status bar state is unavailable")?.session.config.status_bar;
+            if let Some((sent, reply, started, accepted)) = &mut pending.flight {
+                if !*accepted {
+                    match reply.try_recv() {
+                        Ok(result) => { result?; *accepted = true; },
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) => return Err("Status bar save dispatcher stopped".into()),
+                        Err(std::sync::mpsc::TryRecvError::Empty) => {},
+                    }
+                }
+                if *accepted && current == *sent { pending.flight = None; }
+                else if started.elapsed() > std::time::Duration::from_secs(20) { return Err("Status bar save was not confirmed by the authority".into()); }
+                else { return Ok(false); }
+            }
+            if current == pending.desired { return Ok(true); }
+            let reply = client.queue_with_reply("/api/peer/config", serde_json::json!({"operation":"save",
+                "expected":{"status_bar":current}, "values":{"status_bar":pending.desired}}))?;
+            pending.flight = Some((pending.desired, reply, std::time::Instant::now(), false));
+            Ok(false)
+        })();
+        match result {
+            Ok(true) => self.config_status = "Status bar saved".into(),
+            Ok(false) => { self.pending_status_bar_save = Some(pending); ctx.request_repaint_after(std::time::Duration::from_millis(100)); },
+            Err(error) => {
+                self.status_bar = crate::peer::client().and_then(|client| client.snapshot()).map(|snapshot|snapshot.session.config.status_bar)
+                    .unwrap_or_else(||crate::platform::interop::get_live_config().status_bar);
+                self.config_status = error.clone();
+                let _ = crate::messaging::publish(crate::messaging::ToastRequest {id:Some("status_bar.save".into()),
+                    title:"Status bar change could not be saved".into(), message:error, severity:crate::messaging::Severity::Warning, timeout_ms:8000}, "status_bar");
+            }
+        }
+    }
+
     fn apply_timeline_toolbar_preferences(&mut self, preferences: &crate::config::TimelineToolbarPreferences) {
         self.timeline_toolbar_visible = preferences.visible;
         self.timeline_follow_playhead = preferences.follow;
@@ -6934,8 +6957,15 @@ impl PealayerApp {
             if let Some(pending) = &self.pending_timeline_toolbar_save {
                 pending.desired.apply(&mut config);
             }
+            if let Some(pending) = &self.pending_status_bar_save { config.status_bar = pending.desired; }
             let workspace_changed=state.config.as_ref().is_none_or(|old|old.active_workspace_profile!=config.active_workspace_profile || old.workspace_session.nle!=config.workspace_session.nle || old.workspace_dock_layout!=config.workspace_dock_layout);
-            if state.config.as_ref().is_some_and(|old|
+            let status_bar_only = state.config.as_ref().is_some_and(|old| {
+                let mut comparison = old.clone(); comparison.status_bar = config.status_bar; comparison == config
+            });
+            if status_bar_only {
+                self.status_bar = config.status_bar;
+                crate::platform::interop::set_live_config(snapshot.session.config.clone());
+            } else if state.config.as_ref().is_some_and(|old|
                 crate::config::TimelineToolbarPreferences::only_changed(old, &config))
             {
                 self.apply_timeline_toolbar_preferences(&crate::config::TimelineToolbarPreferences::from_config(&config));
@@ -6994,6 +7024,7 @@ impl PealayerApp {
         self.is_paused=snapshot.session.paused;
         self.playback_rate=snapshot.session.speed;
         self.duration=snapshot.session.status.get("duration").and_then(serde_json::Value::as_f64).unwrap_or(0.0);
+        self.media_fps=snapshot.session.status.get("media_fps").and_then(serde_json::Value::as_f64).unwrap_or(0.0);
         self.is_seekable=snapshot.session.status.get("seekable").and_then(serde_json::Value::as_bool).unwrap_or(false);
         if let Some(view)=snapshot.session.media_view {self.apply_peer_media_view(view);}
         let expected=snapshot.session.position+if snapshot.session.paused {0.0}else{(snapshot.received.elapsed().as_secs_f64()+snapshot.round_trip.as_secs_f64()/2.0)*snapshot.session.speed};
@@ -8509,6 +8540,7 @@ impl Default for PealayerApp {
             timeline_toolbar_order: crate::config::default_timeline_toolbar_order(),
             timeline_toolbar_hidden: crate::config::default_timeline_toolbar_hidden(),
             pending_timeline_toolbar_save: None,
+            pending_status_bar_save: None,
             workspace_rendering: false,
             deferred_config_save: false,
             non_user_control_visibility: crate::config::NonUserControlVisibility::Dimmed,
@@ -8549,6 +8581,7 @@ impl Default for PealayerApp {
             web_state_tx,
             web_cmd_rx,
             last_web_broadcast: None,
+            last_web_hardware: None,
             media_controls: None,
             media_cmd_tx,
             media_cmd_rx,
@@ -8671,6 +8704,28 @@ pub(crate) mod tests {
             effective_web_sync_interval(std::time::Duration::from_secs(2), false),
             std::time::Duration::from_secs(2)
         );
+    }
+
+    #[test]
+    fn paused_hardware_changes_are_published_at_the_configured_cadence() {
+        let _lock = lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.web_only = true; app.auto_reload_config = false; app.media_keys_enabled = false;
+        let ctx = egui::Context::default();
+        let mut frame = eframe::Frame::_new_kittest();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        app.web_state_tx = sender;
+        let mut hardware = crate::four_d::controller::HardwareCapabilities::default();
+        hardware.board_connected = true;
+        *app.engine_handle.hardware_capabilities.lock().unwrap() = Some(hardware.clone());
+        let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| eframe::App::logic(&mut app, ctx, &mut frame));
+        let _ = receiver.try_recv().unwrap();
+        hardware.telemetry.bus_mv = Some(12123);
+        *app.engine_handle.hardware_capabilities.lock().unwrap() = Some(hardware);
+        app.last_web_broadcast = Some(std::time::Instant::now() - std::time::Duration::from_millis(300));
+        let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| eframe::App::logic(&mut app, ctx, &mut frame));
+        let status: serde_json::Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
+        assert_eq!(status["hardware_details"]["telemetry"]["bus_mv"], 12123);
     }
 
     #[test]
@@ -9767,7 +9822,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn dynamic_fps_display_switches_between_ui_interaction_and_media_playback() {
+    fn fps_source_is_explicit_and_interaction_never_changes_media_rate() {
         let _lock = lock_app_tests();
         let mut app = PealayerApp::default();
         let now = std::time::Instant::now();
@@ -9793,12 +9848,17 @@ pub(crate) mod tests {
         assert_eq!(info_passive.is_ui_rate, false, "Must display playback rate when not interacting");
         assert!(info_passive.formatted.contains("23.98"), "Expected playback rate 23.98 fps, got {}", info_passive.formatted);
 
-        // 2. When actively interacting with UI
+        // Interaction and speed must not change the source media metric.
         app.record_ui_interaction(current_time + std::time::Duration::from_secs(3));
+        app.playback_rate = 2.0;
+        let interacting = app.current_fps_display(current_time).unwrap();
+        assert!(!interacting.is_ui_rate);
+        assert!((interacting.value - 23.976).abs() < 0.001);
+        app.status_bar.fps_mode = crate::config::StatusBarFpsMode::Ui;
         let display_active = app.current_fps_display(current_time + std::time::Duration::from_secs(3));
         assert!(display_active.is_some());
         let info_active = display_active.unwrap();
-        assert_eq!(info_active.is_ui_rate, true, "Must display UI rate when interacting");
+        assert_eq!(info_active.is_ui_rate, true, "Explicit UI mode displays measured render cadence");
         assert!(info_active.formatted.contains("60"), "Expected UI rate ~60 fps, got {}", info_active.formatted);
         assert!(info_active.tooltip.contains("UI render rate"));
         assert!(info_active.tooltip.contains("23.98"));

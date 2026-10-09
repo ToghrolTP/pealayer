@@ -531,7 +531,21 @@ fn handle_websocket(stream: TcpStream, state: ControlState) {
         }
     }
     let _ = websocket.get_mut().set_nonblocking(true);
+    let mut hardware_subscribed = false;
+    let mut last_hardware = None;
+    let mut next_hardware_sample = std::time::Instant::now();
     loop {
+        if hardware_subscribed && std::time::Instant::now() >= next_hardware_sample {
+            next_hardware_sample = std::time::Instant::now() + Duration::from_millis(100);
+            let config = crate::platform::interop::get_live_config();
+            if config.web_sync_state && config.web_allow_configuration
+                && let Ok(hardware) = crate::peer::hardware_snapshot()
+                && last_hardware.as_ref() != Some(&hardware) {
+                let notification = serde_json::json!({"jsonrpc":"2.0", "method":"peer.hardware", "params":hardware});
+                if websocket.send(tungstenite::Message::Text(notification.to_string().into())).is_err() { break; }
+                last_hardware = Some(hardware);
+            }
+        }
         if let Ok(text) = client_rx.try_recv() {
             if websocket
                 .send(tungstenite::Message::Text(text.into()))
@@ -542,6 +556,17 @@ fn handle_websocket(stream: TcpStream, state: ControlState) {
         }
         match websocket.read() {
             Ok(tungstenite::Message::Text(text)) => {
+                if let Ok(request) = serde_json::from_str::<serde_json::Value>(&text)
+                    && request.get("method").and_then(serde_json::Value::as_str) == Some("peer.hardware.subscribe") {
+                    let config = crate::platform::interop::get_live_config();
+                    if !config.web_allow_configuration {
+                        let _ = websocket.send(tungstenite::Message::Text(crate::platform::interop::format_interop_error(request.get("id").cloned(), -32003, "Web configuration access is disabled").into()));
+                    } else {
+                        hardware_subscribed = true;
+                        let _ = websocket.send(tungstenite::Message::Text(serde_json::json!({"jsonrpc":"2.0", "id":request.get("id"), "result":{"subscribed":true}}).to_string().into()));
+                    }
+                    continue;
+                }
                 if let Some(response) = handle_websocket_text(&state, &text) {
                     if websocket
                         .send(tungstenite::Message::Text(response.into()))
@@ -800,6 +825,10 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
                 Err(error) => HttpResponse::text(503,"Service Unavailable",error),
             }
         }
+        ("GET", "/api/peer/hardware") => match crate::peer::hardware_snapshot() {
+            Ok(snapshot) => HttpResponse::json(200,"OK",snapshot.to_string()),
+            Err(error) => HttpResponse::text(503,"Service Unavailable",error),
+        },
         ("GET", "/api/client/status")=>HttpResponse::json(200,"OK",crate::peer::diagnostics().to_string()),
         ("GET", "/api/process/status")=>HttpResponse::json(200,"OK",crate::process_control::status().to_string()),
         ("POST", "/api/process/command") => {
@@ -1015,7 +1044,7 @@ fn denied_web_capability(
 ) -> Option<&'static str> {
     let configuration_route = matches!(
         (method, path),
-        ("GET", "/api/config") | ("GET", "/api/preferences") | ("POST", "/api/config") | ("GET", "/api/peer/session") | ("POST", "/api/peer/config") | ("POST", "/api/peer/files")
+        ("GET", "/api/config") | ("GET", "/api/preferences") | ("POST", "/api/config") | ("GET", "/api/peer/session") | ("GET", "/api/peer/hardware") | ("POST", "/api/peer/config") | ("POST", "/api/peer/files")
     );
     let control_route = matches!(
         (method, path),

@@ -6,16 +6,18 @@ import {
   ClockCircleOutlined,
   DashboardOutlined,
   EyeInvisibleOutlined,
+  VideoCameraOutlined,
   WarningOutlined,
 } from '@ant-design/icons';
 import type { PlayerState } from './RemoteControlTab';
 import { tr, UiLocale } from '../i18n';
 
 export type StatusBarKey = 'media_rate' | 'hardware' | 'telemetry' | 'status_rgb' | 'warnings' | 'workspace';
-export type StatusBarVisibility = Record<StatusBarKey, boolean>;
+export type StatusBarVisibility = Record<StatusBarKey, boolean> & { fps_mode: 'media' | 'ui' };
 
 const DEFAULT_VISIBILITY: StatusBarVisibility = {
   media_rate: true,
+  fps_mode: 'media',
   hardware: true,
   telemetry: true,
   status_rgb: true,
@@ -96,7 +98,7 @@ export const ApplicationStatusBar: React.FC<ApplicationStatusBarProps> = ({
   const boardName = state.hardware?.board_name || state.hardware_details?.board_name || 'PCController';
   const transport = state.hardware_transport || connectionMode.toUpperCase();
   const menuLabels: Record<StatusBarKey, string> = {
-    media_rate: tr(locale, 'Media frame rate'),
+    media_rate: tr(locale, 'Frame rate'),
     hardware: tr(locale, 'Hardware connection'),
     telemetry: tr(locale, 'Hardware telemetry'),
     status_rgb: tr(locale, 'Physical status RGB'),
@@ -106,14 +108,19 @@ export const ApplicationStatusBar: React.FC<ApplicationStatusBarProps> = ({
   const contextItems = (Object.keys(menuLabels) as StatusBarKey[]).map((key) => ({
     key,
     label: menuLabels[key],
+    icon: key === 'media_rate' ? <VideoCameraOutlined /> : key === 'hardware' ? <ApiOutlined />
+      : key === 'status_rgb' ? <BgColorsOutlined /> : key === 'warnings' ? <WarningOutlined /> : <DashboardOutlined />,
   }));
+  const rate = visibility.fps_mode === 'ui' ? state.ui_fps : state.media_fps;
+  const fpsLabel = visibility.fps_mode === 'ui' ? tr(locale, 'UI render rate') : tr(locale, 'Media frame rate');
+  const setMode = (fps_mode: 'media' | 'ui') => onVisibilityChange({ ...visibility, fps_mode });
 
   return <Dropdown
     trigger={['contextMenu']}
     menu={{
       selectable: true,
       multiple: true,
-      selectedKeys: (Object.keys(visibility) as StatusBarKey[]).filter((key) => visibility[key]),
+      selectedKeys: (Object.keys(menuLabels) as StatusBarKey[]).filter((key) => visibility[key]),
       items: contextItems,
       onClick: ({ key }) => setVisible(key as StatusBarKey, !visibility[key as StatusBarKey]),
     }}
@@ -127,9 +134,21 @@ export const ApplicationStatusBar: React.FC<ApplicationStatusBarProps> = ({
     {visibility.telemetry && telemetry && <StatusItem itemKey="telemetry" label={menuLabels.telemetry} locale={locale} onHide={(key) => setVisible(key, false)}>
       <DashboardOutlined />{telemetry}
     </StatusItem>}
-    {visibility.media_rate && state.current_video && <StatusItem itemKey="media_rate" label={menuLabels.media_rate} locale={locale} onHide={(key) => setVisible(key, false)}>
-      <ClockCircleOutlined />{state.media_fps && state.media_fps > 0 ? `${state.media_fps.toFixed(2)} fps · ` : ''}{state.playing ? tr(locale, 'Playing') : tr(locale, 'Paused')} · {compactTime(state.playback_time ?? 0)}
-    </StatusItem>}
+    {visibility.media_rate && <Dropdown trigger={['contextMenu']} menu={{
+      selectable: true, selectedKeys: [visibility.fps_mode], items: [
+        { key: 'media', icon: <VideoCameraOutlined />, label: tr(locale, 'Media frame rate') },
+        { key: 'ui', icon: <DashboardOutlined />, label: tr(locale, 'UI render rate') },
+        { type: 'divider' }, { key: 'hide', icon: <EyeInvisibleOutlined />, label: tr(locale, 'Hide') },
+      ], onClick: ({ key }) => key === 'hide' ? setVisible('media_rate', false) : setMode(key as 'media' | 'ui'),
+    }}><button type="button" className="app-statusbar__fps" onContextMenu={(event) => event.stopPropagation()}
+      onClick={() => setMode(visibility.fps_mode === 'media' ? 'ui' : 'media')}
+      title={`${fpsLabel}${visibility.fps_mode === 'ui' ? ' (native application)' : ''} · ${tr(locale, 'Click to switch frame rate source')}`}>
+      {visibility.fps_mode === 'ui' ? <DashboardOutlined /> : <VideoCameraOutlined />}
+      {rate != null && Number.isFinite(rate) && rate > 0 && (visibility.fps_mode === 'ui' || state.current_video) ? `${rate.toFixed(2)} fps` : '— fps'}
+    </button></Dropdown>}
+    {visibility.media_rate && state.current_video && <span>
+      <ClockCircleOutlined />{state.playing ? tr(locale, 'Playing') : tr(locale, 'Paused')} · {compactTime(state.playback_time ?? 0)}
+    </span>}
     {visibility.warnings && warnings.length > 0 && <StatusItem itemKey="warnings" label={menuLabels.warnings} locale={locale} onHide={(key) => setVisible(key, false)} className="app-statusbar__warning">
       <WarningOutlined />{warnings[0].message}
     </StatusItem>}
