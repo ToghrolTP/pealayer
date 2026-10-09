@@ -294,6 +294,7 @@ mod tests {
             title: None,
             duration: None,
             last_playback: None,
+            app_name: String::new(),
             #[cfg(all(
                 unix,
                 not(any(target_os = "macos", target_os = "ios", target_os = "android"))
