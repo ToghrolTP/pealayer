@@ -1784,7 +1784,7 @@ pub fn compile_timeline(
         .collect::<std::collections::BTreeSet<_>>();
     let mut current_relay_states = std::collections::BTreeMap::<u8, bool>::new();
 
-    let has_solo = !soloed.is_empty();
+    let has_solo = !soloed.is_empty() || timeline.analog_tracks.iter().any(|track| track.enabled && track.soloed);
 
     for &t in &interesting_times {
         // Evaluate desired state based on Z-Index
@@ -1870,6 +1870,7 @@ pub fn compile_timeline(
 }
 
 pub fn compile_direct_pwm_cues(timeline: &Timeline) -> Vec<CompiledDirectPwmCue> {
+    let any_solo = timeline.analog_tracks.iter().any(|track| track.enabled && track.soloed);
     timeline
         .instances
         .iter()
@@ -1885,6 +1886,9 @@ pub fn compile_direct_pwm_cues(timeline: &Timeline) -> Vec<CompiledDirectPwmCue>
                 .parse::<u8>()
                 .ok()?;
             if channel >= 16
+                || timeline.analog_tracks.iter().find(|track| track.channel == channel)
+                    .is_some_and(|track| !track.allows_output(any_solo))
+                || (any_solo && !timeline.analog_tracks.iter().any(|track| track.channel == channel && track.soloed))
                 || !timeline
                     .track_state(&crate::four_d::models::hardware_timeline_track_key(
                         &direct.control_key,
@@ -2089,7 +2093,7 @@ pub fn evaluate_relay_state(
     muted: &std::collections::BTreeSet<u8>,
     soloed: &std::collections::BTreeSet<u8>,
 ) -> bool {
-    let has_solo = !soloed.is_empty();
+    let has_solo = !soloed.is_empty() || timeline.analog_tracks.iter().any(|track| track.enabled && track.soloed);
     if muted.contains(&relay_id) || (has_solo && !soloed.contains(&relay_id)) {
         return false;
     }
@@ -2293,6 +2297,17 @@ mod tests {
         );
         timeline.set_track_linked("hardware:pwm.12", false);
         assert!(compile_direct_pwm_cues(&timeline).is_empty());
+        timeline.set_track_linked("hardware:pwm.12", true);
+        let mut track = crate::four_d::curve::AnalogTrack::new("House light", 12);
+        track.muted = true;
+        timeline.analog_tracks.push(track);
+        assert!(compile_direct_pwm_cues(&timeline).is_empty(), "muted direct cues must not bypass track state");
+        timeline.analog_tracks[0].muted = false;
+        assert_eq!(compile_direct_pwm_cues(&timeline).len(), 1);
+        let mut solo = crate::four_d::curve::AnalogTrack::new("Solo output", 3);
+        solo.soloed = true;
+        timeline.analog_tracks.push(solo);
+        assert!(compile_direct_pwm_cues(&timeline).is_empty(), "another solo excludes this direct cue");
     }
 
     #[test]

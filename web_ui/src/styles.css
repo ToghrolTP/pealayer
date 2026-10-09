@@ -481,9 +481,9 @@ body {
 .timeline-ruler { position: sticky; top: 0; z-index: 3; height: 28px; padding-inline: var(--timeline-label-width) var(--timeline-end-width); display: flex; align-items: center; justify-content: space-between; color: var(--subtle); background: var(--surface-0); border-bottom: 1px solid var(--line); font: 10px ui-monospace, monospace; }
 .timeline-grid { position: relative; min-height: 0; overflow: auto; overscroll-behavior: contain; touch-action: none; }
 .timeline-grid.is-panning { cursor: grabbing; user-select: none; }
-.timeline-content { --timeline-label-width: 180px; --timeline-end-width: 82px; min-width: max(100%, 680px); }
-.timeline-tracks { position: relative; min-height: 80px; padding-block: 8px; background-image: repeating-linear-gradient(90deg, transparent 0, transparent calc(5% - 1px), color-mix(in srgb, var(--line) 38%, transparent) 5%); background-size: calc(100% - 262px) 100%; background-position: 180px 0; background-repeat: repeat-y; }
-.timeline-row { min-width: 680px; height: 42px; display: grid; grid-template-columns: var(--timeline-label-width) minmax(400px, 1fr) var(--timeline-end-width); align-items: center; }
+.timeline-content { --timeline-label-width: 250px; --timeline-end-width: 82px; min-width: max(100%, 760px); }
+.timeline-tracks { position: relative; min-height: 80px; padding-block: 8px; background-image: repeating-linear-gradient(90deg, transparent 0, transparent calc(5% - 1px), color-mix(in srgb, var(--line) 38%, transparent) 5%); background-size: calc(100% - var(--timeline-label-width) - var(--timeline-end-width)) 100%; background-position: var(--timeline-label-width) 0; background-repeat: repeat-y; }
+.timeline-row { min-width: 760px; height: 42px; display: grid; grid-template-columns: var(--timeline-label-width) minmax(400px, 1fr) var(--timeline-end-width); align-items: center; }
 .timeline-row.is-dimmed { opacity: .48; }
 .timeline-row.is-muted { opacity: .44; }
 .timeline-row.is-solo-filtered { opacity: .36; }
@@ -498,6 +498,11 @@ body {
 .timeline-row__identity strong, .timeline-row__identity small { overflow: hidden; text-align: start; text-overflow: ellipsis; white-space: nowrap; }
 .timeline-row__identity strong { font-size: 12px; }
 .timeline-row__identity small { color: var(--subtle); font-size: 9px; }
+.timeline-track-state { width: 22px; height: 22px; flex: 0 0 22px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border: 1px solid transparent; border-radius: 4px; background: transparent; color: var(--muted); cursor: pointer; }
+.timeline-track-state:hover, .timeline-track-state:focus-visible { background: var(--surface-2); border-color: var(--line); outline: none; }
+.timeline-track-state.is-muted.is-active { color: var(--red); background: color-mix(in srgb, var(--red) 12%, transparent); border-color: color-mix(in srgb, var(--red) 40%, transparent); }
+.timeline-track-state.is-soloed.is-active { color: var(--amber); background: color-mix(in srgb, var(--amber) 12%, transparent); border-color: color-mix(in srgb, var(--amber) 40%, transparent); }
+.timeline-track-state.is-locked.is-active { color: var(--muted); background: var(--surface-2); border-color: var(--line-strong); }
 .timeline-row__menu { flex: 0 0 auto; opacity: 0; transition: opacity .14s ease; }
 .timeline-row__label:hover .timeline-row__menu,
 .timeline-row__label:focus-within .timeline-row__menu,
@@ -557,7 +562,7 @@ body {
 .hardware-control__indicator:is(button) { min-width: 14px; padding: 0; cursor: pointer; transition: transform .1s ease, background .12s ease, box-shadow .12s ease; }
 .hardware-control__indicator:is(button):not(:disabled):active { transform: scale(.84); }
 .hardware-control__indicator:is(button):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
-.hardware-control__indicator.is-on { border-color: color-mix(in srgb, var(--green) 76%, white); background: var(--green); box-shadow: 0 0 12px color-mix(in srgb, var(--green) 65%, transparent); }
+.hardware-control__indicator.is-on { border-color: color-mix(in srgb, var(--indicator-color, var(--green)) 76%, white); background: var(--indicator-color, var(--green)); box-shadow: 0 0 12px color-mix(in srgb, var(--indicator-color, var(--green)) 65%, transparent); }
 .hardware-estop.ant-btn-primary,
 .hardware-estop.ant-btn-primary:hover,
 .hardware-estop.ant-btn-primary:focus-visible {

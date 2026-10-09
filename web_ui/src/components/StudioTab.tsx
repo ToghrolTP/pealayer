@@ -942,6 +942,17 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                 >
                   <span>{trackIcon}</span>
                   <span className="timeline-row__identity"><strong>{track.name}</strong>{track.detail && <small title={track.detail}>{track.detail}</small>}</span>
+                  {([
+                    { key: 'muted', supported: track.supports_mute, active: track.muted, title: track.muted ? 'Unmute' : 'Mute', icon: <StopOutlined /> },
+                    { key: 'soloed', supported: track.supports_solo, active: track.soloed, title: track.soloed ? 'Unsolo' : 'Solo', icon: <AimOutlined /> },
+                    { key: 'locked', supported: track.supports_lock, active: track.locked, title: track.locked ? 'Unlock' : 'Lock', icon: track.locked ? <UnlockOutlined /> : <LockOutlined /> },
+                  ] as const).filter((action) => action.supported).map((action) => <Tooltip key={action.key} title={tr(locale, action.title)}>
+                    <button type="button" aria-label={tr(locale, action.title)} aria-pressed={action.active}
+                      className={`timeline-track-state is-${action.key} ${action.active ? 'is-active' : ''}`}
+                      onClick={(event) => { event.stopPropagation(); void updateTrack({ [action.key]: !action.active }); }}>
+                      {action.icon}
+                    </button>
+                  </Tooltip>)}
                   {directControl && (
                     <Dropdown
                       trigger={['click']}

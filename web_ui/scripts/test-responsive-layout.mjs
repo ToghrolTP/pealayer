@@ -20,7 +20,7 @@ declaration('.program-viewer', 'min-width', '0');
 declaration('.remote-player', 'grid-template-columns', 'minmax(0, 1fr)');
 declaration('.remote-player__preview', 'min-height', '0');
 declaration('.timeline-grid', 'overflow', 'auto');
-declaration('.timeline-content', 'min-width', 'max(100%, 680px)');
+declaration('.timeline-content', 'min-width', 'max(100%, 760px)');
 declaration('.studio-scrubber', 'grid-row', '2');
 declaration('.studio-timecode--muted', 'grid-column', '5');
 declaration('.hardware-control__pwm', 'grid-column', '1 / -1');
