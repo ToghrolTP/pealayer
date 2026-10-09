@@ -6298,7 +6298,7 @@ impl PealayerApp {
         cfg.timeline_navigation_transition_ms = self.timeline_navigation_transition_ms;
         cfg.timeline_follow_playhead = self.timeline_follow_playhead;
         cfg.timeline_toolbar_order =
-            crate::config::normalize_timeline_toolbar_order(&self.timeline_toolbar_order);
+            crate::config::persisted_timeline_toolbar_order(&self.timeline_toolbar_order);
         cfg.timeline_toolbar_hidden = self.timeline_toolbar_hidden.clone();
         cfg.non_user_control_visibility = self.non_user_control_visibility;
         cfg.prefix_relay_identifiers = self.prefix_relay_identifiers;

@@ -4,6 +4,25 @@ Owning tracker: [Pealayer issue #80](https://github.com/ToghrolTP/pealayer/issue
 Updated on 9 October 2026. This is an acceptance ledger, not a claim that all
 historical requests or branches are complete.
 
+## Timeline toolbar recovery (9 October)
+
+The requested Pan left/right and Follow/Bring-into-view swap was not lost from
+source: its original commit remains an ancestor of both installed binaries.
+Cafe's saved complete order retained the previous defaults, and David consumes
+Cafe's preferences. Only those two pairs were swapped through Cafe's config
+API; subsequent API read-back confirmed the same corrected order on both hosts.
+Future default orders inherit through an empty override, while genuinely custom
+orders remain persistent. Unrelated saves no longer freeze current defaults.
+
+The ruler toolbar now uses the shared workspace sublayer, also used by hardware
+cards, rather than an independent Foreground layer. This preserves its position
+above the ruler but beneath the Add cue backdrop and other dialogs. New source
+regressions cover default-order persistence and actual modal paint/input blocking
+in light/dark modes; they are deliberately **not run** at the user's request.
+The prior package/test pipeline was stopped, and slow CI waits are deferred.
+The live order correction is delivered; the backdrop code still requires an
+updated executable and live acceptance. No hardware actuation was performed.
+
 ## Cue-clock and startup-service follow-through (9 October)
 
 The cue-timing acceptance remains physical/live, not a compiler-only gate.

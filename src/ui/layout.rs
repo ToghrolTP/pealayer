@@ -5707,10 +5707,7 @@ fn hardware_header_widget<R>(
 /// Keep transformable card layers attached to their workspace panel rather
 /// than as independent Middle windows that can paint over floating dialogs.
 fn hardware_card_layer(ui: &egui::Ui, key: &str) -> egui::LayerId {
-    let parent = ui.layer_id();
-    let child = egui::LayerId::new(parent.order, egui::Id::new(("hardware-channel-card", parent.id, key)));
-    ui.ctx().set_sublayer(parent, child);
-    child
+    crate::ui::dialog::workspace_overlay_layer(ui, ("hardware-channel-card", key))
 }
 
 fn draw_compact_control_card(
@@ -7070,6 +7067,51 @@ mod timeline_row_tests {
             timeline_follow_target_offset(0.0, 450.0, 400.0, 500.0),
             None
         );
+    }
+
+    #[test]
+    fn timeline_toolbar_stays_under_add_cue_backdrop_and_cannot_be_clicked_through() {
+        for dark in [false, true] {
+            let context = egui::Context::default();
+            context.set_visuals(if dark { egui::Visuals::dark() } else { egui::Visuals::light() });
+            let mut app = PealayerApp::default();
+            let toolbar_rect = egui::Rect::from_min_size(egui::pos2(750.0, 12.0), egui::vec2(180.0, 28.0));
+            context.data_mut(|data| data.insert_temp(timeline_cue_dialog_id(), TimelineCueDraft {
+                track_name: "Relay 5".into(), control_key: "relay.5".into(),
+                start_time_ms: 1000, duration_ms: 1000,
+                action: TimelineCueDraftAction::Relay { enabled: true }, error: None,
+            }));
+            let mut clicked = false;
+            let mut render = |events| context.run_ui(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 800.0))),
+                events, ..Default::default()
+            }, |ui| {
+                let layer = crate::ui::dialog::workspace_overlay_layer(ui, "timeline-ruler-toolbar-layer");
+                assert_eq!(layer.order, ui.layer_id().order);
+                let mut toolbar = ui.new_child(egui::UiBuilder::new().layer_id(layer).max_rect(toolbar_rect));
+                clicked |= toolbar.button("Ruler control sentinel").clicked();
+                draw_timeline_cue_dialog(&mut app, &context);
+            });
+            for _ in 0..3 { discard_ui_output(render(Vec::new())); }
+            let mut output = render(vec![egui::Event::PointerMoved(toolbar_rect.center())]);
+            let control = output.shapes.iter().position(|shape| matches!(&shape.shape,
+                egui::epaint::Shape::Text(text) if text.galley.job.text == "Ruler control sentinel"
+            )).expect("toolbar not painted");
+            let backdrop = output.shapes.iter().position(|shape| matches!(&shape.shape,
+                egui::epaint::Shape::Rect(rect) if rect.rect.contains_rect(toolbar_rect)
+                    && rect.fill == egui::Color32::from_rgba_premultiplied(0, 0, 0, 150)
+            )).expect("full viewport backdrop missing");
+            assert!(control < backdrop, "toolbar paints above the modal backdrop; dark={dark}");
+            assert_eq!(context.layer_id_at(toolbar_rect.center()).unwrap().order, egui::Order::Foreground);
+            output.textures_delta.clear();
+            for pressed in [true, false] {
+                discard_ui_output(render(vec![egui::Event::PointerButton {
+                    pos: toolbar_rect.center(), button: egui::PointerButton::Primary,
+                    pressed, modifiers: egui::Modifiers::NONE,
+                }]));
+            }
+            assert!(!clicked, "modal backdrop allowed a toolbar action; dark={dark}");
+        }
     }
 
     #[test]
@@ -14662,12 +14704,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 visible_ruler.bottom() - 1.0,
                                             ),
                                         );
+                                        // A panel sublayer stays above the ruler's late paint,
+                                        // but below Add cue and every other modal backdrop.
+                                        let toolbar_layer = crate::ui::dialog::workspace_overlay_layer(
+                                            ui, "timeline-ruler-toolbar-layer",
+                                        );
                                         let mut toolbar_ui = ui.new_child(
                                             egui::UiBuilder::new()
-                                                .layer_id(egui::LayerId::new(
-                                                    egui::Order::Foreground,
-                                                    egui::Id::new("timeline-ruler-toolbar-layer"),
-                                                ))
+                                                .layer_id(toolbar_layer)
                                                 .max_rect(toolbar_rect)
                                                 .layout(egui::Layout::right_to_left(egui::Align::Center)),
                                         );

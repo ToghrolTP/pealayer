@@ -24,6 +24,18 @@ Preferences and other UI actions unprocessed. This was not an icon-resource erro
 - Default toolbar positions swap Pan left/right and the lock-style follow action
   with Bring playhead into view. Existing custom orders remain user-owned; apply
   the requested swap to a running instance through its configuration API.
+- Recovery on October 9: the original swap commit remained in both running
+  binaries. Cafe's persisted full toolbar order still contained the previous
+  defaults, and David's remote consumer inherited it. Swapping only the two
+  requested pairs through Cafe's `/api/config` corrected both live instances;
+  no unrelated preferences, media or hardware outputs were modified. An empty
+  order now means inherit defaults, and ordinary saves persist an order only
+  when it is actually customized, preventing defaults from becoming sticky.
+- Frozen-ruler controls use the shared workspace sublayer policy, also used by
+  hardware cards: paint above their panel but below modal backdrops. The former
+  independent Foreground toolbar could paint over Add cue. A regression covers
+  the actual Add cue backdrop, light/dark paint order and blocked pointer clicks.
+  These newly added regressions are not run while the user defers tests/CI waits.
 - Jump List entries retain the embedded per-action Phosphor icon resources.
   Icon acceptance alone does not prove command dispatch or GUI responsiveness.
 

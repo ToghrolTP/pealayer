@@ -96,15 +96,28 @@ impl TimelineToolbarAction {
     pub const DEFAULT_VISIBLE: [Self; 6] = [
         Self::ZoomIn,
         Self::ZoomOut,
-        Self::PanLeft,
         Self::PanRight,
-        Self::BringPlayheadIntoView,
+        Self::PanLeft,
         Self::FollowPlayhead,
+        Self::BringPlayheadIntoView,
     ];
 }
 
 pub fn default_timeline_toolbar_order() -> Vec<TimelineToolbarAction> {
     TimelineToolbarAction::ALL.to_vec()
+}
+
+/// Empty means follow the application default; persist only an actual override.
+/// Saving unrelated preferences must not freeze today's default forever.
+pub fn persisted_timeline_toolbar_order(
+    configured: &[TimelineToolbarAction],
+) -> Vec<TimelineToolbarAction> {
+    let normalized = normalize_timeline_toolbar_order(configured);
+    if normalized == default_timeline_toolbar_order() {
+        Vec::new()
+    } else {
+        normalized
+    }
 }
 
 pub fn default_timeline_toolbar_hidden() -> Vec<TimelineToolbarAction> {
@@ -146,6 +159,18 @@ mod timeline_toolbar_tests {
             TimelineToolbarAction::FollowPlayhead,
             TimelineToolbarAction::BringPlayheadIntoView,
         ]);
+        assert_eq!(&default_timeline_toolbar_order()[..6], &TimelineToolbarAction::DEFAULT_VISIBLE);
+    }
+
+    #[test]
+    fn saving_default_toolbar_does_not_create_a_custom_override() {
+        assert!(AppConfig::default().timeline_toolbar_order.is_empty());
+        assert!(persisted_timeline_toolbar_order(&[]).is_empty());
+        assert!(persisted_timeline_toolbar_order(&default_timeline_toolbar_order()).is_empty());
+        let mut custom = default_timeline_toolbar_order();
+        custom.swap(0, 1);
+        assert_eq!(persisted_timeline_toolbar_order(&custom), custom);
+        assert_eq!(normalize_timeline_toolbar_order(&[]), default_timeline_toolbar_order());
     }
 
     #[test]
@@ -860,7 +885,7 @@ impl Default for AppConfig {
             timeline_animated_navigation: true,
             timeline_navigation_transition_ms: 100,
             timeline_follow_playhead: false,
-            timeline_toolbar_order: default_timeline_toolbar_order(),
+            timeline_toolbar_order: Vec::new(),
             timeline_toolbar_hidden: default_timeline_toolbar_hidden(),
             non_user_control_visibility: NonUserControlVisibility::Dimmed,
             prefix_relay_identifiers: true,

@@ -18,6 +18,15 @@ pub fn singleline_text_edit(text: &mut dyn egui::TextBuffer) -> egui::TextEdit<'
     egui::TextEdit::singleline(text).vertical_align(egui::Align::Center)
 }
 
+/// Workspace overlays paint immediately above their panel, never above dialogs.
+/// Raising individual controls to Foreground lets them escape modal backdrops.
+pub fn workspace_overlay_layer(ui: &egui::Ui, id: impl std::hash::Hash) -> egui::LayerId {
+    let parent = ui.layer_id();
+    let child = egui::LayerId::new(parent.order, parent.id.with(id));
+    ui.ctx().set_sublayer(parent, child);
+    child
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DialogHost {
     Embedded,
