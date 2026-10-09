@@ -41,8 +41,6 @@ image = { version = "0.25.9", default-features = false, features = ["ico", "jpeg
 include_dir = "0.7.4"
 raw-window-handle = "0.6.2"
 souvlaki = { version = "0.8.3", default-features = false, features = ["use_zbus"] }
-ar-reshaper = "1.5.0"
-unicode-bidi = "0.3.18"
 ab_glyph = "0.2"
 notify = "8.2.0"
 open = "5.4.4"
