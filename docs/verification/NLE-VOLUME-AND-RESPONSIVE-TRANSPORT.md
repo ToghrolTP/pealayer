@@ -32,3 +32,30 @@ phone/tablet/desktop layout checks in the linked issue checkpoint.
 
 Erfan-Gaming must not launch Pealayer while KMPlayer is running. Installation-only
 is not playback acceptance. Cafe's libmpv must remain Cafe's own validated runtime.
+
+## Installed checkpoint, 9 October
+
+- [PR #96](https://github.com/ToghrolTP/pealayer/pull/96) runtime source:
+  `735a7c22d01c137a8fee065474f5c33283a31c81`, clean embedded identity.
+- Release build passed in 1 minute 26 seconds, with 14 existing warnings;
+  TypeScript and Vite/PWA build passed. Native icon resources, UPX integrity,
+  David-runtime smoke and retained Cafe-runtime smoke passed. Test suites and
+  slow CI waits remained deferred.
+- Installed executable SHA-256:
+  `582457e3632df4da61670440195e5bd1756975663c15062e5d2f7fd8867da98d`
+  (11,128,832 bytes), verified on David, Cafe and Erfan.
+- David and Cafe updated through the existing chunked upload API and graceful
+  restart. Cafe remains connected to hardware with no hardware error; David
+  remains its cache-only consumer with no local hardware scheduler or transport
+  error. A command through David changed both reported volumes to 17%; muting
+  then showed 17% plus muted=true on both. Original 0% and unmuted were restored.
+  Media remained paused and no outputs were actuated for this check.
+- A full-resolution, DPI-aware Win32 capture inspected the running David NLE
+  monitor at roughly 414 logical pixels wide: mute, horizontal slider and
+  percentage are visible in the third footer row. The capture remains private;
+  do not publish user media/artwork. PrintWindow does not prove GPU video rendering.
+- Cafe reported zero new Pealayer Application Error/WER events since restart.
+  Erfan's destination DLL remained unchanged; its prior executable is retained
+  as the verified rollback. KMPlayer remains running and Pealayer was not launched.
+- Web's deployed PWA identity is `eeda9cb8f7aa49ea`; phone/tablet browser geometry
+  and direct dragging remain human-acceptance checks, not completed test claims.

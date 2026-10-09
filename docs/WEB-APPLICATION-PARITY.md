@@ -16,6 +16,15 @@ widths, and has been exercised against live state rather than sample data.
 
 ## Current product ledger
 
+NLE volume (9 October): [responsive transport correction](verification/NLE-VOLUME-AND-RESPONSIVE-TRANSPORT.md)
+separates seeking from the native action row and exposes a full-width volume
+strip on narrow monitor panels. Web Simple/NLE now share volume, mute and
+percentage controls using the same session commands. The build is installed on
+David and Cafe with live volume/mute synchronization verified; Erfan is installed
+without launching alongside KMPlayer. Narrow native layout was inspected through
+a DPI-aware Win32 capture. Phone/tablet Web gesture acceptance remains pending
+human verification; deferred test suites are not claimed as executed.
+
 Hardware cue modes (9 October): [authoring and execution contract](HARDWARE-CUE-MODES.md)
 separates compact move-only Set and keep markers from resizable timed holds and
 linear PWM ramps, with explicit exit values, native/Web editors and shared
