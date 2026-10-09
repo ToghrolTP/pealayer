@@ -144,7 +144,7 @@ export interface PlayerState {
     icon: string;
     category: string;
     description: string;
-    kind: 'sequence' | 'strip-stream';
+    kind: 'sequence' | 'strip-stream' | 'audio';
     duration_ms: number;
     duration_display: string;
     action_count: number;
@@ -154,6 +154,9 @@ export interface PlayerState {
     default_fps?: number | null;
     default_pixels?: number | null;
   }>;
+  audio_devices?: Array<{ name: string; description: string }>;
+  audio_import_pending?: boolean;
+  audio_preview_ids?: string[];
   effect_recording?: {
     active: boolean;
     id: number;

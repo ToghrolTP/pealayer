@@ -16,6 +16,12 @@ widths, and has been exercised against live state rather than sample data.
 
 ## Current product ledger
 
+Sound effects (9 October): [SFX and audio routing](SOUND-EFFECTS.md) adds a
+shared host audio-effect catalog, native/Web import and preview editors,
+intrinsic Audio-effects cues, main/SFX/per-effect output selection and live
+output discovery. Build, deployment and audible/device acceptance are tracked
+in the focused GitHub checkpoint; this does not declare overall parity done.
+
 Live branding (9 October): [surface reconciliation](verification/LIVE-BRANDING-SURFACES.md)
 removes stale tray tooltips, the built-in-only About logo and startup-only Web/PWA
 identity. Preferences and native media sessions use configured branding; browser

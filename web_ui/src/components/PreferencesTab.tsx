@@ -195,6 +195,22 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
   const [saving, setSaving] = useState<string | null>(null);
   const [status, setStatus] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
   const [filePicker, setFilePicker] = useState<PreferenceControl | null>(null);
+  const refreshAudioOutputs = async () => {
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/rpc`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 'audio-outputs', method: 'audio.outputs.refresh', params: {} }) });
+      const result = await response.json();
+      if (!response.ok || result.error) throw new Error(result.error?.message || 'Audio output discovery failed');
+      // Discovery is asynchronous. Refresh only the options, never overwrite
+      // a user's draft or replace the form with its loading state.
+      for (const delay of [400, 1000]) {
+        await new Promise((resolve) => window.setTimeout(resolve, delay));
+        const catalog = await fetch(`${apiBaseUrl}/api/preferences`);
+        if (!catalog.ok) continue;
+        const next = await catalog.json() as PreferencesContract;
+        setContract((current) => current ? { ...current, controls: next.controls } : current);
+      }
+    } catch (error) { setStatus({ kind: 'error', text: String(error) }); }
+  };
 
   const load = async () => {
     setLoading(true);
@@ -438,6 +454,7 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
           {commonLabel}
           <Select
             value={value}
+            onOpenChange={(open) => { if (open && ['audio_device', 'sfx_audio_device'].includes(control.key)) void refreshAudioOutputs(); }}
             options={(control.options ?? []).map((option) => ({ value: option.value, label: option.description || tr(locale, option.label) }))}
             onChange={(next) => void update(control, next)}
           />

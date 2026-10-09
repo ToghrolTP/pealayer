@@ -1,4 +1,5 @@
 pub mod audio_output;
+pub mod sfx;
 pub mod proxy;
 pub mod player;
 pub mod render;

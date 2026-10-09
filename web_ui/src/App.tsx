@@ -655,7 +655,7 @@ const App: React.FC = () => {
                 apiBaseUrl={apiBaseUrl}
               />
             )}
-            {activeTab === 'effects' && <EffectsTab state={state} sendCmd={sendCmd} locale={runtime?.locale || 'en'} />}
+            {activeTab === 'effects' && <EffectsTab state={state} sendCmd={sendCmd} locale={runtime?.locale || 'en'} apiBaseUrl={apiBaseUrl} />}
             {activeTab === 'hardware' && <HardwareTab state={state} sendCmd={sendCmd} locale={runtime?.locale || 'en'} />}
             {activeTab === 'about' && (
               <PlayerInfoTab state={state} connectionMode={connectionMode} runtime={runtime} locale={runtime?.locale || 'en'} apiBaseUrl={apiBaseUrl} websocketUrl={resolveWebSocketUrl()} platform={platform} />

@@ -1162,6 +1162,7 @@ fn effects_library_toolbar(app: &mut PealayerApp, ui: &mut egui::Ui, width: f32)
         if ui.button(if compact { crate::ui::icons::PLUS.to_string() } else {
             format!("{} {new}", crate::ui::icons::PLUS)
         }).on_hover_text(&new).clicked() { crate::ui::effects_library::begin_new_effect(app, None); }
+        if ui.button(crate::ui::icons::SPEAKER_HIGH).on_hover_text(app.tr("New audio effect")).clicked() { app.begin_audio_effect(); }
         let title = app.tr("Effects Library");
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
             ui.add_sized([ui.available_width().max(1.0), ui.spacing().interact_size.y],
@@ -1836,6 +1837,8 @@ fn effect_controls_kind(
             "Direct channel cue",
             "Timeline effect",
         )
+    } else if effect.audio_effect.is_some() {
+        (crate::ui::icons::SPEAKER_HIGH, "Audio effect", "Host audio")
     } else if effect.controller_strip_effect.is_some() {
         (
             crate::ui::icons::SPARKLE,
@@ -2209,6 +2212,7 @@ fn take_effect_drop_on_rect(
 
 fn effect_preset_reference(preset: &crate::app::EffectPreset) -> Option<String> {
     match preset.source {
+        crate::app::EffectPresetSource::Audio(id) => Some(format!("sfx:{id}")),
         crate::app::EffectPresetSource::ControllerMacro(id) => Some(format!("effect:{id}")),
         crate::app::EffectPresetSource::ControllerStrip => preset
             .effect
@@ -2982,6 +2986,7 @@ fn all_timeline_track_rows(app: &PealayerApp) -> Vec<TimelineTrackRow> {
         .iter()
         .filter_map(|effect| effect.controller_lane)
         .collect::<std::collections::BTreeSet<_>>();
+    if !app.audio_effects().is_empty() { effect_lanes.insert(crate::four_d::models::ControllerEffectLane::Audio); }
     if let Some(capabilities) = capabilities.as_ref() {
         effect_lanes.extend(
             capabilities
@@ -3202,7 +3207,7 @@ fn timeline_cue_placement(
     rows: &[TimelineTrackRow],
     visible_analog_track_ids: &std::collections::BTreeSet<uuid::Uuid>,
 ) -> Option<TimelineCuePlacement> {
-    if effect.controller_macro.is_some() || effect.controller_strip_effect.is_some() {
+    if effect.controller_macro.is_some() || effect.controller_strip_effect.is_some() || effect.audio_effect.is_some() {
         let lane = effect
             .controller_lane
             .unwrap_or(crate::four_d::models::ControllerEffectLane::Sequence);
@@ -3330,6 +3335,7 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
         })
         .filter(|name| !name.trim().is_empty());
     let selected_count = app.selected_instance_ids.len();
+    let mut manage_audio = None;
     let panel_width = effect_controls_content_width(ui.available_width());
     let now = ui.input(|i| i.time);
     let ping_strength = app.effect_controls_ping_strength(now);
@@ -3546,7 +3552,7 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
                 ui.add_space(8.0);
 
                 let is_controller_owned = template.controller_macro.is_some()
-                    || template.controller_strip_effect.is_some();
+                    || template.controller_strip_effect.is_some() || template.audio_effect.is_some();
                 let current_relay_id = template.actions.first().map(|a| a.relay_id).unwrap_or(0);
                 if let Some(direct) = template.direct_control.as_ref() {
                     let is_relay = direct.control_key.starts_with("relay.");
@@ -3735,6 +3741,11 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
                         Some(&displayed_ownership),
                         false,
                         |ui| {
+                            if let Some(sound) = template.audio_effect.as_ref() {
+                                ui.add(egui::Label::new(&sound.program.source).truncate()).on_hover_text(&sound.program.source);
+                                ui.weak(format!("{}% · {}", sound.program.volume, if sound.program.output_device.is_empty() { "Preferences SFX output" } else { &sound.program.output_device }));
+                                if ui.button(format!("{} Manage audio effect", crate::ui::icons::SLIDERS_HORIZONTAL)).clicked() { manage_audio = Some(sound.id); }
+                            }
                             if let Some(macro_cue) = template.controller_macro.as_ref() {
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new(&macro_label).weak());
@@ -4014,7 +4025,7 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
                             .find(|template| template.id == instance.effect_id)
                             .is_some_and(|template| {
                                 template.controller_macro.is_some()
-                                    || template.controller_strip_effect.is_some()
+                                    || template.controller_strip_effect.is_some() || template.audio_effect.is_some()
                             })
                     })
                     .count();
@@ -4091,7 +4102,7 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
                     .find(|template| template.id == effect_id)
                     .is_some_and(|template| {
                         template.controller_macro.is_some()
-                            || template.controller_strip_effect.is_some()
+                            || template.controller_strip_effect.is_some() || template.audio_effect.is_some()
                     });
                 if controller_owned {
                     continue;
@@ -4174,6 +4185,7 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
             },
         );
     }
+    if let Some(id) = manage_audio { app.select_audio_effect(id); app.show_effect_library_editor = true; }
     if panel_header.previous || panel_header.next {
         let cue_ids = sorted_cue_ids(&app.timeline);
         if !cue_ids.is_empty() {
@@ -10324,6 +10336,7 @@ mod timeline_row_tests {
             controller_macro: None,
             controller_strip_effect: None,
             controller_lane: None,
+            audio_effect: None,
         };
         let previous = std::cell::RefCell::new(None::<Vec<egui::Vec2>>);
 
@@ -10780,6 +10793,7 @@ mod timeline_row_tests {
                 controller_macro: None,
                 controller_strip_effect: None,
                 controller_lane: None,
+                audio_effect: None,
             };
             let action_rect = std::cell::Cell::new(egui::Rect::NOTHING);
             let activated = std::cell::Cell::new(false);
@@ -10893,6 +10907,7 @@ mod timeline_row_tests {
             controller_macro: None,
             controller_strip_effect: None,
             controller_lane: None,
+            audio_effect: None,
         };
         let geometry = std::cell::Cell::new((egui::Rect::NOTHING, egui::Rect::NOTHING));
         let render = |events| {
@@ -10973,6 +10988,7 @@ mod timeline_row_tests {
             controller_macro: None,
             controller_strip_effect: None,
             controller_lane: None,
+            audio_effect: None,
         };
         let source = std::cell::Cell::new(egui::Rect::NOTHING);
         let id = egui::Id::new("press-offset-effect-card");
@@ -11029,6 +11045,7 @@ mod timeline_row_tests {
             controller_macro: None,
             controller_strip_effect: None,
             controller_lane: None,
+            audio_effect: None,
         };
         let source = std::cell::Cell::new(egui::Rect::NOTHING);
         let id = egui::Id::new("stable-offset-effect-card");
@@ -11099,6 +11116,7 @@ mod timeline_row_tests {
             }),
             controller_strip_effect: None,
             controller_lane: Some(crate::four_d::models::ControllerEffectLane::Sequence),
+            audio_effect: None,
         };
         begin_effect_drag(&context, payload.clone());
         assert_eq!(
@@ -11175,6 +11193,7 @@ mod timeline_row_tests {
             }),
             controller_strip_effect: None,
             controller_lane: Some(crate::four_d::models::ControllerEffectLane::Sequence),
+            audio_effect: None,
         };
         let source = std::cell::Cell::new(egui::Rect::NOTHING);
         let target = std::cell::Cell::new(egui::Rect::NOTHING);
@@ -11256,6 +11275,7 @@ mod timeline_row_tests {
             }),
             controller_strip_effect: None,
             controller_lane: Some(crate::four_d::models::ControllerEffectLane::Sequence),
+            audio_effect: None,
         };
         let source = std::cell::Cell::new(egui::Rect::NOTHING);
         let target = std::cell::Cell::new(egui::Rect::NOTHING);
@@ -11408,6 +11428,7 @@ mod timeline_row_tests {
             controller_macro: None,
             controller_strip_effect: None,
             controller_lane: None,
+            audio_effect: None,
         };
         let source = std::cell::Cell::new(egui::Rect::NOTHING);
         let menu_requested = std::cell::Cell::new(false);
@@ -11593,6 +11614,7 @@ mod timeline_row_tests {
                 id: "strip.strobe".into(),
             }),
             controller_lane: Some(crate::four_d::models::ControllerEffectLane::Lighting),
+            audio_effect: None,
         };
         let dropped = app.handle_effect_drop(&payload, 0, 1.0);
         assert!(dropped);
@@ -12380,6 +12402,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     controller_macro: preset.effect.controller_macro.clone(),
                                                     controller_strip_effect: preset.effect.controller_strip_effect.clone(),
                                                     controller_lane: preset.effect.controller_lane,
+                                                    audio_effect: preset.effect.audio_effect.clone(),
                                                 };
                                                 let target_label = if preset
                                                     .effect
@@ -16592,7 +16615,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                                     for (i, track_row) in timeline_rows.iter().enumerate() {
                                                         if payload.controller_macro.is_some()
-                                                            || payload.controller_strip_effect.is_some()
+                                                            || payload.controller_strip_effect.is_some() || payload.audio_effect.is_some()
                                                         {
                                                             if track_row.kind
                                                                 == TimelineTrackKind::ControllerEffect(
@@ -16703,7 +16726,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         .get(usize::try_from(hovered_track_index).unwrap_or(usize::MAX))
                                                         .is_some_and(|row| {
                                                             if payload.controller_macro.is_some()
-                                                                || payload.controller_strip_effect.is_some()
+                                                                || payload.controller_strip_effect.is_some() || payload.audio_effect.is_some()
                                                             {
                                                                 row.kind
                                                                     != TimelineTrackKind::ControllerEffect(
@@ -18419,7 +18442,7 @@ impl PealayerApp {
         drop_time_secs: f64,
     ) -> bool {
         let timeline_rows = timeline_track_rows(self);
-        if payload.controller_macro.is_some() || payload.controller_strip_effect.is_some() {
+        if payload.controller_macro.is_some() || payload.controller_strip_effect.is_some() || payload.audio_effect.is_some() {
             let lane = payload
                 .controller_lane
                 .unwrap_or(crate::four_d::models::ControllerEffectLane::Sequence);
@@ -18446,15 +18469,19 @@ impl PealayerApp {
                 self.timeline.templates.iter_mut().find(|effect| {
                     effect.controller_macro == payload.controller_macro
                         && effect.controller_strip_effect == payload.controller_strip_effect
+                        && effect.audio_effect == payload.audio_effect
                 }) {
                 existing.name.clone_from(&payload.name);
                 existing.icon.clone_from(&payload.icon);
                 existing.duration_ms = payload.duration_ms.max(1);
                 existing.controller_lane = Some(lane);
                 existing.duration_policy = crate::four_d::models::CueDurationPolicy::Resizable;
+                if payload.audio_effect.is_some() { existing.duration_policy = crate::four_d::models::CueDurationPolicy::Intrinsic; }
                 existing.id
             } else {
-                let mut effect = if let Some(controller_macro) = payload.controller_macro.as_ref() {
+                let mut effect = if let Some(audio) = payload.audio_effect.as_ref() {
+                    audio.template()
+                } else if let Some(controller_macro) = payload.controller_macro.as_ref() {
                     crate::four_d::models::Effect::controller_macro(
                         payload.name.clone(),
                         payload.icon.clone(),
@@ -18476,6 +18503,7 @@ impl PealayerApp {
                 };
                 effect.controller_lane = Some(lane);
                 effect.duration_policy = crate::four_d::models::CueDurationPolicy::Resizable;
+                if payload.audio_effect.is_some() { effect.duration_policy = crate::four_d::models::CueDurationPolicy::Intrinsic; }
                 let id = effect.id;
                 self.timeline.templates.push(effect);
                 id

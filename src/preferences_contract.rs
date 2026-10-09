@@ -326,7 +326,7 @@ fn seekbar_color_control(key: &'static str, label: &'static str) -> PreferenceCo
 }
 
 pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceControl> {
-    let audio_devices = crate::mpv::audio_output::available_audio_devices();
+    let audio_devices = crate::peer::client().and_then(|client| client.snapshot()).and_then(|snapshot| serde_json::from_value::<Vec<crate::mpv::audio_output::AudioDevice>>(snapshot.session.status.get("audio_devices")?.clone()).ok()).unwrap_or_else(crate::mpv::audio_output::available_audio_devices);
     let audio_output_control = |key, label, selected: &str, follow_media: bool| {
         let mut control = PreferenceControl::select(key, "playback", "Audio output", label, &[]);
         control.description = Some(if follow_media {
@@ -348,7 +348,7 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             label: "Audio device",
             color: None,
             description: Some(device.description.clone()),
-            icon: None,
+            icon: Some("speaker-high"),
         }));
         if !selected.is_empty() && !control.options.iter().any(|option| option.value.as_str() == Some(selected)) {
             control.options.push(PreferenceOption {

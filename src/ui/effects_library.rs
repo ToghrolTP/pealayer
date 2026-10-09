@@ -145,8 +145,13 @@ pub(crate) fn select_advertised_effect(
     source: crate::app::EffectPresetSource,
     strip_id: Option<&str>,
 ) -> Option<String> {
+    if let crate::app::EffectPresetSource::Audio(id) = source {
+        app.select_audio_effect(id);
+        return Some(format!("sfx:{id}"));
+    }
     let capabilities = app.advertised_hardware()?;
     match source {
+        crate::app::EffectPresetSource::Audio(_) => unreachable!(),
         crate::app::EffectPresetSource::ControllerMacro(id) => {
             let effect = capabilities.macros.iter().find(|effect| effect.id == id)?;
             let reference = format!("effect:{id}");
@@ -189,7 +194,9 @@ pub(crate) fn move_dragged_effect_to_group(
     if category.is_empty() || category.len() > 64 || category.chars().any(char::is_control) {
         return Err("Effect group must be a bounded printable value".to_string());
     }
-    let selected = if let Some(effect) = payload.controller_macro.as_ref() {
+    let selected = if let Some(effect) = payload.audio_effect.as_ref() {
+        select_advertised_effect(app, crate::app::EffectPresetSource::Audio(effect.id), None)
+    } else if let Some(effect) = payload.controller_macro.as_ref() {
         select_advertised_effect(
             app,
             crate::app::EffectPresetSource::ControllerMacro(effect.id),
@@ -228,6 +235,8 @@ pub(crate) fn duplicate_selected(app: &mut PealayerApp) {
             .find(|candidate| !used.contains(&u64::from(*candidate)))
             .unwrap_or(0)
             .to_string()
+    } else if app.effect_library_draft.kind == "audio" {
+        uuid::Uuid::new_v4().to_string()
     } else {
         format!("{}-copy", app.effect_library_draft.id)
     };
@@ -2428,6 +2437,10 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
     if !app.show_effect_library_editor {
         return;
     }
+    if app.effect_library_draft.kind == "audio" {
+        crate::ui::audio::draw_sfx_editor(app, ui);
+        return;
+    }
     let mut open = app.show_effect_library_editor;
     let display_language = app.language;
     let human_readable_time_units = app.human_readable_time_units;
@@ -2445,6 +2458,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
         .as_ref()
         .map(|value| value.strip_effects.clone())
         .unwrap_or_default();
+    let audio_effects = app.audio_effects();
     let groups = capabilities
         .as_ref()
         .map(|hardware| hardware.effect_groups.clone())
@@ -2482,6 +2496,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 |ui| {
                     if capture_locked { ui.disable(); }
                     ui.horizontal_wrapped(|ui| {
+                        if ui.button(format!("{} {}", crate::ui::icons::SPEAKER_HIGH, app.tr("Audio"))).clicked() { app.begin_audio_effect(); }
                         if ui
                             .button(format!("{} {}", crate::ui::icons::PLUS, app.tr("Sequence")))
                             .clicked()
@@ -2501,6 +2516,10 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         .auto_shrink([false, false])
                         .show(ui, |ui| {
                             if capture_locked { ui.disable(); }
+                            for effect in &audio_effects {
+                                let response = effect_navigation_button(ui, app.effect_library_selection.as_deref() == Some(effect.reference().as_str()), crate::ui::icons::SPEAKER_HIGH, &effect.name, &format!("{} · {}", effect.group, crate::duration::format_effect_duration_for_language(display_language, effect.duration_ms)));
+                                if response.clicked() { app.select_audio_effect(effect.id); }
+                            }
                             for effect in &sequences {
                                 let reference = format!("effect:{}", effect.id);
                                 let payload = crate::app::EffectDragPayload {
@@ -2517,6 +2536,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     ),
                                     controller_strip_effect: None,
                                     controller_lane: Some(crate::app::controller_macro_lane(effect)),
+                                    audio_effect: None,
                                 };
                                 let selected = app.effect_library_selection.as_deref()
                                     == Some(reference.as_str());
@@ -2565,6 +2585,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     controller_lane: Some(
                                         crate::four_d::models::ControllerEffectLane::Lighting,
                                     ),
+                                    audio_effect: None,
                                 };
                                 let selected = app.effect_library_selection.as_deref()
                                     == Some(reference.as_str());

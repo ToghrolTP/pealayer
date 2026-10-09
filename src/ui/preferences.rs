@@ -1028,16 +1028,17 @@ fn render_contract_control(
             }
         }
         PreferenceControlKind::Select => {
+            let audio_output = matches!(control.key, "audio_device" | "sfx_audio_device");
             let selected = current.as_str().unwrap_or_default();
             let selected_label = control
                 .options
                 .iter()
                 .find(|option| option.value.as_str() == Some(selected))
-                .map(|option| tr(option.label))
+                .map(|option| if audio_output { option.description.clone().unwrap_or_else(|| tr(option.label)) } else { tr(option.label) })
                 .unwrap_or_else(|| selected.to_string());
             preference_row(ui, control_icon, &tr(control.label), label_width, |ui| {
                 let control_width = ui.available_width().min(PREFERENCE_CONTROL_MAX_WIDTH);
-                egui::ComboBox::from_id_salt(("preference", control.key))
+                let popup = egui::ComboBox::from_id_salt(("preference", control.key))
                     .width(control_width)
                     .selected_text(selected_label)
                     .show_ui(ui, |ui| {
@@ -1045,7 +1046,7 @@ fn render_contract_control(
                             if ui
                                 .selectable_label(
                                     option.value == current,
-                                    option.description.clone().unwrap_or_else(|| tr(option.label)),
+                                    if audio_output { option.description.clone().unwrap_or_else(|| tr(option.label)) } else { tr(option.label) },
                                 )
                                 .clicked()
                             {
@@ -1053,6 +1054,19 @@ fn render_contract_control(
                             }
                         }
                     });
+                if audio_output {
+                    let id = ui.id().with(("audio-output-open", control.key));
+                    let was_open = ui.data_mut(|d| d.get_temp::<bool>(id).unwrap_or(false));
+                    if popup.inner.is_some() && !was_open {
+                        if let Some(client) = crate::peer::client() {
+                            let _ = client.queue("/api/player/command", serde_json::to_value(crate::platform::interop::InteropCommand::RefreshAudioOutputs).unwrap());
+                        } else {
+                            let ctx = ui.ctx().clone();
+                            std::thread::spawn(move || { crate::mpv::audio_output::refresh_devices(); ctx.request_repaint(); });
+                        }
+                    }
+                    ui.data_mut(|d| d.insert_temp(id, popup.inner.is_some()));
+                }
             });
         }
         PreferenceControlKind::MultiSelect => {

@@ -286,6 +286,8 @@ pub enum InteropCommand {
         reference: String,
     },
     StopControllerEffect,
+    StopAudioPreview,
+    RefreshAudioOutputs,
     SaveControllerEffectGroup {
         original_name: String,
         name: String,
@@ -827,7 +829,7 @@ pub fn command_catalog() -> Value {
             "move_workspace_profile", "timeline.track.update", "timeline.track.manage", "update_config",
             "reload_config", "add_effect_cue", "update_effect_cue", "remove_effect_cue", "set_recording",
             "get_status", "publish_toast", "dismiss_toast", "quit", "controller_effect_cue.add", "controller_effect.play",
-            "controller_effect.stop", "controller_effect.save", "controller_effect.delete",
+            "controller_effect.stop", "controller_effect.save", "controller_effect.delete", "audio_effect.stop", "audio.outputs.refresh",
             "controller_effect.group.save",
             "controller_effect.record.start", "controller_effect.record.status",
             "controller_effect.record.save", "controller_effect.record.discard",
@@ -1273,6 +1275,14 @@ pub struct PlayerStatusResponse {
     #[serde(default)]
     pub controller_effects: Vec<WebControllerEffect>,
     #[serde(default)]
+    pub audio_devices: Vec<crate::mpv::audio_output::AudioDevice>,
+    #[serde(default)]
+    pub audio_import_pending: bool,
+    #[serde(default)]
+    pub audio_preview_ids: Vec<String>,
+    #[serde(default)]
+    pub audio_voices: Vec<crate::mpv::sfx::AudioVoiceState>,
+    #[serde(default)]
     pub controller_effect_groups: Vec<crate::four_d::controller::HardwareEffectGroup>,
     #[serde(default)]
     pub effect_recording: WebEffectRecording,
@@ -1490,6 +1500,11 @@ impl WebControllerEffectDraft {
             field("effect icon", &self.icon)?;
         }
         match self.kind.as_str() {
+            "audio" => {
+                uuid::Uuid::parse_str(&self.id).map_err(|_| "SFX ID must be a UUID")?;
+                let program: crate::mpv::sfx::AudioProgram = serde_json::from_value(self.program.clone()).map_err(|e| format!("Invalid SFX settings: {e}"))?;
+                program.validate()
+            }
             "sequence" => {
                 self.id.parse::<u8>()
                     .map_err(|_| "sequence effect id must be from 0 to 255".to_string())?;
@@ -1508,7 +1523,7 @@ impl WebControllerEffectDraft {
                 }
                 Ok(())
             }
-            _ => Err("effect kind must be sequence or strip-stream".to_string()),
+            _ => Err("effect kind must be sequence, strip-stream or audio".to_string()),
         }
     }
 }
@@ -1568,6 +1583,10 @@ impl Default for PlayerStatusResponse {
             recordable_track_count: 0,
             effects: Vec::new(),
             controller_effects: Vec::new(),
+            audio_devices: Vec::new(),
+            audio_import_pending: false,
+            audio_preview_ids: Vec::new(),
+            audio_voices: Vec::new(),
             controller_effect_groups: Vec::new(),
             effect_recording: WebEffectRecording::default(),
             cues: Vec::new(),
@@ -1965,6 +1984,8 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         "controller_effect.stop" | "pealayer.controller_effect.stop" => {
             Some(InteropCommand::StopControllerEffect)
         }
+        "audio_effect.stop" => Some(InteropCommand::StopAudioPreview),
+        "audio.outputs.refresh" => Some(InteropCommand::RefreshAudioOutputs),
         "controller_effect.group.save" | "pealayer.controller_effect.group.save" => {
             Some(InteropCommand::SaveControllerEffectGroup {
                 original_name: request
