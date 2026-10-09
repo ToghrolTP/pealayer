@@ -536,6 +536,8 @@ pub struct PealayerApp {
 
     pub seek_pos: Option<f64>,
     pub(crate) seek_controller: crate::mpv::seek::SeekController,
+    pub(crate) frame_cache: std::sync::Arc<std::sync::RwLock<crate::mpv::frame_cache::FrameCache>>,
+    pub(crate) active_pseudo_frame: Option<crate::mpv::frame_cache::CachedFrame>,
     pub(crate) was_playing_before_scrub: bool,
     pub(crate) is_scrubbing: bool,
     pub(crate) pending_scrub_commit: Option<PendingScrubCommit>,
@@ -4598,7 +4600,15 @@ impl PealayerApp {
         self.is_scrubbing = false;
         self.was_playing_before_scrub = false;
         self.pending_scrub_commit = None;
+        self.active_pseudo_frame = None;
         let _ = self.seek_controller.take_completed();
+    }
+
+    pub fn clear_frame_cache(&mut self) {
+        if let Ok(mut cache) = self.frame_cache.write() {
+            cache.clear();
+        }
+        self.active_pseudo_frame = None;
     }
 
     /// Polls and processes all pending MPV events and updates application state.
@@ -4785,6 +4795,7 @@ impl PealayerApp {
                     self.subtitle_text.clear();
                     self.clear_subtitle_overlay();
                     self.reset_scrub_state();
+                    self.clear_frame_cache();
                     self.refresh_media_tracks();
                     self.sync_subtitle_rendering();
                 }
@@ -5619,7 +5630,16 @@ impl PealayerApp {
         }
 
         self.seek_pos = Some(clamped);
-        let _ = self.seek_controller.request_scrub(clamped);
+        match self.seek_controller.request_scrub(clamped) {
+            crate::mpv::seek::ScrubResult::Cached(frame) => {
+                self.active_pseudo_frame = Some(frame);
+            }
+            crate::mpv::seek::ScrubResult::Dispatched(_) => {
+                if let Ok(cache) = self.frame_cache.read() {
+                    self.active_pseudo_frame = cache.query_nearest(clamped);
+                }
+            }
+        }
     }
 
     /// Ends an active scrub session. Dispatches a final exact commit seek and
@@ -5651,6 +5671,7 @@ impl PealayerApp {
         // PlaybackRestart for this exact committed target. Playback is resumed
         // by settle_scrub_commit_if_ready, never against the stale old frame.
         self.is_scrubbing = false;
+        self.active_pseudo_frame = None;
     }
 
     fn selected_subtitle_is_bitmap(&self) -> bool {
@@ -5969,6 +5990,7 @@ impl PealayerApp {
         let path_str = path.to_str().unwrap_or("");
         if !path_str.is_empty() {
             self.reset_scrub_state();
+            self.clear_frame_cache();
             self.capture_current_playback_position();
             self.pending_resume_position = self.resume_position_for(path_str);
             let _ = self.mpv.set_property("keep-open", "always");
@@ -6078,6 +6100,7 @@ impl PealayerApp {
         let trimmed = url.trim();
         if !trimmed.is_empty() {
             self.reset_scrub_state();
+            self.clear_frame_cache();
             self.capture_current_playback_position();
             self.pending_resume_position = self.resume_position_for(trimmed);
             let _ = self.mpv.set_property("keep-open", "always");
@@ -6198,6 +6221,7 @@ impl PealayerApp {
 
     pub fn close_video(&mut self) {
         self.reset_scrub_state();
+        self.clear_frame_cache();
         self.capture_current_playback_position();
         let _ = self.mpv.command("stop", &[]);
         self.current_video_path = None;
@@ -8095,6 +8119,9 @@ impl Default for PealayerApp {
         let (media_cmd_tx, media_cmd_rx) = std::sync::mpsc::channel();
         let engine_handle = crate::four_d::engine::spawn_engine();
         engine_handle.attach_playback_clock(mpv);
+        let frame_cache = std::sync::Arc::new(std::sync::RwLock::new(
+            crate::mpv::frame_cache::FrameCache::new(128 * 1024 * 1024),
+        ));
         Self {
             web_only: false,
             app_name: crate::config::resolved_app_name(&crate::config::AppConfig::default()),
@@ -8139,9 +8166,12 @@ impl Default for PealayerApp {
             temporary_fast_forward_speed: 2.0,
             video_surface_gesture: None,
             seek_pos: None,
-            seek_controller: crate::mpv::seek::SeekController::new(
+            seek_controller: crate::mpv::seek::SeekController::with_cache(
                 crate::mpv::seek::MpvSeekBackend::new(mpv),
+                frame_cache.clone(),
             ),
+            frame_cache,
+            active_pseudo_frame: None,
             was_playing_before_scrub: false,
             is_scrubbing: false,
             pending_scrub_commit: None,
@@ -9636,5 +9666,43 @@ pub(crate) mod tests {
             }
             PlaybackRepaintPacing::VSync => panic!("Expected paced interval matching 60Hz"),
         }
+    }
+
+    #[test]
+    fn test_app_frame_cache_lifecycle_and_pseudo_frame() {
+        let _lock = lock_app_tests();
+        let mut app = PealayerApp::default();
+
+        assert_eq!(app.frame_cache.read().unwrap().len(), 0);
+        assert_eq!(app.frame_cache.read().unwrap().max_bytes(), 128 * 1024 * 1024);
+        assert!(app.active_pseudo_frame.is_none());
+
+        // Insert a dummy frame into cache
+        let dummy = crate::mpv::frame_cache::CachedFrame::new(5.0, 10, 10, vec![42u8; 400]);
+        app.frame_cache.write().unwrap().insert(dummy, 5.0);
+        assert_eq!(app.frame_cache.read().unwrap().len(), 1);
+
+        // Scrubbing should hit the cache and populate active_pseudo_frame
+        app.duration = 100.0;
+        app.is_seekable = true;
+        app.scrub_to(5.0);
+        assert!(app.active_pseudo_frame.is_some());
+        assert_eq!(app.active_pseudo_frame.as_ref().unwrap().pts, 5.0);
+
+        // finish_scrub clears active_pseudo_frame
+        app.finish_scrub(5.0);
+        assert!(app.active_pseudo_frame.is_none());
+
+        // clear_frame_cache clears cache and active_pseudo_frame
+        app.frame_cache.write().unwrap().insert(
+            crate::mpv::frame_cache::CachedFrame::new(5.0, 10, 10, vec![42u8; 400]),
+            5.0,
+        );
+        app.active_pseudo_frame = app.frame_cache.read().unwrap().query_nearest(5.0);
+        assert!(app.active_pseudo_frame.is_some());
+
+        app.clear_frame_cache();
+        assert_eq!(app.frame_cache.read().unwrap().len(), 0);
+        assert!(app.active_pseudo_frame.is_none());
     }
 }
