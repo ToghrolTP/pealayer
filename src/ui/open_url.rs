@@ -102,6 +102,8 @@ struct RemoteProbePayload {
     info: RemoteMediaInfo,
     thumbnail: Option<RemoteThumbnailPixels>,
     thumbnail_error: Option<String>,
+    use_proxy: bool,
+    directory: Option<crate::remote_location::RemoteListing>,
 }
 
 #[derive(Clone, Debug)]
@@ -123,6 +125,7 @@ struct ProbeNetworkSettings {
     use_proxy: bool,
     proxy_url: Option<String>,
     fetch_thumbnail: bool,
+    auto_proxy: bool,
 }
 
 pub struct UrlInspector {
@@ -130,11 +133,15 @@ pub struct UrlInspector {
     rx: Receiver<ProbeResult>,
     generation: u64,
     last_input: String,
+    token: std::sync::Arc<std::sync::atomic::AtomicU64>,
     last_changed: Instant,
     requested_input: Option<String>,
     last_network: Option<ProbeNetworkSettings>,
     last_auto_fetch: bool,
     pub status: ProbeStatus,
+    chosen_proxy: Option<bool>,
+    directory: Option<crate::remote_location::RemoteListing>,
+    manual_proxy: bool,
     thumbnail_texture: Option<egui::TextureHandle>,
     thumbnail_ready_at: Option<Instant>,
     thumbnail_position_seconds: Option<f64>,
@@ -155,11 +162,15 @@ impl Default for UrlInspector {
             rx,
             generation: 0,
             last_input: String::new(),
+            token: std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0)),
             last_changed: Instant::now(),
             requested_input: None,
             last_network: None,
             last_auto_fetch: true,
             status: ProbeStatus::Idle,
+            chosen_proxy: None,
+            directory: None,
+            manual_proxy: false,
             thumbnail_texture: None,
             thumbnail_ready_at: None,
             thumbnail_position_seconds: None,
@@ -171,6 +182,10 @@ impl Default for UrlInspector {
             recent_thumbnail_failed: HashSet::new(),
         }
     }
+}
+
+impl Drop for UrlInspector {
+    fn drop(&mut self) { self.token.fetch_add(1, std::sync::atomic::Ordering::AcqRel); }
 }
 
 impl UrlInspector {
@@ -187,6 +202,8 @@ impl UrlInspector {
             }
             self.status = match probe.result {
                 Ok(payload) => {
+                    self.chosen_proxy = Some(payload.use_proxy);
+                    self.directory = payload.directory;
                     self.thumbnail_texture = payload.thumbnail.as_ref().map(|thumbnail| {
                         ctx.load_texture(
                             format!("remote-media-thumbnail-{}", self.generation),
@@ -215,10 +232,15 @@ impl UrlInspector {
 
         let trimmed = input.trim();
         if self.last_input != trimmed
-            || self.last_network.as_ref() != Some(&network)
+            || !self.last_network.as_ref().is_some_and(|previous| {
+                previous.proxy_url == network.proxy_url && previous.fetch_thumbnail == network.fetch_thumbnail
+                    && previous.auto_proxy == network.auto_proxy
+                    && (network.auto_proxy || previous.use_proxy == network.use_proxy)
+            })
             || self.last_auto_fetch != auto_fetch
         {
             self.generation = self.generation.wrapping_add(1);
+            self.token.store(self.generation, std::sync::atomic::Ordering::Release);
             self.last_input = trimmed.to_owned();
             self.last_network = Some(network.clone());
             self.last_auto_fetch = auto_fetch;
@@ -229,6 +251,8 @@ impl UrlInspector {
             self.thumbnail_ready_at = None;
             self.thumbnail_position_seconds = None;
             self.thumbnail_error = None;
+            self.directory = None;
+            self.chosen_proxy = None;
         }
 
         let Ok(validated) = validate_media_url(trimmed) else {
@@ -289,9 +313,36 @@ impl UrlInspector {
         self.thumbnail_position_seconds = None;
         self.thumbnail_error = None;
         let tx = self.tx.clone();
+        self.token.store(generation, std::sync::atomic::Ordering::Release);
+        let token = self.token.clone();
         std::thread::spawn(move || {
-            let result = probe_remote_media(&url, &network);
-            let _ = tx.send(ProbeResult { generation, result });
+            let result = loop {
+                if token.load(std::sync::atomic::Ordering::Acquire) != generation { return; }
+                let target = url.clone(); let options = network.clone();
+                match crate::remote_location::probe_routes(network.use_proxy, network.auto_proxy, move |proxy| {
+                    let mut options = options.clone(); options.use_proxy = proxy; options.fetch_thumbnail = false;
+                    probe_remote_media(&target, &options)
+                }) {
+                    Err(crate::remote_location::RouteProbeError::Busy) => std::thread::sleep(Duration::from_millis(250)),
+                    result => break result,
+                }
+            };
+            if token.load(std::sync::atomic::Ordering::Acquire) != generation { return; }
+            match result {
+                Ok((proxy, mut payload)) => {
+                    let needs_thumbnail = network.fetch_thumbnail && payload.directory.is_none();
+                    if tx.send(ProbeResult {generation, result: Ok(payload.clone())}).is_err() { return; }
+                    ctx.request_repaint();
+                    if needs_thumbnail {
+                        match crate::server::thumbnails::get_or_generate_remote_thumbnail(&payload.info.final_url, proxy, network.proxy_url.as_deref()).and_then(|file| decode_remote_thumbnail(&file)) {
+                            Ok(pixels) => payload.thumbnail = Some(pixels),
+                            Err(error) => payload.thumbnail_error = Some(error),
+                        }
+                        let _ = tx.send(ProbeResult {generation, result: Ok(payload)});
+                    }
+                }
+                Err(error) => {let _ = tx.send(ProbeResult {generation, result: Err(error.to_string())});}
+            }
             ctx.request_repaint();
         });
     }
@@ -381,6 +432,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let mut open_requested = false;
     let mut browse_requested = false;
     let mut close_requested = crate::ui::dialog::escape_pressed(ui.ctx());
+    if close_requested { app.show_open_url_dialog = false; app.url_inspector = UrlInspector::default(); return; }
     let mut inspect_requested = false;
     let mut configure_proxy_requested = false;
     let mut history_remove_requested = None;
@@ -402,6 +454,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         proxy_url: (!app.open_url_proxy_url.trim().is_empty())
             .then(|| app.open_url_proxy_url.trim().to_string()),
         fetch_thumbnail: app.open_url_fetch_remote_thumbnail,
+        auto_proxy: crate::platform::interop::get_live_config().open_url_auto_proxy && !app.url_inspector.manual_proxy,
     };
     app.url_inspector.update(
         &app.url_input_buffer,
@@ -409,6 +462,12 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         network.clone(),
         app.open_url_fetch_remote_info,
     );
+    if let Some(proxy) = app.url_inspector.chosen_proxy.take() { app.open_url_use_proxy = proxy; }
+    if let Some(listing) = app.url_inspector.directory.take() {
+        crate::remote_location::accept_listing(listing, app.open_url_use_proxy, ui.ctx());
+        app.show_open_url_dialog = false;
+        return;
+    }
     let remote_history = app
         .recent_media
         .iter()
@@ -439,7 +498,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     .show(ui.ctx(), |ui| {
         ui.with_layout(crate::ui::i18n::vertical_layout(app.rtl), |ui| {
             let edit_id = ui.make_persistent_id("open_location_url_editor");
-            let body_height = (ui.available_height() - 54.0).max(180.0);
+            let body_height = (ui.available_height() - 90.0).max(140.0);
             crate::ui::dialog::scroll_column(
                 ui,
                 "open_location_inspector_body",
@@ -480,20 +539,17 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             });
                             ui.add_space(7.0);
 
-                            if let Some(proxy) = effective_proxy.as_deref() {
-                                let proxy_label = format!(
-                                    "{}  {} ({})",
-                                    crate::ui::icons::GLOBE,
-                                    app.tr("Use proxy"),
-                                    proxy_display_value(proxy)
-                                );
+                            {
+                                let proxy_label = effective_proxy.as_deref().map(|proxy| format!("{}  {} ({})", crate::ui::icons::GLOBE, app.tr("Use proxy"), proxy_display_value(proxy))).unwrap_or_else(|| app.tr("Use proxy"));
                                 let configure_label = app.tr("Configure proxy");
                                 ui.horizontal_wrapped(|ui| {
                                     if ui
                                         .checkbox(&mut app.open_url_use_proxy, proxy_label)
                                         .changed()
                                     {
-                                        app.url_inspector = UrlInspector::default();
+                                        app.url_inspector.manual_proxy = true;
+                                        app.url_inspector.last_network = None;
+                                        app.url_inspector.generation = app.url_inspector.generation.wrapping_add(1);
                                         if let Err(error) = app.synchronize_playback_proxy() {
                                             app.show_error = Some(error);
                                         }
@@ -655,24 +711,19 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
             ui.add_space(8.0);
             ui.separator();
+            // Auxiliary actions have their own row: four minimum-width buttons
+            // cannot fit the narrow dialog's confirm row without overflowing.
+            ui.horizontal(|ui| {
+                if ui.add_enabled(can_open, egui::Button::new(format!("{}  Browse folder", crate::ui::icons::FOLDER_OPEN))).clicked() { browse_requested = true; }
+                if crate::ui::dialog::action_button(ui, crate::ui::icons::CLIPBOARD, &app.tr("Paste")).on_hover_text("Ctrl+V").clicked() {
+                    ui.ctx().memory_mut(|memory| memory.request_focus(edit_id));
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+                }
+            });
             crate::ui::dialog::action_bar(
                 ui,
                 app.rtl,
-                |ui| {
-                    if ui.add_enabled(can_open, egui::Button::new(format!("{}  Browse folder", crate::ui::icons::FOLDER_OPEN))).clicked() { browse_requested = true; }
-                    if crate::ui::dialog::action_button(
-                        ui,
-                        crate::ui::icons::CLIPBOARD,
-                        &app.tr("Paste"),
-                    )
-                    .on_hover_text("Ctrl+V")
-                    .clicked()
-                    {
-                        ui.ctx().memory_mut(|memory| memory.request_focus(edit_id));
-                        ui.ctx()
-                            .send_viewport_cmd(egui::ViewportCommand::RequestPaste);
-                    }
-                },
+                |_ui| {},
                 |ui| {
                     // Cancel intentionally precedes Open in this trailing-edge
                     // layout so their visual positions are swapped as requested.
@@ -737,7 +788,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     }
 
     if browse_requested {
-        let _ = crate::remote_location::request(&app.url_input_buffer, Some(app.open_url_use_proxy), false, ui.ctx());
+        let _ = crate::remote_location::request(&app.url_input_buffer, app.url_inspector.manual_proxy.then_some(app.open_url_use_proxy), false, ui.ctx());
         app.show_open_url_dialog = false;
     } else if open_requested {
         let url = validation
@@ -749,6 +800,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         app.show_open_url_dialog = false;
     } else if close_requested {
         app.show_open_url_dialog = false;
+        app.url_inspector = UrlInspector::default();
     }
 }
 
@@ -960,10 +1012,8 @@ fn draw_contextual_probe_action(
         ProbeStatus::Failed { .. } => (app.tr("Retry details"), true),
         ProbeStatus::Idle | ProbeStatus::NotApplicable { .. } => (app.tr("Fetch details"), true),
     };
-    ui.add_enabled(
-        enabled,
-        egui::Button::new(format!("{}  {label}", crate::ui::icons::MAGNIFYING_GLASS)),
-    )
+    ui.add_enabled_ui(enabled, |ui| ui.add_sized([148.0, crate::ui::dialog::ACTION_HEIGHT], egui::Button::new(format!("{}  {label}", crate::ui::icons::MAGNIFYING_GLASS))))
+    .inner
     .clicked()
 }
 
@@ -1622,6 +1672,7 @@ fn probe_remote_media(
             .map_err(|error| friendly_probe_error(error))?;
     }
 
+    let response = response.error_for_status().map_err(friendly_probe_error)?;
     let headers = response.headers();
     let content_length = header_string(headers, CONTENT_RANGE)
         .and_then(|value| {
@@ -1666,7 +1717,11 @@ fn probe_remote_media(
         elapsed_ms: started.elapsed().as_millis(),
     };
 
-    let (thumbnail, thumbnail_error) = if network.fetch_thumbnail && !info.content_type.as_deref().is_some_and(|t| t.to_ascii_lowercase().contains("text/html")) {
+    let directory = if info.content_type.as_deref().is_some_and(|t| t.to_ascii_lowercase().contains("text/html") || t.contains("application/xhtml"))
+        || crate::remote_location::normalize(url).is_ok_and(|url| url.path().ends_with('/') && !crate::remote_location::playable(&url)) {
+        Some(crate::remote_location::discover(url, network.use_proxy, network.proxy_url.as_deref())?)
+    } else { None };
+    let (thumbnail, thumbnail_error) = if network.fetch_thumbnail && directory.is_none() {
         match crate::server::thumbnails::get_or_generate_remote_thumbnail(
             &final_url,
             network.use_proxy,
@@ -1686,6 +1741,8 @@ fn probe_remote_media(
         info,
         thumbnail,
         thumbnail_error,
+        use_proxy: network.use_proxy,
+        directory,
     })
 }
 

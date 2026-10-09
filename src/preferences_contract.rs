@@ -612,6 +612,8 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "Open Location / URL",
             "Fetch remote media information automatically",
         ),
+        PreferenceControl::boolean("clipboard_url_detection", "playback", "Open Location / URL", "Inspect newly copied HTTP(S) links"),
+        PreferenceControl::boolean("open_url_auto_proxy", "playback", "Open Location / URL", "Automatically choose a working proxy or direct connection"),
         PreferenceControl::boolean(
             "open_url_fetch_remote_thumbnail",
             "playback",

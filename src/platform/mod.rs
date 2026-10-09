@@ -1,4 +1,5 @@
 pub mod association;
+pub mod clipboard_urls;
 pub mod associations;
 pub mod interop;
 pub mod media_controls;
