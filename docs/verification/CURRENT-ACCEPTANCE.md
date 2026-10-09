@@ -44,6 +44,9 @@ statements are not the present product state.
   currently authorized R5–R7 may be used; no seat or R8 test is implied.
 - [ ] Exercise recording, offline editing, RF assignments and strip controls
   end to end with real advertised hardware and retain explicit human acceptance.
+  [Behavior-based cue duration](../HARDWARE-CUE-MODES.md) corrects strip windows
+  and finite recordings; explicit recording repeat-window/count execution is
+  unfinished and tracked in [#114](https://github.com/ToghrolTP/pealayer/issues/114).
 - [ ] Recheck idle/playing/taskbar-preview CPU and responsiveness for both
   applications in two separated live samples. Keep #62 open until its gates pass.
 - [ ] Resolve remaining GPU/native-surface and exact-navigation gates in

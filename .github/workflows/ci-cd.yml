@@ -208,11 +208,14 @@ jobs:
           "UPX_PATH=$($upx.FullName)" >> $env:GITHUB_ENV
       - name: "🧪 Run Rust tests"
         if: runner.os != 'Windows'
+        env:
+          PEALAYER_CONFIG_FILE: ${{ runner.temp }}/pealayer-tests.json
         run: cargo test --locked -- --test-threads=1
       - name: "🧪 Run Rust tests · Windows GNU"
         if: runner.os == 'Windows'
         env:
           CARGO_BUILD_JOBS: "1"
+          PEALAYER_CONFIG_FILE: ${{ runner.temp }}/pealayer-tests.json
         # Native tests share process-wide libmpv and application state. Use the
         # same serial test policy as Linux/macOS; --jobs controls compilation,
         # not the number of concurrently executing tests.

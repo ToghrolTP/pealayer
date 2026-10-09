@@ -23,6 +23,9 @@ retroactively attributed to an older download.
 
 - Create direct hardware cues by track interaction or shortcut; distinguish
   move-only value markers and recorded clips from resizable holds and PWM ramps.
+- Resize streamed lighting's active window without changing its cycle speed;
+  keep finite recordings fixed-length and preserve independent cue durations
+  when dropping another effect or refreshing the controller catalog.
 - Record app/board activity into sequences, edit channel lanes, and place effects
   from the library without treating selection as seeking.
 - Use magnetic keyframes, cursor-anchored zoom, two-axis panning, configurable

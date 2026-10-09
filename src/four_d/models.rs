@@ -269,22 +269,26 @@ impl Effect {
             controller_strip_effect: Some(ControllerStripEffectCue { id: effect_id }),
             controller_lane: Some(ControllerEffectLane::Lighting),
             direct_control: None,
-            duration_policy: CueDurationPolicy::Intrinsic,
+            duration_policy: CueDurationPolicy::Resizable,
             audio_effect: None,
         }
     }
 
-    /// Whether this placement represents a sustained value whose interval is
-    /// authored on the media timeline. Controller-owned recordings and strip
-    /// programs carry their own timing and therefore are move-only.
+    /// Whether the execution contract supports an authored active window.
+    /// Finite recordings retain source timing; strip streams run their unchanged
+    /// program for the placement duration. Presentation flags cannot override
+    /// those source semantics.
     pub fn duration_resizable(&self) -> bool {
-        if self.is_state_marker() || self.audio_effect.is_some() { return false; }
+        if self.is_state_marker() || self.audio_effect.is_some() || self.controller_macro.is_some() {
+            return false;
+        }
+        if self.controller_strip_effect.is_some() {
+            return true;
+        }
         match self.duration_policy {
             CueDurationPolicy::Intrinsic => false,
             CueDurationPolicy::Resizable => true,
-            CueDurationPolicy::Auto => {
-                self.controller_macro.is_none() && self.controller_strip_effect.is_none()
-            }
+            CueDurationPolicy::Auto => true,
         }
     }
 
@@ -473,7 +477,7 @@ mod tests {
     }
 
     #[test]
-    fn recorded_programs_are_move_only_but_direct_values_are_resizable() {
+    fn finite_recordings_are_move_only_but_strip_windows_and_direct_values_are_resizable() {
         let recorded = Effect::controller_macro(
             "Recorded".into(),
             String::new(),
@@ -491,9 +495,23 @@ mod tests {
             Some(5),
         );
         assert!(!recorded.duration_resizable());
-        assert!(!lighting.duration_resizable());
+        assert!(lighting.duration_resizable());
         assert!(relay.duration_resizable());
         assert_eq!(relay.actions[0].state, true);
+    }
+
+    #[test]
+    fn controller_execution_semantics_take_priority_over_stored_presentation_policy() {
+        let mut recorded = Effect::controller_macro(
+            "Recorded".into(), String::new(), 2_000, 7, "automatic".into(),
+        );
+        let mut lighting = Effect::controller_strip_effect("Lighting".into(), 3_000, "live-id".into());
+        for policy in [CueDurationPolicy::Auto, CueDurationPolicy::Intrinsic, CueDurationPolicy::Resizable] {
+            recorded.duration_policy = policy;
+            lighting.duration_policy = policy;
+            assert!(!recorded.duration_resizable());
+            assert!(lighting.duration_resizable());
+        }
     }
 
     #[test]

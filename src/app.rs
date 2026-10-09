@@ -7,6 +7,7 @@ use std::sync::{
 };
 
 const IDLE_WEB_SYNC_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
+pub(crate) const MPV_VIDEO_TIMING_OFFSET_SECONDS: f64 = 0.0;
 
 pub(crate) struct PendingTimelineToolbarSave {
     desired: crate::config::TimelineToolbarPreferences,
@@ -546,7 +547,7 @@ pub struct PealayerApp {
     pub(crate) color_palette: crate::config::ColorPalette,
     pub(crate) rtl: bool,
     pub(crate) mpv: crate::mpv::player::Player,
-    pub(crate) mpv_client: libmpv2::Mpv,
+    pub(crate) mpv_client: Arc<libmpv2::Mpv>,
     pub(crate) external_catalog_revision: u64,
     pub(crate) external_seek_revision: u64,
     pub(crate) pending_external_media: Option<String>,
@@ -1019,7 +1020,11 @@ impl eframe::App for PealayerApp {
         {
             ctx.request_repaint_after(remaining);
         }
-        self.refresh_controller_effect_timeline_metadata();
+        if self.refresh_controller_effect_timeline_metadata() {
+            self.persist_timeline_track_preferences();
+            self.sync_timeline_engine();
+            self.save_config();
+        }
         self.poll_external_config(ctx);
 
         // PCController owns the shared latch. A second client or the Web/TUI
@@ -2946,20 +2951,19 @@ impl PealayerApp {
     /// overwritten on every frame. A real catalog edit, reconnect, or rename
     /// advances the snapshot and updates every template with the same durable
     /// controller reference, including isolated copies used by multiple cues.
-    fn refresh_controller_effect_timeline_metadata(&mut self) {
+    /// Returns whether placements changed. The caller owns persistence and
+    /// engine publication, so embedded/test reconciliation cannot save a
+    /// synthetic session into the user's configuration.
+    pub fn refresh_controller_effect_timeline_metadata(&mut self) -> bool {
         let Some(capabilities) = self.advertised_hardware() else {
-            return;
+            return false;
         };
         let catalog = controller_effect_catalog(&capabilities);
         if catalog == self.hardware_effect_authoring.timeline_catalog {
-            return;
+            return false;
         }
         self.hardware_effect_authoring.timeline_catalog = catalog.clone();
-        if reconcile_controller_effect_templates(&mut self.timeline, &catalog) {
-            self.persist_timeline_track_preferences();
-            self.sync_timeline_engine();
-            self.save_config();
-        }
+        reconcile_controller_effect_templates(&mut self.timeline, &catalog)
     }
 
     fn controller_command_argument(value: &str) -> Option<String> {
@@ -3881,8 +3885,6 @@ impl PealayerApp {
             return;
         }
         let effect_id = effect.id;
-        let mut effect = effect;
-        effect.duration_policy = crate::four_d::models::CueDurationPolicy::Resizable;
         self.undo_stack.push(self.snapshot_timeline());
         self.timeline.templates.push(effect);
         let instance = crate::four_d::models::EffectInstance::new(
@@ -8202,7 +8204,6 @@ impl PealayerApp {
         let mut new_template = template.clone();
         let new_id = uuid::Uuid::new_v4();
         new_template.id = new_id;
-        new_template.duration_policy = crate::four_d::models::CueDurationPolicy::Resizable;
         self.timeline.templates.push(new_template);
 
         if let Some(inst) = self
@@ -8292,9 +8293,11 @@ fn reconcile_controller_effect_templates(
         refreshed.id = template.id;
         refreshed.icon.clone_from(&catalog_entry.icon);
         refreshed.controller_lane = Some(catalog_entry.lane);
-        if template.duration_policy == crate::four_d::models::CueDurationPolicy::Resizable {
+        // A strip placement owns its active window, not its program period.
+        // Recordings instead follow their authoritative catalog duration, even
+        // when an earlier insertion incorrectly marked them resizable.
+        if template.controller_strip_effect.is_some() {
             refreshed.duration_ms = template.duration_ms;
-            refreshed.duration_policy = crate::four_d::models::CueDurationPolicy::Resizable;
         }
         if *template != refreshed {
             *template = refreshed;
@@ -8650,7 +8653,10 @@ fn get_shared_mpv() -> &'static libmpv2::Mpv {
         libmpv2::Mpv::with_initializer(|init| {
             let _ = init.set_option("vo", "null");
             let _ = init.set_option("ao", "null");
-            let _ = init.set_option("video-timing-offset", 0.0);
+            let _ = init.set_option(
+                "video-timing-offset",
+                MPV_VIDEO_TIMING_OFFSET_SECONDS,
+            );
             let _ = init.set_option("keep-open", "always");
             Ok(())
         })
@@ -8658,34 +8664,68 @@ fn get_shared_mpv() -> &'static libmpv2::Mpv {
     })
 }
 
+fn observe_default_mpv_client(mpv_client: &libmpv2::Mpv) {
+    let _ = mpv_client.observe_property("time-pos", libmpv2::Format::Double, 1);
+    let _ = mpv_client.observe_property("duration", libmpv2::Format::Double, 2);
+    let _ = mpv_client.observe_property("pause", libmpv2::Format::Flag, 3);
+    let _ = mpv_client.observe_property("volume", libmpv2::Format::Double, 4);
+    let _ = mpv_client.observe_property("mute", libmpv2::Format::Flag, 5);
+    let _ = mpv_client.observe_property("sub-visibility", libmpv2::Format::Flag, 6);
+    let _ = mpv_client.observe_property("sub-font-size", libmpv2::Format::Double, 7);
+    let _ = mpv_client.observe_property("sub-delay", libmpv2::Format::Double, 8);
+    let _ = mpv_client.observe_property("sid", libmpv2::Format::String, 9);
+    let _ = mpv_client.observe_property("audio-delay", libmpv2::Format::Double, 10);
+    let _ = mpv_client.observe_property("aid", libmpv2::Format::String, 11);
+    let _ = mpv_client.observe_property("eof-reached", libmpv2::Format::Flag, 12);
+    let _ = mpv_client.observe_property("container-fps", libmpv2::Format::Double, 13);
+    let _ = mpv_client.observe_property("seekable", libmpv2::Format::Flag, 14);
+    let _ = mpv_client.observe_property("demuxer-cache-duration", libmpv2::Format::Double, 15);
+    let _ = mpv_client.observe_property("cache-buffering-state", libmpv2::Format::Int64, 16);
+    let _ = mpv_client.observe_property("vid", libmpv2::Format::String, 18);
+    let _ = mpv_client.observe_property("sub-text", libmpv2::Format::String, 19);
+    let _ = mpv_client.observe_property("sub-pos", libmpv2::Format::Double, 20);
+    let _ = mpv_client.observe_property("video-out-params/aspect", libmpv2::Format::Double, 21);
+    let _ = mpv_client.observe_property("paused-for-cache", libmpv2::Format::Flag, 22);
+}
+
+#[cfg(not(test))]
+fn default_mpv_client(mpv: &libmpv2::Mpv) -> Arc<libmpv2::Mpv> {
+    let mpv_client = Arc::new(
+        mpv.create_client(None)
+            .expect("Failed to create mpv client"),
+    );
+    observe_default_mpv_client(&mpv_client);
+    mpv_client
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static TEST_MPV_CLIENT: Arc<libmpv2::Mpv> = {
+        let mpv_client = Arc::new(
+            get_shared_mpv()
+                .create_client(None)
+                .expect("Failed to create shared test mpv client"),
+        );
+        observe_default_mpv_client(&mpv_client);
+        mpv_client
+    };
+}
+
+#[cfg(test)]
+fn default_mpv_client(_mpv: &libmpv2::Mpv) -> Arc<libmpv2::Mpv> {
+    let mpv_client = TEST_MPV_CLIENT.with(Arc::clone);
+    // Every unit fixture starts with an empty client event queue. The player
+    // core was already process-global; sharing this client only avoids the
+    // native create/destroy churn that can crash the Windows GNU harness.
+    while mpv_client.wait_event(0.0).is_some() {}
+    mpv_client
+}
+
 impl Default for PealayerApp {
     fn default() -> Self {
         let mpv = get_shared_mpv();
         let _ = mpv.set_property("keep-open", "always");
-        let mpv_client = mpv
-            .create_client(None)
-            .expect("Failed to create mpv client");
-        let _ = mpv_client.observe_property("time-pos", libmpv2::Format::Double, 1);
-        let _ = mpv_client.observe_property("duration", libmpv2::Format::Double, 2);
-        let _ = mpv_client.observe_property("pause", libmpv2::Format::Flag, 3);
-        let _ = mpv_client.observe_property("volume", libmpv2::Format::Double, 4);
-        let _ = mpv_client.observe_property("mute", libmpv2::Format::Flag, 5);
-        let _ = mpv_client.observe_property("sub-visibility", libmpv2::Format::Flag, 6);
-        let _ = mpv_client.observe_property("sub-font-size", libmpv2::Format::Double, 7);
-        let _ = mpv_client.observe_property("sub-delay", libmpv2::Format::Double, 8);
-        let _ = mpv_client.observe_property("sid", libmpv2::Format::String, 9);
-        let _ = mpv_client.observe_property("audio-delay", libmpv2::Format::Double, 10);
-        let _ = mpv_client.observe_property("aid", libmpv2::Format::String, 11);
-        let _ = mpv_client.observe_property("eof-reached", libmpv2::Format::Flag, 12);
-        let _ = mpv_client.observe_property("container-fps", libmpv2::Format::Double, 13);
-        let _ = mpv_client.observe_property("seekable", libmpv2::Format::Flag, 14);
-        let _ = mpv_client.observe_property("demuxer-cache-duration", libmpv2::Format::Double, 15);
-        let _ = mpv_client.observe_property("cache-buffering-state", libmpv2::Format::Int64, 16);
-        let _ = mpv_client.observe_property("vid", libmpv2::Format::String, 18);
-        let _ = mpv_client.observe_property("sub-text", libmpv2::Format::String, 19);
-        let _ = mpv_client.observe_property("sub-pos", libmpv2::Format::Double, 20);
-        let _ = mpv_client.observe_property("video-out-params/aspect", libmpv2::Format::Double, 21);
-        let _ = mpv_client.observe_property("paused-for-cache", libmpv2::Format::Flag, 22);
+        let mpv_client = default_mpv_client(mpv);
         let (_interop_tx, interop_rx) = std::sync::mpsc::channel();
         let (_controller_cmd_tx, controller_cmd_rx) =
             std::sync::mpsc::channel::<crate::platform::interop::ControllerDelivery>();
@@ -9501,6 +9541,63 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn saved_recording_insertion_retains_intrinsic_source_duration() {
+        let _lock = lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.update_hardware_capabilities(Some(crate::four_d::controller::HardwareCapabilities {
+            macros: vec![crate::four_d::controller::HardwareMacro {
+                id: 42, name: "Recording".into(), duration_ms: 1500,
+                mode: "host".into(), ..Default::default()
+            }],
+            ..Default::default()
+        }));
+        app.hardware_effect_authoring.pending_saved_macro_id = Some(42);
+        app.hardware_effect_authoring.anchor_ms = 10_000;
+        app.insert_pending_saved_macro();
+        let instance = app.timeline.instances.last().unwrap();
+        let template = app.timeline.templates.iter().find(|item| item.id == instance.effect_id).unwrap();
+        assert_eq!(instance.start_time_ms, 10_000);
+        assert_eq!(template.duration_ms, 1500);
+        assert_eq!(template.duration_policy, crate::four_d::models::CueDurationPolicy::Intrinsic);
+        assert!(!template.duration_resizable());
+    }
+
+    #[test]
+    fn shared_cue_updates_resize_strip_windows_but_not_finite_recordings() {
+        let _lock = lock_app_tests();
+        use crate::four_d::models::{CueDurationPolicy, Effect, EffectInstance};
+        use crate::platform::interop::InteropCommand;
+        let mut app = PealayerApp::default();
+        let ctx = egui::Context::default();
+        for mut effect in [
+            Effect::controller_macro("Recording".into(), String::new(), 2_000, 7, "host".into()),
+            Effect::controller_strip_effect("Stream".into(), 2_000, "advertised-strip".into()),
+        ] {
+            // Exercise the old erroneous persisted flag, not only constructors.
+            effect.duration_policy = CueDurationPolicy::Resizable;
+            let is_strip = effect.controller_strip_effect.is_some();
+            let original_id = effect.id;
+            app.timeline.templates.push(effect);
+            let instance = EffectInstance::new(original_id, 10_000);
+            let instance_id = instance.id;
+            app.timeline.instances.push(instance);
+            app.timeline.instances.push(EffectInstance::new(original_id, 20_000));
+            app.apply_interop_command(&ctx, InteropCommand::UpdateEffectCue {
+                instance_id: instance_id.to_string(), start_time_ms: 12_000, duration_ms: 8_000,
+            }, "test");
+            let instance = app.timeline.instances.iter().find(|item| item.id == instance_id).unwrap();
+            assert_eq!(instance.start_time_ms, 12_000);
+            let resized = app.timeline.templates.iter().find(|item| item.id == instance.effect_id).unwrap();
+            assert_eq!(resized.duration_ms, if is_strip { 8_000 } else { 2_000 });
+            assert_eq!(resized.duration_resizable(), is_strip);
+            assert_eq!(app.timeline.templates.iter().find(|item| item.id == original_id).unwrap().duration_ms, 2_000);
+            let isolated_id = app.isolate_template_for_instance(instance_id).unwrap();
+            let isolated = app.timeline.templates.iter().find(|item| item.id == isolated_id).unwrap();
+            assert_eq!(isolated.duration_resizable(), is_strip);
+        }
+    }
+
+    #[test]
     fn edited_controller_effect_metadata_refreshes_every_placed_timeline_copy() {
         let first = crate::four_d::models::Effect::controller_macro(
             "Old name".to_string(),
@@ -9512,6 +9609,7 @@ pub(crate) mod tests {
         let first_id = first.id;
         let mut isolated = first.clone();
         isolated.id = uuid::Uuid::new_v4();
+        isolated.duration_policy = crate::four_d::models::CueDurationPolicy::Resizable;
         let isolated_id = isolated.id;
         let strip = crate::four_d::models::Effect::controller_strip_effect(
             "Old lighting".to_string(),
@@ -9580,6 +9678,8 @@ pub(crate) mod tests {
                 .unwrap();
             assert_eq!(effect.name, "Renamed display cue");
             assert_eq!(effect.duration_ms, 2_750);
+            assert_eq!(effect.duration_policy, crate::four_d::models::CueDurationPolicy::Intrinsic);
+            assert!(!effect.duration_resizable());
             assert_eq!(
                 effect.controller_lane,
                 Some(crate::four_d::models::ControllerEffectLane::Display)
@@ -9592,7 +9692,8 @@ pub(crate) mod tests {
             .find(|effect| effect.id == strip_id)
             .unwrap();
         assert_eq!(strip.name, "Renamed aurora");
-        assert_eq!(strip.duration_ms, 8_000);
+        assert_eq!(strip.duration_ms, 5_000);
+        assert!(strip.duration_resizable());
         let local = timeline
             .templates
             .iter()
@@ -10510,17 +10611,23 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn mpv_timing_offset_is_zero_to_prevent_render_thread_blocking() {
-        let _lock = lock_app_tests();
-        let app = PealayerApp::default();
-        let offset = app
-            .mpv
-            .get_property::<f64>("video-timing-offset")
-            .expect("video-timing-offset must be readable");
+    fn mpv_timing_offset_configuration_is_zero_to_prevent_render_thread_blocking() {
+        // Keep this invariant test independent of libmpv lifecycle. Package
+        // smoke exercises the live initializer; constructing and destroying
+        // another shared client here made the Windows GNU harness vulnerable
+        // to a native access violation after earlier app fixtures were dropped.
         assert_eq!(
-            offset, 0.0,
+            MPV_VIDEO_TIMING_OFFSET_SECONDS, 0.0,
             "video-timing-offset must be 0.0 to prevent libmpv from sleeping the UI render thread"
         );
+    }
+
+    #[test]
+    fn unit_app_fixtures_reuse_one_observed_mpv_client_per_test_thread() {
+        let _lock = lock_app_tests();
+        let first = PealayerApp::default();
+        let second = PealayerApp::default();
+        assert!(Arc::ptr_eq(&first.mpv_client, &second.mpv_client));
     }
 
     #[test]
