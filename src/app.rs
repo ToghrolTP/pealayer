@@ -1683,9 +1683,16 @@ impl eframe::App for PealayerApp {
                 });
             }
             crate::platform::interop::set_live_status(status_resp.clone());
-            if let Ok(json) = serde_json::to_string(&status_resp) {
-                let authoritative=crate::peer::client().and_then(|client|client.snapshot()).map(|value|value.session.status.to_string()).unwrap_or(json);
-                let _ = self.web_state_tx.send(authoritative);
+            let web_enabled = self.web_only || web_config.web_enabled;
+            let has_peer = crate::peer::client().is_some();
+            if web_enabled || has_peer {
+                let authoritative = crate::peer::client()
+                    .and_then(|client| client.snapshot())
+                    .map(|value| value.session.status.to_string())
+                    .or_else(|| serde_json::to_string(&status_resp).ok());
+                if let Some(authoritative) = authoritative {
+                    let _ = self.web_state_tx.send(authoritative);
+                }
             }
         }
     }
@@ -8954,6 +8961,27 @@ pub(crate) mod tests {
         let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| eframe::App::logic(&mut app, ctx, &mut frame));
         let status: serde_json::Value = serde_json::from_str(&receiver.try_recv().unwrap()).unwrap();
         assert_eq!(status["hardware_details"]["telemetry"]["bus_mv"], 12123);
+    }
+
+    #[test]
+    fn web_status_json_serialization_is_skipped_when_web_and_peer_disabled() {
+        let _lock = lock_app_tests();
+        let mut config = crate::config::AppConfig::default();
+        config.web_enabled = false;
+        crate::platform::interop::set_live_config(config);
+        let mut app = PealayerApp::default();
+        app.web_only = false;
+        app.auto_reload_config = false;
+        app.media_keys_enabled = false;
+        let ctx = egui::Context::default();
+        let mut frame = eframe::Frame::_new_kittest();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        app.web_state_tx = sender;
+        let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+            eframe::App::logic(&mut app, ctx, &mut frame);
+        });
+        // Receiver should be empty because JSON serialization and broadcast were bypassed
+        assert!(receiver.try_recv().is_err());
     }
 
     #[test]
