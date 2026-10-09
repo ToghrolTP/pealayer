@@ -648,7 +648,14 @@ body {
 .buzzer-control .ant-select, .buzzer-control .ant-input-number { width: 100%; }
 .buzzer-control__actions { margin-top: 14px; display: flex; flex-wrap: wrap; gap: 8px; }
 .buzzer-control__actions .ant-btn-primary { min-width: 130px; }
-.buzzer-control__tone { display: grid; grid-template-columns: minmax(220px, 1fr) minmax(130px, .34fr) minmax(130px, .34fr) auto; align-items: end; gap: 12px; }
+.buzzer-control__tone { display: grid; grid-template-columns: minmax(100px, 1fr) minmax(100px, 1fr) auto; align-items: end; gap: 12px; }
+.buzzer-control__diagnostics { margin-top: 12px; border-top: 1px solid var(--line); }
+.buzzer-control__diagnostics .ant-collapse-content-box { padding-inline: 0 !important; }
+.melody-option { min-width: 0; display: inline-flex; align-items: center; gap: 8px; max-width: 100%; }
+.melody-option .anticon { flex: none; color: var(--muted); }
+.melody-option__name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.melody-option-row { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 4px 12px; }
+.melody-option__detail { margin-inline-start: auto; font-size: 11px; color: var(--muted); font-variant-numeric: tabular-nums; }
 .buzzer-control__tone > div { display: grid; gap: 3px; }
 .seven-segment-display {
   --segment-intensity: 1;

@@ -2338,6 +2338,8 @@ pub(crate) fn draw_effect_capture_controls(app: &mut PealayerApp, ui: &mut egui:
         }
         ui.add_enabled_ui(!active && !busy && connected, |ui| {
             let has_melodies = hardware.as_ref().is_some_and(|value| !value.melodies.is_empty());
+            let combo_id = ui.make_persistent_id("effect_add_melody");
+            let was_open = egui::ComboBox::is_open(ui.ctx(), combo_id);
             let response = egui::ComboBox::from_id_salt("effect_add_melody")
                 .selected_text(if has_melodies {
                     format!("{} Add melody", crate::ui::icons::MUSIC_NOTE)
@@ -2367,7 +2369,7 @@ pub(crate) fn draw_effect_capture_controls(app: &mut PealayerApp, ui: &mut egui:
                     }
                 })
                 .response;
-            refresh_melodies = response.clicked();
+            refresh_melodies = !was_open && egui::ComboBox::is_open(ui.ctx(), response.id);
         });
         ui.add_enabled_ui(!active && !busy, |ui| {
             egui::ComboBox::from_id_salt("effect_capture_clock").width(160.0)
@@ -2402,7 +2404,8 @@ pub(crate) fn draw_effect_capture_controls(app: &mut PealayerApp, ui: &mut egui:
     if refresh_melodies {
         // Events keep this catalog current in the background; opening the
         // picker is also an explicit freshness boundary for user choice.
-        app.engine_handle.request_catalog_refresh();
+        app.apply_interop_command(&ui.ctx().clone(),
+            crate::platform::interop::InteropCommand::RefreshHardwareCatalog, "Effect melody catalog");
     }
     if let Some(melody) = selected_melody
         && let Some(first) = append_melody_steps(&mut app.effect_library_draft.steps, &melody)

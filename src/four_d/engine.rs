@@ -680,9 +680,12 @@ impl ControllerPushTarget {
         if matches!(method, "controller.state" | "controller.event")
             && matches!(
                 params.get("kind").and_then(serde_json::Value::as_str),
-                Some("peripherals.changed" | "melodies.changed")
+                Some("peripherals.changed" | "melodies.changed" | "output")
             )
         {
+            // Output start/finish edges carry no typed buzzer snapshot. Pull
+            // authoritative output state; never infer playing from event text
+            // or refresh for every high-rate buzzer.note event.
             if let Some(refresh) = self.catalog_refresh_requested.upgrade() {
                 refresh.store(true, Ordering::Relaxed);
                 return true;
@@ -2813,6 +2816,16 @@ mod tests {
             &serde_json::json!({"kind": "melodies.changed", "action": "refresh"}),
         ));
         assert!(handle.catalog_refresh_requested.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn output_edges_refresh_buzzer_state_but_note_events_do_not_refresh_catalog() {
+        let handle = spawn_engine();
+        let target = handle.controller_push_target();
+        assert!(target.apply_notification("controller.event", &serde_json::json!({"kind":"output"})));
+        assert!(handle.catalog_refresh_requested.swap(false, Ordering::Relaxed));
+        target.apply_notification("controller.state", &serde_json::json!({"kind":"buzzer.note"}));
+        assert!(!handle.catalog_refresh_requested.load(Ordering::Relaxed));
     }
 
     #[test]
