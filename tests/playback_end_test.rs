@@ -226,7 +226,7 @@ fn test_23fps_media_playback_decoupled_framerate_and_zero_timing_offset() {
     let _lock = lock_playback_tests();
     let mut app = PealayerApp::default();
 
-    let video_path = PathBuf::from("test-data/jellyfish.mp4");
+    let video_path = PathBuf::from("test-data/synthetic_23fps.mp4");
     assert!(video_path.exists());
     app.load_video_file(video_path);
 
