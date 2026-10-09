@@ -216,3 +216,11 @@ identifiers. The Web direct-cue modal now follows the same timing/output groupin
 and state colors. Full controller/sequence inspector parity remains outstanding;
 this visual refinement is not that broader completion claim. See
 [scope and verification](verification/EFFECT-CONTROLS-INSPECTOR.md).
+
+## Mobile button centering
+
+Shared Web button roots, icon wrappers and SVGs now use centered flex geometry,
+including portal actions. The icon baseline spacer and inconsistent transport
+grid overrides are removed; existing collapsed navigation centering is retained.
+Current mobile visual acceptance is still pending, not inferred from CSS/build.
+See [cause, scope and verification](verification/MOBILE-BUTTON-CENTERING.md).
