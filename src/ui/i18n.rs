@@ -1076,25 +1076,11 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
     visual_text(language, translated)
 }
 
-/// Egui's built-in painter positions Unicode scalar values without complex
-/// Arabic shaping or the Unicode bidirectional algorithm. Convert application
-/// copy to presentation forms and visual order at the UI boundary while
-/// retaining logical Unicode in source, configuration, and protocol data.
-pub fn visual_text(language: AppLanguage, logical: &str) -> String {
-    if language != AppLanguage::Persian && !contains_arabic_script(logical) {
-        return logical.to_owned();
-    }
-
-    let shaped = ar_reshaper::reshape_line(logical);
-    let bidi = unicode_bidi::BidiInfo::new(&shaped, None);
-    let mut visual = String::with_capacity(shaped.len());
-    for (index, paragraph) in bidi.paragraphs.iter().enumerate() {
-        if index > 0 {
-            visual.push('\n');
-        }
-        visual.push_str(&bidi.reorder_line(paragraph, paragraph.range.clone()));
-    }
-    visual
+/// Egui 0.35+ performs native contextual text shaping and RTL layout via
+/// HarfRust. Application copy retains logical Unicode without manual
+/// presentation-form reordering.
+pub fn visual_text(_language: AppLanguage, logical: &str) -> String {
+    logical.to_owned()
 }
 
 /// Whether `text` contains Arabic-script Unicode, including Persian-specific
@@ -1148,34 +1134,24 @@ mod tests {
     #[test]
     fn translates_owned_copy_but_leaves_dynamic_names_untouched() {
         let persian = tr(AppLanguage::Persian, "Connect");
-        assert_ne!(persian, "اتصال");
-        assert!(persian.chars().any(|character| {
-            ('\u{FB50}'..='\u{FDFF}').contains(&character)
-                || ('\u{FE70}'..='\u{FEFF}').contains(&character)
-        }));
+        assert_eq!(persian, "اتصال");
         assert_eq!(tr(AppLanguage::English, "Connect"), "Connect");
         assert_eq!(tr(AppLanguage::Persian, "Cinema Relay A"), "Cinema Relay A");
     }
 
     #[test]
-    fn persian_copy_is_shaped_and_reordered_for_egui() {
+    fn persian_copy_retains_logical_unicode_for_native_egui_shaping() {
         let logical = "سلام دنیا".to_string();
         let visual = visual_text(AppLanguage::Persian, &logical);
         assert_eq!(logical, "سلام دنیا");
-        assert_eq!(visual, "ﺎﯿﻧﺩ ﻡﻼﺳ");
+        assert_eq!(visual, "سلام دنیا");
     }
 
     #[test]
-    fn dynamic_persian_name_is_shaped_even_in_english_ui() {
+    fn dynamic_persian_name_retains_logical_unicode() {
         let logical = "PCController رلهٔ‌اصلی ۱۲۳".to_string();
         let visual = visual_text(AppLanguage::English, &logical);
-        assert_eq!(logical, "PCController رلهٔ‌اصلی ۱۲۳");
-        assert_ne!(visual, logical);
-        assert!(visual.contains("PCController"));
-        assert!(visual.chars().any(|character| {
-            ('\u{FB50}'..='\u{FDFF}').contains(&character)
-                || ('\u{FE70}'..='\u{FEFF}').contains(&character)
-        }));
+        assert_eq!(visual, logical);
         assert_eq!(
             visual_text(AppLanguage::English, "PCController Relay A"),
             "PCController Relay A"
@@ -1183,7 +1159,7 @@ mod tests {
     }
 
     #[test]
-    fn bundled_vazirmatn_covers_shaped_persian_presentation_forms() {
+    fn bundled_vazirmatn_covers_persian_characters() {
         let font = include_bytes!("../../assets/fonts/Vazirmatn-Regular.ttf");
         let face = ttf_parser::Face::parse(font, 0).expect("bundled Vazirmatn must parse");
         for glyph in visual_text(AppLanguage::Persian, "سلام دنیا PCController ۱۲۳")
@@ -1192,7 +1168,7 @@ mod tests {
         {
             assert!(
                 face.glyph_index(glyph).is_some(),
-                "font lacks shaped glyph {glyph:?}"
+                "font lacks glyph {glyph:?}"
             );
         }
     }
