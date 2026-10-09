@@ -3,6 +3,30 @@ use eframe::egui;
 
 const CONTROL_FADE_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
+/// Transport intent is independent of the user's accent. All interaction
+/// states keep the same stroke width, so hover/focus cannot shift the glyph.
+pub(crate) fn transport_button<'a>(
+    palette: crate::config::ColorPalette,
+    ui: &egui::Ui,
+    icon: &'a str,
+    role: &str,
+) -> egui::Button<'a> {
+    let dark = ui.visuals().dark_mode;
+    let intent = crate::ui::palette::color(palette, dark, role);
+    let surface = crate::ui::palette::color(palette, dark, "surface-2");
+    egui::Button::new(egui::RichText::new(icon).color(intent))
+        .fill(egui::Color32::from_rgb(
+            ((surface.r() as u16 * 88 + intent.r() as u16 * 12) / 100) as u8,
+            ((surface.g() as u16 * 88 + intent.g() as u16 * 12) / 100) as u8,
+            ((surface.b() as u16 * 88 + intent.b() as u16 * 12) / 100) as u8,
+        ))
+        .stroke(egui::Stroke::new(1.0, intent.gamma_multiply(0.45)))
+}
+
+pub(crate) fn playback_button_role(app: &PealayerApp) -> &'static str {
+    if app.is_paused || app.is_playback_finished() { "green" } else { "amber" }
+}
+
 pub fn timecode_text(value: impl Into<String>) -> egui::RichText {
     egui::RichText::new(value).monospace()
 }
@@ -876,6 +900,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 } else {
                     crate::ui::icons::SPEAKER_HIGH
                 };
+                let transport_palette = app.color_palette;
+                let mute_role = if app.is_muted { "amber" } else { "muted" };
                 let mut volume = app.volume;
                 let mut toggle_fullscreen = false;
                 let mut toggle_pin = false;
@@ -914,7 +940,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 app.tr("Pause")
                             };
                             let play_response = ui
-                                .add_sized([30.0, 22.0], egui::Button::new(play_icon))
+                                .add_sized([30.0, 22.0], transport_button(transport_palette, ui, play_icon, playback_button_role(app)))
                                 .on_hover_text(play_tooltip);
                             play_response.context_menu(|ui| transport_context_menu(app, ui));
                             if play_response.clicked() {
@@ -1046,7 +1072,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 }
                             }
                             toggle_mute = ui
-                                .add(egui::Button::new(mute_icon).frame(false))
+                                .add(transport_button(transport_palette, ui, mute_icon, mute_role))
                                 .on_hover_text(mute_tooltip)
                                 .clicked();
                         });

@@ -5,8 +5,6 @@ import {
   FastBackwardOutlined,
   FastForwardOutlined,
   MutedOutlined,
-  PauseOutlined,
-  PlayCircleFilled,
   SoundOutlined,
   StepBackwardOutlined,
   StepForwardOutlined,
@@ -22,6 +20,7 @@ import type { AppearanceState } from '../appearance';
 import type { TimelineWheelPreferences } from '../timelineWheel';
 import type { HardwareMelody } from '../melodyCatalog';
 import { MediaTrackSelectors } from './MediaTrackSelectors';
+import { PlaybackButton } from './PlaybackButton';
 
 export interface PlayerState {
   app_icon_revision?: number;
@@ -325,14 +324,13 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
         <Tooltip title={`${tr(locale, 'Seek backward')} ${quickSeekSeconds}s`}>
           <Button shape="circle" icon={<FastBackwardOutlined />} disabled={!state.current_video || !state.seekable} onClick={() => sendCmd('seek', { seconds: -quickSeekSeconds })} />
         </Tooltip>
-        <Tooltip title={state.playing ? tr(locale, 'Pause') : tr(locale, 'Play')}>
-          <Button
-            shape="circle"
+          <PlaybackButton
             className="remote-player__play"
-            icon={state.playing ? <PauseOutlined /> : <PlayCircleFilled />}
+            playing={state.playing}
+            loaded={Boolean(state.current_video)}
+            locale={locale}
             onClick={() => sendCmd('toggle_pause')}
           />
-        </Tooltip>
         <Tooltip title={`${tr(locale, 'Seek forward')} ${quickSeekSeconds}s`}>
           <Button shape="circle" icon={<FastForwardOutlined />} disabled={!state.current_video || !state.seekable} onClick={() => sendCmd('seek', { seconds: quickSeekSeconds })} />
         </Tooltip>
@@ -364,6 +362,9 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
       <div className="remote-player__volume">
         <Button
           type="text"
+          className={`transport-action ${state.muted ? 'transport-action--pause' : ''}`}
+          aria-pressed={Boolean(state.muted)}
+          disabled={!state.current_video || state.muted === undefined}
           aria-label={state.muted ? tr(locale, 'Unmute') : tr(locale, 'Mute')}
           icon={state.muted || state.volume === 0 ? <MutedOutlined /> : <SoundOutlined />}
           onClick={() => sendCmd('set_mute', { muted: !state.muted })}
