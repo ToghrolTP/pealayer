@@ -4,6 +4,18 @@ use std::sync::{Arc, Mutex};
 
 const IDLE_WEB_SYNC_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
+pub(crate) struct PendingTimelineToolbarSave {
+    desired: crate::config::TimelineToolbarPreferences,
+    flight: Option<TimelineToolbarSaveFlight>,
+}
+
+struct TimelineToolbarSaveFlight {
+    sent: crate::config::TimelineToolbarPreferences,
+    reply: std::sync::mpsc::Receiver<Result<serde_json::Value, String>>,
+    accepted: bool,
+    started: std::time::Instant,
+}
+
 fn effective_web_sync_interval(
     configured: std::time::Duration,
     playback_or_operation_active: bool,
@@ -729,8 +741,12 @@ pub struct PealayerApp {
     pub(crate) timeline_animated_navigation: bool,
     pub(crate) timeline_navigation_transition_ms: u32,
     pub(crate) timeline_follow_playhead: bool,
+    pub(crate) timeline_toolbar_visible: bool,
     pub(crate) timeline_toolbar_order: Vec<crate::config::TimelineToolbarAction>,
     pub(crate) timeline_toolbar_hidden: Vec<crate::config::TimelineToolbarAction>,
+    pub(crate) pending_timeline_toolbar_save: Option<PendingTimelineToolbarSave>,
+    pub(crate) workspace_rendering: bool,
+    pub(crate) deferred_config_save: bool,
     pub(crate) non_user_control_visibility: crate::config::NonUserControlVisibility,
     pub(crate) prefix_relay_identifiers: bool,
     pub(crate) live_pwm_updates: bool,
@@ -894,6 +910,10 @@ pub struct MediaTrackInfo {
 
 impl eframe::App for PealayerApp {
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        self.flush_timeline_toolbar_save(ctx);
+        if std::mem::take(&mut self.deferred_config_save) {
+            self.save_config();
+        }
         // eframe calls logic even while minimized/occluded. Commands, device
         // results and authoritative snapshots must never depend on painting.
         for request in crate::peer::take_gui_requests() {
@@ -1767,6 +1787,7 @@ impl eframe::App for PealayerApp {
                         ui.ctx().data_mut(|data| {
                             data.insert_temp(workspace_tab_rects_id, Vec::<egui::Rect>::new());
                         });
+                        self.workspace_rendering = true;
                         let mut dock_state =
                             std::mem::replace(&mut self.dock_state, egui_dock::DockState::new(vec![]));
                         let mut dock_style = egui_dock::Style::from_egui(ui.style().as_ref());
@@ -1784,6 +1805,7 @@ impl eframe::App for PealayerApp {
                                 .show_inside(ui, &mut tab_viewer);
                         });
                         self.dock_state = dock_state;
+                        self.workspace_rendering = false;
                         if !self.pending_tab_reveals.is_empty() {
                             let mut layout_changed = false;
                             for tab in std::mem::take(&mut self.pending_tab_reveals) {
@@ -6321,6 +6343,7 @@ impl PealayerApp {
         cfg.timeline_animated_navigation = self.timeline_animated_navigation;
         cfg.timeline_navigation_transition_ms = self.timeline_navigation_transition_ms;
         cfg.timeline_follow_playhead = self.timeline_follow_playhead;
+        cfg.timeline_toolbar_visible = self.timeline_toolbar_visible;
         cfg.timeline_toolbar_order =
             crate::config::persisted_timeline_toolbar_order(&self.timeline_toolbar_order);
         cfg.timeline_toolbar_hidden = self.timeline_toolbar_hidden.clone();
@@ -6402,7 +6425,114 @@ impl PealayerApp {
         cfg
     }
 
+    fn timeline_toolbar_preferences(&self) -> crate::config::TimelineToolbarPreferences {
+        use crate::config::{TimelineToolbarAction, TimelineToolbarPreferences};
+        TimelineToolbarPreferences {
+            visible: self.timeline_toolbar_visible,
+            follow: self.timeline_follow_playhead,
+            order: crate::config::persisted_timeline_toolbar_order(&self.timeline_toolbar_order),
+            hidden: TimelineToolbarAction::ALL.into_iter()
+                .filter(|action| self.timeline_toolbar_hidden.contains(action)).collect(),
+        }
+    }
+
+    pub(crate) fn request_timeline_toolbar_save(&mut self, ctx: &egui::Context) {
+        let desired = self.timeline_toolbar_preferences();
+        if let Some(pending) = &mut self.pending_timeline_toolbar_save {
+            pending.desired = desired;
+        } else {
+            self.pending_timeline_toolbar_save = Some(PendingTimelineToolbarSave {
+                desired, flight: None,
+            });
+        }
+        ctx.request_repaint();
+    }
+
+    fn apply_timeline_toolbar_preferences(&mut self, preferences: &crate::config::TimelineToolbarPreferences) {
+        self.timeline_toolbar_visible = preferences.visible;
+        self.timeline_follow_playhead = preferences.follow;
+        self.timeline_toolbar_order = crate::config::normalize_timeline_toolbar_order(&preferences.order);
+        self.timeline_toolbar_hidden = preferences.hidden.clone();
+    }
+
+    /// Runs outside panel drawing. Only toolbar keys are persisted or sent;
+    /// remote edits are coalesced while one acknowledged request is in flight.
+    fn flush_timeline_toolbar_save(&mut self, ctx: &egui::Context) {
+        let Some(mut pending) = self.pending_timeline_toolbar_save.take() else { return };
+        let result = (|| -> Result<bool, String> {
+            let Some(client) = crate::peer::client() else {
+                let mut config = crate::platform::interop::get_live_config();
+                pending.desired.apply(&mut config);
+                config.save()?;
+                crate::platform::interop::set_live_config(config);
+                self.config_fingerprint = crate::config::AppConfig::fingerprint(
+                    &crate::config::AppConfig::get_config_path()).ok();
+                return Ok(true);
+            };
+            let snapshot = client.snapshot().ok_or("Remote toolbar state is unavailable")?;
+            let current = crate::config::TimelineToolbarPreferences::from_config(&snapshot.session.config);
+            if let Some(flight) = &mut pending.flight {
+                if !flight.accepted {
+                    match flight.reply.try_recv() {
+                        Ok(result) => { result?; flight.accepted = true; }
+                        Err(std::sync::mpsc::TryRecvError::Disconnected) =>
+                            return Err("Remote toolbar dispatcher stopped before acknowledging the change".into()),
+                        Err(std::sync::mpsc::TryRecvError::Empty) => {}
+                    }
+                }
+                if flight.accepted && current == flight.sent {
+                    pending.flight = None;
+                } else if flight.started.elapsed() > std::time::Duration::from_secs(20) {
+                    return Err("Remote toolbar change was not confirmed; refreshed from the authority. Check the connection before retrying.".into());
+                } else {
+                    return Ok(false);
+                }
+            }
+            if current == pending.desired { return Ok(true) }
+            let old = serde_json::to_value(&snapshot.session.config).map_err(|error| error.to_string())?;
+            let mut values = pending.desired.values();
+            let values_map = values.as_object_mut().ok_or("Invalid toolbar preferences")?;
+            values_map.retain(|key, value| old.get(key) != Some(value));
+            let expected = values_map.keys().map(|key|
+                (key.clone(), old.get(key).cloned().unwrap_or_default()))
+                .collect::<serde_json::Map<String, serde_json::Value>>();
+            let reply = client.queue_with_reply("/api/peer/config", serde_json::json!({
+                "operation": "save", "expected": expected, "values": values,
+            }))?;
+            pending.flight = Some(TimelineToolbarSaveFlight {
+                sent: pending.desired.clone(), reply, accepted: false,
+                started: std::time::Instant::now(),
+            });
+            Ok(false)
+        })();
+        match result {
+            Ok(true) => self.config_status = "Timeline toolbar saved".into(),
+            Ok(false) => {
+                self.pending_timeline_toolbar_save = Some(pending);
+                ctx.request_repaint_after(std::time::Duration::from_millis(100));
+            }
+            Err(error) => {
+                let config = crate::peer::client().and_then(|client| client.snapshot())
+                    .map(|snapshot| snapshot.session.config)
+                    .unwrap_or_else(crate::platform::interop::get_live_config);
+                self.apply_timeline_toolbar_preferences(&crate::config::TimelineToolbarPreferences::from_config(&config));
+                self.config_status = error.clone();
+                let _ = crate::messaging::publish(crate::messaging::ToastRequest {
+                    id: Some("timeline.toolbar.save".into()), title: "Toolbar change could not be saved".into(),
+                    message: error, severity: crate::messaging::Severity::Warning, timeout_ms: 8000,
+                }, "timeline");
+                ctx.request_repaint();
+            }
+        }
+    }
+
     pub fn save_config(&mut self) {
+        // DockArea borrows the real layout during painting. Never serialize
+        // its empty placeholder; flush after the dock has been returned.
+        if self.workspace_rendering {
+            self.deferred_config_save = true;
+            return;
+        }
         if self.preference_preview_original.is_some() {
             log::debug!(
                 "Deferring automatic configuration save while Preferences is previewing changes"
@@ -6530,6 +6660,7 @@ impl PealayerApp {
         self.timeline_animated_navigation = config.timeline_animated_navigation;
         self.timeline_navigation_transition_ms = config.timeline_navigation_transition_ms;
         self.timeline_follow_playhead = config.timeline_follow_playhead;
+        self.timeline_toolbar_visible = config.timeline_toolbar_visible;
         self.timeline_toolbar_order =
             crate::config::normalize_timeline_toolbar_order(&config.timeline_toolbar_order);
         self.timeline_toolbar_hidden = config.timeline_toolbar_hidden.clone();
@@ -6732,6 +6863,18 @@ impl PealayerApp {
                         crate::peer::validate_config_expectations(&crate::platform::interop::get_live_config(), value.get("expected"))?;
                         let config=crate::platform::interop::get_live_config().apply_patch(value.get("values").ok_or("Configuration values are required")?)?;
                         config.save()?;
+                        // A toolbar-only mutation cannot restore a saved dock,
+                        // reset media properties or replace the working effect.
+                        if value.get("values").and_then(serde_json::Value::as_object)
+                            .is_some_and(|values| !values.is_empty() && values.keys().all(|key|
+                                crate::config::TimelineToolbarPreferences::owns_key(key)))
+                        {
+                            self.apply_timeline_toolbar_preferences(&crate::config::TimelineToolbarPreferences::from_config(&config));
+                            crate::platform::interop::set_live_config(config);
+                            self.config_fingerprint = crate::config::AppConfig::fingerprint(
+                                &crate::config::AppConfig::get_config_path()).ok();
+                            return Ok(serde_json::json!({"applied":true}));
+                        }
                         if value.get("values").is_some_and(|values|values.get("workspace_session").is_some()){
                             let mut profile=config.workspace_session.clone();profile.window_geometry=None;profile.egui_memory=None;self.apply_workspace_profile(ctx,&profile)?;
                         }
@@ -6787,14 +6930,22 @@ impl PealayerApp {
         let id=egui::Id::new("pealayer_remote_authority_ui");
         let mut state=ctx.data_mut(|data|data.get_temp::<crate::peer::PeerUiState>(id).unwrap_or_default());
         if state.config.as_ref()!=Some(&snapshot.session.config) {
-            let config=snapshot.session.config.clone();
+            let mut config=snapshot.session.config.clone();
+            if let Some(pending) = &self.pending_timeline_toolbar_save {
+                pending.desired.apply(&mut config);
+            }
             let workspace_changed=state.config.as_ref().is_none_or(|old|old.active_workspace_profile!=config.active_workspace_profile || old.workspace_session.nle!=config.workspace_session.nle || old.workspace_dock_layout!=config.workspace_dock_layout);
-            if let Err(error)=crate::peer::mirror(||self.apply_runtime_config(ctx,config.clone())){self.config_status=error;}
+            if state.config.as_ref().is_some_and(|old|
+                crate::config::TimelineToolbarPreferences::only_changed(old, &config))
+            {
+                self.apply_timeline_toolbar_preferences(&crate::config::TimelineToolbarPreferences::from_config(&config));
+                crate::platform::interop::set_live_config(snapshot.session.config.clone());
+            } else if let Err(error)=crate::peer::mirror(||self.apply_runtime_config(ctx,config.clone())){self.config_status=error;}
             if workspace_changed{
                 let mut profile=config.workspace_session.clone();profile.window_geometry=None;profile.egui_memory=None;
                 if let Err(error)=crate::peer::mirror(||self.apply_workspace_profile(ctx,&profile)){self.config_status=error;}
             }
-            state.config=Some(config);
+            state.config=Some(snapshot.session.config.clone());
         }
         if state.timeline!=snapshot.session.timeline {
             if let Some(timeline)=&snapshot.session.timeline {
@@ -8354,8 +8505,12 @@ impl Default for PealayerApp {
             timeline_animated_navigation: true,
             timeline_navigation_transition_ms: 100,
             timeline_follow_playhead: false,
+            timeline_toolbar_visible: true,
             timeline_toolbar_order: crate::config::default_timeline_toolbar_order(),
             timeline_toolbar_hidden: crate::config::default_timeline_toolbar_hidden(),
+            pending_timeline_toolbar_save: None,
+            workspace_rendering: false,
+            deferred_config_save: false,
             non_user_control_visibility: crate::config::NonUserControlVisibility::Dimmed,
             prefix_relay_identifiers: true,
             live_pwm_updates: true,
@@ -8445,6 +8600,24 @@ pub(crate) mod tests {
         APP_TEST_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    #[test]
+    fn saves_during_dock_drawing_are_deferred_without_capturing_the_placeholder() {
+        let _lock = lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.workspace_rendering = true;
+        app.dock_state = egui_dock::DockState::new(vec![]);
+        app.save_config();
+        assert!(app.deferred_config_save);
+        assert!(app.pending_timeline_toolbar_save.is_none());
+        app.timeline_toolbar_hidden.push(crate::config::TimelineToolbarAction::ZoomIn);
+        app.request_timeline_toolbar_save(&egui::Context::default());
+        let values = app.pending_timeline_toolbar_save.as_ref().unwrap().desired.values();
+        assert_eq!(values.as_object().unwrap().len(), 4);
+        assert!(values.get("workspace_dock_layout").is_none());
+        assert!(values.get("workspace_session").is_none());
+        assert!(app.pending_timeline_toolbar_save.as_ref().unwrap().flight.is_none());
     }
 
     #[test]

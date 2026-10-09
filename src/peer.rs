@@ -431,10 +431,16 @@ pub struct Client {
     pub local_port: u16,
     pub http: reqwest::blocking::Client,
     latest: Mutex<ReceivedSession>,
-    pending: mpsc::SyncSender<(String, Value, Instant)>,
+    pending: mpsc::SyncSender<QueuedCommand>,
     pub error: Mutex<Option<String>>,
     pub command_error: Mutex<Option<String>>,
     context: Mutex<Option<eframe::egui::Context>>,
+}
+struct QueuedCommand {
+    path: String,
+    value: Value,
+    created: Instant,
+    reply: Option<mpsc::Sender<Result<Value, String>>>,
 }
 impl Client {
     pub fn url(&self, path: &str) -> Result<url::Url, String> {
@@ -484,6 +490,22 @@ impl Client {
         Ok(body)
     }
     pub fn queue(&self, path: &str, value: Value) -> Result<(), String> {
+        self.queue_command(path, value, None)
+    }
+
+    /// Same bounded dispatcher and API as other peer edits, with a completion
+    /// channel so optimistic controls can report rejection rather than lie.
+    pub fn queue_with_reply(&self, path: &str, value: Value)
+        -> Result<mpsc::Receiver<Result<Value, String>>, String>
+    {
+        let (sender, receiver) = mpsc::channel();
+        self.queue_command(path, value, Some(sender))?;
+        Ok(receiver)
+    }
+
+    fn queue_command(&self, path: &str, value: Value,
+        reply: Option<mpsc::Sender<Result<Value, String>>>) -> Result<(), String>
+    {
         if self
             .latest
             .lock()
@@ -495,7 +517,7 @@ impl Client {
             );
         }
         self.pending
-            .try_send((path.into(), value, Instant::now()))
+            .try_send(QueuedCommand { path: path.into(), value, created: Instant::now(), reply })
             .map_err(|_| {
                 "Remote command queue is full or disconnected; command was not sent".into()
             })
@@ -707,7 +729,7 @@ pub fn connect(value: &str, local_port: u16) -> Result<(), String> {
         return Err("Client Web port must be nonzero".into());
     }
     let (origin, http, session, round_trip) = probe_session(value)?;
-    let (tx, rx) = mpsc::sync_channel::<(String, Value, Instant)>(64);
+    let (tx, rx) = mpsc::sync_channel::<QueuedCommand>(64);
     let client = Arc::new(Client {
         origin,
         local_port,
@@ -728,15 +750,16 @@ pub fn connect(value: &str, local_port: u16) -> Result<(), String> {
         .map_err(|_| "A remote session is already selected")?;
     let commands = client.clone();
     std::thread::spawn(move || {
-        while let Ok((path, value, created)) = rx.recv() {
+        while let Ok(QueuedCommand { path, value, created, reply }) = rx.recv() {
             let result = if created.elapsed() > Duration::from_millis(500) {
                 Err("Expired remote command was discarded; it was not replayed".into())
             } else {
                 commands.post(&path, &value)
             };
             if let Ok(mut slot) = commands.command_error.lock() {
-                *slot = result.err();
+                *slot = result.as_ref().err().cloned();
             }
+            if let Some(reply) = reply { let _ = reply.send(result); }
             if let Some(context) = commands.context.lock().ok().and_then(|value| value.clone()) {
                 context.request_repaint();
             }
