@@ -16,6 +16,13 @@ widths, and has been exercised against live state rather than sample data.
 
 ## Current product ledger
 
+Native toolbar follow-up (9 October): [toolbar interactions](verification/TIMELINE-TOOLBAR-INTERACTIONS.md)
+tracks immediate, workspace-safe saves, drag ordering/hiding, continuous held
+navigation and fixed ruler geometry. The full-toolbar visibility preference
+uses the shared Rust preference contract, so Web preferences can configure the
+native authority too. This is **not** a claim that React already has equivalent
+draggable ruler controls; that counterpart remains part of timeline parity.
+
 | Area | Current state | Completion evidence | Remaining work |
 | --- | --- | --- | --- |
 | Application shell | In progress | Installable SPA/PWA, responsive navigation, shared appearance and connection state; footer now consumes the native persisted visibility contract and exposes right-click hide/show actions | Finish application-style command header and compact/mobile command access |
