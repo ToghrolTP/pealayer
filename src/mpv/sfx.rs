@@ -478,16 +478,24 @@ impl Voice {
     fn poll_error(&mut self) -> Option<String> {
         let mpv = self.mpv.as_ref()?;
         let mut failure = None;
+        let mut ended = false;
         for _ in 0..64 {
             let Some(event) = mpv.wait_event(0.0) else {
                 break;
             };
-            if let Err(error) = event {
-                failure = Some(format!("SFX decoder/output failed: {error}"));
-                break;
+            match event {
+                Err(error) => {
+                    failure = Some(format!("SFX decoder/output failed: {error}"));
+                    break;
+                }
+                Ok(libmpv2::events::Event::EndFile(_)) => {
+                    ended = true;
+                    break;
+                }
+                _ => {}
             }
         }
-        if failure.is_some() {
+        if failure.is_some() || ended {
             self.mpv = None;
         }
         failure
