@@ -75,15 +75,49 @@ pub struct ControllerStripEffectCue {
     pub id: String,
 }
 
-/// A directly-authored value held by one advertised hardware channel for the
-/// cue's visible interval. Unlike a recorded/controller-owned sequence this
-/// has no intrinsic program length, so its timeline placement may be resized.
+/// How a direct command behaves, independently of its visual placement.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum DirectCueBehavior {
+    SetKeep,
+    #[default]
+    Hold,
+    Ramp,
+}
+
+/// An authored channel command. SetKeep has no exit edge; timed commands have
+/// an explicit final value. Neither visual marker width nor zoom affects timing.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct DirectControlCue {
     /// Stable PCController capability key, for example `relay.5` or `pwm.10`.
     pub control_key: String,
     /// Exact normalized value in basis points (0..=10_000).
     pub value_basis_points: u16,
+    #[serde(default)]
+    pub behavior: DirectCueBehavior,
+    #[serde(default)]
+    pub end_value_basis_points: u16,
+}
+
+impl DirectControlCue {
+    pub fn value_at(&self, elapsed_ms: u64, duration_ms: u64) -> u16 {
+        self.behavior.value_at(self.value_basis_points, self.end_value_basis_points, elapsed_ms, duration_ms)
+    }
+}
+
+impl DirectCueBehavior {
+    pub fn value_at(self, start: u16, end: u16, elapsed_ms: u64, duration_ms: u64) -> u16 {
+        let start = start.min(10_000);
+        let end = end.min(10_000);
+        match self {
+            DirectCueBehavior::SetKeep => start,
+            DirectCueBehavior::Hold => if elapsed_ms < duration_ms { start } else { end },
+            DirectCueBehavior::Ramp => {
+                let progress = elapsed_ms.min(duration_ms.max(1)) as f64 / duration_ms.max(1) as f64;
+                (f64::from(start) + (f64::from(end) - f64::from(start)) * progress).round() as u16
+            }
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -238,6 +272,7 @@ impl Effect {
     /// authored on the media timeline. Controller-owned recordings and strip
     /// programs carry their own timing and therefore are move-only.
     pub fn duration_resizable(&self) -> bool {
+        if self.is_state_marker() { return false; }
         match self.duration_policy {
             CueDurationPolicy::Intrinsic => false,
             CueDurationPolicy::Resizable => true,
@@ -245,6 +280,10 @@ impl Effect {
                 self.controller_macro.is_none() && self.controller_strip_effect.is_none()
             }
         }
+    }
+
+    pub fn is_state_marker(&self) -> bool {
+        self.direct_control.as_ref().is_some_and(|cue| cue.behavior == DirectCueBehavior::SetKeep)
     }
 
     pub fn direct_control(
@@ -277,6 +316,8 @@ impl Effect {
             direct_control: Some(DirectControlCue {
                 control_key,
                 value_basis_points: normalized,
+                behavior: DirectCueBehavior::Hold,
+                end_value_basis_points: 0,
             }),
             duration_policy: CueDurationPolicy::Resizable,
         }
@@ -446,6 +487,28 @@ mod tests {
         assert!(!lighting.duration_resizable());
         assert!(relay.duration_resizable());
         assert_eq!(relay.actions[0].state, true);
+    }
+
+    #[test]
+    fn persistent_markers_are_move_only_and_do_not_have_an_exit_value() {
+        let mut effect = Effect::direct_control("Set".into(), String::new(), 1000, "pwm.2".into(), 3750, None);
+        let direct = effect.direct_control.as_mut().unwrap();
+        direct.behavior = DirectCueBehavior::SetKeep;
+        direct.end_value_basis_points = 0;
+        assert_eq!(direct.value_at(0, 1000), 3750);
+        assert_eq!(direct.value_at(86_400_000, 1000), 3750);
+        assert!(effect.is_state_marker());
+        assert!(!effect.duration_resizable());
+    }
+
+    #[test]
+    fn timed_values_have_exact_exit_edges_and_ramp_endpoints() {
+        assert_eq!(DirectCueBehavior::Hold.value_at(10_000, 0, 999, 1000), 10_000);
+        assert_eq!(DirectCueBehavior::Hold.value_at(10_000, 0, 1000, 1000), 0);
+        assert_eq!(DirectCueBehavior::Ramp.value_at(2000, 8000, 0, 1000), 2000);
+        assert_eq!(DirectCueBehavior::Ramp.value_at(2000, 8000, 500, 1000), 5000);
+        assert_eq!(DirectCueBehavior::Ramp.value_at(8000, 2000, 500, 1000), 5000);
+        assert_eq!(DirectCueBehavior::Ramp.value_at(2000, 8000, 1000, 1000), 8000);
     }
 
     #[test]

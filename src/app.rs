@@ -1578,6 +1578,8 @@ impl eframe::App for PealayerApp {
                                         effect.duration_ms,
                                     ),
                                 resizable: effect.duration_resizable(),
+                                behavior: effect.direct_control.as_ref().map(|cue| cue.behavior),
+                                end_value_basis_points: effect.direct_control.as_ref().map(|cue| cue.end_value_basis_points),
                                 control_key: effect
                                     .direct_control
                                     .as_ref()
@@ -4143,12 +4145,16 @@ impl PealayerApp {
                 value_basis_points,
                 start_time_ms,
                 duration_ms,
+                behavior,
+                end_value_basis_points,
             } => {
-                if let Err(error) = self.add_direct_control_cue(
+                if let Err(error) = self.add_configured_direct_control_cue(
                     &control_key,
                     value_basis_points,
                     start_time_ms,
                     duration_ms,
+                    behavior,
+                    end_value_basis_points,
                 ) {
                     self.set_osd(error);
                 }
@@ -4156,10 +4162,12 @@ impl PealayerApp {
             InteropCommand::UpdateDirectControlCueValue {
                 instance_id,
                 value_basis_points,
+                behavior,
+                end_value_basis_points,
             } => {
                 let result = uuid::Uuid::parse_str(&instance_id)
                     .map_err(|_| "Cue is no longer available".to_string())
-                    .and_then(|id| self.update_direct_control_cue_value(id, value_basis_points));
+                    .and_then(|id| self.configure_direct_control_cue(id, value_basis_points, behavior, end_value_basis_points));
                 if let Err(error) = result {
                     self.set_osd(error);
                 }
@@ -7668,15 +7676,22 @@ impl PealayerApp {
         );
     }
 
-    /// Adds a directly-authored state/value interval to an advertised channel.
-    /// These placements are intentionally distinct from recorded effects: the
-    /// user owns their duration and PCController still owns the physical key.
+    /// Quick channel actions set and keep the value. The cue dialog can author
+    /// timed holds or ramps explicitly; marker width is never a release time.
     pub fn add_direct_control_cue(
         &mut self,
         control_key: &str,
         value_basis_points: u16,
         start_time_ms: u64,
         duration_ms: u64,
+    ) -> Result<uuid::Uuid, String> {
+        self.add_configured_direct_control_cue(control_key, value_basis_points, start_time_ms, duration_ms,
+            crate::four_d::models::DirectCueBehavior::SetKeep, 0)
+    }
+
+    pub fn add_configured_direct_control_cue(
+        &mut self, control_key: &str, value_basis_points: u16, start_time_ms: u64,
+        duration_ms: u64, behavior: crate::four_d::models::DirectCueBehavior, end_value_basis_points: u16,
     ) -> Result<uuid::Uuid, String> {
         let control = self
             .engine_handle
@@ -7694,13 +7709,19 @@ impl PealayerApp {
         if relay_id.is_none() && !is_pwm {
             return Err(format!("Channel '{}' does not support direct value cues", control.name));
         }
+        if behavior == crate::four_d::models::DirectCueBehavior::Ramp && !is_pwm {
+            return Err("Ramps require a PWM channel".into());
+        }
+        if value_basis_points > 10_000 || end_value_basis_points > 10_000 {
+            return Err("Cue values must be between 0 and 100%".into());
+        }
         let value = value_basis_points.min(10_000);
         let value_label = if relay_id.is_some() {
             if value >= 5_000 { "On".to_string() } else { "Off".to_string() }
         } else {
             format!("{:.2}%", f32::from(value) / 100.0)
         };
-        let template = crate::four_d::models::Effect::direct_control(
+        let mut template = crate::four_d::models::Effect::direct_control(
             format!("{} · {}", control.name, value_label),
             control.icon.clone(),
             duration_ms,
@@ -7708,6 +7729,10 @@ impl PealayerApp {
             value,
             relay_id,
         );
+        if let Some(direct) = template.direct_control.as_mut() {
+            direct.behavior = behavior;
+            direct.end_value_basis_points = end_value_basis_points;
+        }
         let template_id = template.id;
         let instance = crate::four_d::models::EffectInstance::new(template_id, start_time_ms);
         let instance_id = instance.id;
@@ -7730,6 +7755,23 @@ impl PealayerApp {
         instance_id: uuid::Uuid,
         value_basis_points: u16,
     ) -> Result<(), String> {
+        self.configure_direct_control_cue(instance_id, value_basis_points, None, None)
+    }
+
+    pub fn configure_direct_control_cue(
+        &mut self, instance_id: uuid::Uuid, value_basis_points: u16,
+        behavior: Option<crate::four_d::models::DirectCueBehavior>, end_value_basis_points: Option<u16>,
+    ) -> Result<(), String> {
+        let current = self.timeline.instances.iter().find(|cue| cue.id == instance_id)
+            .and_then(|cue| self.timeline.templates.iter().find(|effect| effect.id == cue.effect_id))
+            .and_then(|effect| effect.direct_control.as_ref())
+            .ok_or_else(|| "This cue has no direct channel value".to_string())?;
+        if behavior == Some(crate::four_d::models::DirectCueBehavior::Ramp) && !current.control_key.starts_with("pwm.") {
+            return Err("Ramps require a PWM channel".into());
+        }
+        if value_basis_points > 10_000 || end_value_basis_points.is_some_and(|value| value > 10_000) {
+            return Err("Cue values must be between 0 and 100%".into());
+        }
         let effect_id = self
             .timeline
             .instances
@@ -7751,6 +7793,8 @@ impl PealayerApp {
             .ok_or_else(|| "This recorded effect has no direct value".to_string())?;
         let value = value_basis_points.min(10_000);
         direct.value_basis_points = value;
+        if let Some(behavior) = behavior { direct.behavior = behavior; }
+        if let Some(end) = end_value_basis_points { direct.end_value_basis_points = end; }
         let base_name = effect
             .name
             .split_once(" · ")
@@ -7765,7 +7809,7 @@ impl PealayerApp {
         for action in &mut effect.actions {
             action.state = value >= 5_000;
         }
-        self.sync_timeline_engine();
+        self.commit_timeline_edit();
         Ok(())
     }
 

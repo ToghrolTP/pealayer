@@ -1047,7 +1047,9 @@ fn timeline_snap_targets(
             .find(|effect| effect.id == instance.effect_id)
         {
             targets.push(instance.start_time_ms);
-            targets.push(instance.start_time_ms.saturating_add(effect.duration_ms));
+            if !effect.is_state_marker() {
+                targets.push(instance.start_time_ms.saturating_add(effect.duration_ms));
+            }
         }
     }
     targets.sort_unstable();
@@ -2275,6 +2277,8 @@ struct TimelineCueDraft {
     control_key: String,
     start_time_ms: u64,
     duration_ms: u64,
+    behavior: crate::four_d::models::DirectCueBehavior,
+    end_value_basis_points: u16,
     action: TimelineCueDraftAction,
     error: Option<String>,
 }
@@ -3171,6 +3175,56 @@ fn timeline_cue_dialog_id() -> egui::Id {
     egui::Id::new("timeline-add-cue-dialog")
 }
 
+fn direct_cue_behavior_editor(ui: &mut egui::Ui, behavior: &mut crate::four_d::models::DirectCueBehavior,
+    end: &mut u16, pwm: bool) {
+    use crate::four_d::models::DirectCueBehavior;
+    ui.horizontal_wrapped(|ui| {
+        ui.selectable_value(behavior, DirectCueBehavior::SetKeep, "Set and keep");
+        ui.selectable_value(behavior, DirectCueBehavior::Hold, "Timed hold");
+        if pwm { ui.selectable_value(behavior, DirectCueBehavior::Ramp, "PWM ramp"); }
+    });
+    if *behavior != DirectCueBehavior::SetKeep {
+        ui.horizontal(|ui| {
+            ui.label(if *behavior == DirectCueBehavior::Ramp { "Ramp to" } else { "On exit" });
+            if pwm {
+                ui.add(egui::Slider::new(end, 0..=10_000).custom_formatter(|v, _| format!("{:.1}%", v / 100.0)));
+            } else {
+                ui.selectable_value(end, 0, "Off");
+                ui.selectable_value(end, 10_000, "On");
+            }
+        });
+    }
+}
+
+fn direct_cue_marker_caption(effect: &crate::four_d::models::Effect) -> String {
+    let Some(cue) = &effect.direct_control else { return effect.name.clone(); };
+    let value = if cue.control_key.starts_with("relay.") {
+        if cue.value_basis_points >= 5_000 { "On".to_string() } else { "Off".to_string() }
+    } else { format!("{:.1}%", f32::from(cue.value_basis_points) / 100.0) };
+    format!("{value}  → ∞")
+}
+
+fn paint_hardware_cue(painter: &egui::Painter, rect: egui::Rect, effect: &crate::four_d::models::Effect,
+    alpha: u8, stroke: egui::Stroke) {
+    let color = egui::Color32::from_rgba_unmultiplied(65, 111, 161, alpha);
+    painter.rect_filled(rect, if effect.is_state_marker() { 9.0 } else { 4.0 }, color);
+    if let Some(direct) = &effect.direct_control {
+        if direct.behavior == crate::four_d::models::DirectCueBehavior::Ramp {
+            for index in 0..32 {
+                let value = direct.value_at(index * 100, 3100) as f32 / 10_000.0;
+                let strip = egui::Rect::from_min_max(
+                    egui::pos2(rect.left() + rect.width() * index as f32 / 32.0, rect.top() + 2.0),
+                    egui::pos2(rect.left() + rect.width() * (index + 1) as f32 / 32.0, rect.bottom() - 2.0));
+                painter.rect_filled(strip, 0.0, egui::Color32::from_rgba_unmultiplied(
+                    35, (60.0 + value * 100.0) as u8, (90.0 + value * 110.0) as u8, alpha));
+            }
+            painter.line_segment([egui::pos2(rect.left() + 5.0, rect.bottom() - 4.0 - rect.height() * 0.6 * direct.value_basis_points as f32 / 10_000.0),
+                egui::pos2(rect.right() - 5.0, rect.bottom() - 4.0 - rect.height() * 0.6 * direct.end_value_basis_points as f32 / 10_000.0)], egui::Stroke::new(1.0, egui::Color32::WHITE));
+        }
+    }
+    painter.rect_stroke(rect, if effect.is_state_marker() { 9.0 } else { 4.0 }, stroke, egui::StrokeKind::Inside);
+}
+
 fn timeline_cue_draft_for_row(
     app: &PealayerApp,
     row: &TimelineTrackRow,
@@ -3234,6 +3288,8 @@ fn timeline_cue_draft_for_row(
         control_key: control_key.to_string(),
         start_time_ms,
         duration_ms: 1_000,
+        behavior: crate::four_d::models::DirectCueBehavior::SetKeep,
+        end_value_basis_points: 0,
         action,
         error: None,
     })
@@ -3290,6 +3346,8 @@ fn draw_timeline_cue_dialog(app: &mut PealayerApp, context: &egui::Context) {
         .show(context, |ui| {
             ui.add(elegance::Badge::new(draft.control_key.as_str(), elegance::BadgeTone::Neutral).preserve_case());
             ui.add_space(10.0);
+            direct_cue_behavior_editor(ui, &mut draft.behavior, &mut draft.end_value_basis_points,
+                matches!(draft.action, TimelineCueDraftAction::Pwm { .. }));
             elegance::Card::new().heading(app.tr("Timing")).show(ui, |ui| {
                 egui::Grid::new("timeline-add-cue-timing")
                     .num_columns(2)
@@ -3301,12 +3359,14 @@ fn draw_timeline_cue_dialog(app: &mut PealayerApp, context: &egui::Context) {
                             app.human_readable_time_units,
                         ));
                         ui.end_row();
+                        if draft.behavior != crate::four_d::models::DirectCueBehavior::SetKeep {
                         ui.label(app.tr("Duration"));
                         ui.add(crate::duration::time_value_drag(
                             &mut draft.duration_ms, 100..=86_400_000, 10.0,
                             app.human_readable_time_units,
                         ));
                         ui.end_row();
+                        }
                     });
             });
             ui.add_space(8.0);
@@ -3331,11 +3391,13 @@ fn draw_timeline_cue_dialog(app: &mut PealayerApp, context: &egui::Context) {
         });
 
     if submit {
-        match app.add_direct_control_cue(
+        match app.add_configured_direct_control_cue(
             &draft.control_key,
             draft.value_basis_points(),
             draft.start_time_ms,
             draft.duration_ms,
+            draft.behavior,
+            draft.end_value_basis_points,
         ) {
             Ok(_) => {
                 let cue_added = app.tr("Cue added");
@@ -7079,6 +7141,7 @@ mod timeline_row_tests {
             context.data_mut(|data| data.insert_temp(timeline_cue_dialog_id(), TimelineCueDraft {
                 track_name: "Relay 5".into(), control_key: "relay.5".into(),
                 start_time_ms: 1000, duration_ms: 1000,
+                behavior: crate::four_d::models::DirectCueBehavior::SetKeep, end_value_basis_points: 0,
                 action: TimelineCueDraftAction::Relay { enabled: true }, error: None,
             }));
             let mut clicked = false;
@@ -11163,6 +11226,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             let mut update_duration_to = None;
                             let mut update_relay_to = None;
                             let mut update_direct_value_to = None;
+                            let mut update_direct_behavior_to = None;
 
                             if let Some(idx) = instance_idx {
                                 let selected_cue_label = self.app.tr("Selected cue");
@@ -11242,10 +11306,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 effect_controls_badge(
                                                     ui,
                                                     crate::ui::icons::CLOCK,
-                                                    crate::duration::format_effect_duration_for_language(
+                                                    if template.is_state_marker() { "Set and keep".to_string() } else { crate::duration::format_effect_duration_for_language(
                                                         display_language,
                                                         template.duration_ms,
-                                                    ),
+                                                    ) },
                                                 );
                                             });
                                             ui.add_space(7.0);
@@ -11283,7 +11347,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             effect_controls_timing_overview(
                                                 ui,
                                                 start_ms,
-                                                template.duration_ms,
+                                                if template.is_state_marker() { 0 } else { template.duration_ms },
                                                 max_start_ms,
                                                 (self.app.playback_time.max(0.0) * 1_000.0)
                                                     .round() as u64,
@@ -11299,7 +11363,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     |ui| {
                                                         ui.label(
                                                             egui::RichText::new(crate::duration::format_time_value_ms(
-                                                                start_ms.saturating_add(template.duration_ms),
+                                                                start_ms.saturating_add(if template.is_state_marker() { 0 } else { template.duration_ms }),
                                                             ))
                                                             .small()
                                                             .weak(),
@@ -11359,6 +11423,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                 update_duration_to = Some(duration_ms);
                                                                 timeline_dirty = true;
                                                             }
+                                                        } else if template.is_state_marker() {
+                                                            ui.label("Until next command");
                                                         } else {
                                                             ui.label(
                                                                 crate::duration::format_effect_duration_for_language(
@@ -11389,6 +11455,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             false,
                                             |ui| {
                                                 let mut value = direct.value_basis_points;
+                                                let mut behavior = direct.behavior;
+                                                let mut end = direct.end_value_basis_points;
+                                                direct_cue_behavior_editor(ui, &mut behavior, &mut end, !is_relay);
+                                                if behavior != direct.behavior || end != direct.end_value_basis_points {
+                                                    update_direct_behavior_to = Some((value, behavior, end));
+                                                }
                                                 if is_relay {
                                                     ui.horizontal(|ui| {
                                                         ui.label(egui::RichText::new(&state_label).weak());
@@ -11426,7 +11498,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     value = (percent.clamp(0.0, 100.0) * 100.0).round() as u16;
                                                 }
                                                 if value != direct.value_basis_points {
-                                                    update_direct_value_to = Some(value);
+                                                    if update_direct_behavior_to.is_some() {
+                                                        update_direct_behavior_to = Some((value, behavior, end));
+                                                    } else { update_direct_value_to = Some(value); }
                                                 }
                                             },
                                         );
@@ -11692,6 +11766,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     self.app.set_osd(error);
                                 }
                                 ui.ctx().request_repaint();
+                            }
+                            if let Some((value, behavior, end)) = update_direct_behavior_to {
+                                if let Err(error) = self.app.configure_direct_control_cue(id, value, Some(behavior), Some(end)) {
+                                    self.app.set_osd(error);
+                                }
                             }
 
                             if let Some(eff_id) = relocate_effect_id {
@@ -15089,7 +15168,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 };
 
                                                 let start_x = rect.min.x + (instance.start_time_ms as f32 * px_per_ms);
-                                                let end_x = start_x + (effect.duration_ms.max(1) as f32 * px_per_ms);
+                                                let end_x = if effect.is_state_marker() { start_x + 88.0 }
+                                                    else { start_x + (effect.duration_ms.max(1) as f32 * px_per_ms) };
                                                 let minimum_clip_width = if duration_resizable { 8.0 } else { 18.0 };
 
                                                 let clip_rect = egui::Rect::from_min_max(
@@ -15120,7 +15200,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     self.app.tr("Duration"),
                                                     duration,
                                                 );
-                                                if !duration_resizable {
+                                                if effect.is_state_marker() {
+                                                    cue_tooltip = format!("{}\nSet and keep — until next command\nDrag to move; no automatic exit", effect.name);
+                                                } else if !duration_resizable {
                                                     cue_tooltip.push_str(&format!(
                                                         "\n{}",
                                                         self.app.tr("Intrinsic duration — drag to move"),
@@ -15298,8 +15380,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 );
 
                                                 // Draw clip box
-                                                painter.rect_filled(clip_rect, 4.0, egui::Color32::from_rgba_unmultiplied(142, 68, 173, alpha)); // Purple clip
-                                                painter.rect_stroke(clip_rect, 4.0, egui::Stroke::new(stroke_width, stroke_color), egui::StrokeKind::Inside);
+                                                paint_hardware_cue(&painter, clip_rect, effect, alpha, egui::Stroke::new(stroke_width, stroke_color));
 
                                                 // Visual handle grips
                                                 let left_active = hovered_handle == Some(crate::app::DragMode::ResizeLeft);
@@ -15312,7 +15393,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                                 // Clip name label
                                                 let displayed_effect_name = crate::ui::i18n::visual_text(display_language, &effect.name);
-                                                let title = if is_mismatched {
+                                                let title = if effect.is_state_marker() {
+                                                    direct_cue_marker_caption(effect)
+                                                } else if is_mismatched {
                                                     format!("{} {} {}", crate::ui::icons::WARNING, crate::ui::icons::SPARKLE, displayed_effect_name)
                                                 } else {
                                                     format!("{} {}", crate::ui::icons::SPARKLE, displayed_effect_name)
@@ -15346,8 +15429,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             painter.rect_filled(shadow_rect, 4.0, egui::Color32::from_rgba_unmultiplied(0, 0, 0, 80));
 
                                             // Draw bright purple clip
-                                            painter.rect_filled(clip_rect, 4.0, egui::Color32::from_rgb(172, 98, 203)); // Brighter purple
-                                            painter.rect_stroke(clip_rect, 4.0, egui::Stroke::new(stroke_width, stroke_color), egui::StrokeKind::Inside);
+                                            paint_hardware_cue(&painter, clip_rect, &effect, 255, egui::Stroke::new(stroke_width, stroke_color));
 
                                             // Visual handle grips
                                             let left_active = self.app.active_drag.as_ref().map(|d| d.mode) == Some(crate::app::DragMode::ResizeLeft);
@@ -15360,7 +15442,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                             // Clip name label
                                             let displayed_effect_name = crate::ui::i18n::visual_text(display_language, &effect.name);
-                                            let title = if is_mismatched {
+                                            let title = if effect.is_state_marker() {
+                                                direct_cue_marker_caption(&effect)
+                                            } else if is_mismatched {
                                                 format!("{} {} {}", crate::ui::icons::WARNING, crate::ui::icons::SPARKLE, displayed_effect_name)
                                             } else {
                                                 format!("{} {}", crate::ui::icons::SPARKLE, displayed_effect_name)
@@ -15524,7 +15608,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                 snap_line_x = Some(rect.min.x + (target as f32 * px_per_ms));
                                                             }
                                                             // Check snap to end
-                                                            if snap_line_x.is_none() {
+                                                            let moving_state_marker = self.app.timeline.instances.iter().find(|cue| cue.id == drag_state.instance_id)
+                                                                .and_then(|cue| self.app.timeline.templates.iter().find(|effect| effect.id == cue.effect_id))
+                                                                .is_some_and(|effect| effect.is_state_marker());
+                                                            if snap_line_x.is_none() && !moving_state_marker {
                                                                 let primary_new_end = primary_new_start + drag_state.initial_duration_ms;
                                                                 if let Some(target) = nearest_snap_time(
                                                                     primary_new_end,

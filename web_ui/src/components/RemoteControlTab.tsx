@@ -177,6 +177,8 @@ export interface PlayerState {
     duration_ms: number;
     duration_display: string;
     resizable: boolean;
+    behavior?: 'set-keep' | 'hold' | 'ramp' | null;
+    end_value_basis_points?: number | null;
     control_key?: string | null;
     value_basis_points?: number | null;
   }>;

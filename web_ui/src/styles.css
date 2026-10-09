@@ -501,6 +501,9 @@ body {
 .timeline-lane::after { content: ''; position: absolute; inset: 50% 0 auto; border-top: 1px solid var(--line-strong); opacity: .7; }
 .timeline-cue { position: absolute; z-index: 2; inset-block-start: 4px; min-width: 22px; height: 19px; overflow: hidden; display: flex; align-items: center; justify-content: space-between; gap: 3px; padding: 0 5px; border: 1px solid color-mix(in srgb, var(--accent) 78%, white 12%); border-radius: 4px; background: color-mix(in srgb, var(--accent) 74%, var(--surface-0)); color: var(--accent-text); font: 700 9px ui-sans-serif, sans-serif; cursor: grab; touch-action: none; user-select: none; box-shadow: 0 3px 10px rgba(0, 0, 0, .24); }
 .timeline-cue:active { cursor: grabbing; }
+.timeline-cue--state { border-radius: 10px; border-inline-start: 3px solid var(--accent); background: var(--surface-2); color: var(--text); box-shadow: none; }
+.timeline-cue--state .ant-btn { color: inherit; }
+.timeline-cue--ramp { border-radius: 4px; }
 .timeline-cue > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .timeline-cue .ant-btn { min-width: 15px; width: 15px; height: 15px; padding: 0; color: var(--accent-text); }
 .timeline-cue__resize { position: absolute; inset-block: 1px; width: 5px; border-radius: 2px; opacity: 0; background: color-mix(in srgb, white 72%, var(--accent)); transition: opacity .14s ease; cursor: ew-resize; }

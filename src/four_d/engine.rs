@@ -344,6 +344,23 @@ pub struct CompiledDirectPwmCue {
     pub end_time_ms: u64,
     pub channel: u8,
     pub value_basis_points: u16,
+    pub behavior: super::models::DirectCueBehavior,
+    pub end_value_basis_points: u16,
+}
+
+impl CompiledDirectPwmCue {
+    pub fn priority_at(&self, time_ms: u64) -> u64 {
+        if self.behavior == super::models::DirectCueBehavior::Ramp && time_ms < self.end_time_ms {
+            return time_ms;
+        }
+        if self.behavior != super::models::DirectCueBehavior::SetKeep && time_ms >= self.end_time_ms {
+            self.end_time_ms
+        } else { self.start_time_ms }
+    }
+    pub fn value_at(&self, time_ms: u64) -> u16 {
+        self.behavior.value_at(self.value_basis_points, self.end_value_basis_points,
+            time_ms.saturating_sub(self.start_time_ms), self.end_time_ms.saturating_sub(self.start_time_ms))
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -1644,16 +1661,16 @@ pub fn spawn_engine() -> EngineHandle {
                 for channel in pwm_channels {
                     if (channel as usize) < 16 {
                         let ch = channel as usize;
-                        // Direct value cues are layered in timeline order and
-                        // temporarily override a curve. When the interval ends,
-                        // the underlying curve (or zero) is restored.
-                        let direct = direct_pwm_cues.iter().rev().find(|cue| {
+                        // Explicit direct edges override the curve. SetKeep
+                        // persists; timed commands keep their authored exit
+                        // value until the next start/exit edge on this channel.
+                        let direct = direct_pwm_cues.iter().filter(|cue| {
                             cue.channel == channel
                                 && current_time >= cue.start_time_ms
-                                && current_time < cue.end_time_ms
-                        });
+                        }).max_by_key(|cue| (cue.priority_at(current_time), cue.start_time_ms));
+                        if direct.is_none() && !analog_tracks.iter().any(|track| track.channel == channel) { continue; }
                         let val = direct.map(|cue| {
-                            ((u32::from(cue.value_basis_points) * 255 + 5_000) / 10_000) as u8
+                            ((u32::from(cue.value_at(current_time)) * 255 + 5_000) / 10_000) as u8
                         }).unwrap_or_else(|| {
                             analog_tracks
                                 .iter()
@@ -1743,8 +1760,11 @@ pub fn compile_timeline(
             .iter()
             .find(|t| t.id == instance.effect_id)
         {
+            if effect.direct_control.is_some() { continue; }
             interesting_times.push(instance.start_time_ms);
-            interesting_times.push(instance.start_time_ms + effect.duration_ms);
+            if !effect.is_state_marker() {
+                interesting_times.push(instance.start_time_ms.saturating_add(effect.duration_ms));
+            }
 
             for action in &effect.actions {
                 interesting_times.push(instance.start_time_ms + action.offset_ms);
@@ -1758,6 +1778,7 @@ pub fn compile_timeline(
     let relay_ids = timeline
         .templates
         .iter()
+        .filter(|effect| effect.direct_control.is_none())
         .flat_map(|effect| effect.actions.iter().map(|action| action.relay_id))
         .filter(|relay_id| *relay_id != 0)
         .collect::<std::collections::BTreeSet<_>>();
@@ -1781,6 +1802,7 @@ pub fn compile_timeline(
                         .iter()
                         .find(|tmpl| tmpl.id == instance.effect_id)
                     {
+                        if effect.direct_control.is_some() { continue; }
                         let end_time = instance.start_time_ms + effect.duration_ms;
 
                         if t >= instance.start_time_ms && t < end_time {
@@ -1827,6 +1849,23 @@ pub fn compile_timeline(
         }
     }
 
+    // Direct commands contribute only their actual edges. Do not invent a
+    // reset at a marker's visual end, or reassert it over later recorded actions.
+    for instance in &timeline.instances {
+        let Some(effect) = timeline.templates.iter().find(|effect| effect.id == instance.effect_id) else { continue; };
+        let Some(direct) = &effect.direct_control else { continue; };
+        let Some(relay_id) = effect.target.primary_relay_id() else { continue; };
+        if muted.contains(&relay_id) || (has_solo && !soloed.contains(&relay_id))
+            || !timeline.track_state(&super::models::hardware_timeline_track_key(&direct.control_key)).linked { continue; }
+        compiled.push(CompiledAction { time_ms: instance.start_time_ms, relay_id, state: direct.value_basis_points >= 5_000 });
+        if direct.behavior != super::models::DirectCueBehavior::SetKeep {
+            compiled.push(CompiledAction { time_ms: instance.start_time_ms.saturating_add(effect.duration_ms), relay_id,
+                state: direct.end_value_basis_points >= 5_000 });
+        }
+    }
+    compiled.sort_by_key(|action| action.time_ms);
+    let mut states = std::collections::BTreeMap::new();
+    compiled.retain(|action| states.insert(action.relay_id, action.state) != Some(action.state));
     compiled
 }
 
@@ -1856,9 +1895,11 @@ pub fn compile_direct_pwm_cues(timeline: &Timeline) -> Vec<CompiledDirectPwmCue>
             }
             Some(CompiledDirectPwmCue {
                 start_time_ms: instance.start_time_ms,
-                end_time_ms: instance.start_time_ms.saturating_add(effect.duration_ms),
+                end_time_ms: if effect.is_state_marker() { instance.start_time_ms } else { instance.start_time_ms.saturating_add(effect.duration_ms) },
                 channel,
                 value_basis_points: direct.value_basis_points,
+                behavior: direct.behavior,
+                end_value_basis_points: direct.end_value_basis_points,
             })
         })
         .collect()
@@ -2052,6 +2093,11 @@ pub fn evaluate_relay_state(
     if muted.contains(&relay_id) || (has_solo && !soloed.contains(&relay_id)) {
         return false;
     }
+    if timeline.templates.iter().any(|effect| effect.direct_control.is_some() && effect.target.primary_relay_id() == Some(relay_id)) {
+        return compile_timeline(timeline, muted, soloed).iter().rev()
+            .find(|action| action.relay_id == relay_id && action.time_ms <= t_ms)
+            .is_some_and(|action| action.state);
+    }
 
     let mut desired_state = false;
 
@@ -2241,6 +2287,8 @@ mod tests {
                 end_time_ms: 5_250,
                 channel: 12,
                 value_basis_points: 3_750,
+                behavior: crate::four_d::models::DirectCueBehavior::Hold,
+                end_value_basis_points: 0,
             }]
         );
         timeline.set_track_linked("hardware:pwm.12", false);
@@ -2266,6 +2314,25 @@ mod tests {
         assert_eq!(compiled[0].time_ms, 2_000);
         assert_eq!(compiled[0].relay_id, 5);
         assert!(!compiled[0].state);
+    }
+
+    #[test]
+    fn persistent_relay_has_no_release_and_respects_later_commands_and_track_link() {
+        let mut timeline = Timeline::new();
+        for (at, value) in [(10_000, 10_000), (20_000, 0)] {
+            let mut effect = Effect::direct_control("Keep".into(), String::new(), 1000, "relay.5".into(), value, Some(5));
+            effect.direct_control.as_mut().unwrap().behavior = crate::four_d::models::DirectCueBehavior::SetKeep;
+            let id = effect.id;
+            timeline.templates.push(effect);
+            timeline.instances.push(EffectInstance::new(id, at));
+        }
+        let actions = compile_timeline(&timeline, &Default::default(), &Default::default());
+        assert_eq!(actions.iter().map(|action| (action.time_ms, action.state)).collect::<Vec<_>>(), vec![(10_000, true), (20_000, false)]);
+        assert!(evaluate_relay_state(&timeline, 5, 15_000, &Default::default(), &Default::default()));
+        assert!(!evaluate_relay_state(&timeline, 5, 25_000, &Default::default(), &Default::default()));
+        assert!(compile_timeline(&timeline, &std::collections::BTreeSet::from([5]), &Default::default()).is_empty());
+        timeline.set_track_linked("hardware:relay.5", false);
+        assert!(compile_timeline(&timeline, &Default::default(), &Default::default()).is_empty());
     }
 
     #[test]

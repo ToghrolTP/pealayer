@@ -16,6 +16,13 @@ widths, and has been exercised against live state rather than sample data.
 
 ## Current product ledger
 
+Hardware cue modes (9 October): [authoring and execution contract](HARDWARE-CUE-MODES.md)
+separates compact move-only Set and keep markers from resizable timed holds and
+linear PWM ramps, with explicit exit values, native/Web editors and shared
+prepared-plan compilation. Source/build checks are not installed acceptance:
+tests remain deferred at the user's request; Cafe deployment, native/Web gesture
+inspection and safe physical timing verification are owned by consolidation.
+
 Native toolbar follow-up (9 October): [toolbar interactions](verification/TIMELINE-TOOLBAR-INTERACTIONS.md)
 tracks immediate, workspace-safe saves, drag ordering/hiding, continuous held
 navigation and fixed ruler geometry. The full-toolbar visibility preference
