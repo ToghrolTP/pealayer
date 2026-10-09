@@ -122,6 +122,16 @@ pub(super) fn draw(
         .rect_filled(output.rect, 0.0, ui.visuals().panel_fill);
     let pointer = ui.input(|input| input.pointer.interact_pos());
     let now = ui.input(|input| input.time);
+    // egui also marks a stationary long press as a drag after its click
+    // timeout. Reordering needs real movement, otherwise held Pan buttons
+    // would turn into a drag payload and stop panning after 800 ms.
+    let moved_for_drag = ui.input(|input| {
+        input
+            .pointer
+            .press_origin()
+            .zip(input.pointer.interact_pos())
+            .is_some_and(|(start, current)| start.distance(current) > input.options.max_click_dist)
+    });
     let mut changed = false;
 
     // Keep the existing right-to-left order: first configured action is next
@@ -158,7 +168,10 @@ pub(super) fn draw(
             enabled,
             action == Action::FollowPlayhead && app.timeline_follow_playhead,
         );
-        if response.drag_started_by(egui::PointerButton::Primary) {
+        if response.dragged_by(egui::PointerButton::Primary)
+            && moved_for_drag
+            && !egui::DragAndDrop::has_any_payload(ui.ctx())
+        {
             egui::DragAndDrop::set_payload(ui.ctx(), ToolbarDrag(action));
         }
         if let Some(drag) = response.dnd_hover_payload::<ToolbarDrag>() {
@@ -177,7 +190,7 @@ pub(super) fn draw(
         let holding = enabled
             && matches!(action, Action::PanLeft | Action::PanRight)
             && response.is_pointer_button_down_on()
-            && !response.dragged();
+            && !egui::DragAndDrop::has_any_payload(ui.ctx());
         let hold_started = if holding {
             ui.data_mut(|data| *data.get_temp_mut_or_insert_with(hold_id, || now))
         } else {
