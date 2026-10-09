@@ -83,10 +83,15 @@ Regression evidence:
 - Peer repaint comparison omitted the typed `session.hardware` snapshot, and
   the consumer engine could install it after the UI's repaint. Both paths now
   wake on real hardware changes, including after installation. The existing
-  WebSocket provides changed-state wakeups for authoritative session refreshes,
-  coalesced to at most ten full pulls per second. Paused idle health snapshots
-  stay at one second; unavailable/disabled status streaming falls back to fast
-  polling only while a board is connected.
+  WebSocket supports `peer.hardware.subscribe` / `peer.hardware`, reusing the
+  typed `HardwareCapabilities` snapshot without fetching mpv/config/workspace
+  state for each RGB update. The server sends changed-only snapshots at most
+  ten times per second. Paused full-session health pulls stay at one second;
+  unavailable/disabled streaming uses the lightweight `/api/peer/hardware`
+  fallback only while a board is connected. A generation fence prevents a slow
+  full-session HTTP response overwriting newer pushed hardware. Both reads use
+  the existing configuration-access permission. Missing payload fields or
+  changed source identities retain known-good values and require refresh.
 - Footer saves are narrow, acknowledged and asynchronous for consumers; a
   click no longer waits for remote HTTP or re-applies the workspace/player.
   Numeric widths are stable to prevent status values shifting neighboring items.
