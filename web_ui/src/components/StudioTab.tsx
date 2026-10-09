@@ -20,6 +20,7 @@ import {
   LockOutlined,
   MoreOutlined,
   PlusOutlined,
+  PoweroffOutlined,
   RadarChartOutlined,
   SaveOutlined,
   SettingOutlined,
@@ -1084,6 +1085,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
         </div>
       </section>
       <Modal
+        className="cue-inspector-modal"
         open={directCueControl !== null}
         title={tr(locale, editingDirectCue ? 'Manage cue' : 'Add hardware cue')}
         okText={tr(locale, editingDirectCue ? 'Save' : 'Add cue')}
@@ -1108,13 +1110,39 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
           setDirectCueControl(null);
         }}
       >
-        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+        <div className="cue-inspector">
+        <section className="cue-inspector__section cue-inspector__identity">
+          <span className="cue-inspector__icon" aria-hidden="true">{configuredEffectGlyph(state.hardware_details?.controls.find(control => control.key === directCueControl)?.icon ?? (directCueControl?.startsWith('relay.') ? 'plug' : 'lightbulb'))}</span>
+          <div>
+            <strong>{cues.find(cue => cue.id === editingDirectCue)?.name ?? state.hardware_details?.controls.find(control => control.key === directCueControl)?.name ?? directCueControl}</strong>
+            <div className="cue-inspector__detail">{directCueControl}</div>
+          </div>
+        </section>
+        <section className="cue-inspector__section">
+        <h3><ClockCircleOutlined /> {tr(locale, 'Timing')}</h3>
+        <div className="cue-inspector__timing">
+          <label>{tr(locale, 'Starts')}
+            <InputNumber aria-label={tr(locale, 'Start time')} addonAfter="s" min={0} max={Math.max(durationSeconds, directCueStart, 60)} step={.001} value={directCueStart} onChange={(value) => setDirectCueStart(Number(value ?? 0))} />
+          </label>
+          <label>{tr(locale, 'Duration')}
+            {directCueBehavior === 'set-keep' ? <span className="cue-inspector__read-only">{tr(locale, 'Until next command')}</span> :
+              <InputNumber aria-label={tr(locale, 'Duration')} addonAfter="s" min={.05} max={3600} step={.05} value={directCueDuration} onChange={(value) => setDirectCueDuration(Number(value ?? 1))} />}
+          </label>
+        </div>
+        {directCueBehavior !== 'set-keep' && <div className="cue-inspector__detail">{tr(locale, 'Ends at')} {formatTime(directCueStart + directCueDuration)}</div>}
+        </section>
+        <section className="cue-inspector__section">
+        <h3>{configuredEffectGlyph(directCueControl?.startsWith('relay.') ? 'plug' : 'lightbulb')} {tr(locale, 'Direct channel value')}</h3>
+        <label className="cue-inspector__field">{tr(locale, 'Behavior')}
         <Select aria-label={tr(locale, 'Cue behavior')} style={{ width: '100%' }} value={directCueBehavior} onChange={setDirectCueBehavior}
           options={[{ value: 'set-keep', label: tr(locale, 'Set and keep') }, { value: 'hold', label: tr(locale, 'Timed hold') },
             ...(directCueControl?.startsWith('pwm.') ? [{ value: 'ramp', label: tr(locale, 'PWM ramp') }] : [])]} />
-        <InputNumber aria-label={tr(locale, 'Start time')} addonBefore={tr(locale, 'Starts')} addonAfter="s" min={0} max={86400} step={.001} value={directCueStart} onChange={(value) => setDirectCueStart(Number(value ?? 0))} />
-        {directCueControl?.startsWith('relay.') ? <Select aria-label={tr(locale, 'State')} value={directCuePercent}
-          onChange={setDirectCuePercent} options={[{ value: 100, label: tr(locale, 'On') }, { value: 0, label: tr(locale, 'Off') }]} /> :
+        </label>
+        <label className="cue-inspector__field">{tr(locale, directCueBehavior === 'ramp' ? 'Start value' : 'Value')}
+        {directCueControl?.startsWith('relay.') ? <div className="cue-inspector__states" role="group" aria-label={tr(locale, 'State')}>
+          <Button icon={<PoweroffOutlined />} aria-pressed={directCuePercent >= 50} className={directCuePercent >= 50 ? 'cue-inspector__state--on' : ''} onClick={() => setDirectCuePercent(100)}>{tr(locale, 'On')}</Button>
+          <Button icon={<StopOutlined />} aria-pressed={directCuePercent < 50} className={directCuePercent < 50 ? 'cue-inspector__state--off' : ''} onClick={() => setDirectCuePercent(0)}>{tr(locale, 'Off')}</Button>
+        </div> :
         <Space.Compact block>
           <Slider
             style={{ flex: 1 }}
@@ -1135,13 +1163,16 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
           />
         </Space.Compact>
         }
+        </label>
         {directCueBehavior !== 'set-keep' && <>
-          <InputNumber aria-label={tr(locale, 'Duration')} addonBefore={tr(locale, 'Duration')} addonAfter="s" min={.1} max={86400} step={.1} value={directCueDuration} onChange={(value) => setDirectCueDuration(Number(value ?? 1))} />
+          <label className="cue-inspector__field">{tr(locale, directCueBehavior === 'ramp' ? 'Ramp to' : 'On exit')}
           {directCueControl?.startsWith('relay.') ? <Select aria-label={tr(locale, 'On exit')} value={directCueEndPercent}
             onChange={setDirectCueEndPercent} options={[{ value: 0, label: tr(locale, 'Exit: Off') }, { value: 100, label: tr(locale, 'Exit: On') }]} /> :
-            <InputNumber aria-label={tr(locale, 'End value')} addonBefore={tr(locale, directCueBehavior === 'ramp' ? 'Ramp to' : 'On exit')} addonAfter="%" min={0} max={100} value={directCueEndPercent} onChange={(value) => setDirectCueEndPercent(Number(value ?? 0))} />}
+            <InputNumber aria-label={tr(locale, 'End value')} addonAfter="%" min={0} max={100} step={.01} value={directCueEndPercent} onChange={(value) => setDirectCueEndPercent(Number(value ?? 0))} />}
+          </label>
         </>}
-        </Space>
+        </section>
+        </div>
       </Modal>
     </div>
   );

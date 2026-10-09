@@ -975,5 +975,23 @@ body {
   .ant-modal-footer { flex: 0 0 auto; display: flex; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 }
 .rf-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0 16px; }
+.cue-inspector { display: grid; gap: 10px; min-width: 0; }
+.cue-inspector__section { min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-1); }
+.cue-inspector__section h3 { display: flex; align-items: center; gap: 8px; margin: 0 0 12px; font-size: 14px; font-weight: 600; }
+.cue-inspector__identity { display: flex; align-items: center; gap: 10px; }
+.cue-inspector__identity > div { min-width: 0; }
+.cue-inspector__identity strong { display: block; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.cue-inspector__icon { display: grid; place-items: center; width: 32px; height: 32px; flex-shrink: 0; border-radius: 8px; color: var(--accent); background: color-mix(in srgb, var(--accent) 10%, transparent); }
+.cue-inspector__detail { margin-top: 6px; color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.cue-inspector__timing { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.cue-inspector__timing > label, .cue-inspector__field { display: grid; gap: 6px; min-width: 0; font-size: 12px; color: var(--muted); }
+.cue-inspector__field + .cue-inspector__field { margin-top: 12px; }
+.cue-inspector .ant-input-number-group-wrapper, .cue-inspector .ant-input-number, .cue-inspector .ant-select { width: 100%; min-width: 0; }
+.cue-inspector__read-only { display: flex; align-items: center; min-height: 32px; color: var(--text); }
+.cue-inspector__states { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
+.cue-inspector__states .ant-btn { height: 32px; }
+.cue-inspector__states .ant-btn.cue-inspector__state--on { background: #1a7f45; border-color: #1a7f45; color: white; }
+.cue-inspector__states .ant-btn.cue-inspector__state--off { background: #536c7d; border-color: #536c7d; color: white; }
+@media (max-width: 420px) { .cue-inspector__timing { grid-template-columns: minmax(0, 1fr); } }
 .rf-manager-modal .ant-modal-body { max-height: min(72vh, 720px); overflow-y: auto; }
 .rf-manager-modal .ant-form-item { margin-bottom: 12px; }

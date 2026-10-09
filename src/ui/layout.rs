@@ -1539,31 +1539,27 @@ fn effect_controls_panel_header(
         .fill(ui.visuals().widgets.noninteractive.weak_bg_fill)
         .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
         .corner_radius(10.0)
-        .inner_margin(egui::Margin::symmetric(11, 9))
+        .inner_margin(egui::Margin::symmetric(EFFECT_CONTROLS_CARD_MARGIN, 9))
         .show(ui, |ui| {
             ui.set_width(effect_controls_frame_content_width(outer_width));
             ui.horizontal(|ui| {
-                egui::Frame::new()
-                    .fill(ui.visuals().selection.bg_fill.gamma_multiply(0.16))
-                    .corner_radius(7.0)
-                    .inner_margin(egui::Margin::same(7))
-                    .show(ui, |ui| {
-                        ui.label(
-                            egui::RichText::new(crate::ui::icons::SLIDERS_HORIZONTAL)
-                                .size(18.0)
-                                .color(ui.visuals().selection.bg_fill),
-                        );
+                let compact = ui.available_width() < 300.0;
+                let title_width = (ui.available_width() - if compact { 76.0 } else { 160.0 }).max(1.0);
+                ui.allocate_ui_with_layout(egui::vec2(title_width, 28.0),
+                    egui::Layout::top_down(egui::Align::Min), |ui| {
+                        ui.add(egui::Label::new(egui::RichText::new(title).strong().size(15.0))
+                            .truncate()).on_hover_text(title);
+                        if !compact {
+                            ui.add(egui::Label::new(egui::RichText::new(subtitle).small().weak())
+                                .truncate()).on_hover_text(subtitle);
+                        }
                     });
-                ui.vertical(|ui| {
-                    ui.label(egui::RichText::new(title).strong().size(15.0));
-                    ui.label(egui::RichText::new(subtitle).small().weak());
-                });
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    effect_controls_badge(
+                    if !compact { effect_controls_badge(
                         ui,
                         crate::ui::icons::SELECTION_ALL,
                         selection_label,
-                    );
+                    ); }
                     response.next = ui
                         .add_enabled(
                             can_navigate,
@@ -1597,7 +1593,7 @@ fn effect_controls_timing_overview(
 ) -> egui::Response {
     let total_time_ms = total_time_ms.max(start_time_ms.saturating_add(duration_ms)).max(1);
     let (rect, response) = ui.allocate_exact_size(
-        egui::vec2(ui.available_width(), 30.0),
+        egui::vec2(ui.available_width(), 20.0),
         egui::Sense::hover(),
     );
     let track = egui::Rect::from_min_max(
@@ -1635,6 +1631,46 @@ fn effect_controls_timing_overview(
     ))
 }
 
+/// Exact millisecond editing, without a misleading position slider. The same
+/// bounded, unit-aware field is used by the docked inspector and cue dialog.
+fn effect_controls_time_field(
+    ui: &mut egui::Ui,
+    label: &str,
+    value: &mut u64,
+    range: std::ops::RangeInclusive<u64>,
+    human_units: bool,
+) -> (bool, bool) {
+    let before = *value;
+    let mut undo = false;
+    ui.push_id(label, |ui| {
+        ui.label(egui::RichText::new(label).small().weak());
+        let step = crate::ui::dialog::numeric_adjustment(
+            crate::config::NumericInputSteps::for_step(50.0),
+            ui.input(|input| input.modifiers),
+        ).round().max(1.0) as u64;
+        let gap = ui.spacing().item_spacing.x;
+        let number_width = (ui.available_width() - 52.0 - gap * 2.0).max(1.0);
+        ui.horizontal(|ui| {
+            if ui.add_sized([26.0, 28.0], egui::Button::new(crate::ui::icons::MINUS))
+                .on_hover_text("Decrease · Ctrl: fine / Shift: coarse").clicked() {
+                *value = value.saturating_sub(step).clamp(*range.start(), *range.end());
+                undo = true;
+            }
+            let editor = ui.add_sized([number_width, 28.0],
+                crate::duration::time_value_drag(value, range.clone(), step as f64, human_units));
+            undo |= editor.drag_started() || editor.gained_focus()
+                || (editor.changed() && !editor.dragged());
+            editor.on_hover_text("Enter an exact time (for example 1.25s or 00:01:02.500)");
+            if ui.add_sized([26.0, 28.0], egui::Button::new(crate::ui::icons::PLUS))
+                .on_hover_text("Increase · Ctrl: fine / Shift: coarse").clicked() {
+                *value = value.saturating_add(step).clamp(*range.start(), *range.end());
+                undo = true;
+            }
+        });
+    });
+    (*value != before, undo)
+}
+
 fn effect_controls_relay_state(
     ui: &mut egui::Ui,
     value: &mut u16,
@@ -1645,8 +1681,8 @@ fn effect_controls_relay_state(
     let button_width = ((ui.available_width() - gap) / 2.0).max(70.0);
     ui.horizontal(|ui| {
         let on = *value >= 5_000;
-        let on_color = egui::Color32::from_rgb(38, 166, 91);
-        let off_color = egui::Color32::from_rgb(125, 146, 160);
+        let on_color = egui::Color32::from_rgb(26, 127, 69);
+        let off_color = egui::Color32::from_rgb(83, 108, 125);
         if ui
             .add_sized(
                 [button_width, 30.0],
@@ -1657,6 +1693,7 @@ fn effect_controls_relay_state(
                 .fill(if on { on_color } else { ui.visuals().widgets.inactive.weak_bg_fill })
                 .stroke(egui::Stroke::new(1.0, if on { on_color } else { ui.visuals().widgets.inactive.bg_stroke.color })),
             )
+            .on_hover_text("Set the cue's value to On; does not switch the live output")
             .clicked()
         {
             *value = 10_000;
@@ -1671,6 +1708,7 @@ fn effect_controls_relay_state(
                 .fill(if !on { off_color } else { ui.visuals().widgets.inactive.weak_bg_fill })
                 .stroke(egui::Stroke::new(1.0, if !on { off_color } else { ui.visuals().widgets.inactive.bg_stroke.color })),
             )
+            .on_hover_text("Set the cue's value to Off; does not switch the live output")
             .clicked()
         {
             *value = 0;
@@ -1717,19 +1755,13 @@ fn effect_controls_card_with_ping<R>(
             .selection
             .bg_fill
             .gamma_multiply((base_mult + 0.18 * ping_strength).min(1.0))
-    } else if emphasized {
-        visuals
-            .selection
-            .bg_fill
-            .gamma_multiply(if visuals.dark_mode { 0.18 } else { 0.10 })
     } else {
         visuals.widgets.noninteractive.bg_fill
     };
     let stroke = if ping_strength > 0.0 {
-        let stroke_width = 1.0 + 2.0 * ping_strength;
         let stroke_alpha = (0.72 + 0.28 * ping_strength).min(1.0);
         egui::Stroke::new(
-            stroke_width,
+            1.0,
             visuals.selection.bg_fill.gamma_multiply(stroke_alpha),
         )
     } else if emphasized {
@@ -1741,7 +1773,7 @@ fn effect_controls_card_with_ping<R>(
         .fill(fill)
         .stroke(stroke)
         .corner_radius(10.0)
-        .inner_margin(egui::Margin::symmetric(EFFECT_CONTROLS_CARD_MARGIN, 11))
+        .inner_margin(egui::Margin::symmetric(EFFECT_CONTROLS_CARD_MARGIN, 9))
         .show(ui, |ui| {
             ui.set_width(effect_controls_frame_content_width(outer_width));
             ui.horizontal(|ui| {
@@ -1758,15 +1790,15 @@ fn effect_controls_card_with_ping<R>(
                         ui.label(egui::RichText::new(icon).size(17.0).color(icon_color));
                     });
                 ui.vertical(|ui| {
-                    ui.label(egui::RichText::new(title).strong().size(14.0));
+                    ui.add(egui::Label::new(egui::RichText::new(title).strong().size(14.0))
+                        .truncate()).on_hover_text(title);
                     if let Some(subtitle) = subtitle.filter(|value| !value.trim().is_empty()) {
-                        ui.label(egui::RichText::new(subtitle).small().weak());
+                        ui.add(egui::Label::new(egui::RichText::new(subtitle).small().weak())
+                            .truncate()).on_hover_text(subtitle);
                     }
                 });
             });
-            ui.add_space(8.0);
-            ui.separator();
-            ui.add_space(7.0);
+            ui.add_space(6.0);
             add_contents(ui)
         });
     if emphasized {
@@ -3238,27 +3270,40 @@ fn timeline_cue_dialog_id() -> egui::Id {
 }
 
 fn direct_cue_behavior_editor(ui: &mut egui::Ui, behavior: &mut crate::four_d::models::DirectCueBehavior,
+    pwm: bool) {
+    use crate::four_d::models::DirectCueBehavior;
+    ui.label(egui::RichText::new("Behavior").small().weak());
+    egui::ComboBox::from_id_salt("direct-cue-behavior")
+        .width(ui.available_width())
+        .selected_text(match behavior {
+            DirectCueBehavior::SetKeep => "Set and keep",
+            DirectCueBehavior::Hold => "Timed hold",
+            DirectCueBehavior::Ramp => "PWM ramp",
+        })
+        .show_ui(ui, |ui| {
+            ui.selectable_value(behavior, DirectCueBehavior::SetKeep, "Set and keep")
+                .on_hover_text("Set the value once; keep it until the next command");
+            ui.selectable_value(behavior, DirectCueBehavior::Hold, "Timed hold")
+                .on_hover_text("Apply the value for the cue duration, then apply the exit value");
+            if pwm { ui.selectable_value(behavior, DirectCueBehavior::Ramp, "PWM ramp")
+                .on_hover_text("Transition from the start value to the end value over the cue duration"); }
+        });
+}
+
+fn direct_cue_exit_editor(ui: &mut egui::Ui, behavior: crate::four_d::models::DirectCueBehavior,
     end: &mut u16, pwm: bool) {
     use crate::four_d::models::DirectCueBehavior;
-    ui.horizontal_wrapped(|ui| {
-        ui.selectable_value(behavior, DirectCueBehavior::SetKeep, "Set and keep");
-        ui.selectable_value(behavior, DirectCueBehavior::Hold, "Timed hold");
-        if pwm { ui.selectable_value(behavior, DirectCueBehavior::Ramp, "PWM ramp"); }
-    });
-    if *behavior != DirectCueBehavior::SetKeep {
-        ui.horizontal(|ui| {
-            ui.label(if *behavior == DirectCueBehavior::Ramp { "Ramp to" } else { "On exit" });
+    if behavior != DirectCueBehavior::SetKeep {
+            ui.add_space(5.0);
+            ui.label(egui::RichText::new(if behavior == DirectCueBehavior::Ramp { "Ramp to" } else { "On exit" })
+                .small().weak());
             if pwm {
-                ui.add(egui::Slider::new(end, 0..=10_000)
-                    .custom_formatter(|v, _| format!("{:.1}%", v / 100.0))
-                    .custom_parser(|text| text.trim().trim_end_matches('%').trim().parse::<f64>().ok()
-                        .filter(|value| value.is_finite())
-                        .map(|value| (value.clamp(0.0, 100.0) * 100.0).round())));
+                let mut percent = f64::from(*end) / 100.0;
+                draw_pwm_editor_row(ui, &mut percent, true);
+                *end = (percent.clamp(0.0, 100.0) * 100.0).round() as u16;
             } else {
-                ui.selectable_value(end, 0, "Off");
-                ui.selectable_value(end, 10_000, "On");
+                effect_controls_relay_state(ui, end, "On", "Off");
             }
-        });
     }
 }
 
@@ -3346,7 +3391,6 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
             let selected_cue_label = app.tr("Selected cue");
             let name_label = app.tr("Name");
             let timing_label = app.tr("Timing");
-            let timing_subtitle = app.tr("Exact timeline placement and length");
             let start_time_label = app.tr("Starts");
             let duration_label = app.tr("Duration");
             let fixed_duration_help = app.tr("Duration is defined by the recorded effect");
@@ -3372,7 +3416,6 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
             let macro_label = app.tr("Macro");
             let mode_label = app.tr("Mode");
             let effect_label = app.tr("Effect");
-            let untitled_effect_label = app.tr("Untitled effect");
             let max_secs = if app.duration > 0.0 {
                 app.duration
             } else {
@@ -3395,21 +3438,25 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
                 let displayed_kind = app.tr(kind_label);
                 let displayed_ownership = app.tr(ownership_label);
                 let template = &mut app.timeline.templates[t_idx];
-                let summary_title = if template.name.trim().is_empty() {
-                    untitled_effect_label
-                } else {
-                    crate::ui::i18n::visual_text(display_language, &template.name)
-                };
-
                 effect_controls_card_with_ping(
                     ui,
                     panel_width,
                     kind_icon,
-                    &summary_title,
-                    Some(&selected_cue_label),
+                    &selected_cue_label,
+                    None,
                     true,
                     ping_strength,
                     |ui| {
+                        ui.label(egui::RichText::new(&name_label).small().weak());
+                        let name_align = crate::ui::i18n::input_alignment(app.rtl, &template.name);
+                        let name_editor = ui.add_sized(
+                            [ui.available_width(), 28.0],
+                            crate::ui::dialog::singleline_text_edit(&mut template.name)
+                                .horizontal_align(name_align),
+                        );
+                        if name_editor.gained_focus() { push_undo = true; }
+                        if name_editor.changed() { timeline_dirty = true; }
+                        ui.add_space(6.0);
                         ui.horizontal_wrapped(|ui| {
                             effect_controls_badge(ui, kind_icon, displayed_kind.clone());
                             effect_controls_badge(
@@ -3425,20 +3472,6 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
                                 },
                             );
                         });
-                        ui.add_space(7.0);
-                        ui.label(egui::RichText::new(&name_label).small().weak());
-                        let name_align = crate::ui::i18n::input_alignment(app.rtl, &template.name);
-                        let name_editor = ui.add_sized(
-                            [ui.available_width(), 26.0],
-                            crate::ui::dialog::singleline_text_edit(&mut template.name)
-                                .horizontal_align(name_align),
-                        );
-                        if name_editor.gained_focus() {
-                            push_undo = true;
-                        }
-                        if name_editor.changed() {
-                            timeline_dirty = true;
-                        }
                     },
                 );
 
@@ -3449,111 +3482,64 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
                     panel_width,
                     crate::ui::icons::CLOCK,
                     &timing_label,
-                    Some(&timing_subtitle),
+                    None,
                     false,
                     |ui| {
                         let max_start_ms = (max_secs * 1_000.0).round() as u64;
                         let mut start_ms = instance_start_ms;
+                        let mut duration_ms = template.duration_ms;
+                        let mut fields = |ui: &mut egui::Ui, start_field: bool| {
+                            if start_field {
+                                let (changed, undo) = effect_controls_time_field(ui,
+                                    &start_time_label, &mut start_ms, 0..=max_start_ms.max(instance_start_ms),
+                                    app.human_readable_time_units);
+                                push_undo |= undo;
+                                if changed { update_start_to = Some(start_ms); timeline_dirty = true; }
+                            } else if template.duration_resizable() {
+                                let (changed, undo) = effect_controls_time_field(ui,
+                                    &duration_label, &mut duration_ms, 50..=3_600_000,
+                                    app.human_readable_time_units);
+                                push_undo |= undo;
+                                if changed {
+                                    isolate_instance = true;
+                                    update_duration_to = Some(duration_ms);
+                                    timeline_dirty = true;
+                                }
+                            } else {
+                                ui.label(egui::RichText::new(&duration_label).small().weak());
+                                ui.add_sized([ui.available_width(), 28.0], egui::Label::new(
+                                    if template.is_state_marker() { "Until next command".to_string() }
+                                    else { format!("{}  {}", crate::ui::icons::LOCK,
+                                        crate::duration::format_effect_duration_for_language(display_language, duration_ms)) }
+                                ).truncate()).on_hover_text(if template.is_state_marker() {
+                                    "A state marker persists until another command changes this channel"
+                                } else { &fixed_duration_help });
+                            }
+                        };
+                        if ui.available_width() >= 320.0 {
+                            ui.columns(2, |columns| { fields(&mut columns[0], true); fields(&mut columns[1], false); });
+                        } else {
+                            fields(ui, true);
+                            ui.add_space(6.0);
+                            fields(ui, false);
+                        }
+                        ui.add_space(4.0);
                         effect_controls_timing_overview(
                             ui,
                             start_ms,
                             if template.is_state_marker() {
                                 0
                             } else {
-                                template.duration_ms
+                                duration_ms
                             },
                             max_start_ms,
                             (app.playback_time.max(0.0) * 1_000.0).round() as u64,
                         );
-                        ui.horizontal(|ui| {
-                            ui.label(
-                                egui::RichText::new(crate::duration::format_time_value_ms(
-                                    start_ms,
-                                ))
-                                .small()
-                                .weak(),
-                            );
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    ui.label(
-                                        egui::RichText::new(crate::duration::format_time_value_ms(
-                                            start_ms.saturating_add(
-                                                if template.is_state_marker() {
-                                                    0
-                                                } else {
-                                                    template.duration_ms
-                                                },
-                                            ),
-                                        ))
-                                        .small()
-                                        .weak(),
-                                    );
-                                },
-                            );
-                        });
-                        ui.add_space(6.0);
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new(&start_time_label).weak());
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    let editor = ui.add(crate::duration::time_value_drag(
-                                        &mut start_ms,
-                                        0..=max_start_ms,
-                                        50.0,
-                                        app.human_readable_time_units,
-                                    ));
-                                    if editor.drag_started()
-                                        || (editor.changed() && !editor.dragged())
-                                    {
-                                        push_undo = true;
-                                    }
-                                    if editor.changed() {
-                                        update_start_to = Some(start_ms);
-                                        timeline_dirty = true;
-                                    }
-                                },
-                            );
-                        });
-                        ui.add_space(7.0);
-                        ui.horizontal(|ui| {
-                            ui.label(egui::RichText::new(&duration_label).weak());
-                            ui.with_layout(
-                                egui::Layout::right_to_left(egui::Align::Center),
-                                |ui| {
-                                    if template.duration_resizable() {
-                                        let mut duration_ms = template.duration_ms;
-                                        let editor = ui.add(crate::duration::time_value_drag(
-                                            &mut duration_ms,
-                                            50..=3_600_000,
-                                            50.0,
-                                            app.human_readable_time_units,
-                                        ));
-                                        if editor.drag_started()
-                                            || (editor.changed() && !editor.dragged())
-                                        {
-                                            push_undo = true;
-                                        }
-                                        if editor.changed() {
-                                            isolate_instance = true;
-                                            update_duration_to = Some(duration_ms);
-                                            timeline_dirty = true;
-                                        }
-                                    } else if template.is_state_marker() {
-                                        ui.label("Until next command");
-                                    } else {
-                                        ui.label(
-                                            crate::duration::format_effect_duration_for_language(
-                                                display_language,
-                                                template.duration_ms,
-                                            ),
-                                        )
-                                        .on_hover_text(&fixed_duration_help);
-                                    }
-                                },
-                            );
-                        });
+                        if !template.is_state_marker() {
+                            ui.label(egui::RichText::new(format!("Ends at {}",
+                                crate::duration::format_time_value_ms(start_ms.saturating_add(duration_ms))))
+                                .small().weak());
+                        }
                     },
                 );
 
@@ -3579,10 +3565,8 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
                             let mut value = direct.value_basis_points;
                             let mut behavior = direct.behavior;
                             let mut end = direct.end_value_basis_points;
-                            direct_cue_behavior_editor(ui, &mut behavior, &mut end, !is_relay);
-                            if behavior != direct.behavior || end != direct.end_value_basis_points {
-                                update_direct_behavior_to = Some((value, behavior, end));
-                            }
+                            direct_cue_behavior_editor(ui, &mut behavior, !is_relay);
+                            ui.add_space(6.0);
                             if is_relay {
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new(&state_label).weak());
@@ -3593,26 +3577,25 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
                                                 .control_key
                                                 .strip_prefix("relay.")
                                                 .and_then(|value| value.parse::<u8>().ok());
-                                            let live = relay_id.is_some_and(|relay_id| {
-                                                active_relays.contains(&relay_id)
-                                            });
+                                            let live = connected_hardware.as_ref().and_then(|_| relay_id)
+                                                .map(|relay_id| active_relays.contains(&relay_id));
                                             ui.colored_label(
-                                                if live {
+                                                if live == Some(true) {
                                                     egui::Color32::from_rgb(38, 166, 91)
                                                 } else {
                                                     ui.visuals().weak_text_color()
                                                 },
-                                                if live {
+                                                if live == Some(true) {
                                                     format!(
                                                         "{} {live_output_on_label}",
                                                         crate::ui::icons::DOT_OUTLINE
                                                     )
-                                                } else {
+                                                } else if live == Some(false) {
                                                     format!(
                                                         "{} {live_output_off_label}",
                                                         crate::ui::icons::DOT_OUTLINE
                                                     )
-                                                },
+                                                } else { "Live state unavailable".to_string() },
                                             );
                                         },
                                     );
@@ -3620,9 +3603,15 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
                                 ui.add_space(5.0);
                                 effect_controls_relay_state(ui, &mut value, &on_label, &off_label);
                             } else {
+                                ui.label(egui::RichText::new(if behavior == crate::four_d::models::DirectCueBehavior::Ramp {
+                                    "Start value" } else { "Value" }).small().weak());
                                 let mut percent = f64::from(value) / 100.0;
                                 draw_pwm_editor_row(ui, &mut percent, true);
                                 value = (percent.clamp(0.0, 100.0) * 100.0).round() as u16;
+                            }
+                            direct_cue_exit_editor(ui, behavior, &mut end, !is_relay);
+                            if behavior != direct.behavior || end != direct.end_value_basis_points {
+                                update_direct_behavior_to = Some((value, behavior, end));
                             }
                             if value != direct.value_basis_points {
                                 if update_direct_behavior_to.is_some() {
@@ -3784,15 +3773,10 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
                 }
 
                 ui.add_space(8.0);
-                effect_controls_card(
-                    ui,
-                    panel_width,
-                    crate::ui::icons::INFO,
-                    &details_label,
-                    Some(&displayed_ownership),
-                    false,
-                    |ui| {
-                        let identifier_width = (ui.available_width() - 112.0).max(80.0);
+                egui::CollapsingHeader::new(format!("{}  {details_label}", crate::ui::icons::INFO))
+                    .id_salt(("cue-details", id))
+                    .show(ui, |ui| {
+                        let identifier_width = (ui.available_width() - 112.0).max(1.0);
                         egui::Grid::new(("effect-control-identifiers", id))
                             .num_columns(3)
                             .spacing([8.0, 6.0])
@@ -3834,15 +3818,14 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
                                 }
                                 ui.end_row();
                             });
-                    },
-                );
+                    });
 
                 ui.add_space(8.0);
                 egui::Frame::new()
                     .fill(ui.visuals().widgets.noninteractive.weak_bg_fill)
                     .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
                     .corner_radius(9.0)
-                    .inner_margin(egui::Margin::same(8))
+                    .inner_margin(egui::Margin::symmetric(EFFECT_CONTROLS_CARD_MARGIN, 8))
                     .show(ui, |ui| {
                         ui.set_width(effect_controls_frame_content_width(panel_width));
                         ui.horizontal_wrapped(|ui| {
@@ -10705,6 +10688,47 @@ mod timeline_row_tests {
             assert!(painted[0] <= available + f32::EPSILON);
             assert_eq!(painted[0], effect_controls_content_width(available));
         }
+    }
+
+    #[test]
+    fn cue_time_fields_fit_narrow_panels_without_mutating_exact_values() {
+        for available in [144.0, 280.0, 480.0] {
+            let context = egui::Context::default();
+            let mut value = 54_267;
+            let mut field_width = 0.0;
+            let output = context.run_ui(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO,
+                    egui::vec2(available, 240.0))), ..Default::default()
+            }, |ui| {
+                let field = ui.scope(|ui| {
+                    assert_eq!(effect_controls_time_field(ui, "Starts", &mut value,
+                        0..=60_000, true), (false, false));
+                });
+                field_width = field.response.rect.width();
+            });
+            discard_ui_output(output);
+            assert_eq!(value, 54_267);
+            assert!(field_width <= available, "field overflow at {available}: {field_width}");
+        }
+    }
+
+    #[test]
+    fn cue_selection_ping_does_not_change_card_geometry() {
+        let context = egui::Context::default();
+        let mut widths = Vec::new();
+        let output = context.run_ui(egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO,
+                egui::vec2(300.0, 400.0))), ..Default::default()
+        }, |ui| {
+            for ping in [0.0, 0.5, 1.0] {
+                let card = effect_controls_card_with_ping(ui, 280.0,
+                    crate::ui::icons::PLUG, "Selected cue", None, true, ping,
+                    |ui| { ui.label("Same cue"); });
+                widths.push(card.response.rect.width());
+            }
+        });
+        discard_ui_output(output);
+        assert!(widths.windows(2).all(|pair| pair[0] == pair[1]));
     }
 
     #[test]
