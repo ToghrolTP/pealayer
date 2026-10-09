@@ -4,6 +4,23 @@ Owning tracker: [Pealayer issue #80](https://github.com/ToghrolTP/pealayer/issue
 Updated on 9 October 2026. This is an acceptance ledger, not a claim that all
 historical requests or branches are complete.
 
+## Canonical Windows paths (9 October)
+
+The user clarified that `C:\development` is reserved for development tools.
+The Pealayer checkout and shared build cache previously there have been moved,
+not copied, beneath `%LOCALAPPDATA%\Programs\Pealayer`. Canonical source remains
+`source\Pealayer`; the shared Cargo cache is now `build-cache\cargo-target`.
+The existing detached checkout is preserved at `source\checkpoints\build-checkpoint`
+with repaired Git metadata; no checkout was duplicated or reset, and the old
+development location no longer exists. Windows runner, packager, host profile
+and generated Cargo settings now share that cache path. See
+[working locations and low-write workflow](LOCAL-WORKSPACE-HYGIENE.md).
+
+This pass changed tooling/paths only: no build, test suite, CI wait, application
+replacement, media action or controller-service change. Syntax inspection and
+file/runtime identity checks completed; both installed apps kept their PIDs and
+respond to health requests. This does not claim a newly compiled runtime.
+
 ## Timeline toolbar recovery (9 October)
 
 The requested Pan left/right and Follow/Bring-into-view swap was not lost from

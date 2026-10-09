@@ -7,6 +7,8 @@ executables, and reduced unnecessary SSD writes on 2026-10-08.
 
 - Canonical source: `%LOCALAPPDATA%\Programs\Pealayer\source\Pealayer`.
 - Installed application: `%LOCALAPPDATA%\Programs\Pealayer\bin`.
+- Shared Windows Cargo cache: `build-cache\cargo-target` under that program
+  root, selected by the shared Windows resolver and generated Cargo settings.
 - Reusable host profile/import library: `config\windows-build-host.json` and
   `build-dependencies\libmpv` under the same program root.
 - Candidate packages: `staging\preferences-organization`; reuse the directory
@@ -14,11 +16,38 @@ executables, and reduced unnecessary SSD writes on 2026-10-08.
 - Private screenshots/diagnostics: `verification` under the program root. Do not
   commit private host state, media references, runtime DLLs or user artwork.
 
+`C:\development` is reserved for development tools, not Pealayer-owned source,
+runtime files or caches. Do not recreate a checkout or target directory there.
+
 Before adopting a new working location, check the actual Git worktree ownership,
 branch, dirty state, remote reachability and active owners. Do not overwrite an
 existing canonical checkout's branch or remove another owner's worktree.
 
-## Cleanup checkpoint, not cleanup completion
+## Canonical relocation completed (9 October 2026)
+
+The clean, detached build checkout formerly at `C:\development\Pealayer` was
+relocated with Git's worktree move to `source\checkpoints\build-checkpoint`
+under the program root. Its Git identity, tracked files, npm dependencies and
+effect-guide PDF were preserved; no new checkout or duplicate copy was created.
+The existing Cargo target directory was moved separately to the shared canonical
+cache using a same-volume directory rename. Its last built executable digest
+is unchanged, and the old development directory no longer exists. Git metadata
+and user write access were repaired for the relocated directories without
+resetting branches or changing global safe-directory exceptions.
+
+Both Windows runner and packager now resolve one shared default cache path;
+intentional `CARGO_TARGET_DIR` overrides remain available. The host profile and
+generated Cargo settings for canonical source and the current release worktree
+were refreshed without a build or test run. No global Cargo cache override was
+set, avoiding interference with other Rust projects. Running David/Cafe binaries,
+media, controller service and settings were not replaced for this path-only
+change. No symlink or compatibility alias was left in `C:\development`.
+
+This relocation is not a claim that other historical caches or worktrees have
+been deleted. Preserve their owners and follow the older inventory below before
+any separate cleanup.
+
+## Historical cleanup checkpoint (8 October), not cleanup completion
 
 Read-only audit found six registered worktrees, all clean and with no commits
 unique from origin. Two current-task worktrees remain under

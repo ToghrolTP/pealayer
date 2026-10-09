@@ -60,15 +60,8 @@ $rustBin = @(
 if ($rustBin) {
     $env:Path = $rustBin + ';' + $env:Path
 }
-$cargoTargetDirectory = if ($env:CARGO_TARGET_DIR) {
-    if ([System.IO.Path]::IsPathRooted($env:CARGO_TARGET_DIR)) {
-        [System.IO.Path]::GetFullPath($env:CARGO_TARGET_DIR)
-    } else {
-        [System.IO.Path]::GetFullPath((Join-Path $repositoryRoot $env:CARGO_TARGET_DIR))
-    }
-} else {
-    Join-Path $repositoryRoot 'target'
-}
+$cargoTargetDirectory = Get-PealayerCargoTargetDirectory -RepositoryRoot $repositoryRoot
+$env:CARGO_TARGET_DIR = $cargoTargetDirectory
 $releaseDirectory = Join-Path $cargoTargetDirectory 'release'
 $stagingDirectory = Join-Path $cargoTargetDirectory 'package-windows'
 $sourceDirectory = Split-Path -Parent $repositoryRoot
