@@ -15,6 +15,14 @@ const HEALTH_TOKEN_ENV: &str = "PEALAYER_UPDATE_HEALTH_TOKEN";
 const HELPER_PATH_ENV: &str = "PEALAYER_UPDATE_HELPER_PATH";
 const JOURNAL_PATH_ENV: &str = "PEALAYER_UPDATE_JOURNAL_PATH";
 
+fn sha256_hex(digest: impl AsRef<[u8]>) -> String {
+    digest
+        .as_ref()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect()
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct UpdateStatus {
     pub operation_id: Option<String>,
@@ -177,7 +185,7 @@ impl UpdateManager {
         command_tx: &std::sync::mpsc::Sender<crate::platform::interop::InteropCommand>,
     ) {
         if command_tx
-            .send(crate::platform::interop::InteropCommand::Quit)
+            .send(crate::platform::interop::InteropCommand::QuitLocal)
             .is_ok()
         {
             // An idle/paused eframe window may have no more frames scheduled.
@@ -552,7 +560,7 @@ fn finalize_upload_file(
             upload.received, upload.expected_size
         ));
     }
-    let actual = format!("{:x}", upload.hasher.finalize());
+    let actual = sha256_hex(upload.hasher.finalize());
     if actual != upload.expected_sha256 {
         let _ = fs::remove_file(&upload.path);
         return Err(format!(
@@ -633,7 +641,7 @@ fn download_update(
             "download size mismatch: expected {size} bytes, received {bytes_done}"
         ));
     }
-    let actual = format!("{:x}", hash.finalize());
+    let actual = sha256_hex(hash.finalize());
     if let Some(expected) = expected
         && actual != expected
     {
@@ -984,7 +992,7 @@ pub fn push_current_to_peer(target: &str) -> Result<UpdateStatus, String> {
             }
         };
         offset += count as u64;
-        println!("{}", status.message);
+        crate::cli_println!("{}", status.message);
     }
     let finish_result = client
         .post(format!("{target}/api/update/finish"))
@@ -1367,7 +1375,7 @@ pub fn schedule_startup_health_acknowledgement() {
             file.sync_all()
         });
         if let Err(error) = acknowledgement {
-            eprintln!("write update health acknowledgement: {error}");
+            crate::cli_eprintln!("write update health acknowledgement: {error}");
             return;
         }
         if let Some(helper) = helper {
@@ -1450,7 +1458,7 @@ fn validate_journal(journal: &UpdateJournal, supplied_path: &Path) -> Result<(),
     Ok(())
 }
 
-fn wait_for_parent_exit(pid: u32, timeout: Duration) -> Result<(), String> {
+pub(crate) fn wait_for_parent_exit(pid: u32, timeout: Duration) -> Result<(), String> {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         if !process_is_running(pid) {
@@ -1517,8 +1525,15 @@ fn normalize_sha256(value: &str) -> Result<String, String> {
 fn sha256_file(path: &Path) -> Result<String, String> {
     let mut file = File::open(path).map_err(|error| format!("open {}: {error}", path.display()))?;
     let mut hash = Sha256::new();
-    std::io::copy(&mut file, &mut hash).map_err(|error| error.to_string())?;
-    Ok(format!("{:x}", hash.finalize()))
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let count = file.read(&mut buffer).map_err(|error| error.to_string())?;
+        if count == 0 {
+            break;
+        }
+        hash.update(&buffer[..count]);
+    }
+    Ok(sha256_hex(hash.finalize()))
 }
 
 fn verify_file_sha256(path: &Path, expected: &str) -> Result<(), String> {
@@ -1835,7 +1850,7 @@ mod tests {
             health_path: directory.join(".update.healthy"),
             health_token: "test".into(),
             current_sha256: sha256_file(&current_path).unwrap(),
-            replacement_sha256: format!("{:x}", Sha256::digest(b"replacement")),
+            replacement_sha256: sha256_hex(Sha256::digest(b"replacement")),
             arguments: vec![],
             working_directory: directory.clone(),
         };
@@ -1896,7 +1911,7 @@ mod tests {
         manager.dispatch_quit(&sender);
         assert!(matches!(
             receiver.try_recv(),
-            Ok(crate::platform::interop::InteropCommand::Quit)
+            Ok(crate::platform::interop::InteropCommand::QuitLocal)
         ));
         assert!(
             wakeups.load(Ordering::Relaxed) > previous,

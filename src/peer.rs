@@ -5,6 +5,17 @@ use serde_json::Value;
 use std::sync::{Arc, Mutex, OnceLock, mpsc};
 use std::time::{Duration, Instant};
 
+const ACTIVE_SESSION_POLL_INTERVAL: Duration = Duration::from_millis(100);
+const IDLE_SESSION_POLL_INTERVAL: Duration = Duration::from_secs(1);
+
+fn session_poll_interval(paused: bool) -> Duration {
+    if paused {
+        IDLE_SESSION_POLL_INTERVAL
+    } else {
+        ACTIVE_SESSION_POLL_INTERVAL
+    }
+}
+
 pub const USER_AGENT: &str = concat!("Pealayer/", env!("CARGO_PKG_VERSION"), " peer-client");
 static CLIENT: OnceLock<Arc<Client>> = OnceLock::new();
 static INSTANCE: OnceLock<String> = OnceLock::new();
@@ -216,6 +227,8 @@ pub fn take_gui_requests() -> Vec<GuiRequest> {
 struct ServerResources {
     engine: mpsc::Sender<crate::four_d::engine::EngineMessage>,
     capabilities: Arc<Mutex<Option<crate::four_d::controller::HardwareCapabilities>>>,
+    media_playback: Arc<Mutex<crate::four_d::media_sync::PlaybackSample>>,
+    media_clock_owned: Arc<std::sync::atomic::AtomicBool>,
     mpv: &'static libmpv2::Mpv,
     context: eframe::egui::Context,
 }
@@ -227,9 +240,27 @@ pub fn register_server(
     let _ = SERVER.set(ServerResources {
         engine: engine.sender.clone(),
         capabilities: engine.hardware_capabilities.clone(),
+        media_playback: engine.media_playback.clone(),
+        media_clock_owned: engine.media_clock_owned.clone(),
         mpv,
         context,
     });
+}
+/// Direct observer health, independent of a cached UI snapshot. No media paths
+/// or user-supplied titles are included in process diagnostics.
+pub fn playback_clock_diagnostics() -> Value {
+    let Some(server) = SERVER.get() else { return Value::Null };
+    match server.media_playback.try_lock() {
+        Ok(sample) => serde_json::json!({
+            "observer_owned": server.media_clock_owned.load(std::sync::atomic::Ordering::Acquire),
+            "identity_ready": !sample.name.is_empty(), "loaded": sample.loaded,
+            "position_ms": sample.position_ms, "playing": sample.playing,
+            "buffering": sample.buffering, "epoch": sample.epoch,
+            "sample_age_ms": sample.observed_at.elapsed().as_millis() as u64,
+        }),
+        Err(std::sync::TryLockError::WouldBlock) => serde_json::json!({"state":"busy"}),
+        Err(std::sync::TryLockError::Poisoned(_)) => serde_json::json!({"state":"unavailable"}),
+    }
 }
 pub fn server_session() -> Result<Session, String> {
     let server = SERVER.get().ok_or("Pealayer session is initializing")?;
@@ -506,10 +537,11 @@ impl Client {
         use sha2::{Digest, Sha256};
         use std::io::Read;
         let directory = crate::server::thumbnails::get_thumbnail_cache_dir().join("peers");
-        let key = format!(
-            "{:x}",
-            Sha256::digest(format!("{}\n{target}", self.origin).as_bytes())
-        );
+        let digest = Sha256::digest(format!("{}\n{target}", self.origin).as_bytes());
+        let key = digest
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>();
         let path = directory.join(format!("{key}.jpg"));
         if path.is_file() {
             return Ok(path);
@@ -635,10 +667,7 @@ pub fn validate_config_expectations(
     }
     Ok(())
 }
-pub fn connect(value: &str, local_port: u16) -> Result<(), String> {
-    if local_port == 0 {
-        return Err("Client Web port must be nonzero".into());
-    }
+pub(crate) fn probe_session(value: &str) -> Result<(url::Url, reqwest::blocking::Client, Session, Duration), String> {
     let origin = endpoint(value)?;
     let http = reqwest::blocking::Client::builder()
         .no_proxy()
@@ -655,6 +684,7 @@ pub fn connect(value: &str, local_port: u16) -> Result<(), String> {
                 .join("/api/peer/session")
                 .map_err(|error| error.to_string())?,
         )
+        .header("X-Pealayer-Route", instance_id())
         .send()
         .map_err(|error| error.to_string())?;
     if !response.status().is_success() {
@@ -669,6 +699,14 @@ pub fn connect(value: &str, local_port: u16) -> Result<(), String> {
         return Err("A Pealayer instance cannot connect to itself".into());
     }
     session.config.validate()?;
+    Ok((origin, http, session, started.elapsed()))
+}
+
+pub fn connect(value: &str, local_port: u16) -> Result<(), String> {
+    if local_port == 0 {
+        return Err("Client Web port must be nonzero".into());
+    }
+    let (origin, http, session, round_trip) = probe_session(value)?;
     let (tx, rx) = mpsc::sync_channel::<(String, Value, Instant)>(64);
     let client = Arc::new(Client {
         origin,
@@ -677,7 +715,7 @@ pub fn connect(value: &str, local_port: u16) -> Result<(), String> {
         latest: Mutex::new(ReceivedSession {
             session,
             received: Instant::now(),
-            round_trip: started.elapsed(),
+            round_trip,
             revision: 1,
         }),
         pending: tx,
@@ -706,6 +744,14 @@ pub fn connect(value: &str, local_port: u16) -> Result<(), String> {
     });
     std::thread::spawn(move || {
         loop {
+            // Keep precise position synchronization while playing, but do not
+            // serialize and transfer the full session/config ten times per
+            // second while paused. The one-second idle snapshot also bounds
+            // remote health detection without a permanent high-rate poll.
+            let poll_interval = client
+                .snapshot()
+                .map(|snapshot| session_poll_interval(snapshot.session.paused))
+                .unwrap_or(ACTIVE_SESSION_POLL_INTERVAL);
             let started = Instant::now();
             let next = client
                 .request(reqwest::Method::GET, "/api/peer/session")
@@ -750,7 +796,7 @@ pub fn connect(value: &str, local_port: u16) -> Result<(), String> {
                     }
                 }
             }
-            std::thread::sleep(Duration::from_millis(100));
+            std::thread::sleep(poll_interval);
         }
     });
     Ok(())
@@ -758,12 +804,17 @@ pub fn connect(value: &str, local_port: u16) -> Result<(), String> {
 
 #[derive(Clone, Default)]
 pub(crate) struct PeerUiState {
+    pub link_connected: Option<bool>,
     pub config: Option<crate::config::AppConfig>,
     pub loaded_media: Option<String>,
     pub media_error: Option<String>,
     pub timeline: Option<TimelineState>,
     pub last_correction: Option<Instant>,
     pub attached_external: std::collections::BTreeSet<String>,
+}
+
+pub(crate) fn peer_link_was_lost(previous: Option<bool>, fresh: bool) -> bool {
+    previous == Some(true) && !fresh
 }
 
 fn preserve_geometry(new: &mut Value, old: Option<&Value>) {
@@ -781,7 +832,57 @@ fn preserve_geometry(new: &mut Value, old: Option<&Value>) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn process_probe_requires_a_valid_foreign_session_and_sends_loop_identity() {
+        use std::io::{Read, Write};
+        for (id, expected) in [("foreign-instance", true), (instance_id(), false)] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let address=listener.local_addr().unwrap();
+            let session=Session {
+                instance_id:id.into(), config:crate::config::AppConfig::default(),status:serde_json::json!({}),
+                hardware:None,media:None,media_view:None,position:0.0,paused:true,speed:1.0,
+                sampled_unix_ms:0,timeline:None,config_path:String::new(),consumers:vec![],
+            };
+            let body=serde_json::to_string(&session).unwrap();
+            let worker=std::thread::spawn(move || {
+                let (mut stream, _)=listener.accept().unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+                let mut bytes=Vec::new();
+                loop {
+                    let mut chunk=[0u8;1024]; let count=stream.read(&mut chunk).unwrap();
+                    if count==0 { break; } bytes.extend_from_slice(&chunk[..count]);
+                    if bytes.windows(4).any(|window|window==b"\r\n\r\n") {break;}
+                }
+                let request=String::from_utf8(bytes).unwrap().to_ascii_lowercase();
+                assert!(request.starts_with("get /api/peer/session "));
+                assert!(request.contains(&format!("x-pealayer-route: {}",instance_id())));
+                write!(stream,"HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",body.len(),body).unwrap();
+            });
+            assert_eq!(probe_session(&format!("pealayer://{address}")).is_ok(), expected);
+            worker.join().unwrap();
+        }
+    }
     use super::*;
+    #[test]
+    fn stale_peer_link_is_not_a_board_disconnect_or_initial_connection_failure() {
+        assert!(peer_link_was_lost(Some(true), false));
+        assert!(!peer_link_was_lost(None, false));
+        assert!(!peer_link_was_lost(Some(false), false));
+        assert!(!peer_link_was_lost(Some(false), true));
+    }
+    #[test]
+    fn peer_session_polling_slows_only_while_paused() {
+        assert_eq!(
+            session_poll_interval(false),
+            Duration::from_millis(100)
+        );
+        assert_eq!(
+            session_poll_interval(true),
+            Duration::from_secs(1)
+        );
+        assert!(session_poll_interval(true) <= Duration::from_secs(1));
+    }
+
     #[test]
     fn endpoint_validation() {
         assert_eq!(

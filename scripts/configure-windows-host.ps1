@@ -38,6 +38,7 @@ $result = [ordered]@{
     runtime = Get-PealayerFileIdentity -Path $resolution.RuntimeLibrary
     host_profile = $saved.ProfilePath
     cargo_config = $saved.CargoConfigPath
+    cargo_target_directory = $saved.Profile.cargo_target_directory
     user_environment_persisted = $saved.UserEnvironmentPersisted
 }
 
@@ -51,4 +52,5 @@ if ($Json) {
     Write-Host "  runtime SHA256: $($result.runtime.sha256)"
     Write-Host "  host profile  : $($saved.ProfilePath)"
     Write-Host "  Cargo config  : $($saved.CargoConfigPath)"
+    Write-Host "  build cache   : $($result.cargo_target_directory)"
 }

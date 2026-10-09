@@ -11,6 +11,29 @@ pub enum Purpose {
     TimelineSave,
     ConfigImport,
     ConfigExport(Box<crate::config::AppConfig>),
+    PreferenceFile { key: String, extensions: Vec<String> },
+}
+
+fn preference_file_id(key: &str) -> egui::Id { egui::Id::new(("preference-file-selection", key)) }
+
+pub fn take_preference_file(ctx: &egui::Context, key: &str) -> Option<String> {
+    ctx.data_mut(|data| data.remove_temp::<String>(preference_file_id(key)))
+}
+
+fn selectable_file(purpose: &Purpose, path: &str) -> bool {
+    match purpose {
+        Purpose::PreferenceFile { extensions, .. } => path.rsplit('.').next()
+            .is_some_and(|extension| extensions.iter().any(|allowed| allowed.eq_ignore_ascii_case(extension))),
+        _ => true,
+    }
+}
+
+fn valid_selection(state: &State) -> bool {
+    if state.busy || state.selected.is_empty() || !selectable_file(&state.purpose, &state.selected) {
+        return false;
+    }
+    !matches!(state.purpose, Purpose::PreferenceFile { .. }) || state.listing.as_ref()
+        .is_some_and(|listing| listing.entries.iter().any(|entry| entry.path == state.selected && !entry.is_dir))
 }
 struct State {
     open: bool,
@@ -35,27 +58,32 @@ struct Connection {
     error: Option<String>,
 }
 pub fn connection_dialog(ctx: &egui::Context) {
+    connection_dialog_to(ctx, None);
+}
+
+pub fn connection_dialog_to(ctx: &egui::Context, endpoint: Option<&str>) {
     ctx.data_mut(|data| {
         data.insert_temp(
             egui::Id::new("peer_connection_dialog"),
             Connection {
                 open: true,
-                endpoint: "pealayer://".into(),
-                port: 8081,
+                endpoint: endpoint.unwrap_or("pealayer://").into(),
+                port: crate::config::control_port(),
                 error: None,
             },
         )
     });
 }
-pub fn draw_connection(ui: &mut egui::Ui) {
+pub fn draw_connection(ui: &mut egui::Ui) -> Option<crate::process_control::ConnectRequest> {
     let id = egui::Id::new("peer_connection_dialog");
     let Some(mut state) = ui.ctx().data_mut(|data| data.get_temp::<Connection>(id)) else {
-        return;
+        return None;
     };
     if !state.open {
-        return;
+        return None;
     }
     let mut open = state.open;
+    let mut request = None;
     egui::Window::new(format!("{} Connect to Pealayer", crate::ui::icons::GLOBE))
         .id(id)
         .open(&mut open)
@@ -65,7 +93,7 @@ pub fn draw_connection(ui: &mut egui::Ui) {
         .show(ui.ctx(), |ui| {
             ui.label("Server");
             ui.add(
-                egui::TextEdit::singleline(&mut state.endpoint)
+                crate::ui::dialog::singleline_text_edit(&mut state.endpoint)
                     .hint_text("pealayer://host:8080")
                     .desired_width(f32::INFINITY),
             );
@@ -79,28 +107,18 @@ pub fn draw_connection(ui: &mut egui::Ui) {
             if crate::ui::dialog::primary_action_button(ui, crate::ui::icons::PLUG, "Connect")
                 .clicked()
             {
-                let result = crate::peer::endpoint(&state.endpoint).and_then(|_| {
-                    std::env::current_exe()
-                        .map_err(|error| error.to_string())
-                        .and_then(|exe| {
-                            std::process::Command::new(exe)
-                                .arg("--connect")
-                                .arg(&state.endpoint)
-                                .arg("--client-port")
-                                .arg(state.port.to_string())
-                                .spawn()
-                                .map(|_| ())
-                                .map_err(|error| error.to_string())
-                        })
-                });
-                match result {
-                    Ok(()) => state.open = false,
+                let value = crate::process_control::ConnectRequest {
+                    operation_id: uuid::Uuid::new_v4().to_string(), endpoint:state.endpoint.clone(), client_port:state.port,
+                };
+                match value.validate() {
+                    Ok(()) => { state.open = false; request = Some(value); }
                     Err(error) => state.error = Some(error),
                 }
             }
         });
     state.open = state.open && open;
     ui.ctx().data_mut(|data| data.insert_temp(id, state));
+    request
 }
 
 pub fn open(ctx: &egui::Context, purpose: Purpose, path: Option<String>) {
@@ -127,6 +145,8 @@ fn refresh(browser: &Browser, ctx: &egui::Context) {
         }
         state.busy = true;
         state.error = None;
+        state.listing = None;
+        state.selected.clear();
         state.path.clone()
     } else {
         return;
@@ -204,7 +224,7 @@ pub fn draw(app: &mut crate::app::PealayerApp, ui: &mut egui::Ui) {
                     reload = true;
                 }
                 let path = ui.add(
-                    egui::TextEdit::singleline(&mut state.path)
+                    crate::ui::dialog::singleline_text_edit(&mut state.path)
                         .desired_width(ui.available_width() - 44.0),
                 );
                 if path.lost_focus() && ui.input(|input| input.key_pressed(egui::Key::Enter)) {
@@ -219,7 +239,7 @@ pub fn draw(app: &mut crate::app::PealayerApp, ui: &mut egui::Ui) {
                 }
             });
             ui.add(
-                egui::TextEdit::singleline(&mut state.filter)
+                crate::ui::dialog::singleline_text_edit(&mut state.filter)
                     .hint_text("Filter files")
                     .desired_width(f32::INFINITY),
             );
@@ -259,6 +279,7 @@ pub fn draw(app: &mut crate::app::PealayerApp, ui: &mut egui::Ui) {
                 .max_height((ui.available_height() - 78.0).max(80.0))
                 .show(ui, |ui| {
                     for (path, name, directory, media, size) in rows {
+                        if !directory && !selectable_file(&state.purpose, &path) { continue; }
                         let glyph = if directory {
                             crate::ui::icons::FOLDER_OPEN
                         } else if media {
@@ -277,7 +298,7 @@ pub fn draw(app: &mut crate::app::PealayerApp, ui: &mut egui::Ui) {
                                 .selected(state.selected == path)
                                 .wrap_mode(egui::TextWrapMode::Truncate),
                         );
-                        if response.clicked() {
+                        if response.clicked() && (!directory || !matches!(state.purpose, Purpose::PreferenceFile { .. })) {
                             state.selected = path.clone();
                         }
                         if response.double_clicked() {
@@ -304,7 +325,7 @@ pub fn draw(app: &mut crate::app::PealayerApp, ui: &mut egui::Ui) {
             ui.horizontal(|ui| {
                 ui.label("File");
                 ui.add(
-                    egui::TextEdit::singleline(&mut state.selected)
+                    crate::ui::dialog::singleline_text_edit(&mut state.selected)
                         .desired_width((ui.available_width() - 220.0).max(80.0)),
                 );
                 if crate::ui::dialog::action_button(ui, crate::ui::icons::X, "Cancel").clicked() {
@@ -316,10 +337,11 @@ pub fn draw(app: &mut crate::app::PealayerApp, ui: &mut egui::Ui) {
                     }
                     Purpose::TimelineSave | Purpose::ConfigExport(_) => "Save",
                     Purpose::ConfigImport => "Import",
+                    Purpose::PreferenceFile { .. } => "Select",
                 };
                 if ui
                     .add_enabled(
-                        !state.busy && !state.selected.is_empty(),
+                        valid_selection(&state),
                         egui::Button::new(format!("{} {label}", crate::ui::icons::CHECK)),
                     )
                     .clicked()
@@ -329,7 +351,7 @@ pub fn draw(app: &mut crate::app::PealayerApp, ui: &mut egui::Ui) {
             });
         });
     state.open = open && !cancel;
-    if commit {
+    if commit && valid_selection(&state) {
         let selected = state.selected.clone();
         let purpose = state.purpose.clone();
         state.busy = true;
@@ -337,6 +359,11 @@ pub fn draw(app: &mut crate::app::PealayerApp, ui: &mut egui::Ui) {
             app.load_media_target(&selected);
             state.open = false;
             state.busy = false;
+        } else if let Purpose::PreferenceFile { key, .. } = purpose {
+            ctx.data_mut(|data| data.insert_temp(preference_file_id(&key), selected));
+            state.open = false;
+            state.busy = false;
+            ctx.request_repaint();
         } else {
             let browser = browser.clone();
             let context = ctx.clone();
@@ -350,6 +377,7 @@ pub fn draw(app: &mut crate::app::PealayerApp, ui: &mut egui::Ui) {
                     Purpose::Audio=>client.post("/api/peer/media",&serde_json::json!({"operation":"command","name":"audio-add","args":[selected]})).map(|_|()),
                     Purpose::Subtitle=>client.post("/api/peer/media",&serde_json::json!({"operation":"command","name":"sub-add","args":[selected]})).map(|_|()),
                     Purpose::Media=>Ok(()),
+                    Purpose::PreferenceFile { .. }=>unreachable!("preference selection is returned to the draft, not executed remotely"),
                 };
                 if let Ok(mut state) = browser.0.lock() {
                     state.busy = false;
@@ -374,5 +402,35 @@ fn format_size(size: u64) -> String {
         format!("{:.1} KiB", size as f64 / 1024.0)
     } else {
         format!("{:.1} MiB", size as f64 / 1048576.0)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn preference_file_selection_requires_a_supported_non_directory_from_current_listing() {
+        let mut state = State {
+            open: true, path: String::new(), selected: "icon.PNG".into(), filter: String::new(),
+            busy: false, error: None, listing: None,
+            purpose: Purpose::PreferenceFile { key: "app_icon".into(), extensions: vec!["png".into()] },
+        };
+        assert!(!valid_selection(&state));
+        state.listing = Some(crate::server::fs_api::DirectoryBrowseResponse {
+            current_path: String::new(), parent_path: None,
+            entries: vec![crate::server::fs_api::FileEntryInfo {
+                path: "icon.PNG".into(), name: "icon.PNG".into(), is_dir: false, is_media: false,
+                size_bytes: 1, has_thumbnail: false,
+            }],
+        });
+        assert!(valid_selection(&state));
+        state.listing.as_mut().unwrap().entries[0].is_dir = true;
+        assert!(!valid_selection(&state));
+        state.listing.as_mut().unwrap().entries[0].is_dir = false;
+        state.busy = true;
+        assert!(!valid_selection(&state));
+        assert!(!selectable_file(&state.purpose, "icon.png.exe"));
+        assert!(selectable_file(&Purpose::TimelineSave, "untitled.json"));
     }
 }

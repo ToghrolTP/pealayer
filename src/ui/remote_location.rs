@@ -40,7 +40,7 @@ pub fn draw(app: &mut PealayerApp, ctx: &egui::Context) {
         .show(ctx, |ui| {
             ui.horizontal(|ui| {
                 ui.label(icons::LINK);
-                let response = ui.add(egui::TextEdit::singleline(&mut view.target).hint_text("https://host/folder/").desired_width((ui.available_width() - 88.0).max(90.0)));
+                let response = ui.add(crate::ui::dialog::singleline_text_edit(&mut view.target).hint_text("https://host/folder/").desired_width((ui.available_width() - 88.0).max(90.0)));
                 response.context_menu(|ui| { if ui.button(format!("{}  Copy", icons::COPY)).clicked() { ui.ctx().copy_text(view.target.clone()); ui.close(); } if ui.button("Paste").clicked() { ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste); ui.close(); } });
                 if ui.add_enabled(!state.loading && remote::normalize(&view.target).is_ok(), egui::Button::new(format!("{} Browse", icons::MAGNIFYING_GLASS))).clicked() || response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) { navigate = Some(view.target.clone()); }
             });
@@ -60,7 +60,7 @@ pub fn draw(app: &mut PealayerApp, ctx: &egui::Context) {
                 ui.separator();
                 ui.horizontal(|ui| {
                     ui.label(icons::MAGNIFYING_GLASS);
-                    ui.add(egui::TextEdit::singleline(&mut view.filter).hint_text("Filter files...").desired_width(180.0));
+                    ui.add(crate::ui::dialog::singleline_text_edit(&mut view.filter).hint_text("Filter files...").desired_width(180.0));
                     for (by, label) in [(remote::SortBy::Name, "Name"), (remote::SortBy::Date, "Date"), (remote::SortBy::Size, "Size")] {
                         if ui.selectable_label(state.sort == by, label).clicked() { remote::sort(by, if state.sort == by { !state.descending } else { false }); }
                     }

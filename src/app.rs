@@ -623,6 +623,9 @@ pub struct PealayerApp {
     pub(crate) show_remaining_time: bool,
     pub(crate) editing_elapsed_time: bool,
     pub(crate) elapsed_time_input: String,
+    pub(crate) elapsed_time_original: String,
+    pub(crate) elapsed_time_group: usize,
+    pub(crate) elapsed_time_group_digits: usize,
     pub(crate) elapsed_edit_focus_requested: bool,
     pub(crate) osd_message: Option<(String, std::time::Instant)>,
     pub(crate) osd_display_options: Option<crate::platform::interop::OsdOptions>,
@@ -890,18 +893,11 @@ pub struct MediaTrackInfo {
 }
 
 impl eframe::App for PealayerApp {
-    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
-        if let Some(winit_window) = frame.winit_window() {
-            if let Some(monitor) = winit_window.current_monitor() {
-                let detected = resolve_display_refresh_rate(monitor.refresh_rate_millihertz());
-                if detected >= 20.0 {
-                    self.display_refresh_rate = detected;
-                }
-            }
-        }
-        self.frame_rate_tracker.record_frame(std::time::Instant::now());
+    fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        // eframe calls logic even while minimized/occluded. Commands, device
+        // results and authoritative snapshots must never depend on painting.
         for request in crate::peer::take_gui_requests() {
-            let result=if request.deadline< std::time::Instant::now(){Err("Request expired before application; change was not applied".into())}else{self.apply_peer_request(ui.ctx(),&request.path,request.value)};
+            let result=if request.deadline< std::time::Instant::now(){Err("Request expired before application; change was not applied".into())}else{self.apply_peer_request(ctx,&request.path,request.value)};
             let _=request.reply.send(result);
         }
         if self.web_only {
@@ -909,7 +905,7 @@ impl eframe::App for PealayerApp {
             // shared command engine while exposing only the Web/PWA surface.
             // Reasserting visibility prevents a focus/restore command from
             // accidentally presenting the implementation viewport.
-            ui.ctx()
+            ctx
                 .send_viewport_cmd(egui::ViewportCommand::Visible(false));
         }
         #[cfg(target_os = "windows")]
@@ -935,9 +931,9 @@ impl eframe::App for PealayerApp {
         }
 
         if !self.web_only {
-            crate::platform::taskbar_preview::register_repaint(ui.ctx());
+            crate::platform::taskbar_preview::register_repaint(ctx);
             self.ensure_shell_initialized();
-            self.process_shell_commands(ui.ctx());
+            self.process_shell_commands(ctx);
         }
         self.process_controller_call_results();
         if !self.rf.pending && self.engine_handle.take_rf_catalog_refresh_request() {
@@ -955,10 +951,10 @@ impl eframe::App for PealayerApp {
             .hardware_effect_authoring
             .preview_repaint_after(preview_now)
         {
-            ui.ctx().request_repaint_after(remaining);
+            ctx.request_repaint_after(remaining);
         }
         self.refresh_controller_effect_timeline_metadata();
-        self.poll_external_config(ui.ctx());
+        self.poll_external_config(ctx);
 
         // PCController owns the shared latch. A second client or the Web/TUI
         // may engage or release it, so reflect the engine's push/reconnect
@@ -976,19 +972,6 @@ impl eframe::App for PealayerApp {
             }
         }
 
-        // A held seat direction captures the pointer until the physical button
-        // is released. This remains active even if a repaint moves the cursor
-        // outside the original button or the panel is hidden mid-gesture.
-        if !ui.input(|input| input.pointer.primary_down())
-            && let Some((_, stop_action, control_key)) = self.held_motion_action.take()
-        {
-            crate::ui::layout::invoke_held_motion_action(
-                self,
-                &control_key,
-                &stop_action,
-            );
-        }
-
         if !self.media_keys_enabled {
             // Drop unregisters the native session and invalidates old callbacks.
             self.media_controls = None;
@@ -1002,45 +985,13 @@ impl eframe::App for PealayerApp {
                 let mut controls = crate::platform::media_controls::MediaControlsManager::new(
                     hwnd,
                     self.media_cmd_tx.clone(),
-                    ui.ctx().clone(),
+                    ctx.clone(),
                 );
                 let title = self.current_video_path.as_deref()
                     .map(|path| crate::media::media_target_label(&path.to_string_lossy()));
                 controls.update_metadata(title.as_deref());
                 self.media_controls = Some(controls);
             }
-        }
-
-        // Track active window/panel drag operations safely without lock nesting
-        let is_pointer_down = ui.input(|i| i.pointer.any_down());
-        let native_window_operating = crate::platform::windows::native_window_operation_active();
-        if crate::platform::windows::take_native_window_operation_ended() {
-            // Always paint once on release: live mode consumes any final
-            // geometry/property change, while compatibility mode replaces the
-            // deliberately retained frame without waiting for another wakeup.
-            ui.ctx().request_repaint();
-        }
-        // Only throttle the MPV render pass for a real window/timeline drag.
-        // `egui_is_using_pointer()` is also true while seeking or holding the
-        // video surface, where suppressing paint freezes the very preview the
-        // gesture is meant to control.
-        self.is_window_operating = (native_window_operating && !self.live_video_during_window_move)
-            || should_throttle_video_render(
-                is_pointer_down,
-                self.is_window_operating,
-                self.active_drag.is_some(),
-            );
-
-        // Process drag and dropped files
-        let dropped_file_paths = ui.input(|i| {
-            i.raw
-                .dropped_files
-                .iter()
-                .map(|file| file.path().to_owned())
-                .collect::<Vec<_>>()
-        });
-        if !dropped_file_paths.is_empty() {
-            self.load_dropped_files(dropped_file_paths);
         }
 
         // Drain every command source before mutating player state. This keeps IPC,
@@ -1063,7 +1014,7 @@ impl eframe::App for PealayerApp {
             }
         }
         while let Ok(delivery) = self.controller_cmd_rx.try_recv() {
-            self.apply_interop_command(ui.ctx(), delivery.command.clone(), "PCController");
+            self.apply_interop_command(ctx, delivery.command.clone(), "PCController");
             delivery.acknowledge_applied();
         }
         for (source, command) in inbound_commands {
@@ -1072,17 +1023,157 @@ impl eframe::App for PealayerApp {
             if source == "Media controls" && !self.media_keys_enabled {
                 continue;
             }
-            self.apply_interop_command(ui.ctx(), command, source);
+            self.apply_interop_command(ctx, command, source);
+        }
+
+        if crate::peer::active(){crate::peer::mirror(||self.process_events());}else{self.process_events();}
+        if crate::peer::active(){self.poll_peer_session(ctx);}
+        self.sync_window_level(ctx);
+
+        if self.is_scrubbing || self.pending_scrub_commit.is_some() {
+            // A paused libmpv surface still needs paint opportunities while a
+            // coalesced preview or exact commit is decoding. This timer exists
+            // only for the active gesture/commit and therefore does not revive
+            // the old permanent idle repaint loop.
+            ctx.request_repaint_after(std::time::Duration::from_millis(16));
+        }
+        self.schedule_playback_repaint(ctx);
+        self.update_shell_state();
+        crate::branding::sync_native_window_icon(
+            ctx,
+            crate::branding::PlaybackIconState::from_player(
+                self.current_video_path.is_some(),
+                self.is_paused,
+                self.is_eof,
+            ),
+        );
+        if let Some(ref mut mc) = self.media_controls {
+            mc.update_playback(
+                self.current_video_path.is_some(),
+                self.is_paused,
+                self.playback_time,
+                self.duration,
+            );
+            mc.update_volume(self.volume as f64 / 100.0);
+        }
+
+        // Connection loss and retry are normal runtime states. Surface them in
+        // the status chrome instead of interrupting playback with a modal.
+        if let Ok(err_guard) = self.engine_handle.connection_error.try_lock() {
+            if let Some(err) = err_guard.as_ref()
+                && self.connection_notice.as_deref() != Some(err)
+            {
+                self.connection_notice = Some(err.clone());
+            }
+        }
+        let connected_now = self
+            .engine_handle
+            .is_connected
+            .load(std::sync::atomic::Ordering::Relaxed);
+        let board_connected_now = connected_now
+            && self
+                .advertised_hardware()
+                .is_some_and(|capabilities| capabilities.board_connected);
+        // A consumer's transport is the Pealayer peer link, not the board.
+        // Losing that link must never pause the authority or invent a USB loss.
+        let hardware_lost = !crate::peer::active() && hardware_connection_was_lost(
+            self.was_hardware_connected,
+            connected_now,
+            self.was_board_connected,
+            board_connected_now,
+        );
+        if hardware_lost {
+            let title = if !connected_now { "PCController connection lost" } else { "Board unavailable" };
+            let detail = self.engine_handle.connection_error.lock().ok().and_then(|error| error.clone())
+                .filter(|error| !error.trim().is_empty())
+                .unwrap_or_else(|| if !connected_now {
+                    "The controller connection is unavailable; the board's physical connection is unknown.".into()
+                } else {
+                    "PCController reports that the board is unavailable.".into()
+                });
+            let message = if self.pause_on_hardware_disconnect {
+                self.pause();
+                format!("{detail} Playback paused.")
+            } else {
+                detail
+            };
+            let _ = crate::messaging::publish(crate::messaging::ToastRequest {
+                id: Some("hardware.connection".into()), title: title.into(), message: message.clone(),
+                severity: crate::messaging::Severity::Warning, timeout_ms: 8000,
+            }, "hardware");
+            self.set_osd(message.clone());
+            if let Some(hwnd) = self.window_handle {
+                let _ = crate::platform::windows::show_system_notification(
+                    hwnd,
+                    &self.app_name,
+                    &message,
+                );
+            }
+        }
+        if !crate::peer::active() && connected_now && !self.was_hardware_connected {
+            self.connection_notice = None;
+            self.save_config();
+        }
+        if !crate::peer::active() { self.is_connected = connected_now; }
+        self.was_hardware_connected = connected_now;
+        self.was_board_connected = board_connected_now;
+        let update = crate::update::manager().status();
+        if update.state != "idle"
+            && self.last_update_notice_state.as_deref() != Some(update.state.as_str())
+        {
+            self.set_osd(update.message.clone());
+            if matches!(update.state.as_str(), "restarting" | "failed")
+                && let Some(hwnd) = self.window_handle
+            {
+                let _ = crate::platform::windows::show_system_notification(
+                    hwnd,
+                    &self.app_name,
+                    &update.message,
+                );
+            }
+            self.last_update_notice_state = Some(update.state.clone());
+        }
+        // Controller/WebSocket callbacks already request repaint on real state
+        // changes. Do not keep the opaque OpenGL window on a synthetic timer:
+        // that needlessly recomposes the entire UI and can present as flicker.
+        let connection_requested = self
+            .engine_handle
+            .connection_requested
+            .load(std::sync::atomic::Ordering::Relaxed);
+        if connection_requested && (!connected_now || !board_connected_now) {
+            // Connection transitions happen on the engine thread. Keep the
+            // UI, title, and local status API truthful during recovery without
+            // returning to a permanent repaint loop that burns GPU while idle.
+            ctx.request_repaint_after(std::time::Duration::from_millis(500));
+        }
+        if self.hardware_effect_authoring.pending_operation.is_some()
+            || self.board_operation.is_some()
+        {
+            // Tracked RPC calls complete off the UI thread. Keep a short
+            // repaint lease while one is pending so its result cannot remain
+            // hidden until another mouse or media event happens.
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
+
+        let window_title = contextual_window_title(
+            &self.app_name,
+            self.current_video_path.as_deref(),
+            self.is_connected,
+            connection_requested,
+        );
+        if self.last_window_title != window_title {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Title(window_title.clone()));
+            self.last_window_title = window_title;
         }
 
         // Reconcile the workspace with the viewport before publishing status.
-        crate::remote_location::install_context(ui.ctx());
+        crate::remote_location::install_context(ctx);
         if let Some(playback) = crate::remote_location::take_playback() { self.play_remote_location(playback); }
         crate::remote_location::set_current(self.current_video_path.as_ref().and_then(|path|path.to_str()));
         // A fullscreen request can be observed in this same frame; preserving
         // the already-staged workspace prevents that observation from replacing
         // an NLE restore target with the forced Simple workspace.
-        let viewport = ui.input(|input| input.viewport().clone());
+        let viewport = ctx.input(|input| input.viewport().clone());
         let is_fullscreen = viewport.fullscreen.unwrap_or(false);
         if !is_fullscreen && !viewport.minimized.unwrap_or(false) {
             if let (Some(inner), Some(outer)) = (viewport.inner_rect, viewport.outer_rect) {
@@ -1111,7 +1202,7 @@ impl eframe::App for PealayerApp {
         // Keep the read-only status snapshot current at the configured cadence;
         // WebSocket delivery itself can be disabled independently.
         let web_config = crate::platform::interop::get_live_frame_config(
-            ui.ctx().theme() == egui::Theme::Dark,
+            ctx.theme() == egui::Theme::Dark,
         );
         crate::peer::publish_timeline(crate::peer::TimelineState{timeline:self.timeline.clone(),muted:self.track_muted.clone(),soloed:self.track_soloed.clone()});
         let appearance = web_config.appearance.clone();
@@ -1147,7 +1238,7 @@ impl eframe::App for PealayerApp {
             // than leaving the cached API/Web preview one event behind. The
             // deadline frame broadcasts and schedules no further wakeup.
             if let Some(last) = self.last_web_broadcast {
-                ui.ctx().request_repaint_after(
+                ctx.request_repaint_after(
                     web_sync_interval.saturating_sub(now.duration_since(last)),
                 );
             }
@@ -1244,6 +1335,7 @@ impl eframe::App for PealayerApp {
                 remote_browser: crate::remote_location::snapshot(),
                 messages,
                 appearance: Some(appearance),
+                app_icon_revision: crate::platform::interop::live_config_revision(),
                 timeline_wheel_preferences: Some(crate::config::TimelineWheelPreferences {
                     plain: self.timeline_plain_wheel_action,
                     ctrl: self.timeline_ctrl_wheel_action,
@@ -1337,11 +1429,13 @@ impl eframe::App for PealayerApp {
                     .and_then(|transport| transport.clone()),
                 hardware_connected,
                 hardware_sync: self.engine_handle.prepared_timeline.try_lock().ok()
-                    .filter(|plan|plan.has_items()).map(|plan|serde_json::json!({
+                    .filter(|plan|plan.has_items() || plan.authority.is_some()).map(|plan|serde_json::json!({
+                        "authority":plan.authority,"authority_client_id":plan.authority_client_id,
                         "revision":plan.revision,"prepared_revision":plan.acknowledged_revision,
                         "clock_ack_revision":plan.clock_ack_revision,"clock_ack_epoch":plan.clock_ack_epoch,
                         "ack_age_ms":plan.last_ack.map(|ack|ack.elapsed().as_millis() as u64),
-                        "error":plan.error,"deferred_reason":plan.deferred_reason,"timeline":plan.feedback
+                        "error":plan.error,"deferred_reason":plan.deferred_reason,
+                        "requires_reprepare":plan.requires_reprepare,"timeline":plan.feedback
                     })).unwrap_or(serde_json::Value::Null),
                 hardware_error: self
                     .engine_handle
@@ -1498,6 +1592,63 @@ impl eframe::App for PealayerApp {
                 let _ = self.web_state_tx.send(authoritative);
             }
         }
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let is_fullscreen = ui.input(|input| input.viewport().fullscreen.unwrap_or(false));
+        if let Some(winit_window) = frame.winit_window() {
+            if let Some(monitor) = winit_window.current_monitor() {
+                let detected = resolve_display_refresh_rate(monitor.refresh_rate_millihertz());
+                if detected >= 20.0 {
+                    self.display_refresh_rate = detected;
+                }
+            }
+        }
+        self.frame_rate_tracker.record_frame(std::time::Instant::now());
+        // A held seat direction captures the pointer until the physical button
+        // is released. This remains active even if a repaint moves the cursor
+        // outside the original button or the panel is hidden mid-gesture.
+        if !ui.input(|input| input.pointer.primary_down())
+            && let Some((_, stop_action, control_key)) = self.held_motion_action.take()
+        {
+            crate::ui::layout::invoke_held_motion_action(
+                self,
+                &control_key,
+                &stop_action,
+            );
+        }
+
+        // Track active window/panel drag operations safely without lock nesting
+        let is_pointer_down = ui.input(|i| i.pointer.any_down());
+        let native_window_operating = crate::platform::windows::native_window_operation_active();
+        if crate::platform::windows::take_native_window_operation_ended() {
+            // Always paint once on release: live mode consumes any final
+            // geometry/property change, while compatibility mode replaces the
+            // deliberately retained frame without waiting for another wakeup.
+            ui.ctx().request_repaint();
+        }
+        // Only throttle the MPV render pass for a real window/timeline drag.
+        // `egui_is_using_pointer()` is also true while seeking or holding the
+        // video surface, where suppressing paint freezes the very preview the
+        // gesture is meant to control.
+        self.is_window_operating = (native_window_operating && !self.live_video_during_window_move)
+            || should_throttle_video_render(
+                is_pointer_down,
+                self.is_window_operating,
+                self.active_drag.is_some(),
+            );
+
+        // Process drag and dropped files
+        let dropped_file_paths = ui.input(|i| {
+            i.raw
+                .dropped_files
+                .iter()
+                .map(|file| file.path().to_owned())
+                .collect::<Vec<_>>()
+        });
+        if !dropped_file_paths.is_empty() {
+            self.load_dropped_files(dropped_file_paths);
+        }
 
         // Initialize RTT texture once if not done yet
         let mut init_rtt = false;
@@ -1569,130 +1720,6 @@ impl eframe::App for PealayerApp {
 
         let ctx = ui.ctx().clone();
 
-        if crate::peer::active(){crate::peer::mirror(||self.process_events());}else{self.process_events();}
-        if crate::peer::active(){self.poll_peer_session(&ctx);}
-        self.sync_window_level(ui.ctx());
-        if self.is_scrubbing || self.pending_scrub_commit.is_some() {
-            // A paused libmpv surface still needs paint opportunities while a
-            // coalesced preview or exact commit is decoding. This timer exists
-            // only for the active gesture/commit and therefore does not revive
-            // the old permanent idle repaint loop.
-            ctx.request_repaint_after(std::time::Duration::from_millis(16));
-        }
-        self.schedule_playback_repaint(&ctx);
-        self.update_shell_state();
-        crate::branding::sync_native_window_icon(
-            &ctx,
-            crate::branding::PlaybackIconState::from_player(
-                self.current_video_path.is_some(),
-                self.is_paused,
-                self.is_eof,
-            ),
-        );
-        if let Some(ref mut mc) = self.media_controls {
-            mc.update_playback(
-                self.current_video_path.is_some(),
-                self.is_paused,
-                self.playback_time,
-                self.duration,
-            );
-            mc.update_volume(self.volume as f64 / 100.0);
-        }
-
-        // Connection loss and retry are normal runtime states. Surface them in
-        // the status chrome instead of interrupting playback with a modal.
-        if let Ok(err_guard) = self.engine_handle.connection_error.try_lock() {
-            if let Some(err) = err_guard.as_ref()
-                && self.connection_notice.as_deref() != Some(err)
-            {
-                self.connection_notice = Some(err.clone());
-            }
-        }
-        let connected_now = self
-            .engine_handle
-            .is_connected
-            .load(std::sync::atomic::Ordering::Relaxed);
-        let board_connected_now = connected_now
-            && self
-                .advertised_hardware()
-                .is_some_and(|capabilities| capabilities.board_connected);
-        let hardware_lost = hardware_connection_was_lost(
-            self.was_hardware_connected,
-            connected_now,
-            self.was_board_connected,
-            board_connected_now,
-        );
-        if hardware_lost {
-            let message = if self.pause_on_hardware_disconnect {
-                self.pause();
-                self.tr("Hardware disconnected — playback paused")
-            } else {
-                self.tr("Hardware disconnected")
-            };
-            self.set_osd(message.clone());
-            if let Some(hwnd) = self.window_handle {
-                let _ = crate::platform::windows::show_system_notification(
-                    hwnd,
-                    &self.app_name,
-                    &message,
-                );
-            }
-        }
-        if connected_now && !self.was_hardware_connected {
-            self.connection_notice = None;
-            self.save_config();
-        }
-        self.is_connected = connected_now;
-        self.was_hardware_connected = connected_now;
-        self.was_board_connected = board_connected_now;
-        let update = crate::update::manager().status();
-        if update.state != "idle"
-            && self.last_update_notice_state.as_deref() != Some(update.state.as_str())
-        {
-            self.set_osd(update.message.clone());
-            if matches!(update.state.as_str(), "restarting" | "failed")
-                && let Some(hwnd) = self.window_handle
-            {
-                let _ = crate::platform::windows::show_system_notification(
-                    hwnd,
-                    &self.app_name,
-                    &update.message,
-                );
-            }
-            self.last_update_notice_state = Some(update.state.clone());
-        }
-        // Controller/WebSocket callbacks already request repaint on real state
-        // changes. Do not keep the opaque OpenGL window on a synthetic timer:
-        // that needlessly recomposes the entire UI and can present as flicker.
-        let connection_requested = self
-            .engine_handle
-            .connection_requested
-            .load(std::sync::atomic::Ordering::Relaxed);
-        if connection_requested && (!connected_now || !board_connected_now) {
-            // Connection transitions happen on the engine thread. Keep the
-            // UI, title, and local status API truthful during recovery without
-            // returning to a permanent repaint loop that burns GPU while idle.
-            ctx.request_repaint_after(std::time::Duration::from_millis(500));
-        }
-        if self.hardware_effect_authoring.pending_operation.is_some()
-            || self.board_operation.is_some()
-        {
-            // Tracked RPC calls complete off the UI thread. Keep a short
-            // repaint lease while one is pending so its result cannot remain
-            // hidden until another mouse or media event happens.
-            ctx.request_repaint_after(std::time::Duration::from_millis(50));
-        }
-        let window_title = contextual_window_title(
-            &self.app_name,
-            self.current_video_path.as_deref(),
-            self.is_connected,
-            connection_requested,
-        );
-        if self.last_window_title != window_title {
-            ui.ctx()
-                .send_viewport_cmd(egui::ViewportCommand::Title(window_title.clone()));
-            self.last_window_title = window_title;
-        }
         crate::ui::sync_native_window_appearance(ui.ctx(), self.color_palette);
 
         if !is_fullscreen {
@@ -1857,7 +1884,7 @@ impl eframe::App for PealayerApp {
                                 ))
                                 .clicked()
                             {
-                                self.show_preferences_dialog = true;
+                                crate::ui::preferences::open(self, ui.ctx());
                                 ui.close();
                             }
                         });
@@ -1873,7 +1900,9 @@ impl eframe::App for PealayerApp {
                 crate::ui::audio::draw_settings_dialog(self, ui);
                 crate::ui::preferences::draw(self, ui);
                 crate::ui::peer_browser::draw(self,ui);
-                crate::ui::peer_browser::draw_connection(ui);
+                if let Some(request) = crate::ui::peer_browser::draw_connection(ui) {
+                    self.apply_interop_command(ui.ctx(), crate::platform::interop::InteropCommand::ConnectPeer { request }, "ui");
+                }
                 crate::ui::effects_library::draw_editor(self, ui);
                 crate::ui::board_info::draw(self, ui);
                 crate::ui::rf::draw(self, ui);
@@ -1932,6 +1961,7 @@ impl eframe::App for PealayerApp {
                                     (crate::ui::icons::ARROW_UP, ",  or  [", "Frame Step Backward (-1 frame)"),
                                     (crate::ui::icons::SLIDERS_HORIZONTAL, "Mouse Wheel", "Adjust Volume on player/bar"),
                                     (crate::ui::icons::CLOCK_COUNTER_CLOCKWISE, "Shift + Mouse Wheel", "Seek forward / backward"),
+                                    (crate::ui::icons::PLUS, "A (Timeline)", "Add cue to selected track"),
                                     (crate::ui::icons::ARROWS_OUT, "Double Click", "Toggle Fullscreen / Open Video"),
                                     (crate::ui::icons::LIST_CHECKS, "Right Click", "Open Player Context Menu"),
                                     (crate::ui::icons::FILE_VIDEO, "Drag & Drop", "Drop media file onto window to play"),
@@ -1962,6 +1992,7 @@ impl eframe::App for PealayerApp {
                     crate::ui::about::draw(self, ui);
                 }
             });
+        crate::four_d::authority::draw_warning(self,ui.ctx());
         crate::ui::toasts::draw(ui.ctx());
         crate::ui::remote_location::draw(self, ui.ctx());
     }
@@ -3447,6 +3478,15 @@ impl PealayerApp {
             .map(|mut queue| queue.drain(..).collect::<Vec<_>>())
             .unwrap_or_default();
         for result in results {
+            if result.operation=="hardware-authority" {
+                if let Err(error)=result.result {
+                    let _=crate::messaging::publish(crate::messaging::ToastRequest {
+                        id:Some("hardware.authority".into()),title:"Publishing authority".into(),message:error,
+                        severity:crate::messaging::Severity::Warning,timeout_ms:8000,
+                    },"hardware");
+                }
+                continue;
+            }
             if result.operation.starts_with("rf-") {
                 if self.rf.complete(&result.operation, result.result) {
                     if let Err(error) = self.request_rf("catalog", serde_json::json!({"read_board":true})) { self.rf.error = error; }
@@ -3707,7 +3747,8 @@ impl PealayerApp {
         // Dialogs and physical client-window placement remain local. Everything
         // that operates the session goes through the authority's unified engine.
         if let Some(client)=crate::peer::client() && !crate::peer::mirroring()
-            && !matches!(&command,InteropCommand::OpenPreferences|InteropCommand::OpenMediaInformation|InteropCommand::OpenBoardInformation{..}|InteropCommand::OpenRfManager|InteropCommand::Activate|InteropCommand::Minimize|InteropCommand::Maximize|InteropCommand::Restore|InteropCommand::SetFullscreen{..}|InteropCommand::ToggleFullscreen|InteropCommand::GetStatus) {
+            && !command.is_process_local()
+            && !matches!(&command,InteropCommand::QuitLocal|InteropCommand::OpenPreferences|InteropCommand::OpenMediaInformation|InteropCommand::OpenBoardInformation{..}|InteropCommand::OpenRfManager|InteropCommand::Activate|InteropCommand::Minimize|InteropCommand::Maximize|InteropCommand::Restore|InteropCommand::SetFullscreen{..}|InteropCommand::ToggleFullscreen|InteropCommand::GetStatus) {
             if matches!(&command,InteropCommand::OpenMediaFolder){crate::ui::peer_browser::open(ctx,crate::ui::peer_browser::Purpose::Media,None);return;}
             if let Err(error)=serde_json::to_value(&command).map_err(|error|error.to_string()).and_then(|value|client.queue("/api/player/command",value)){self.show_error=Some(error);}
             return;
@@ -3854,9 +3895,7 @@ impl PealayerApp {
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             }
             InteropCommand::OpenPreferences => {
-                self.show_preferences_dialog = true;
-                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
-                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                crate::ui::preferences::open(self, ctx);
             }
             InteropCommand::OpenMediaInformation => {
                 self.open_or_focus_tab(crate::ui::layout::PealayerTab::MediaInspector);
@@ -3914,7 +3953,16 @@ impl PealayerApp {
             InteropCommand::DismissToast { id } => {
                 crate::messaging::dismiss(&id); ctx.request_repaint(); return;
             }
-            InteropCommand::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
+            InteropCommand::ConnectPeer { request } => {
+                if let Err(error) = crate::process_control::connect(request, ctx.clone(),
+                    self.engine_handle.is_connected.clone(), self.engine_handle.serial_port.clone(), self.mpv.0) {
+                    let _ = crate::messaging::publish(crate::messaging::ToastRequest {
+                        id:Some("peer.connect".into()), title:"Remote connection change failed".into(),
+                        message:error,severity:crate::messaging::Severity::Error,timeout_ms:10000,
+                    },source);
+                }
+            }
+            InteropCommand::Quit | InteropCommand::QuitLocal => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
             InteropCommand::SetWorkspace { profile } => {
                 self.restore_workspace_profile(ctx, &profile);
             }
@@ -4308,6 +4356,9 @@ impl PealayerApp {
             InteropCommand::RefreshHardwareCatalog => {
                 self.engine_handle.request_catalog_refresh();
             }
+            InteropCommand::HardwareAuthority { operation, requester_id } => {
+                crate::four_d::authority::request(self, &operation, &requester_id);
+            }
             InteropCommand::PlayHardwareMelody { name, repeats } => {
                 if let Err(error) = self.play_buzzer_melody(&name, repeats) {
                     self.set_osd(error);
@@ -4467,7 +4518,7 @@ impl PealayerApp {
                     return;
                 }
             },
-            InteropCommand::GetStatus => {}
+            InteropCommand::GetStatus | InteropCommand::GetProcessStatus => {}
         }
         if !matches!(source, "keyboard" | "menu") {
             self.set_osd(format!("{source}: command applied"));
@@ -6271,7 +6322,7 @@ impl PealayerApp {
         cfg.timeline_navigation_transition_ms = self.timeline_navigation_transition_ms;
         cfg.timeline_follow_playhead = self.timeline_follow_playhead;
         cfg.timeline_toolbar_order =
-            crate::config::normalize_timeline_toolbar_order(&self.timeline_toolbar_order);
+            crate::config::persisted_timeline_toolbar_order(&self.timeline_toolbar_order);
         cfg.timeline_toolbar_hidden = self.timeline_toolbar_hidden.clone();
         cfg.non_user_control_visibility = self.non_user_control_visibility;
         cfg.prefix_relay_identifiers = self.prefix_relay_identifiers;
@@ -6554,6 +6605,12 @@ impl PealayerApp {
 
         let _ = self.mpv.set_property("volume", self.volume);
         let _ = self.mpv.set_property("mute", self.is_muted);
+        let audio_device = if config.audio_device.trim().is_empty() { "auto" } else { config.audio_device.as_str() };
+        if let Err(error) = self.mpv.set_property("audio-device", audio_device) {
+            log::warn!("{error}; falling back to the system default audio output");
+            self.mpv.set_property("audio-device", "auto")
+                .map_err(|error| format!("Select default audio output: {error}"))?;
+        }
         let _ = self.mpv.set_property("sub-font-size", self.sub_font_size);
         let _ = self.mpv.set_property("sub-delay", self.sub_delay);
         let _ = self.mpv.set_property("sub-pos", self.sub_position_percent);
@@ -6746,11 +6803,23 @@ impl PealayerApp {
             state.timeline=snapshot.session.timeline.clone();
         }
         let fresh=snapshot.received.elapsed()<std::time::Duration::from_secs(2);
+        let link_lost = crate::peer::peer_link_was_lost(state.link_connected, fresh);
+        state.link_connected = Some(fresh);
         self.is_connected=fresh;
         self.serial_port=client.origin.as_str().replacen("http://","pealayer://",1).trim_end_matches('/').into();
         if !fresh {
             let _=self.mpv.0.set_property("pause",true);
-            self.connection_notice=Some("Remote Pealayer disconnected; controls are not redirected to local hardware".into());
+            let detail = client.error.lock().ok().and_then(|value| value.clone())
+                .unwrap_or_else(|| "No fresh state received from the remote Pealayer for two seconds.".into());
+            self.connection_notice=Some(detail.clone());
+            if link_lost {
+                let _ = crate::messaging::publish(crate::messaging::ToastRequest {
+                    id: Some("peer.connection".into()), title: "Remote Pealayer link interrupted".into(),
+                    message: format!("{detail} Local preview and controls are suspended; the remote board connection is unknown."),
+                    severity: crate::messaging::Severity::Warning, timeout_ms: 8000,
+                }, "peer");
+            }
+            ctx.data_mut(|data|data.insert_temp(id,state));
             return;
         }
         self.connection_notice=client.error.lock().ok().and_then(|value|value.clone()).or_else(||client.command_error.lock().ok().and_then(|value|value.clone()));
@@ -7470,7 +7539,7 @@ impl PealayerApp {
         self.selected_instance_ids.clear();
         self.selected_instance_ids.insert(instance_id);
         self.selected_timeline_track = Some(crate::four_d::models::hardware_timeline_track_key(control_key));
-        self.sync_timeline_engine();
+        self.commit_timeline_edit();
         Ok(instance_id)
     }
 
@@ -8179,6 +8248,9 @@ impl Default for PealayerApp {
             show_remaining_time: false,
             editing_elapsed_time: false,
             elapsed_time_input: String::new(),
+            elapsed_time_original: String::new(),
+            elapsed_time_group: 0,
+            elapsed_time_group_digits: 0,
             elapsed_edit_focus_requested: false,
             osd_message: None,
             osd_display_options: None,
@@ -8373,6 +8445,45 @@ pub(crate) mod tests {
         APP_TEST_LOCK
             .lock()
             .unwrap_or_else(|poisoned| poisoned.into_inner())
+    }
+
+    #[test]
+    fn hidden_logic_applies_ipc_and_web_commands_and_publishes_without_painting() {
+        let _lock = lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.web_only = true;
+        app.auto_reload_config = false;
+        app.media_keys_enabled = false;
+        let ctx = egui::Context::default();
+        let mut frame = eframe::Frame::_new_kittest();
+        let (ipc, ipc_rx) = std::sync::mpsc::channel();
+        let (web, web_rx) = std::sync::mpsc::channel();
+        let (status, status_rx) = std::sync::mpsc::channel();
+        app.interop_rx = ipc_rx;
+        app.web_cmd_rx = web_rx;
+        app.web_state_tx = status;
+        ipc.send(crate::platform::interop::InteropCommand::ShowOsd {
+            message: "IPC without painting".into(), options: Default::default(),
+        }).unwrap();
+        web.send(crate::platform::interop::InteropCommand::ShowOsd {
+            message: "Web without painting".into(), options: Default::default(),
+        }).unwrap();
+        // This is the exact callback eframe uses for a hidden/occluded root;
+        // no UI pass, video texture, native HWND or board is needed.
+        let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+            eframe::App::logic(&mut app, ctx, &mut frame);
+        });
+        assert_eq!(app.osd_message.as_ref().unwrap().0, "Web without painting");
+        let published: serde_json::Value = serde_json::from_str(&status_rx.try_recv().unwrap()).unwrap();
+        assert_eq!(published["osd"]["message"], "Web without painting");
+        web.send(crate::platform::interop::InteropCommand::HideOsd).unwrap();
+        app.last_web_broadcast = None;
+        let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| {
+            eframe::App::logic(&mut app, ctx, &mut frame);
+        });
+        assert!(app.osd_message.is_none());
+        let published: serde_json::Value = serde_json::from_str(&status_rx.try_recv().unwrap()).unwrap();
+        assert!(published["osd"].is_null());
     }
 
     #[test]

@@ -105,7 +105,7 @@ authentication. The shared-token policy remains an open review finding.
 Validation evidence and deployment results are recorded separately; compilation
 alone does not establish two-host playback or physical hardware correctness.
 
-## Current validation checkpoint (2026-10-06)
+## Earlier compile-only checkpoint (2026-10-06)
 
 Compile-only `cargo check --tests --locked` passed. No test suites were executed.
 The follow-up Windows release build passed in 2m 14s at source commit
@@ -126,3 +126,33 @@ and messaging surfaces also need an end-to-end parity audit; relaying their
 commands alone is not evidence that every native dialog mirrors remote state.
 
 Do not treat this checkpoint as production acceptance or merge/deploy approval.
+
+## Two-host checkpoint (2026-10-08)
+
+Cafe is the authority and sole hardware scheduler; David runs the canonical
+application as a consumer through a user-authorized loopback Chisel forward.
+No global tool policy was changed. The existing remote-access tunnel was not
+replaced. Both applications remain running in their signed-in desktop sessions.
+
+Verified through the consumer's API: mute, pause, exact seek and restoration of
+the original paused position. Both authoritative and decoded positions matched,
+with zero reported paused preview drift. A preference change appeared on both
+API views while the consumer's local config-file hash stayed unchanged; its
+original value was restored. The consumer's WebSocket returned a complete
+authoritative status snapshot. Diagnostics confirm cache-only local storage,
+no local hardware scheduler and no command/transport error. These observations
+do not prove all native dialogs or hardware actions over a degraded link.
+
+Cafe's controller host and protected firmware update restored board media-clock
+acknowledgements. Actual playback advanced, but a later hardware cue's 58.1 ms
+acknowledgement exceeded the 50 ms guard and correctly paused playback. This
+remains an acceptance failure, not a reason to bypass the guard. Sample tunnel
+round trips around 0.5–1.1 seconds also preclude claiming frame-exact playing
+preview synchronization. Paused agreement is not continuous-playback proof.
+
+Current release manifests, focused tests, deployment results and remaining
+startup-service, timing, consumer-update and merge gates are recorded in
+[the deployment checkpoint](verification/DEPLOYMENT-AND-MERGE-CHECKPOINT.md).
+Server-file HEAD/range transfers, consumer disconnect recovery, concurrent
+Preferences/timeline conflicts, complete native GUI parity and physical
+press/release/E-STOP remain open end-to-end checks.

@@ -16,8 +16,20 @@ const effects = read('src/components/EffectsTab.tsx');
 const effectRecorder = read('src/components/EffectRecorder.tsx');
 const effectGroupDialog = read('src/components/EffectGroupDialog.tsx');
 const css = read('src/styles.css');
+const preferences = read('src/components/PreferencesTab.tsx');
+const filePicker = read('src/components/ServerFilePicker.tsx');
+const authority = read('src/components/PublishingAuthority.tsx');
+const webPlatform = read('src/webPlatform.ts');
 
 const contracts = [
+  [app.includes('revision=${state.app_icon_revision') && webPlatform.includes('revision=${state.app_icon_revision'), 'runtime branding changes refresh the header, favicon, PWA and media-session imagery without a playback change'],
+  [authority.includes('Connect to authority') && authority.includes('authority.owner_endpoint') && authority.includes('disabled={!authority.owner_endpoint}'), 'conflicts offer the validated remote authority without inventing an endpoint'],
+  [app.includes('<PublishingAuthority') && hardware.includes('<PublishingAuthority') && authority.includes("sendCmd('pealayer.hardware.authority'") && authority.includes('authority.owner_id === actor'), 'publishing authority uses the same server reservation in controls and the global conflict dialog'],
+  [authority.includes('disabled={!paused || authority.exclusive}') && authority.includes("change('accept', request.client_id)") && authority.includes("change('unlock'") === false && authority.includes("'unlock' : 'lock'"), 'owner-consented handoff requires paused playback and production can be explicitly unlocked'],
+  [preferences.includes('icon: string') && preferences.includes('controlIcons[control.icon]') && !preferences.includes('controlIcons[control.kind]'), 'preference row icons use semantic Rust metadata instead of input type'],
+  [preferences.includes("control.kind === 'file'") && preferences.includes('<ServerFilePicker') && preferences.includes('FolderOpenOutlined'), 'file preferences expose a real Browse action'],
+  [preferences.includes('contract?.groups.filter') && preferences.includes('group.default_open') && preferences.includes('<Collapse'), 'preference cards use shared ordering and optional disclosure'],
+  [filePicker.includes('/api/fs/browse') && filePicker.includes('AbortController') && filePicker.includes('setDirectory(null)'), 'preference file picker browses authoritative server files without stale failed listings'],
   [hardware.includes("trigger={['contextMenu']}"), 'hardware cards expose a context menu'],
   [hardware.includes('onPointerDown') && hardware.includes("hardware.action.invoke"), 'hardware actions dispatch on pointer-down'],
   [hardware.includes('hardware-control__indicator') && hardware.includes('immediateToggle'), 'hardware indicators are actionable'],
@@ -33,6 +45,7 @@ const contracts = [
   [studio.includes('state.timeline_tracks') && studio.includes('timelineRows.map'), 'timeline renders the shared native track inventory'],
   [studio.includes("kind: 'pinch'") && studio.includes("event.button !== 1") && css.includes('.timeline-grid.is-panning'), 'timeline supports two-finger pinch/pan and middle-button panning'],
   [studio.includes("trigger={['contextMenu']}") && studio.includes("sendCmd('timeline.track.update'") && studio.includes("sendCmd('timeline.track.manage'"), 'timeline track menus use shared selection, routing and management commands'],
+  [studio.includes('anyTimelineTrackSoloed') && studio.includes('is-solo-filtered') && css.includes('.timeline-row.is-muted') && css.includes('.timeline-row.is-soloed') && css.includes('.timeline-row.is-locked'), 'timeline tracks render semantic mute, solo-isolation, and lock states'],
   [library.includes("replace(/^\\\\\\\\\\?\\\\/"), 'Windows namespace prefixes are removed from breadcrumbs'],
   [library.includes("trigger={['contextMenu']}") && library.includes('Copy full path'), 'media entries expose application-style context actions'],
   [media.includes('state.osd') && css.includes('.media-osd--custom'), 'Web video surfaces render the native configurable OSD contract'],

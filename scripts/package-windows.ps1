@@ -4,7 +4,8 @@ param(
     [switch]$SkipTests,
     [switch]$Run,
     [string]$Branding,
-    [string]$LibmpvDirectory
+    [string]$LibmpvDirectory,
+    [string]$OutputDirectory
 )
 
 $ErrorActionPreference = 'Stop'
@@ -25,6 +26,13 @@ if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
 
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'libmpv-windows.ps1')
+$packageCommit = (& git -C $repositoryRoot rev-parse HEAD).Trim()
+if ($LASTEXITCODE -ne 0 -or !$packageCommit) { throw 'Cannot identify package source.' }
+if (& git -C $repositoryRoot status --porcelain) { throw 'Commit or preserve local changes before packaging a production build.' }
+# Pin the existing build-metadata contract, invalidating stale shared-cache
+# metadata even when the worktree commit changed without a source-file change.
+$env:GITHUB_SHA = $packageCommit
+$env:GITHUB_REF_NAME = (& git -C $repositoryRoot rev-parse --abbrev-ref HEAD).Trim()
 if ($Branding) {
     $resolvedBranding = (Resolve-Path -LiteralPath $Branding -ErrorAction Stop).Path
     $brandDocument = Get-Content -Raw -LiteralPath $resolvedBranding | ConvertFrom-Json
@@ -52,19 +60,14 @@ $rustBin = @(
 if ($rustBin) {
     $env:Path = $rustBin + ';' + $env:Path
 }
-$cargoTargetDirectory = if ($env:CARGO_TARGET_DIR) {
-    if ([System.IO.Path]::IsPathRooted($env:CARGO_TARGET_DIR)) {
-        [System.IO.Path]::GetFullPath($env:CARGO_TARGET_DIR)
-    } else {
-        [System.IO.Path]::GetFullPath((Join-Path $repositoryRoot $env:CARGO_TARGET_DIR))
-    }
-} else {
-    Join-Path $repositoryRoot 'target'
-}
+$cargoTargetDirectory = Get-PealayerCargoTargetDirectory -RepositoryRoot $repositoryRoot
+$env:CARGO_TARGET_DIR = $cargoTargetDirectory
 $releaseDirectory = Join-Path $cargoTargetDirectory 'release'
 $stagingDirectory = Join-Path $cargoTargetDirectory 'package-windows'
 $sourceDirectory = Split-Path -Parent $repositoryRoot
-$outputDirectory = if ((Split-Path -Leaf $sourceDirectory) -ieq 'source') {
+$outputDirectory = if ($OutputDirectory) {
+    [System.IO.Path]::GetFullPath($OutputDirectory)
+} elseif ((Split-Path -Leaf $sourceDirectory) -ieq 'source') {
     Join-Path (Split-Path -Parent $sourceDirectory) 'bin'
 } else {
     Join-Path $repositoryRoot 'bin'
@@ -88,7 +91,7 @@ if (-not $upxPath) {
 }
 
 if (-not $SkipTests) {
-    & cargo test --locked --jobs 1
+    & cargo test --locked --jobs 1 -- --test-threads=1
     if ($LASTEXITCODE -ne 0) { throw "cargo test failed with exit code $LASTEXITCODE" }
 }
 
@@ -137,6 +140,7 @@ $expectedProductName = if ($env:APP_NAME) {
 if ($resource.ProductName -ne $expectedProductName -or $resource.OriginalFilename -ne $effectiveExecutableFile) {
     throw 'Packaged executable is missing the expected Win32 identity resources.'
 }
+& (Join-Path $PSScriptRoot 'verify-windows-quick-action-icons.ps1') -Executable $stagedExecutable
 
 $unpackedBytes = (Get-Item -LiteralPath $stagedExecutable).Length
 $upxVersion = $null
@@ -152,6 +156,17 @@ if (-not $NoUpx) {
 $env:Path = $stagingDirectory + ';' + $libmpvDirectory + ';' + $env:Path
 $smoke = Start-Process -FilePath $stagedExecutable -ArgumentList '--smoke-test' -WorkingDirectory $stagingDirectory -Wait -PassThru
 if ($smoke.ExitCode -ne 0) { throw "Packaged Pealayer/libmpv smoke test failed with exit code $($smoke.ExitCode)" }
+
+$identityOutput = Join-Path $stagingDirectory 'build-identity.json'
+$identityProcess = Start-Process -FilePath $stagedExecutable -ArgumentList '--build-info' -WorkingDirectory $stagingDirectory -WindowStyle Hidden -RedirectStandardOutput $identityOutput -Wait -PassThru
+if ($identityProcess.ExitCode -ne 0) { throw 'Cannot inspect the packaged executable build identity.' }
+$embeddedIdentity = Get-Content -Raw -LiteralPath $identityOutput | ConvertFrom-Json
+if ($embeddedIdentity.commit -ne $packageCommit -or $embeddedIdentity.dirty) {
+    throw 'Embedded executable identity does not match clean package source; refusing publication.'
+}
+if ((& git -C $repositoryRoot rev-parse HEAD).Trim() -ne $packageCommit -or (& git -C $repositoryRoot status --porcelain)) {
+    throw 'Package source changed during the build; refusing publication.'
+}
 
 Copy-Item -LiteralPath $stagedExecutable -Destination $outputDirectory -Force
 Copy-PealayerLibmpvRuntime -RuntimeLibrary $stagedRuntime -DestinationDirectory $outputDirectory
@@ -194,8 +209,8 @@ $artifacts = @($effectiveExecutableFile,'libmpv-2.dll','mpv-2.dll','assets/fonts
 $manifest = [ordered]@{
     format = 'pealayer-windows-package'
     version = $resource.ProductVersion
-    git_commit = (& git -C $repositoryRoot rev-parse HEAD).Trim()
-    git_dirty = [bool](& git -C $repositoryRoot status --porcelain)
+    git_commit = $embeddedIdentity.commit
+    git_dirty = $embeddedIdentity.dirty
     built_at_utc = [DateTime]::UtcNow.ToString('o')
     target = (& rustc -vV | Select-String '^host:' | ForEach-Object { $_.Line.Substring(5).Trim() })
     build_host = [ordered]@{
@@ -219,6 +234,7 @@ $manifest = [ordered]@{
     validation = [ordered]@{
         tests = if ($SkipTests) { 'skipped' } else { 'passed' }
         windows_resources = 'verified'
+        quick_action_icons = 'verified'
         libmpv_smoke = 'passed'
         web_ui = if ($webUiPackaged) { 'packaged' } else { 'embedded_fallback' }
         upx = if ($NoUpx) { [ordered]@{ enabled = $false; tested = $false } } else { [ordered]@{ enabled = $true; tested = $true; version = $upxVersion } }

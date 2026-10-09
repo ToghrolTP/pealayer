@@ -62,6 +62,15 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         return english.to_owned();
     }
     let translated = match english {
+        "Application icons" => "نمادهای برنامه",
+        "Application icon" => "نماد برنامه",
+        "Current" => "کنونی",
+        "Classic (previous)" => "کلاسیک (قبلی)",
+        "Default icon" => "نماد پیش‌فرض",
+        "Bundled application icon" => "نماد همراه برنامه",
+        "Use default icon" => "استفاده از نماد پیش‌فرض",
+        "Browse..." => "مرور…",
+        "Choose an image file" => "انتخاب پروندهٔ تصویر",
         "File" => "پرونده",
         "Edit" => "ویرایش",
         "Audio" => "صدا",
@@ -801,6 +810,7 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Frame Step Backward (-1 frame)" => "یک قاب عقب",
         "Adjust Volume on player/bar" => "تنظیم صدا روی پخش‌کننده",
         "Seek forward / backward" => "پیمایش جلو یا عقب",
+        "Add cue to selected track" => "افزودن نشانه به ترک انتخاب‌شده",
         "Toggle Fullscreen / Open Video" => "تمام‌صفحه یا باز کردن ویدئو",
         "Open Player Context Menu" => "باز کردن منوی زمینه‌ای پخش‌کننده",
         "Drop media file onto window to play" => "رسانه را برای پخش روی پنجره رها کنید",
@@ -871,6 +881,9 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "4D Cinema Editor" => "ویرایشگر سینمای چهاربعدی",
         "Active output status" => "وضعیت خروجی‌های فعال",
         "Effect templates" => "الگوهای جلوه",
+        "Select a cue to inspect and edit" => "برای بررسی و ویرایش، یک نشانه را انتخاب کنید",
+        "Timing, routing, and output" => "زمان‌بندی، مسیریابی و خروجی",
+        "Batch-edit selected cues" => "ویرایش گروهی نشانه‌های انتخاب‌شده",
         "Icon" => "نماد",
         "Search icons..." => "جست‌وجوی نمادها…",
         "List view" => "نمای فهرست",
@@ -879,6 +892,10 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "No matching icons" => "نماد منطبقی پیدا نشد",
         "Name" => "نام",
         "Duration" => "مدت",
+        "Add cue" => "افزودن نشانه",
+        "Cue added" => "نشانه افزوده شد",
+        "On" => "روشن",
+        "Off" => "خاموش",
         "Actions" => "عملیات",
         "Selected cue" => "نشانهٔ انتخاب‌شده",
         "1 cue" => "۱ نشانه",
@@ -891,10 +908,14 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Exact timeline placement and length" => "جای‌گذاری و مدت دقیق در خط زمانی",
         "Starts" => "آغاز",
         "Go to cue" => "رفتن به نشانه",
+        "Duplicate cue" => "تکثیر نشانه",
         "Untitled effect" => "جلوهٔ بی‌نام",
         "No cue selected" => "هیچ نشانه‌ای انتخاب نشده است",
         "Select a cue on the timeline to manage it" => {
             "برای مدیریت، نشانه‌ای را در خط زمانی انتخاب کنید"
+        }
+        "Select a hardware track and press A, or double-click its lane, to add a cue." => {
+            "برای افزودن نشانه، یک ترک سخت‌افزاری را انتخاب و A را فشار دهید، یا روی مسیر آن دوبار کلیک کنید."
         }
         "Cue unavailable" => "نشانه در دسترس نیست",
         "The selected cue is no longer on the timeline" => "نشانهٔ انتخاب‌شده دیگر در خط زمانی نیست",
@@ -903,7 +924,10 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Hardware macro" => "ماکروی سخت‌افزاری",
         "PCController effect" => "جلوهٔ PCController",
         "Relay sequence" => "توالی رله",
+        "Direct channel cue" => "نشانهٔ مستقیم کانال",
         "Timeline effect" => "جلوهٔ خط زمانی",
+        "Live output on" => "خروجی زنده روشن است",
+        "Live output off" => "خروجی زنده خاموش است",
         "No live hardware outputs" => "هیچ خروجی سخت‌افزاری زنده‌ای در دسترس نیست",
         "Output" => "خروجی",
         "Set hardware target" => "تعیین مقصد سخت‌افزاری",
@@ -920,6 +944,9 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Create" => "ساختن",
         "Timeline instances" => "نمونه‌های خط زمانی",
         "Start time" => "زمان آغاز",
+        "Select a relay or PWM timeline track first" => {
+            "ابتدا یک ترک رله یا PWM را در خط زمانی انتخاب کنید"
+        }
         "Effect" => "جلوه",
         "Unavailable project effect" => "جلوهٔ پروژه در دسترس نیست",
         "Delete" => "حذف",

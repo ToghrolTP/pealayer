@@ -101,6 +101,98 @@ const TIMELINE_COMPACT_TRACK_ROW_HEIGHT: f32 = 32.0;
 const TIMELINE_COMFORTABLE_TRACK_ROW_HEIGHT: f32 = 40.0;
 const TIMELINE_COMPACT_ANALOG_ROW_HEIGHT: f32 = 40.0;
 const TIMELINE_COMFORTABLE_ANALOG_ROW_HEIGHT: f32 = 48.0;
+const TIMELINE_TRACK_STATE_BUTTON_SIZE: f32 = 22.0;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TimelineTrackStateKind {
+    Muted,
+    Soloed,
+    Locked,
+}
+
+fn timeline_track_state_color(kind: TimelineTrackStateKind) -> egui::Color32 {
+    match kind {
+        // Do not inherit the application accent: these colors communicate
+        // suppressed output, isolated output, and constrained editing.
+        TimelineTrackStateKind::Muted => egui::Color32::from_rgb(224, 88, 88),
+        TimelineTrackStateKind::Soloed => egui::Color32::from_rgb(245, 184, 65),
+        TimelineTrackStateKind::Locked => egui::Color32::from_rgb(125, 146, 160),
+    }
+}
+
+fn timeline_track_visual_opacity(muted: bool, soloed: bool, locked: bool, any_soloed: bool) -> f32 {
+    if muted {
+        0.42
+    } else if any_soloed && !soloed {
+        0.36
+    } else if locked {
+        0.72
+    } else {
+        1.0
+    }
+}
+
+fn timeline_track_cue_alpha(muted: bool, soloed: bool, locked: bool, any_soloed: bool) -> u8 {
+    (255.0 * timeline_track_visual_opacity(muted, soloed, locked, any_soloed)).round() as u8
+}
+
+fn timeline_track_state_button(
+    ui: &mut egui::Ui,
+    active: bool,
+    kind: TimelineTrackStateKind,
+    icon: &str,
+    help: &str,
+) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(TIMELINE_TRACK_STATE_BUTTON_SIZE, TIMELINE_TRACK_STATE_BUTTON_SIZE),
+        egui::Sense::click(),
+    );
+    let semantic = timeline_track_state_color(kind);
+    let hovered = response.hovered();
+    let fill = if active {
+        semantic.gamma_multiply(if hovered { 0.30 } else { 0.20 })
+    } else if hovered {
+        ui.visuals().widgets.hovered.bg_fill
+    } else {
+        egui::Color32::TRANSPARENT
+    };
+    let stroke_color = if active {
+        semantic
+    } else if hovered {
+        ui.visuals().widgets.hovered.bg_stroke.color
+    } else {
+        egui::Color32::TRANSPARENT
+    };
+    let icon_color = if active {
+        semantic
+    } else if hovered {
+        ui.visuals().strong_text_color()
+    } else {
+        ui.visuals().weak_text_color()
+    };
+
+    // The exact rectangle and inside stroke never change. Hover therefore
+    // cannot alter layout or nudge the glyph as a selectable label did.
+    let painter = ui.painter();
+    painter.rect_filled(rect, 4.0, fill);
+    painter.rect_stroke(
+        rect,
+        4.0,
+        egui::Stroke::new(1.0, stroke_color),
+        egui::StrokeKind::Inside,
+    );
+    painter.text(
+        rect.center(),
+        egui::Align2::CENTER_CENTER,
+        icon,
+        egui::FontId::proportional(13.0),
+        icon_color,
+    );
+    if hovered {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
+    }
+    response.on_hover_text(help)
+}
 pub const TIMELINE_MIN_ZOOM: f32 = 0.5;
 pub const TIMELINE_MAX_ZOOM: f32 = 2000.0;
 
@@ -774,6 +866,26 @@ fn timeline_two_line_menu_label(
     job
 }
 
+fn timeline_pointer_time_ms(
+    pointer_x: f32,
+    timeline_left: f32,
+    px_per_ms: f32,
+    duration_ms: u64,
+) -> u64 {
+    if !pointer_x.is_finite()
+        || !timeline_left.is_finite()
+        || !px_per_ms.is_finite()
+        || px_per_ms <= 0.0
+    {
+        return 0;
+    }
+    (((pointer_x - timeline_left).max(0.0) / px_per_ms).round() as u64).min(duration_ms)
+}
+
+fn timeline_ruler_context_time_id() -> egui::Id {
+    egui::Id::new("timeline_ruler_context_time_ms")
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 struct TimelineNavigationTransition {
     start_offset: egui::Vec2,
@@ -783,6 +895,48 @@ struct TimelineNavigationTransition {
     started_at_seconds: f64,
     duration_seconds: f32,
     anchor: Option<TimelineZoomAnchor>,
+}
+
+fn timeline_ruler_owns_pointer(
+    ruler: egui::Rect,
+    toolbar: egui::Rect,
+    pointer: egui::Pos2,
+    dragging_ruler: bool,
+) -> bool {
+    dragging_ruler || (ruler.contains(pointer) && !toolbar.contains(pointer))
+}
+
+fn start_timeline_navigation_transition(
+    ui: &egui::Ui,
+    id: egui::Id,
+    start: (egui::Vec2, f32),
+    target: (egui::Vec2, f32),
+    duration_ms: u32,
+) {
+    start_anchored_timeline_navigation_transition(ui, id, start, target, duration_ms, None);
+}
+
+fn start_anchored_timeline_navigation_transition(
+    ui: &egui::Ui,
+    id: egui::Id,
+    start: (egui::Vec2, f32),
+    target: (egui::Vec2, f32),
+    duration_ms: u32,
+    anchor: Option<TimelineZoomAnchor>,
+) {
+    // All Context accessors use the same non-reentrant lock. Snapshot input
+    // before the data transaction; never read input or request repaint inside it.
+    let transition = TimelineNavigationTransition {
+        start_offset: start.0,
+        target_offset: target.0,
+        start_zoom: start.1,
+        target_zoom: target.1,
+        started_at_seconds: ui.input(|input| input.time),
+        duration_seconds: duration_ms as f32 / 1_000.0,
+        anchor,
+    };
+    ui.data_mut(|data| data.insert_temp(id, transition));
+    ui.ctx().request_repaint();
 }
 
 fn sample_timeline_navigation_transition(
@@ -1299,6 +1453,166 @@ fn effect_controls_frame_content_width(outer_width: f32) -> f32 {
     (outer_width - f32::from(EFFECT_CONTROLS_CARD_MARGIN) * 2.0 - 2.0).max(1.0)
 }
 
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct EffectControlsHeaderResponse {
+    previous: bool,
+    next: bool,
+}
+
+fn effect_controls_panel_header(
+    ui: &mut egui::Ui,
+    outer_width: f32,
+    selected_count: usize,
+    cue_count: usize,
+    title: &str,
+    subtitle: &str,
+    selection_label: &str,
+) -> EffectControlsHeaderResponse {
+    let mut response = EffectControlsHeaderResponse::default();
+    let can_navigate = cue_count > 1 || (cue_count == 1 && selected_count == 0);
+    egui::Frame::new()
+        .fill(ui.visuals().widgets.noninteractive.weak_bg_fill)
+        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+        .corner_radius(10.0)
+        .inner_margin(egui::Margin::symmetric(11, 9))
+        .show(ui, |ui| {
+            ui.set_width(effect_controls_frame_content_width(outer_width));
+            ui.horizontal(|ui| {
+                egui::Frame::new()
+                    .fill(ui.visuals().selection.bg_fill.gamma_multiply(0.16))
+                    .corner_radius(7.0)
+                    .inner_margin(egui::Margin::same(7))
+                    .show(ui, |ui| {
+                        ui.label(
+                            egui::RichText::new(crate::ui::icons::SLIDERS_HORIZONTAL)
+                                .size(18.0)
+                                .color(ui.visuals().selection.bg_fill),
+                        );
+                    });
+                ui.vertical(|ui| {
+                    ui.label(egui::RichText::new(title).strong().size(15.0));
+                    ui.label(egui::RichText::new(subtitle).small().weak());
+                });
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    effect_controls_badge(
+                        ui,
+                        crate::ui::icons::SELECTION_ALL,
+                        selection_label,
+                    );
+                    response.next = ui
+                        .add_enabled(
+                            can_navigate,
+                            egui::Button::new(crate::ui::icons::SKIP_FORWARD)
+                                .frame(false)
+                                .min_size(egui::vec2(28.0, 28.0)),
+                        )
+                        .on_hover_text("Select next cue (Tab)")
+                        .clicked();
+                    response.previous = ui
+                        .add_enabled(
+                            can_navigate,
+                            egui::Button::new(crate::ui::icons::SKIP_BACK)
+                                .frame(false)
+                                .min_size(egui::vec2(28.0, 28.0)),
+                        )
+                        .on_hover_text("Select previous cue (Shift+Tab)")
+                        .clicked();
+                });
+            });
+        });
+    response
+}
+
+fn effect_controls_timing_overview(
+    ui: &mut egui::Ui,
+    start_time_ms: u64,
+    duration_ms: u64,
+    total_time_ms: u64,
+    playhead_time_ms: u64,
+) -> egui::Response {
+    let total_time_ms = total_time_ms.max(start_time_ms.saturating_add(duration_ms)).max(1);
+    let (rect, response) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), 30.0),
+        egui::Sense::hover(),
+    );
+    let track = egui::Rect::from_min_max(
+        egui::pos2(rect.left(), rect.center().y - 4.0),
+        egui::pos2(rect.right(), rect.center().y + 4.0),
+    );
+    ui.painter().rect_filled(track, 4.0, ui.visuals().widgets.inactive.bg_fill);
+    let x_for_time = |time_ms: u64| {
+        egui::lerp(
+            track.left()..=track.right(),
+            (time_ms.min(total_time_ms) as f32 / total_time_ms as f32).clamp(0.0, 1.0),
+        )
+    };
+    let cue_start = x_for_time(start_time_ms);
+    let cue_end = x_for_time(start_time_ms.saturating_add(duration_ms));
+    let cue_rect = egui::Rect::from_min_max(
+        egui::pos2(cue_start, track.top() - 3.0),
+        egui::pos2((cue_end.max(cue_start + 3.0)).min(track.right()), track.bottom() + 3.0),
+    );
+    ui.painter().rect_filled(
+        cue_rect,
+        5.0,
+        ui.visuals().selection.bg_fill.gamma_multiply(0.82),
+    );
+    let playhead_x = x_for_time(playhead_time_ms);
+    ui.painter().line_segment(
+        [egui::pos2(playhead_x, rect.top() + 2.0), egui::pos2(playhead_x, rect.bottom() - 2.0)],
+        egui::Stroke::new(1.5, egui::Color32::from_rgb(231, 76, 60)),
+    );
+    response.on_hover_text(format!(
+        "{} → {} · {}",
+        crate::duration::format_time_value_ms(start_time_ms),
+        crate::duration::format_time_value_ms(start_time_ms.saturating_add(duration_ms)),
+        crate::duration::format_time_value_ms(duration_ms),
+    ))
+}
+
+fn effect_controls_relay_state(
+    ui: &mut egui::Ui,
+    value: &mut u16,
+    on_label: &str,
+    off_label: &str,
+) {
+    let gap = ui.spacing().item_spacing.x;
+    let button_width = ((ui.available_width() - gap) / 2.0).max(70.0);
+    ui.horizontal(|ui| {
+        let on = *value >= 5_000;
+        let on_color = egui::Color32::from_rgb(38, 166, 91);
+        let off_color = egui::Color32::from_rgb(125, 146, 160);
+        if ui
+            .add_sized(
+                [button_width, 30.0],
+                egui::Button::new(
+                    egui::RichText::new(format!("{}  {on_label}", crate::ui::icons::POWER))
+                        .color(if on { egui::Color32::WHITE } else { ui.visuals().text_color() }),
+                )
+                .fill(if on { on_color } else { ui.visuals().widgets.inactive.weak_bg_fill })
+                .stroke(egui::Stroke::new(1.0, if on { on_color } else { ui.visuals().widgets.inactive.bg_stroke.color })),
+            )
+            .clicked()
+        {
+            *value = 10_000;
+        }
+        if ui
+            .add_sized(
+                [button_width, 30.0],
+                egui::Button::new(
+                    egui::RichText::new(format!("{}  {off_label}", crate::ui::icons::STOP_CIRCLE))
+                        .color(if !on { egui::Color32::WHITE } else { ui.visuals().text_color() }),
+                )
+                .fill(if !on { off_color } else { ui.visuals().widgets.inactive.weak_bg_fill })
+                .stroke(egui::Stroke::new(1.0, if !on { off_color } else { ui.visuals().widgets.inactive.bg_stroke.color })),
+            )
+            .clicked()
+        {
+            *value = 0;
+        }
+    });
+}
+
 fn effect_controls_card<R>(
     ui: &mut egui::Ui,
     outer_width: f32,
@@ -1358,11 +1672,11 @@ fn effect_controls_card_with_ping<R>(
     } else {
         visuals.widgets.noninteractive.bg_stroke
     };
-    egui::Frame::new()
+    let card = egui::Frame::new()
         .fill(fill)
         .stroke(stroke)
-        .corner_radius(9.0)
-        .inner_margin(egui::Margin::symmetric(EFFECT_CONTROLS_CARD_MARGIN, 9))
+        .corner_radius(10.0)
+        .inner_margin(egui::Margin::symmetric(EFFECT_CONTROLS_CARD_MARGIN, 11))
         .show(ui, |ui| {
             ui.set_width(effect_controls_frame_content_width(outer_width));
             ui.horizontal(|ui| {
@@ -1371,17 +1685,33 @@ fn effect_controls_card_with_ping<R>(
                 } else {
                     ui.visuals().strong_text_color()
                 };
-                ui.label(egui::RichText::new(icon).size(17.0).color(icon_color));
+                egui::Frame::new()
+                    .fill(icon_color.gamma_multiply(if emphasized { 0.18 } else { 0.10 }))
+                    .corner_radius(6.0)
+                    .inner_margin(egui::Margin::same(6))
+                    .show(ui, |ui| {
+                        ui.label(egui::RichText::new(icon).size(17.0).color(icon_color));
+                    });
                 ui.vertical(|ui| {
-                    ui.label(egui::RichText::new(title).strong());
+                    ui.label(egui::RichText::new(title).strong().size(14.0));
                     if let Some(subtitle) = subtitle.filter(|value| !value.trim().is_empty()) {
                         ui.label(egui::RichText::new(subtitle).small().weak());
                     }
                 });
             });
+            ui.add_space(8.0);
+            ui.separator();
             ui.add_space(7.0);
             add_contents(ui)
-        })
+        });
+    if emphasized {
+        let stripe = egui::Rect::from_min_max(
+            card.response.rect.min,
+            egui::pos2(card.response.rect.min.x + 3.0, card.response.rect.max.y),
+        );
+        ui.painter().rect_filled(stripe, 10.0, ui.visuals().selection.bg_fill);
+    }
+    card
 }
 
 fn effect_controls_badge(ui: &mut egui::Ui, icon: &str, text: impl Into<String>) {
@@ -1399,7 +1729,17 @@ fn effect_controls_badge(ui: &mut egui::Ui, icon: &str, text: impl Into<String>)
 fn effect_controls_kind(
     effect: &crate::four_d::models::Effect,
 ) -> (&'static str, &'static str, &'static str) {
-    if effect.controller_strip_effect.is_some() {
+    if let Some(direct) = effect.direct_control.as_ref() {
+        (
+            if direct.control_key.starts_with("relay.") {
+                crate::ui::icons::PLUG
+            } else {
+                crate::ui::icons::SLIDERS_HORIZONTAL
+            },
+            "Direct channel cue",
+            "Timeline effect",
+        )
+    } else if effect.controller_strip_effect.is_some() {
         (
             crate::ui::icons::SPARKLE,
             "Addressable lighting",
@@ -1921,6 +2261,33 @@ struct TimelineTrackRow {
     relay_ids: Vec<u8>,
     dimmed: bool,
     kind: TimelineTrackKind,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TimelineCueDraftAction {
+    Relay { enabled: bool },
+    Pwm { value_basis_points: u16 },
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct TimelineCueDraft {
+    track_name: String,
+    control_key: String,
+    start_time_ms: u64,
+    duration_ms: u64,
+    action: TimelineCueDraftAction,
+    error: Option<String>,
+}
+
+impl TimelineCueDraft {
+    fn value_basis_points(&self) -> u16 {
+        match self.action {
+            TimelineCueDraftAction::Relay { enabled } => {
+                if enabled { 10_000 } else { 0 }
+            }
+            TimelineCueDraftAction::Pwm { value_basis_points } => value_basis_points,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2798,6 +3165,193 @@ fn relay_identifier_label(relay_id: u8) -> String {
 
 fn is_pwm_control(control: &crate::four_d::controller::HardwareControl) -> bool {
     matches!(control.kind.as_str(), "mosfet" | "pwm") || control.key.starts_with("pwm.")
+}
+
+fn timeline_cue_dialog_id() -> egui::Id {
+    egui::Id::new("timeline-add-cue-dialog")
+}
+
+fn timeline_cue_draft_for_row(
+    app: &PealayerApp,
+    row: &TimelineTrackRow,
+    start_time_ms: u64,
+) -> Result<TimelineCueDraft, String> {
+    if !row.linked || !row.visible {
+        return Err(format!("Track '{}' is not linked and visible", row.name));
+    }
+    if !row.enabled {
+        return Err(format!("Track '{}' is locked by PCController", row.name));
+    }
+    let control_key = row
+        .control_key
+        .as_deref()
+        .ok_or_else(|| format!("Track '{}' does not accept direct cues", row.name))?;
+    let control = app
+        .advertised_hardware()
+        .and_then(|capabilities| {
+            crate::ui::hardware_control::managed_controls(&capabilities)
+                .into_iter()
+                .find(|control| control.key == control_key)
+        })
+        .ok_or_else(|| format!("Channel '{control_key}' is not advertised by PCController"))?;
+
+    if row
+        .relay_ids
+        .iter()
+        .any(|relay| app.track_locked.contains(relay))
+    {
+        return Err(format!("Track '{}' is locked", row.name));
+    }
+    let analog_locked = control_key
+        .strip_prefix("pwm.")
+        .and_then(|channel| channel.parse::<u8>().ok())
+        .and_then(|channel| {
+            app.timeline
+                .analog_tracks
+                .iter()
+                .find(|track| track.channel == channel)
+        })
+        .is_some_and(|track| track.locked);
+    if analog_locked {
+        return Err(format!("Track '{}' is locked", row.name));
+    }
+
+    let action = if relay_id_from_control_key(control_key).is_some() {
+        TimelineCueDraftAction::Relay { enabled: true }
+    } else if is_pwm_control(&control) {
+        TimelineCueDraftAction::Pwm {
+            value_basis_points: 5_000,
+        }
+    } else {
+        return Err(format!(
+            "Track '{}' does not support directly-authored cues",
+            row.name
+        ));
+    };
+
+    Ok(TimelineCueDraft {
+        track_name: row.name.clone(),
+        control_key: control_key.to_string(),
+        start_time_ms,
+        duration_ms: 1_000,
+        action,
+        error: None,
+    })
+}
+
+fn request_timeline_cue_dialog(
+    app: &mut PealayerApp,
+    context: &egui::Context,
+    track_key: &str,
+    start_time_ms: u64,
+) {
+    let row = all_timeline_track_rows(app)
+        .into_iter()
+        .find(|row| row.key == track_key);
+    let Some(row) = row else {
+        let message = app.tr("Select a relay or PWM timeline track first");
+        app.set_osd(message);
+        return;
+    };
+    app.selected_timeline_track = Some(row.key.clone());
+    match timeline_cue_draft_for_row(app, &row, start_time_ms) {
+        Ok(draft) => {
+            context
+                .data_mut(|data| data.insert_temp(timeline_cue_dialog_id(), draft));
+            context.request_repaint();
+        }
+        Err(error) => app.set_osd(error),
+    }
+}
+
+fn draw_timeline_cue_dialog(app: &mut PealayerApp, context: &egui::Context) {
+    let Some(mut draft) =
+        context.data_mut(|data| data.get_temp::<TimelineCueDraft>(timeline_cue_dialog_id()))
+    else {
+        return;
+    };
+    let mut open = true;
+    let mut cancel = false;
+    let mut submit = false;
+    crate::ui::sync_elegance_theme(context);
+    elegance::Modal::new("timeline-add-cue-dialog", &mut open)
+        .heading(app.tr("Add cue"))
+        .subtitle(draft.track_name.clone())
+        .header_icon(crate::ui::icons::PLUS)
+        .max_width(440.0)
+        .footer(|ui| {
+            if ui.add(elegance::Button::new(app.tr("Add cue")).accent(elegance::Accent::Green)).clicked() {
+                submit = true;
+            }
+            if ui.add(elegance::Button::new(app.tr("Cancel")).outline()).clicked() {
+                cancel = true;
+            }
+        })
+        .show(context, |ui| {
+            ui.add(elegance::Badge::new(draft.control_key.as_str(), elegance::BadgeTone::Neutral).preserve_case());
+            ui.add_space(10.0);
+            elegance::Card::new().heading(app.tr("Timing")).show(ui, |ui| {
+                egui::Grid::new("timeline-add-cue-timing")
+                    .num_columns(2)
+                    .spacing([14.0, 10.0])
+                    .show(ui, |ui| {
+                        ui.label(app.tr("Start time"));
+                        ui.add(crate::duration::time_value_drag(
+                            &mut draft.start_time_ms, 0..=86_400_000, 10.0,
+                            app.human_readable_time_units,
+                        ));
+                        ui.end_row();
+                        ui.label(app.tr("Duration"));
+                        ui.add(crate::duration::time_value_drag(
+                            &mut draft.duration_ms, 100..=86_400_000, 10.0,
+                            app.human_readable_time_units,
+                        ));
+                        ui.end_row();
+                    });
+            });
+            ui.add_space(8.0);
+            elegance::Card::new().heading(app.tr("Action")).show(ui, |ui| match &mut draft.action {
+                TimelineCueDraftAction::Relay { enabled } => {
+                    let mut selected = usize::from(*enabled);
+                    if ui.add(elegance::SegmentedControl::new(&mut selected, [app.tr("Off"), app.tr("On")])).changed() {
+                        *enabled = selected == 1;
+                    }
+                }
+                TimelineCueDraftAction::Pwm { value_basis_points } => {
+                    ui.add(egui::Slider::new(value_basis_points, 0..=10_000)
+                        .custom_formatter(|value, _| format!("{:.2}%", value / 100.0))
+                        .custom_parser(|text| text.trim().trim_end_matches('%').trim().parse::<f64>().ok()
+                            .map(|percent| (percent.clamp(0.0, 100.0) * 100.0).round())));
+                }
+            });
+            if let Some(error) = draft.error.as_deref() {
+                ui.add_space(8.0);
+                elegance::Callout::new(elegance::CalloutTone::Danger).body(error).show(ui, |_| {});
+            }
+        });
+
+    if submit {
+        match app.add_direct_control_cue(
+            &draft.control_key,
+            draft.value_basis_points(),
+            draft.start_time_ms,
+            draft.duration_ms,
+        ) {
+            Ok(_) => {
+                let cue_added = app.tr("Cue added");
+                app.set_osd(format!("{cue_added}: {}", draft.track_name));
+                open = false;
+            }
+            Err(error) => draft.error = Some(error),
+        }
+    }
+    if !open || cancel {
+        context.data_mut(|data| {
+            data.remove::<TimelineCueDraft>(timeline_cue_dialog_id());
+        });
+    } else {
+        context.data_mut(|data| data.insert_temp(timeline_cue_dialog_id(), draft));
+    }
 }
 
 fn pwm_channel_for<'a>(
@@ -5077,7 +5631,7 @@ fn draw_rf_code_tool(app: &mut PealayerApp, ui: &mut egui::Ui) {
     board_tool_card(ui, crate::ui::icons::RADIO, &app.tr("RF code"), |ui| {
         let response = ui.add_sized(
             [ui.available_width(), 28.0],
-            egui::TextEdit::singleline(&mut code)
+            crate::ui::dialog::singleline_text_edit(&mut code)
                 .hint_text("0x12AB34")
                 .font(egui::TextStyle::Monospace),
         );
@@ -5153,10 +5707,7 @@ fn hardware_header_widget<R>(
 /// Keep transformable card layers attached to their workspace panel rather
 /// than as independent Middle windows that can paint over floating dialogs.
 fn hardware_card_layer(ui: &egui::Ui, key: &str) -> egui::LayerId {
-    let parent = ui.layer_id();
-    let child = egui::LayerId::new(parent.order, egui::Id::new(("hardware-channel-card", parent.id, key)));
-    ui.ctx().set_sublayer(parent, child);
-    child
+    crate::ui::dialog::workspace_overlay_layer(ui, ("hardware-channel-card", key))
 }
 
 fn draw_compact_control_card(
@@ -5248,7 +5799,7 @@ fn draw_compact_control_card(
                     let edit_width = (ui.available_width() * 0.42).clamp(64.0, 190.0);
                     let edit = ui.add_sized(
                         [edit_width, 24.0],
-                        egui::TextEdit::singleline(&mut draft)
+                        crate::ui::dialog::singleline_text_edit(&mut draft)
                             .id(text_edit_id)
                             .horizontal_align(edit_align)
                             .hint_text(&control.default_name),
@@ -5573,7 +6124,7 @@ fn draw_control_card(
                                     edit_response = Some(
                                         ui.add_sized(
                                             [width, 24.0],
-                                            egui::TextEdit::singleline(&mut draft)
+                                            crate::ui::dialog::singleline_text_edit(&mut draft)
                                                 .id(text_edit_id)
                                                 .horizontal_align(edit_align)
                                                 .hint_text(&control.default_name),
@@ -6189,6 +6740,36 @@ mod timeline_row_tests {
     use super::*;
 
     #[test]
+    fn timeline_track_state_semantics_have_distinct_colors_and_opacity() {
+        assert_ne!(timeline_track_state_color(TimelineTrackStateKind::Muted), timeline_track_state_color(TimelineTrackStateKind::Soloed));
+        assert_ne!(timeline_track_state_color(TimelineTrackStateKind::Soloed), timeline_track_state_color(TimelineTrackStateKind::Locked));
+        assert_eq!(timeline_track_visual_opacity(true, false, false, false), 0.42);
+        assert_eq!(timeline_track_visual_opacity(false, false, false, true), 0.36);
+        assert_eq!(timeline_track_visual_opacity(false, true, false, true), 1.0);
+        assert_eq!(timeline_track_visual_opacity(false, false, true, false), 0.72);
+        assert_eq!(timeline_track_cue_alpha(true, false, false, false), 107);
+        assert_eq!(timeline_track_cue_alpha(false, false, false, true), 92);
+    }
+
+    #[test]
+    fn timeline_track_state_button_always_reserves_the_same_square() {
+        let context = egui::Context::default();
+        let mut size = egui::Vec2::ZERO;
+        discard_ui_output(context.run_ui(egui::RawInput::default(), |ui| {
+            size = timeline_track_state_button(
+                ui,
+                false,
+                TimelineTrackStateKind::Muted,
+                crate::ui::icons::PROHIBIT,
+                "Mute",
+            )
+            .rect
+            .size();
+        }));
+        assert_eq!(size, egui::vec2(TIMELINE_TRACK_STATE_BUTTON_SIZE, TIMELINE_TRACK_STATE_BUTTON_SIZE));
+    }
+
+    #[test]
     fn middle_button_timeline_pan_tracks_the_grab_offset_on_both_axes() {
         let offset = pan_timeline_offset(
             egui::vec2(120.0, 70.0),
@@ -6486,6 +7067,96 @@ mod timeline_row_tests {
             timeline_follow_target_offset(0.0, 450.0, 400.0, 500.0),
             None
         );
+    }
+
+    #[test]
+    fn timeline_toolbar_stays_under_add_cue_backdrop_and_cannot_be_clicked_through() {
+        for dark in [false, true] {
+            let context = egui::Context::default();
+            context.set_visuals(if dark { egui::Visuals::dark() } else { egui::Visuals::light() });
+            let mut app = PealayerApp::default();
+            let toolbar_rect = egui::Rect::from_min_size(egui::pos2(750.0, 12.0), egui::vec2(180.0, 28.0));
+            context.data_mut(|data| data.insert_temp(timeline_cue_dialog_id(), TimelineCueDraft {
+                track_name: "Relay 5".into(), control_key: "relay.5".into(),
+                start_time_ms: 1000, duration_ms: 1000,
+                action: TimelineCueDraftAction::Relay { enabled: true }, error: None,
+            }));
+            let mut clicked = false;
+            // Area fades its painter on opening. Advance a deterministic clock
+            // beyond that animation before asserting the final backdrop color.
+            let frame_time = std::cell::Cell::new(0.0);
+            let mut render = |events| context.run_ui(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 800.0))),
+                time: Some({
+                    let time = frame_time.get();
+                    frame_time.set(time + 1.0);
+                    time
+                }),
+                events, ..Default::default()
+            }, |ui| {
+                let layer = crate::ui::dialog::workspace_overlay_layer(ui, "timeline-ruler-toolbar-layer");
+                assert_eq!(layer.order, ui.layer_id().order);
+                let mut toolbar = ui.new_child(egui::UiBuilder::new().layer_id(layer).max_rect(toolbar_rect));
+                clicked |= toolbar.button("Ruler control sentinel").clicked();
+                draw_timeline_cue_dialog(&mut app, &context);
+            });
+            for _ in 0..3 { discard_ui_output(render(Vec::new())); }
+            let mut output = render(vec![egui::Event::PointerMoved(toolbar_rect.center())]);
+            let control = output.shapes.iter().position(|shape| matches!(&shape.shape,
+                egui::epaint::Shape::Text(text) if text.galley.job.text == "Ruler control sentinel"
+            )).expect("toolbar not painted");
+            let backdrop = output.shapes.iter().position(|shape| matches!(&shape.shape,
+                egui::epaint::Shape::Rect(rect) if rect.rect.contains_rect(toolbar_rect)
+                    && rect.fill == egui::Color32::from_rgba_premultiplied(0, 0, 0, 150)
+            )).expect("full viewport backdrop missing");
+            assert!(control < backdrop, "toolbar paints above the modal backdrop; dark={dark}");
+            assert_eq!(context.layer_id_at(toolbar_rect.center()).unwrap().order, egui::Order::Foreground);
+            output.textures_delta.clear();
+            for pressed in [true, false] {
+                discard_ui_output(render(vec![egui::Event::PointerButton {
+                    pos: toolbar_rect.center(), button: egui::PointerButton::Primary,
+                    pressed, modifiers: egui::Modifiers::NONE,
+                }]));
+            }
+            assert!(!clicked, "modal backdrop allowed a toolbar action; dark={dark}");
+        }
+    }
+
+    #[test]
+    fn timeline_ruler_does_not_steal_toolbar_cursor_or_seek() {
+        let ruler = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(900.0, 30.0));
+        let toolbar = egui::Rect::from_min_max(egui::pos2(650.0, 1.0), egui::pos2(897.0, 29.0));
+        assert!(!timeline_ruler_owns_pointer(ruler, toolbar, toolbar.center(), false));
+        assert!(timeline_ruler_owns_pointer(ruler, toolbar, egui::pos2(200.0, 15.0), false));
+        // A seek already started on the ruler may continue across the toolbar.
+        assert!(timeline_ruler_owns_pointer(ruler, toolbar, toolbar.center(), true));
+        assert!(!timeline_ruler_owns_pointer(ruler, toolbar, egui::pos2(200.0, 60.0), false));
+    }
+
+    #[test]
+    fn timeline_navigation_transaction_does_not_reenter_egui_context() {
+        let context = egui::Context::default();
+        let id = egui::Id::new("navigation-lock-regression");
+        let mut output = context.run_ui(
+            egui::RawInput { time: Some(10.0), ..Default::default() },
+            |ui| {
+                // Toolbar navigation, follow-playhead, wheel and reveal all
+                // use this path. It must return with the context unlocked.
+                for target_zoom in [120.0, 150.0, 100.0, 200.0] {
+                    start_timeline_navigation_transition(
+                        ui, id, (egui::vec2(10.0, 20.0), 100.0),
+                        (egui::vec2(300.0, 40.0), target_zoom), 220,
+                    );
+                    let transition = ui.data(|data| {
+                        data.get_temp::<TimelineNavigationTransition>(id).unwrap()
+                    });
+                    assert_eq!(transition.started_at_seconds, 10.0);
+                    assert_eq!(transition.target_zoom, target_zoom);
+                    assert_eq!(transition.duration_seconds, 0.22);
+                }
+            },
+        );
+        output.textures_delta.clear();
     }
 
     #[test]
@@ -7426,6 +8097,71 @@ mod timeline_row_tests {
     }
 
     #[test]
+    fn cue_dialog_drafts_valid_actions_for_relay_and_pwm_tracks() {
+        let mut app = PealayerApp::default();
+        app.update_hardware_capabilities(Some(crate::four_d::controller::HardwareCapabilities {
+            board_connected: true,
+            controls: vec![
+                crate::four_d::controller::HardwareControl {
+                    key: "relay.5".to_string(),
+                    kind: "relay".to_string(),
+                    name: "Fog relay".to_string(),
+                    ..Default::default()
+                },
+                crate::four_d::controller::HardwareControl {
+                    key: "pwm.12".to_string(),
+                    kind: "pwm".to_string(),
+                    name: "House light".to_string(),
+                    ..Default::default()
+                },
+            ],
+            ..Default::default()
+        }));
+        let rows = all_timeline_track_rows(&app);
+        let relay = rows
+            .iter()
+            .find(|row| row.key == "hardware:relay.5")
+            .expect("relay track should be advertised");
+        let pwm = rows
+            .iter()
+            .find(|row| row.key == "hardware:pwm.12")
+            .expect("PWM track should be advertised");
+
+        let relay_draft = timeline_cue_draft_for_row(&app, relay, 2_750)
+            .expect("relay track should accept a direct cue");
+        assert_eq!(relay_draft.start_time_ms, 2_750);
+        assert_eq!(relay_draft.duration_ms, 1_000);
+        assert_eq!(relay_draft.value_basis_points(), 10_000);
+
+        let pwm_draft = timeline_cue_draft_for_row(&app, pwm, 4_000)
+            .expect("PWM track should accept a direct cue");
+        assert_eq!(pwm_draft.start_time_ms, 4_000);
+        assert_eq!(pwm_draft.value_basis_points(), 5_000);
+    }
+
+    #[test]
+    fn cue_dialog_rejects_a_locked_track() {
+        let mut app = PealayerApp::default();
+        app.update_hardware_capabilities(Some(crate::four_d::controller::HardwareCapabilities {
+            board_connected: true,
+            controls: vec![crate::four_d::controller::HardwareControl {
+                key: "relay.6".to_string(),
+                kind: "relay".to_string(),
+                name: "Locked relay".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }));
+        app.track_locked.insert(6);
+        let row = all_timeline_track_rows(&app)
+            .into_iter()
+            .find(|row| row.key == "hardware:relay.6")
+            .expect("relay track should be advertised");
+
+        assert!(timeline_cue_draft_for_row(&app, &row, 0).is_err());
+    }
+
+    #[test]
     fn timeline_track_filter_searches_caption_detail_and_stable_key() {
         let row = TimelineTrackRow {
             key: "hardware:seat.a".to_string(),
@@ -7453,16 +8189,28 @@ mod timeline_row_tests {
     #[test]
     fn exact_keyframe_insertion_selects_and_deduplicates_the_durable_model() {
         let mut app = PealayerApp::default();
+        app.playback_time = 8.75;
+        app.seek_pos = Some(8.75);
         let (first, inserted) = app.insert_timeline_keyframe(1_250);
         assert!(inserted);
         assert_eq!(app.timeline.keyframes.len(), 1);
         assert_eq!(app.timeline.keyframes[0].time_ms, 1_250);
         assert_eq!(app.selected_timeline_keyframe, Some(first));
+        assert_eq!(app.playback_time, 8.75, "inserting a keyframe must not seek playback");
+        assert_eq!(app.seek_pos, Some(8.75), "inserting a keyframe must not change the pending seek");
 
         let (duplicate, inserted) = app.insert_timeline_keyframe(1_250);
         assert!(!inserted);
         assert_eq!(duplicate, first);
         assert_eq!(app.timeline.keyframes.len(), 1);
+    }
+
+    #[test]
+    fn exact_keyframe_context_time_is_stable_and_clamped() {
+        let captured = timeline_pointer_time_ms(350.0, 100.0, 0.25, 8_000);
+        assert_eq!(captured, 1_000);
+        assert_eq!(timeline_pointer_time_ms(4_000.0, 100.0, 0.25, 8_000), 8_000);
+        assert_eq!(timeline_pointer_time_ms(50.0, 100.0, 0.25, 8_000), 0);
     }
 
     #[test]
@@ -8907,10 +9655,19 @@ mod timeline_row_tests {
             2_000,
             "thunder".to_string(),
         );
+        let direct = crate::four_d::models::Effect::direct_control(
+            "House light".to_string(),
+            String::new(),
+            1_000,
+            "pwm.12".to_string(),
+            5_000,
+            None,
+        );
 
         assert_eq!(effect_controls_kind(&relay).1, "Relay sequence");
         assert_eq!(effect_controls_kind(&macro_effect).1, "Hardware macro");
         assert_eq!(effect_controls_kind(&strip).1, "Addressable lighting");
+        assert_eq!(effect_controls_kind(&direct).1, "Direct channel cue");
     }
 
     #[test]
@@ -9927,7 +10684,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                     .clicked()
                 {
                     self.app.preferences_tab = 2;
-                    self.app.show_preferences_dialog = true;
+                    crate::ui::preferences::open(self.app, ui.ctx());
                     ui.close();
                 }
             }
@@ -9961,7 +10718,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
             ))
             .clicked()
         {
-            self.app.show_preferences_dialog = true;
+            crate::ui::preferences::open(self.app, ui.ctx());
             ui.close();
         }
     }
@@ -10114,6 +10871,19 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         .clicked()
                                     {
                                         self.app.toggle_audio_muted();
+                                    }
+                                    let mut volume = self.app.volume;
+                                    let volume_response = ui
+                                        .add_sized([76.0, 18.0], egui::Slider::new(&mut volume, 0.0..=130.0).show_value(false))
+                                        .on_hover_text(format!("{}: {:.0}%", self.app.tr("Volume"), volume));
+                                    if volume_response.changed() {
+                                        let _ = self.app.mpv.set_property("volume", volume);
+                                        self.app.volume = volume;
+                                    }
+                                    if (volume_response.changed() && !volume_response.dragged())
+                                        || volume_response.drag_stopped()
+                                    {
+                                        self.app.save_config();
                                     }
                                     crate::ui::media_tracks::menu_button(
                                         self.app,
@@ -10290,6 +11060,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 as f32,
                                         );
                                     }
+                                    crate::ui::controls::paint_seekbar_chapters(
+                                        ui, &response, self.app.duration, &self.app.media_chapters(),
+                                        self.app.active_media_chapter().map(|chapter| chapter.index),
+                                    );
                                     let show_seek_preview =
                                         self.app.nle_seekbar_hover_thumbnails;
                                     crate::ui::seek_preview::draw(
@@ -10345,25 +11119,35 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             ui.ctx().request_repaint();
                         }
                         ui.set_width(panel_width);
+                        let panel_subtitle = if selected_count == 0 {
+                            self.app.tr("Select a cue to inspect and edit")
+                        } else if selected_count == 1 {
+                            self.app.tr("Timing, routing, and output")
+                        } else {
+                            self.app.tr("Batch-edit selected cues")
+                        };
+                        let panel_header = effect_controls_panel_header(
+                            ui,
+                            panel_width,
+                            selected_count,
+                            self.app.timeline.instances.len(),
+                            &self.app.tr("Effect Controls"),
+                            &panel_subtitle,
+                            &if selected_count == 1 {
+                                self.app.tr("1 cue")
+                            } else {
+                                format!("{selected_count} {}", self.app.tr("cues"))
+                            },
+                        );
+                        ui.add_space(9.0);
 
                         if selected_count == 1 {
                             let id = *self.app.selected_instance_ids.iter().next().unwrap();
                             let mut timeline_dirty = false;
                             let mut delete_cue = false;
                             let mut jump_to_cue = false;
+                            let mut duplicate_cue = false;
                             let mut relocate_effect_id = None;
-
-                            ui.horizontal(|ui| {
-                                ui.heading(self.app.tr("Effect Controls"));
-                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    effect_controls_badge(
-                                        ui,
-                                        crate::ui::icons::SELECTION_ALL,
-                                        self.app.tr("1 cue"),
-                                    );
-                                });
-                            });
-                            ui.add_space(6.0);
 
                             let instance_idx = self
                                 .app
@@ -10372,6 +11156,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 .iter()
                                 .position(|instance| instance.id == id);
 
+                            let timeline_before_edit = self.app.snapshot_timeline();
                             let mut push_undo = false;
                             let mut isolate_instance = false;
                             let mut update_start_to = None;
@@ -10391,6 +11176,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 let state_label = self.app.tr("State");
                                 let on_label = self.app.tr("On");
                                 let off_label = self.app.tr("Off");
+                                let live_output_on_label = self.app.tr("Live output on");
+                                let live_output_off_label = self.app.tr("Live output off");
                                 let hardware_target_label = self.app.tr("Hardware target");
                                 let source_label = self.app.tr("Source");
                                 let unavailable_output_label = self.app.tr("Unavailable output");
@@ -10400,6 +11187,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 let target_output_label = self.app.tr("Output");
                                 let delete_cue_label = self.app.tr("Delete Cue");
                                 let jump_label = self.app.tr("Go to cue");
+                                let duplicate_label = self.app.tr("Duplicate cue");
                                 let details_label = self.app.tr("Technical details");
                                 let target_mismatch_label = self.app.tr("Target mismatch");
                                 let configured_output_label = self.app.tr("Configured output");
@@ -10468,9 +11256,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             );
                                             let name_editor = ui.add_sized(
                                                 [ui.available_width(), 26.0],
-                                                egui::TextEdit::singleline(&mut template.name)
+                                                crate::ui::dialog::singleline_text_edit(&mut template.name)
                                                     .horizontal_align(name_align),
                                             );
+                                            if name_editor.gained_focus() {
+                                                push_undo = true;
+                                            }
                                             if name_editor.changed() {
                                                 timeline_dirty = true;
                                             }
@@ -10489,6 +11280,34 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         |ui| {
                                             let max_start_ms = (max_secs * 1_000.0).round() as u64;
                                             let mut start_ms = instance_start_ms;
+                                            effect_controls_timing_overview(
+                                                ui,
+                                                start_ms,
+                                                template.duration_ms,
+                                                max_start_ms,
+                                                (self.app.playback_time.max(0.0) * 1_000.0)
+                                                    .round() as u64,
+                                            );
+                                            ui.horizontal(|ui| {
+                                                ui.label(
+                                                    egui::RichText::new(crate::duration::format_time_value_ms(start_ms))
+                                                        .small()
+                                                        .weak(),
+                                                );
+                                                ui.with_layout(
+                                                    egui::Layout::right_to_left(egui::Align::Center),
+                                                    |ui| {
+                                                        ui.label(
+                                                            egui::RichText::new(crate::duration::format_time_value_ms(
+                                                                start_ms.saturating_add(template.duration_ms),
+                                                            ))
+                                                            .small()
+                                                            .weak(),
+                                                        );
+                                                    },
+                                                );
+                                            });
+                                            ui.add_space(6.0);
                                             ui.horizontal(|ui| {
                                                 ui.label(egui::RichText::new(&start_time_label).weak());
                                                 ui.with_layout(
@@ -10514,23 +11333,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     },
                                                 );
                                             });
-                                            let mut start_secs = start_ms as f64 / 1_000.0;
-                                            let slider = ui.add_sized(
-                                                [ui.available_width(), 18.0],
-                                                egui::Slider::new(&mut start_secs, 0.0..=max_secs)
-                                                    .show_value(false),
-                                            );
-                                            if slider.drag_started()
-                                                || (slider.changed() && !slider.dragged())
-                                            {
-                                                push_undo = true;
-                                            }
-                                            if slider.changed() {
-                                                update_start_to = Some((start_secs * 1000.0) as u64);
-                                                timeline_dirty = true;
-                                            }
-
-                                            ui.add_space(5.0);
+                                            ui.add_space(7.0);
                                             ui.horizontal(|ui| {
                                                 ui.label(egui::RichText::new(&duration_label).weak());
                                                 ui.with_layout(
@@ -10590,10 +11393,33 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     ui.horizontal(|ui| {
                                                         ui.label(egui::RichText::new(&state_label).weak());
                                                         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                                            ui.selectable_value(&mut value, 0, format!("{}  {}", crate::ui::icons::STOP_CIRCLE, off_label));
-                                                            ui.selectable_value(&mut value, 10_000, format!("{}  {}", crate::ui::icons::POWER, on_label));
+                                                            let relay_id = direct
+                                                                .control_key
+                                                                .strip_prefix("relay.")
+                                                                .and_then(|value| value.parse::<u8>().ok());
+                                                            let live = relay_id
+                                                                .is_some_and(|relay_id| active_relays.contains(&relay_id));
+                                                            ui.colored_label(
+                                                                if live {
+                                                                    egui::Color32::from_rgb(38, 166, 91)
+                                                                } else {
+                                                                    ui.visuals().weak_text_color()
+                                                                },
+                                                                if live {
+                                                                    format!("{} {live_output_on_label}", crate::ui::icons::DOT_OUTLINE)
+                                                                } else {
+                                                                    format!("{} {live_output_off_label}", crate::ui::icons::DOT_OUTLINE)
+                                                                },
+                                                            );
                                                         });
                                                     });
+                                                    ui.add_space(5.0);
+                                                    effect_controls_relay_state(
+                                                        ui,
+                                                        &mut value,
+                                                        &on_label,
+                                                        &off_label,
+                                                    );
                                                 } else {
                                                     let mut percent = f64::from(value) / 100.0;
                                                     draw_pwm_editor_row(ui, &mut percent, true);
@@ -10730,52 +11556,85 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     }
 
                                     ui.add_space(8.0);
-                                    let details_open = crate::ui::icons::disclosure_header(
+                                    effect_controls_card(
                                         ui,
-                                        ("effect-control-details", id),
-                                        &format!("{}  {details_label}", crate::ui::icons::INFO),
+                                        panel_width,
+                                        crate::ui::icons::INFO,
+                                        &details_label,
+                                        Some(&displayed_ownership),
                                         false,
-                                    );
-                                    if details_open {
+                                        |ui| {
+                                        let identifier_width = (ui.available_width() - 112.0).max(80.0);
                                         egui::Grid::new(("effect-control-identifiers", id))
-                                            .num_columns(2)
-                                            .spacing([8.0, 4.0])
+                                            .num_columns(3)
+                                            .spacing([8.0, 6.0])
                                             .show(ui, |ui| {
                                                 ui.label(egui::RichText::new("Cue ID").small().weak());
-                                                ui.add(egui::Label::new(egui::RichText::new(id.to_string()).monospace().small()).selectable(true));
+                                                ui.add_sized(
+                                                    [identifier_width, 20.0],
+                                                    egui::Label::new(egui::RichText::new(id.to_string()).monospace().small())
+                                                        .selectable(true)
+                                                        .truncate(),
+                                                );
+                                                if ui.button(crate::ui::icons::COPY).on_hover_text("Copy cue ID").clicked() {
+                                                    ui.ctx().copy_text(id.to_string());
+                                                }
                                                 ui.end_row();
                                                 ui.label(egui::RichText::new("Effect ID").small().weak());
-                                                ui.add(egui::Label::new(egui::RichText::new(template.id.to_string()).monospace().small()).selectable(true));
+                                                ui.add_sized(
+                                                    [identifier_width, 20.0],
+                                                    egui::Label::new(egui::RichText::new(template.id.to_string()).monospace().small())
+                                                        .selectable(true)
+                                                        .truncate(),
+                                                );
+                                                if ui.button(crate::ui::icons::COPY).on_hover_text("Copy effect ID").clicked() {
+                                                    ui.ctx().copy_text(template.id.to_string());
+                                                }
                                                 ui.end_row();
                                             });
-                                    }
+                                        },
+                                    );
 
                                     ui.add_space(8.0);
-                                    ui.horizontal(|ui| {
-                                        if ui
-                                            .button(format!("{}  {jump_label}", crate::ui::icons::SKIP_BACK))
-                                            .clicked()
-                                        {
-                                            jump_to_cue = true;
-                                        }
-                                        ui.with_layout(
-                                            egui::Layout::right_to_left(egui::Align::Center),
-                                            |ui| {
+                                    egui::Frame::new()
+                                        .fill(ui.visuals().widgets.noninteractive.weak_bg_fill)
+                                        .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
+                                        .corner_radius(9.0)
+                                        .inner_margin(egui::Margin::same(8))
+                                        .show(ui, |ui| {
+                                            ui.set_width(effect_controls_frame_content_width(panel_width));
+                                            ui.horizontal_wrapped(|ui| {
                                                 if ui
-                                                    .button(
-                                                        egui::RichText::new(format!(
-                                                            "{}  {delete_cue_label}",
-                                                            crate::ui::icons::TRASH
-                                                        ))
-                                                        .color(egui::Color32::from_rgb(220, 74, 74)),
+                                                    .button(format!("{}  {jump_label}", crate::ui::icons::SKIP_BACK))
+                                                    .clicked()
+                                                {
+                                                    jump_to_cue = true;
+                                                }
+                                                if ui
+                                                    .button(format!("{}  {duplicate_label}", crate::ui::icons::COPY))
+                                                    .clicked()
+                                                {
+                                                    duplicate_cue = true;
+                                                }
+                                                let destructive = egui::Color32::from_rgb(220, 74, 74);
+                                                if ui
+                                                    .add(
+                                                        egui::Button::new(
+                                                            egui::RichText::new(format!(
+                                                                "{}  {delete_cue_label}",
+                                                                crate::ui::icons::TRASH
+                                                            ))
+                                                            .color(destructive),
+                                                        )
+                                                        .fill(destructive.gamma_multiply(0.08))
+                                                        .stroke(egui::Stroke::new(1.0, destructive.gamma_multiply(0.55))),
                                                     )
                                                     .clicked()
                                                 {
                                                     delete_cue = true;
                                                 }
-                                            },
-                                        );
-                                    });
+                                            });
+                                        });
                                 }
                             } else {
                                 effect_controls_card(
@@ -10790,7 +11649,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             }
 
                             if push_undo {
-                                self.app.undo_stack.push(self.app.snapshot_timeline());
+                                self.app.undo_stack.push(timeline_before_edit);
                             }
 
                             if isolate_instance {
@@ -10840,6 +11699,36 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 ui.ctx().request_repaint();
                             }
 
+                            if duplicate_cue {
+                                if let Some(instance) = self
+                                    .app
+                                    .timeline
+                                    .instances
+                                    .iter()
+                                    .find(|instance| instance.id == id)
+                                    .cloned()
+                                {
+                                    let duration_ms = self
+                                        .app
+                                        .timeline
+                                        .templates
+                                        .iter()
+                                        .find(|template| template.id == instance.effect_id)
+                                        .map(|template| template.duration_ms)
+                                        .unwrap_or(0);
+                                    self.app.undo_stack.push(self.app.snapshot_timeline());
+                                    let duplicate = crate::four_d::models::EffectInstance::new(
+                                        instance.effect_id,
+                                        instance.start_time_ms.saturating_add(duration_ms),
+                                    );
+                                    let duplicate_id = duplicate.id;
+                                    self.app.timeline.instances.push(duplicate);
+                                    self.app.selected_instance_ids.clear();
+                                    self.app.selected_instance_ids.insert(duplicate_id);
+                                    timeline_dirty = true;
+                                }
+                            }
+
                             if jump_to_cue {
                                 if let Some(instance) = self
                                     .app
@@ -10860,22 +11749,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             }
 
                             if timeline_dirty {
-                                self.app.sync_timeline_engine();
+                                self.app.commit_timeline_edit();
                                 ui.ctx().request_repaint();
                             }
                         } else if selected_count > 1 {
-                            ui.horizontal(|ui| {
-                                ui.heading(self.app.tr("Effect Controls"));
-                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                    effect_controls_badge(
-                                        ui,
-                                        crate::ui::icons::SELECTION_ALL,
-                                        format!("{selected_count} {}", self.app.tr("cues")),
-                                    );
-                                });
-                            });
-                            ui.add_space(6.0);
-
                             let mut timeline_dirty = false;
                             let mut delete_all = false;
                             let mut bulk_relay = None;
@@ -11043,11 +11920,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             }
 
                             if timeline_dirty {
-                                self.app.sync_timeline_engine();
+                                self.app.commit_timeline_edit();
                             }
                         } else {
-                            ui.heading(self.app.tr("Effect Controls"));
-                            ui.add_space(6.0);
                             effect_controls_card(
                                 ui,
                                 panel_width,
@@ -11055,12 +11930,57 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 &self.app.tr("No cue selected"),
                                 Some(&self.app.tr("Select a cue on the timeline to manage it")),
                                 false,
-                                |_| {},
+                                |ui| {
+                                    ui.horizontal_wrapped(|ui| {
+                                        effect_controls_badge(
+                                            ui,
+                                            crate::ui::icons::KEYBOARD,
+                                            "A",
+                                        );
+                                        ui.label(
+                                            egui::RichText::new(self.app.tr(
+                                                "Select a hardware track and press A, or double-click its lane, to add a cue.",
+                                            ))
+                                            .small()
+                                            .weak(),
+                                        );
+                                    });
+                                },
                             );
+                        }
+                        if panel_header.previous || panel_header.next {
+                            let cue_ids = sorted_cue_ids(&self.app.timeline);
+                            if !cue_ids.is_empty() {
+                                let selected_index = cue_ids.iter().position(|cue_id| {
+                                    self.app.selected_instance_ids.contains(cue_id)
+                                });
+                                let next_index = if panel_header.previous {
+                                    selected_index
+                                        .unwrap_or(0)
+                                        .checked_sub(1)
+                                        .unwrap_or(cue_ids.len() - 1)
+                                } else {
+                                    selected_index
+                                        .map(|index| (index + 1) % cue_ids.len())
+                                        .unwrap_or(0)
+                                };
+                                self.app.selected_instance_ids.clear();
+                                self.app.selected_instance_ids.insert(cue_ids[next_index]);
+                                self.app.selected_keyframes.clear();
+                                self.app.selected_timeline_keyframe = None;
+                                ui.ctx().request_repaint();
+                            }
                         }
                     }
                     PealayerTab::EffectsLibrary => {
-                        ui.horizontal(|ui| {
+                        // Fixed rows and scrolling cards share one trailing edge.
+                        let scroll = &ui.spacing().scroll;
+                        let scrollbar_width = scroll.bar_width + scroll.bar_inner_margin + scroll.bar_outer_margin;
+                        let effects_width = effects_panel_content_width(ui.available_width() - scrollbar_width);
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(effects_width, 0.0),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| ui.horizontal(|ui| {
                             ui.heading(self.app.tr("Effects Library"));
                             ui.with_layout(
                                 egui::Layout::right_to_left(egui::Align::Center),
@@ -11092,11 +12012,15 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     }
                                 },
                             );
-                        });
+                            }),
+                        );
                         ui.add_space(4.0);
 
                         // 1. Instant search edit field
-                        ui.horizontal(|ui| {
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(effects_width, 0.0),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| ui.horizontal(|ui| {
                             ui.label(self.app.tr("Search"));
                             let search_hint = self.app.tr("Search effects...");
                             let search_align = crate::ui::i18n::input_alignment(
@@ -11104,15 +12028,17 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 &self.app.effects_search_query,
                             );
                             let res = ui.add(
-                                egui::TextEdit::singleline(&mut self.app.effects_search_query)
+                                crate::ui::dialog::singleline_text_edit(&mut self.app.effects_search_query)
                                     .horizontal_align(search_align)
                                     .hint_text(search_hint)
+                                    .desired_width(ui.available_width())
                             );
                             if res.changed() {
                                 // Request repaint to filter instantly
                                 ui.ctx().request_repaint();
                             }
-                        });
+                            }),
+                        );
 
                         ui.add_space(8.0);
 
@@ -11158,8 +12084,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     // Keep a deliberate gutter between cards and the scrollbar /
                                     // right panel edge. The previous full-width inner frame caused
                                     // its stroke and action row to crowd or clip against that edge.
-                                    let effects_width =
-                                        effects_panel_content_width(ui.available_width());
                                     ui.set_width(effects_width);
                                     for (category, presets) in categorized {
                                         let group_id = ui.make_persistent_id(("effect-group", &category));
@@ -11406,7 +12330,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                     );
                                                                     let name_response = ui.add_sized(
                                                                         [name_width, 24.0],
-                                                                        egui::TextEdit::singleline(&mut edit.name)
+                                                                        crate::ui::dialog::singleline_text_edit(&mut edit.name)
                                                                             .id(item_id.with("inline-name"))
                                                                             .horizontal_align(name_align)
                                                                             .char_limit(64),
@@ -11657,7 +12581,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 &draft.name,
                                             );
                                             let name_response = ui.add(
-                                                egui::TextEdit::singleline(&mut draft.name)
+                                                crate::ui::dialog::singleline_text_edit(&mut draft.name)
                                                     .horizontal_align(name_align)
                                                     .desired_width(250.0),
                                             );
@@ -11738,6 +12662,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             }
                     }
                     PealayerTab::HardwareMonitor => {
+                        crate::four_d::authority::draw_controls(self.app,ui);
                         let capabilities = self.app.advertised_hardware();
                         ui.horizontal(|ui| {
                             ui.heading(self.app.tr("Hardware Monitor Dashboard"));
@@ -12243,6 +13168,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             })
                             .map(|track| track.id)
                             .collect::<std::collections::BTreeSet<_>>();
+                        let relay_solo_active = !self.app.track_soloed.is_empty();
+                        let analog_solo_active = self.app.timeline.analog_tracks.iter().any(|track| track.soloed);
                         let can_add_keyframe = can_add_timeline_keyframe(
                             &timeline_rows,
                             visible_analog_track_ids.len(),
@@ -12418,7 +13345,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 });
                                 let filter_response = header_ui.add_sized(
                                     [158.0, 22.0],
-                                    egui::TextEdit::singleline(&mut timeline_track_filter)
+                                    crate::ui::dialog::singleline_text_edit(&mut timeline_track_filter)
                                         .hint_text(self.app.tr("Tracks"))
                                         .frame(egui::Frame::NONE)
                                         .margin(egui::Margin::symmetric(4, 2)),
@@ -12494,6 +13421,23 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         .selected_timeline_track
                                         .as_deref()
                                         == Some(track_row.key.as_str());
+                                    let row_muted = if matches!(track_row.kind, TimelineTrackKind::Audio(_)) {
+                                        self.app.is_muted
+                                    } else {
+                                        !track_row.relay_ids.is_empty()
+                                            && track_row.relay_ids.iter().all(|relay| self.app.track_muted.contains(relay))
+                                    };
+                                    let row_soloed = !track_row.relay_ids.is_empty()
+                                        && track_row.relay_ids.iter().all(|relay| self.app.track_soloed.contains(relay));
+                                    let row_locked = !track_row.relay_ids.is_empty()
+                                        && track_row.relay_ids.iter().all(|relay| self.app.track_locked.contains(relay));
+                                    let row_has_solo_context = relay_solo_active && !track_row.relay_ids.is_empty();
+                                    let row_visual_opacity = timeline_track_visual_opacity(
+                                        row_muted,
+                                        row_soloed,
+                                        row_locked,
+                                        row_has_solo_context,
+                                    );
                                     let row_fill = if brought_into_view || selected_track {
                                         ui.visuals().selection.bg_fill.gamma_multiply(0.24)
                                     } else if track_row.active {
@@ -12504,6 +13448,29 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         ui.visuals().faint_bg_color
                                     };
                                     ui.painter().rect_filled(rect, 0.0, row_fill);
+                                    if row_visual_opacity < 1.0 {
+                                        ui.painter().rect_filled(
+                                            rect,
+                                            0.0,
+                                            egui::Color32::from_black_alpha(((1.0 - row_visual_opacity) * 105.0).round() as u8),
+                                        );
+                                    }
+                                    let state_color = if row_muted {
+                                        Some(timeline_track_state_color(TimelineTrackStateKind::Muted))
+                                    } else if row_soloed {
+                                        Some(timeline_track_state_color(TimelineTrackStateKind::Soloed))
+                                    } else if row_locked {
+                                        Some(timeline_track_state_color(TimelineTrackStateKind::Locked))
+                                    } else {
+                                        None
+                                    };
+                                    if let Some(state_color) = state_color {
+                                        ui.painter().rect_filled(
+                                            egui::Rect::from_min_max(rect.min, egui::pos2(rect.min.x + 3.0, rect.max.y)),
+                                            0.0,
+                                            state_color,
+                                        );
+                                    }
                                     ui.painter().rect_stroke(rect, 0.0, ui.visuals().widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
 
                                     // Keep the advertised icon, caption and actions vertically
@@ -12531,9 +13498,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         let ui = &mut child_ui;
                                         ui.add_space(6.0);
                                         let icon_color = if track_row.active && track_row.enabled {
-                                            ui.visuals().selection.bg_fill
+                                            ui.visuals().selection.bg_fill.gamma_multiply(row_visual_opacity)
                                         } else {
-                                            ui.visuals().weak_text_color()
+                                            ui.visuals().weak_text_color().gamma_multiply(row_visual_opacity)
                                         };
                                         let (icon_rect, _) = ui.allocate_exact_size(
                                             egui::vec2(18.0, timeline_track_height),
@@ -12577,7 +13544,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 });
                                                 let edit = ui.add_sized(
                                                     [label_width, timeline_track_height],
-                                                    egui::TextEdit::singleline(&mut draft),
+                                                    crate::ui::dialog::singleline_text_edit(&mut draft),
                                                 );
                                                 let focus = ui.ctx().data_mut(|data| {
                                                     data.get_temp::<bool>(rename_focus_id)
@@ -12615,8 +13582,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 // effect captions look centered even though the
                                                 // label requested `Align::Min`.
                                                 let painter = ui.painter().with_clip_rect(identity_rect);
-                                                let title_color = ui.visuals().strong_text_color();
-                                                let detail_color = ui.visuals().weak_text_color();
+                                                let title_color = ui.visuals().strong_text_color().gamma_multiply(row_visual_opacity);
+                                                let detail_color = ui.visuals().weak_text_color().gamma_multiply(row_visual_opacity);
                                                 let title_galley = egui::WidgetText::from(
                                                     egui::RichText::new(&track_row.name)
                                                         .size(11.0)
@@ -12708,20 +13675,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     ("timeline-audio-selector", &track_row.key),
                                                 );
                                                 media_control_clicked |= selector.clicked();
-                                                let mute = ui
-                                                    .selectable_label(
-                                                        self.app.is_muted,
-                                                        if self.app.is_muted {
-                                                            crate::ui::icons::SPEAKER_SLASH
-                                                        } else {
-                                                            crate::ui::icons::SPEAKER_HIGH
-                                                        },
-                                                    )
-                                                    .on_hover_text(if self.app.is_muted {
-                                                        self.app.tr("Unmute")
-                                                    } else {
-                                                        self.app.tr("Mute")
-                                                    });
+                                                let mute_help = if self.app.is_muted { self.app.tr("Unmute") } else { self.app.tr("Mute") };
+                                                let mute = timeline_track_state_button(
+                                                    ui,
+                                                    self.app.is_muted,
+                                                    TimelineTrackStateKind::Muted,
+                                                    if self.app.is_muted { crate::ui::icons::SPEAKER_SLASH } else { crate::ui::icons::SPEAKER_HIGH },
+                                                    &mute_help,
+                                                );
                                                 if mute.clicked() {
                                                     media_control_clicked = true;
                                                     self.app.toggle_audio_muted();
@@ -12768,11 +13729,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             let locked = track_row.relay_ids.iter().all(|relay| {
                                                 self.app.track_locked.contains(relay)
                                             });
-                                            if ui
-                                                .selectable_label(locked, crate::ui::icons::LOCK)
-                                                .on_hover_text(&lock_help)
-                                                .clicked()
-                                            {
+                                            if timeline_track_state_button(ui, locked, TimelineTrackStateKind::Locked, crate::ui::icons::LOCK, &lock_help).clicked() {
                                                 for relay in &track_row.relay_ids {
                                                     if locked {
                                                         self.app.track_locked.remove(relay);
@@ -12785,11 +13742,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             let soloed = track_row.relay_ids.iter().all(|relay| {
                                                 self.app.track_soloed.contains(relay)
                                             });
-                                            if ui
-                                                .selectable_label(soloed, crate::ui::icons::TARGET)
-                                                .on_hover_text(&relay_solo_help)
-                                                .clicked()
-                                            {
+                                            if timeline_track_state_button(ui, soloed, TimelineTrackStateKind::Soloed, crate::ui::icons::TARGET, &relay_solo_help).clicked() {
                                                 for relay in &track_row.relay_ids {
                                                     if soloed {
                                                         self.app.track_soloed.remove(relay);
@@ -12804,11 +13757,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             let muted = track_row.relay_ids.iter().all(|relay| {
                                                 self.app.track_muted.contains(relay)
                                             });
-                                            if ui
-                                                .selectable_label(muted, crate::ui::icons::PROHIBIT)
-                                                .on_hover_text(&relay_mute_help)
-                                                .clicked()
-                                            {
+                                            if timeline_track_state_button(ui, muted, TimelineTrackStateKind::Muted, crate::ui::icons::PROHIBIT, &relay_mute_help).clicked() {
                                                 for relay in &track_row.relay_ids {
                                                     if muted {
                                                         self.app.track_muted.remove(relay);
@@ -13089,12 +14038,41 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         .selected_timeline_track
                                         .as_deref()
                                         == Some(track_key.as_str());
+                                    let track_visual_opacity = timeline_track_visual_opacity(
+                                        track.muted,
+                                        track.soloed,
+                                        track.locked,
+                                        analog_solo_active,
+                                    );
                                     let row_fill = if brought_into_view || selected_track {
                                         ui.visuals().selection.bg_fill.gamma_multiply(0.24)
                                     } else {
                                         ui.visuals().extreme_bg_color
                                     };
                                     ui.painter().rect_filled(rect, 0.0, row_fill);
+                                    if track_visual_opacity < 1.0 {
+                                        ui.painter().rect_filled(
+                                            rect,
+                                            0.0,
+                                            egui::Color32::from_black_alpha(((1.0 - track_visual_opacity) * 105.0).round() as u8),
+                                        );
+                                    }
+                                    let state_color = if track.muted {
+                                        Some(timeline_track_state_color(TimelineTrackStateKind::Muted))
+                                    } else if track.soloed {
+                                        Some(timeline_track_state_color(TimelineTrackStateKind::Soloed))
+                                    } else if track.locked {
+                                        Some(timeline_track_state_color(TimelineTrackStateKind::Locked))
+                                    } else {
+                                        None
+                                    };
+                                    if let Some(state_color) = state_color {
+                                        ui.painter().rect_filled(
+                                            egui::Rect::from_min_max(rect.min, egui::pos2(rect.min.x + 3.0, rect.max.y)),
+                                            0.0,
+                                            state_color,
+                                        );
+                                    }
                                     ui.painter().rect_stroke(rect, 0.0, ui.visuals().widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
 
                                     // Amplitude Y-axis tick labels on track header right margin
@@ -13135,11 +14113,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             egui::vec2(18.0, timeline_analog_height),
                                             egui::Layout::left_to_right(egui::Align::Center),
                                             |ui| {
-                                                ui.label(
+                                                ui.label(egui::RichText::new(
                                                     advertised_row
                                                         .map(|row| row.icon.as_str())
                                                         .unwrap_or(crate::ui::icons::SLIDERS_HORIZONTAL),
-                                                );
+                                                ).color(ui.visuals().text_color().gamma_multiply(track_visual_opacity)));
                                             },
                                         );
                                         ui.allocate_ui(egui::vec2(88.0, 24.0), |ui| {
@@ -13155,7 +14133,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 });
                                                 let edit = ui.add_sized(
                                                     [88.0, 22.0],
-                                                    egui::TextEdit::singleline(&mut draft),
+                                                    crate::ui::dialog::singleline_text_edit(&mut draft),
                                                 );
                                                 let focus = ui.ctx().data_mut(|data| {
                                                     data.get_temp::<bool>(rename_focus_id)
@@ -13203,7 +14181,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 ui.painter().with_clip_rect(name_rect).galley(
                                                     name_pos,
                                                     name_galley,
-                                                    ui.visuals().strong_text_color(),
+                                                    ui.visuals().strong_text_color().gamma_multiply(track_visual_opacity),
                                                 );
                                                 name_response.on_hover_text(format!(
                                                     "{analog_track_label}: {}\n{port_channel_label}: P{}",
@@ -13292,9 +14270,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             }
                                         }
 
-                                        let lock_btn = ui
-                                            .selectable_label(track.locked, crate::ui::icons::LOCK)
-                                            .on_hover_text(&lock_help);
+                                        let lock_btn = timeline_track_state_button(ui, track.locked, TimelineTrackStateKind::Locked, crate::ui::icons::LOCK, &lock_help);
                                         if lock_btn.clicked() {
                                             track.locked = !track.locked;
                                             if track.locked {
@@ -13303,17 +14279,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             analog_tracks_changed = true;
                                         }
 
-                                        let solo_btn = ui
-                                            .selectable_label(track.soloed, crate::ui::icons::TARGET)
-                                            .on_hover_text(&relay_solo_help);
+                                        let solo_btn = timeline_track_state_button(ui, track.soloed, TimelineTrackStateKind::Soloed, crate::ui::icons::TARGET, &relay_solo_help);
                                         if solo_btn.clicked() {
                                             track.soloed = !track.soloed;
                                             analog_tracks_changed = true;
                                         }
 
-                                        let mute_btn = ui
-                                            .selectable_label(track.muted, crate::ui::icons::PROHIBIT)
-                                            .on_hover_text(&actuator_mute_help);
+                                        let mute_btn = timeline_track_state_button(ui, track.muted, TimelineTrackStateKind::Muted, crate::ui::icons::PROHIBIT, &actuator_mute_help);
                                         if mute_btn.clicked() {
                                             track.muted = !track.muted;
                                             analog_tracks_changed = true;
@@ -13633,6 +14605,27 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         let ruler_response = ui.interact(ruler_rect, egui::Id::new("timeline_ruler"), egui::Sense::click_and_drag())
                                             .on_hover_text(&timeline_ruler_help);
 
+                                        // Capture the ruler position before opening the menu. Once
+                                        // the popup is visible, the live pointer is over the menu,
+                                        // not the ruler; deriving the timestamp from it made exact
+                                        // keyframes jump to an unrelated (usually earlier) time.
+                                        let ruler_context_requested = !keyframe_context_owned
+                                            && ruler_rect.contains(pointer_pos.unwrap_or_default())
+                                            && ui.input(|input| input.pointer.button_released(egui::PointerButton::Secondary));
+                                        if ruler_context_requested {
+                                            if let Some(position) = pointer_pos {
+                                                let pointer_ms = timeline_pointer_time_ms(
+                                                    position.x,
+                                                    rect.min.x,
+                                                    px_per_ms,
+                                                    (total_seconds * 1_000.0).round() as u64,
+                                                );
+                                                ui.ctx().data_mut(|data| {
+                                                    data.insert_temp(timeline_ruler_context_time_id(), pointer_ms);
+                                                });
+                                            }
+                                        }
+
                                         if !keyframe_context_owned { ruler_response.context_menu(|ui| {
                                             ui.label(egui::RichText::new(self.app.tr("Timeline keyframe")).strong());
                                             let playhead_ms = (self.app.playback_time * 1_000.0)
@@ -13654,10 +14647,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 ui.ctx().request_repaint();
                                                 ui.close();
                                             }
-                                            if let Some(position) = pointer_pos {
-                                                let pointer_ms = (((position.x - rect.min.x).max(0.0) / px_per_ms)
-                                                    .round() as u64)
-                                                    .min((total_seconds * 1_000.0).round() as u64);
+                                            let pointer_ms = ui.ctx().data(|data| {
+                                                data.get_temp::<u64>(timeline_ruler_context_time_id())
+                                            });
+                                            if let Some(pointer_ms) = pointer_ms {
                                                 if ui
                                                     .add_enabled(
                                                         can_add_keyframe,
@@ -13719,12 +14712,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 visible_ruler.bottom() - 1.0,
                                             ),
                                         );
+                                        // A panel sublayer stays above the ruler's late paint,
+                                        // but below Add cue and every other modal backdrop.
+                                        let toolbar_layer = crate::ui::dialog::workspace_overlay_layer(
+                                            ui, "timeline-ruler-toolbar-layer",
+                                        );
                                         let mut toolbar_ui = ui.new_child(
                                             egui::UiBuilder::new()
-                                                .layer_id(egui::LayerId::new(
-                                                    egui::Order::Foreground,
-                                                    egui::Id::new("timeline-ruler-toolbar-layer"),
-                                                ))
+                                                .layer_id(toolbar_layer)
                                                 .max_rect(toolbar_rect)
                                                 .layout(egui::Layout::right_to_left(egui::Align::Center)),
                                         );
@@ -13827,7 +14822,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         ))
                                                         .clicked()
                                                     {
-                                                        self.app.show_preferences_dialog = true;
+                                                        crate::ui::preferences::open(self.app, ui.ctx());
                                                         ui.close();
                                                     }
                                                     if changed {
@@ -13837,6 +14832,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     }
                                                 })
                                                 .0
+                                                .on_hover_cursor(egui::CursorIcon::PointingHand)
                                                 .on_hover_text(self.app.tr("More timeline controls and preferences"));
 
                                                 for action in toolbar_order.into_iter().filter(|action| {
@@ -13871,6 +14867,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                 .frame(selected)
                                                                 .selected(selected),
                                                         )
+                                                        .on_hover_cursor(egui::CursorIcon::PointingHand)
                                                         .on_hover_text(format!(
                                                             "{}\n{}",
                                                             self.app.tr(timeline_toolbar_action_label(action)),
@@ -14032,8 +15029,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         }
 
                                         if let Some(pos) = pointer_pos {
-                                            if (ruler_rect.contains(pos)
-                                                || ruler_response.dragged_by(egui::PointerButton::Primary))
+                                            if timeline_ruler_owns_pointer(
+                                                ruler_rect, toolbar_rect, pos,
+                                                ruler_response.dragged_by(egui::PointerButton::Primary),
+                                            )
+                                                && !popup_was_open
+                                                && !egui::Popup::is_any_open(ui.ctx())
                                                 && !clicked_any_keyframe
                                                 && self.app.active_drag.is_none()
                                                 && self.app.lasso_origin.is_none()
@@ -14076,22 +15077,40 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             }
                                         }
 
-                                        // Draw horizontal track separators and backgrounds
+                                        // Draw horizontal track separators and semantic state backgrounds.
                                         for i in 0..=timeline_rows.len() {
                                             let grid_y =
                                                 tracks_top + i as f32 * timeline_track_height;
 
-                                            // Lock row background darkening
-                                            if let Some(relay_id) = relay_for_timeline_row(&timeline_rows, i as i32) {
-                                                if self.app.track_locked.contains(&relay_id) {
-                                                    let track_rect = egui::Rect::from_min_max(
-                                                        egui::pos2(rect.min.x, grid_y),
-                                                        egui::pos2(
-                                                            rect.max.x,
-                                                            grid_y + timeline_track_height,
-                                                        ),
+                                            if let Some(track_row) = timeline_rows.get(i)
+                                                && !track_row.relay_ids.is_empty()
+                                            {
+                                                let muted = track_row.relay_ids.iter().all(|relay| self.app.track_muted.contains(relay));
+                                                let soloed = track_row.relay_ids.iter().all(|relay| self.app.track_soloed.contains(relay));
+                                                let locked = track_row.relay_ids.iter().all(|relay| self.app.track_locked.contains(relay));
+                                                let opacity = timeline_track_visual_opacity(muted, soloed, locked, relay_solo_active);
+                                                let track_rect = egui::Rect::from_min_max(
+                                                    egui::pos2(rect.min.x, grid_y),
+                                                    egui::pos2(rect.max.x, grid_y + timeline_track_height),
+                                                );
+                                                if opacity < 1.0 {
+                                                    painter.rect_filled(
+                                                        track_rect,
+                                                        0.0,
+                                                        egui::Color32::from_black_alpha(((1.0 - opacity) * 92.0).round() as u8),
                                                     );
-                                                    painter.rect_filled(track_rect, 0.0, ui.visuals().faint_bg_color);
+                                                }
+                                                let tint = if muted {
+                                                    Some(TimelineTrackStateKind::Muted)
+                                                } else if soloed {
+                                                    Some(TimelineTrackStateKind::Soloed)
+                                                } else if locked {
+                                                    Some(TimelineTrackStateKind::Locked)
+                                                } else {
+                                                    None
+                                                };
+                                                if let Some(kind) = tint {
+                                                    painter.rect_filled(track_rect, 0.0, timeline_track_state_color(kind).gamma_multiply(0.07));
                                                 }
                                             }
 
@@ -14446,9 +15465,15 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 };
                                                 let stroke_width = if is_selected { 2.0_f32 } else if is_mismatched { 1.5_f32 } else { 1.0_f32 };
 
-                                                let is_muted = relay_id
-                                                    .is_some_and(|relay_id| self.app.track_muted.contains(&relay_id));
-                                                let alpha = if is_muted { 128 } else { 255 };
+                                                let is_muted = relay_id.is_some_and(|relay_id| self.app.track_muted.contains(&relay_id));
+                                                let is_soloed = relay_id.is_some_and(|relay_id| self.app.track_soloed.contains(&relay_id));
+                                                let is_locked = relay_id.is_some_and(|relay_id| self.app.track_locked.contains(&relay_id));
+                                                let alpha = timeline_track_cue_alpha(
+                                                    is_muted,
+                                                    is_soloed,
+                                                    is_locked,
+                                                    relay_id.is_some() && relay_solo_active,
+                                                );
 
                                                 // Draw clip box
                                                 painter.rect_filled(clip_rect, 4.0, egui::Color32::from_rgba_unmultiplied(142, 68, 173, alpha)); // Purple clip
@@ -14872,6 +15897,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         let mut kf_interp_change = None;
                                         let mut kf_to_remove = None;
                                         let mut pending_add_keyframe = None;
+                                        let mut pending_cue_dialog = None;
 
                                         for (t_idx, track) in self
                                             .app
@@ -14900,6 +15926,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 crate::four_d::models::hardware_timeline_track_key(
                                                     &format!("pwm.{}", track.channel),
                                                 );
+                                            let track_visual_opacity = timeline_track_visual_opacity(
+                                                track.muted,
+                                                track.soloed,
+                                                track.locked,
+                                                analog_solo_active,
+                                            );
                                             let row_fill = if self
                                                 .app
                                                 .selected_timeline_track
@@ -14911,6 +15943,25 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 ui.visuals().extreme_bg_color
                                             };
                                             painter.rect_filled(row_rect, 0.0, row_fill);
+                                            if track_visual_opacity < 1.0 {
+                                                painter.rect_filled(
+                                                    row_rect,
+                                                    0.0,
+                                                    egui::Color32::from_black_alpha(((1.0 - track_visual_opacity) * 92.0).round() as u8),
+                                                );
+                                            }
+                                            let state_tint = if track.muted {
+                                                Some(TimelineTrackStateKind::Muted)
+                                            } else if track.soloed {
+                                                Some(TimelineTrackStateKind::Soloed)
+                                            } else if track.locked {
+                                                Some(TimelineTrackStateKind::Locked)
+                                            } else {
+                                                None
+                                            };
+                                            if let Some(kind) = state_tint {
+                                                painter.rect_filled(row_rect, 0.0, timeline_track_state_color(kind).gamma_multiply(0.07));
+                                            }
 
                                             // Centerline guide (50% intensity)
                                             painter.line_segment(
@@ -14931,11 +15982,22 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             }
 
                                             // Draw translucent fill under curve (Curve Gradient Underlay)
-                                            let fill_col = if track.muted {
-                                                egui::Color32::from_rgba_unmultiplied(100, 100, 100, 20)
+                                            let curve_color = if track.muted {
+                                                egui::Color32::from_rgb(118, 118, 118)
+                                            } else if track.soloed {
+                                                timeline_track_state_color(TimelineTrackStateKind::Soloed)
+                                            } else if track.locked {
+                                                timeline_track_state_color(TimelineTrackStateKind::Locked)
                                             } else {
-                                                egui::Color32::from_rgba_unmultiplied(0, 220, 255, 25)
+                                                egui::Color32::from_rgb(0, 220, 255)
                                             };
+                                            let curve_color = curve_color.gamma_multiply(track_visual_opacity);
+                                            let fill_col = egui::Color32::from_rgba_unmultiplied(
+                                                curve_color.r(),
+                                                curve_color.g(),
+                                                curve_color.b(),
+                                                if track.muted { 16 } else { 25 },
+                                            );
                                             for window in points.windows(2) {
                                                 let p1 = window[0];
                                                 let p2 = window[1];
@@ -14949,11 +16011,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             }
 
                                             // Draw curve line
-                                            let curve_color = if track.muted {
-                                                egui::Color32::from_rgb(110, 110, 110)
-                                            } else {
-                                                egui::Color32::from_rgb(0, 220, 255)
-                                            };
                                             painter.add(egui::Shape::line(
                                                 points,
                                                 egui::Stroke::new(1.8_f32, curve_color),
@@ -15121,18 +16178,30 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             {
                                                 if let Some(pos) = response.interact_pointer_pos() {
                                                     if row_rect.contains(pos) {
-                                                        self.app.selected_timeline_track = Some(
-                                                            crate::four_d::models::hardware_timeline_track_key(
-                                                                &format!("pwm.{}", track.channel),
-                                                            ),
+                                                        let track_key = crate::four_d::models::hardware_timeline_track_key(
+                                                            &format!("pwm.{}", track.channel),
                                                         );
+                                                        self.app.selected_timeline_track = Some(track_key.clone());
                                                         let new_t = (((pos.x - rect.min.x) / zoom) * 1000.0).max(0.0) as u64;
-                                                        let new_v = ((curve_bottom - pos.y) / curve_span).clamp(0.0, 1.0);
-                                                        pending_add_keyframe = Some((track.id, new_t, new_v));
+                                                        if ui.input(|input| input.modifiers.alt) {
+                                                            let new_v = ((curve_bottom - pos.y) / curve_span).clamp(0.0, 1.0);
+                                                            pending_add_keyframe = Some((track.id, new_t, new_v));
+                                                        } else {
+                                                            pending_cue_dialog = Some((track_key, new_t));
+                                                        }
                                                         clicked_any_keyframe = true;
                                                     }
                                                 }
                                             }
+                                        }
+
+                                        if let Some((track_key, start_time_ms)) = pending_cue_dialog {
+                                            request_timeline_cue_dialog(
+                                                self.app,
+                                                ui.ctx(),
+                                                &track_key,
+                                                start_time_ms,
+                                            );
                                         }
 
                                         if let Some((tid, new_t, new_v)) = pending_add_keyframe {
@@ -15708,7 +16777,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             let mut timeline_scroll_state = timeline_scroll.state;
                             let timeline_content_size = timeline_scroll.content_size;
                             let timeline_viewport = timeline_scroll.inner_rect;
-                            let ((rect, response), clicked_any_clip, clicked_any_keyframe) = timeline_scroll.inner;
+                            let ((rect, response), mut clicked_any_clip, clicked_any_keyframe) = timeline_scroll.inner;
 
                             let mut timeline_scroll_changed = false;
                             let navigation_transition_id =
@@ -16037,25 +17106,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         && ((target_offset - current_offset).length() > 0.5
                                             || (target_zoom - current_zoom).abs() > 0.01)
                                     {
-                                        ui.data_mut(|data| {
-                                            data.insert_temp(
-                                                navigation_transition_id,
-                                                TimelineNavigationTransition {
-                                                    start_offset: current_offset,
-                                                    target_offset,
-                                                    start_zoom: current_zoom,
-                                                    target_zoom,
-                                                    started_at_seconds: ui.input(|input| input.time),
-                                                    duration_seconds: self
-                                                        .app
-                                                        .timeline_navigation_transition_ms
-                                                        as f32
-                                                        / 1_000.0,
-                                                    anchor: None,
-                                                },
-                                            );
-                                        });
-                                        ui.ctx().request_repaint();
+                                        start_timeline_navigation_transition(
+                                            ui, navigation_transition_id,
+                                            (current_offset, current_zoom),
+                                            (target_offset, target_zoom),
+                                            self.app.timeline_navigation_transition_ms,
+                                        );
                                     } else {
                                         self.app.timeline_zoom = target_zoom;
                                         timeline_scroll_state.offset = target_offset;
@@ -16146,23 +17202,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             target_offset.y = (target_offset.y - translation.y).clamp(0.0, max_y);
                                         }
                                     }
-                                    let transition = TimelineNavigationTransition {
-                                        start_offset: current_offset,
-                                        target_offset,
-                                        start_zoom: current_zoom,
-                                        target_zoom,
-                                        started_at_seconds: ui.input(|input| input.time),
-                                        duration_seconds: self
-                                            .app
-                                            .timeline_navigation_transition_ms
-                                            as f32
-                                            / 1_000.0,
-                                        anchor: zoom_anchor,
-                                    };
-                                    ui.data_mut(|data| {
-                                        data.insert_temp(navigation_transition_id, transition);
-                                    });
-                                    ui.ctx().request_repaint();
+                                    start_anchored_timeline_navigation_transition(
+                                        ui, navigation_transition_id,
+                                        (current_offset, current_zoom),
+                                        (target_offset, target_zoom),
+                                        self.app.timeline_navigation_transition_ms,
+                                        zoom_anchor,
+                                    );
                                 } else {
                                     ui.data_mut(|data| {
                                         data.remove_temp::<TimelineNavigationTransition>(
@@ -16328,25 +17374,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         timeline_scroll_state.offset.y,
                                     );
                                     if self.app.timeline_animated_navigation {
-                                        ui.data_mut(|data| {
-                                            data.insert_temp(
-                                                navigation_transition_id,
-                                                TimelineNavigationTransition {
-                                                    start_offset: timeline_scroll_state.offset,
-                                                    target_offset,
-                                                    start_zoom: self.app.timeline_zoom,
-                                                    target_zoom: self.app.timeline_zoom,
-                                                    started_at_seconds: ui.input(|input| input.time),
-                                                    duration_seconds: self
-                                                        .app
-                                                        .timeline_navigation_transition_ms
-                                                        as f32
-                                                        / 1_000.0,
-                                                    anchor: None,
-                                                },
-                                            );
-                                        });
-                                        ui.ctx().request_repaint();
+                                        start_timeline_navigation_transition(
+                                            ui, navigation_transition_id,
+                                            (timeline_scroll_state.offset, self.app.timeline_zoom),
+                                            (target_offset, self.app.timeline_zoom),
+                                            self.app.timeline_navigation_transition_ms,
+                                        );
                                     } else {
                                         timeline_scroll_state.offset = target_offset;
                                         timeline_scroll_changed = true;
@@ -16544,6 +17577,44 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 self.app.lasso_initial_keyframes.clear();
                             }
 
+                            if response.double_clicked()
+                                && !clicked_any_clip
+                                && !clicked_any_keyframe
+                                && self.app.active_drag.is_none()
+                                && self.app.active_keyframe_drag.is_none()
+                                && !lasso_was_active
+                                && !popup_was_open
+                                && !egui::Popup::is_any_open(ui.ctx())
+                            {
+                                if let Some(mouse_pos) = response.interact_pointer_pos()
+                                    && mouse_pos.y >= tracks_top
+                                    && mouse_pos.y < tracks_top + track_area_height
+                                {
+                                    let row_index = ((mouse_pos.y - tracks_top)
+                                        / timeline_track_height)
+                                        .floor()
+                                        as usize;
+                                    if let Some(track_key) = timeline_rows
+                                        .get(row_index)
+                                        .map(|row| row.key.clone())
+                                    {
+                                        let start_time_ms = timeline_pointer_time_ms(
+                                            mouse_pos.x,
+                                            rect.min.x,
+                                            px_per_ms,
+                                            (total_seconds * 1_000.0).round() as u64,
+                                        );
+                                        request_timeline_cue_dialog(
+                                            self.app,
+                                            ui.ctx(),
+                                            &track_key,
+                                            start_time_ms,
+                                        );
+                                        clicked_any_clip = true;
+                                    }
+                                }
+                            }
+
                             if response.clicked_by(egui::PointerButton::Primary)
                                 && !clicked_any_clip
                                 && !clicked_any_keyframe
@@ -16613,29 +17684,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         && (target_offset_x - timeline_scroll_state.offset.x).abs()
                                             > 0.5
                                     {
-                                        let started_at_seconds = ui.input(|input| input.time);
-                                        ui.data_mut(|data| {
-                                            data.insert_temp(
-                                                navigation_transition_id,
-                                                TimelineNavigationTransition {
-                                                    start_offset: timeline_scroll_state.offset,
-                                                    target_offset: egui::vec2(
-                                                        target_offset_x,
-                                                        timeline_scroll_state.offset.y,
-                                                    ),
-                                                    start_zoom: self.app.timeline_zoom,
-                                                    target_zoom: self.app.timeline_zoom,
-                                                    started_at_seconds,
-                                                    duration_seconds: self
-                                                        .app
-                                                        .timeline_navigation_transition_ms
-                                                        as f32
-                                                        / 1_000.0,
-                                                    anchor: None,
-                                                },
-                                            );
-                                        });
-                                        ui.ctx().request_repaint();
+                                        start_timeline_navigation_transition(
+                                            ui, navigation_transition_id,
+                                            (timeline_scroll_state.offset, self.app.timeline_zoom),
+                                            (egui::vec2(target_offset_x, timeline_scroll_state.offset.y), self.app.timeline_zoom),
+                                            self.app.timeline_navigation_transition_ms,
+                                        );
                                     } else {
                                         ui.data_mut(|data| {
                                             data.remove_temp::<TimelineNavigationTransition>(
@@ -16706,7 +17760,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     self.app.save_config();
                                 }
                                 if ui.button(format!("{} {}", crate::ui::icons::GEAR, self.app.tr("Preferences..."))).clicked() {
-                                    self.app.show_preferences_dialog = true;
+                                    crate::ui::preferences::open(self.app, ui.ctx());
                                     ui.close();
                                 }
                             });
@@ -16729,6 +17783,16 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         && !i.modifiers.ctrl
                                         && !i.modifiers.command
                                         && !i.modifiers.alt
+                                });
+                                let add_timeline_cue_pressed = ui.input(|i| {
+                                    i.key_pressed(egui::Key::A)
+                                        && !i.modifiers.ctrl
+                                        && !i.modifiers.command
+                                        && !i.modifiers.alt
+                                        && !i.modifiers.shift
+                                }) && ui.ctx().data(|data| {
+                                    data.get_temp::<TimelineCueDraft>(timeline_cue_dialog_id())
+                                        .is_none()
                                 });
                                 let previous_cue_pressed = ui.input(|i| {
                                     i.key_pressed(egui::Key::Tab) && i.modifiers.shift
@@ -16789,7 +17853,27 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 let key_2_pressed = ui.input(|i| i.key_pressed(egui::Key::Num2)) && num_modifier_free;
                                 let key_3_pressed = ui.input(|i| i.key_pressed(egui::Key::Num3)) && num_modifier_free;
 
-                                if add_timeline_keyframe_pressed {
+                                if add_timeline_cue_pressed {
+                                    let start_time_ms = (self.app.playback_time * 1_000.0)
+                                        .round()
+                                        .clamp(0.0, total_seconds * 1_000.0)
+                                        as u64;
+                                    if let Some(track_key) =
+                                        self.app.selected_timeline_track.clone()
+                                    {
+                                        request_timeline_cue_dialog(
+                                            self.app,
+                                            ui.ctx(),
+                                            &track_key,
+                                            start_time_ms,
+                                        );
+                                    } else {
+                                        let message = self.app.tr(
+                                            "Select a relay or PWM timeline track first",
+                                        );
+                                        self.app.set_osd(message);
+                                    }
+                                } else if add_timeline_keyframe_pressed {
                                     let time_ms = (self.app.playback_time * 1_000.0)
                                         .round()
                                         .clamp(0.0, total_seconds * 1_000.0)
@@ -17032,6 +18116,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                 }
               });
             });
+        if matches!(tab, PealayerTab::Timeline) {
+            draw_timeline_cue_dialog(self.app, ui.ctx());
+        }
     }
 }
 
@@ -17552,15 +18639,7 @@ impl PealayerApp {
             }
         }
 
-        let compiled = crate::four_d::engine::compile_timeline(
-            &self.timeline,
-            &self.track_muted,
-            &self.track_soloed,
-        );
-        let _ = self
-            .engine_handle
-            .sender
-            .send(crate::four_d::engine::EngineMessage::UpdateQueue(compiled));
+        self.commit_timeline_edit();
 
         self.set_osd(format!("Relocated '{}' to {}", effect_name, display_name));
         true
