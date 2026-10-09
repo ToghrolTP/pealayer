@@ -16,6 +16,17 @@ widths, and has been exercised against live state rather than sample data.
 
 ## Current product ledger
 
+Live branding (9 October): [surface reconciliation](verification/LIVE-BRANDING-SURFACES.md)
+removes stale tray tooltips, the built-in-only About logo and startup-only Web/PWA
+identity. Preferences and native media sessions use configured branding; browser
+updates reuse authoritative config revisions without disconnecting controls.
+OS-managed pinned/installed branding remains a packaging/cache boundary, not a
+reason to rewrite the running executable.
+The installed David/Cafe builds passed a reversible API preview with native
+title/icon and live runtime/manifest verification; Erfan is installed without
+launching alongside KMPlayer. Tray hover and dialog visual acceptance are pending
+the user's confirmation, not inferred from compilation.
+
 NLE volume (9 October): [responsive transport correction](verification/NLE-VOLUME-AND-RESPONSIVE-TRANSPORT.md)
 separates seeking from the native action row and exposes a full-width volume
 strip on narrow monitor panels. Web Simple/NLE now share volume, mute and
