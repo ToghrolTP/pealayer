@@ -16656,10 +16656,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             // fire while the canvas owns keyboard focus, so text fields and the
                             // rest of the application retain their normal keys.
                             let timeline_layer = ui.layer_id();
+                            let timeline_popup_open = egui::Popup::is_any_open(ui.ctx());
                             if self.app.keyboard_shortcuts_enabled && ui.ctx().memory(|memory| {
                                 memory.has_focus(timeline_keyboard_focus_id())
                                     && memory.is_above_modal_layer(timeline_layer)
-                                    && !memory.any_popup_open()
+                                    && !timeline_popup_open
                             }) {
                                 let keyboard_pan = ui.input(|input| {
                                     if input.modifiers.shift && !input.modifiers.ctrl
