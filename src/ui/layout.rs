@@ -687,6 +687,56 @@ fn timeline_wheel_delta(events: &[egui::Event], line_speed: f32, page_height: f3
     }).fold(egui::Vec2::ZERO, |sum, delta| sum + delta)
 }
 
+fn timeline_ruler_scroll_steps_from_events(events: &[egui::Event]) -> i32 {
+    let mut steps: i32 = 0;
+    for event in events {
+        if let egui::Event::MouseWheel { delta, unit, .. } = event {
+            let count = match unit {
+                egui::MouseWheelUnit::Line | egui::MouseWheelUnit::Page => {
+                    if delta.y > 0.0 {
+                        1
+                    } else if delta.y < 0.0 {
+                        -1
+                    } else {
+                        0
+                    }
+                }
+                egui::MouseWheelUnit::Point => {
+                    if delta.y >= 1.0 {
+                        1
+                    } else if delta.y <= -1.0 {
+                        -1
+                    } else {
+                        0
+                    }
+                }
+            };
+            steps += count;
+        }
+    }
+    steps
+}
+
+fn timeline_ruler_scroll_steps(ui: &egui::Ui) -> i32 {
+    let steps = ui.input(|input| {
+        timeline_ruler_scroll_steps_from_events(&input.events)
+    });
+
+    let has_wheel = ui.input(|input| {
+        input.smooth_scroll_delta != egui::Vec2::ZERO
+            || input.events.iter().any(|e| matches!(e, egui::Event::MouseWheel { .. }))
+    });
+
+    if has_wheel {
+        ui.ctx().input_mut(|input| {
+            input.smooth_scroll_delta = egui::Vec2::ZERO;
+            input.events.retain(|event| !matches!(event, egui::Event::MouseWheel { .. }));
+        });
+    }
+
+    steps
+}
+
 fn timeline_zoom_from_wheel(current_zoom: f32, wheel_delta: f32) -> f32 {
     // Multiplicative zoom feels uniform at both ends of the range. A 120-unit
     // Windows wheel notch changes the scale by roughly 27%, while precision
@@ -6959,6 +7009,64 @@ mod timeline_row_tests {
         assert_eq!(timeline_wheel_delta(&events, 20.0, 200.0), egui::vec2(0.0, -172.0));
         assert_eq!(timeline_wheel_delta(&[wheel(egui::MouseWheelUnit::Page, egui::vec2(0.0, -1.0), egui::Modifiers::CTRL)], 20.0, 200.0), egui::vec2(0.0, -200.0));
         assert_eq!(timeline_wheel_delta(&[wheel(egui::MouseWheelUnit::Line, egui::vec2(2.0, 0.0), egui::Modifiers::ALT)], 20.0, 200.0), egui::vec2(40.0, 0.0));
+    }
+
+    #[test]
+    fn timeline_ruler_scroll_steps_converts_vertical_wheel_to_frame_steps() {
+        let wheel = |unit, delta| egui::Event::MouseWheel {
+            unit,
+            delta,
+            modifiers: egui::Modifiers::NONE,
+            phase: egui::TouchPhase::Move,
+        };
+        // Scrolling upwards (positive y) advances forward (+1 frame per notch)
+        assert_eq!(
+            timeline_ruler_scroll_steps_from_events(&[wheel(egui::MouseWheelUnit::Line, egui::vec2(0.0, 1.0))]),
+            1
+        );
+        // High magnitude line delta (e.g. Windows multi-line notch 3.0 or 120.0) still produces exactly 1 frame step
+        assert_eq!(
+            timeline_ruler_scroll_steps_from_events(&[wheel(egui::MouseWheelUnit::Line, egui::vec2(0.0, 3.0))]),
+            1
+        );
+        assert_eq!(
+            timeline_ruler_scroll_steps_from_events(&[wheel(egui::MouseWheelUnit::Line, egui::vec2(0.0, 120.0))]),
+            1
+        );
+        // Scrolling downwards (negative y) steps backward (-1 frame per notch)
+        assert_eq!(
+            timeline_ruler_scroll_steps_from_events(&[wheel(egui::MouseWheelUnit::Line, egui::vec2(0.0, -1.0))]),
+            -1
+        );
+        assert_eq!(
+            timeline_ruler_scroll_steps_from_events(&[wheel(egui::MouseWheelUnit::Line, egui::vec2(0.0, -3.0))]),
+            -1
+        );
+        // Multiple separate notch events in a single frame accumulate
+        assert_eq!(
+            timeline_ruler_scroll_steps_from_events(&[
+                wheel(egui::MouseWheelUnit::Line, egui::vec2(0.0, 1.0)),
+                wheel(egui::MouseWheelUnit::Line, egui::vec2(0.0, 1.0)),
+                wheel(egui::MouseWheelUnit::Line, egui::vec2(0.0, 1.0)),
+            ]),
+            3
+        );
+        // Point unit (trackpad / smooth wheel) resolves directionally
+        assert_eq!(
+            timeline_ruler_scroll_steps_from_events(&[wheel(egui::MouseWheelUnit::Point, egui::vec2(0.0, 15.0))]),
+            1
+        );
+        assert_eq!(
+            timeline_ruler_scroll_steps_from_events(&[wheel(egui::MouseWheelUnit::Point, egui::vec2(0.0, -25.0))]),
+            -1
+        );
+        // Sub-pixel jitter under 1.0 point is ignored
+        assert_eq!(
+            timeline_ruler_scroll_steps_from_events(&[wheel(egui::MouseWheelUnit::Point, egui::vec2(0.0, 0.4))]),
+            0
+        );
+        // Empty events produce 0 steps
+        assert_eq!(timeline_ruler_scroll_steps_from_events(&[]), 0);
     }
 
     #[test]
@@ -14605,11 +14713,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         keyframe_context_owned = keyframe_hit || keyframe_candidates.iter()
                                             .any(|(target, _)| egui::Popup::is_id_open(ui.ctx(), target.menu_id()));
 
-                                        if ui.rect_contains_pointer(viewport_clip) {
-                                            pending_timeline_wheel = timeline_wheel_over_surface(ui, viewport_clip,
-                                                timeline_wheel_behavior(self.app, scroll_modifiers));
-                                        }
-
                                         let ruler_response = ui.interact(ruler_rect, egui::Id::new("timeline_ruler"), egui::Sense::click_and_drag())
                                             .on_hover_text(&timeline_ruler_help);
 
@@ -14700,6 +14803,23 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             pending_timeline_toolbar_action = toolbar.action;
                                         }
                                         held_timeline_pan = toolbar.held_pan;
+
+                                        let visible_ruler = ruler_rect.intersect(viewport_clip);
+                                        let ruler_hovered = ui.rect_contains_pointer(visible_ruler)
+                                            && !ui.rect_contains_pointer(toolbar_rect);
+                                        let ruler_scroll_steps = if ruler_hovered {
+                                            timeline_ruler_scroll_steps(ui)
+                                        } else {
+                                            0
+                                        };
+
+                                        if ruler_scroll_steps != 0 {
+                                            self.app.step_timeline_frame(ruler_scroll_steps);
+                                            ui.ctx().request_repaint();
+                                        } else if ui.rect_contains_pointer(viewport_clip) {
+                                            pending_timeline_wheel = timeline_wheel_over_surface(ui, viewport_clip,
+                                                timeline_wheel_behavior(self.app, scroll_modifiers));
+                                        }
 
                                         let mut clicked_any_keyframe = keyframe_context_owned && ui.input(|input|
                                             input.pointer.any_down() || input.pointer.any_released());
