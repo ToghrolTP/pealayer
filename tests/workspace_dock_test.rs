@@ -211,6 +211,7 @@ fn test_pealayer_tab_icons_not_empty() {
 #[test]
 fn test_workspace_window_menu_translations() {
     let app = pealayer::app::PealayerApp::default();
+    assert_eq!(app.tr("Workspace"), "Workspace");
     assert_eq!(app.tr("Window"), "Window");
     assert_eq!(app.tr("Panels"), "Panels");
     assert_eq!(
@@ -219,6 +220,10 @@ fn test_workspace_window_menu_translations() {
     );
 
     let fa = pealayer::config::AppLanguage::Persian;
+    assert_eq!(
+        pealayer::ui::i18n::tr(fa, "Workspace"),
+        pealayer::ui::i18n::visual_text(fa, "فضای کاری")
+    );
     assert_eq!(
         pealayer::ui::i18n::tr(fa, "Window"),
         pealayer::ui::i18n::visual_text(fa, "پنجره")
@@ -234,5 +239,15 @@ fn test_workspace_window_menu_translations() {
     assert_eq!(
         pealayer::ui::i18n::tr(fa, "All workspace panels are closed"),
         pealayer::ui::i18n::visual_text(fa, "همه پنل‌های فضای کاری بسته شده‌اند")
+    );
+    assert_eq!(
+        pealayer::ui::i18n::tr(
+            fa,
+            "Open panels from the Workspace menu above, or reset the workspace."
+        ),
+        pealayer::ui::i18n::visual_text(
+            fa,
+            "پنل‌ها را از منوی فضای کاری در بالا باز کنید یا فضای کاری را بازنشانی نمایید."
+        )
     );
 }
