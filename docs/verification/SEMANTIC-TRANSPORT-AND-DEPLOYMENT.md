@@ -23,8 +23,9 @@ so remote requests do not lose the NLE button's previous capture behavior.
 
 ## Current acceptance limits
 
-- Source TypeScript/Vite/PWA and native compilation are distinct from installed
-  playback acceptance. Automated tests are deferred at the user's request.
+- The exact final PR head passed TypeScript/Vite/PWA verification and the full
+  locked Rust, integration, shell, PCController, Web, and doc-test suite. These
+  source gates remain distinct from installed playback acceptance.
 - Cafe's fresh inventory found its controller service running but Pealayer
   stopped. Windows recorded a canonical-executable fail-fast crash, so final
   delivery must include real startup, Play, increasing media time, Pause,
