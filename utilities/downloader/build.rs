@@ -1,6 +1,9 @@
+#[path = "../../scripts/build-metadata.rs"]
+mod build_metadata;
 #[path = "src/icon.rs"]
 mod icon;
 fn main() {
+    build_metadata::emit_build_metadata();
     println!("cargo:rerun-if-changed=src/icon.rs");
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("windows") {
         return;
@@ -36,4 +39,11 @@ fn main() {
     resources
         .compile()
         .expect("Compile downloader executable metadata");
+    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("gnu") {
+        let resource = output.parent().unwrap().join("resource.o");
+        println!(
+            "cargo:rustc-link-arg-bin=pealayer-downloader={}",
+            resource.display()
+        );
+    }
 }

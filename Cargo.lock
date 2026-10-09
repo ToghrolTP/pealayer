@@ -3539,6 +3539,7 @@ dependencies = [
  "egui-phosphor",
  "image",
  "pealayer-downloads",
+ "serde_json",
  "winres",
 ]
 

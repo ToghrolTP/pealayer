@@ -1,9 +1,13 @@
 import assert from 'node:assert/strict';
-import { readFile } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import vm from 'node:vm';
 
 const dist = new URL('../dist/', import.meta.url);
 const build = JSON.parse(await readFile(new URL('pwa-build.json', dist), 'utf8'));
+const stylesheets = (await readdir(new URL('assets/', dist))).filter(name => name.endsWith('.css'));
+assert.deepEqual(stylesheets, ['app.css'], 'Keep shared CSS in the initial stylesheet; versioned lazy CSS breaks the preload suffix check');
+const appCss = await readFile(new URL('assets/app.css', dist), 'utf8');
+assert.match(appCss, /\.download-center/, 'Downloads must ship in the initial application stylesheet');
 const worker = await readFile(new URL('sw.js', dist), 'utf8');
 const events = new Map();
 const storage = new Map();

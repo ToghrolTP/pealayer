@@ -62,7 +62,7 @@ jobs:
         with:
           toolchain: stable
       - name: "📥 Verify shared download engine with local fixtures"
-        run: cargo test --locked -p pealayer-downloads
+        run: cargo test --locked -p pealayer-downloads --features ui
       - name: "🐹 Install Go for actionlint"
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:
@@ -208,10 +208,10 @@ jobs:
         run: cargo test --locked --jobs 1 --target x86_64-pc-windows-gnu -- --test-threads=1
       - name: "🚀 Build release binary"
         if: runner.os != 'Windows'
-        run: cargo build --release --locked
+        run: cargo build --release --locked -p pealayer -p pealayer-downloader
       - name: "🚀 Build release binary · Windows GNU"
         if: runner.os == 'Windows'
-        run: cargo build --release --locked --target x86_64-pc-windows-gnu
+        run: cargo build --release --locked --target x86_64-pc-windows-gnu -p pealayer -p pealayer-downloader
       - name: "🧪 Pack and smoke-test Windows binary"
         if: runner.os == 'Windows'
         shell: pwsh
@@ -222,11 +222,20 @@ jobs:
           if ($LASTEXITCODE) { throw "UPX compression failed: $LASTEXITCODE" }
           & $env:UPX_PATH -t $binary
           if ($LASTEXITCODE) { throw "UPX validation failed: $LASTEXITCODE" }
-          $smoke = Start-Process $binary -ArgumentList --smoke-test -WorkingDirectory (Split-Path $binary) -Wait -PassThru
-          if ($smoke.ExitCode) { throw "Smoke test failed: $($smoke.ExitCode)" }
+          . ./scripts/package-probe-windows.ps1
+          [void](Invoke-PackageProbe $binary '--smoke-test' (Split-Path $binary))
+          $downloader = Join-Path (Split-Path $binary) 'pealayer-downloader.exe'
+          $identity = (Get-Item $downloader).VersionInfo
+          if ($identity.ProductName -ne 'Pealayer Downloader' -or $identity.OriginalFilename -ne 'pealayer-downloader.exe') { throw 'Downloader resources are missing' }
+          [void](Invoke-PackageProbe $downloader '--smoke-test' (Split-Path $binary))
+          $source = Invoke-PackageProbe $downloader '--build-info' (Split-Path $binary) | ConvertFrom-Json
+          if ($source.commit -ne $env:GITHUB_SHA -or $source.dirty) { throw 'Downloader source identity is not clean/current' }
       - name: "🧪 Smoke-test macOS binary"
         if: runner.os == 'macOS'
         run: ./target/release/pealayer --smoke-test
+      - name: "📥 Smoke-test standalone utility without opening a queue"
+        if: runner.os != 'Windows'
+        run: ./target/release/pealayer-downloader --smoke-test
       - name: "📦 Package build output"
         id: package
         shell: bash
@@ -241,6 +250,9 @@ jobs:
           binary="target/release/$BINARY_NAME"
           if [[ "$RUNNER_OS" == Windows ]]; then binary="target/x86_64-pc-windows-gnu/release/$BINARY_NAME"; fi
           cp "$binary" README.md LICENSE "$output/"
+          downloader="target/release/pealayer-downloader"
+          if [[ "$RUNNER_OS" == Windows ]]; then downloader="target/x86_64-pc-windows-gnu/release/pealayer-downloader.exe"; fi
+          cp "$downloader" "$output/"
           cp assets/fonts/Vazirmatn-Regular.ttf "$output/assets/fonts/"
           cp -r web_ui/dist "$output/web_ui/"
           if [[ "$RUNNER_OS" == Windows ]]; then cp "${MPV_DLL_PATH//\\//}" "$output/"; fi

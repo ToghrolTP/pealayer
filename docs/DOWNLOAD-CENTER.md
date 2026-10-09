@@ -62,7 +62,8 @@ Primary contracts: [aria2](https://aria2.github.io/manual/en/html/aria2c.html),
   yet populate a persistent piece cache.
 - `GET/HEAD /api/downloads/media?id=…` serves ranges behind existing origin,
   peer-routing and file-access permissions. Complete streaming launch UX and live
-  HTTP/media acceptance remain required.
+  long media playback acceptance remains required. Isolated HTTP acceptance now
+  verifies paused cached-prefix/origin-gap bytes, completed GET/HEAD and 416 bounds.
 
 ### Shared contracts
 
@@ -83,24 +84,52 @@ ownership rather than stealing it.
 
 ## Verification and remaining delivery gates
 
-Fourteen core/local-HTTP tests pass: exact payload, pause/resume, ignored Range
+Sixteen core/local-HTTP/native-widget tests pass: exact payload, pause/resume, ignored Range
 restart, changed identity, interrupted body, cancellation, exclusive ownership and
-cached-prefix/origin-range correctness. Three explicitly invoked installed-engine
+cached-prefix/origin-range correctness, the rendered Resume button's backend
+action and recovery from a lost engine-connection reply. Three explicitly invoked installed-engine
 tests pass with synthetic local media: aria2, yt-dlp and FFmpeg remux/extraction.
 An intermittent yt-dlp fixture failure appeared during one concurrent run and was
 not reproduced in subsequent isolated/combined runs; repeated acceptance remains
 a gate, not a claim that this intermittent condition is solved.
 
-Main all-target compilation and Web type checking pass. The standalone release
-built before the last engine/lifecycle additions; final binary acceptance must
-follow the exact checkpoint. Rendered native/Web responsive acceptance, disk-failure
-and crash-recovery stress, measured bandwidth, long playback and deployment remain
-open.
+Main all-target compilation and the complete Web/PWA build pass. An isolated
+released backend passed RPC add/pause/resume/cancel plus exact progressive and
+completed media HTTP delivery. Web Add/Pause reached the same queue. Rendered
+desktop (1280), tablet (768) and phone (390) layouts have no horizontal overflow.
+A read-only Win32 capture confirms the standalone window restores the same
+completed, cancelled and paused jobs without stealing another process's queue.
+Native narrow-window/manual input acceptance, disk-failure and crash-recovery
+stress, measured bandwidth, long playback and production deployment remain open.
+
+Visual acceptance caught version-stamped lazy CSS being classified as JavaScript
+by Vite's suffix-based preload helper. All surfaces now ship their scoped styles
+in the initial application stylesheet, with a build regression gate. Both views
+reserve speed-chart geometry before samples arrive instead of shifting rows.
+
+The Windows packager now builds and includes `pealayer-downloader.exe`, verifies
+its distinct resources, headless UI/dependency smoke and clean source identity,
+and records it in the host manifest. The player and utility share one build
+metadata emitter. `--smoke-test` never opens a queue or starts downloads;
+`--build-info` never starts the UI. Final package/deployment verification is
+coordinated after merge from clean exact main, not a development-worktree build.
+
+Reproduce the focused live HTTP acceptance against a fresh isolated backend:
+
+```text
+node scripts/download-fixture-server.mjs <synthetic-media-file>
+node scripts/verify-download-api.mjs <loopback-backend-url> <printed-fixture-url>
+```
+
+Use dedicated `PEALAYER_CONFIG_FILE`, `PEALAYER_DOWNLOAD_ROOT`, loopback Web port,
+and disabled hardware auto-connect/session restore/media keys. Do not run the
+fixture against a user's queue. The generated media, private queue and screenshots
+belong in canonical staging, never the repository.
 
 Full request completion additionally requires owned/bundled-tool launch/provenance,
 cache policy and piece storage, streaming launch, format/playlist/transcode features,
 bulk/context/keyboard controls, localization, standalone authority attachment/RPC,
-combined-mode launch and packaged release workflows. These remain tracked in #110.
+combined-mode launch and cross-platform release packaging. These remain tracked in #110.
 
 Build on the faster host or CI, never production. Publish source before deployment,
 use graceful IPC/peer update and destination-validated libmpv. Issue #110 stays open

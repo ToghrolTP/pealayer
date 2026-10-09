@@ -79,7 +79,7 @@ export function DownloadsTab({ apiBaseUrl, sendCmd }: { apiBaseUrl: string; send
         {job.total ? <Progress percent={Math.min(100, job.downloaded / job.total * 100)} format={value => `${value?.toFixed(1)}%`} status={job.state === 'failed' ? 'exception' : job.state === 'complete' ? 'success' : 'normal'} /> : null}
         <div className="download-stats"><span>{bytes(job.downloaded)}{job.total ? ` / ${bytes(job.total)}` : ''}</span><span>{bytes(job.speed)}/s</span>
           {job.eta_seconds != null && <span>{Math.floor(job.eta_seconds / 60)}m {job.eta_seconds % 60}s left</span>}</div>
-        {job.samples.length > 1 && <svg className="download-chart" viewBox="0 0 600 38" preserveAspectRatio="none" role="img" aria-label="Measured download speed"><polyline points={points} fill="none" stroke="currentColor" strokeWidth="2" vectorEffect="non-scaling-stroke" /></svg>}
+        <svg className={`download-chart${job.samples.length > 1 ? '' : ' download-chart--empty'}`} viewBox="0 0 600 38" preserveAspectRatio="none" role="img" aria-label="Measured download speed"><polyline points={points} fill="none" stroke="currentColor" strokeWidth="2" vectorEffect="non-scaling-stroke" /></svg>
         {job.error && <Alert type="error" showIcon title={job.error} />}
         <div className="download-actions">
           {job.actions.includes('pause') && <Button disabled={pending} icon={<PauseOutlined />} onClick={() => act('pause')}>Pause</Button>}

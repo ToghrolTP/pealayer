@@ -53,6 +53,44 @@ impl eframe::App for Downloader {
     }
 }
 fn main() -> eframe::Result {
+    if let Some(argument) = std::env::args().nth(1) {
+        match argument.as_str() {
+            "--build-info" => {
+                println!(
+                    "{}",
+                    serde_json::json!({
+                        "application": "Pealayer Downloader", "version": env!("CARGO_PKG_VERSION"),
+                        "commit": env!("PEALAYER_GIT_COMMIT"), "dirty": env!("PEALAYER_GIT_DIRTY") == "true",
+                        "target": env!("PEALAYER_BUILD_TARGET")
+                    })
+                );
+                return Ok(());
+            }
+            "--smoke-test" => {
+                // Headless UI/dependency smoke: no production queue, GPU window or download.
+                let context = eframe::egui::Context::default();
+                let mut fonts = eframe::egui::FontDefinitions::default();
+                egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+                context.set_fonts(fonts);
+                let mut output = context.run_ui(Default::default(), |ui| {
+                    ui.label("Pealayer Downloader");
+                });
+                output.textures_delta.clear();
+                return Ok(());
+            }
+            "--help" => {
+                println!(
+                    "Pealayer Downloader {}\nOpen without arguments for the download queue.\n--build-info  Inspect source identity without opening files\n--smoke-test  Headless UI/dependency check without starting downloads",
+                    env!("CARGO_PKG_VERSION")
+                );
+                return Ok(());
+            }
+            _ => {
+                eprintln!("Unknown downloader option; use --help");
+                std::process::exit(2);
+            }
+        }
+    }
     let options = eframe::NativeOptions {
         viewport: eframe::egui::ViewportBuilder::default()
             .with_inner_size([840.0, 620.0])

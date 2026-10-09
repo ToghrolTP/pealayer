@@ -22,9 +22,16 @@ impl View {
     pub fn draw(&mut self, ui: &mut egui::Ui, manager: &Manager) -> Option<String> {
         let snapshot = manager.snapshot();
         if let Some(receiver) = &self.pending {
-            if let Ok(result) = receiver.try_recv() {
-                self.error = result.err();
-                self.pending = None;
+            match receiver.try_recv() {
+                Ok(result) => {
+                    self.error = result.err();
+                    self.pending = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    self.error = Some("Engine connection worker stopped before replying".into());
+                    self.pending = None;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => {}
             }
         }
         if !snapshot.engines.contains(&self.engine) || self.engine == Engine::Ffmpeg {
@@ -149,10 +156,16 @@ impl View {
                         .then(|| self.aria2_secret.clone()),
                 };
                 let (tx, rx) = std::sync::mpsc::channel();
-                self.pending = Some(rx);
-                std::thread::spawn(move || {
-                    let _ = tx.send(manager.configure_engines(settings));
-                });
+                match std::thread::Builder::new()
+                    .name("download-engine-connect".into())
+                    .spawn(move || {
+                        let _ = tx.send(manager.configure_engines(settings));
+                    }) {
+                    Ok(_) => self.pending = Some(rx),
+                    Err(error) => {
+                        self.error = Some(format!("Cannot start engine connection: {error}"))
+                    }
+                }
                 self.aria2_secret.clear();
             }
         });
@@ -286,11 +299,13 @@ impl View {
                                 if let Some(error) = &job.error {
                                     ui.colored_label(Color32::from_rgb(216, 89, 91), error);
                                 }
+                                // Reserve the chart footprint before samples arrive, avoiding
+                                // shifting the actions and the following queue rows on refresh.
+                                let (rect, _) = ui.allocate_exact_size(
+                                    Vec2::new(ui.available_width(), 32.0),
+                                    egui::Sense::hover(),
+                                );
                                 if job.samples.len() > 1 {
-                                    let (rect, _) = ui.allocate_exact_size(
-                                        Vec2::new(ui.available_width(), 32.0),
-                                        egui::Sense::hover(),
-                                    );
                                     let peak = job.samples.iter().copied().max().unwrap_or(1).max(1)
                                         as f32;
                                     let points = job
@@ -346,4 +361,97 @@ pub fn bytes(value: u64) -> String {
         (1.0, "B")
     };
     format!("{:.1} {suffix}", value as f64 / divisor)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn rendered_resume_button_changes_the_shared_queue() {
+        let root = std::env::temp_dir().join(format!("pealayer-ui-{}", uuid::Uuid::new_v4()));
+        let manager = Manager::open(root.clone()).unwrap();
+        let id = manager
+            .add(AddRequest {
+                url: "http://127.0.0.1:9/synthetic.bin".into(),
+                use_proxy: false,
+                proxy_url: None,
+                filename: None,
+                engine: Engine::Native,
+                connections: 1,
+            })
+            .unwrap();
+        manager.action(&id, "pause").unwrap();
+        let mut view = View::default();
+        let context = egui::Context::default();
+        let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+            view.draw(ui, &manager);
+        });
+        let position = output
+            .shapes
+            .iter()
+            .find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text) if text.galley.text().ends_with(" Resume") => {
+                    Some(text.visual_bounding_rect().center())
+                }
+                _ => None,
+            })
+            .expect("Paused job renders its actual Resume button");
+        output.textures_delta.clear();
+        let pointer = |pressed| egui::Event::PointerButton {
+            pos: position,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        let mut output = context.run_ui(
+            egui::RawInput {
+                events: vec![
+                    egui::Event::PointerMoved(position),
+                    pointer(true),
+                    pointer(false),
+                ],
+                ..Default::default()
+            },
+            |ui| {
+                view.draw(ui, &manager);
+            },
+        );
+        output.textures_delta.clear();
+        assert_ne!(
+            manager.snapshot().jobs[0].state,
+            State::Paused,
+            "A widget click must invoke the backend, not just change UI state"
+        );
+        manager.shutdown(std::time::Duration::from_secs(2)).unwrap();
+        drop(manager);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn lost_engine_reply_releases_the_connect_control() {
+        let root = std::env::temp_dir().join(format!("pealayer-ui-{}", uuid::Uuid::new_v4()));
+        let manager = Manager::open(root.clone()).unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        drop(sender);
+        let mut view = View {
+            pending: Some(receiver),
+            ..Default::default()
+        };
+        let context = egui::Context::default();
+        let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+            view.draw(ui, &manager);
+        });
+        output.textures_delta.clear();
+        assert!(view.pending.is_none());
+        assert!(
+            view.error
+                .as_deref()
+                .unwrap()
+                .contains("stopped before replying")
+        );
+        manager.shutdown(std::time::Duration::from_secs(2)).unwrap();
+        drop(manager);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }
