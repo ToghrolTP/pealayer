@@ -2034,6 +2034,7 @@ impl eframe::App for PealayerApp {
                 crate::ui::workspace_profiles::draw(self, ui);
 
                 crate::ui::open_url::draw(self, ui);
+                crate::downloads::draw(self, ui);
 
                 if self.show_shortcuts_dialog {
                     let language = self.language;
@@ -2127,6 +2128,7 @@ impl eframe::App for PealayerApp {
     fn persist_egui_memory(&self)->bool { !crate::peer::active() }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        crate::downloads::shutdown();
         crate::mpv::external::shutdown();
         // Never leave a press-and-hold channel active merely because Pealayer
         // was closed before the operating system delivered the key-up event.

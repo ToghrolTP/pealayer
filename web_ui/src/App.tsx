@@ -5,6 +5,7 @@ import {
   BulbOutlined,
   ControlOutlined,
   DashboardOutlined,
+  DownloadOutlined,
   FolderOpenOutlined,
   InfoCircleOutlined,
   SettingOutlined,
@@ -35,8 +36,9 @@ const StudioTab = React.lazy(() => import('./components/StudioTab').then((module
 const PreferencesTab = React.lazy(() => import('./components/PreferencesTab').then((module) => ({ default: module.PreferencesTab })));
 const EffectsTab = React.lazy(() => import('./components/EffectsTab').then((module) => ({ default: module.EffectsTab })));
 const HardwareTab = React.lazy(() => import('./components/HardwareTab').then((module) => ({ default: module.HardwareTab })));
+const DownloadsTab = React.lazy(() => import('./components/DownloadsTab').then((module) => ({ default: module.DownloadsTab })));
 
-const SURFACE_IDS = ['player', 'timeline', 'effects', 'hardware', 'library', 'about', 'preferences'] as const;
+const SURFACE_IDS = ['player', 'timeline', 'effects', 'hardware', 'library', 'downloads', 'about', 'preferences'] as const;
 type SurfaceId = typeof SURFACE_IDS[number];
 
 const STORAGE = {
@@ -154,7 +156,7 @@ const App: React.FC = () => {
     document.documentElement.dir = runtime.direction;
     const surfaceNames: Record<SurfaceId, string> = {
       player: 'Player', timeline: 'Timeline', effects: 'Effects Library', hardware: 'Hardware Monitor',
-      library: 'Media Library', about: 'About and system', preferences: 'Preferences',
+      library: 'Media Library', downloads: 'Downloads', about: 'About and system', preferences: 'Preferences',
     };
     document.title = `${tr(runtime.locale, surfaceNames[activeTab])} — ${runtime.appName}`;
     const media = window.matchMedia('(prefers-color-scheme: light)');
@@ -520,6 +522,7 @@ const App: React.FC = () => {
       icon: <InfoCircleOutlined style={{ fontSize: 18 }} />,
       label: tr(runtime?.locale || 'en', 'About and system'),
     },
+    { key: 'downloads', icon: <DownloadOutlined style={{ fontSize: 18 }} />, label: 'Downloads' },
     {
       key: 'preferences',
       icon: <SettingOutlined style={{ fontSize: 18 }} />,
@@ -662,6 +665,7 @@ const App: React.FC = () => {
               />
             )}
             {activeTab === 'effects' && <EffectsTab state={state} sendCmd={sendCmd} locale={runtime?.locale || 'en'} apiBaseUrl={apiBaseUrl} />}
+            {activeTab === 'downloads' && <DownloadsTab apiBaseUrl={apiBaseUrl} sendCmd={sendCmd} />}
             {activeTab === 'hardware' && <HardwareTab state={state} sendCmd={sendCmd} locale={runtime?.locale || 'en'} />}
             {activeTab === 'about' && (
               <PlayerInfoTab state={state} connectionMode={connectionMode} runtime={runtime} locale={runtime?.locale || 'en'} apiBaseUrl={apiBaseUrl} websocketUrl={resolveWebSocketUrl()} platform={platform} />

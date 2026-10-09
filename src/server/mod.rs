@@ -1,5 +1,6 @@
 pub mod fs_api;
 mod media_stream;
+mod download_media;
 pub mod thumbnails;
 pub mod web_assets;
 
@@ -459,6 +460,11 @@ fn handle_connection(mut stream: TcpStream, state: ControlState) {
                 let _ = media_stream::serve(&request, &mut stream);
                 return;
             }
+            Ok(request) if matches!(request.method.as_str(), "GET" | "HEAD") && request.target.split('?').next() == Some("/api/downloads/media") => {
+                let _ = stream.set_write_timeout(Some(Duration::from_secs(30)));
+                let _ = download_media::serve(&request, &mut stream);
+                return;
+            }
             Ok(mut request) => {
                 let head=request.method=="HEAD";
                 if head{request.method="GET".into();}
@@ -619,6 +625,7 @@ fn handle_websocket_text(state: &ControlState, text: &str) -> Option<String> {
         return None;
     }
     let request = serde_json::from_str::<crate::platform::interop::JsonRpcRequest>(text).ok()?;
+    if let Some(response) = crate::downloads::rpc_payload(text, true) { return Some(response); }
     Some(
         if matches!(
             request.method.as_str(),
@@ -1281,6 +1288,9 @@ fn pwa_manifest_response() -> HttpResponse {
 }
 
 fn json_rpc_response(body: &[u8], state: &ControlState) -> HttpResponse {
+    if let Some(response) = crate::downloads::rpc_payload(&String::from_utf8_lossy(body), true) {
+        return HttpResponse::json(200, "OK", response);
+    }
     if local_process_payload(body) {
         if !crate::platform::interop::get_live_config().web_allow_control { return permission_denied("control"); }
         return HttpResponse::json(200, "OK", dispatch_ipc_payload(state, &String::from_utf8_lossy(body)));
@@ -1490,6 +1500,7 @@ fn parse_player_command(body: &[u8]) -> Result<crate::platform::interop::Interop
 }
 
 fn dispatch_ipc_payload(state: &ControlState, payload: &str) -> String {
+    if let Some(response) = crate::downloads::rpc_payload(payload, true) { return response; }
     use crate::platform::interop::InteropCommand;
 
     let (id, command) = match crate::platform::interop::parse_interop_request(payload) {

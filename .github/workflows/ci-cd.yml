@@ -57,6 +57,12 @@ jobs:
         run: npm run build --prefix web_ui
       - name: "🦀 Verify shared library and executable boundary"
         run: node scripts/check-crate-boundary.mjs
+      - name: "🦀 Install Rust for independent transfer checks"
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: stable
+      - name: "📥 Verify shared download engine with local fixtures"
+        run: cargo test --locked -p pealayer-downloads
       - name: "🐹 Install Go for actionlint"
         uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7
         with:

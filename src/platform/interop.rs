@@ -2657,6 +2657,7 @@ fn dispatch_local_payload(
     expected_identity: &str,
     expected_session_id: Option<u32>,
 ) -> String {
+    if let Some(response) = crate::downloads::rpc_payload(payload, false) { return response; }
     let (id, command) = match parse_interop_request(payload) {
         Ok(parsed) => parsed,
         Err(error) => return format_interop_error(None, -32600, &error),

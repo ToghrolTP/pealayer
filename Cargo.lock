@@ -3508,6 +3508,7 @@ dependencies = [
  "network-interface",
  "notify",
  "open",
+ "pealayer-downloads",
  "raw-window-handle",
  "reqwest",
  "rfd",
@@ -3528,6 +3529,34 @@ dependencies = [
  "winreg",
  "winres",
  "zip",
+]
+
+[[package]]
+name = "pealayer-downloader"
+version = "0.2.0"
+dependencies = [
+ "eframe",
+ "egui-phosphor",
+ "image",
+ "pealayer-downloads",
+ "winres",
+]
+
+[[package]]
+name = "pealayer-downloads"
+version = "0.2.0"
+dependencies = [
+ "egui",
+ "egui-phosphor",
+ "libc",
+ "percent-encoding",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "url",
+ "uuid",
+ "windows 0.62.2",
 ]
 
 [[package]]

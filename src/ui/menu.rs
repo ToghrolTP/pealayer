@@ -309,6 +309,10 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     }
 
                     ui.separator();
+                    if ui.button(format!("{} Downloads", egui_phosphor::regular::DOWNLOAD_SIMPLE)).clicked() {
+                        crate::downloads::open(&ctx);
+                        ui.close();
+                    }
                     if ui.button(app.tr("Quit")).clicked() {
                         ctx.send_viewport_cmd(egui::ViewportCommand::Close);
                     }

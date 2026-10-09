@@ -1,0 +1,15 @@
+[package]
+name = "pealayer-downloader"
+version = "0.2.0"
+edition = "2024"
+license = "MIT"
+description = "Standalone Pealayer download utility"
+
+[dependencies]
+pealayer-downloads = { path = "../../crates/download-core", features = ["ui"] }
+eframe = { version = "0.36.2", default-features = false, features = ["glow", "wayland", "x11"] }
+egui-phosphor = { version = "0.14.0", default-features = false, features = ["regular"] }
+
+[build-dependencies]
+image = { version = "0.25.9", default-features = false, features = ["ico", "png"] }
+winres = "0.1.12"

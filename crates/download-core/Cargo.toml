@@ -1,0 +1,26 @@
+[package]
+name = "pealayer-downloads"
+version = "0.2.0"
+edition = "2024"
+license = "MIT"
+description = "Shared Pealayer download queue and transfer contracts"
+
+[features]
+ui = ["dep:egui", "dep:egui-phosphor"]
+
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.150"
+reqwest = { version = "0.12.28", default-features = false, features = ["blocking", "json", "rustls-tls"] }
+uuid = { version = "1.26.1", features = ["v4", "serde"] }
+url = "2.5.8"
+percent-encoding = "2.3"
+tokio = { version = "1.53", features = ["rt", "time", "net"] }
+egui = { version = "0.36.2", optional = true }
+egui-phosphor = { version = "0.14.0", default-features = false, features = ["regular"], optional = true }
+
+[target.'cfg(windows)'.dependencies]
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_Security", "Win32_System_JobObjects", "Win32_System_Threading"] }
+
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"

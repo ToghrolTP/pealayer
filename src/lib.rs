@@ -6,6 +6,7 @@ pub mod cli;
 pub mod config;
 pub mod diagnostics;
 pub mod duration;
+pub mod downloads;
 pub mod four_d;
 pub mod hardware_shortcuts;
 pub mod media;
