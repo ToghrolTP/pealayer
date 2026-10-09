@@ -11891,7 +11891,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         &pause_label
                                     };
                                     let play_response = ui
-                                        .add_sized([30.0, 22.0], egui::Button::new(play_icon))
+                                        .add_sized([30.0, 22.0], crate::ui::controls::transport_button(self.app.color_palette, ui, play_icon, crate::ui::controls::playback_button_role(self.app)))
                                         .on_hover_text(play_tooltip);
                                     play_response.context_menu(|ui| {
                                         crate::ui::controls::transport_context_menu(self.app, ui)
@@ -11902,22 +11902,20 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     let stop_response = ui
                                         .add_sized(
                                             [30.0, 22.0],
-                                            egui::Button::new(crate::ui::icons::STOP_CIRCLE),
+                                            crate::ui::controls::transport_button(self.app.color_palette, ui, crate::ui::icons::STOP_CIRCLE, "red"),
                                         )
                                         .on_hover_text(&stop_label);
                                     stop_response.context_menu(|ui| {
                                         crate::ui::controls::transport_context_menu(self.app, ui)
                                     });
                                     if stop_response.clicked() {
-                                        // Punch out on stop
-                                        self.app.commit_recorded_samples();
-
-                                        let _ = self.app.mpv.command("seek", &["0", "absolute+exact"]);
-                                        let _ = self.app.mpv.set_property("pause", true);
-                                        self.app.is_paused = true;
-                                        self.app.is_eof = false;
-                                        self.app.playback_time = 0.0;
-                                        self.app.seek_pos = None;
+                                        // Use the same session-owned Stop as IPC, Web and
+                                        // media keys; a remote consumer must not stop only
+                                        // its local preview and invent paused server state.
+                                        let ctx = ui.ctx().clone();
+                                        self.app.apply_interop_command(&ctx,
+                                            crate::platform::interop::InteropCommand::Stop,
+                                            "Program monitor");
                                     }
                                     let mute_icon = if self.app.is_muted {
                                         crate::ui::icons::SPEAKER_SLASH
@@ -11925,7 +11923,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         crate::ui::icons::SPEAKER_HIGH
                                     };
                                     if ui
-                                        .add_sized([30.0, 22.0], egui::Button::new(mute_icon))
+                                        .add_sized([30.0, 22.0], crate::ui::controls::transport_button(self.app.color_palette, ui, mute_icon, if self.app.is_muted { "amber" } else { "muted" }))
                                         .on_hover_text(if self.app.is_muted {
                                             self.app.tr("Unmute")
                                         } else {

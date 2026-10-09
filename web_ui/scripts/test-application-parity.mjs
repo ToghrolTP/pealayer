@@ -6,6 +6,7 @@ const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
 const hardware = read('src/components/HardwareTab.tsx');
 const studio = read('src/components/StudioTab.tsx');
 const remote = read('src/components/RemoteControlTab.tsx');
+const playbackButton = read('src/components/PlaybackButton.tsx');
 const media = read('src/components/MediaSurface.tsx');
 const library = read('src/components/MediaLibraryTab.tsx');
 const app = read('src/App.tsx');
@@ -24,6 +25,8 @@ const authority = read('src/components/PublishingAuthority.tsx');
 const webPlatform = read('src/webPlatform.ts');
 
 const contracts = [
+  [studio.includes('<PlaybackButton') && remote.includes('<PlaybackButton') && playbackButton.includes('disabled={!loaded || playing === undefined}') && playbackButton.includes("playing ? 'Pause' : 'Play'"), 'both playback surfaces render their action and enabled state from the authoritative snapshot'],
+  [css.includes('.transport-action--play { --transport-color: var(--green); }') && css.includes('.transport-action--pause { --transport-color: var(--amber); }') && css.includes('border: 1px solid') && !css.includes('transform: translateY(1px);\n  box-shadow:'), 'transport intents share semantic colors and fixed borders instead of moving on hover/press'],
   [studio.includes('useSeekbar(state, sendCmd)') && remote.includes('useSeekbar(state, sendCmd)') && seekbar.includes("send('scrub_to'") && seekbar.includes("send('finish_scrub'"), 'Simple and NLE seekbars share ordered live preview and exact commit commands'],
   [seekbar.includes('state.settled_seek_revision') && seekbar.includes('baselineRevision.current') && seekbar.includes('state.settled_seek_target'), 'seek drafts wait for a correlated decoder settlement, not stale or already-advancing position samples'],
   [seekbar.includes("'#969696'") && seekbar.includes("'#EF4444'") && css.includes('.seekbar-markers__chapter::after') && css.includes('height: 4px'), 'chapter ticks remain subtle and contained while named keyframes retain red dividers'],

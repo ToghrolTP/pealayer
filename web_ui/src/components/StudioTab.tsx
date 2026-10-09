@@ -19,7 +19,6 @@ import {
   LinkOutlined,
   LockOutlined,
   MoreOutlined,
-  PauseOutlined,
   PlusOutlined,
   RadarChartOutlined,
   SaveOutlined,
@@ -45,6 +44,7 @@ import { defaultTimelineWheelPreferences, timelineWheelAction, timelineZoomAtPoi
 import type { TimelineWheelPreferences } from '../timelineWheel';
 import { appendMelodySteps, sequenceDurationMs } from '../melodyCatalog';
 import { MediaTrackSelectors } from './MediaTrackSelectors';
+import { PlaybackButton } from './PlaybackButton';
 
 interface StudioTabProps {
   state: PlayerState;
@@ -761,9 +761,11 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
           <Tooltip title={`${tr(locale, 'Seek backward')} ${quickSeekSeconds}s`}>
             <Button icon={<FastBackwardOutlined />} onClick={() => sendCmd('seek', { seconds: -quickSeekSeconds })} />
           </Tooltip>
-          <Button
+          <PlaybackButton
             className="studio-transport__play"
-            icon={state.playing ? <PauseOutlined /> : <CaretRightFilled />}
+            playing={state.playing}
+            loaded={Boolean(state.current_video)}
+            locale={locale}
             onClick={() => sendCmd('toggle_pause')}
           />
           <Tooltip title={`${tr(locale, 'Seek forward')} ${quickSeekSeconds}s`}>
