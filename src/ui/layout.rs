@@ -1813,15 +1813,8 @@ fn effect_controls_card_with_ping<R>(
 }
 
 fn effect_controls_badge(ui: &mut egui::Ui, icon: &str, text: impl Into<String>) {
-    let visuals = ui.visuals();
-    egui::Frame::new()
-        .fill(visuals.widgets.inactive.weak_bg_fill)
-        .stroke(visuals.widgets.noninteractive.bg_stroke)
-        .corner_radius(20.0)
-        .inner_margin(egui::Margin::symmetric(7, 3))
-        .show(ui, |ui| {
-            ui.label(egui::RichText::new(format!("{icon}  {}", text.into())).small());
-        });
+    crate::ui::sync_elegance_theme(ui.ctx());
+    ui.add(elegance::Badge::new(format!("{icon}  {}", text.into()), elegance::BadgeTone::Neutral).preserve_case());
 }
 
 fn effect_controls_kind(

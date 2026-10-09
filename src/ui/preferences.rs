@@ -789,13 +789,16 @@ fn draw_preferences_editor(draft: &mut PreferencesDraft, ui: &mut egui::Ui) -> P
             .alert(true)
             .close_on_backdrop(false)
             .footer(|ui| {
-                if ui.add(elegance::Button::new(tr("Save")).accent(elegance::Accent::Green)).clicked() {
+                if ui.add(elegance::Button::new(format!("{}  {}", crate::ui::icons::FLOPPY_DISK, tr("Save")))
+                    .min_width(crate::ui::dialog::ACTION_BUTTON_WIDTH)).clicked() {
                     save = true;
                 }
-                if ui.add(elegance::Button::new(tr("Discard")).accent(elegance::Accent::Red)).clicked() {
+                if ui.add(elegance::Button::new(format!("{}  {}", crate::ui::icons::TRASH, tr("Discard")))
+                    .accent(elegance::Accent::Red).min_width(crate::ui::dialog::ACTION_BUTTON_WIDTH)).clicked() {
                     discard = true;
                 }
-                if ui.add(elegance::Button::new(tr("Cancel")).outline()).clicked() {
+                if ui.add(elegance::Button::new(format!("{}  {}", crate::ui::icons::X, tr("Cancel")))
+                    .outline().min_width(crate::ui::dialog::ACTION_BUTTON_WIDTH)).clicked() {
                     cancel = true;
                 }
             })
@@ -1816,14 +1819,10 @@ fn preference_section_with_disclosure(
     default_open: Option<bool>,
     body: impl FnOnce(&mut egui::Ui),
 ) {
-    egui::Frame::new()
-        .fill(ui.visuals().faint_bg_color.gamma_multiply(0.42))
-        .stroke(egui::Stroke::new(
-            1.0_f32,
-            ui.visuals().widgets.noninteractive.bg_stroke.color,
-        ))
+    crate::ui::sync_elegance_theme(ui.ctx());
+    elegance::Card::new()
         .corner_radius(9.0)
-        .inner_margin(egui::Margin::same(12))
+        .padding(egui::Margin::same(12))
         .show(ui, |ui| {
             ui.set_width(ui.available_width());
             if let Some(default_open) = default_open {
