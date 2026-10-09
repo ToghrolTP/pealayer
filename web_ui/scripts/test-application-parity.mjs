@@ -51,7 +51,7 @@ const contracts = [
   [hardware.includes('controlIcon(control.kind, control.icon)'), 'hardware controls honor the shared custom icon contract'],
   [hardware.includes('Buzzer & melodies') && hardware.includes("hardware.buzzer.melody") && hardware.includes("hardware.buzzer.tone") && hardware.includes("hardware.buzzer.stop"), 'hardware monitor exposes live melody, tone, and stop controls'],
   [hardware.includes('<MelodySelect') && hardware.includes("refresh={() => { void sendCmd('hardware.catalog.refresh'); }}") &&
-    readFileSync(new URL('../src/components/MelodySelect.tsx', import.meta.url), 'utf8').includes('onOpenChange={(open) => { if (open) refresh(); }}'), 'shared melody picker refreshes the controller catalog on opening'],
+    read('src/components/MelodySelect.tsx').includes('onOpenChange={(open) => { if (open) refresh(); }}'), 'shared melody picker refreshes the controller catalog on opening'],
   [css.includes('.hardware-estop.ant-btn-primary'), 'E-STOP owns its filled danger styling'],
   [sevenSegment.includes("mask & (1 << bit)") && hardware.includes('<SevenSegmentDisplay'), 'front-panel masks render as live seven-segment glyphs'],
   [remote.includes('<MediaSurface') && studio.includes('<MediaSurface'), 'both player surfaces share the native media element'],
