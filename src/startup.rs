@@ -354,6 +354,11 @@ pub fn run() -> eframe::Result {
             }
             let mpv = Mpv::with_initializer(|init| {
                 init.set_property("vo", "libmpv")?;
+                // Stop libmpv from blocking the UI thread during render passes.
+                // By default video-timing-offset is 0.050s, which forces mpv_render_context_render
+                // to sleep until the next frame's presentation timestamp (e.g. ~41.7ms for 23.976 fps),
+                // truncating the entire UI event loop to the video's frame rate.
+                init.set_property("video-timing-offset", 0.0)?;
                 let audio_device = if loaded_config.audio_device.trim().is_empty() {
                     "auto"
                 } else {
@@ -715,6 +720,7 @@ pub fn run() -> eframe::Result {
                     video_texture_id: None,
                     texture_width: 1920,
                     texture_height: 1080,
+                    has_rendered_frame: false,
                 })),
                 selected_instance_ids: std::collections::HashSet::new(),
                 selected_keyframes: std::collections::HashSet::new(),

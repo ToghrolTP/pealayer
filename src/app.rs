@@ -435,12 +435,14 @@ fn canonical_effect_reference(reference: &str) -> Option<String> {
     (!id.is_empty()).then(|| format!("effect:{}", id.to_ascii_lowercase()))
 }
 
+#[derive(Debug, Default)]
 pub struct RttState {
     pub video_texture: Option<eframe::glow::Texture>,
     pub video_fbo: Option<eframe::glow::Framebuffer>,
     pub video_texture_id: Option<eframe::egui::TextureId>,
     pub texture_width: u32,
     pub texture_height: u32,
+    pub has_rendered_frame: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -572,7 +574,7 @@ pub struct PealayerApp {
     pub(crate) is_scrubbing: bool,
     pub(crate) pending_scrub_commit: Option<PendingScrubCommit>,
     pub(crate) last_mouse_activity: std::time::Instant,
-    pub(crate) frame_rate_tracker: FrameRateTracker,
+    pub frame_rate_tracker: FrameRateTracker,
     pub display_refresh_rate: f64,
     pub(crate) pin_controls: bool,
 
@@ -779,7 +781,7 @@ pub struct PealayerApp {
     pub(crate) windows_video_taskbar_thumbnail: bool,
     pub(crate) windows_thumbnail_toolbar: bool,
     pub(crate) windows_jump_list_quick_actions: bool,
-    pub(crate) opengl_vsync: bool,
+    pub opengl_vsync: bool,
     pub(crate) live_video_during_window_move: bool,
     pub(crate) compositor_paced_window_move: bool,
     pub(crate) native_dialog_windows: bool,
@@ -4965,9 +4967,13 @@ impl PealayerApp {
         if !self.is_active_playback() {
             return None;
         }
-        let target_hz = self.display_refresh_rate.clamp(20.0, 360.0);
-        let target_interval = std::time::Duration::from_secs_f64(1.0 / target_hz);
-        Some(PlaybackRepaintPacing::Paced(target_interval))
+        if self.opengl_vsync {
+            Some(PlaybackRepaintPacing::VSync)
+        } else {
+            let target_hz = self.display_refresh_rate.clamp(20.0, 360.0);
+            let target_interval = std::time::Duration::from_secs_f64(1.0 / target_hz);
+            Some(PlaybackRepaintPacing::Paced(target_interval))
+        }
     }
 
     /// Requests repaints during active playback to decouple the UI frame rate from
@@ -5015,8 +5021,15 @@ impl PealayerApp {
         let formatted = rate.map(|rate| format!("{rate:.2} fps")).unwrap_or_else(|| "— fps".into());
         let ui_rate = self.frame_rate_tracker.live_fps().map(|rate| format!("{rate:.2} fps")).unwrap_or_else(|| "—".into());
         let media_rate = if self.current_video_path.is_some() && self.media_fps > 0.0 { format!("{:.2} fps", self.media_fps) } else { "—".into() };
-        let tooltip = format!("{}: {}\n{}: {}\n{}: {}\n{}", self.tr("Media frame rate"), media_rate,
-            self.tr("UI render rate"), ui_rate, self.tr("Active mode"), active_mode_label,
+        let render_micros = crate::ui::video::LAST_MPV_RENDER_MICROS.load(std::sync::atomic::Ordering::Relaxed);
+        let max_render_micros = crate::ui::video::MAX_MPV_RENDER_MICROS.load(std::sync::atomic::Ordering::Relaxed);
+        let render_stat = if render_micros > 0 {
+            format!("\n{}: {:.2} ms (max: {:.2} ms)", self.tr("MPV render time"), render_micros as f64 / 1000.0, max_render_micros as f64 / 1000.0)
+        } else {
+            String::new()
+        };
+        let tooltip = format!("{}: {}\n{}: {}\n{}: {}{}\n{}", self.tr("Media frame rate"), media_rate,
+            self.tr("UI render rate"), ui_rate, self.tr("Active mode"), active_mode_label, render_stat,
             self.tr("Click to switch frame rate source"));
         Some(FpsDisplayInfo { value: rate.unwrap_or(0.0), formatted, active_mode_label, tooltip, is_ui_rate })
     }
@@ -6044,6 +6057,9 @@ impl PealayerApp {
         if !path_str.is_empty() {
             self.reset_scrub_state();
             self.clear_frame_cache();
+            if let Ok(mut rtt) = self.rtt_state.try_lock() {
+                rtt.has_rendered_frame = false;
+            }
             self.capture_current_playback_position();
             self.pending_resume_position = self.resume_position_for(path_str);
             let _ = self.mpv.set_property("keep-open", "always");
@@ -8382,6 +8398,7 @@ fn get_shared_mpv() -> &'static libmpv2::Mpv {
         libmpv2::Mpv::with_initializer(|init| {
             let _ = init.set_option("vo", "null");
             let _ = init.set_option("ao", "null");
+            let _ = init.set_option("video-timing-offset", 0.0);
             let _ = init.set_option("keep-open", "always");
             Ok(())
         })
@@ -8551,6 +8568,7 @@ impl Default for PealayerApp {
                 video_texture_id: None,
                 texture_width: 1920,
                 texture_height: 1080,
+                has_rendered_frame: false,
             })),
             current_video_path: None,
             show_remaining_time: false,
@@ -9911,7 +9929,11 @@ pub(crate) mod tests {
         app.playback_time = 10.0;
         assert!(app.is_active_playback(), "Unpaused loaded media must be active playback");
 
-        // Playback pacing should adapt to the desktop display refresh rate
+        // When opengl_vsync is enabled (default), playback pacing delegates directly to hardware VSync
+        assert_eq!(app.playback_repaint_pacing(), Some(PlaybackRepaintPacing::VSync));
+
+        // When opengl_vsync is disabled, playback pacing adapts to the desktop display refresh rate
+        app.opengl_vsync = false;
         app.display_refresh_rate = 60.0;
         match app.playback_repaint_pacing() {
             Some(PlaybackRepaintPacing::Paced(dur)) => {
@@ -10043,6 +10065,12 @@ pub(crate) mod tests {
         app.is_paused = false;
         app.is_eof = false;
 
+        // VSync pacing when opengl_vsync is true (default)
+        assert_eq!(app.playback_repaint_pacing(), Some(PlaybackRepaintPacing::VSync));
+
+        // When VSync is disabled, desktop pacing adapts to display refresh rate
+        app.opengl_vsync = false;
+
         // 144 Hz display pacing
         app.display_refresh_rate = 144.0;
         let pacing_144 = app.playback_repaint_pacing().expect("Should pace during playback");
@@ -10102,5 +10130,112 @@ pub(crate) mod tests {
         app.clear_frame_cache();
         assert_eq!(app.frame_cache.read().unwrap().len(), 0);
         assert!(app.active_pseudo_frame.is_none());
+    }
+
+    #[test]
+    fn step_single_frame_and_step_frames_n_handle_unloaded_and_edge_inputs() {
+        let _lock = lock_app_tests();
+        let mut app = PealayerApp::default();
+        // With no video loaded, stepping should be a safe no-op without panics
+        app.step_single_frame(1);
+        app.step_single_frame(-1);
+        app.step_frames_n(1, 5);
+        app.step_frames_n(-1, 5);
+        app.step_frames_n(0, 5);
+        app.step_frames_n(1, 0);
+    }
+
+    #[test]
+    fn calculate_frame_step_target_steps_forward_and_backward_accurately() {
+        let fps = 24.0;
+        let duration = 10.0;
+
+        // Step forward from 0.0
+        let f1 = calculate_frame_step_target(0.0, fps, 1, duration);
+        assert!((f1 - 1.0 / 24.0).abs() < 1e-6);
+
+        // Step forward again from frame 1
+        let f2 = calculate_frame_step_target(f1, fps, 1, duration);
+        assert!((f2 - 2.0 / 24.0).abs() < 1e-6);
+
+        // Step backward from frame 2
+        let f1_back = calculate_frame_step_target(f2, fps, -1, duration);
+        assert!((f1_back - 1.0 / 24.0).abs() < 1e-6);
+
+        // Step backward from frame 1 to 0
+        let f0 = calculate_frame_step_target(f1_back, fps, -1, duration);
+        assert_eq!(f0, 0.0);
+
+        // Clamp at 0 when stepping backward from 0
+        let f_neg = calculate_frame_step_target(0.0, fps, -1, duration);
+        assert_eq!(f_neg, 0.0);
+
+        // Sub-frame position stepping: paused at 1.01s (between frame 24 and 25 at 24fps)
+        // 1.01 * 24 = 24.24
+        // Stepping forward should land on frame 25
+        let f_forward = calculate_frame_step_target(1.01, fps, 1, duration);
+        assert!((f_forward - 25.0 / 24.0).abs() < 1e-6);
+
+        // Stepping backward from 1.01 should land on frame 24
+        let f_backward = calculate_frame_step_target(1.01, fps, -1, duration);
+        assert!((f_backward - 24.0 / 24.0).abs() < 1e-6);
+
+        // Clamping at end of media
+        let f_end = calculate_frame_step_target(10.0, fps, 1, duration);
+        assert_eq!(f_end, 10.0);
+
+        // Multiple frame steps: +5 frames from 0.0
+        let f5 = calculate_frame_step_target(0.0, fps, 5, duration);
+        assert!((f5 - 5.0 / 24.0).abs() < 1e-6);
+
+        // Non-finite or 0 steps safe handling
+        assert_eq!(calculate_frame_step_target(2.0, fps, 0, duration), 2.0);
+        assert_eq!(calculate_frame_step_target(f64::NAN, fps, 1, duration), 0.0);
+    }
+
+    #[test]
+    fn step_timeline_frame_hits_frame_cache_and_pauses_playback() {
+        let _lock = lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.current_video_path = Some(std::path::PathBuf::from("video.mp4"));
+        app.is_seekable = true;
+        app.duration = 60.0;
+        app.media_fps = 30.0;
+        app.is_paused = false;
+
+        // Prepopulate frame cache at target time (1/30s = 0.03333s)
+        let target_pts = 1.0 / 30.0;
+        let frame = crate::mpv::frame_cache::CachedFrame::new(
+            target_pts,
+            320,
+            180,
+            vec![77u8; 320 * 180 * 4],
+        );
+        app.frame_cache.write().unwrap().insert(frame, target_pts);
+
+        // Step 1 frame forward
+        app.step_timeline_frame(1);
+
+        // Must pause cleanly without unpausing
+        assert!(app.is_paused);
+        // Logical seek_pos must be updated to target_pts
+        assert_eq!(app.seek_pos, Some(target_pts));
+        // Pseudo-frame must hit cache immediately
+        assert!(app.active_pseudo_frame.is_some());
+        assert_eq!(app.active_pseudo_frame.as_ref().unwrap().pts, target_pts);
+    }
+
+    #[test]
+    fn mpv_timing_offset_is_zero_to_prevent_render_thread_blocking() {
+        let _lock = lock_app_tests();
+        let app = PealayerApp::default();
+        let offset = app
+            .mpv
+            .get_property::<f64>("video-timing-offset")
+            .expect("video-timing-offset must be readable");
+        assert_eq!(
+            offset, 0.0,
+            "video-timing-offset must be 0.0 to prevent libmpv from sleeping the UI render thread"
+        );
     }
 }

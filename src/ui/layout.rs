@@ -14707,6 +14707,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         let painter = ui.painter().with_clip_rect(track_clip);
                                         let ruler_painter = ui.painter().with_clip_rect(ruler_rect.intersect(viewport_clip));
 
+                                        let visible_start_sec = (((viewport_clip.min.x - 50.0 - rect.min.x) / zoom) as f64).max(0.0);
+                                        let visible_end_sec = (((viewport_clip.max.x + 50.0 - rect.min.x) / zoom) as f64).min(total_seconds);
+                                        let visible_start_i = (visible_start_sec.floor() as i32).max(0);
+                                        let visible_end_i = (visible_end_sec.ceil() as i32).min(total_seconds.ceil() as i32);
+
                                         // Draw timeline tracks background
                                         painter.rect_filled(rect, 0.0, ui.visuals().panel_fill);
 
@@ -14846,7 +14851,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             input.pointer.any_down() || input.pointer.any_released());
                                         for marker in self.app.timeline.keyframes.clone() {
                                             let marker_x = rect.min.x + marker.time_ms as f32 * px_per_ms;
-                                            if marker_x < rect.min.x || marker_x > rect.max.x {
+                                            if marker_x < rect.min.x || marker_x > rect.max.x || marker_x < viewport_clip.min.x - 20.0 || marker_x > viewport_clip.max.x + 20.0 {
                                                 continue;
                                             }
                                             // Interaction is registered here, but the marker is
@@ -14956,7 +14961,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         for chapter in &media_chapters {
                                             let marker_x =
                                                 rect.min.x + chapter.time_seconds as f32 * zoom;
-                                            if marker_x < rect.min.x || marker_x > rect.max.x {
+                                            if marker_x < rect.min.x || marker_x > rect.max.x || marker_x < viewport_clip.min.x - 20.0 || marker_x > viewport_clip.max.x + 20.0 {
                                                 continue;
                                             }
                                             let marker_rect = egui::Rect::from_center_size(
@@ -15042,9 +15047,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                                         // Draw grid lines
                                         // Major grid lines every second (zoom px)
-                                        for i in 0..=(total_seconds.ceil() as i32) {
+                                        for i in visible_start_i..=visible_end_i {
                                             let grid_x = rect.min.x + (i as f32 * zoom);
-                                            if grid_x <= rect.max.x {
+                                            if grid_x >= viewport_clip.min.x - 1.0 && grid_x <= viewport_clip.max.x + 1.0 && grid_x <= rect.max.x {
                                                 painter.line_segment(
                                                     [egui::pos2(grid_x, rect.min.y), egui::pos2(grid_x, rect.max.y)],
                                                     ui.visuals().widgets.noninteractive.bg_stroke,
@@ -15253,6 +15258,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         track_y + cue_row_height - 4.0,
                                                     ),
                                                 );
+
+                                                let is_active_drag = active_drag_id == Some(instance.id);
+                                                if !is_active_drag && (clip_rect.max.x < viewport_clip.min.x - 20.0 || clip_rect.min.x > viewport_clip.max.x + 20.0) {
+                                                    continue;
+                                                }
 
                                                 let clip_id = egui::Id::new(instance.id);
                                                 let is_track_locked = relay_id
@@ -15952,11 +15962,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(34, 42, 48)),
                                             );
 
-                                            // Sample continuous curve along timeline
+                                            // Sample continuous curve along visible timeline
                                             let step_px = 6.0_f32;
                                             let mut points = Vec::new();
-                                            let mut curr_x = rect.min.x;
-                                            while curr_x <= rect.max.x {
+                                            let visible_left = (viewport_clip.min.x - step_px).max(rect.min.x);
+                                            let visible_right = (viewport_clip.max.x + step_px).min(rect.max.x);
+                                            let mut curr_x = visible_left;
+                                            while curr_x <= visible_right {
                                                 let t_ms = (((curr_x - rect.min.x) / zoom) * 1000.0).max(0.0) as u64;
                                                 let norm_val = track.evaluate(t_ms);
                                                 let py = curve_bottom - (norm_val * curve_span);
@@ -16020,6 +16032,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             // Keyframe markers and interactions
                                             for (k_idx, kf) in track.keyframes.iter().enumerate() {
                                                 let kx = rect.min.x + (kf.time_ms as f32 * px_per_ms);
+                                                if kx < viewport_clip.min.x - 20.0 || kx > viewport_clip.max.x + 20.0 {
+                                                    continue;
+                                                }
                                                 let ky = curve_bottom - (kf.value * curve_span);
                                                 let center = egui::pos2(kx, ky);
                                                 let is_selected = self.app.selected_keyframes.contains(&(track.id, k_idx));
@@ -16412,9 +16427,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         );
                                         let label_step = label_step.max(((longest_label.size().x + 10.0) / zoom).ceil().max(1.0) as i32);
 
-                                        for i in 0..=(total_seconds.ceil() as i32) {
+                                        for i in visible_start_i..=visible_end_i {
                                             let grid_x = rect.min.x + (i as f32 * zoom);
-                                            if grid_x <= rect.max.x - 8.0 {
+                                            if grid_x >= viewport_clip.min.x - 100.0 && grid_x <= rect.max.x - 8.0 {
                                                 // Major second tick
                                                 ruler_painter.line_segment(
                                                     [egui::pos2(grid_x, ruler_rect.max.y - 8.0), egui::pos2(grid_x, ruler_rect.max.y)],
@@ -16424,7 +16439,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 if zoom >= 50.0 {
                                                     for sub in 1..10 {
                                                         let sub_x = grid_x + (sub as f32 * (zoom / 10.0));
-                                                        if sub_x <= rect.max.x - 8.0 {
+                                                        if sub_x >= viewport_clip.min.x - 20.0 && sub_x <= rect.max.x - 8.0 {
                                                             let notch_h = if sub == 5 { 5.0 } else { 3.0 };
                                                             ruler_painter.line_segment(
                                                                 [egui::pos2(sub_x, ruler_rect.max.y - notch_h), egui::pos2(sub_x, ruler_rect.max.y)],
@@ -16458,7 +16473,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         for chapter in &media_chapters {
                                             let marker_x =
                                                 rect.min.x + chapter.time_seconds as f32 * zoom;
-                                            if marker_x < rect.min.x || marker_x > rect.max.x {
+                                            if marker_x < rect.min.x || marker_x > rect.max.x || marker_x < viewport_clip.min.x - 20.0 || marker_x > viewport_clip.max.x + 20.0 {
                                                 continue;
                                             }
                                             let active =
@@ -16496,7 +16511,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         for marker in &self.app.timeline.keyframes {
                                             let marker_x =
                                                 rect.min.x + marker.time_ms as f32 * px_per_ms;
-                                            if marker_x < rect.min.x || marker_x > rect.max.x {
+                                            if marker_x < rect.min.x || marker_x > rect.max.x || marker_x < viewport_clip.min.x - 20.0 || marker_x > viewport_clip.max.x + 20.0 {
                                                 continue;
                                             }
                                             let selected = self.app.selected_timeline_keyframe
