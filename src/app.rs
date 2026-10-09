@@ -435,12 +435,14 @@ fn canonical_effect_reference(reference: &str) -> Option<String> {
     (!id.is_empty()).then(|| format!("effect:{}", id.to_ascii_lowercase()))
 }
 
+#[derive(Debug, Default)]
 pub struct RttState {
     pub video_texture: Option<eframe::glow::Texture>,
     pub video_fbo: Option<eframe::glow::Framebuffer>,
     pub video_texture_id: Option<eframe::egui::TextureId>,
     pub texture_width: u32,
     pub texture_height: u32,
+    pub has_rendered_frame: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -6087,6 +6089,9 @@ impl PealayerApp {
         if !path_str.is_empty() {
             self.reset_scrub_state();
             self.clear_frame_cache();
+            if let Ok(mut rtt) = self.rtt_state.try_lock() {
+                rtt.has_rendered_frame = false;
+            }
             self.capture_current_playback_position();
             self.pending_resume_position = self.resume_position_for(path_str);
             let _ = self.mpv.set_property("keep-open", "always");
@@ -8564,6 +8569,7 @@ impl Default for PealayerApp {
                 video_texture_id: None,
                 texture_width: 1920,
                 texture_height: 1080,
+                has_rendered_frame: false,
             })),
             current_video_path: None,
             show_remaining_time: false,
