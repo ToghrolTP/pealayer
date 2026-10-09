@@ -355,8 +355,8 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
               type="button"
               className={`hardware-control__indicator ${active ? 'is-on' : ''}`}
               style={{ '--indicator-color': control.indicator_color || control.color || 'var(--green)' } as React.CSSProperties}
-              aria-label={tr(locale, isMotionControl(control) ? control.direction === 'up' ? 'Up' : control.direction === 'down' ? 'Down' : control.direction === 'stop' ? 'Stopped' : 'State not sampled by the board' : active ? 'On' : 'Off')}
-              title={tr(locale, isMotionControl(control) ? control.direction === 'up' ? 'Up' : control.direction === 'down' ? 'Down' : control.direction === 'stop' ? 'Stopped' : 'State not sampled by the board' : active ? 'Turn off' : 'Turn on')}
+              aria-label={tr(locale, isMotionControl(control) ? control.direction === 'up' ? 'Up' : control.direction === 'down' ? 'Down' : control.direction === 'stop' ? 'Stopped' : 'State unavailable from the board' : active ? 'On' : 'Off')}
+              title={tr(locale, isMotionControl(control) ? control.direction === 'up' ? 'Up' : control.direction === 'down' ? 'Down' : control.direction === 'stop' ? 'Stopped' : 'State unavailable from the board' : active ? 'Turn off' : 'Turn on')}
               disabled={!immediateToggle || control.locked || !state.hardware_connected || Boolean(state.estop_active)}
               {...(immediateToggle ? actionInputProps(control, immediateToggle) : {})}
             />}
