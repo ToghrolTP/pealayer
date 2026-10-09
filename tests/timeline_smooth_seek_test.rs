@@ -165,4 +165,3 @@ fn test_seek_controller_serves_cache_hits_without_backend_dispatch() {
 
     wait_for_seek_target(&seeks, 12.0);
 }
-
