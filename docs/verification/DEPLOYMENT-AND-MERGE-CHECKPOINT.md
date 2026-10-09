@@ -26,14 +26,18 @@ Cafe's graceful peer updater installed that exact executable; API read-back
 confirmed the new commit, matching executable digest, destination-specific mpv
 runtime, authority role, and preserved paused position and complete timeline.
 PCController's independent startup service remained running with the same PID.
-David remains a connected, cache-only remote consumer on its previous binary:
-the tool policy blocked its updater invocation, and the user has been asked to
-run the staged local updater. No hardware actuation was performed.
+The tool policy initially blocked this task's David updater invocation; the
+coordinating task completed the graceful local replacement and the user also
+reported running the requested updater. Independent API read-back confirms
+David now runs the same clean commit and executable digest as Cafe, with its
+own destination mpv runtime, connected cache-only consumer role, no local
+hardware scheduler, and unchanged paused position and complete timeline. Both
+health endpoints report ready. No hardware actuation was performed.
 
-Backdrop visual/input acceptance is still outstanding. The user has been asked
-to open Add cue without submitting it and check that the ruler buttons are
-dimmed and cannot be activated through the backdrop. Do not label deployment
-or source checks as this live visual proof.
+Backdrop visual/input acceptance is still outstanding. The user reported
+performing the check on David instead of Cafe; that is suitable for the shared
+executable, but the observed dimming/input result still needs confirmation.
+Do not label deployment or source checks as this live visual proof.
 
 The coordinator separately reported a macOS CI failure in the new backdrop
 test: synthetic frames checked final alpha before egui's Area opening fade had
