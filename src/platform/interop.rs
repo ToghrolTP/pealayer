@@ -263,10 +263,18 @@ pub enum InteropCommand {
         value_basis_points: u16,
         start_time_ms: u64,
         duration_ms: u64,
+        #[serde(default)]
+        behavior: crate::four_d::models::DirectCueBehavior,
+        #[serde(default)]
+        end_value_basis_points: u16,
     },
     UpdateDirectControlCueValue {
         instance_id: String,
         value_basis_points: u16,
+        #[serde(default)]
+        behavior: Option<crate::four_d::models::DirectCueBehavior>,
+        #[serde(default)]
+        end_value_basis_points: Option<u16>,
     },
     AddControllerEffectCue {
         reference: String,
@@ -681,10 +689,12 @@ impl InteropCommand {
                 control_key,
                 value_basis_points,
                 duration_ms,
+                end_value_basis_points,
                 ..
             } if control_key.trim().is_empty()
                 || control_key.len() > 128
                 || *value_basis_points > 10_000
+                || *end_value_basis_points > 10_000
                 || *duration_ms < 100
                 || *duration_ms > 86_400_000 =>
             {
@@ -693,8 +703,11 @@ impl InteropCommand {
             Self::UpdateDirectControlCueValue {
                 instance_id,
                 value_basis_points,
+                end_value_basis_points,
+                ..
             } if uuid::Uuid::parse_str(instance_id.trim()).is_err()
-                || *value_basis_points > 10_000 =>
+                || *value_basis_points > 10_000
+                || end_value_basis_points.is_some_and(|value| value > 10_000) =>
             {
                 Err("direct cue value requires a valid UUID and 0..100% value".to_string())
             }
@@ -1367,6 +1380,8 @@ pub struct WebEffectCue {
     pub duration_ms: u64,
     pub duration_display: String,
     pub resizable: bool,
+    pub behavior: Option<crate::four_d::models::DirectCueBehavior>,
+    pub end_value_basis_points: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub control_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1865,6 +1880,10 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         }
         "direct_cue.add" | "pealayer.direct_cue.add" | "pealayer.timeline.direct.add" => {
             Some(InteropCommand::AddDirectControlCue {
+                behavior: request.params.get("behavior").map(|value| serde_json::from_value(value.clone()))
+                    .transpose().map_err(|_| "invalid direct cue behavior".to_string())?.unwrap_or_default(),
+                end_value_basis_points: request.params.get("end_value_basis_points").map(|value| serde_json::from_value(value.clone()))
+                    .transpose().map_err(|_| "invalid cue end value".to_string())?.unwrap_or(0),
                 control_key: string(&["control_key", "channel"])?,
                 value_basis_points: request
                     .params
@@ -1892,6 +1911,10 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         }
         "direct_cue.value" | "pealayer.direct_cue.value" => {
             Some(InteropCommand::UpdateDirectControlCueValue {
+                behavior: request.params.get("behavior").map(|value| serde_json::from_value(value.clone()))
+                    .transpose().map_err(|_| "invalid direct cue behavior".to_string())?,
+                end_value_basis_points: request.params.get("end_value_basis_points").map(|value| serde_json::from_value(value.clone()))
+                    .transpose().map_err(|_| "invalid cue end value".to_string())?,
                 instance_id: string(&["instance_id", "cue_id"])?,
                 value_basis_points: request
                     .params

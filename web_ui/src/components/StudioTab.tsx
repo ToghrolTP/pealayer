@@ -252,6 +252,20 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
   const [cuePreviews, setCuePreviews] = useState<Record<string, { start_time_ms: number; duration_ms: number }>>({});
   const [directCueControl, setDirectCueControl] = useState<string | null>(null);
   const [directCuePercent, setDirectCuePercent] = useState(50);
+  const [directCueBehavior, setDirectCueBehavior] = useState<'set-keep' | 'hold' | 'ramp'>('set-keep');
+  const [directCueEndPercent, setDirectCueEndPercent] = useState(0);
+  const [directCueDuration, setDirectCueDuration] = useState(1);
+  const [directCueStart, setDirectCueStart] = useState(0);
+  const [editingDirectCue, setEditingDirectCue] = useState<string | null>(null);
+  const openDirectCue = (controlKey: string, cue?: NonNullable<PlayerState['cues']>[number]) => {
+    setDirectCueControl(controlKey);
+    setEditingDirectCue(cue?.id ?? null);
+    setDirectCuePercent((cue?.value_basis_points ?? 5000) / 100);
+    setDirectCueBehavior(cue?.behavior ?? 'set-keep');
+    setDirectCueEndPercent((cue?.end_value_basis_points ?? 0) / 100);
+    setDirectCueDuration((cue?.duration_ms ?? 1000) / 1000);
+    setDirectCueStart((cue?.start_time_ms ?? currentSeconds * 1000) / 1000);
+  };
   const [activeCueDrag, setActiveCueDrag] = useState<null | {
     id: string;
     mode: 'move' | 'resize-left' | 'resize-right';
@@ -269,7 +283,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
   const currentSeconds = state.playback_time ?? 0;
   const durationSeconds = state.duration ?? 0;
   const timelineDurationMs = useMemo(() => {
-    const cueEnd = cues.reduce((maximum, cue) => Math.max(maximum, cue.start_time_ms + cue.duration_ms), 0);
+    const cueEnd = cues.reduce((maximum, cue) => Math.max(maximum, cue.start_time_ms + (cue.behavior === 'set-keep' ? 0 : cue.duration_ms)), 0);
     return Math.max(durationSeconds * 1000, cueEnd, 1000);
   }, [cues, durationSeconds]);
   const selected = selectedEffect ? controllerEffects.find((effect) => effect.reference === selectedEffect) : undefined;
@@ -946,19 +960,20 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                           ? [
                             { key: '10000', label: tr(locale, 'On') },
                             { key: '0', label: tr(locale, 'Off') },
+                            { key: 'custom', label: tr(locale, 'Timed cue...') },
                           ]
                           : [0, 25, 50, 75, 100].map((value) => ({ key: String(value * 100), label: `${value}%` }))
                             .concat([{ key: 'custom', label: tr(locale, 'Custom value...') }]),
                         onClick: ({ key }) => {
                           if (key === 'custom') {
-                            setDirectCuePercent(50);
-                            setDirectCueControl(directControl.key);
+                            openDirectCue(directControl.key);
                           } else {
                             sendCmd('direct_cue.add', {
                               control_key: directControl.key,
                               value_basis_points: Number(key),
                               start_time_ms: Math.max(0, Math.round(currentSeconds * 1000)),
                               duration_ms: 1000,
+                              behavior: 'set-keep',
                             });
                           }
                         },
@@ -984,17 +999,28 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                     (() => {
                       const placement = cuePreviews[cue.id] ?? cue;
                       return (
+                    <Dropdown key={cue.id} trigger={['contextMenu']} menu={{ items: [
+                      ...(cue.control_key ? [{ key: 'manage', label: tr(locale, 'Manage...'), icon: <EditOutlined /> }] : []),
+                      { key: 'jump', label: tr(locale, 'Jump to cue start'), icon: <AimOutlined /> },
+                      { key: 'delete', label: tr(locale, 'Delete cue'), icon: <DeleteOutlined />, danger: true },
+                    ], onClick: ({ key }) => {
+                      if (key === 'manage' && cue.control_key) openDirectCue(cue.control_key, cue);
+                      if (key === 'jump') sendCmd('seek_to', { seconds: placement.start_time_ms / 1000 });
+                      if (key === 'delete') sendCmd('pealayer.timeline.effect.remove', { instance_id: cue.id });
+                    } }}>
                     <div
                       key={cue.id}
                       role="button"
                       tabIndex={0}
                       aria-label={cue.name}
-                      className="timeline-cue"
+                      className={`timeline-cue ${cue.behavior === 'set-keep' ? 'timeline-cue--state' : ''} ${cue.behavior === 'ramp' ? 'timeline-cue--ramp' : ''}`}
                       style={{
                         left: `${(placement.start_time_ms / timelineDurationMs) * 100}%`,
-                        width: `${Math.max(1.2, (placement.duration_ms / timelineDurationMs) * 100)}%`,
+                        width: cue.behavior === 'set-keep' ? 88 : `${Math.max(1.2, (placement.duration_ms / timelineDurationMs) * 100)}%`,
+                        ...(cue.behavior === 'ramp' ? { background: `linear-gradient(90deg, color-mix(in srgb, var(--accent) ${25 + (cue.value_basis_points ?? 0) / 200}%, var(--surface-0)), color-mix(in srgb, var(--accent) ${25 + (cue.end_value_basis_points ?? 0) / 200}%, var(--surface-0)))` } : {}),
                       }}
-                      title={`${cue.name} · ${formatTime(placement.start_time_ms / 1000)} · ${tr(locale, cue.resizable ? 'Drag to move; use the edges to resize' : 'Recorded effect · drag to move')}`}
+                      title={`${cue.name} · ${formatTime(placement.start_time_ms / 1000)} · ${tr(locale, cue.behavior === 'set-keep' ? 'Set and keep — until next command; drag to move' : cue.resizable ? 'Drag to move; use the edges to resize' : 'Recorded effect · drag to move')}`}
+                      onDoubleClick={() => { if (cue.control_key) openDirectCue(cue.control_key, cue); }}
                       onPointerDown={(event) => {
                         if (event.button !== 0 || (event.target as HTMLElement).closest('.timeline-cue__delete')) return;
                         event.preventDefault();
@@ -1022,16 +1048,16 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                           suppressCueClick.current = null;
                           return;
                         }
-                        sendCmd('seek_to', { seconds: placement.start_time_ms / 1000 });
+                        // Selection/editing must not move the media playhead.
                       }}
                       onKeyDown={(event) => {
                         if (event.target !== event.currentTarget || !['Enter', ' '].includes(event.key)) return;
                         event.preventDefault();
-                        sendCmd('seek_to', { seconds: placement.start_time_ms / 1000 });
+                        if (cue.control_key) openDirectCue(cue.control_key, cue);
                       }}
                     >
                       {cue.resizable && <span className="timeline-cue__resize timeline-cue__resize--left" aria-hidden="true" />}
-                      <span>{cue.name}</span>
+                      <span>{cue.behavior === 'set-keep' ? `${cue.control_key?.startsWith('relay.') ? (Number(cue.value_basis_points) >= 5000 ? 'On' : 'Off') : `${Number(cue.value_basis_points) / 100}%`} → ∞` : cue.name}</span>
                       <Button
                         className="timeline-cue__delete"
                         type="text"
@@ -1044,6 +1070,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                       />
                       {cue.resizable && <span className="timeline-cue__resize timeline-cue__resize--right" aria-hidden="true" />}
                     </div>
+                    </Dropdown>
                       );
                     })()
                   ))}
@@ -1058,21 +1085,36 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
       </section>
       <Modal
         open={directCueControl !== null}
-        title={tr(locale, 'Add PWM value cue')}
-        okText={tr(locale, 'Add cue')}
+        title={tr(locale, editingDirectCue ? 'Manage cue' : 'Add hardware cue')}
+        okText={tr(locale, editingDirectCue ? 'Save' : 'Add cue')}
         cancelText={tr(locale, 'Cancel')}
         onCancel={() => setDirectCueControl(null)}
-        onOk={() => {
+        onOk={async () => {
           if (!directCueControl) return;
-          sendCmd('direct_cue.add', {
+          const saved = await sendCmd(editingDirectCue ? 'direct_cue.value' : 'direct_cue.add', {
+            instance_id: editingDirectCue,
             control_key: directCueControl,
             value_basis_points: Math.round(directCuePercent * 100),
-            start_time_ms: Math.max(0, Math.round(currentSeconds * 1000)),
-            duration_ms: 1000,
+            start_time_ms: Math.max(0, Math.round(directCueStart * 1000)),
+            duration_ms: Math.max(100, Math.round(directCueDuration * 1000)),
+            behavior: directCueBehavior,
+            end_value_basis_points: Math.round(directCueEndPercent * 100),
           });
+          if (!saved) return;
+          if (editingDirectCue && !await sendCmd('pealayer.timeline.effect.update', {
+            instance_id: editingDirectCue, start_time_ms: Math.round(directCueStart * 1000),
+            duration_ms: Math.max(100, Math.round(directCueDuration * 1000)),
+          })) return;
           setDirectCueControl(null);
         }}
       >
+        <Space direction="vertical" size="middle" style={{ width: '100%' }}>
+        <Select aria-label={tr(locale, 'Cue behavior')} style={{ width: '100%' }} value={directCueBehavior} onChange={setDirectCueBehavior}
+          options={[{ value: 'set-keep', label: tr(locale, 'Set and keep') }, { value: 'hold', label: tr(locale, 'Timed hold') },
+            ...(directCueControl?.startsWith('pwm.') ? [{ value: 'ramp', label: tr(locale, 'PWM ramp') }] : [])]} />
+        <InputNumber aria-label={tr(locale, 'Start time')} addonBefore={tr(locale, 'Starts')} addonAfter="s" min={0} max={86400} step={.001} value={directCueStart} onChange={(value) => setDirectCueStart(Number(value ?? 0))} />
+        {directCueControl?.startsWith('relay.') ? <Select aria-label={tr(locale, 'State')} value={directCuePercent}
+          onChange={setDirectCuePercent} options={[{ value: 100, label: tr(locale, 'On') }, { value: 0, label: tr(locale, 'Off') }]} /> :
         <Space.Compact block>
           <Slider
             style={{ flex: 1 }}
@@ -1092,6 +1134,14 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
             onChange={(value) => setDirectCuePercent(Number(value ?? 0))}
           />
         </Space.Compact>
+        }
+        {directCueBehavior !== 'set-keep' && <>
+          <InputNumber aria-label={tr(locale, 'Duration')} addonBefore={tr(locale, 'Duration')} addonAfter="s" min={.1} max={86400} step={.1} value={directCueDuration} onChange={(value) => setDirectCueDuration(Number(value ?? 1))} />
+          {directCueControl?.startsWith('relay.') ? <Select aria-label={tr(locale, 'On exit')} value={directCueEndPercent}
+            onChange={setDirectCueEndPercent} options={[{ value: 0, label: tr(locale, 'Exit: Off') }, { value: 100, label: tr(locale, 'Exit: On') }]} /> :
+            <InputNumber aria-label={tr(locale, 'End value')} addonBefore={tr(locale, directCueBehavior === 'ramp' ? 'Ramp to' : 'On exit')} addonAfter="%" min={0} max={100} value={directCueEndPercent} onChange={(value) => setDirectCueEndPercent(Number(value ?? 0))} />}
+        </>}
+        </Space>
       </Modal>
     </div>
   );

@@ -186,36 +186,36 @@ pub fn compile_plan(
         let last_curve_time = track
             .and_then(|track| track.keyframes.last())
             .map_or(0, |keyframe| keyframe.time_ms);
-        let last_cue_time = channel_cues
-            .iter()
-            .map(|cue| cue.end_time_ms)
-            .max()
-            .unwrap_or(0);
-        let end = last_curve_time.max(last_cue_time);
-        if end / 34 > 200_000 {
+        if last_curve_time / 34 > 200_000 {
             return Err("PWM timeline exceeds prepared sample capacity; shorten or split it".into());
         }
-        let mut times = (0..=end / 34)
-            .map(|sample| sample * 34)
-            .collect::<Vec<_>>();
-        if times.last().copied() != Some(end) {
-            times.push(end);
+        let mut times = Vec::new();
+        if track.is_some() {
+            times.extend((0..=last_curve_time / 34).map(|sample| sample * 34));
+            times.push(last_curve_time);
         }
         for cue in &channel_cues {
             times.push(cue.start_time_ms);
-            times.push(cue.end_time_ms);
+            if cue.behavior != super::models::DirectCueBehavior::SetKeep { times.push(cue.end_time_ms); }
+            if cue.behavior == super::models::DirectCueBehavior::Ramp {
+                let samples = cue.end_time_ms.saturating_sub(cue.start_time_ms) / 34;
+                if samples > 200_000 || times.len() as u64 + samples > 200_000 {
+                    return Err("PWM timeline exceeds prepared sample capacity; shorten or split it".into());
+                }
+                times.extend((0..=samples).map(|sample| cue.start_time_ms.saturating_add(sample * 34)));
+            }
         }
         times.sort_unstable();
         times.dedup();
         let mut previous = None;
         for at in times {
-            let direct = channel_cues.iter().rev().find(|cue| {
-                at >= cue.start_time_ms && at < cue.end_time_ms
-            });
+            let direct = channel_cues.iter().filter(|cue| at >= cue.start_time_ms)
+                .max_by_key(|cue| (cue.priority_at(at), cue.start_time_ms));
+            if direct.is_none() && track.is_none() { continue; }
             let value = direct.map_or_else(
                 || track.map_or(0, |track| (track.evaluate(at) * 4095.0).round() as u16),
                 |cue| {
-                    ((u32::from(cue.value_basis_points) * 4095 + 5_000) / 10_000) as u16
+                    ((u32::from(cue.value_at(at)) * 4095 + 5_000) / 10_000) as u16
                 },
             );
             if previous != Some(value) {
@@ -563,5 +563,39 @@ mod tests {
                 && action["step"]["target"] == 3
                 && action["step"]["value"] == 0
         }));
+    }
+
+    #[test]
+    fn persistent_pwm_at_a_late_position_is_a_single_command_without_zero_or_exit() {
+        let mut timeline = Timeline::new();
+        let mut effect = Effect::direct_control("Keep".into(), String::new(), 1000, "pwm.3".into(), 5000, None);
+        effect.direct_control.as_mut().unwrap().behavior = super::super::models::DirectCueBehavior::SetKeep;
+        let id = effect.id;
+        timeline.templates.push(effect);
+        timeline.instances.push(EffectInstance::new(id, 86_000_000));
+        let plan = compile_plan(&timeline, &[], &[]).unwrap();
+        let actions = plan["actions"].as_array().unwrap();
+        assert_eq!(actions.len(), 1);
+        assert_eq!(actions[0]["time_ms"], 86_000_000);
+        assert_eq!(actions[0]["step"]["value"], 2048);
+    }
+
+    #[test]
+    fn pwm_ramp_is_prepared_with_exact_start_and_end_values() {
+        let mut timeline = Timeline::new();
+        let mut effect = Effect::direct_control("Ramp".into(), String::new(), 1000, "pwm.3".into(), 0, None);
+        let cue = effect.direct_control.as_mut().unwrap();
+        cue.behavior = super::super::models::DirectCueBehavior::Ramp;
+        cue.end_value_basis_points = 10_000;
+        let id = effect.id;
+        timeline.templates.push(effect);
+        timeline.instances.push(EffectInstance::new(id, 10_000));
+        let plan = compile_plan(&timeline, &[], &[]).unwrap();
+        let actions = plan["actions"].as_array().unwrap();
+        assert_eq!(actions.first().unwrap()["time_ms"], 10_000);
+        assert_eq!(actions.first().unwrap()["step"]["value"], 0);
+        assert_eq!(actions.last().unwrap()["time_ms"], 11_000);
+        assert_eq!(actions.last().unwrap()["step"]["value"], 4095);
+        assert!(actions.iter().any(|action| action["step"]["value"].as_u64().is_some_and(|value| value > 0 && value < 4095)));
     }
 }
