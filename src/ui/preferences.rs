@@ -2124,6 +2124,7 @@ mod tests {
             applied_appearance: None,
             config_watcher: None,
             config_reload_due: None,
+            branding_config: None,
         };
         let ctx = egui::Context::default();
         helper.apply_appearance(&ctx);
