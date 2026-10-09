@@ -11570,6 +11570,37 @@ mod timeline_row_tests {
     }
 
     #[test]
+    fn controller_drops_preserve_execution_policy_and_existing_strip_windows() {
+        use crate::four_d::models::{ControllerEffectLane, CueDurationPolicy, Effect, HardwareTarget};
+        let mut app = PealayerApp::default();
+        app.duration = 60.0;
+        let recorded = Effect::controller_macro("Recording".into(), String::new(), 1_000, 7, "host".into());
+        let lighting = Effect::controller_strip_effect("Stream".into(), 8_000, "advertised-strip".into());
+        let lighting_id = lighting.id;
+        app.timeline.templates.extend([recorded, lighting]);
+        let rows = timeline_track_rows(&app);
+        for (lane, duration, macro_ref, strip_ref) in [
+            (ControllerEffectLane::Sequence, 1_000, Some(crate::four_d::models::ControllerMacroCue { id: 7, mode: "host".into() }), None),
+            (ControllerEffectLane::Lighting, 2_000, None, Some(crate::four_d::models::ControllerStripEffectCue { id: "advertised-strip".into() })),
+        ] {
+            let row = rows.iter().position(|row| row.kind == TimelineTrackKind::ControllerEffect(lane)).unwrap();
+            let payload = EffectDragPayload {
+                name: "Catalog effect".into(), icon: String::new(), duration_ms: duration,
+                target: HardwareTarget::ControllerMacro, actions: Vec::new(),
+                controller_macro: macro_ref, controller_strip_effect: strip_ref,
+                controller_lane: Some(lane), audio_effect: None,
+            };
+            assert!(app.handle_effect_drop(&payload, row as i32, 10.0));
+            let instance = app.timeline.instances.last().unwrap();
+            let template = app.timeline.templates.iter().find(|item| item.id == instance.effect_id).unwrap();
+            assert_eq!(template.duration_ms, duration);
+            assert_eq!(template.duration_resizable(), lane == ControllerEffectLane::Lighting);
+            assert_eq!(template.duration_policy, if lane == ControllerEffectLane::Lighting { CueDurationPolicy::Resizable } else { CueDurationPolicy::Intrinsic });
+        }
+        assert_eq!(app.timeline.templates.iter().find(|item| item.id == lighting_id).unwrap().duration_ms, 8_000);
+    }
+
+    #[test]
     fn test_dropped_effect_hover_cursor_interaction() {
         let mut app = PealayerApp::default();
         app.duration = 60.0;
@@ -18471,13 +18502,17 @@ impl PealayerApp {
                     effect.controller_macro == payload.controller_macro
                         && effect.controller_strip_effect == payload.controller_strip_effect
                         && effect.audio_effect == payload.audio_effect
+                        && effect.duration_ms == payload.duration_ms.max(1)
                 }) {
                 existing.name.clone_from(&payload.name);
                 existing.icon.clone_from(&payload.icon);
                 existing.duration_ms = payload.duration_ms.max(1);
                 existing.controller_lane = Some(lane);
-                existing.duration_policy = crate::four_d::models::CueDurationPolicy::Resizable;
-                if payload.audio_effect.is_some() { existing.duration_policy = crate::four_d::models::CueDurationPolicy::Intrinsic; }
+                existing.duration_policy = if payload.controller_strip_effect.is_some() {
+                    crate::four_d::models::CueDurationPolicy::Resizable
+                } else {
+                    crate::four_d::models::CueDurationPolicy::Intrinsic
+                };
                 existing.id
             } else {
                 let mut effect = if let Some(audio) = payload.audio_effect.as_ref() {
@@ -18503,8 +18538,6 @@ impl PealayerApp {
                     )
                 };
                 effect.controller_lane = Some(lane);
-                effect.duration_policy = crate::four_d::models::CueDurationPolicy::Resizable;
-                if payload.audio_effect.is_some() { effect.duration_policy = crate::four_d::models::CueDurationPolicy::Intrinsic; }
                 let id = effect.id;
                 self.timeline.templates.push(effect);
                 id

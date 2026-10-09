@@ -8202,7 +8202,6 @@ impl PealayerApp {
         let mut new_template = template.clone();
         let new_id = uuid::Uuid::new_v4();
         new_template.id = new_id;
-        new_template.duration_policy = crate::four_d::models::CueDurationPolicy::Resizable;
         self.timeline.templates.push(new_template);
 
         if let Some(inst) = self
@@ -8292,9 +8291,11 @@ fn reconcile_controller_effect_templates(
         refreshed.id = template.id;
         refreshed.icon.clone_from(&catalog_entry.icon);
         refreshed.controller_lane = Some(catalog_entry.lane);
-        if template.duration_policy == crate::four_d::models::CueDurationPolicy::Resizable {
+        // A strip placement owns its active window, not its program period.
+        // Recordings instead follow their authoritative catalog duration, even
+        // when an earlier insertion incorrectly marked them resizable.
+        if template.controller_strip_effect.is_some() {
             refreshed.duration_ms = template.duration_ms;
-            refreshed.duration_policy = crate::four_d::models::CueDurationPolicy::Resizable;
         }
         if *template != refreshed {
             *template = refreshed;
@@ -9501,6 +9502,41 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn shared_cue_updates_resize_strip_windows_but_not_finite_recordings() {
+        let _lock = lock_app_tests();
+        use crate::four_d::models::{CueDurationPolicy, Effect, EffectInstance};
+        use crate::platform::interop::InteropCommand;
+        let mut app = PealayerApp::default();
+        let ctx = egui::Context::default();
+        for mut effect in [
+            Effect::controller_macro("Recording".into(), String::new(), 2_000, 7, "host".into()),
+            Effect::controller_strip_effect("Stream".into(), 2_000, "advertised-strip".into()),
+        ] {
+            // Exercise the old erroneous persisted flag, not only constructors.
+            effect.duration_policy = CueDurationPolicy::Resizable;
+            let is_strip = effect.controller_strip_effect.is_some();
+            let original_id = effect.id;
+            app.timeline.templates.push(effect);
+            let instance = EffectInstance::new(original_id, 10_000);
+            let instance_id = instance.id;
+            app.timeline.instances.push(instance);
+            app.timeline.instances.push(EffectInstance::new(original_id, 20_000));
+            app.apply_interop_command(&ctx, InteropCommand::UpdateEffectCue {
+                instance_id: instance_id.to_string(), start_time_ms: 12_000, duration_ms: 8_000,
+            }, "test");
+            let instance = app.timeline.instances.iter().find(|item| item.id == instance_id).unwrap();
+            assert_eq!(instance.start_time_ms, 12_000);
+            let resized = app.timeline.templates.iter().find(|item| item.id == instance.effect_id).unwrap();
+            assert_eq!(resized.duration_ms, if is_strip { 8_000 } else { 2_000 });
+            assert_eq!(resized.duration_resizable(), is_strip);
+            assert_eq!(app.timeline.templates.iter().find(|item| item.id == original_id).unwrap().duration_ms, 2_000);
+            let isolated_id = app.isolate_template_for_instance(instance_id).unwrap();
+            let isolated = app.timeline.templates.iter().find(|item| item.id == isolated_id).unwrap();
+            assert_eq!(isolated.duration_resizable(), is_strip);
+        }
+    }
+
+    #[test]
     fn edited_controller_effect_metadata_refreshes_every_placed_timeline_copy() {
         let first = crate::four_d::models::Effect::controller_macro(
             "Old name".to_string(),
@@ -9512,6 +9548,7 @@ pub(crate) mod tests {
         let first_id = first.id;
         let mut isolated = first.clone();
         isolated.id = uuid::Uuid::new_v4();
+        isolated.duration_policy = crate::four_d::models::CueDurationPolicy::Resizable;
         let isolated_id = isolated.id;
         let strip = crate::four_d::models::Effect::controller_strip_effect(
             "Old lighting".to_string(),
@@ -9580,6 +9617,8 @@ pub(crate) mod tests {
                 .unwrap();
             assert_eq!(effect.name, "Renamed display cue");
             assert_eq!(effect.duration_ms, 2_750);
+            assert_eq!(effect.duration_policy, crate::four_d::models::CueDurationPolicy::Intrinsic);
+            assert!(!effect.duration_resizable());
             assert_eq!(
                 effect.controller_lane,
                 Some(crate::four_d::models::ControllerEffectLane::Display)
@@ -9592,7 +9631,8 @@ pub(crate) mod tests {
             .find(|effect| effect.id == strip_id)
             .unwrap();
         assert_eq!(strip.name, "Renamed aurora");
-        assert_eq!(strip.duration_ms, 8_000);
+        assert_eq!(strip.duration_ms, 5_000);
+        assert!(strip.duration_resizable());
         let local = timeline
             .templates
             .iter()

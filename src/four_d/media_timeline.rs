@@ -412,6 +412,21 @@ mod tests {
     use super::*;
     use crate::four_d::models::{Effect, EffectInstance, Timeline};
     #[test]
+    fn prepared_strip_window_retains_its_reference_and_authored_duration() {
+        use super::super::models::{Effect, EffectInstance};
+        let mut timeline = Timeline::default();
+        let mut strip = Effect::controller_strip_effect("Stream".into(), 2_000, "advertised-strip".into());
+        strip.duration_ms = 8_000;
+        let id = strip.id;
+        timeline.templates.push(strip);
+        timeline.instances.push(EffectInstance::new(id, 10_000));
+        let plan = compile_plan(&timeline, &[], &[]).unwrap();
+        assert_eq!(plan["cues"][0]["reference"], "effect:advertised-strip");
+        assert_eq!(plan["cues"][0]["time_ms"], 10_000);
+        assert_eq!(plan["cues"][0]["duration_ms"], 8_000);
+    }
+
+    #[test]
     fn publication_uses_the_prepared_engines_stable_identity() {
         let mut plan = PreparedTimeline::default();
         plan.authority_client_id = "publisher:stable-engine".into();
