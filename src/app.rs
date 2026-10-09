@@ -1014,6 +1014,12 @@ impl eframe::App for PealayerApp {
             }
         }
 
+        if self.media_controls.as_ref().is_some_and(|controls| !controls.has_branding(&self.app_name)) {
+            // Re-register a renamed native session (not a second listener).
+            // MPRIS Identity is fixed at registration; metadata alone cannot
+            // change it. Drop invalidates callbacks before the replacement.
+            self.media_controls = None;
+        }
         if !self.media_keys_enabled {
             // Drop unregisters the native session and invalidates old callbacks.
             self.media_controls = None;
@@ -1028,6 +1034,7 @@ impl eframe::App for PealayerApp {
                     hwnd,
                     self.media_cmd_tx.clone(),
                     ctx.clone(),
+                    &self.app_name,
                 );
                 let title = self.current_video_path.as_deref()
                     .map(|path| crate::media::media_target_label(&path.to_string_lossy()));

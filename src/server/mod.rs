@@ -134,7 +134,6 @@ struct ControlState {
     latest_status: Arc<Mutex<Option<String>>>,
     websocket_clients: Arc<Mutex<Vec<Sender<String>>>>,
     egui_ctx: eframe::egui::Context,
-    runtime_config_json: Arc<str>,
     web_dist_root: std::path::PathBuf,
     launch_receipts: Arc<Mutex<LaunchReceiptCache>>,
     application_identity: Arc<str>,
@@ -315,7 +314,7 @@ fn spawn_control_server_on_addresses_with_channel(
 fn spawn_control_server_on_listeners_with_channel(
     listeners: Vec<TcpListener>,
     egui_ctx: eframe::egui::Context,
-    runtime_config: WebRuntimeConfig,
+    _runtime_config: WebRuntimeConfig,
     command_tx: Sender<crate::platform::interop::InteropCommand>,
     application_identity: String,
     state_tx: Sender<String>,
@@ -350,10 +349,6 @@ fn spawn_control_server_on_listeners_with_channel(
         latest_status,
         websocket_clients,
         egui_ctx,
-        runtime_config_json: Arc::from(
-            serde_json::to_string(&runtime_config)
-                .expect("web runtime configuration must serialize"),
-        ),
         web_dist_root: web_dist_root(),
         launch_receipts: Arc::new(Mutex::new(LaunchReceiptCache::default())),
         application_identity: Arc::from(application_identity),
@@ -866,12 +861,13 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
             r#"{"status":"ok","service":"pealayer","rpc":"2.0"}"#,
         ),
         ("GET", "/api/runtime/config") => {
-            HttpResponse::json(200, "OK", state.runtime_config_json.to_string())
+            HttpResponse::json(200, "OK", serde_json::to_string(&live_runtime_config())
+                .expect("web runtime configuration must serialize")).with_cache_control("no-cache")
         }
         ("GET", "/api/runtime/app-icon") => runtime_app_icon_response(&request.target),
         ("GET", "/api/runtime/app-icon-192.png") => runtime_pwa_icon_response(&request.target, 192),
         ("GET", "/api/runtime/app-icon-512.png") => runtime_pwa_icon_response(&request.target, 512),
-        ("GET", "/manifest.webmanifest") => pwa_manifest_response(state),
+        ("GET", "/manifest.webmanifest") => pwa_manifest_response(),
         ("GET", "/api/config") => HttpResponse::json(
             200,
             "OK",
@@ -1212,18 +1208,32 @@ fn pwa_icon_response(config: &crate::config::AppConfig, state: crate::branding::
     HttpResponse::bytes(200, "OK", "image/png", png.into_inner()).with_cache_control("no-cache")
 }
 
-fn pwa_manifest_response(state: &ControlState) -> HttpResponse {
-    let runtime = serde_json::from_str::<serde_json::Value>(&state.runtime_config_json)
-        .unwrap_or_else(|_| serde_json::json!({}));
-    let app_name = runtime
-        .get("appName")
-        .and_then(serde_json::Value::as_str)
-        .filter(|name| !name.trim().is_empty())
-        .unwrap_or("Pealayer");
-    let theme_color = runtime
-        .get("accentColor")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("#0078d4");
+fn live_runtime_config() -> WebRuntimeConfig {
+    let config = crate::platform::interop::get_live_config();
+    runtime_config_for(&config)
+}
+
+fn runtime_config_for(config: &crate::config::AppConfig) -> WebRuntimeConfig {
+    let language = crate::config::resolve_language(crate::config::resolved_language_preference(config));
+    let rtl = crate::config::resolve_rtl(crate::config::resolved_direction_preference(config), language);
+    WebRuntimeConfig::production(
+        crate::config::resolved_app_name(config),
+        if language == crate::config::AppLanguage::Persian { "fa" } else { "en" }.into(),
+        if rtl { "rtl" } else { "ltr" }.into(),
+        match crate::config::resolved_theme(config) {
+            crate::config::AppTheme::Light => "light",
+            crate::config::AppTheme::Dark => "dark",
+            crate::config::AppTheme::System => "system",
+        }.into(),
+        crate::ui::platform_accent_rgb(config),
+    )
+}
+
+fn pwa_manifest_response() -> HttpResponse {
+    let runtime = live_runtime_config();
+    let app_name = runtime.app_name;
+    let theme_color = runtime.accent_color;
+    let revision = crate::platform::interop::live_config_revision();
     HttpResponse::bytes(
         200,
         "OK",
@@ -1245,13 +1255,13 @@ fn pwa_manifest_response(state: &ControlState) -> HttpResponse {
             "launch_handler": {"client_mode": ["navigate-existing", "auto"]},
             "icons": [
                 {
-                    "src": "/api/runtime/app-icon-192.png?state=stopped",
+                    "src": format!("/api/runtime/app-icon-192.png?state=stopped&revision={revision}"),
                     "sizes": "192x192",
                     "type": "image/png",
                     "purpose": "any maskable"
                 },
                 {
-                    "src": "/api/runtime/app-icon-512.png?state=stopped",
+                    "src": format!("/api/runtime/app-icon-512.png?state=stopped&revision={revision}"),
                     "sizes": "512x512",
                     "type": "image/png",
                     "purpose": "any maskable"
@@ -1786,7 +1796,7 @@ mod tests {
         let state = ControlState {
             command_tx:tx, latest_status:Arc::new(Mutex::new(None)),
             websocket_clients:Arc::new(Mutex::new(vec![])), egui_ctx:eframe::egui::Context::default(),
-            runtime_config_json:"{}".into(), web_dist_root:std::path::PathBuf::new(),
+            web_dist_root:std::path::PathBuf::new(),
             launch_receipts:Arc::new(Mutex::new(LaunchReceiptCache::default())),
             application_identity:"Pealayer".into(), expected_session_id:None,
         };
@@ -1997,5 +2007,15 @@ mod tests {
             command,
             crate::platform::interop::InteropCommand::SetVolume { value: 42.0 }
         );
+    }
+
+    #[test]
+    fn runtime_branding_uses_current_configuration_not_startup_snapshot() {
+        let config = crate::config::AppConfig { app_name: Some("Cinema workspace".into()), ..Default::default() };
+        let value = runtime_config_for(&config);
+        assert_eq!(value.app_name, crate::config::resolved_app_name(&config));
+        assert_eq!(value.app_icon_path, "/api/runtime/app-icon");
+        let source = include_str!("mod.rs");
+        assert!(!source.contains(concat!("runtime_config", "_json")));
     }
 }

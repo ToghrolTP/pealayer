@@ -1597,7 +1597,7 @@ impl AppConfig {
                 self.save_to_path(&path)?;
                 if let Err(error) = crate::platform::windows::configure_config_directory(
                     &path,
-                    &resolved_app_name(self),
+                    self,
                 ) {
                     log::warn!("Could not apply native configuration-folder metadata: {error}");
                 }
@@ -1633,7 +1633,7 @@ impl AppConfig {
             self.save_to_path(&path)?;
             if let Err(error) = crate::platform::windows::configure_config_directory(
                 &path,
-                &resolved_app_name(self),
+                self,
             ) {
                 log::warn!("Could not apply native configuration-folder metadata: {error}");
             }
