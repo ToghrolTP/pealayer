@@ -7,6 +7,7 @@ const hardware = read('src/components/HardwareTab.tsx');
 const studio = read('src/components/StudioTab.tsx');
 const remote = read('src/components/RemoteControlTab.tsx');
 const playbackButton = read('src/components/PlaybackButton.tsx');
+const volumeControl = read('src/components/VolumeControl.tsx');
 const media = read('src/components/MediaSurface.tsx');
 const library = read('src/components/MediaLibraryTab.tsx');
 const app = read('src/App.tsx');
@@ -25,6 +26,8 @@ const authority = read('src/components/PublishingAuthority.tsx');
 const webPlatform = read('src/webPlatform.ts');
 
 const contracts = [
+  [studio.includes('<VolumeControl') && remote.includes('<VolumeControl') && volumeControl.includes("sendCmd('set_volume'") && volumeControl.includes("sendCmd('set_mute'") && volumeControl.includes('aria-label={tr(locale, \'Volume\')}'), 'Simple and NLE share accessible horizontal volume and mute controls using session commands'],
+  [css.includes('grid-template-rows: auto minmax(0, 1fr) auto auto') && css.includes('.studio-volume { grid-column: 1 / -1; grid-row: 3; width: 100%; }'), 'the monitor reserves its selectors and gives narrow panels a full-width volume row'],
   [studio.includes('<PlaybackButton') && remote.includes('<PlaybackButton') && playbackButton.includes('disabled={!loaded || playing === undefined}') && playbackButton.includes("playing ? 'Pause' : 'Play'"), 'both playback surfaces render their action and enabled state from the authoritative snapshot'],
   [css.includes('.transport-action--play { --transport-color: var(--green); }') && css.includes('.transport-action--pause { --transport-color: var(--amber); }') && css.includes('border: 1px solid') && !css.includes('transform: translateY(1px);\n  box-shadow:'), 'transport intents share semantic colors and fixed borders instead of moving on hover/press'],
   [studio.includes('useSeekbar(state, sendCmd)') && remote.includes('useSeekbar(state, sendCmd)') && seekbar.includes("send('scrub_to'") && seekbar.includes("send('finish_scrub'"), 'Simple and NLE seekbars share ordered live preview and exact commit commands'],
