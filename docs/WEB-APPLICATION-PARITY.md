@@ -216,3 +216,14 @@ identifiers. The Web direct-cue modal now follows the same timing/output groupin
 and state colors. Full controller/sequence inspector parity remains outstanding;
 this visual refinement is not that broader completion claim. See
 [scope and verification](verification/EFFECT-CONTROLS-INSPECTOR.md).
+
+## Mobile button centering
+
+Shared Web button roots, icon wrappers and SVGs now use centered flex geometry,
+including portal actions. The icon baseline spacer and inconsistent transport
+grid overrides are removed; existing collapsed navigation centering is retained.
+The focused responsive guardrails passed, and the combined package is installed
+on Cafe and David with the corrected CSS confirmed over HTTP. Erfan is updated
+without launching over KMPlayer. These are delivery checks, not visual proof.
+Current mobile visual acceptance is still pending, not inferred from CSS/build.
+See [cause, scope and verification](verification/MOBILE-BUTTON-CENTERING.md).

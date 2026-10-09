@@ -36,6 +36,18 @@ declaration('.app-sider .app-menu.ant-menu-inline-collapsed > .ant-menu-item', '
 declaration('.app-sider .app-menu.ant-menu-inline-collapsed > .ant-menu-item .ant-menu-title-content', 'display', 'none !important');
 declaration('.ant-modal-body', 'overflow', 'auto');
 declaration('.ant-modal-footer', 'flex-wrap', 'wrap');
+declaration('.ant-modal-footer', 'align-items', 'center');
+// Keep portal and main-page buttons on the same geometry contract. Icons must
+// not acquire an extra text-baseline row in small, loading or icon-only buttons.
+declaration(':root .ant-btn', 'display', 'inline-flex');
+declaration(':root .ant-btn', 'align-items', 'center');
+declaration(':root .ant-btn', 'justify-content', 'center');
+declaration(':root .ant-btn > .ant-btn-icon', 'align-self', 'center');
+declaration(':root .ant-btn > .ant-btn-icon > .anticon', 'line-height', '1');
+declaration(':root .ant-btn > .ant-btn-icon > .anticon::before', 'content', 'none');
+declaration(':root .ant-btn > .ant-btn-icon > .anticon > svg', 'display', 'block');
+declaration('.media-volume > .ant-btn', 'display', 'inline-flex');
+declaration('.studio-transport__play.ant-btn', 'display', 'inline-flex');
 const library = readFileSync(new URL('../src/components/MediaLibraryTab.tsx', import.meta.url), 'utf8');
 assert.match(library, /scroll=\{\{ x: 640 \}\}/, 'Wide library tables need their own horizontal scroller');
-console.log('Responsive layout guardrails passed (24 contracts).');
+console.log('Responsive layout guardrails passed.');
