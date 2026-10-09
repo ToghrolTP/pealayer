@@ -156,6 +156,15 @@ policy blocker is not a completed deployment and must not be bypassed.
 
 ## Regression rules
 
+- **Buzzer catalog and control:** PCController owns configured melodies. Native
+  and Web selectors refresh whenever opened, including keyboard activation;
+  catalog events and low-rate output edges obtain authoritative state. Native
+  controls use the same session commands as Web/API so remote consumers reach
+  their authority instead of an inactive local engine. Searchable Web choices
+  share icons/duration details with the effects editor, and diagnostic tones
+  collapse. Malformed refreshes preserve the last-good list rather than render
+  false-empty state. See [delivery and remaining physical/UI gates](verification/BUZZER-LIVE-CATALOG.md).
+
 - **Elapsed-time editing:** Native and both Web transports use a fixed
   `HH:MM:SS.sss` segment mask. Unchanged blur does not seek; changed blur and
   explicit Enter use the existing seek path, while Escape always cancels.
