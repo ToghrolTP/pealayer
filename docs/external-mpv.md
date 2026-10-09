@@ -137,5 +137,6 @@ cargo test --locked --lib live_duplex_ipc_and_muted_dual_preview -- --ignored --
 ```
 
 Linux/macOS socket and native visual/audio acceptance remain distinct from
-Windows IPC verification. See the owning PR / issue #80 for installation evidence.
+Windows IPC verification. See [delivery evidence](verification/EXTERNAL-MPV-DELIVERY.md)
+for installed packages, live API receipts and remaining acceptance checks.
 Protocol reference: [mpv JSON IPC](https://mpv.io/manual/stable/#json-ipc).

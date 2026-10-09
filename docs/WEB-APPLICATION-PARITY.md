@@ -24,6 +24,8 @@ actual connection/ownership/errors. Real Windows IPC tests verified bidirectiona
 state, muted preview, reconnect/no replay, owned-process cleanup and 32 command
 acknowledgements in about 21 ms. Linux/macOS and human visual/audio acceptance
 remain explicit; no claim of frame-locked independent decoders or complete parity.
+[Delivery evidence](verification/EXTERNAL-MPV-DELIVERY.md) records the installed
+David/Cafe/Erfan package, retained host runtimes and remaining acceptance checks.
 
 Copied links and source browsing (9 October): [remote-location workflow](remote-folders.md)
 adds default-enabled text-only clipboard URL observation, debounced live inputs,
