@@ -736,6 +736,7 @@ pub struct AppConfig {
     pub audio_device: String,
     /// Empty means SFX follows the main player output selection.
     pub sfx_audio_device: String,
+    pub audio_effects: Vec<crate::mpv::sfx::AudioEffect>,
     pub pin_controls: bool,
     pub show_remaining_time: bool,
     pub open_url_multiline: bool,
@@ -921,6 +922,7 @@ impl Default for AppConfig {
             is_muted: false,
             audio_device: "auto".to_string(),
             sfx_audio_device: String::new(),
+            audio_effects: Vec::new(),
             pin_controls: false,
             show_remaining_time: false,
             open_url_multiline: true,
@@ -1760,6 +1762,13 @@ impl AppConfig {
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        if self.audio_effects.len() > 256 { return Err("At most 256 audio effects may be saved".into()); }
+        let mut audio_ids = std::collections::HashSet::new();
+        for effect in &self.audio_effects {
+            effect.validate()?;
+            if effect.duration_ms == 0 || effect.duration_ms > 86_400_000 { return Err("SFX duration must be finite, positive and at most 24 hours".into()); }
+            if !audio_ids.insert(effect.id) { return Err("Duplicate audio effect ID".into()); }
+        }
         for (key, value) in [("chapter_color", &self.seekbar_markers.chapter_color),
             ("active_chapter_color", &self.seekbar_markers.active_chapter_color),
             ("keyframe_color", &self.seekbar_markers.keyframe_color)] {

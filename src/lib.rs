@@ -1,4 +1,5 @@
 pub mod app;
+pub mod audio_effects;
 pub mod application_shortcuts;
 pub mod branding;
 pub mod cli;

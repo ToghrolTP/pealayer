@@ -189,6 +189,8 @@ pub struct Effect {
     pub direct_control: Option<DirectControlCue>,
     #[serde(default)]
     pub duration_policy: CueDurationPolicy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_effect: Option<crate::mpv::sfx::AudioEffect>,
 }
 
 impl Effect {
@@ -205,6 +207,7 @@ impl Effect {
             controller_lane: None,
             direct_control: None,
             duration_policy: CueDurationPolicy::Auto,
+            audio_effect: None,
         }
     }
 
@@ -227,6 +230,7 @@ impl Effect {
             controller_lane: None,
             direct_control: None,
             duration_policy: CueDurationPolicy::Auto,
+            audio_effect: None,
         }
     }
 
@@ -249,6 +253,7 @@ impl Effect {
             controller_lane: Some(ControllerEffectLane::Sequence),
             direct_control: None,
             duration_policy: CueDurationPolicy::Intrinsic,
+            audio_effect: None,
         }
     }
 
@@ -265,6 +270,7 @@ impl Effect {
             controller_lane: Some(ControllerEffectLane::Lighting),
             direct_control: None,
             duration_policy: CueDurationPolicy::Intrinsic,
+            audio_effect: None,
         }
     }
 
@@ -272,7 +278,7 @@ impl Effect {
     /// authored on the media timeline. Controller-owned recordings and strip
     /// programs carry their own timing and therefore are move-only.
     pub fn duration_resizable(&self) -> bool {
-        if self.is_state_marker() { return false; }
+        if self.is_state_marker() || self.audio_effect.is_some() { return false; }
         match self.duration_policy {
             CueDurationPolicy::Intrinsic => false,
             CueDurationPolicy::Resizable => true,
@@ -320,6 +326,7 @@ impl Effect {
                 end_value_basis_points: 0,
             }),
             duration_policy: CueDurationPolicy::Resizable,
+            audio_effect: None,
         }
     }
 }
@@ -625,7 +632,7 @@ impl Timeline {
             .templates
             .iter()
             .filter(|template| {
-                template.controller_macro.is_some() || template.controller_strip_effect.is_some()
+                template.controller_macro.is_some() || template.controller_strip_effect.is_some() || template.audio_effect.is_some()
             })
             .map(|template| template.id)
             .collect::<std::collections::BTreeSet<_>>();

@@ -33,6 +33,9 @@ import { Button, ConfigProvider, Divider, Dropdown, Empty, Input, InputNumber, m
 import type { PlayerState } from './RemoteControlTab';
 import { tr, UiLocale } from '../i18n';
 import { EffectIconPicker, effectGlyph as configuredEffectGlyph } from '../effectIcons';
+import { SoundEffectFields } from './SoundEffectFields';
+import { Typography } from 'antd';
+import { GroupSelect } from './GroupSelect';
 import { EffectRecorder } from './EffectRecorder';
 import recordingColors from '../../../assets/themes/recording-colors.json';
 import { mediaBasename } from '../mediaLabel';
@@ -545,7 +548,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
           try {
             if (!await sendCmd('controller_effect.save', effectPayload(effectDraft))) return;
             window.localStorage.removeItem('pealayer.effect-working-draft');
-            setEffectEditorOpen(false);
+            if (effectDraft.kind !== 'audio') setEffectEditorOpen(false);
           }
           catch { void message.error(tr(locale, 'Program must be valid JSON')); return; }
           finally { setSavingEffect(false); }
@@ -553,13 +556,17 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
       >
         {effectDraft && (
           <ConfigProvider componentDisabled={captureBusy}><div className="effect-editor-grid">
-            <label><span>{tr(locale, 'Type')}</span><Select value={effectDraft.kind} options={[{ value: 'sequence', label: tr(locale, 'Timed sequence') }, { value: 'strip-stream', label: tr(locale, 'Addressable lighting') }]} onChange={(kind) => setEffectDraft({ ...effectDraft, kind })} /></label>
-            <label><span>{tr(locale, 'ID')}</span><Input value={effectDraft.id} onChange={(event) => setEffectDraft({ ...effectDraft, id: event.target.value })} /></label>
+            <label><span>{tr(locale, 'Type')}</span><Select disabled={effectDraft.kind === 'audio'} value={effectDraft.kind} options={[{ value: 'sequence', label: tr(locale, 'Timed sequence') }, { value: 'strip-stream', label: tr(locale, 'Addressable lighting') }, ...(effectDraft.kind === 'audio' ? [{ value: 'audio', label: tr(locale, 'Audio effect') }] : [])]} onChange={(kind) => setEffectDraft({ ...effectDraft, kind })} /></label>
+            {effectDraft.kind !== 'audio' && <label><span>{tr(locale, 'ID')}</span><Input value={effectDraft.id} onChange={(event) => setEffectDraft({ ...effectDraft, id: event.target.value })} /></label>}
             <label><span>{tr(locale, 'Name')}</span><Input value={effectDraft.name} onChange={(event) => setEffectDraft({ ...effectDraft, name: event.target.value })} /></label>
             <label><span>{tr(locale, 'Icon')}</span><EffectIconPicker value={effectDraft.icon} searchPlaceholder={tr(locale, 'Search icons...')} presetsLabel={tr(locale, 'Presets')} emptyLabel={tr(locale, 'No matching icons')} onChange={(icon) => setEffectDraft({ ...effectDraft, icon })} /></label>
-            <label><span>{tr(locale, 'Category')}</span><Input value={effectDraft.category} onChange={(event) => setEffectDraft({ ...effectDraft, category: event.target.value })} /></label>
+            <label><span>{tr(locale, 'Group')}</span><GroupSelect value={effectDraft.category} groups={[...new Set(controllerEffects.map((effect) => effect.category))]} locale={locale} onChange={(category) => setEffectDraft({ ...effectDraft, category })} onCreate={() => {
+              let name = '';
+              Modal.confirm({ title: tr(locale, 'New group'), content: <Input maxLength={64} onChange={(event) => { name = event.target.value.trim(); }} />, onOk: () => { if (!name) return Promise.reject(); setEffectDraft({ ...effectDraft, category: name }); } });
+            }} /></label>
             <label className="effect-editor-grid__wide"><span>{tr(locale, 'Description')}</span><Input value={effectDraft.description} onChange={(event) => setEffectDraft({ ...effectDraft, description: event.target.value })} /></label>
-            <label><span>{tr(locale, 'Duration (ms)')}</span><InputNumber min={1} value={effectDraft.duration_ms} onChange={(duration_ms) => setEffectDraft({ ...effectDraft, duration_ms: duration_ms ?? 1 })} /></label>
+            <label><span>{tr(locale, 'Duration (ms)')}</span>{effectDraft.kind === 'audio' ? <Typography.Text type="secondary">{controllerEffects.find((effect) => effect.id === effectDraft.id)?.duration_display || effectDraft.duration_ms}</Typography.Text> : <InputNumber min={1} value={effectDraft.duration_ms} onChange={(duration_ms) => setEffectDraft({ ...effectDraft, duration_ms: duration_ms ?? 1 })} />}</label>
+            {effectDraft.kind === 'audio' && <SoundEffectFields program={JSON.parse(effectDraft.programText || '{}')} onChange={(patch) => setEffectDraft({ ...effectDraft, programText: JSON.stringify({ ...JSON.parse(effectDraft.programText || '{}'), ...patch }) })} state={state} reference={effectDraft.reference} apiBaseUrl={apiBaseUrl} locale={locale} sendCmd={sendCmd} />}
             {effectDraft.kind === 'strip-stream' && <label><span>{tr(locale, 'Frames per second')}</span><InputNumber min={1} max={120} value={effectDraft.default_fps} onChange={(default_fps) => setEffectDraft({ ...effectDraft, default_fps: default_fps ?? 20 })} /></label>}
             {effectDraft.kind === 'strip-stream' && <label><span>{tr(locale, 'Pixels')}</span><InputNumber min={1} value={effectDraft.default_pixels} onChange={(default_pixels) => setEffectDraft({ ...effectDraft, default_pixels: default_pixels ?? 100 })} /></label>}
             {effectDraft.kind === 'sequence' && <label><span>{tr(locale, 'Color')}</span><Select disabled={captureBusy} value={effectDraft.color} onChange={(color) => setEffectDraft({ ...effectDraft, color })} options={recordingColors.map((color) => ({ value: color.id, label: <span className="recording-color-option"><span className="recording-color-swatch" style={{ backgroundColor: color.hex }} />{tr(locale, color.label)}</span> }))} /></label>}

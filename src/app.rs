@@ -1,4 +1,5 @@
 use crate::mpv::render::RenderContextWrapper;
+use crate::platform::interop::InteropCommand;
 use eframe::egui;
 use std::sync::{Arc, Mutex};
 
@@ -92,6 +93,7 @@ pub struct EffectPreset {
 pub enum EffectPresetSource {
     ControllerMacro(u64),
     ControllerStrip,
+    Audio(uuid::Uuid),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -278,6 +280,7 @@ pub struct EffectDragPayload {
     pub controller_macro: Option<crate::four_d::models::ControllerMacroCue>,
     pub controller_strip_effect: Option<crate::four_d::models::ControllerStripEffectCue>,
     pub controller_lane: Option<crate::four_d::models::ControllerEffectLane>,
+    pub audio_effect: Option<crate::mpv::sfx::AudioEffect>,
 }
 
 #[derive(Debug)]
@@ -980,6 +983,10 @@ impl eframe::App for PealayerApp {
             self.process_shell_commands(ctx);
         }
         self.process_controller_call_results();
+        if crate::mpv::sfx::initialize(self.engine_handle.media_playback.clone(), self.engine_handle.estop_active.clone(), ctx) {
+            crate::mpv::sfx::update_plan(&self.timeline);
+        }
+        self.process_audio_effect_results();
         if !self.rf.pending && self.engine_handle.take_rf_catalog_refresh_request() {
             if let Err(error) = self.request_rf(
                 "catalog",
@@ -1303,7 +1310,7 @@ impl eframe::App for PealayerApp {
             let hardware_details = hardware
                 .as_ref()
                 .map(|capabilities| web_hardware_details(capabilities, self.motion_control_mode));
-            let controller_effects = hardware
+            let mut controller_effects: Vec<crate::platform::interop::WebControllerEffect> = hardware
                 .as_ref()
                 .map(|capabilities| {
                     capabilities
@@ -1368,6 +1375,7 @@ impl eframe::App for PealayerApp {
                         .collect()
                 })
                 .unwrap_or_default();
+            controller_effects.extend(self.audio_effects().iter().map(|effect| self.web_audio_effect(effect)));
             let controller_connected = self
                 .engine_handle
                 .is_connected
@@ -1580,6 +1588,10 @@ impl eframe::App for PealayerApp {
                     })
                     .collect(),
                 controller_effects,
+                audio_devices: crate::mpv::audio_output::available_audio_devices(),
+                audio_import_pending: crate::mpv::sfx::importing(),
+                audio_preview_ids: self.audio_effects().iter().filter(|e| crate::mpv::sfx::previewing(e.id)).map(|e| e.id.to_string()).collect(),
+                audio_voices: crate::mpv::sfx::active_voices(),
                 controller_effect_groups: hardware
                     .as_ref()
                     .map(|hardware| hardware.effect_groups.clone())
@@ -2842,11 +2854,7 @@ impl PealayerApp {
     }
 
     pub fn advertised_effect_presets(&self) -> Vec<EffectPreset> {
-        let Some(capabilities) = self.advertised_hardware() else {
-            return Vec::new();
-        };
-
-        capabilities
+        let mut presets: Vec<EffectPreset> = self.advertised_hardware().map(|capabilities| capabilities
             .macros
             .iter()
             .map(controller_macro_effect_preset)
@@ -2856,7 +2864,12 @@ impl PealayerApp {
                     .iter()
                     .map(controller_strip_effect_preset),
             )
-            .collect()
+            .collect()).unwrap_or_default();
+        presets.extend(self.audio_effects().iter().map(|effect| EffectPreset {
+            category: effect.group.clone(), group_icon: "speaker-high".into(),
+            effect: effect.template(), source: EffectPresetSource::Audio(effect.id),
+        }));
+        presets
     }
 
     /// Refreshes every placed controller-owned cue from PCController's latest
@@ -3140,6 +3153,22 @@ impl PealayerApp {
     }
 
     pub(crate) fn save_controller_effect(&mut self) -> Result<(), String> {
+        if self.effect_library_draft.kind == "audio" {
+            let draft = &self.effect_library_draft;
+            let program: crate::mpv::sfx::AudioProgram = serde_json::from_str(&draft.program_json).map_err(|e| format!("Invalid SFX settings: {e}"))?;
+            let command = InteropCommand::SaveControllerEffect { effect: crate::platform::interop::WebControllerEffectDraft {
+                reference: draft.reference.clone(), id: draft.id.clone(), name: draft.name.clone(), icon: draft.icon.clone(),
+                category: draft.category.clone(), description: draft.description.clone(), kind: "audio".into(),
+                program: serde_json::to_value(&program).unwrap(), color: String::new(), default_fps: 0,
+                duration_ms: 0, default_pixels: 0, is_new: draft.is_new,
+            }};
+            if self.route_audio_command(command)? { return Ok(()); }
+            return crate::mpv::sfx::import(crate::mpv::sfx::AudioEffect {
+                id: uuid::Uuid::parse_str(&draft.id).map_err(|_| "Invalid SFX ID")?,
+                name: draft.name.clone(), group: draft.category.clone(), icon: draft.icon.clone(),
+                description: draft.description.clone(), duration_ms: 0, program,
+            });
+        }
         if self.hardware_effect_authoring.active || self.advertised_hardware().is_some_and(|hardware| hardware.effect_recording.active) {
             return Err("Finish or discard capture before publishing edits".into());
         }
@@ -3225,6 +3254,10 @@ impl PealayerApp {
     }
 
     pub(crate) fn delete_controller_effect(&mut self) -> Result<(), String> {
+        if let Some(effect) = self.audio_effects().into_iter().find(|e| e.reference() == self.effect_library_draft.reference) {
+            if !self.route_audio_command(InteropCommand::DeleteControllerEffect { reference: effect.reference() })? { self.delete_audio_effect(effect.id); }
+            return Ok(());
+        }
         let reference = self.effect_library_draft.reference.trim();
         if reference.is_empty() || self.effect_library_draft.is_new {
             return Err("Select a saved PCController effect first".to_string());
@@ -3259,6 +3292,11 @@ impl PealayerApp {
     }
 
     pub(crate) fn play_controller_effect(&mut self, reference: &str) -> Result<(), String> {
+        if let Some(effect) = self.audio_effects().into_iter().find(|e| e.reference() == reference) {
+            if self.estop_active { return Err("Release E-STOP before playing audio effects".into()); }
+            if self.route_audio_command(InteropCommand::PlayControllerEffect { reference: reference.into() })? { return Ok(()); }
+            return crate::mpv::sfx::preview(effect);
+        }
         if reference.trim().is_empty() {
             return Err("Select a PCController effect first".to_string());
         }
@@ -3301,6 +3339,9 @@ impl PealayerApp {
         &mut self,
         reference: &str,
     ) -> ControllerEffectPreviewPhase {
+        if let Some(effect) = self.audio_effects().iter().find(|e| e.reference() == reference) {
+            return if self.audio_previewing(effect.id) { ControllerEffectPreviewPhase::Stop } else { ControllerEffectPreviewPhase::Run };
+        }
         self.hardware_effect_authoring
             .effect_preview_phase(reference, std::time::Instant::now())
     }
@@ -3353,6 +3394,10 @@ impl PealayerApp {
     }
 
     pub(crate) fn stop_controller_effect(&mut self, reference: &str) -> Result<(), String> {
+        if self.audio_effects().iter().any(|e| e.reference() == reference) {
+            if self.route_audio_command(InteropCommand::StopAudioPreview)? { return Ok(()); }
+            return crate::mpv::sfx::stop_preview();
+        }
         if reference.trim().is_empty() {
             return Err("Select a PCController effect first".to_string());
         }
@@ -4215,6 +4260,7 @@ impl PealayerApp {
             } => {
                 let preset = self.advertised_effect_presets().into_iter().find(|preset| {
                     let candidate = match preset.source {
+                        EffectPresetSource::Audio(id) => format!("sfx:{id}"),
                         EffectPresetSource::ControllerMacro(id) => format!("effect:{id}"),
                         EffectPresetSource::ControllerStrip => preset
                             .effect
@@ -4230,7 +4276,9 @@ impl PealayerApp {
                     return;
                 };
                 let effect_id = preset.effect.id;
-                self.timeline.templates.push(preset.effect);
+                if !self.timeline.templates.iter().any(|effect| effect.id == effect_id) {
+                    self.timeline.templates.push(preset.effect);
+                }
                 let instance = crate::four_d::models::EffectInstance::new(effect_id, start_time_ms);
                 self.selected_instance_ids.clear();
                 self.selected_instance_ids.insert(instance.id);
@@ -4244,6 +4292,7 @@ impl PealayerApp {
                 }
             }
             InteropCommand::StopControllerEffect => {
+                let _ = crate::mpv::sfx::stop_preview();
                 if let Err(error) = self.stop_strip_preview() {
                     self.set_osd(error);
                     return;
@@ -4256,6 +4305,11 @@ impl PealayerApp {
                     self.set_osd(error);
                     return;
                 }
+            }
+            InteropCommand::StopAudioPreview => { let _ = crate::mpv::sfx::stop_preview(); }
+            InteropCommand::RefreshAudioOutputs => {
+                let ctx = ctx.clone();
+                std::thread::spawn(move || { crate::mpv::audio_output::refresh_devices(); ctx.request_repaint(); });
             }
             InteropCommand::SaveControllerEffectGroup {
                 original_name,
@@ -6837,6 +6891,7 @@ impl PealayerApp {
         let _ = self.mpv.set_property("volume", self.volume);
         let _ = self.mpv.set_property("mute", self.is_muted);
         let audio_device = if config.audio_device.trim().is_empty() { "auto" } else { config.audio_device.as_str() };
+        crate::mpv::sfx::outputs(audio_device, &config.sfx_audio_device);
         if let Err(error) = self.mpv.set_property("audio-device", audio_device) {
             log::warn!("{error}; falling back to the system default audio output");
             self.mpv.set_property("audio-device", "auto")
@@ -7712,6 +7767,7 @@ impl PealayerApp {
     /// Keeping relay edges and controller-owned macro cues together prevents
     /// load, undo, delete, and drag operations from updating only one lane.
     pub fn sync_timeline_engine(&self) {
+        crate::mpv::sfx::update_plan(&self.timeline);
         let state=crate::peer::TimelineState{timeline:self.timeline.clone(),muted:self.track_muted.clone(),soloed:self.track_soloed.clone()};
         if let Some(client)=crate::peer::client(){
             if !crate::peer::mirroring() && let Some(snapshot)=client.snapshot() && snapshot.session.timeline.as_ref()!=Some(&state){
