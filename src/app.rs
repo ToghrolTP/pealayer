@@ -10617,5 +10617,3 @@ pub(crate) mod tests {
         assert_eq!(updated.as_ref().unwrap().board_name, "MutatedBoard");
     }
 }
-
-
