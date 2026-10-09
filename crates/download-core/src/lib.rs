@@ -1284,7 +1284,18 @@ mod tests {
         };
         server.join().unwrap();
         assert_eq!(fs::read(output).unwrap(), payload);
+        manager.shutdown(Duration::from_secs(2)).unwrap();
         drop(manager);
-        fs::remove_dir_all(root).unwrap();
+        let cleanup_deadline = Instant::now() + Duration::from_secs(2);
+        loop {
+            match fs::remove_dir_all(&root) {
+                Ok(()) => break,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => break,
+                Err(_) if Instant::now() < cleanup_deadline => {
+                    thread::sleep(Duration::from_millis(20));
+                }
+                Err(error) => panic!("cannot clean fixture storage {}: {error}", root.display()),
+            }
+        }
     }
 }

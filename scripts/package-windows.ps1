@@ -20,6 +20,39 @@ function Get-BrandValue([object]$Document, [string]$Name) {
     return $value.Trim()
 }
 
+function Assert-PackageSourceStable([string]$RepositoryRoot, [string]$ExpectedCommit) {
+    $currentCommit = (& git -C $RepositoryRoot rev-parse HEAD).Trim()
+    if ($LASTEXITCODE -ne 0 -or $currentCommit -ne $ExpectedCommit) {
+        throw 'Package source commit changed during the build; refusing publication.'
+    }
+    $unexpected = @(& git -C $RepositoryRoot status --porcelain --untracked-files=all -- . ':(exclude)web_ui/dist/**')
+    if ($LASTEXITCODE -ne 0) { throw 'Could not verify package source status.' }
+    if ($unexpected.Count -ne 0) {
+        throw "Package source outside web_ui/dist changed during the build: $($unexpected -join '; ')"
+    }
+}
+
+function Restore-PackageWebDistribution([string]$RepositoryRoot) {
+    & git -C $RepositoryRoot restore --worktree -- web_ui/dist
+    if ($LASTEXITCODE -ne 0) { throw 'Could not restore the tracked Web distribution after packaging.' }
+    $untracked = @(& git -C $RepositoryRoot ls-files --others --exclude-standard -- web_ui/dist)
+    if ($LASTEXITCODE -ne 0) { throw 'Could not inspect generated Web distribution files.' }
+    $distributionRoot = [System.IO.Path]::GetFullPath((Join-Path $RepositoryRoot 'web_ui\dist')).TrimEnd('\', '/')
+    foreach ($relativePath in $untracked) {
+        $candidate = [System.IO.Path]::GetFullPath((Join-Path $RepositoryRoot $relativePath))
+        if (-not $candidate.StartsWith(
+            $distributionRoot + [System.IO.Path]::DirectorySeparatorChar,
+            [System.StringComparison]::OrdinalIgnoreCase
+        )) {
+            throw "Refusing to remove generated content outside web_ui/dist: $candidate"
+        }
+        Remove-Item -LiteralPath $candidate -Force
+    }
+    if (& git -C $RepositoryRoot status --porcelain --untracked-files=all) {
+        throw 'Package source did not return to its original clean state.'
+    }
+}
+
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
     throw 'scripts/package-windows.ps1 is intended for native Windows packaging.'
 }
@@ -110,6 +143,8 @@ if (Test-Path -LiteralPath $webUiPackage -PathType Leaf) {
         Pop-Location
     }
 }
+Assert-PackageSourceStable -RepositoryRoot $repositoryRoot -ExpectedCommit $packageCommit
+$env:PEALAYER_PACKAGE_VERIFIED_SOURCE_CLEAN = 'true'
 
 & (Join-Path $PSScriptRoot 'run-windows.ps1') -BuildOnly -LibmpvDirectory $libmpvSourceDirectory
 & cargo build --locked --release -p pealayer-downloader
@@ -174,9 +209,7 @@ $embeddedIdentity = Invoke-PackageProbe $stagedExecutable '--build-info' $stagin
 if ($embeddedIdentity.commit -ne $packageCommit -or $embeddedIdentity.dirty) {
     throw 'Embedded executable identity does not match clean package source; refusing publication.'
 }
-if ((& git -C $repositoryRoot rev-parse HEAD).Trim() -ne $packageCommit -or (& git -C $repositoryRoot status --porcelain)) {
-    throw 'Package source changed during the build; refusing publication.'
-}
+Assert-PackageSourceStable -RepositoryRoot $repositoryRoot -ExpectedCommit $packageCommit
 
 Copy-Item -LiteralPath $stagedExecutable -Destination $outputDirectory -Force
 Copy-Item -LiteralPath $stagedDownloader -Destination $outputDirectory -Force
@@ -208,6 +241,7 @@ if (Test-Path -LiteralPath (Join-Path $webDistribution 'index.html')) {
     Copy-Item -Path (Join-Path $webDistribution '*') -Destination $packagedWebDistribution -Recurse -Force
     $webUiPackaged = $true
 }
+Restore-PackageWebDistribution -RepositoryRoot $repositoryRoot
 
 $artifacts = @($effectiveExecutableFile,'pealayer-downloader.exe','libmpv-2.dll','mpv-2.dll','assets/fonts/Vazirmatn-Regular.ttf') | ForEach-Object {
     $path = Join-Path $outputDirectory $_
