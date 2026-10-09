@@ -145,6 +145,58 @@ pub fn normalize_timeline_toolbar_order(
     normalized
 }
 
+/// A narrowly scoped edit: changing a toolbar must never publish a workspace
+/// snapshot (the dock is temporarily borrowed while its panels are drawn).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TimelineToolbarPreferences {
+    pub visible: bool,
+    pub follow: bool,
+    pub order: Vec<TimelineToolbarAction>,
+    pub hidden: Vec<TimelineToolbarAction>,
+}
+
+impl TimelineToolbarPreferences {
+    pub fn from_config(config: &AppConfig) -> Self {
+        Self {
+            visible: config.timeline_toolbar_visible,
+            follow: config.timeline_follow_playhead,
+            order: persisted_timeline_toolbar_order(&config.timeline_toolbar_order),
+            hidden: TimelineToolbarAction::ALL.into_iter()
+                .filter(|action| config.timeline_toolbar_hidden.contains(action)).collect(),
+        }
+    }
+
+    pub fn apply(&self, config: &mut AppConfig) {
+        config.timeline_toolbar_visible = self.visible;
+        config.timeline_follow_playhead = self.follow;
+        config.timeline_toolbar_order = self.order.clone();
+        config.timeline_toolbar_hidden = self.hidden.clone();
+    }
+
+    pub fn values(&self) -> serde_json::Value {
+        serde_json::json!({
+            "timeline_toolbar_visible": self.visible,
+            "timeline_follow_playhead": self.follow,
+            "timeline_toolbar_order": self.order,
+            "timeline_toolbar_hidden": self.hidden,
+        })
+    }
+
+    pub fn owns_key(key: &str) -> bool {
+        matches!(key, "timeline_toolbar_visible" | "timeline_follow_playhead"
+            | "timeline_toolbar_order" | "timeline_toolbar_hidden")
+    }
+
+    pub fn only_changed(previous: &AppConfig, next: &AppConfig) -> bool {
+        let mut unrelated = next.clone();
+        unrelated.timeline_toolbar_visible = previous.timeline_toolbar_visible;
+        unrelated.timeline_follow_playhead = previous.timeline_follow_playhead;
+        unrelated.timeline_toolbar_order = previous.timeline_toolbar_order.clone();
+        unrelated.timeline_toolbar_hidden = previous.timeline_toolbar_hidden.clone();
+        &unrelated == previous
+    }
+}
+
 #[cfg(test)]
 mod timeline_toolbar_tests {
     use super::*;
@@ -197,6 +249,26 @@ mod timeline_toolbar_tests {
         assert!(!hidden.contains(&TimelineToolbarAction::FollowPlayhead));
         assert!(hidden.contains(&TimelineToolbarAction::AddKeyframe));
         assert!(hidden.contains(&TimelineToolbarAction::DeleteSelection));
+    }
+
+    #[test]
+    fn toolbar_patch_cannot_carry_workspace_or_media_state() {
+        let original = AppConfig::default();
+        assert!(original.timeline_toolbar_visible);
+        let mut preferences = TimelineToolbarPreferences::from_config(&original);
+        preferences.visible = false;
+        preferences.hidden.push(TimelineToolbarAction::ZoomIn);
+        let values = preferences.values();
+        assert_eq!(values.as_object().unwrap().len(), 4);
+        assert!(values.as_object().unwrap().keys().all(|key| TimelineToolbarPreferences::owns_key(key)));
+        let updated = original.apply_patch(&values).unwrap();
+        assert_eq!(updated.workspace_dock_layout, original.workspace_dock_layout);
+        assert_eq!(updated.workspace_session, original.workspace_session);
+        assert_eq!(updated.last_media_target, original.last_media_target);
+        assert!(TimelineToolbarPreferences::only_changed(&original, &updated));
+        let mut workspace_edit = updated;
+        workspace_edit.workspace_dock_layout = Some("not a toolbar edit".into());
+        assert!(!TimelineToolbarPreferences::only_changed(&original, &workspace_edit));
     }
 }
 
@@ -709,6 +781,7 @@ pub struct AppConfig {
     /// Follow an advancing playhead and ease the viewport forward before it
     /// reaches the trailing edge.
     pub timeline_follow_playhead: bool,
+    pub timeline_toolbar_visible: bool,
     pub timeline_toolbar_order: Vec<TimelineToolbarAction>,
     pub timeline_toolbar_hidden: Vec<TimelineToolbarAction>,
     pub non_user_control_visibility: NonUserControlVisibility,
@@ -885,6 +958,7 @@ impl Default for AppConfig {
             timeline_animated_navigation: true,
             timeline_navigation_transition_ms: 100,
             timeline_follow_playhead: false,
+            timeline_toolbar_visible: true,
             timeline_toolbar_order: Vec::new(),
             timeline_toolbar_hidden: default_timeline_toolbar_hidden(),
             non_user_control_visibility: NonUserControlVisibility::Dimmed,

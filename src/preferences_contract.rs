@@ -715,6 +715,12 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "Timeline navigation",
             "Keep the playhead in view during playback",
         ),
+        PreferenceControl::boolean(
+            "timeline_toolbar_visible",
+            "input",
+            "Timeline navigation",
+            "Show timeline toolbar",
+        ),
         PreferenceControl::number(
             "timeline_navigation_transition_ms",
             "input",

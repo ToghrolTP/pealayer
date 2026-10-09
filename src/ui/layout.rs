@@ -781,7 +781,7 @@ fn timeline_follow_target_offset(
     Some(target.clamp(0.0, (content_width - viewport_width).max(0.0)))
 }
 
-fn timeline_toolbar_action_label(action: TimelineToolbarAction) -> &'static str {
+pub(super) fn timeline_toolbar_action_label(action: TimelineToolbarAction) -> &'static str {
     match action {
         TimelineToolbarAction::ZoomIn => "Zoom in",
         TimelineToolbarAction::ZoomOut => "Zoom out",
@@ -800,7 +800,7 @@ fn timeline_toolbar_action_label(action: TimelineToolbarAction) -> &'static str 
     }
 }
 
-fn timeline_toolbar_action_icon(action: TimelineToolbarAction) -> &'static str {
+pub(super) fn timeline_toolbar_action_icon(action: TimelineToolbarAction) -> &'static str {
     match action {
         TimelineToolbarAction::ZoomIn => crate::ui::icons::PLUS,
         TimelineToolbarAction::ZoomOut => crate::ui::icons::MINUS,
@@ -819,7 +819,7 @@ fn timeline_toolbar_action_icon(action: TimelineToolbarAction) -> &'static str {
     }
 }
 
-fn timeline_toolbar_action_shortcut(action: TimelineToolbarAction) -> &'static str {
+pub(super) fn timeline_toolbar_action_shortcut(action: TimelineToolbarAction) -> &'static str {
     match action {
         TimelineToolbarAction::ZoomIn => "+ / =",
         TimelineToolbarAction::ZoomOut => "-",
@@ -13198,6 +13198,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                         let mut timeline_header_offset_y = synced_vertical_offset;
                         let mut pending_timeline_wheel = None;
                         let mut pending_timeline_toolbar_action = None;
+                        let mut held_timeline_pan = 0.0;
                         ui.horizontal_top(|ui| {
                             // 1. Left column: Fixed Track Headers
                             ui.vertical(|ui| {
@@ -14553,7 +14554,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         );
 
                                         let viewport_clip = ui.clip_rect();
-                                        let ruler_rect = timeline_frozen_ruler_rect(rect, viewport);
+                                        let mut ruler_rect = timeline_frozen_ruler_rect(rect, viewport);
+                                        // Anchor the band to the viewport, not the cancellation
+                                        // of fractional content/scroll offsets. Keep pan ticks
+                                        // inside this fixed, physical-pixel-aligned header.
+                                        let ppp = ui.ctx().pixels_per_point();
+                                        let top = (viewport_clip.top() * ppp).round() / ppp;
+                                        ruler_rect.min.y = top;
+                                        ruler_rect.max.y = ((top + TIMELINE_RULER_HEIGHT) * ppp).round() / ppp;
                                         let track_clip = egui::Rect::from_min_max(
                                             egui::pos2(viewport_clip.left(), ruler_rect.bottom()),
                                             viewport_clip.max,
@@ -14684,200 +14692,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             }
                                         }); }
 
-                                        // Keep navigation controls anchored to the visible end of
-                                        // the frozen ruler rather than letting them scroll with
-                                        // timeline content.
-                                        let toolbar_order =
-                                            crate::config::normalize_timeline_toolbar_order(
-                                                &self.app.timeline_toolbar_order,
-                                            );
-                                        let visible_toolbar_buttons = toolbar_order
-                                            .iter()
-                                            .filter(|action| {
-                                                !self.app.timeline_toolbar_hidden.contains(action)
-                                            })
-                                            .count();
-                                        let visible_ruler = ruler_rect.intersect(viewport_clip);
-                                        let toolbar_width = ((visible_toolbar_buttons + 1) as f32
-                                            * 26.0
-                                            + 8.0)
-                                            .min(visible_ruler.width());
-                                        let toolbar_rect = egui::Rect::from_min_max(
-                                            egui::pos2(
-                                                visible_ruler.right() - toolbar_width,
-                                                visible_ruler.top() + 1.0,
-                                            ),
-                                            egui::pos2(
-                                                visible_ruler.right() - 3.0,
-                                                visible_ruler.bottom() - 1.0,
-                                            ),
+                                        let toolbar = crate::ui::timeline_toolbar::draw(
+                                            ui, self.app, viewport_clip, can_add_keyframe,
                                         );
-                                        // A panel sublayer stays above the ruler's late paint,
-                                        // but below Add cue and every other modal backdrop.
-                                        let toolbar_layer = crate::ui::dialog::workspace_overlay_layer(
-                                            ui, "timeline-ruler-toolbar-layer",
-                                        );
-                                        let mut toolbar_ui = ui.new_child(
-                                            egui::UiBuilder::new()
-                                                .layer_id(toolbar_layer)
-                                                .max_rect(toolbar_rect)
-                                                .layout(egui::Layout::right_to_left(egui::Align::Center)),
-                                        );
-                                        egui::Frame::NONE
-                                            .fill(ui.visuals().panel_fill.gamma_multiply(0.96))
-                                            .corner_radius(4.0)
-                                            .inner_margin(egui::Margin::symmetric(2, 0))
-                                            .show(&mut toolbar_ui, |ui| {
-                                                egui::containers::menu::MenuButton::from_button(
-                                                    egui::Button::new(crate::ui::icons::DOTS_THREE)
-                                                        .frame(false),
-                                                )
-                                                .ui(ui, |ui| {
-                                                    ui.set_min_width(310.0);
-                                                    ui.strong(self.app.tr("Timeline toolbar"));
-                                                    ui.label(
-                                                        egui::RichText::new(self.app.tr(
-                                                            "Choose visible controls and their order.",
-                                                        ))
-                                                        .small()
-                                                        .weak(),
-                                                    );
-                                                    ui.separator();
-
-                                                    let mut order = crate::config::normalize_timeline_toolbar_order(
-                                                        &self.app.timeline_toolbar_order,
-                                                    );
-                                                    let mut hidden = self.app.timeline_toolbar_hidden.clone();
-                                                    let snapshot = order.clone();
-                                                    let mut changed = false;
-                                                    for (index, action) in snapshot.into_iter().enumerate() {
-                                                        ui.horizontal(|ui| {
-                                                            let mut visible = !hidden.contains(&action);
-                                                            if ui
-                                                                .checkbox(
-                                                                    &mut visible,
-                                                                    format!(
-                                                                        "{}  {}",
-                                                                        timeline_toolbar_action_icon(action),
-                                                                        self.app.tr(timeline_toolbar_action_label(action))
-                                                                    ),
-                                                                )
-                                                                .changed()
-                                                            {
-                                                                hidden.retain(|candidate| *candidate != action);
-                                                                if !visible {
-                                                                    hidden.push(action);
-                                                                }
-                                                                changed = true;
-                                                            }
-                                                            ui.with_layout(
-                                                                egui::Layout::right_to_left(egui::Align::Center),
-                                                                |ui| {
-                                                                    if ui
-                                                                        .add_enabled(
-                                                                            index + 1 < order.len(),
-                                                                            egui::Button::new(crate::ui::icons::ARROW_DOWN)
-                                                                                .small(),
-                                                                        )
-                                                                        .on_hover_text(self.app.tr("Move down"))
-                                                                        .clicked()
-                                                                    {
-                                                                        order.swap(index, index + 1);
-                                                                        changed = true;
-                                                                    }
-                                                                    if ui
-                                                                        .add_enabled(
-                                                                            index > 0,
-                                                                            egui::Button::new(crate::ui::icons::ARROW_UP)
-                                                                                .small(),
-                                                                        )
-                                                                        .on_hover_text(self.app.tr("Move up"))
-                                                                        .clicked()
-                                                                    {
-                                                                        order.swap(index, index - 1);
-                                                                        changed = true;
-                                                                    }
-                                                                },
-                                                            );
-                                                        });
-                                                    }
-                                                    ui.separator();
-                                                    if ui
-                                                        .button(format!(
-                                                            "{} {}",
-                                                            crate::ui::icons::ARROW_COUNTER_CLOCKWISE,
-                                                            self.app.tr("Reset toolbar")
-                                                        ))
-                                                        .clicked()
-                                                    {
-                                                        order = crate::config::default_timeline_toolbar_order();
-                                                        hidden = crate::config::default_timeline_toolbar_hidden();
-                                                        changed = true;
-                                                    }
-                                                    if ui
-                                                        .button(format!(
-                                                            "{} {}",
-                                                            crate::ui::icons::GEAR,
-                                                            self.app.tr("Preferences...")
-                                                        ))
-                                                        .clicked()
-                                                    {
-                                                        crate::ui::preferences::open(self.app, ui.ctx());
-                                                        ui.close();
-                                                    }
-                                                    if changed {
-                                                        self.app.timeline_toolbar_order = order;
-                                                        self.app.timeline_toolbar_hidden = hidden;
-                                                        self.app.save_config();
-                                                    }
-                                                })
-                                                .0
-                                                .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                                .on_hover_text(self.app.tr("More timeline controls and preferences"));
-
-                                                for action in toolbar_order.into_iter().filter(|action| {
-                                                    !self.app.timeline_toolbar_hidden.contains(action)
-                                                }) {
-                                                    let enabled = match action {
-                                                        TimelineToolbarAction::AddKeyframe => can_add_keyframe,
-                                                        TimelineToolbarAction::PreviousCue
-                                                        | TimelineToolbarAction::NextCue => {
-                                                            !self.app.timeline.instances.is_empty()
-                                                        }
-                                                        TimelineToolbarAction::NudgeCueLeft
-                                                        | TimelineToolbarAction::NudgeCueRight
-                                                        | TimelineToolbarAction::DeleteSelection => {
-                                                            !self.app.selected_instance_ids.is_empty()
-                                                                || !self.app.selected_keyframes.is_empty()
-                                                                || self.app.selected_timeline_keyframe.is_some()
-                                                        }
-                                                        TimelineToolbarAction::ClearSelection => {
-                                                            !self.app.selected_instance_ids.is_empty()
-                                                                || !self.app.selected_keyframes.is_empty()
-                                                                || self.app.selected_timeline_keyframe.is_some()
-                                                        }
-                                                        _ => true,
-                                                    };
-                                                    let selected = action == TimelineToolbarAction::FollowPlayhead
-                                                        && self.app.timeline_follow_playhead;
-                                                    let response = ui
-                                                        .add_enabled(
-                                                            enabled,
-                                                            egui::Button::new(timeline_toolbar_action_icon(action))
-                                                                .frame(selected)
-                                                                .selected(selected),
-                                                        )
-                                                        .on_hover_cursor(egui::CursorIcon::PointingHand)
-                                                        .on_hover_text(format!(
-                                                            "{}\n{}",
-                                                            self.app.tr(timeline_toolbar_action_label(action)),
-                                                            timeline_toolbar_action_shortcut(action),
-                                                        ));
-                                                    if response.clicked() {
-                                                        pending_timeline_toolbar_action = Some(action);
-                                                    }
-                                                }
-                                            });
+                                        let toolbar_rect = toolbar.rect;
+                                        if toolbar.action.is_some() {
+                                            pending_timeline_toolbar_action = toolbar.action;
+                                        }
+                                        held_timeline_pan = toolbar.held_pan;
 
                                         let mut clicked_any_keyframe = keyframe_context_owned && ui.input(|input|
                                             input.pointer.any_down() || input.pointer.any_released());
@@ -16833,9 +16655,21 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             // Timeline-local shortcuts mirror the visible toolbar. They only
                             // fire while the canvas owns keyboard focus, so text fields and the
                             // rest of the application retain their normal keys.
-                            if ui.ctx().memory(|memory| {
+                            let timeline_layer = ui.layer_id();
+                            if self.app.keyboard_shortcuts_enabled && ui.ctx().memory(|memory| {
                                 memory.has_focus(timeline_keyboard_focus_id())
+                                    && memory.is_above_modal_layer(timeline_layer)
+                                    && !memory.any_popup_open()
                             }) {
+                                let keyboard_pan = ui.input(|input| {
+                                    if input.modifiers.shift && !input.modifiers.ctrl
+                                        && !input.modifiers.command && !input.modifiers.alt
+                                    {
+                                        u8::from(input.key_down(egui::Key::ArrowRight)) as f32
+                                            - u8::from(input.key_down(egui::Key::ArrowLeft)) as f32
+                                    } else { 0.0 }
+                                });
+                                if keyboard_pan != 0.0 { held_timeline_pan = keyboard_pan; }
                                 let shortcut_action = ui.input(|input| {
                                     if input.modifiers.is_none()
                                         && (input.key_pressed(egui::Key::Plus)
@@ -16846,20 +16680,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         && input.key_pressed(egui::Key::Minus)
                                     {
                                         Some(TimelineToolbarAction::ZoomOut)
-                                    } else if input.modifiers.shift
-                                        && !input.modifiers.ctrl
-                                        && !input.modifiers.command
-                                        && !input.modifiers.alt
-                                        && input.key_pressed(egui::Key::ArrowLeft)
-                                    {
-                                        Some(TimelineToolbarAction::PanLeft)
-                                    } else if input.modifiers.shift
-                                        && !input.modifiers.ctrl
-                                        && !input.modifiers.command
-                                        && !input.modifiers.alt
-                                        && input.key_pressed(egui::Key::ArrowRight)
-                                    {
-                                        Some(TimelineToolbarAction::PanRight)
                                     } else if input.modifiers.is_none()
                                         && input.key_pressed(egui::Key::C)
                                     {
@@ -16943,7 +16763,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     TimelineToolbarAction::FollowPlayhead => {
                                         self.app.timeline_follow_playhead =
                                             !self.app.timeline_follow_playhead;
-                                        self.app.save_config();
+                                        self.app.request_timeline_toolbar_save(ui.ctx());
                                         if self.app.timeline_follow_playhead {
                                             let playhead_x = (self.app.playback_time.max(0.0) as f32
                                                 * current_zoom)
@@ -17282,6 +17102,22 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 }
                             }
 
+                            if held_timeline_pan != 0.0 {
+                                // Integrate held keys/buttons by frame time, rather than
+                                // restarting an easing animation on every OS key repeat.
+                                ui.data_mut(|data| {
+                                    data.remove_temp::<TimelineNavigationTransition>(navigation_transition_id);
+                                });
+                                let dt = ui.input(|input| input.stable_dt);
+                                let max_x = (timeline_content_size.x - timeline_viewport.width()).max(0.0);
+                                timeline_scroll_state.offset.x = (timeline_scroll_state.offset.x
+                                    + crate::ui::timeline_toolbar::held_pan_delta(
+                                        held_timeline_pan, timeline_viewport.width(), dt))
+                                    .clamp(0.0, max_x);
+                                timeline_scroll_changed = true;
+                                ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
+                            }
+
                             // Middle-button dragging pans the existing two-axis
                             // ScrollArea viewport. Track the gesture independently
                             // of child responses so panning also works when it starts
@@ -17350,6 +17186,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                             if self.app.timeline_follow_playhead
                                 && !self.app.is_paused
+                                && held_timeline_pan == 0.0
                                 && !middle_pan_active
                                 && ui.data(|data| {
                                     data.get_temp::<TimelineNavigationTransition>(
