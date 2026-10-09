@@ -616,6 +616,10 @@ pub fn run() -> eframe::Result {
                 }
             }
 
+            let frame_cache = Arc::new(std::sync::RwLock::new(
+                crate::mpv::frame_cache::FrameCache::new(128 * 1024 * 1024),
+            ));
+
             let mut app = PealayerApp {
                 web_only: cli_options.web_only,
                 app_name: app_name.clone(),
@@ -679,9 +683,12 @@ pub fn run() -> eframe::Result {
                 media_track_properties: None,
                 selected_timeline_track: None,
                 seek_pos: None,
-                seek_controller: crate::mpv::seek::SeekController::new(
+                seek_controller: crate::mpv::seek::SeekController::with_cache(
                     crate::mpv::seek::MpvSeekBackend::new(mpv_static),
+                    frame_cache.clone(),
                 ),
+                frame_cache,
+                active_pseudo_frame: None,
                 was_playing_before_scrub: false,
                 is_scrubbing: false,
                 pending_scrub_commit: None,
