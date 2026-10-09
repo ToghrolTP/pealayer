@@ -11,7 +11,7 @@ pub fn color_field(
     let id = ui.next_auto_id().with("rgb-color-field");
     let mut response = ui.add_sized(
         [width, 28.0],
-        egui::TextEdit::singleline(hex)
+        crate::ui::dialog::singleline_text_edit(hex)
             .id(id)
             .desired_width(width)
             .margin(egui::Margin {

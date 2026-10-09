@@ -4,6 +4,8 @@ use serde_json::{Value, json};
 use std::time::{Duration, Instant};
 
 pub struct PreparedTimeline {
+    pub authority: Option<super::authority::Status>,
+    pub authority_client_id: String,
     pub revision: u64,
     pub payload: Value,
     pub acknowledged_revision: u64,
@@ -13,12 +15,17 @@ pub struct PreparedTimeline {
     pub error: Option<String>,
     pub deferred_reason: Option<String>,
     pub compilation_error: Option<String>,
+    /// A timing discontinuity invalidated the controller's previous arm. Keep
+    /// the media paused until an explicit Play requests a new prepare/ack cycle.
+    pub requires_reprepare: bool,
     pub last_ack: Option<Instant>,
     pub play_requested: bool,
 }
 impl Default for PreparedTimeline {
     fn default() -> Self {
         Self {
+            authority: None,
+            authority_client_id: crate::platform::interop::controller_instance_id(),
             revision: 0,
             payload: json!({"cues":[],"actions":[],"max_lateness_ms":50}),
             acknowledged_revision: 0,
@@ -28,12 +35,36 @@ impl Default for PreparedTimeline {
             error: None,
             deferred_reason: None,
             compilation_error: None,
+            requires_reprepare: false,
             last_ack: None,
             play_requested: false,
         }
     }
 }
 impl PreparedTimeline {
+    pub fn update_authority(&mut self, status: super::authority::Status) -> bool {
+        let changed = self.authority.as_ref().map(|value| value.owner_id.as_str())
+            != Some(status.owner_id.as_str());
+        if changed {
+            self.acknowledged_revision = 0;
+            self.clock_ack_revision = 0;
+            self.clock_ack_epoch = 0;
+            self.last_ack = None;
+            self.play_requested = false;
+            self.feedback = Value::Null;
+            self.error = self.compilation_error.clone();
+            self.deferred_reason = None;
+            self.revision = self.revision.saturating_add(1);
+        }
+        self.authority = Some(status);
+        changed
+    }
+    pub fn may_publish(&self) -> bool {
+        // Identity is fixed when the engine is created (or supplied by the
+        // authority for a remote consumer). Re-resolving it here reloads and
+        // validates the entire config under this lock on every clock sample.
+        self.authority.as_ref().is_none_or(|authority|authority.may_publish(&self.authority_client_id))
+    }
     pub fn has_items(&self) -> bool {
         self.revision != self.acknowledged_revision
             || self.compilation_error.is_some()
@@ -51,6 +82,7 @@ impl PreparedTimeline {
                 self.compilation_error = None;
                 self.error = None;
                 self.deferred_reason = None;
+                self.requires_reprepare = false;
                 self.last_ack = None;
             }
             Err(error) => {
@@ -60,6 +92,7 @@ impl PreparedTimeline {
                 self.compilation_error = Some(error.clone());
                 self.error = Some(error);
                 self.deferred_reason = None;
+                self.requires_reprepare = false;
                 self.last_ack = None;
             }
             _ => {}
@@ -74,6 +107,31 @@ impl PreparedTimeline {
             && self.compilation_error.is_none()
             && self.feedback["armed_epoch"].as_u64() == Some(epoch)
             && matches!(self.feedback["state"].as_str(), Some("paused" | "playing"))
+    }
+
+    /// Explicit Play may retry a cancelled/faulted controller executor, but
+    /// must obtain a new revision and arm acknowledgement before unpausing.
+    /// Reusing the old revision only returns its terminal state on the peer.
+    pub fn request_play(&mut self) -> bool {
+        if self.compilation_error.is_some() {
+            self.play_requested = false;
+            return false;
+        }
+        let reprepare = self.requires_reprepare
+            || matches!(self.feedback["state"].as_str(), Some("stopped" | "faulted"));
+        if reprepare {
+            self.revision = self.revision.saturating_add(1);
+            self.acknowledged_revision = 0;
+            self.clock_ack_revision = 0;
+            self.clock_ack_epoch = 0;
+            self.last_ack = None;
+            self.error = None;
+            self.deferred_reason = None;
+            self.requires_reprepare = false;
+            self.feedback = Value::Null;
+        }
+        self.play_requested = true;
+        reprepare
     }
 }
 
@@ -195,6 +253,7 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
         let mut previous_path = String::new();
         let mut seeking = false;
         while lifecycle.strong_count() > 0 {
+            let unattended = crate::platform::interop::allow_unattended_hardware_takeover();
             let mut restarted = false;
             for _ in 0..128 {
                 match client.wait_event(0.0) {
@@ -228,6 +287,7 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
                 .ok()
                 .filter(|value| value.is_finite() && *value > 0.0);
             let coordinator = connected.load(std::sync::atomic::Ordering::Acquire)
+                && plan.lock().is_ok_and(|plan|plan.may_publish())
                 && endpoint
                     .lock()
                     .is_ok_and(|value| super::controller::is_controller_endpoint(&value));
@@ -237,6 +297,8 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
                 && !buffering
                 && !estop.load(std::sync::atomic::Ordering::Acquire);
             let mut set_pause = None;
+            let handoff_pause = plan.lock().is_ok_and(|plan| plan.authority.as_ref()
+                .is_some_and(|state| state.unattended_claim(&plan.authority_client_id, unattended).is_some()));
             if let Ok(mut clock) = sample.lock() {
                 let next = position
                     .unwrap_or(clock.position_ms as f64 / 1000.)
@@ -256,6 +318,7 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
                     prepared.error = Some(
                         "Media clock discontinuity without a seek; hardware playback paused".into(),
                     );
+                    prepared.requires_reprepare = true;
                     prepared.play_requested = false;
                 }
                 if rebase {
@@ -267,6 +330,7 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
                         prepared.revision = prepared.revision.saturating_add(1);
                         prepared.error = prepared.compilation_error.clone();
                         prepared.deferred_reason = None;
+                        prepared.requires_reprepare = false;
                         prepared.last_ack = None;
                         prepared.play_requested |= playing;
                     }
@@ -293,6 +357,7 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
                         }
                         if ready && !fresh {
                             prepared.error = Some("Hardware clock acknowledgement expired; playback paused. Seek and reprepare before retrying.".into());
+                            prepared.requires_reprepare = true;
                             prepared.play_requested = false;
                         }
                         set_pause = Some(true);
@@ -310,6 +375,12 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
                     }
                 }
                 clock.playing = playing;
+                if handoff_pause {
+                    // This is a real libmpv pause, not a fabricated paused clock.
+                    // The publisher accepts only after observing and ACKing it.
+                    set_pause = Some(true);
+                    if let Ok(mut prepared) = plan.lock() { prepared.play_requested = false; }
+                }
             }
             // Never hold shared state while waiting for an mpv command.
             if let Some(paused) = set_pause {
@@ -324,6 +395,48 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
 mod tests {
     use super::*;
     use crate::four_d::models::{Effect, EffectInstance, Timeline};
+    #[test]
+    fn publication_uses_the_prepared_engines_stable_identity() {
+        let mut plan = PreparedTimeline::default();
+        plan.authority_client_id = "publisher:stable-engine".into();
+        plan.authority = Some(super::super::authority::Status {
+            owner_id: plan.authority_client_id.clone(), owner_label: "Publisher".into(),
+            exclusive: false, revision: 1, pending: vec![], owner_endpoint: None,
+        });
+        assert!(plan.may_publish());
+        plan.authority.as_mut().unwrap().exclusive = true;
+        assert!(plan.may_publish());
+        plan.authority.as_mut().unwrap().owner_id = "another-publisher".into();
+        assert!(!plan.may_publish());
+        plan.authority.as_mut().unwrap().owner_id.clear();
+        assert!(!plan.may_publish());
+    }
+
+    #[test]
+    fn authority_handoff_invalidates_old_arm_but_metadata_refresh_does_not() {
+        let status = super::super::authority::Status {
+            owner_id: "owner".into(), owner_label: "Publisher".into(),
+            exclusive: false, revision: 1, pending: vec![], owner_endpoint: None,
+        };
+        let mut plan = PreparedTimeline::default();
+        plan.authority = Some(status.clone());
+        plan.acknowledged_revision = 7;
+        plan.clock_ack_revision = 7;
+        plan.clock_ack_epoch = 4;
+        plan.last_ack = Some(Instant::now());
+        plan.play_requested = true;
+        let mut refresh = status;
+        refresh.owner_endpoint = Some("http://publisher.example:8080/".into());
+        assert!(!plan.update_authority(refresh.clone()));
+        assert_eq!(plan.clock_ack_revision, 7);
+        refresh.owner_id = "requester".into();
+        assert!(plan.update_authority(refresh));
+        assert_eq!(plan.acknowledged_revision, 0);
+        assert_eq!(plan.clock_ack_revision, 0);
+        assert_eq!(plan.clock_ack_epoch, 0);
+        assert!(plan.last_ack.is_none());
+        assert!(!plan.play_requested);
+    }
     #[test]
     fn revision_is_content_driven_and_requires_clock_arming_ack() {
         let mut plan = PreparedTimeline::default();
@@ -348,6 +461,46 @@ mod tests {
         plan.replace(Err("too many actions".into()));
         assert!(plan.has_items());
         assert!(!plan.ready_for(1));
+        assert!(!plan.request_play());
+        assert!(!plan.play_requested);
+        assert!(plan.compilation_error.is_some());
+    }
+
+    #[test]
+    fn explicit_play_reprepares_a_stopped_controller_without_reusing_its_arm() {
+        let mut plan = PreparedTimeline::default();
+        plan.replace(Ok(json!({"cues":[],"actions":[{"id":"a"}]})));
+        plan.acknowledged_revision = 1;
+        plan.clock_ack_revision = 1;
+        plan.clock_ack_epoch = 3;
+        plan.feedback = json!({"state":"stopped","armed_epoch":3});
+        plan.last_ack = Some(Instant::now());
+
+        assert!(plan.request_play());
+        assert_eq!(plan.revision, 2);
+        assert_eq!(plan.acknowledged_revision, 0);
+        assert_eq!(plan.clock_ack_revision, 0);
+        assert_eq!(plan.clock_ack_epoch, 0);
+        assert!(plan.last_ack.is_none());
+        assert!(plan.play_requested);
+        assert!(!plan.ready_for(3));
+        // Repeated Play while preparation is pending must not churn revisions.
+        assert!(!plan.request_play());
+        assert_eq!(plan.revision, 2);
+    }
+
+    #[test]
+    fn explicit_play_retries_faults_but_not_a_healthy_paused_executor() {
+        let mut plan = PreparedTimeline::default();
+        plan.replace(Ok(json!({"cues":[],"actions":[{"id":"a"}]})));
+        plan.feedback = json!({"state":"paused"});
+        assert!(!plan.request_play());
+        assert_eq!(plan.revision, 1);
+        plan.feedback = json!({"state":"faulted"});
+        plan.error = Some("executor cancelled".into());
+        assert!(plan.request_play());
+        assert_eq!(plan.revision, 2);
+        assert!(plan.error.is_none());
     }
     #[test]
     fn retryable_resource_wait_is_distinct_from_a_timing_fault() {

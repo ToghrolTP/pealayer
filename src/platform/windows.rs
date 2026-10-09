@@ -1371,42 +1371,7 @@ pub fn update_windows_taskbar_state(_progress: f64, _duration: f64, _is_paused: 
     // No-op on non-Windows platforms
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct WindowsQuickAction {
-    pub title: &'static str,
-    pub arguments: &'static str,
-}
-
-pub const WINDOWS_QUICK_ACTIONS: [WindowsQuickAction; 7] = [
-    WindowsQuickAction {
-        title: "Play / Pause",
-        arguments: "--toggle-pause",
-    },
-    WindowsQuickAction {
-        title: "Previous chapter",
-        arguments: "--chapter-previous",
-    },
-    WindowsQuickAction {
-        title: "Next chapter",
-        arguments: "--chapter-next",
-    },
-    WindowsQuickAction {
-        title: "Mute / Unmute",
-        arguments: "--toggle-mute",
-    },
-    WindowsQuickAction {
-        title: "Toggle fullscreen",
-        arguments: "--toggle-fullscreen",
-    },
-    WindowsQuickAction {
-        title: "Preferences",
-        arguments: "--preferences",
-    },
-    WindowsQuickAction {
-        title: "Exit Pealayer",
-        arguments: "--quit",
-    },
-];
+pub use super::windows_quick_actions::{WindowsQuickAction, WINDOWS_QUICK_ACTIONS};
 
 #[cfg(target_os = "windows")]
 fn build_windows_jump_list(include_quick_actions: bool) -> Result<(), String> {
@@ -1426,6 +1391,8 @@ fn build_windows_jump_list(include_quick_actions: bool) -> Result<(), String> {
     let executable = std::env::current_exe()
         .map_err(|error| format!("resolve executable for Windows quick actions: {error}"))?;
     let executable_wide = wide_null_path(&executable);
+    let working_directory_wide = wide_null_path(executable.parent().ok_or_else(||
+        "Windows quick-action executable has no containing directory".to_owned())?);
     const PKEY_TITLE: PROPERTYKEY = PROPERTYKEY {
         fmtid: GUID::from_u128(0xf29f85e0_4ff9_1068_ab91_08002b27b3d9),
         pid: 2,
@@ -1463,9 +1430,11 @@ fn build_windows_jump_list(include_quick_actions: bool) -> Result<(), String> {
                     .map_err(|error| format!("set Windows quick-action executable: {error}"))?;
                 link.SetArguments(PCWSTR(arguments.as_ptr()))
                     .map_err(|error| format!("set Windows quick-action arguments: {error}"))?;
+                link.SetWorkingDirectory(PCWSTR(working_directory_wide.as_ptr()))
+                    .map_err(|error| format!("set Windows quick-action working directory: {error}"))?;
                 link.SetDescription(PCWSTR(description.as_ptr()))
                     .map_err(|error| format!("set Windows quick-action description: {error}"))?;
-                link.SetIconLocation(PCWSTR(executable_wide.as_ptr()), 0)
+                link.SetIconLocation(PCWSTR(executable_wide.as_ptr()), action.icon_location_index())
                     .map_err(|error| format!("set Windows quick-action icon: {error}"))?;
 
                 let properties: IPropertyStore = link
@@ -2135,10 +2104,19 @@ unsafe extern "system" fn shell_window_proc(
 ) -> windows::Win32::Foundation::LRESULT {
     use windows::Win32::Foundation::LRESULT;
     use windows::Win32::UI::WindowsAndMessaging::{
-        WM_APPCOMMAND, WM_COMMAND, WM_CONTEXTMENU, WM_LBUTTONDBLCLK, WM_RBUTTONUP,
+        WM_APPCOMMAND, WM_COMMAND, WM_CONTEXTMENU, WM_LBUTTONDBLCLK, WM_RBUTTONUP, WM_SETICON,
     };
 
     observe_native_window_message(message);
+
+    if message == WM_SETICON {
+        // eframe owns the HICON lifetime. Shell copies it; do not destroy it.
+        let result = unsafe { DefSubclassProc(hwnd, message, wparam, lparam) };
+        if lparam.0 != 0 {
+            let _ = refresh_system_tray_window_icon(hwnd.0 as isize, lparam.0);
+        }
+        return result;
+    }
 
     if matches!(message, 0x02e0 | 0x031a | 0x001a) { // DPI/theme/system settings
         THUMBNAIL_METRICS_DIRTY.store(true, Ordering::Release);
@@ -2369,7 +2347,7 @@ pub fn register_system_tray_icon(hwnd_raw: isize, tip: &str) -> Result<(), Strin
         NIF_ICON, NIF_MESSAGE, NIF_TIP, NIM_ADD, NIM_MODIFY, NOTIFYICONDATAW,
         Shell_NotifyIconW,
     };
-    use windows::Win32::UI::WindowsAndMessaging::{GCLP_HICON, GetClassLongPtrW, HICON, LoadIconW};
+    use windows::Win32::UI::WindowsAndMessaging::{GCLP_HICON, GetClassLongPtrW, HICON, LoadIconW, SendMessageW, WM_GETICON, ICON_SMALL2};
     use windows::core::PCWSTR;
 
     if hwnd_raw == 0 {
@@ -2381,8 +2359,14 @@ pub fn register_system_tray_icon(hwnd_raw: isize, tip: &str) -> Result<(), Strin
         let module =
             GetModuleHandleW(None).map_err(|error| format!("GetModuleHandleW failed: {error}"))?;
         let instance: windows::Win32::Foundation::HINSTANCE = module.into();
-        let hicon = LoadIconW(Some(instance), PCWSTR(1usize as *const u16))
-            .unwrap_or_else(|_| HICON(GetClassLongPtrW(hwnd, GCLP_HICON) as *mut _));
+        let window_icon = SendMessageW(hwnd, WM_GETICON,
+            Some(windows::Win32::Foundation::WPARAM(ICON_SMALL2 as usize)), None).0;
+        let hicon = if window_icon != 0 {
+            HICON(window_icon as *mut _)
+        } else {
+            LoadIconW(Some(instance), PCWSTR(1usize as *const u16))
+                .unwrap_or_else(|_| HICON(GetClassLongPtrW(hwnd, GCLP_HICON) as *mut _))
+        };
         if hicon.0.is_null() {
             return Err("packaged application icon is unavailable".to_string());
         }
@@ -2411,6 +2395,24 @@ pub fn register_system_tray_icon(hwnd_raw: isize, tip: &str) -> Result<(), Strin
             Err("Shell_NotifyIconW NIM_ADD and NIM_MODIFY failed".to_string())
         }
     }
+}
+
+#[cfg(target_os = "windows")]
+fn refresh_system_tray_window_icon(hwnd_raw: isize, icon_raw: isize) -> Result<(), String> {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::UI::Shell::{NIF_ICON, NIM_MODIFY, NOTIFYICONDATAW, Shell_NotifyIconW};
+    use windows::Win32::UI::WindowsAndMessaging::HICON;
+    let mut nid = NOTIFYICONDATAW {
+        cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
+        hWnd: HWND(hwnd_raw as *mut _),
+        uID: 1,
+        uFlags: NIF_ICON,
+        hIcon: HICON(icon_raw as *mut _),
+        ..Default::default()
+    };
+    unsafe { Shell_NotifyIconW(NIM_MODIFY, &mut nid) }.as_bool()
+        .then_some(())
+        .ok_or_else(|| "Shell_NotifyIconW icon refresh failed".to_string())
 }
 
 #[cfg(target_os = "windows")]
@@ -2982,6 +2984,33 @@ mod tests {
                 action.title,
                 action.arguments
             );
+        }
+    }
+
+    #[test]
+    fn windows_quick_action_icons_are_distinct_embedded_resources() {
+        let mut ids = std::collections::HashSet::new();
+        let mut images = std::collections::HashSet::new();
+        for action in WINDOWS_QUICK_ACTIONS {
+            assert!(action.icon_resource_id > 1, "task must not use the app logo");
+            assert!(ids.insert(action.icon_resource_id), "duplicate task icon resource");
+            assert_eq!(action.icon_location_index(), -(action.icon_resource_id as i32));
+            let ico = super::super::windows_shell_icons::shell_icon_ico(action.icon_glyph);
+            assert_eq!(&ico[..4], &[0, 0, 1, 0]);
+            assert_eq!(u16::from_le_bytes([ico[4], ico[5]]) as usize,
+                super::super::windows_shell_icons::SHELL_ICON_SIZES.len());
+            let decoded = image::load_from_memory_with_format(&ico, image::ImageFormat::Ico)
+                .expect("generated shell ICO must decode").to_rgba8();
+            assert_eq!(decoded.dimensions(), (64, 64));
+            assert!(images.insert(decoded.into_raw()), "two actions have identical icons");
+            for size in super::super::windows_shell_icons::SHELL_ICON_SIZES {
+                let pixels = super::super::windows_shell_icons::shell_icon_rgba(action.icon_glyph, size);
+                assert!(pixels.chunks_exact(4).any(|pixel| pixel[3] > 0));
+                for x in 0..size {
+                    assert_eq!(pixels[(x * 4 + 3) as usize], 0, "top edge clipped");
+                    assert_eq!(pixels[((size - 1) * size * 4 + x * 4 + 3) as usize], 0, "bottom edge clipped");
+                }
+            }
         }
     }
 

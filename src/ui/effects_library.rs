@@ -1922,7 +1922,7 @@ fn draw_sequence_step_editor(
                                 let text_align =
                                     crate::ui::i18n::input_alignment(rtl_ui, &step.text);
                                 ui.add(
-                                    egui::TextEdit::singleline(&mut step.text)
+                                    crate::ui::dialog::singleline_text_edit(&mut step.text)
                                         .horizontal_align(text_align),
                                 );
                                 ui.end_row();
@@ -2094,7 +2094,7 @@ fn draw_sequence_step_editor(
                                 ui.end_row();
                                 ui.label("Payload (hex)");
                                 ui.add(
-                                    egui::TextEdit::singleline(&mut step.payload_hex)
+                                    crate::ui::dialog::singleline_text_edit(&mut step.payload_hex)
                                         .desired_width(280.0)
                                         .font(egui::TextStyle::Monospace),
                                 );
@@ -2103,7 +2103,7 @@ fn draw_sequence_step_editor(
                                 let text_align =
                                     crate::ui::i18n::input_alignment(rtl_ui, &step.text);
                                 ui.add(
-                                    egui::TextEdit::singleline(&mut step.text)
+                                    crate::ui::dialog::singleline_text_edit(&mut step.text)
                                         .horizontal_align(text_align),
                                 );
                                 ui.end_row();
@@ -2125,7 +2125,7 @@ fn draw_sequence_step_editor(
                 for (action_index, action) in step.action_ids.iter_mut().enumerate() {
                     ui.horizontal(|ui| {
                         ui.add(
-                            egui::TextEdit::singleline(action)
+                            crate::ui::dialog::singleline_text_edit(action)
                                 .desired_width(240.0)
                                 .hint_text("seat.a.up"),
                         );
@@ -2229,17 +2229,32 @@ fn paint_recording_swatch(ui: &egui::Ui, rect: egui::Rect, value: &str) {
         .circle_stroke(center, 5.0, egui::Stroke::new(1.0, egui::Color32::GRAY));
 }
 
+fn recording_color_label(ui: &egui::Ui, label: &str) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    // Match the painted swatch's fixed 24 px lane. Ordinary spaces vary with
+    // font and selected/hover formatting, making the label visibly jump.
+    job.append(
+        label,
+        28.0,
+        egui::TextFormat::simple(
+            egui::TextStyle::Button.resolve(ui.style()),
+            ui.visuals().text_color(),
+        ),
+    );
+    job
+}
+
 fn recording_color_picker(ui: &mut egui::Ui, value: &mut String) -> egui::Response {
     let selected = recording_colors()
         .iter()
         .find(|color| color.id == *value)
         .unwrap_or(&recording_colors()[0]);
     let response = egui::ComboBox::from_id_salt("effect_recording_color")
-        .selected_text(format!("     {}", selected.label))
+        .selected_text(recording_color_label(ui, &selected.label))
         .show_ui(ui, |ui| {
             for color in recording_colors() {
-                let row =
-                    ui.selectable_value(value, color.id.clone(), format!("     {}", color.label));
+                let label = recording_color_label(ui, &color.label);
+                let row = ui.selectable_value(value, color.id.clone(), label);
                 paint_recording_swatch(ui, row.rect, &color.id);
             }
         })
@@ -2617,7 +2632,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     ui.label(&labels.3);
                                     ui.add_enabled(
                                         draft.is_new,
-                                        egui::TextEdit::singleline(&mut draft.id)
+                                        crate::ui::dialog::singleline_text_edit(&mut draft.id)
                                             .desired_width(260.0),
                                     );
                                     ui.end_row();
@@ -2627,7 +2642,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                         &draft.name,
                                     );
                                     ui.add(
-                                        egui::TextEdit::singleline(&mut draft.name)
+                                        crate::ui::dialog::singleline_text_edit(&mut draft.name)
                                             .horizontal_align(name_align)
                                             .desired_width(320.0),
                                     );
@@ -2785,7 +2800,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                                     &app.effect_library_draft.label,
                                                 );
                                                 ui.add(
-                                                    egui::TextEdit::singleline(
+                                                    crate::ui::dialog::singleline_text_edit(
                                                         &mut app.effect_library_draft.label,
                                                     )
                                                     .horizontal_align(label_align),
@@ -2797,7 +2812,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                                     &app.effect_library_draft.lcd_message,
                                                 );
                                                 ui.add(
-                                                    egui::TextEdit::singleline(
+                                                    crate::ui::dialog::singleline_text_edit(
                                                         &mut app.effect_library_draft.lcd_message,
                                                     )
                                                     .horizontal_align(lcd_align),

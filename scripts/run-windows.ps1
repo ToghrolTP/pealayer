@@ -17,15 +17,8 @@ if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'libmpv-windows.ps1')
 Set-Location -LiteralPath $repositoryRoot
-$cargoTargetDirectory = if ($env:CARGO_TARGET_DIR) {
-    if ([System.IO.Path]::IsPathRooted($env:CARGO_TARGET_DIR)) {
-        [System.IO.Path]::GetFullPath($env:CARGO_TARGET_DIR)
-    } else {
-        [System.IO.Path]::GetFullPath((Join-Path $repositoryRoot $env:CARGO_TARGET_DIR))
-    }
-} else {
-    Join-Path $repositoryRoot 'target'
-}
+$cargoTargetDirectory = Get-PealayerCargoTargetDirectory -RepositoryRoot $repositoryRoot
+$env:CARGO_TARGET_DIR = $cargoTargetDirectory
 $machineRustupHome = [Environment]::GetEnvironmentVariable('RUSTUP_HOME', 'Machine')
 if ($machineRustupHome) { $env:RUSTUP_HOME = $machineRustupHome }
 $userProfileDirectory = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)

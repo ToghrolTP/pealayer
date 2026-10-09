@@ -8,7 +8,7 @@ pub use egui_phosphor::regular::{
     CLOCK_COUNTER_CLOCKWISE, COPY,
     CPU, DIAMOND, DOOR, DOT_OUTLINE, DOTS_SIX_VERTICAL, DOTS_THREE, ERASER, EYE, EYE_SLASH, FAN,
     FAST_FORWARD, FILE_VIDEO, FIRE, FLOPPY_DISK, FOLDER_OPEN, FRAME_CORNERS, GAUGE, GEAR, GLOBE,
-    GRID_FOUR, HAND_TAP, HEADPHONES, HOURGLASS_MEDIUM, INFO, KEYBOARD, LAMP, LIGHTBULB, LIGHTNING,
+    GRID_FOUR, HAND_TAP, HEADPHONES, HOURGLASS_MEDIUM, IMAGE, INFO, KEYBOARD, LAMP, LIGHTBULB, LIGHTNING,
     LINK, LINK_SIMPLE, LIST, LIST_CHECKS, LOCK, MAGNIFYING_GLASS, MINUS, MONITOR_PLAY, MUSIC_NOTE,
     PALETTE, PAPER_PLANE_TILT, PAUSE, PENCIL_SIMPLE, PLAY, PLUG, PLUS, POWER, PROHIBIT, PUSH_PIN,
     PUSH_PIN_SLASH, RADIO, RECORD, REWIND, SCISSORS, SEAT, SELECTION_ALL, SKIP_BACK, SKIP_FORWARD,
@@ -290,7 +290,7 @@ pub fn searchable_icon_picker_contents(
                     .max(70.0);
             let search_response = ui.add_sized(
                 [search_width, ui.spacing().interact_size.y],
-                egui::TextEdit::singleline(search)
+                crate::ui::dialog::singleline_text_edit(search)
                     .id_salt(search_id.with("input"))
                     .hint_text(config.search_hint)
                     .desired_width(search_width),

@@ -1,4 +1,5 @@
 pub mod controller;
+pub mod authority;
 pub mod curve;
 pub mod curve_record;
 pub mod embedded_host;

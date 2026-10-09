@@ -26,6 +26,9 @@ coordinator timing contract.
 3. An independent libmpv observer samples actual playback every 20 ms; the
    telemetry thread sends clock updates about every 40 ms while hardware is armed.
    Repainting, Web UI connection, and GPU callbacks do not own this clock.
+   Authority checks compare the engine's already-established client identity;
+   they must not load/parse/validate configuration while holding the timeline
+   mutex in the sampling or publishing path.
 4. Playback waits for both plan preparation and a matching paused-clock/epoch
    arming acknowledgement. PCController schedules commands itself, rather than
    receiving a new play RPC at every cue boundary.
@@ -42,6 +45,9 @@ cue, seek before its start and prepare again; continuing after the failed cue is
 not automatic recovery.
 
 The egui status bar and Web Effects Library expose preparation/timing faults.
+Semantic preparation, authority, execution-ledger and fault transitions wake the
+existing UI/Web state publisher; ordinary clock echoes and ACK-age changes do
+not force idle repaint loops. The wake callback runs outside timeline locks.
 `/api/player/status.hardware_sync` exposes plan and clock acknowledgements,
 their age, any deferred resource reason, and the PCController ledger. PCController also publishes
 `media.timeline` state events and includes the ledger in its playback snapshot.

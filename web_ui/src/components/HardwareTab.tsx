@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { RfManager } from './RfManager';
+import { PublishingAuthority } from './PublishingAuthority';
 import {
   Alert,
   Button,
@@ -441,6 +442,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
         >{tr(locale, 'E-STOP')}</Button>
       </Space>
     </header>
+    <PublishingAuthority state={state} sendCmd={sendCmd} controls />
 
     <Modal
       className="channel-manager-modal"

@@ -66,12 +66,153 @@ fn playback_publish_interval(sample: &PlaybackSample) -> Duration {
     }
 }
 
+fn handoff_pause_acknowledged(sample: &PlaybackSample, valid_echo: bool) -> bool {
+    valid_echo && !sample.playing && !sample.buffering
+        && sample.observed_at.elapsed() < Duration::from_millis(250)
+}
+
+#[derive(Default)]
+struct AutomaticClaim {
+    attempted: bool,
+    owner: Option<String>,
+}
+impl AutomaticClaim {
+    fn should_request(&mut self, loaded: bool, status: &super::authority::Status) -> bool {
+        if self.owner.as_ref().is_some_and(|owner| !owner.is_empty()) && status.owner_id.is_empty() {
+            self.attempted = false;
+        }
+        self.owner = Some(status.owner_id.clone());
+        if !loaded || self.attempted { return false; }
+        self.attempted = true;
+        // Never take over an existing owner automatically, even after reconnect.
+        status.owner_id.is_empty()
+    }
+}
+
+fn invalidate_coordinator_session(plan: &mut super::media_timeline::PreparedTimeline) {
+    // Even an acknowledged empty plan has a coordinator revision; do not
+    // reuse it after losing that coordinator session.
+    if plan.revision != 0 { plan.revision = plan.revision.saturating_add(1); }
+    plan.acknowledged_revision = 0;
+    plan.clock_ack_revision = 0;
+    plan.clock_ack_epoch = 0;
+    plan.last_ack = None;
+    plan.feedback = serde_json::Value::Null;
+    plan.play_requested = false;
+}
+
+fn take_coordinator_session<T>(
+    client: &mut Option<T>,
+    timeline: &Mutex<super::media_timeline::PreparedTimeline>,
+) -> Option<T> {
+    let old = client.take()?;
+    // Invalidate once per live stream, not on every disconnected polling pass.
+    // Every transport-loss path shares this transition; no old arm or Play
+    // request may survive an ACK/heartbeat failure on an otherwise live engine.
+    if let Ok(mut plan) = timeline.lock() {
+        invalidate_coordinator_session(&mut plan);
+    }
+    Some(old)
+}
+
+#[derive(serde::Deserialize)]
+struct ControllerPlanIdentity {
+    client_id: String,
+    revision: u64,
+}
+
+#[derive(serde::Deserialize)]
+struct ControllerClockIdentity {
+    client_id: String,
+    sequence: u64,
+}
+
+fn reconcile_clock_sequence(
+    client_id: &str,
+    sequence: &mut u64,
+    feedback: serde_json::Value,
+) -> Result<(), String> {
+    let remote: ControllerClockIdentity = serde_json::from_value(feedback)
+        .map_err(|error| format!("Invalid hardware clock identity: {error}"))?;
+    let floor = if remote.client_id == client_id {
+        (*sequence).max(remote.sequence)
+    } else {
+        *sequence
+    };
+    floor.checked_add(1)
+        .ok_or_else(|| "Hardware clock sequence exhausted".to_string())?;
+    // A stable publisher can restart faster than its old clock lease expires.
+    // Continue only its own counter; do not release its exclusive authority,
+    // adopt another publisher's epoch, or replay any previous output.
+    // The next outgoing paused arm/update increments this floor before sending.
+    *sequence = floor;
+    Ok(())
+}
+
+fn reconcile_controller_revision(
+    plan: &mut super::media_timeline::PreparedTimeline,
+    feedback: serde_json::Value,
+) -> Result<(), String> {
+    let remote: ControllerPlanIdentity = serde_json::from_value(feedback)
+        .map_err(|error| format!("Invalid hardware timeline identity: {error}"))?;
+    // Revisions are monotonic per publisher, not per Pealayer process. The
+    // coordinator can retain our old plan across an application update.
+    if remote.client_id == plan.authority_client_id && remote.revision >= plan.revision {
+        let next = remote.revision.checked_add(1)
+            .ok_or_else(|| "Hardware timeline revision exhausted".to_string())?;
+        invalidate_coordinator_session(plan);
+        plan.revision = next;
+    }
+    Ok(())
+}
+
+// Wake idle UI/Web consumers for semantic transitions, not for every clock echo
+// or changing ACK age. The executor/observer never waits for a repaint.
+#[derive(PartialEq)]
+struct SyncPresentation {
+    authority: Option<super::authority::Status>,
+    revision: u64,
+    prepared_revision: u64,
+    clock_revision: u64,
+    clock_epoch: u64,
+    error: Option<String>,
+    deferred: Option<String>,
+    requires_reprepare: bool,
+    executor_state: Option<String>,
+    acknowledged: Option<u64>,
+}
+
+fn notify_sync_change(
+    timeline: &Mutex<super::media_timeline::PreparedTimeline>,
+    notifier: &Mutex<Option<super::engine::StateNotifier>>,
+    previous: &mut Option<SyncPresentation>,
+) {
+    let presentation = timeline.lock().ok().map(|plan| SyncPresentation {
+        authority: plan.authority.clone(),
+        revision: plan.revision,
+        prepared_revision: plan.acknowledged_revision,
+        clock_revision: plan.clock_ack_revision,
+        clock_epoch: plan.clock_ack_epoch,
+        error: plan.error.clone(),
+        deferred: plan.deferred_reason.clone(),
+        requires_reprepare: plan.requires_reprepare,
+        executor_state: plan.feedback["state"].as_str().map(str::to_owned),
+        acknowledged: plan.feedback["acknowledged"].as_u64(),
+    });
+    if presentation != *previous {
+        *previous = presentation;
+        // Callback may read timeline state; no application lock is held here.
+        super::engine::notify_state_change(notifier);
+    }
+}
+
 pub fn spawn(
     lifecycle: Weak<()>,
     sample: Arc<Mutex<PlaybackSample>>,
     connected: Arc<AtomicBool>,
     endpoint: Arc<Mutex<String>>,
     timeline: Arc<Mutex<super::media_timeline::PreparedTimeline>>,
+    notifier: Arc<Mutex<Option<super::engine::StateNotifier>>>,
 ) {
     std::thread::spawn(move || {
         let id = crate::platform::interop::controller_instance_id();
@@ -85,20 +226,31 @@ pub fn spawn(
         let mut preparation_retry_at = Instant::now();
         let mut preparation_retry_revision = 0_u64;
         let mut last_error = String::new();
+        let mut authority_at = Instant::now()-Duration::from_secs(2);
+        let mut automatic_claim = AutomaticClaim::default();
+        let mut authority_ready = false;
+        let mut reconcile_session = true;
+        let mut owner_endpoint_cache: (String, Option<String>) = (String::new(), None);
+        let mut owner_endpoint_at = Instant::now() - Duration::from_secs(10);
+        let mut unattended_attempt: Option<(String, String)> = None;
+        let mut previous_presentation = None;
         loop {
+            notify_sync_change(&timeline, &notifier, &mut previous_presentation);
             let alive = lifecycle.strong_count() > 0;
             let requested_endpoint = endpoint.lock().map(|s| s.clone()).unwrap_or_default();
             let usable = alive
                 && connected.load(Ordering::Relaxed)
                 && super::controller::is_controller_endpoint(&requested_endpoint);
             if !usable || active_endpoint != requested_endpoint {
-                if let Some(mut old) = client.take() {
+                if let Some(mut old) = take_coordinator_session(&mut client, &timeline) {
                     sequence += 1;
                     let _ = old.call("controller.media.playback.update", json!({
                         "client_id":id,"sequence":sequence,"position_ms":0,"loaded":false,"playing":false,"rate":1.0}));
                     let _ = old.call("controller.app.instance.remove", json!({"id":id}));
                 }
                 previous = None;
+                authority_ready = false;
+                authority_at = Instant::now() - Duration::from_secs(2);
                 if let Ok(mut plan) = timeline.lock() {
                     plan.acknowledged_revision = 0;
                     plan.last_ack = None;
@@ -126,6 +278,10 @@ pub fn spawn(
                         active_endpoint = requested_endpoint;
                         reported_at = Instant::now();
                         previous = None;
+                        authority_ready = false;
+                        authority_at = Instant::now() - Duration::from_secs(2);
+                        automatic_claim = AutomaticClaim::default();
+                        reconcile_session = true;
                     }
                     Err(error) => {
                         if error != last_error {
@@ -135,6 +291,102 @@ pub fn spawn(
                         retry_at = Instant::now() + Duration::from_secs(2);
                     }
                 }
+            }
+            if let Some(ref mut rpc)=client {
+                if authority_at.elapsed()>=Duration::from_secs(1) {
+                    authority_at=Instant::now();
+                    let result=rpc.call("controller.media.authority.get",json!({})).and_then(|value|
+                        serde_json::from_value::<super::authority::Status>(value).map_err(|error|format!("Invalid publishing authority state: {error}")));
+                    match result {
+                        Ok(mut status)=>{
+                            authority_ready = true;
+                            if automatic_claim.should_request(current.loaded, &status) {
+                                match rpc.call_detailed("controller.media.authority.change",json!({"client_id":id,"operation":"request"})) {
+                                    Ok(value) => {
+                                        if let Ok(updated)=serde_json::from_value(value){status=updated;}
+                                    }
+                                    Err(error) => {
+                                        if let Ok(mut plan)=timeline.lock() {
+                                            plan.error=Some(format!("Publishing claim failed: {error}"));
+                                            plan.play_requested=false;
+                                        }
+                                        if error.transport_failed {
+                                            // Claim outcome is unknown. Reconnect, read authority
+                                            // first, and never replay an output or handoff accept.
+                                            let _ = take_coordinator_session(&mut client, &timeline);
+                                            authority_ready=false;
+                                            retry_at=Instant::now()+Duration::from_secs(2);
+                                            continue;
+                                        }
+                                    }
+                                }
+                            }
+                            if status.owner_id != owner_endpoint_cache.0 || owner_endpoint_at.elapsed() >= Duration::from_secs(10) {
+                                owner_endpoint_at = Instant::now();
+                                // Only observers need the remote alternative. Do not
+                                // add an address lookup to the active publisher's clock path.
+                                owner_endpoint_cache = (status.owner_id.clone(), if status.owner_id.is_empty() || status.owner_id == id { None } else {
+                                    rpc.call("controller.app.instance.get", json!({"id": status.owner_id}))
+                                        .ok().and_then(|value| super::authority::owner_endpoint(&status.owner_id, &value))
+                                });
+                            }
+                            status.owner_endpoint = owner_endpoint_cache.1.clone();
+                            if let Ok(mut plan)=timeline.lock() {
+                                if plan.update_authority(status) {
+                                    previous=None;
+                                }
+                            }
+                        }
+                        Err(error)=>{
+                            authority_ready = false;
+                            if let Ok(mut plan)=timeline.lock(){
+                                plan.error=Some(format!("Publishing authority unavailable: {error}"));
+                            }
+                            // A failed query cannot leave a dead socket pinned forever.
+                            // The new stream queries authority before preparing or sending.
+                            let _ = take_coordinator_session(&mut client, &timeline);
+                            previous=None;
+                            retry_at=Instant::now()+Duration::from_secs(2);
+                            continue;
+                        }
+                    }
+                }
+                if !authority_ready || timeline.lock().is_ok_and(|plan|!plan.may_publish()) {
+                    if reported_at.elapsed()>=Duration::from_secs(10) {
+                        if rpc.call("controller.app.instance.report",identity(&id,&current.name)).is_err() {
+                            let _ = take_coordinator_session(&mut client, &timeline);
+                            authority_ready=false;
+                            previous=None;
+                            retry_at=Instant::now()+Duration::from_secs(2);
+                        }
+                        reported_at=Instant::now();
+                    }
+                    std::thread::sleep(Duration::from_millis(20));continue;
+                }
+            }
+            if reconcile_session && let Some(ref mut rpc) = client {
+                let result = rpc.call("controller.media.playback.get", json!({}))
+                    .map_err(|error| format!("Playback clock snapshot: {error}"))
+                    .and_then(|feedback| reconcile_clock_sequence(&id, &mut sequence, feedback))
+                    .and_then(|_| rpc.call("controller.media.timeline.get", json!({})))
+                    .and_then(|feedback| {
+                        let mut plan = timeline.lock()
+                            .map_err(|_| "Hardware timeline state unavailable".to_string())?;
+                        reconcile_controller_revision(&mut plan, feedback)
+                    });
+                if let Err(error) = result {
+                    if let Ok(mut plan) = timeline.lock() {
+                        plan.error = Some(format!("Hardware coordinator state unavailable: {error}"));
+                    }
+                    let _ = take_coordinator_session(&mut client, &timeline);
+                    authority_ready = false;
+                    previous = None;
+                    retry_at = Instant::now() + Duration::from_secs(2);
+                    continue;
+                }
+                reconcile_session = false;
+                preparation_retry_revision = 0;
+                previous = None;
             }
             // A prepared hardware timeline does not make a paused media clock
             // active. Publish at 25 Hz only while playback advances; explicit
@@ -177,6 +429,16 @@ pub fn spawn(
                                 "plan_revision": revision,
                             }),
                         );
+                        if let Err(error) = arm_result {
+                            let _ = take_coordinator_session(&mut client, &timeline);
+                            if let Ok(mut plan) = timeline.lock() {
+                                plan.error = Some(format!("Hardware clock acknowledgement failed: {error}"));
+                            }
+                            authority_ready = false;
+                            previous = None;
+                            retry_at = Instant::now() + Duration::from_secs(2);
+                            continue;
+                        }
                         if let Ok(mut plan) = timeline.lock()
                             && plan.revision == revision
                         {
@@ -209,7 +471,9 @@ pub fn spawn(
                             let retry_ms = error.retry_after_ms.unwrap_or(2_000).clamp(500, 10_000);
                             preparation_retry_at = Instant::now() + Duration::from_millis(retry_ms);
                             if let Ok(mut plan) = timeline.lock() {
-                                plan.error = None;
+                                if !plan.requires_reprepare {
+                                    plan.error = None;
+                                }
                                 plan.deferred_reason = Some(format!("Hardware timeline is waiting: {}", error.message));
                                 plan.play_requested = false;
                             }
@@ -220,6 +484,12 @@ pub fn spawn(
                             plan.deferred_reason = None;
                             plan.error = Some(format!("Hardware timeline not prepared: {}", error.message));
                             plan.play_requested = false;
+                        }
+                        if error.transport_failed {
+                            let _ = take_coordinator_session(&mut client, &timeline);
+                            authority_ready = false;
+                            previous = None;
+                            retry_at = Instant::now() + Duration::from_secs(2);
                         }
                         continue;
                     }
@@ -251,12 +521,12 @@ pub fn spawn(
                     "duration_ms":current.duration_ms,"playing":outgoing_playing,"loaded":current.loaded,"rate":current.rate,"epoch":current.epoch,"plan_revision":revision}));
                 match result {
                     Ok(feedback) => {
+                        let valid_echo = feedback["sequence"].as_u64() == Some(sequence)
+                            && feedback["client_id"] == id
+                            && feedback["epoch"].as_u64() == Some(current.epoch)
+                            && feedback["plan_revision"].as_u64().unwrap_or(0) == revision;
                         if let Ok(mut plan) = timeline.lock() {
-                            if feedback["sequence"].as_u64() != Some(sequence)
-                                || feedback["client_id"] != id
-                                || feedback["epoch"].as_u64() != Some(current.epoch)
-                                || feedback["plan_revision"].as_u64().unwrap_or(0) != revision
-                            {
+                            if !valid_echo {
                                 plan.error =
                                     Some("Hardware clock echo mismatch; playback paused".into());
                                 plan.play_requested = false;
@@ -265,9 +535,12 @@ pub fn spawn(
                                 plan.clock_ack_revision = revision;
                                 plan.clock_ack_epoch = current.epoch;
                                 plan.feedback = feedback["timeline"].clone();
-                                // A transient transport failure must not remain visible once
-                                // the controller has acknowledged a newer clock sample.
-                                plan.error = None;
+                                // A transient transport failure can clear on a fresh
+                                // acknowledgement. A discontinuity fault is different:
+                                // keep it latched until explicit Play requests re-arming.
+                                if !plan.requires_reprepare {
+                                    plan.error = None;
+                                }
                                 if plan.feedback["state"] == "faulted" {
                                     plan.error = Some(
                                         plan.feedback["error"]
@@ -282,6 +555,43 @@ pub fn spawn(
                         previous = Some(current.clone());
                         sent_at = Instant::now();
                         last_error.clear();
+                        // Owner consent is configured locally. A real observed pause
+                        // and its successful echo precede PCController's existing
+                        // acknowledged cleanup/transfer. Never replay a failed accept.
+                        let claim = if handoff_pause_acknowledged(&current, valid_echo) {
+                            let enabled = crate::platform::interop::allow_unattended_hardware_takeover();
+                            timeline.lock().ok().and_then(|plan| plan.authority.as_ref()
+                                .and_then(|status| status.unattended_claim(&id, enabled)).cloned())
+                        } else { None };
+                        if let Some(claim) = claim {
+                            let key = (claim.client_id.clone(), claim.requested_at.clone());
+                            if unattended_attempt.as_ref() != Some(&key) {
+                                unattended_attempt = Some(key);
+                                let result = rpc.call("controller.media.authority.change", json!({
+                                    "client_id": id, "operation": "accept", "requester_id": claim.client_id
+                                })).and_then(|value| serde_json::from_value::<super::authority::Status>(value)
+                                    .map_err(|error| format!("Invalid authority handoff acknowledgement: {error}")));
+                                match result {
+                                    Ok(status) => {
+                                        if let Ok(mut plan) = timeline.lock() { plan.update_authority(status); }
+                                        previous = None;
+                                        authority_at = Instant::now() - Duration::from_secs(2);
+                                        let _ = crate::messaging::publish(crate::messaging::ToastRequest {
+                                            id: Some("hardware.authority".into()), title: "Publishing handoff completed".into(),
+                                            message: format!("Playback paused. {} now owns hardware publishing.", claim.label),
+                                            severity: crate::messaging::Severity::Info, timeout_ms: 6000,
+                                        }, "hardware");
+                                    }
+                                    Err(error) => {
+                                        let _ = crate::messaging::publish(crate::messaging::ToastRequest {
+                                            id: Some("hardware.authority".into()), title: "Unattended handoff failed".into(),
+                                            message: format!("{error}. Playback remains paused; review the handoff manually."),
+                                            severity: crate::messaging::Severity::Error, timeout_ms: 10000,
+                                        }, "hardware");
+                                    }
+                                }
+                            }
+                        }
                     }
                     Err(error) => {
                         if let Ok(mut plan) = timeline.lock() {
@@ -295,7 +605,8 @@ pub fn spawn(
                             eprintln!("Playback sync: {error}");
                             last_error = error;
                         }
-                        client = None;
+                        let _ = take_coordinator_session(&mut client, &timeline);
+                        authority_ready = false;
                         previous = None;
                         retry_at = Instant::now() + Duration::from_secs(2);
                     }
@@ -311,7 +622,10 @@ pub fn spawn(
                     )
                     .is_err()
                 {
-                    client = None;
+                    let _ = take_coordinator_session(&mut client, &timeline);
+                    authority_ready = false;
+                    previous = None;
+                    retry_at = Instant::now() + Duration::from_secs(2);
                 }
                 reported_at = Instant::now();
             }
@@ -325,6 +639,216 @@ fn identity(id: &str, name: &str) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn automatic_claim_recovers_after_release_or_reconnect_without_taking_an_owner() {
+        let mut status = super::super::authority::Status {
+            owner_id: String::new(), owner_label: String::new(), exclusive: false,
+            revision: 1, pending: vec![], owner_endpoint: None,
+        };
+        let mut claim = AutomaticClaim::default();
+        assert!(!claim.should_request(false, &status));
+        assert!(claim.should_request(true, &status));
+        assert!(!claim.should_request(true, &status));
+        status.owner_id = "another-publisher".into();
+        assert!(!claim.should_request(true, &status));
+        let mut reconnected = AutomaticClaim::default();
+        assert!(!reconnected.should_request(true, &status));
+        status.exclusive = true;
+        assert!(!reconnected.should_request(true, &status));
+        status.owner_id.clear();
+        status.exclusive = false;
+        assert!(claim.should_request(true, &status));
+        assert!(!claim.should_request(true, &status));
+        assert!(AutomaticClaim::default().should_request(true, &status));
+    }
+
+    #[test]
+    fn failed_authority_query_invalidates_arm_and_requires_a_new_plan_revision() {
+        let mut plan = super::super::media_timeline::PreparedTimeline::default();
+        plan.revision = 7;
+        plan.acknowledged_revision = 7;
+        plan.clock_ack_revision = 7;
+        plan.clock_ack_epoch = 3;
+        plan.feedback = json!({"armed_epoch":3,"state":"playing"});
+        plan.last_ack = Some(Instant::now());
+        plan.play_requested = true;
+        assert!(plan.ready_for(3));
+        invalidate_coordinator_session(&mut plan);
+        assert_eq!(plan.revision, 8);
+        assert_eq!(plan.acknowledged_revision, 0);
+        assert_eq!(plan.clock_ack_revision, 0);
+        assert_eq!(plan.clock_ack_epoch, 0);
+        assert!(plan.last_ack.is_none());
+        assert!(!plan.play_requested);
+        assert!(!plan.ready_for(3));
+    }
+
+    #[test]
+    fn stream_loss_invalidates_once_and_disconnected_polls_never_churn_revisions() {
+        let mut plan = super::super::media_timeline::PreparedTimeline::default();
+        plan.revision = 7;
+        plan.acknowledged_revision = 7;
+        plan.clock_ack_revision = 7;
+        plan.clock_ack_epoch = 3;
+        plan.feedback = json!({"armed_epoch":3,"state":"playing"});
+        plan.last_ack = Some(Instant::now());
+        plan.play_requested = true;
+        plan.requires_reprepare = true;
+        let timeline = Mutex::new(plan);
+        let mut client = Some("live clock stream");
+        assert_eq!(take_coordinator_session(&mut client, &timeline), Some("live clock stream"));
+        for _ in 0..100 {
+            assert!(take_coordinator_session(&mut client, &timeline).is_none());
+        }
+        {
+            let plan = timeline.lock().unwrap();
+            assert_eq!(plan.revision, 8);
+            assert_eq!(plan.acknowledged_revision, 0);
+            assert_eq!(plan.clock_ack_revision, 0);
+            assert_eq!(plan.clock_ack_epoch, 0);
+            assert!(plan.last_ack.is_none());
+            assert!(plan.feedback.is_null());
+            assert!(!plan.play_requested);
+            assert!(plan.requires_reprepare, "Semantic safety faults stay latched");
+            assert!(!plan.ready_for(3));
+        }
+        client = Some("replacement clock stream");
+        let _ = take_coordinator_session(&mut client, &timeline);
+        assert_eq!(timeline.lock().unwrap().revision, 9);
+    }
+
+    #[test]
+    fn fresh_empty_coordinator_uses_new_revision_after_clock_transport_loss() {
+        let mut plan = super::super::media_timeline::PreparedTimeline::default();
+        plan.revision = 3;
+        plan.acknowledged_revision = 3;
+        plan.clock_ack_revision = 3;
+        plan.clock_ack_epoch = 2;
+        plan.play_requested = true;
+        let timeline = Mutex::new(plan);
+        let _ = take_coordinator_session(&mut Some(()), &timeline);
+        let mut plan = timeline.lock().unwrap();
+        reconcile_controller_revision(&mut plan, json!({"client_id":"","revision":0})).unwrap();
+        assert_eq!(plan.revision, 4);
+        assert_eq!(plan.acknowledged_revision, 0);
+        assert!(!plan.play_requested);
+    }
+
+    #[test]
+    fn restarted_publisher_adopts_its_retained_revision_without_resuming() {
+        let mut plan = super::super::media_timeline::PreparedTimeline::default();
+        plan.revision = 3;
+        plan.acknowledged_revision = 3;
+        plan.clock_ack_revision = 3;
+        plan.clock_ack_epoch = 2;
+        plan.play_requested = true;
+        plan.requires_reprepare = true;
+        plan.feedback = json!({"state":"faulted"});
+        let actor = plan.authority_client_id.clone();
+        reconcile_controller_revision(&mut plan, json!({"client_id":actor,"revision":17})).unwrap();
+        assert_eq!(plan.revision, 18);
+        assert_eq!(plan.acknowledged_revision, 0);
+        assert_eq!(plan.clock_ack_revision, 0);
+        assert!(!plan.play_requested);
+        assert!(plan.requires_reprepare);
+        assert!(plan.feedback.is_null());
+    }
+
+    #[test]
+    fn restarted_publisher_continues_only_its_own_clock_counter_without_releasing_authority() {
+        let mut sequence = 0;
+        reconcile_clock_sequence("publisher", &mut sequence,
+            json!({"client_id":"publisher","sequence":7578,"epoch":99})).unwrap();
+        assert_eq!(sequence, 7578);
+        sequence += 1; // The first paused arm is strictly newer than the retained clock.
+        assert_eq!(sequence, 7579);
+        reconcile_clock_sequence("publisher", &mut sequence,
+            json!({"client_id":"publisher","sequence":7000})).unwrap();
+        assert_eq!(sequence, 7579, "A reconnect never moves the local counter backwards");
+    }
+
+    #[test]
+    fn clock_counter_reconciliation_ignores_other_actors_and_handles_an_empty_coordinator() {
+        let mut sequence = 0;
+        reconcile_clock_sequence("publisher", &mut sequence,
+            json!({"client_id":"other","sequence":u64::MAX})).unwrap();
+        assert_eq!(sequence, 0);
+        reconcile_clock_sequence("publisher", &mut sequence,
+            json!({"client_id":"","sequence":0})).unwrap();
+        sequence += 1;
+        assert_eq!(sequence, 1);
+    }
+
+    #[test]
+    fn clock_counter_reconciliation_rejects_malformed_or_exhausted_state_without_mutation() {
+        let mut sequence = 5;
+        for feedback in [json!({"sequence":7}), json!({"client_id":"publisher"}),
+            json!({"client_id":"publisher","sequence":"7"}),
+            json!({"client_id":"publisher","sequence":u64::MAX})] {
+            assert!(reconcile_clock_sequence("publisher", &mut sequence, feedback).is_err());
+            assert_eq!(sequence, 5);
+        }
+    }
+
+    #[test]
+    fn revision_reconciliation_leaves_other_publishers_and_newer_local_plans_untouched() {
+        let mut plan = super::super::media_timeline::PreparedTimeline::default();
+        plan.revision = 8;
+        plan.acknowledged_revision = 8;
+        reconcile_controller_revision(&mut plan, json!({"client_id":"other","revision":99})).unwrap();
+        assert_eq!(plan.revision, 8);
+        let actor = plan.authority_client_id.clone();
+        reconcile_controller_revision(&mut plan, json!({"client_id":actor,"revision":7})).unwrap();
+        assert_eq!(plan.revision, 8);
+        assert_eq!(plan.acknowledged_revision, 8);
+    }
+
+    #[test]
+    fn revision_reconciliation_rejects_malformed_identity_and_overflow_without_mutation() {
+        let mut plan = super::super::media_timeline::PreparedTimeline::default();
+        plan.revision = 3;
+        let actor = plan.authority_client_id.clone();
+        for feedback in [json!({"revision":5}), json!({"client_id":actor,"revision":"5"}),
+            json!({"client_id":actor,"revision":u64::MAX})] {
+            assert!(reconcile_controller_revision(&mut plan, feedback).is_err());
+            assert_eq!(plan.revision, 3);
+        }
+    }
+
+    #[test]
+    fn sync_notifications_wake_on_transitions_not_clock_echoes_and_release_locks() {
+        let plan = Arc::new(Mutex::new(super::super::media_timeline::PreparedTimeline::default()));
+        let calls = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let callback_plan = plan.clone();
+        let callback_calls = calls.clone();
+        let callback: super::super::engine::StateNotifier = Arc::new(move || {
+            assert!(callback_plan.try_lock().is_ok());
+            callback_calls.fetch_add(1, Ordering::Relaxed);
+        });
+        let notifier = Mutex::new(Some(callback));
+        let mut previous = None;
+        notify_sync_change(&plan, &notifier, &mut previous);
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        {
+            let mut plan = plan.lock().unwrap();
+            plan.last_ack = Some(Instant::now());
+            plan.feedback = json!({"clock_sequence":20});
+        }
+        notify_sync_change(&plan, &notifier, &mut previous);
+        assert_eq!(calls.load(Ordering::Relaxed), 1);
+        plan.lock().unwrap().acknowledged_revision = 1;
+        notify_sync_change(&plan, &notifier, &mut previous);
+        assert_eq!(calls.load(Ordering::Relaxed), 2);
+        plan.lock().unwrap().feedback = json!({"state":"playing","acknowledged":1});
+        notify_sync_change(&plan, &notifier, &mut previous);
+        assert_eq!(calls.load(Ordering::Relaxed), 3);
+        plan.lock().unwrap().error = Some("cue deadline failed".into());
+        notify_sync_change(&plan, &notifier, &mut previous);
+        assert_eq!(calls.load(Ordering::Relaxed), 4);
+        notify_sync_change(&plan, &notifier, &mut previous);
+        assert_eq!(calls.load(Ordering::Relaxed), 4);
+    }
+
     #[test]
     fn playback_and_action_subscriptions_share_one_complete_client_identity() {
         let id = crate::platform::interop::controller_instance_id();
@@ -390,5 +914,20 @@ mod tests {
             playback_publish_interval(&value),
             Duration::from_millis(40)
         );
+    }
+
+    #[test]
+    fn unattended_handoff_requires_fresh_observed_pause_and_matching_echo() {
+        let mut value = PlaybackSample::default();
+        assert!(handoff_pause_acknowledged(&value, true));
+        assert!(!handoff_pause_acknowledged(&value, false));
+        value.playing = true;
+        assert!(!handoff_pause_acknowledged(&value, true));
+        value.playing = false;
+        value.buffering = true;
+        assert!(!handoff_pause_acknowledged(&value, true));
+        value.buffering = false;
+        value.observed_at = Instant::now() - Duration::from_secs(1);
+        assert!(!handoff_pause_acknowledged(&value, true));
     }
 }

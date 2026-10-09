@@ -158,13 +158,17 @@ impl EmbeddedHost {
     }
 
     pub fn call(&mut self, method: &str, params: Value) -> Result<Value, String> {
-        self.invoke_host(
-            "host_call",
-            json!({
+        self.call_detailed(method, params).map_err(|error|error.message)
+    }
+
+    pub(crate) fn call_detailed(&mut self, method: &str, params: Value) -> Result<Value, super::controller::ControllerRpcError> {
+        let handle = self.handle.ok_or_else(||super::controller::ControllerRpcError::transport("PCController embedded host is already destroyed".into()))?;
+        invoke_json_detailed(self.api, &json!({
+                "operation": "host_call", "handle": handle,
                 "method": method,
                 "params": params,
-            }),
-        )
+                "client_id": if method == "controller.app.instance.report" || method == "controller.ping" { None } else { Some(crate::platform::interop::controller_instance_id()) },
+            })).map(|response|response.get("result").cloned().unwrap_or(Value::Null))
     }
 
     pub fn endpoints(&self) -> &Value {
@@ -227,22 +231,29 @@ impl Drop for EmbeddedHost {
 }
 
 fn invoke_json(api: NativeApi, request: &Value) -> Result<Value, String> {
+    invoke_json_detailed(api, request).map_err(|error|error.message)
+}
+
+fn invoke_json_detailed(api: NativeApi, request: &Value) -> Result<Value, super::controller::ControllerRpcError> {
     let request = CString::new(request.to_string())
         .map_err(|_| "PCController request contains an interior NUL".to_string())?;
     let response_ptr = unsafe { (api.invoke)(request.as_ptr().cast_mut()) };
     if response_ptr.is_null() {
-        return Err("PCControllerInvoke returned NULL".to_string());
+        return Err(super::controller::ControllerRpcError::transport("PCControllerInvoke returned NULL".into()));
     }
     let response = unsafe { CStr::from_ptr(response_ptr) }.to_bytes().to_vec();
     unsafe { (api.free)(response_ptr) };
     let value: Value = serde_json::from_slice(&response)
-        .map_err(|error| format!("decode PCController response: {error}"))?;
+        .map_err(|error| super::controller::ControllerRpcError::transport(format!("decode PCController response: {error}")))?;
     if !value.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+        if let Some(error) = value.get("rpc_error").filter(|value|!value.is_null()) {
+            return Err(super::controller::controller_json_rpc_error(error));
+        }
         return Err(value
             .get("error")
             .and_then(Value::as_str)
             .unwrap_or("PCController operation failed")
-            .to_string());
+            .to_string().into());
     }
     Ok(value)
 }

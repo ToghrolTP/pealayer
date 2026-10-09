@@ -23,6 +23,12 @@ fn web_dist_root() -> std::path::PathBuf {
     {
         return override_root;
     }
+    // The peer updater replaces the executable, not an adjacent asset tree.
+    // Release assets must match the Rust contract embedded in that executable.
+    // Custom Web deployments remain explicitly selectable via PEALAYER_WEB_ROOT.
+    if !cfg!(debug_assertions) {
+        return std::path::PathBuf::new();
+    }
     if let Ok(executable) = std::env::current_exe() {
         if let Some(binary_directory) = executable.parent() {
             let packaged = binary_directory.join("web_ui/dist");
@@ -30,9 +36,6 @@ fn web_dist_root() -> std::path::PathBuf {
                 return packaged;
             }
         }
-    }
-    if !cfg!(debug_assertions) {
-        return std::path::PathBuf::new();
     }
     let working_tree = std::path::PathBuf::from("web_ui/dist");
     if working_tree.join("index.html").is_file() {
@@ -177,6 +180,28 @@ pub fn spawn_web_server_configured(
     (state_tx, command_rx)
 }
 
+/// Start on an already-bound socket. Embedders/tests can request port zero and
+/// retain ownership of the actual listener, without a close/rebind race or
+/// accidentally sending commands to another application on a fixed port.
+pub fn spawn_web_server_on_listener(
+    listener: TcpListener,
+    egui_ctx: eframe::egui::Context,
+    runtime_config: WebRuntimeConfig,
+) -> (Sender<String>, Receiver<crate::platform::interop::InteropCommand>) {
+    let (command_tx, command_rx) = channel();
+    let (state_tx, state_rx) = channel();
+    let state_tx = spawn_control_server_on_listeners_with_channel(
+        vec![listener],
+        egui_ctx,
+        runtime_config.clone(),
+        command_tx,
+        runtime_config.app_name.clone(),
+        state_tx,
+        state_rx,
+    );
+    (state_tx, command_rx)
+}
+
 /// Starts every TCP-facing control protocol on one listener. HTTP and REST use
 /// their normal paths, WebSocket upgrades use `/ws`, and CLI/native automation
 /// posts newline-compatible JSON to `/api/ipc`.
@@ -263,6 +288,39 @@ fn spawn_control_server_on_addresses_with_channel(
     state_tx: Sender<String>,
     state_rx: Receiver<String>,
 ) -> Sender<String> {
+    let listeners = addresses
+        .into_iter()
+        .filter_map(|ip| {
+            let address = std::net::SocketAddr::new(ip, port);
+            match TcpListener::bind(address) {
+                Ok(listener) => Some(listener),
+                Err(error) => {
+                    log::error!("Could not bind unified Pealayer control port {address}: {error}");
+                    None
+                }
+            }
+        })
+        .collect();
+    spawn_control_server_on_listeners_with_channel(
+        listeners,
+        egui_ctx,
+        runtime_config,
+        command_tx,
+        application_identity,
+        state_tx,
+        state_rx,
+    )
+}
+
+fn spawn_control_server_on_listeners_with_channel(
+    listeners: Vec<TcpListener>,
+    egui_ctx: eframe::egui::Context,
+    runtime_config: WebRuntimeConfig,
+    command_tx: Sender<crate::platform::interop::InteropCommand>,
+    application_identity: String,
+    state_tx: Sender<String>,
+    state_rx: Receiver<String>,
+) -> Sender<String> {
     crate::update::manager().register_gui_context(egui_ctx.clone());
     let latest_status = Arc::new(Mutex::new(None));
     let websocket_clients: Arc<Mutex<Vec<Sender<String>>>> = Arc::new(Mutex::new(Vec::new()));
@@ -301,18 +359,13 @@ fn spawn_control_server_on_addresses_with_channel(
         application_identity: Arc::from(application_identity),
         expected_session_id,
     };
-    let mut listening = 0_usize;
-    for ip in addresses {
-        let address = std::net::SocketAddr::new(ip, port);
-        let listener = match TcpListener::bind(address) {
-            Ok(listener) => listener,
-            Err(error) => {
-                log::error!("Could not bind unified Pealayer control port {address}: {error}");
-                continue;
-            }
-        };
-        listening += 1;
-        log::info!("Pealayer Web UI and APIs listening on http://{address}/");
+    if listeners.is_empty() {
+        log::error!("Pealayer Web UI could not start any configured listener");
+    }
+    for listener in listeners {
+        if let Ok(address) = listener.local_addr() {
+            log::info!("Pealayer Web UI and APIs listening on http://{address}/");
+        }
         let listener_state = state.clone();
         thread::spawn(move || {
             for stream in listener.incoming() {
@@ -321,9 +374,6 @@ fn spawn_control_server_on_addresses_with_channel(
                 thread::spawn(move || handle_connection(stream, connection_state));
             }
         });
-    }
-    if listening == 0 {
-        log::error!("Pealayer Web UI could not start any configured listener");
     }
 
     state_tx
@@ -405,7 +455,7 @@ fn handle_connection(mut stream: TcpStream, state: ControlState) {
             Ok(request) if !browser_origin_allowed(&request.headers, stream.local_addr().ok()) => {
                 HttpResponse::text(403, "Forbidden", "Browser origin is not permitted")
             }
-            Ok(request) if crate::peer::active() && request.target.starts_with("/api/") && request.target.split('?').next()!=Some("/api/client/status") => {
+            Ok(request) if crate::peer::active() && peer_relay_route(&request.target) && !local_process_payload(&request.body) => {
                 let _ = proxy_http(&request, &mut stream);
                 return;
             }
@@ -427,6 +477,26 @@ fn handle_connection(mut stream: TcpStream, state: ControlState) {
         };
         let _ = write_http_response(&mut stream, response);
     }
+}
+
+fn peer_relay_route(target: &str) -> bool {
+    let path = target.split('?').next().unwrap_or(target);
+    // Session commands operate the authority. Updating this executable and
+    // inspecting this consumer are process-local, never updates of its server.
+    path.starts_with("/api/") && path != "/api/client/status"
+        && !path.starts_with("/api/update/")
+        && !path.starts_with("/api/process/")
+}
+
+fn local_process_payload(body: &[u8]) -> bool {
+    let Ok(value) = serde_json::from_slice::<serde_json::Value>(body) else { return false; };
+    // Invalid parameters still belong to this process and must receive its
+    // validation error, not be sent to the authority by the gateway.
+    if let Some(method) = value.get("method").and_then(serde_json::Value::as_str) {
+        return matches!(method, "pealayer.process.status" | "pealayer.process.connect" | "pealayer.process.quit");
+    }
+    serde_json::from_value::<crate::platform::interop::InteropCommand>(value)
+        .is_ok_and(|command| command.is_process_local())
 }
 
 fn handle_websocket(stream: TcpStream, state: ControlState) {
@@ -494,6 +564,12 @@ fn handle_websocket(stream: TcpStream, state: ControlState) {
 }
 
 fn handle_websocket_text(state: &ControlState, text: &str) -> Option<String> {
+    if local_process_payload(text.as_bytes()) {
+        if !crate::platform::interop::get_live_config().web_allow_control {
+            return Some(crate::platform::interop::format_interop_error(None, -32003, "Web control permission is disabled"));
+        }
+        return Some(dispatch_ipc_payload(state, text));
+    }
     if let Some(client) = crate::peer::client() {
         let value = match serde_json::from_str::<serde_json::Value>(text) {
             Ok(value) => value,
@@ -725,6 +801,16 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
             }
         }
         ("GET", "/api/client/status")=>HttpResponse::json(200,"OK",crate::peer::diagnostics().to_string()),
+        ("GET", "/api/process/status")=>HttpResponse::json(200,"OK",crate::process_control::status().to_string()),
+        ("POST", "/api/process/command") => {
+            if !std::str::from_utf8(&request.body).ok()
+                .and_then(|payload|crate::platform::interop::parse_interop_request(payload).ok())
+                .is_some_and(|(_,command)|command.is_process_local()) {
+                HttpResponse::text(400, "Bad Request", "A validated process-local command is required")
+            } else {
+                HttpResponse::json(200, "OK", dispatch_ipc_payload(state, &String::from_utf8_lossy(&request.body)))
+            }
+        }
         ("POST", "/api/peer/media") => peer_result(serde_json::from_slice(&request.body).map_err(|error|error.to_string()).and_then(crate::peer::apply_media_operation).map(|_|serde_json::json!({"accepted":true}))),
         ("POST", "/api/peer/controller") => {
             let result = serde_json::from_slice::<serde_json::Value>(&request.body).map_err(|error|error.to_string()).and_then(|value| {
@@ -938,6 +1024,7 @@ fn denied_web_capability(
             | ("DELETE", "/api/osd")
             | ("POST", "/api/player/command")
             | ("POST", "/api/ipc")
+            | ("POST", "/api/process/command")
     );
     let file_route = path.starts_with("/api/fs/") || path.starts_with("/api/remote/") || matches!(path,"/api/peer/files"|"/api/peer/open")
         || matches!(path, "/api/player/frame" | "/api/player/seek-thumbnail"
@@ -1078,7 +1165,11 @@ fn runtime_app_icon_response(target: &str) -> HttpResponse {
 
 fn runtime_pwa_icon_response(target: &str, size: u32) -> HttpResponse {
     let config = crate::platform::interop::get_live_config();
-    let configured = crate::branding::icon_image(&config, requested_icon_state(target));
+    pwa_icon_response(&config, requested_icon_state(target), size)
+}
+
+fn pwa_icon_response(config: &crate::config::AppConfig, state: crate::branding::PlaybackIconState, size: u32) -> HttpResponse {
+    let configured = crate::branding::icon_image(config, state);
     let source = configured
         .or_else(|| image::load_from_memory(include_bytes!("../../assets/pealayer-icon.png")).ok());
     let Some(source) = source else {
@@ -1151,6 +1242,10 @@ fn pwa_manifest_response(state: &ControlState) -> HttpResponse {
 }
 
 fn json_rpc_response(body: &[u8], state: &ControlState) -> HttpResponse {
+    if local_process_payload(body) {
+        if !crate::platform::interop::get_live_config().web_allow_control { return permission_denied("control"); }
+        return HttpResponse::json(200, "OK", dispatch_ipc_payload(state, &String::from_utf8_lossy(body)));
+    }
     let response = match serde_json::from_slice::<crate::platform::interop::JsonRpcRequest>(body) {
         Ok(request)
             if matches!(
@@ -1247,6 +1342,10 @@ fn config_update_response(body: &[u8], state: &ControlState) -> HttpResponse {
 }
 
 fn player_command_response(body: &[u8], state: &ControlState) -> HttpResponse {
+    if local_process_payload(body) {
+        if !crate::platform::interop::get_live_config().web_allow_control { return permission_denied("control"); }
+        return HttpResponse::json(200, "OK", dispatch_ipc_payload(state, &String::from_utf8_lossy(body)));
+    }
     match parse_player_command(body) {
         Ok(command) if remote_command_permission(&command).is_some() => permission_denied("host file access"),
         Ok(command) => match command.validate() {
@@ -1359,9 +1458,7 @@ fn dispatch_ipc_payload(state: &ControlState, payload: &str) -> String {
         Err(error) => return crate::platform::interop::format_interop_error(None, -32600, &error),
     };
     if let Some(error) = remote_command_permission(&command) { return crate::platform::interop::format_interop_error(id, -32003, error); }
-    if matches!(command, InteropCommand::GetStatus) {
-        let value = serde_json::to_value(crate::platform::interop::get_live_status())
-            .unwrap_or_else(|_| serde_json::json!({"status":"initializing"}));
+    if let Some(value) = command.query_result() {
         return crate::platform::interop::format_interop_response(id, &value);
     }
 
@@ -1411,7 +1508,7 @@ fn dispatch_ipc_payload(state: &ControlState, payload: &str) -> String {
             "application dispatcher is unavailable",
         );
     }
-    state.egui_ctx.request_repaint();
+    crate::platform::interop::wake_command_dispatcher(&state.egui_ctx);
     crate::platform::interop::format_interop_response(id, &serde_json::json!({"status":"accepted"}))
 }
 
@@ -1639,7 +1736,61 @@ fn mime_for_path(path: &std::path::Path) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn remote_consumer_updates_stay_local_while_session_commands_relay() {
+        for target in ["/api/update/manifest", "/api/update/begin", "/api/update/chunk?id=one", "/api/update/finish", "/api/update/status", "/api/update/from-url", "/api/client/status"] {
+            assert!(!super::peer_relay_route(target), "{target}");
+        }
+        for target in ["/api/config", "/api/player/command", "/api/rpc", "/api/peer/session", "/api/fs/file?path=media"] {
+            assert!(super::peer_relay_route(target), "{target}");
+        }
+        for target in ["/api/process/status", "/api/process/command"] {
+            assert!(!super::peer_relay_route(target));
+        }
+    }
     use super::*;
+
+    #[test]
+    fn process_lifecycle_uses_one_contract_across_rpc_ipc_http_and_websocket() {
+        use crate::platform::interop::InteropCommand;
+        let (tx, rx) = channel();
+        let state = ControlState {
+            command_tx:tx, latest_status:Arc::new(Mutex::new(None)),
+            websocket_clients:Arc::new(Mutex::new(vec![])), egui_ctx:eframe::egui::Context::default(),
+            runtime_config_json:"{}".into(), web_dist_root:std::path::PathBuf::new(),
+            launch_receipts:Arc::new(Mutex::new(LaunchReceiptCache::default())),
+            application_identity:"Pealayer".into(), expected_session_id:None,
+        };
+        let query=r#"{"jsonrpc":"2.0","id":1,"method":"pealayer.process.status"}"#;
+        assert!(local_process_payload(query.as_bytes()));
+        let response:serde_json::Value=serde_json::from_str(&dispatch_ipc_payload(&state,query)).unwrap();
+        assert_eq!(response["result"]["process_id"],std::process::id());
+        assert!(rx.try_recv().is_err());
+        assert!(handle_websocket_text(&state,query).unwrap().contains("process_id"));
+        for response in [json_rpc_response(query.as_bytes(),&state),player_command_response(query.as_bytes(),&state)] {
+            assert_eq!(response.status,200);
+            let value:serde_json::Value=serde_json::from_slice(&response.body).unwrap();
+            assert_eq!(value["result"]["process_id"],std::process::id());
+        }
+        let quit=r#"{"jsonrpc":"2.0","id":2,"method":"pealayer.process.quit"}"#;
+        assert!(dispatch_ipc_payload(&state,quit).contains("accepted"));
+        assert_eq!(rx.try_recv().unwrap(),InteropCommand::QuitLocal);
+        let connect=serde_json::json!({"jsonrpc":"2.0","id":3,"method":"pealayer.process.connect", "params":{
+            "operation_id":uuid::Uuid::new_v4().to_string(),"endpoint":"pealayer://publisher.example:8080","client_port":8081
+        }}).to_string();
+        assert!(local_process_payload(connect.as_bytes()));
+        assert!(dispatch_ipc_payload(&state,&connect).contains("accepted"));
+        assert!(matches!(rx.try_recv().unwrap(),InteropCommand::ConnectPeer{..}));
+        assert!(!local_process_payload(br#"{"command":"quit"}"#));
+        assert!(!local_process_payload(br#"{"command":"play"}"#));
+        let invalid=r#"{"jsonrpc":"2.0","id":4,"method":"pealayer.process.connect","params":{}}"#;
+        assert!(local_process_payload(invalid.as_bytes()));
+        assert!(dispatch_ipc_payload(&state,invalid).contains("error"));
+        assert!(rx.try_recv().is_err());
+        let restricted=crate::config::AppConfig{web_allow_control:false,..Default::default()};
+        assert_eq!(denied_web_capability("POST","/api/process/command",&restricted),Some("control"));
+        assert_eq!(denied_web_capability("GET","/api/process/status",&restricted),None);
+    }
 
     #[test]
     fn browser_origins_must_match_listener_host_and_cannot_rebind() {
@@ -1774,6 +1925,25 @@ mod tests {
             assert_eq!(response.content_type, "image/png");
             let icon = image::load_from_memory(&response.body).unwrap();
             assert_eq!((icon.width(), icon.height()), (size, size));
+        }
+    }
+
+    #[test]
+    fn pwa_icon_response_respects_the_bundled_preset() {
+        use crate::{branding::PlaybackIconState, config::AppIconPreset};
+        let mut config = crate::config::AppConfig::default();
+        let mut previous = None;
+        for preset in [AppIconPreset::Current, AppIconPreset::Classic] {
+            config.app_icon_preset = preset;
+            let response = pwa_icon_response(&config, PlaybackIconState::Stopped, 192);
+            assert_eq!(response.status, 200);
+            assert_eq!(response.content_type, "image/png");
+            let icon = image::load_from_memory(&response.body).unwrap();
+            assert_eq!((icon.width(), icon.height()), (192, 192));
+            if let Some(previous) = previous {
+                assert_ne!(response.body, previous);
+            }
+            previous = Some(response.body);
         }
     }
 

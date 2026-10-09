@@ -20,6 +20,7 @@ fn is_false(value: &bool) -> bool {
 pub enum PreferenceControlKind {
     Accent,
     Boolean,
+    File,
     Number,
     MultiSelect,
     ReplacementList,
@@ -46,6 +47,8 @@ pub struct PreferenceControl {
     pub group: &'static str,
     pub label: &'static str,
     pub kind: PreferenceControlKind,
+    /// Semantic Phosphor name shared by native and Web renderers.
+    pub icon: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub description: Option<&'static str>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -66,6 +69,37 @@ pub struct PreferenceControl {
     pub placeholder: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub custom_key: Option<&'static str>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub file_extensions: Vec<&'static str>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct PreferenceGroup {
+    pub section: &'static str,
+    pub name: &'static str,
+    pub collapsible: bool,
+    pub default_open: bool,
+    pub configured_count: usize,
+}
+
+pub fn preference_groups(controls: &[PreferenceControl], values: &serde_json::Value) -> Vec<PreferenceGroup> {
+    let mut groups: Vec<PreferenceGroup> = Vec::new();
+    for control in controls {
+        if groups.iter().any(|group| group.section == control.section && group.name == control.group) {
+            continue;
+        }
+        let members = controls.iter().filter(|candidate| candidate.section == control.section && candidate.group == control.group);
+        let collapsible = members.clone().all(|control| matches!(control.kind, PreferenceControlKind::File));
+        let configured_count = members.filter(|control| value_at_path(values, control.key)
+            .and_then(serde_json::Value::as_str).is_some_and(|value| !value.trim().is_empty())).count();
+        groups.push(PreferenceGroup { section: control.section, name: control.group,
+            collapsible, default_open: !collapsible || configured_count > 0, configured_count });
+    }
+    // Optional appearance overrides follow the common appearance settings;
+    // configuration-file operations close Advanced on every surface.
+    groups.sort_by_key(|group| matches!((group.section, group.name),
+        ("appearance", "Application icons") | ("advanced", "Config file")));
+    groups
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -80,6 +114,7 @@ pub struct PreferencesContract {
     pub format: &'static str,
     pub sections: Vec<PreferenceSection>,
     pub controls: Vec<PreferenceControl>,
+    pub groups: Vec<PreferenceGroup>,
     pub values: serde_json::Value,
     pub defaults: serde_json::Value,
 }
@@ -97,6 +132,7 @@ impl PreferenceControl {
             group,
             label,
             kind: PreferenceControlKind::Boolean,
+            icon: "check-square",
             description: None,
             options: Vec::new(),
             minimum: None,
@@ -107,6 +143,7 @@ impl PreferenceControl {
             inverted: false,
             placeholder: None,
             custom_key: None,
+            file_extensions: Vec::new(),
         }
     }
 
@@ -274,7 +311,49 @@ pub fn preference_sections() -> Vec<PreferenceSection> {
     ]
 }
 
+fn application_icon_control(key: &'static str, label: &'static str, placeholder: &'static str) -> PreferenceControl {
+    let mut control = PreferenceControl::text(key, "appearance", "Application icons", label, placeholder);
+    control.kind = PreferenceControlKind::File;
+    control.file_extensions = vec!["png", "jpg", "jpeg", "webp", "ico"];
+    control
+}
+
 pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceControl> {
+    let audio_devices = crate::mpv::audio_output::available_audio_devices();
+    let audio_output_control = |key, label, selected: &str, follow_media: bool| {
+        let mut control = PreferenceControl::select(key, "playback", "Audio output", label, &[]);
+        control.description = Some(if follow_media {
+            "Select a separate output for sound effects, or follow the media output"
+        } else {
+            "Select a system audio device and backend; System default is recommended"
+        });
+        if follow_media {
+            control.options.push(PreferenceOption {
+                value: serde_json::json!(""),
+                label: "Same as media output",
+                color: None,
+                description: None,
+                icon: None,
+            });
+        }
+        control.options.extend(audio_devices.iter().map(|device| PreferenceOption {
+            value: serde_json::Value::String(device.name.clone()),
+            label: "Audio device",
+            color: None,
+            description: Some(device.description.clone()),
+            icon: None,
+        }));
+        if !selected.is_empty() && !control.options.iter().any(|option| option.value.as_str() == Some(selected)) {
+            control.options.push(PreferenceOption {
+                value: serde_json::Value::String(selected.to_string()),
+                label: "Unavailable audio device",
+                color: None,
+                description: Some(format!("Unavailable: {selected}")),
+                icon: None,
+            });
+        }
+        control
+    };
     let mut controls = vec![
         PreferenceControl::select(
             "theme",
@@ -291,38 +370,14 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "Color palette",
             &[("native", "Neutral (default)"), ("studio", "Studio")],
         ),
-        {
-            let mut control = PreferenceControl::text(
-                "app_icon_playing", "appearance", "Application icons", "Playing icon", "PNG, JPEG, WebP, or ICO path",
-            );
-            control.description = Some("Shown by the native window, taskbar, Web UI, favicon, and media session while media is playing.");
-            control
-        },
-        {
-            let mut control = PreferenceControl::text(
-                "app_icon_paused", "appearance", "Application icons", "Paused icon", "PNG, JPEG, WebP, or ICO path",
-            );
-            control.description = Some("Shown while loaded media is paused. Leave empty to use the base application icon.");
-            control
-        },
-        {
-            let mut control = PreferenceControl::text(
-                "app_icon_stopped", "appearance", "Application icons", "Stopped icon", "PNG, JPEG, WebP, or ICO path",
-            );
-            control.description = Some("Shown when no media is loaded or playback has ended. This is also the best shortcut and executable icon.");
-            control
-        },
+        application_icon_control("app_icon", "Default icon", "Bundled application icon"),
         PreferenceControl::select(
-            "language",
-            "appearance",
-            "Interface",
-            "Language",
-            &[
-                ("system", "System language"),
-                ("en", "English"),
-                ("fa", "Persian"),
-            ],
+            "app_icon_preset", "appearance", "Interface", "Application icon",
+            &[("current", "Current"), ("classic", "Classic (previous)")],
         ),
+        application_icon_control("app_icon_playing", "Playing", "Use default icon"),
+        application_icon_control("app_icon_paused", "Paused", "Use default icon"),
+        application_icon_control("app_icon_stopped", "Stopped", "Use default icon"),
         PreferenceControl::select(
             "fullscreen_video_background",
             "appearance",
@@ -332,6 +387,17 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
                 ("black", "Black"),
                 ("dark_gray", "Dark gray"),
                 ("theme", "Use app theme"),
+            ],
+        ),
+        PreferenceControl::select(
+            "language",
+            "appearance",
+            "Interface",
+            "Language",
+            &[
+                ("system", "System language"),
+                ("en", "English"),
+                ("fa", "Persian"),
             ],
         ),
         {
@@ -380,6 +446,8 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "Player controls",
             "Single-click the picture to play or pause",
         ),
+        audio_output_control("audio_device", "Media output device / backend", &config.audio_device, false),
+        audio_output_control("sfx_audio_device", "SFX output device / backend", &config.sfx_audio_device, true),
         {
             let mut control = PreferenceControl::number(
                 "playback_speed",
@@ -574,6 +642,14 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "Preferred endpoint",
             "pccontroller://host:port, tcp://host:port, or direct:<device>",
         ),
+        {
+            let mut control = PreferenceControl::boolean(
+                "allow_unattended_hardware_takeover", "hardware", "Publishing authority",
+                "Allow unattended publishing handoffs",
+            );
+            control.description = Some("Automatically pause this publisher and accept an incoming handoff. Production lock always prevents takeover. Enable only with trusted controller access.");
+            control
+        },
         PreferenceControl::select(
             "motion_control_mode",
             "hardware",
@@ -1047,7 +1123,49 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
     );
     recent_click.inverted = true;
     controls.insert(14, recent_click);
+    let mut hints = std::collections::HashSet::new();
+    for control in &mut controls {
+        control.icon = semantic_preference_icon(control);
+        if let Some(description) = control.description
+            && !hints.insert((control.section, control.group, description)) {
+            control.description = None;
+        }
+    }
     controls
+}
+
+fn semantic_preference_icon(control: &PreferenceControl) -> &'static str {
+    match control.key {
+        "theme" => "circle-half",
+        "accent_color" | "accent" => "palette",
+        "color_palette" => "swatches",
+        "language" => "translate",
+        "fullscreen_video_background" => "frame-corners",
+        "always_on_top" => "push-pin",
+        "consistent_video_aspect_ratio" => "arrows-out",
+        "osd_position" => "target",
+        "osd_timeout_seconds" => "clock",
+        "app_icon" => "image",
+        "app_icon_preset" => "image",
+        "app_icon_playing" => "play",
+        "app_icon_paused" => "pause",
+        "app_icon_stopped" => "stop-circle",
+        "audio_device" | "sfx_audio_device" => "speaker-high",
+        key if key.starts_with("subtitle_") => "subtitles",
+        key if key.starts_with("timeline_") => "waveform",
+        key if key.starts_with("web_") => "globe",
+        key if key.starts_with("keyboard_") || key.starts_with("shortcut_") => "keyboard",
+        _ => match control.kind {
+            PreferenceControlKind::Accent => "palette",
+            PreferenceControlKind::Boolean => "check-square",
+            PreferenceControlKind::File => "image",
+            PreferenceControlKind::Number => "sliders-horizontal",
+            PreferenceControlKind::MultiSelect => "globe",
+            PreferenceControlKind::ReplacementList => "text-align-left",
+            PreferenceControlKind::Select => "list-checks",
+            PreferenceControlKind::Text => "pencil-simple",
+        },
+    }
 }
 
 pub fn preferences_contract(config: &crate::config::AppConfig) -> PreferencesContract {
@@ -1061,6 +1179,7 @@ pub fn preferences_contract(config: &crate::config::AppConfig) -> PreferencesCon
     PreferencesContract {
         format: "pealayer-preferences",
         sections: preference_sections(),
+        groups: preference_groups(&controls, &values),
         controls,
         values,
         defaults: serde_json::to_value(crate::config::AppConfig::default()).unwrap_or_default(),
@@ -1098,7 +1217,82 @@ pub fn set_value_at_path(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn appearance_rows_have_semantic_icons_and_language_is_last() {
+        let controls = preference_controls(&crate::config::AppConfig::default());
+        let interface: Vec<_> = controls.iter().filter(|control| control.section == "appearance" && control.group == "Interface").collect();
+        assert_eq!(interface.iter().map(|control| control.key).collect::<Vec<_>>(),
+            ["theme", "accent_color", "color_palette", "app_icon_preset", "fullscreen_video_background", "language"]);
+        assert_eq!(interface.iter().map(|control| control.icon).collect::<Vec<_>>(),
+            ["circle-half", "palette", "swatches", "image", "frame-corners", "translate"]);
+        for (key, icon) in [("always_on_top", "push-pin"), ("osd_position", "target"), ("osd_timeout_seconds", "clock"),
+            ("app_icon_playing", "play"), ("app_icon_paused", "pause"), ("app_icon_stopped", "stop-circle")] {
+            assert_eq!(controls.iter().find(|control| control.key == key).unwrap().icon, icon);
+        }
+    }
     use super::*;
+
+    #[test]
+    fn preference_cards_and_help_are_unique_and_ordered() {
+        let contract = preferences_contract(&crate::config::AppConfig::default());
+        let mut controls = std::collections::HashSet::new();
+        let mut hints = std::collections::HashSet::new();
+        let mut cards = std::collections::HashSet::new();
+        for control in &contract.controls {
+            assert!(controls.insert(control.key), "duplicate control: {}", control.key);
+            if let Some(description) = control.description {
+                assert!(hints.insert((control.section, control.group, description)), "duplicate help in {}", control.group);
+            }
+        }
+        for group in &contract.groups {
+            assert!(cards.insert((group.section, group.name)), "duplicate card: {}", group.name);
+        }
+        assert_eq!(contract.groups.iter().filter(|group| group.section == "advanced").last().unwrap().name, "Config file");
+        assert_eq!(contract.groups.iter().filter(|group| group.section == "appearance").last().unwrap().name, "Application icons");
+    }
+
+    #[test]
+    fn application_icons_share_file_controls_and_optional_disclosure() {
+        let mut config = crate::config::AppConfig::default();
+        let contract = preferences_contract(&config);
+        let group = contract.groups.iter().find(|group| group.name == "Application icons").unwrap();
+        assert!(group.collapsible);
+        assert!(!group.default_open);
+        assert_eq!(group.configured_count, 0);
+        let controls = contract.controls.iter().filter(|control| control.group == group.name).collect::<Vec<_>>();
+        assert_eq!(controls.iter().map(|control| control.key).collect::<Vec<_>>(),
+            ["app_icon", "app_icon_playing", "app_icon_paused", "app_icon_stopped"]);
+        for control in controls {
+            assert!(matches!(control.kind, PreferenceControlKind::File));
+            assert!(control.description.is_none());
+            assert_eq!(control.file_extensions, ["png", "jpg", "jpeg", "webp", "ico"]);
+            assert_eq!(serde_json::to_value(control).unwrap()["kind"], "file");
+        }
+        assert!(contract.groups.iter().filter(|group| !group.collapsible).all(|group| group.default_open));
+        config.app_icon_paused = Some("custom-paused.png".into());
+        let configured = preferences_contract(&config);
+        let group = configured.groups.iter().find(|group| group.name == "Application icons").unwrap();
+        assert!(group.default_open);
+        assert_eq!(group.configured_count, 1);
+        config.app_icon_paused = Some("  ".into());
+        let empty = preferences_contract(&config);
+        assert!(!empty.groups.iter().find(|group| group.name == "Application icons").unwrap().default_open);
+    }
+
+    #[test]
+    fn bundled_icon_choices_are_shared_without_expanding_custom_overrides() {
+        let mut config = crate::config::AppConfig::default();
+        config.app_icon_preset = crate::config::AppIconPreset::Classic;
+        let contract = preferences_contract(&config);
+        let control = contract.controls.iter().find(|control| control.key == "app_icon_preset").unwrap();
+        assert!(matches!(control.kind, PreferenceControlKind::Select));
+        assert_eq!(control.section, "appearance");
+        assert_eq!(control.group, "Interface");
+        assert_eq!(control.options.iter().map(|option| option.value.as_str().unwrap()).collect::<Vec<_>>(),
+            ["current", "classic"]);
+        assert_eq!(contract.values["app_icon_preset"], "classic");
+        assert!(!contract.groups.iter().find(|group| group.name == "Application icons").unwrap().default_open);
+    }
 
     #[test]
     fn application_shortcuts_are_shared_editable_controls() {

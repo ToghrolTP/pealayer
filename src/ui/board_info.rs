@@ -239,7 +239,7 @@ fn overview(
             let name_align = crate::ui::i18n::input_alignment(app.rtl, &app.board_name_draft);
             ui.add_enabled(
                 app.board_operation.is_none(),
-                egui::TextEdit::singleline(&mut app.board_name_draft)
+                crate::ui::dialog::singleline_text_edit(&mut app.board_name_draft)
                     .horizontal_align(name_align)
                     .char_limit(8)
                     .desired_width(150.0),

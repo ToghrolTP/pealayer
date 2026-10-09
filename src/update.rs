@@ -177,7 +177,7 @@ impl UpdateManager {
         command_tx: &std::sync::mpsc::Sender<crate::platform::interop::InteropCommand>,
     ) {
         if command_tx
-            .send(crate::platform::interop::InteropCommand::Quit)
+            .send(crate::platform::interop::InteropCommand::QuitLocal)
             .is_ok()
         {
             // An idle/paused eframe window may have no more frames scheduled.
@@ -984,7 +984,7 @@ pub fn push_current_to_peer(target: &str) -> Result<UpdateStatus, String> {
             }
         };
         offset += count as u64;
-        println!("{}", status.message);
+        crate::cli_println!("{}", status.message);
     }
     let finish_result = client
         .post(format!("{target}/api/update/finish"))
@@ -1367,7 +1367,7 @@ pub fn schedule_startup_health_acknowledgement() {
             file.sync_all()
         });
         if let Err(error) = acknowledgement {
-            eprintln!("write update health acknowledgement: {error}");
+            crate::cli_eprintln!("write update health acknowledgement: {error}");
             return;
         }
         if let Some(helper) = helper {
@@ -1450,7 +1450,7 @@ fn validate_journal(journal: &UpdateJournal, supplied_path: &Path) -> Result<(),
     Ok(())
 }
 
-fn wait_for_parent_exit(pid: u32, timeout: Duration) -> Result<(), String> {
+pub(crate) fn wait_for_parent_exit(pid: u32, timeout: Duration) -> Result<(), String> {
     let deadline = Instant::now() + timeout;
     while Instant::now() < deadline {
         if !process_is_running(pid) {
@@ -1896,7 +1896,7 @@ mod tests {
         manager.dispatch_quit(&sender);
         assert!(matches!(
             receiver.try_recv(),
-            Ok(crate::platform::interop::InteropCommand::Quit)
+            Ok(crate::platform::interop::InteropCommand::QuitLocal)
         ));
         assert!(
             wakeups.load(Ordering::Relaxed) > previous,

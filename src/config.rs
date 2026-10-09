@@ -6,6 +6,15 @@ use std::sync::mpsc::{Receiver, channel};
 pub const DEFAULT_PLAYBACK_POSITION_HISTORY_LIMIT: u32 = 50;
 pub const MAX_PLAYBACK_POSITION_HISTORY_LIMIT: u32 = 500;
 
+/// Bundled application artwork; custom deployment/state icons take precedence.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AppIconPreset {
+    #[default]
+    Current,
+    Classic,
+}
+
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum AlwaysOnTopMode {
@@ -70,10 +79,10 @@ impl TimelineToolbarAction {
     pub const ALL: [Self; 14] = [
         Self::ZoomIn,
         Self::ZoomOut,
-        Self::PanLeft,
         Self::PanRight,
-        Self::BringPlayheadIntoView,
+        Self::PanLeft,
         Self::FollowPlayhead,
+        Self::BringPlayheadIntoView,
         Self::AddKeyframe,
         Self::PreviousCue,
         Self::NextCue,
@@ -87,15 +96,28 @@ impl TimelineToolbarAction {
     pub const DEFAULT_VISIBLE: [Self; 6] = [
         Self::ZoomIn,
         Self::ZoomOut,
-        Self::PanLeft,
         Self::PanRight,
-        Self::BringPlayheadIntoView,
+        Self::PanLeft,
         Self::FollowPlayhead,
+        Self::BringPlayheadIntoView,
     ];
 }
 
 pub fn default_timeline_toolbar_order() -> Vec<TimelineToolbarAction> {
     TimelineToolbarAction::ALL.to_vec()
+}
+
+/// Empty means follow the application default; persist only an actual override.
+/// Saving unrelated preferences must not freeze today's default forever.
+pub fn persisted_timeline_toolbar_order(
+    configured: &[TimelineToolbarAction],
+) -> Vec<TimelineToolbarAction> {
+    let normalized = normalize_timeline_toolbar_order(configured);
+    if normalized == default_timeline_toolbar_order() {
+        Vec::new()
+    } else {
+        normalized
+    }
 }
 
 pub fn default_timeline_toolbar_hidden() -> Vec<TimelineToolbarAction> {
@@ -126,6 +148,30 @@ pub fn normalize_timeline_toolbar_order(
 #[cfg(test)]
 mod timeline_toolbar_tests {
     use super::*;
+
+    #[test]
+    fn timeline_navigation_default_order_matches_visual_pairs() {
+        assert_eq!(&default_timeline_toolbar_order()[..6], &[
+            TimelineToolbarAction::ZoomIn,
+            TimelineToolbarAction::ZoomOut,
+            TimelineToolbarAction::PanRight,
+            TimelineToolbarAction::PanLeft,
+            TimelineToolbarAction::FollowPlayhead,
+            TimelineToolbarAction::BringPlayheadIntoView,
+        ]);
+        assert_eq!(&default_timeline_toolbar_order()[..6], &TimelineToolbarAction::DEFAULT_VISIBLE);
+    }
+
+    #[test]
+    fn saving_default_toolbar_does_not_create_a_custom_override() {
+        assert!(AppConfig::default().timeline_toolbar_order.is_empty());
+        assert!(persisted_timeline_toolbar_order(&[]).is_empty());
+        assert!(persisted_timeline_toolbar_order(&default_timeline_toolbar_order()).is_empty());
+        let mut custom = default_timeline_toolbar_order();
+        custom.swap(0, 1);
+        assert_eq!(persisted_timeline_toolbar_order(&custom), custom);
+        assert_eq!(normalize_timeline_toolbar_order(&[]), default_timeline_toolbar_order());
+    }
 
     #[test]
     fn timeline_toolbar_order_self_heals_duplicates_and_missing_actions() {
@@ -573,6 +619,10 @@ impl Default for WorkspaceProfile {
 pub struct AppConfig {
     pub volume: f64,
     pub is_muted: bool,
+    /// mpv audio-device name, including its backend prefix; `auto` uses OS default.
+    pub audio_device: String,
+    /// Empty means SFX follows the main player output selection.
+    pub sfx_audio_device: String,
     pub pin_controls: bool,
     pub show_remaining_time: bool,
     pub open_url_multiline: bool,
@@ -593,6 +643,7 @@ pub struct AppConfig {
     pub playback_positions: Vec<PlaybackPositionEntry>,
     pub app_name: Option<String>,
     pub app_icon: Option<PathBuf>,
+    pub app_icon_preset: AppIconPreset,
     pub app_icon_playing: Option<PathBuf>,
     pub app_icon_paused: Option<PathBuf>,
     pub app_icon_stopped: Option<PathBuf>,
@@ -607,6 +658,8 @@ pub struct AppConfig {
     pub hardware_endpoint: Option<String>,
     pub auto_connect_hardware: bool,
     pub pause_on_hardware_disconnect: bool,
+    /// Owner consent policy; never overrides PCController's production lock.
+    pub allow_unattended_hardware_takeover: bool,
     pub click_player_to_toggle: bool,
     pub playback_speed: f64,
     pub temporary_fast_forward_speed: f64,
@@ -751,6 +804,8 @@ impl Default for AppConfig {
         Self {
             volume: 100.0,
             is_muted: false,
+            audio_device: "auto".to_string(),
+            sfx_audio_device: String::new(),
             pin_controls: false,
             show_remaining_time: false,
             open_url_multiline: true,
@@ -771,6 +826,7 @@ impl Default for AppConfig {
             playback_positions: Vec::new(),
             app_name: None,
             app_icon: None,
+            app_icon_preset: AppIconPreset::Current,
             app_icon_playing: None,
             app_icon_paused: None,
             app_icon_stopped: None,
@@ -785,6 +841,7 @@ impl Default for AppConfig {
             hardware_endpoint: None,
             auto_connect_hardware: true,
             pause_on_hardware_disconnect: true,
+            allow_unattended_hardware_takeover: false,
             click_player_to_toggle: true,
             playback_speed: 1.0,
             temporary_fast_forward_speed: 2.0,
@@ -828,7 +885,7 @@ impl Default for AppConfig {
             timeline_animated_navigation: true,
             timeline_navigation_transition_ms: 100,
             timeline_follow_playhead: false,
-            timeline_toolbar_order: default_timeline_toolbar_order(),
+            timeline_toolbar_order: Vec::new(),
             timeline_toolbar_hidden: default_timeline_toolbar_hidden(),
             non_user_control_visibility: NonUserControlVisibility::Dimmed,
             prefix_relay_identifiers: true,
@@ -928,9 +985,13 @@ pub fn detect_executable_dir() -> PathBuf {
 }
 
 pub fn detect_storage_mode(exe_dir: &std::path::Path) -> StorageMode {
-    if std::env::var("PEALAYER_PORTABLE")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
+    storage_mode_with_setting(exe_dir, std::env::var("PEALAYER_PORTABLE").ok().as_deref())
+}
+
+// Pass the setting explicitly so tests never mutate the process environment
+// underneath libmpv/native threads or other storage/configuration tests.
+fn storage_mode_with_setting(exe_dir: &std::path::Path, portable: Option<&str>) -> StorageMode {
+    if portable.is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
         || exe_dir.join("portable.flag").exists()
         || exe_dir.join("pealayer.json").exists()
         || exe_dir.join("portable.dat").exists()
@@ -1278,6 +1339,7 @@ impl AppConfig {
         self.color_palette = source.color_palette;
         self.accent_color = source.accent_color;
         self.custom_accent_color = source.custom_accent_color.clone();
+        self.app_icon_preset = source.app_icon_preset;
     }
 
     pub(crate) fn normalize_playback_positions(&mut self) {
@@ -1581,6 +1643,14 @@ impl AppConfig {
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        for (key, device) in [
+            ("audio_device", &self.audio_device),
+            ("sfx_audio_device", &self.sfx_audio_device),
+        ] {
+            if device.len() > 256 || device.chars().any(char::is_control) {
+                return Err(format!("{key} must be a valid audio device identifier"));
+            }
+        }
         if !self.volume.is_finite() || !(0.0..=130.0).contains(&self.volume) {
             return Err("volume must be between 0 and 130".to_string());
         }
@@ -2221,7 +2291,7 @@ mod tests {
             std::env::temp_dir().join(format!("pealayer_test_sys_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&temp_dir).unwrap();
 
-        let mode = detect_storage_mode(&temp_dir);
+        let mode = storage_mode_with_setting(&temp_dir, None);
         assert_eq!(mode, StorageMode::System);
 
         let sys_path = resolve_system_config_path();
@@ -2260,19 +2330,12 @@ mod tests {
     fn test_detect_storage_mode_env_var() {
         let temp_dir =
             std::env::temp_dir().join(format!("pealayer_test_env_{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&temp_dir).unwrap();
-
-        unsafe {
-            std::env::set_var("PEALAYER_PORTABLE", "1");
+        for setting in ["1", "true", "TRUE", "TrUe"] {
+            assert_eq!(storage_mode_with_setting(&temp_dir, Some(setting)), StorageMode::Portable);
         }
-        let mode = detect_storage_mode(&temp_dir);
-        assert_eq!(mode, StorageMode::Portable);
-
-        unsafe {
-            std::env::remove_var("PEALAYER_PORTABLE");
+        for setting in [None, Some("0"), Some("false"), Some("invalid")] {
+            assert_eq!(storage_mode_with_setting(&temp_dir, setting), StorageMode::System);
         }
-
-        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
