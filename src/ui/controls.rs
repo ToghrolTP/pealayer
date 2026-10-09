@@ -48,7 +48,7 @@ pub(crate) fn draw_volume_strip(app: &mut PealayerApp, ui: &mut egui::Ui) {
         ui.input(|input| input.smooth_scroll_delta.y)
     } else { 0.0 };
     if wheel != 0.0 {
-        volume = (volume + wheel.signum() * 2.0).clamp(0.0, 130.0);
+        volume = (volume + f64::from(wheel.signum()) * 2.0).clamp(0.0, 130.0);
         ui.input_mut(|input| input.smooth_scroll_delta.y = 0.0);
     }
     if response.changed() || wheel != 0.0 {
