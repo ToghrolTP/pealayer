@@ -6488,7 +6488,8 @@ impl PealayerApp {
                 ctx.request_repaint_after(std::time::Duration::from_millis(100));
             }
             Err(error) => {
-                let config = crate::peer::client().map(|client| client.config())
+                let config = crate::peer::client().and_then(|client| client.snapshot())
+                    .map(|snapshot| snapshot.session.config)
                     .unwrap_or_else(crate::platform::interop::get_live_config);
                 self.apply_timeline_toolbar_preferences(&crate::config::TimelineToolbarPreferences::from_config(&config));
                 self.config_status = error.clone();

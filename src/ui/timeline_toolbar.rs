@@ -4,7 +4,7 @@ use crate::app::PealayerApp;
 use crate::config::TimelineToolbarAction as Action;
 use eframe::egui::{self, Align2, Color32, FontId, Id, Rect, Response, Sense, Stroke, StrokeKind};
 
-const CELL: f32 = 26.0;
+const CELL: f32 = super::layout::TIMELINE_RULER_HEIGHT;
 
 #[derive(Clone)]
 struct ToolbarDrag(Action);
