@@ -166,6 +166,15 @@ struct StoredQueue {
 pub struct Manager(Arc<Mutex<Inner>>);
 
 pub fn default_root() -> Result<PathBuf, String> {
+    // Administrative/portable launch configuration, never an RPC-supplied destination.
+    if let Some(value) = std::env::var_os("PEALAYER_DOWNLOAD_ROOT") {
+        let path = PathBuf::from(value);
+        return if path.is_absolute() {
+            Ok(path)
+        } else {
+            Err("PEALAYER_DOWNLOAD_ROOT must be absolute".into())
+        };
+    }
     #[cfg(windows)]
     {
         return std::env::var_os("LOCALAPPDATA")
