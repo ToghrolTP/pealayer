@@ -31,8 +31,9 @@ labeled sequence-editor inputs is not mistaken for button-content misalignment.
 
 TypeScript and production/PWA generation passed. Responsive CSS guardrails were
 extended for root/wrapper/SVG layout, spacer removal and transport/footer overrides.
-They remain unexecuted under the user's standing request to defer test suites and
-slow CI waits. A current screenshot identifying any remaining affected mobile
+The coordinating task ran `node web_ui/scripts/test-responsive-layout.mjs` and
+reported a pass. Other test suites and slow CI waits remain deferred under the
+user's standing request. A current screenshot identifying any remaining affected mobile
 button was requested; real phone/tablet/desktop visual acceptance is pending.
 Do not turn source inspection or compilation into a claim of screenshot proof.
 
