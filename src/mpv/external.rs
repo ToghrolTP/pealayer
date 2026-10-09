@@ -93,6 +93,8 @@ pub struct Status {
     acknowledged_ids: Vec<u64>,
     #[serde(skip)]
     pub clock_at: Option<Instant>,
+    #[serde(skip)]
+    pending_seek: bool,
 }
 const OBSERVED: &[&str] = &[
     "path",
@@ -338,6 +340,7 @@ fn advancing(s: &Status) -> bool {
 
 fn apply_event(s: &mut Status, v: &Value) -> bool {
     if v["event"] == "start-file" {
+        s.pending_seek = true;
         for key in ["time-pos", "duration", "seekable"] {
             s.properties.remove(key);
         }
@@ -371,7 +374,12 @@ fn apply_event(s: &mut Status, v: &Value) -> bool {
         s.revision = s.revision.saturating_add(1);
         return true;
     }
-    if v["event"] == "playback-restart" {
+    if v["event"] == "seek" {
+        s.pending_seek = true;
+        return true;
+    }
+    if v["event"] == "playback-restart" && s.pending_seek {
+        s.pending_seek = false;
         s.seek_revision = s.seek_revision.saturating_add(1);
         s.revision = s.revision.saturating_add(1);
         return true;
@@ -1065,8 +1073,14 @@ mod tests {
         assert_eq!(lookup(&s.properties, "track-list/0/id"), Some(json!(2)));
         assert_eq!(lookup(&s.properties, "track-list/count"), Some(json!(1)));
         assert_eq!(s.catalog_revision, 1);
+        apply_event(&mut s, &json!({"event":"seek"}));
         apply_event(&mut s, &json!({"event":"playback-restart"}));
         assert_eq!(s.seek_revision, 1);
+        apply_event(&mut s, &json!({"event":"playback-restart"}));
+        assert_eq!(
+            s.seek_revision, 1,
+            "Buffering/restart alone must not reset hardware timing faults"
+        );
     }
     #[test]
     fn external_settings_reject_unsafe_endpoints() {
