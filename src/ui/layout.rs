@@ -687,53 +687,27 @@ fn timeline_wheel_delta(events: &[egui::Event], line_speed: f32, page_height: f3
     }).fold(egui::Vec2::ZERO, |sum, delta| sum + delta)
 }
 
-fn timeline_ruler_scroll_steps_from_events(events: &[egui::Event]) -> i32 {
-    let mut steps: i32 = 0;
-    for event in events {
-        if let egui::Event::MouseWheel { delta, unit, .. } = event {
-            let count = match unit {
-                egui::MouseWheelUnit::Line | egui::MouseWheelUnit::Page => {
-                    if delta.y > 0.0 {
-                        1
-                    } else if delta.y < 0.0 {
-                        -1
-                    } else {
-                        0
-                    }
-                }
-                egui::MouseWheelUnit::Point => {
-                    if delta.y >= 1.0 {
-                        1
-                    } else if delta.y <= -1.0 {
-                        -1
-                    } else {
-                        0
-                    }
-                }
-            };
-            steps += count;
-        }
+fn ruler_wheel_step(event: &egui::Event) -> i32 {
+    if let egui::Event::MouseWheel { delta, unit, modifiers, .. } = event {
+        if modifiers.ctrl || modifiers.shift || modifiers.alt || modifiers.command { return 0; }
+        if delta.y == 0.0 || (matches!(unit, egui::MouseWheelUnit::Point) && delta.y.abs() < 1.0) { return 0; }
+        return if delta.y > 0.0 { 1 } else { -1 };
     }
-    steps
+    0
 }
 
 fn timeline_ruler_scroll_steps(ui: &egui::Ui) -> i32 {
-    let steps = ui.input(|input| {
-        timeline_ruler_scroll_steps_from_events(&input.events)
-    });
-
-    let has_wheel = ui.input(|input| {
-        input.smooth_scroll_delta != egui::Vec2::ZERO
-            || input.events.iter().any(|e| matches!(e, egui::Event::MouseWheel { .. }))
-    });
-
-    if has_wheel {
+    let (steps, consumed) = ui.input(|input| (input.events.iter().map(ruler_wheel_step).fold(0_i32, i32::saturating_add),
+        input.events.iter().any(|event| ruler_wheel_step(event) != 0)));
+    if consumed {
         ui.ctx().input_mut(|input| {
-            input.smooth_scroll_delta = egui::Vec2::ZERO;
-            input.events.retain(|event| !matches!(event, egui::Event::MouseWheel { .. }));
+            input.smooth_scroll_delta.y = 0.0;
+            for event in &mut input.events {
+                if ruler_wheel_step(event) != 0 && let egui::Event::MouseWheel { delta, .. } = event { delta.y = 0.0; }
+            }
+            input.events.retain(|event| !matches!(event, egui::Event::MouseWheel { delta, .. } if *delta == egui::Vec2::ZERO));
         });
     }
-
     steps
 }
 
@@ -5376,7 +5350,7 @@ fn draw_addressable_strip_tool(
                 "solid" => {
                     ui.horizontal_wrapped(|ui| {
                         ui.label(app.tr("Color"));
-                        ui.color_edit_button_srgba(&mut color);
+                        crate::ui::color_picker::color_button_srgba(ui, &mut color);
                         ui.label(app.tr("Brightness"));
                         ui.add(egui::Slider::new(&mut brightness, 0..=255).show_value(true));
                     });
@@ -5406,7 +5380,7 @@ fn draw_addressable_strip_tool(
                             egui::DragValue::new(&mut pixel).range(0..=pixels.saturating_sub(1)),
                         );
                         ui.label(app.tr("Color"));
-                        ui.color_edit_button_srgba(&mut color);
+                        crate::ui::color_picker::color_button_srgba(ui, &mut color);
                     });
                     ui.horizontal_wrapped(|ui| {
                         ui.label(app.tr("Brightness"));
@@ -5438,9 +5412,9 @@ fn draw_addressable_strip_tool(
                 "frame" => {
                     ui.horizontal_wrapped(|ui| {
                         ui.label(app.tr("Start color"));
-                        ui.color_edit_button_srgba(&mut color);
+                        crate::ui::color_picker::color_button_srgba(ui, &mut color);
                         ui.label(app.tr("End color"));
-                        ui.color_edit_button_srgba(&mut second_color);
+                        crate::ui::color_picker::color_button_srgba(ui, &mut second_color);
                     });
                     ui.horizontal_wrapped(|ui| {
                         ui.label(app.tr("Brightness"));
@@ -7078,70 +7052,24 @@ mod timeline_row_tests {
     }
 
     #[test]
-    fn timeline_ruler_scroll_steps_converts_vertical_wheel_to_frame_steps() {
-        let wheel = |unit, delta| egui::Event::MouseWheel {
-            unit,
-            delta,
-            modifiers: egui::Modifiers::NONE,
-            phase: egui::TouchPhase::Move,
-        };
-        // Scrolling upwards (positive y) advances forward (+1 frame per notch)
-        assert_eq!(
-            timeline_ruler_scroll_steps_from_events(&[wheel(egui::MouseWheelUnit::Line, egui::vec2(0.0, 1.0))]),
-            1
-        );
-        // High magnitude line delta (e.g. Windows multi-line notch 3.0 or 120.0) still produces exactly 1 frame step
-        assert_eq!(
-            timeline_ruler_scroll_steps_from_events(&[wheel(egui::MouseWheelUnit::Line, egui::vec2(0.0, 3.0))]),
-            1
-        );
-        assert_eq!(
-            timeline_ruler_scroll_steps_from_events(&[wheel(egui::MouseWheelUnit::Line, egui::vec2(0.0, 120.0))]),
-            1
-        );
-        // Scrolling downwards (negative y) steps backward (-1 frame per notch)
-        assert_eq!(
-            timeline_ruler_scroll_steps_from_events(&[wheel(egui::MouseWheelUnit::Line, egui::vec2(0.0, -1.0))]),
-            -1
-        );
-        assert_eq!(
-            timeline_ruler_scroll_steps_from_events(&[wheel(egui::MouseWheelUnit::Line, egui::vec2(0.0, -3.0))]),
-            -1
-        );
-        // Multiple separate notch events in a single frame accumulate
-        assert_eq!(
-            timeline_ruler_scroll_steps_from_events(&[
-                wheel(egui::MouseWheelUnit::Line, egui::vec2(0.0, 1.0)),
-                wheel(egui::MouseWheelUnit::Line, egui::vec2(0.0, 1.0)),
-                wheel(egui::MouseWheelUnit::Line, egui::vec2(0.0, 1.0)),
-            ]),
-            3
-        );
-        // Point unit (trackpad / smooth wheel) resolves directionally
-        assert_eq!(
-            timeline_ruler_scroll_steps_from_events(&[wheel(egui::MouseWheelUnit::Point, egui::vec2(0.0, 15.0))]),
-            1
-        );
-        assert_eq!(
-            timeline_ruler_scroll_steps_from_events(&[wheel(egui::MouseWheelUnit::Point, egui::vec2(0.0, -25.0))]),
-            -1
-        );
-        // Sub-pixel jitter under 1.0 point is ignored
-        assert_eq!(
-            timeline_ruler_scroll_steps_from_events(&[wheel(egui::MouseWheelUnit::Point, egui::vec2(0.0, 0.4))]),
-            0
-        );
-        // Empty events produce 0 steps
-        assert_eq!(timeline_ruler_scroll_steps_from_events(&[]), 0);
-    }
-
-    #[test]
     fn timeline_combines_native_precision_trackpad_pinch_factors() {
         assert_eq!(timeline_pinch_factor(&[]), None);
         assert_eq!(timeline_pinch_factor(&[
             egui::Event::Zoom(1.1), egui::Event::Zoom(1.2)]), Some(1.32));
         assert_eq!(timeline_pinch_factor(&[egui::Event::Zoom(f32::NAN)]), None);
         assert_eq!(timeline_pinch_factor(&[egui::Event::Zoom(0.0)]), None);
+    }
+
+    #[test]
+    fn ruler_wheel_steps_once_per_event_and_preserves_horizontal_and_modifiers() {
+        let wheel = |unit, delta, modifiers| egui::Event::MouseWheel {
+            unit, delta, modifiers, phase: egui::TouchPhase::Move,
+        };
+        assert_eq!(ruler_wheel_step(&wheel(egui::MouseWheelUnit::Line, egui::vec2(0.0,120.0), egui::Modifiers::NONE)), 1);
+        assert_eq!(ruler_wheel_step(&wheel(egui::MouseWheelUnit::Line, egui::vec2(0.0,-3.0), egui::Modifiers::NONE)), -1);
+        assert_eq!(ruler_wheel_step(&wheel(egui::MouseWheelUnit::Point, egui::vec2(0.0,0.4), egui::Modifiers::NONE)), 0);
+        assert_eq!(ruler_wheel_step(&wheel(egui::MouseWheelUnit::Line, egui::vec2(2.0,0.0), egui::Modifiers::NONE)), 0);
+        assert_eq!(ruler_wheel_step(&wheel(egui::MouseWheelUnit::Line, egui::vec2(0.0,1.0), egui::Modifiers::CTRL)), 0);
     }
 
     #[test]
@@ -11235,10 +11163,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 as f32,
                                         );
                                     }
-                                    crate::ui::controls::paint_seekbar_chapters(
-                                        ui, &response, self.app.duration, &self.app.media_chapters(),
-                                        self.app.active_media_chapter().map(|chapter| chapter.index),
-                                    );
+                                    if let Some(chapter_time) = crate::ui::controls::paint_seekbar_markers(ui, &response, self.app) {
+                                        current_pos = chapter_time;
+                                    }
                                     let show_seek_preview =
                                         self.app.nle_seekbar_hover_thumbnails;
                                     crate::ui::seek_preview::draw(
@@ -14887,19 +14814,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         }
                                         held_timeline_pan = toolbar.held_pan;
 
-                                        let visible_ruler = ruler_rect.intersect(viewport_clip);
-                                        let ruler_hovered = ui.rect_contains_pointer(visible_ruler)
+                                        let ruler_hovered = ui.rect_contains_pointer(ruler_rect.intersect(viewport_clip))
                                             && !ui.rect_contains_pointer(toolbar_rect);
-                                        let ruler_scroll_steps = if ruler_hovered {
-                                            timeline_ruler_scroll_steps(ui)
-                                        } else {
-                                            0
-                                        };
-
-                                        if ruler_scroll_steps != 0 {
-                                            self.app.step_timeline_frame(ruler_scroll_steps);
-                                            ui.ctx().request_repaint();
-                                        } else if ui.rect_contains_pointer(viewport_clip) {
+                                        if ruler_hovered {
+                                            let steps = timeline_ruler_scroll_steps(ui);
+                                            if steps != 0 { self.app.step_timeline_frame(steps); ui.ctx().request_repaint(); }
+                                        }
+                                        if ui.rect_contains_pointer(viewport_clip) {
                                             pending_timeline_wheel = timeline_wheel_over_surface(ui, viewport_clip,
                                                 timeline_wheel_behavior(self.app, scroll_modifiers));
                                         }
@@ -14926,8 +14847,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             let marker_response = ui
                                                 .interact(marker_rect, egui::Id::new(("timeline-keyframe", marker.id)), egui::Sense::click())
                                                 .on_hover_text(format!(
-                                                    "{} · {}",
+                                                    "{}{} · {}",
                                                     self.app.tr("Exact timeline keyframe"),
+                                                    if marker.label.is_empty() { String::new() } else { format!(" · {}", marker.label) },
                                                     crate::duration::format_time_value_ms(marker.time_ms)
                                                 ));
                                             let target = TimelineKeyframeTarget::Marker(marker.id);
@@ -14942,6 +14864,17 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             }
                                             keyframe_context_menu(ui, &marker_response, target, targeted, |ui| {
                                                 ui.label(egui::RichText::new(self.app.tr("Exact timeline keyframe")).strong());
+                                                let mut label = marker.label.clone();
+                                                ui.horizontal(|ui| {
+                                                    ui.label(self.app.tr("Name"));
+                                                    if ui.add(crate::ui::dialog::singleline_text_edit(&mut label).desired_width(160.0)).changed() {
+                                                        self.app.undo_stack.push(self.app.snapshot_timeline());
+                                                        if let Some(keyframe) = self.app.timeline.keyframes.iter_mut().find(|keyframe| keyframe.id == marker.id) {
+                                                            keyframe.label = label;
+                                                        }
+                                                        self.app.commit_timeline_edit();
+                                                    }
+                                                });
                                                 let mut exact_time = marker.time_ms;
                                                 ui.horizontal(|ui| {
                                                     ui.label(self.app.tr("Time"));

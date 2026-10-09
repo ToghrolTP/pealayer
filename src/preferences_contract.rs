@@ -19,6 +19,7 @@ fn is_false(value: &bool) -> bool {
 #[serde(rename_all = "snake_case")]
 pub enum PreferenceControlKind {
     Accent,
+    Color,
     Boolean,
     File,
     Number,
@@ -318,6 +319,12 @@ fn application_icon_control(key: &'static str, label: &'static str, placeholder:
     control
 }
 
+fn seekbar_color_control(key: &'static str, label: &'static str) -> PreferenceControl {
+    let mut control = PreferenceControl::text(key, "playback", "Seekbar markers", label, "#RRGGBB");
+    control.kind = PreferenceControlKind::Color;
+    control
+}
+
 pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceControl> {
     let audio_devices = crate::mpv::audio_output::available_audio_devices();
     let audio_output_control = |key, label, selected: &str, follow_media: bool| {
@@ -504,6 +511,9 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
                 Some("Disabled by default so the NLE transport and timeline remain unobstructed");
             control
         },
+        seekbar_color_control("seekbar_markers.chapter_color", "Chapter markers"),
+        seekbar_color_control("seekbar_markers.active_chapter_color", "Active chapter background"),
+        seekbar_color_control("seekbar_markers.keyframe_color", "Keyframe markers"),
         PreferenceControl::number(
             "quick_seek_seconds",
             "playback",
@@ -1168,7 +1178,7 @@ fn semantic_preference_icon(control: &PreferenceControl) -> &'static str {
         key if key.starts_with("web_") => "globe",
         key if key.starts_with("keyboard_") || key.starts_with("shortcut_") => "keyboard",
         _ => match control.kind {
-            PreferenceControlKind::Accent => "palette",
+            PreferenceControlKind::Accent | PreferenceControlKind::Color => "palette",
             PreferenceControlKind::Boolean => "check-square",
             PreferenceControlKind::File => "image",
             PreferenceControlKind::Number => "sliders-horizontal",

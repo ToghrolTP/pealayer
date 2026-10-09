@@ -16,12 +16,18 @@ const effects = read('src/components/EffectsTab.tsx');
 const effectRecorder = read('src/components/EffectRecorder.tsx');
 const effectGroupDialog = read('src/components/EffectGroupDialog.tsx');
 const css = read('src/styles.css');
+const seekbar = read('src/components/seekbar.tsx');
+const colorPicker = read('src/components/ColorPicker.tsx');
 const preferences = read('src/components/PreferencesTab.tsx');
 const filePicker = read('src/components/ServerFilePicker.tsx');
 const authority = read('src/components/PublishingAuthority.tsx');
 const webPlatform = read('src/webPlatform.ts');
 
 const contracts = [
+  [studio.includes('useSeekbar(state, sendCmd)') && remote.includes('useSeekbar(state, sendCmd)') && seekbar.includes("send('scrub_to'") && seekbar.includes("send('finish_scrub'"), 'Simple and NLE seekbars share ordered live preview and exact commit commands'],
+  [seekbar.includes('state.settled_seek_revision') && seekbar.includes('baselineRevision.current') && seekbar.includes('state.settled_seek_target'), 'seek drafts wait for a correlated decoder settlement, not stale or already-advancing position samples'],
+  [seekbar.includes("'#969696'") && seekbar.includes("'#EF4444'") && css.includes('.seekbar-markers__chapter::after') && css.includes('height: 4px'), 'chapter ticks remain subtle and contained while named keyframes retain red dividers'],
+  [preferences.includes("control.kind === 'color'") && colorPicker.includes('assets/themes/ui-colors.json') && effects.includes("import { ColorPicker } from './ColorPicker'") && hardware.includes("import { ColorPicker } from './ColorPicker'"), 'marker preferences and effect/hardware pickers share the semantic swatch catalog'],
   [app.includes('revision=${state.app_icon_revision') && webPlatform.includes('revision=${state.app_icon_revision'), 'runtime branding changes refresh the header, favicon, PWA and media-session imagery without a playback change'],
   [authority.includes('Connect to authority') && authority.includes('authority.owner_endpoint') && authority.includes('disabled={!authority.owner_endpoint}'), 'conflicts offer the validated remote authority without inventing an endpoint'],
   [app.includes('<PublishingAuthority') && hardware.includes('<PublishingAuthority') && authority.includes("sendCmd('pealayer.hardware.authority'") && authority.includes('authority.owner_id === actor'), 'publishing authority uses the same server reservation in controls and the global conflict dialog'],

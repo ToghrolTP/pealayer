@@ -38,6 +38,7 @@ import recordingColors from '../../../assets/themes/recording-colors.json';
 import { mediaBasename } from '../mediaLabel';
 import { formatTimelineTime } from '../timelineTime';
 import { SeekThumbnailPreview } from './SeekThumbnailPreview';
+import { SeekbarMarkers, useSeekbar } from './seekbar';
 import { MediaSurface } from './MediaSurface';
 import type { MediaGesturePreferences } from './MediaSurface';
 import { defaultTimelineWheelPreferences, timelineWheelAction, timelineZoomAtPointer } from '../timelineWheel';
@@ -245,7 +246,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
       steps: steps ?? [], properties: { ...(draft.program?.properties ?? {}), mode: engine ?? 'auto', ...(draft.color ? { color: draft.color } : {}) },
     } : JSON.parse(programText || '{}') };
   };
-  const [seekDraft, setSeekDraft] = useState<number | null>(null);
+  const seek = useSeekbar(state, sendCmd);
   const [workspaceManagerOpen, setWorkspaceManagerOpen] = useState(false);
   const [workspaceName, setWorkspaceName] = useState('');
   const [workspaceIcon, setWorkspaceIcon] = useState('window');
@@ -290,8 +291,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
   const mediaName = state.current_video
     ? mediaBasename(state.current_video, tr(locale, 'Untitled'))
     : tr(locale, 'No Media Playing');
-  const seekPercent = durationSeconds > 0 ? (currentSeconds / durationSeconds) * 100 : 0;
-  const activeSeek = seekDraft ?? seekPercent;
+  const activeSeek = seek.value;
   const directControls = useMemo(
     () => (state.hardware_details?.controls ?? []).filter((control) =>
       !control.hidden && (control.kind === 'relay' || control.kind === 'pwm' || control.kind === 'mosfet')),
@@ -777,29 +777,19 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
             apiBaseUrl={apiBaseUrl}
             unavailableLabel={tr(locale, 'Preview unavailable')}
             className="studio-scrubber"
+            chapters={state.chapters}
+            keyframes={state.timeline_keyframes}
           >
             <Slider
               min={0}
               max={100}
               value={activeSeek}
               disabled={!state.seekable || durationSeconds <= 0}
-              onChange={(value) => setSeekDraft(value)}
-              onChangeComplete={(value) => {
-                setSeekDraft(null);
-                sendCmd('seek_abs', { percentage: value });
-              }}
+              onChange={seek.change}
+              onChangeComplete={seek.commit}
               tooltip={seekbarHoverThumbnails ? { open: false } : { formatter: (value) => formatTime(((value ?? 0) / 100) * durationSeconds) }}
             />
-            {durationSeconds > 0 && chapters
-              .filter((chapter) => chapter.time_seconds >= 0 && chapter.time_seconds <= durationSeconds)
-              .map((chapter) => (
-                <span
-                  key={chapter.index}
-                  aria-hidden="true"
-                  className={`studio-scrubber__chapter${state.current_chapter_index === chapter.index ? ' is-active' : ''}`}
-                  style={{ left: `${(chapter.time_seconds / durationSeconds) * 100}%` }}
-                />
-              ))}
+            <SeekbarMarkers state={state} seconds={activeSeek / 100 * durationSeconds} onChapter={seek.commitSeconds} />
           </SeekThumbnailPreview>
           <span className="studio-timecode studio-timecode--muted">
             {state.live ? tr(locale, 'LIVE') : formatTime(durationSeconds)}

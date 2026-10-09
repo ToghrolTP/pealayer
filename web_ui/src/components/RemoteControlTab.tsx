@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React from 'react';
 import type { RfSnapshot } from './RfManager';
 import { Button, Select, Slider, Tooltip } from 'antd';
 import {
@@ -17,6 +17,7 @@ import { mediaBasename } from '../mediaLabel';
 import { MediaSurface } from './MediaSurface';
 import type { MediaGesturePreferences } from './MediaSurface';
 import { SeekThumbnailPreview } from './SeekThumbnailPreview';
+import { SeekbarMarkers, useSeekbar } from './seekbar';
 import type { AppearanceState } from '../appearance';
 import type { TimelineWheelPreferences } from '../timelineWheel';
 import type { HardwareMelody } from '../melodyCatalog';
@@ -50,6 +51,11 @@ export interface PlayerState {
   }>;
   chapters?: Array<{ index: number; title: string; time_seconds: number }>;
   current_chapter_index?: number | null;
+  seek_pending?: boolean;
+  settled_seek_revision?: number;
+  settled_seek_target?: number | null;
+  seekbar_markers?: { chapter_color: string; active_chapter_color: string; keyframe_color: string };
+  timeline_keyframes?: Array<{ id: string; time_ms: number; label: string }>;
   seekable?: boolean;
   live?: boolean;
   muted?: boolean;
@@ -257,14 +263,11 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
   seekbarHoverThumbnails,
   mediaGestures,
 }) => {
-  const [seekDraft, setSeekDraft] = useState<number | null>(null);
+  const seek = useSeekbar(state, sendCmd);
 
   const videoName = state.current_video
     ? mediaBasename(state.current_video, tr(locale, 'Untitled'))
     : state.current_video === null ? tr(locale, 'No Media Playing') : tr(locale, 'Initializing…');
-  const seekPercent = state.duration && state.duration > 0
-    ? ((state.playback_time || 0) / state.duration) * 100
-    : 0;
 
   return (
     <section className="remote-player">
@@ -298,19 +301,19 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
           mediaIdentity={state.current_video}
           apiBaseUrl={apiBaseUrl}
           unavailableLabel={tr(locale, 'Preview unavailable')}
+          chapters={state.chapters}
+          keyframes={state.timeline_keyframes}
         >
           <Slider
             min={0}
             max={100}
-            value={seekDraft ?? seekPercent}
+            value={seek.value}
             disabled={!state.current_video || !state.seekable || !state.duration}
-            onChange={setSeekDraft}
-            onChangeComplete={(value) => {
-              setSeekDraft(null);
-              sendCmd('seek_abs', { percentage: value });
-            }}
+            onChange={seek.change}
+            onChangeComplete={seek.commit}
             tooltip={seekbarHoverThumbnails ? { open: false } : { formatter: (value) => formatTime(((value || 0) / 100) * (state.duration || 0)) }}
           />
+          <SeekbarMarkers state={state} seconds={seek.value / 100 * (state.duration ?? 0)} onChapter={seek.commitSeconds} />
         </SeekThumbnailPreview>
         <span>{state.live ? tr(locale, 'LIVE') : formatTime(state.duration)}</span>
       </div>

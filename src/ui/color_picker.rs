@@ -2,6 +2,50 @@
 //! The swatch is a click target inside the text field's reserved leading margin.
 use eframe::egui;
 
+#[derive(serde::Deserialize)]
+pub struct PaletteSwatch { pub label: String, pub hex: String }
+
+pub fn semantic_swatches() -> &'static [PaletteSwatch] {
+    static SWATCHES: std::sync::LazyLock<Vec<PaletteSwatch>> = std::sync::LazyLock::new(||
+        serde_json::from_str(include_str!("../../assets/themes/ui-colors.json")).expect("valid shared UI swatches"));
+    &SWATCHES
+}
+
+fn swatch_row(ui: &mut egui::Ui) -> Option<egui::Color32> {
+    let mut selected = None;
+    ui.horizontal_wrapped(|ui| {
+        for swatch in semantic_swatches() {
+            let [r,g,b] = crate::config::parse_rgb_hex(&swatch.hex).expect("valid shared swatch");
+            let color = egui::Color32::from_rgb(r,g,b);
+            let (rect, response) = ui.allocate_exact_size(egui::vec2(22.0,22.0), egui::Sense::click());
+            ui.painter().circle_filled(rect.center(), 7.0, color);
+            ui.painter().circle_stroke(rect.center(), 7.0, ui.visuals().widgets.noninteractive.bg_stroke);
+            if response.on_hover_text(&swatch.label).clicked() { selected = Some(color); }
+        }
+    });
+    selected
+}
+
+/// Compact RGB-valued control with the same swatches as HEX fields.
+pub fn color_button_srgba(ui: &mut egui::Ui, color: &mut egui::Color32) -> egui::Response {
+    let (rect, mut response) = ui.allocate_exact_size(egui::vec2(28.0,28.0), egui::Sense::click());
+    ui.painter().circle_filled(rect.center(), 8.0, *color);
+    ui.painter().circle_stroke(rect.center(), 8.0, ui.visuals().widgets.noninteractive.bg_stroke);
+    egui::Popup::menu(&response).close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+        if let Some(selected) = swatch_row(ui) { *color = selected; response.mark_changed(); }
+        ui.separator();
+        if egui::color_picker::color_picker_color32(ui, color, egui::color_picker::Alpha::OnlyBlend) { response.mark_changed(); }
+    });
+    response
+}
+
+pub fn color_button_srgb(ui: &mut egui::Ui, rgb: &mut [u8;3]) -> egui::Response {
+    let mut color = egui::Color32::from_rgb(rgb[0],rgb[1],rgb[2]);
+    let response = color_button_srgba(ui, &mut color);
+    if response.changed() { *rgb = [color.r(),color.g(),color.b()]; }
+    response
+}
+
 pub fn color_field(
     ui: &mut egui::Ui,
     hex: &mut String,
@@ -45,6 +89,10 @@ pub fn color_field(
         .id(id.with("palette"))
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .show(|ui| {
+            if let Some(selected) = swatch_row(ui) {
+                *hex = format!("#{:02X}{:02X}{:02X}", selected.r(),selected.g(),selected.b()); response.mark_changed();
+            }
+            ui.separator();
             let mut color = egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
             if egui::color_picker::color_picker_color32(
                 ui,
@@ -61,6 +109,14 @@ pub fn color_field(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn shared_swatches_are_valid_and_include_semantic_marker_colors() {
+        for swatch in semantic_swatches() { assert!(crate::config::parse_rgb_hex(&swatch.hex).is_some()); }
+        for expected in ["#EF4444", "#F59E0B", "#969696"] {
+            assert!(semantic_swatches().iter().any(|swatch| swatch.hex == expected));
+        }
+    }
 
     #[test]
     fn integrated_color_field_keeps_round_swatch_inside_text_field_in_both_themes() {

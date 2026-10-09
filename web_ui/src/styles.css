@@ -407,8 +407,13 @@ body {
 .studio-scrubber, .studio-volume { margin: 0 5px !important; }
 .seek-thumbnail-host { position: relative; min-width: 0; width: 100%; }
 .seek-thumbnail-host > .ant-slider { width: 100%; margin: 0; }
-.studio-scrubber__chapter { position: absolute; z-index: 2; top: 50%; width: 2px; height: 14px; border-radius: 1px; background: #d8a238; transform: translate(-50%, -50%); pointer-events: none; }
-.studio-scrubber__chapter.is-active { background: #ffc14b; box-shadow: 0 0 7px color-mix(in srgb, #ffc14b 55%, transparent); }
+.seekbar-markers { position: absolute; inset: 0; pointer-events: none; }
+.seekbar-markers__active { position: absolute; top: 50%; height: 4px; transform: translateY(-50%); opacity: .24; border-radius: 2px; }
+.seekbar-markers__chapter { position: absolute; z-index: 3; top: 50%; width: 12px; height: 16px; transform: translate(-50%, -50%); padding: 0; border: 0; background: transparent; pointer-events: auto; cursor: pointer; }
+.seekbar-markers__chapter::after { content: ''; position: absolute; left: 5.5px; top: 6px; height: 4px; width: 1px; border-radius: 1px; background: currentColor; }
+.seekbar-markers__chapter:focus-visible { outline: 1px solid currentColor; outline-offset: 1px; border-radius: 4px; }
+.seekbar-markers__keyframe { position: absolute; z-index: 2; top: 50%; width: 2px; height: 14px; border-radius: 1px; transform: translate(-50%, -50%); pointer-events: none; }
+.seek-thumbnail-popover__caption { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .seek-thumbnail-popover {
   position: fixed;
   z-index: 1000;
