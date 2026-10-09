@@ -27,6 +27,38 @@ pub(crate) fn playback_button_role(app: &PealayerApp) -> &'static str {
     if app.is_paused || app.is_playback_finished() { "green" } else { "amber" }
 }
 
+/// A bounded horizontal volume strip, shared by responsive monitor layouts.
+/// Session commands also control the authority when this app is a consumer.
+pub(crate) fn draw_volume_strip(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    let icon = if app.is_muted { crate::ui::icons::SPEAKER_SLASH } else { crate::ui::icons::SPEAKER_HIGH };
+    if ui.add_sized([30.0, 22.0], transport_button(app.color_palette, ui, icon,
+        if app.is_muted { "amber" } else { "muted" }))
+        .on_hover_text(app.tr(if app.is_muted { "Unmute" } else { "Mute" })).clicked() {
+        app.apply_interop_command(&ui.ctx().clone(), crate::platform::interop::InteropCommand::ToggleMute,
+            "Volume control");
+    }
+    let mut volume = app.volume;
+    let old_width = ui.spacing().slider_width;
+    // Reserve a stable percentage column, even when the value has fewer digits.
+    ui.spacing_mut().slider_width = (ui.available_width() - 44.0 - ui.spacing().item_spacing.x).max(1.0);
+    let response = ui.add(egui::Slider::new(&mut volume, 0.0..=130.0).show_value(false))
+        .on_hover_text(format!("{}: {:.0}%", app.tr("Volume"), volume));
+    ui.spacing_mut().slider_width = old_width;
+    let wheel = if response.hovered() {
+        ui.input(|input| input.smooth_scroll_delta.y)
+    } else { 0.0 };
+    if wheel != 0.0 {
+        volume = (volume + f64::from(wheel.signum()) * 2.0).clamp(0.0, 130.0);
+        ui.input_mut(|input| input.smooth_scroll_delta.y = 0.0);
+    }
+    if response.changed() || wheel != 0.0 {
+        app.apply_interop_command(&ui.ctx().clone(), crate::platform::interop::InteropCommand::SetVolume { value: volume },
+            "Volume control");
+    }
+    ui.add_sized([44.0, 22.0], egui::Label::new(timecode_text(format!("{:.0}%", volume))))
+        .on_hover_text(app.tr("Volume"));
+}
+
 pub fn timecode_text(value: impl Into<String>) -> egui::RichText {
     egui::RichText::new(value).monospace()
 }

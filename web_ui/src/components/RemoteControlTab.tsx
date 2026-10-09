@@ -4,8 +4,6 @@ import { Button, Select, Slider, Tooltip } from 'antd';
 import {
   FastBackwardOutlined,
   FastForwardOutlined,
-  MutedOutlined,
-  SoundOutlined,
   StepBackwardOutlined,
   StepForwardOutlined,
   VideoCameraOutlined,
@@ -21,6 +19,7 @@ import type { TimelineWheelPreferences } from '../timelineWheel';
 import type { HardwareMelody } from '../melodyCatalog';
 import { MediaTrackSelectors } from './MediaTrackSelectors';
 import { PlaybackButton } from './PlaybackButton';
+import { VolumeControl } from './VolumeControl';
 
 export interface PlayerState {
   app_icon_revision?: number;
@@ -359,25 +358,7 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
 
       <MediaTrackSelectors state={state} sendCmd={sendCmd} locale={locale} />
 
-      <div className="remote-player__volume">
-        <Button
-          type="text"
-          className={`transport-action ${state.muted ? 'transport-action--pause' : ''}`}
-          aria-pressed={Boolean(state.muted)}
-          disabled={!state.current_video || state.muted === undefined}
-          aria-label={state.muted ? tr(locale, 'Unmute') : tr(locale, 'Mute')}
-          icon={state.muted || state.volume === 0 ? <MutedOutlined /> : <SoundOutlined />}
-          onClick={() => sendCmd('set_mute', { muted: !state.muted })}
-        />
-        <Slider
-          min={0}
-          max={130}
-          value={state.muted ? 0 : (state.volume ?? 0)}
-          disabled={state.volume === undefined}
-          onChange={(value) => sendCmd('set_volume', { value })}
-        />
-        <output>{state.volume === undefined ? '—' : `${Math.round(state.muted ? 0 : state.volume)}%`}</output>
-      </div>
+      <VolumeControl className="remote-player__volume" state={state} sendCmd={sendCmd} locale={locale} />
     </section>
   );
 };

@@ -11861,8 +11861,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                     }
                     PealayerTab::ProgramMonitor => {
                         ui.vertical(|ui| {
-                            // ponytail: reserve 35px at bottom for inline transport controls
-                            let video_h = (ui.available_height() - 35.0).max(0.0);
+                            // Reserve complete rows before drawing video. A single 35px
+                            // footer clipped controls when the monitor was narrow.
+                            let compact_transport = ui.available_width() < 600.0;
+                            let row_height = ui.spacing().interact_size.y.max(24.0);
+                            let rows = if compact_transport { 3.0 } else { 2.0 };
+                            let footer_height = rows * row_height + (rows - 1.0) * ui.spacing().item_spacing.y + 5.0;
+                            let video_h = (ui.available_height() - footer_height).max(0.0);
                             let video_size = egui::vec2(ui.available_width(), video_h);
                             ui.allocate_ui_with_layout(video_size, egui::Layout::top_down(egui::Align::Center), |ui| {
                                 crate::ui::video::draw(self.app, ui);
@@ -11875,7 +11880,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 && self.app.is_seekable
                                 && self.app.duration > 0.0;
                             ui.add_enabled_ui(has_video, |ui| {
-                                ui.horizontal(|ui| {
+                                ui.horizontal_wrapped(|ui| {
                                     let play_icon = if self.app.is_playback_finished() {
                                         crate::ui::icons::ARROW_COUNTER_CLOCKWISE
                                     } else if self.app.is_paused {
@@ -11917,35 +11922,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             crate::platform::interop::InteropCommand::Stop,
                                             "Program monitor");
                                     }
-                                    let mute_icon = if self.app.is_muted {
-                                        crate::ui::icons::SPEAKER_SLASH
-                                    } else {
-                                        crate::ui::icons::SPEAKER_HIGH
-                                    };
-                                    if ui
-                                        .add_sized([30.0, 22.0], crate::ui::controls::transport_button(self.app.color_palette, ui, mute_icon, if self.app.is_muted { "amber" } else { "muted" }))
-                                        .on_hover_text(if self.app.is_muted {
-                                            self.app.tr("Unmute")
-                                        } else {
-                                            self.app.tr("Mute")
-                                        })
-                                        .clicked()
-                                    {
-                                        self.app.toggle_audio_muted();
-                                    }
-                                    let mut volume = self.app.volume;
-                                    let volume_response = ui
-                                        .add_sized([76.0, 18.0], egui::Slider::new(&mut volume, 0.0..=130.0).show_value(false))
-                                        .on_hover_text(format!("{}: {:.0}%", self.app.tr("Volume"), volume));
-                                    if volume_response.changed() {
-                                        let _ = self.app.mpv.set_property("volume", volume);
-                                        self.app.volume = volume;
-                                    }
-                                    if (volume_response.changed() && !volume_response.dragged())
-                                        || volume_response.drag_stopped()
-                                    {
-                                        self.app.save_config();
-                                    }
                                     crate::ui::media_tracks::menu_button(
                                         self.app,
                                         ui,
@@ -11978,8 +11954,15 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         1,
                                         crate::ui::controls::TransportNudgeDensity::Compact,
                                     );
-                                    ui.separator();
-
+                                    if !compact_transport {
+                                        ui.separator();
+                                        ui.allocate_ui_with_layout(egui::vec2(210.0, row_height),
+                                            egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                                                crate::ui::controls::draw_volume_strip(self.app, ui);
+                                            });
+                                    }
+                                });
+                                ui.horizontal(|ui| {
                                     let elapsed = self.app.seek_pos.unwrap_or(self.app.playback_time);
                                     let include_hours = self.app.duration >= 3600.0;
                                     crate::ui::controls::draw_elapsed_editor(
@@ -12146,6 +12129,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         self.app.finish_scrub(current_pos);
                                     }
                                 });
+                                if compact_transport {
+                                    ui.horizontal(|ui| {
+                                        crate::ui::controls::draw_volume_strip(self.app, ui);
+                                    });
+                                }
                             });
                         });
                     }

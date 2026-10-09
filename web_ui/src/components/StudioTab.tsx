@@ -39,6 +39,7 @@ import { formatTimelineTime } from '../timelineTime';
 import { SeekThumbnailPreview } from './SeekThumbnailPreview';
 import { SeekbarMarkers, useSeekbar } from './seekbar';
 import { MediaSurface } from './MediaSurface';
+import { VolumeControl } from './VolumeControl';
 import type { MediaGesturePreferences } from './MediaSurface';
 import { defaultTimelineWheelPreferences, timelineWheelAction, timelineZoomAtPointer } from '../timelineWheel';
 import type { TimelineWheelPreferences } from '../timelineWheel';
@@ -796,14 +797,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
           <span className="studio-timecode studio-timecode--muted">
             {state.live ? tr(locale, 'LIVE') : formatTime(durationSeconds)}
           </span>
-          <SoundOutlined className="volume-icon" />
-          <Slider
-            className="studio-volume"
-            min={0}
-            max={130}
-            value={state.muted ? 0 : (state.volume ?? 0)}
-            onChange={(value) => sendCmd('set_volume', { value })}
-          />
+          <VolumeControl className="studio-volume" state={state} sendCmd={sendCmd} locale={locale} />
         </div>
         <MediaTrackSelectors state={state} sendCmd={sendCmd} locale={locale} compact />
       </section>
