@@ -16,6 +16,15 @@ widths, and has been exercised against live state rather than sample data.
 
 ## Current product ledger
 
+Download center: [shared service and remaining gates](DOWNLOAD-CENTER.md) adds
+a Rust-authoritative queue, native/Web surfaces and a player-independent
+standalone utility. Rust HTTP, local aria2, yt-dlp and queued FFmpeg processing
+share the queue. Isolated RPC/range delivery, Web Add/Pause and desktop/tablet/phone
+layouts are verified. Windows and CI packaging now include the distinct utility.
+Full cache policy, streaming launch UX, bulk/context/keyboard controls and
+production package/deployment acceptance remain open. The complete delivery
+contract remains under issue #110.
+
 Selective native widget integration (9 October): [palette-safe Elegance](verification/PALETTE-SAFE-ELEGANCE.md)
 uses the existing Pealayer appearance contract for every library palette role,
 live OS scheme and typography, without replacing the global style or adding a

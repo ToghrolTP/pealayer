@@ -26,6 +26,7 @@ if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
 
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
 . (Join-Path $PSScriptRoot 'libmpv-windows.ps1')
+. (Join-Path $PSScriptRoot 'package-probe-windows.ps1')
 $packageCommit = (& git -C $repositoryRoot rev-parse HEAD).Trim()
 if ($LASTEXITCODE -ne 0 -or !$packageCommit) { throw 'Cannot identify package source.' }
 if (& git -C $repositoryRoot status --porcelain) { throw 'Commit or preserve local changes before packaging a production build.' }
@@ -111,6 +112,8 @@ if (Test-Path -LiteralPath $webUiPackage -PathType Leaf) {
 }
 
 & (Join-Path $PSScriptRoot 'run-windows.ps1') -BuildOnly -LibmpvDirectory $libmpvSourceDirectory
+& cargo build --locked --release -p pealayer-downloader
+if ($LASTEXITCODE -ne 0) { throw "Standalone downloader build failed with exit code $LASTEXITCODE" }
 
 New-Item -ItemType Directory -Force -Path $stagingDirectory,$outputDirectory | Out-Null
 $effectiveExecutableName = if ($env:APP_EXECUTABLE_NAME) {
@@ -126,7 +129,9 @@ if ($effectiveExecutableName -notmatch '^[A-Za-z0-9_.-]+$' -or $effectiveExecuta
 $effectiveExecutableFile = "$effectiveExecutableName.exe"
 $stagedExecutable = Join-Path $stagingDirectory $effectiveExecutableFile
 $stagedRuntime = Join-Path $stagingDirectory 'libmpv-2.dll'
+$stagedDownloader = Join-Path $stagingDirectory 'pealayer-downloader.exe'
 Copy-Item -LiteralPath (Join-Path $releaseDirectory 'pealayer.exe') -Destination $stagedExecutable -Force
+Copy-Item -LiteralPath (Join-Path $releaseDirectory 'pealayer-downloader.exe') -Destination $stagedDownloader -Force
 Copy-PealayerLibmpvRuntime -RuntimeLibrary $libmpvRuntime -DestinationDirectory $stagingDirectory
 
 $resource = (Get-Item -LiteralPath $stagedExecutable).VersionInfo
@@ -141,6 +146,15 @@ if ($resource.ProductName -ne $expectedProductName -or $resource.OriginalFilenam
     throw 'Packaged executable is missing the expected Win32 identity resources.'
 }
 & (Join-Path $PSScriptRoot 'verify-windows-quick-action-icons.ps1') -Executable $stagedExecutable
+$downloaderResource = (Get-Item -LiteralPath $stagedDownloader).VersionInfo
+if ($downloaderResource.ProductName -ne 'Pealayer Downloader' -or $downloaderResource.OriginalFilename -ne 'pealayer-downloader.exe') {
+    throw 'Standalone downloader is missing its distinct Win32 identity resources.'
+}
+[void](Invoke-PackageProbe $stagedDownloader '--smoke-test' $stagingDirectory)
+$downloaderIdentity = Invoke-PackageProbe $stagedDownloader '--build-info' $stagingDirectory | ConvertFrom-Json
+if ($downloaderIdentity.commit -ne $packageCommit -or $downloaderIdentity.dirty) {
+    throw 'Standalone downloader identity does not match clean package source.'
+}
 
 $unpackedBytes = (Get-Item -LiteralPath $stagedExecutable).Length
 $upxVersion = $null
@@ -154,13 +168,9 @@ if (-not $NoUpx) {
 }
 
 $env:Path = $stagingDirectory + ';' + $libmpvDirectory + ';' + $env:Path
-$smoke = Start-Process -FilePath $stagedExecutable -ArgumentList '--smoke-test' -WorkingDirectory $stagingDirectory -Wait -PassThru
-if ($smoke.ExitCode -ne 0) { throw "Packaged Pealayer/libmpv smoke test failed with exit code $($smoke.ExitCode)" }
+[void](Invoke-PackageProbe $stagedExecutable '--smoke-test' $stagingDirectory)
 
-$identityOutput = Join-Path $stagingDirectory 'build-identity.json'
-$identityProcess = Start-Process -FilePath $stagedExecutable -ArgumentList '--build-info' -WorkingDirectory $stagingDirectory -WindowStyle Hidden -RedirectStandardOutput $identityOutput -Wait -PassThru
-if ($identityProcess.ExitCode -ne 0) { throw 'Cannot inspect the packaged executable build identity.' }
-$embeddedIdentity = Get-Content -Raw -LiteralPath $identityOutput | ConvertFrom-Json
+$embeddedIdentity = Invoke-PackageProbe $stagedExecutable '--build-info' $stagingDirectory | ConvertFrom-Json
 if ($embeddedIdentity.commit -ne $packageCommit -or $embeddedIdentity.dirty) {
     throw 'Embedded executable identity does not match clean package source; refusing publication.'
 }
@@ -169,6 +179,7 @@ if ((& git -C $repositoryRoot rev-parse HEAD).Trim() -ne $packageCommit -or (& g
 }
 
 Copy-Item -LiteralPath $stagedExecutable -Destination $outputDirectory -Force
+Copy-Item -LiteralPath $stagedDownloader -Destination $outputDirectory -Force
 Copy-PealayerLibmpvRuntime -RuntimeLibrary $stagedRuntime -DestinationDirectory $outputDirectory
 $fontSource = Join-Path $repositoryRoot 'assets\fonts\Vazirmatn-Regular.ttf'
 if (-not (Test-Path -LiteralPath $fontSource -PathType Leaf)) {
@@ -198,7 +209,7 @@ if (Test-Path -LiteralPath (Join-Path $webDistribution 'index.html')) {
     $webUiPackaged = $true
 }
 
-$artifacts = @($effectiveExecutableFile,'libmpv-2.dll','mpv-2.dll','assets/fonts/Vazirmatn-Regular.ttf') | ForEach-Object {
+$artifacts = @($effectiveExecutableFile,'pealayer-downloader.exe','libmpv-2.dll','mpv-2.dll','assets/fonts/Vazirmatn-Regular.ttf') | ForEach-Object {
     $path = Join-Path $outputDirectory $_
     [ordered]@{
         path = $_
@@ -236,6 +247,7 @@ $manifest = [ordered]@{
         windows_resources = 'verified'
         quick_action_icons = 'verified'
         libmpv_smoke = 'passed'
+        standalone_downloader = 'resource_identity_and_headless_ui_smoke_verified'
         web_ui = if ($webUiPackaged) { 'packaged' } else { 'embedded_fallback' }
         upx = if ($NoUpx) { [ordered]@{ enabled = $false; tested = $false } } else { [ordered]@{ enabled = $true; tested = $true; version = $upxVersion } }
     }

@@ -17,13 +17,17 @@ export default defineConfig({
     outDir: 'dist',
     assetsDir: 'assets',
     emptyOutDir: true,
+    // All surfaces share the application stylesheet. Version-stamped lazy CSS
+    // URLs are not recognized by Vite's suffix-based preload helper, so do not
+    // split CSS into dynamic chunks that can silently load as JavaScript.
+    cssCodeSplit: false,
     // Readable filenames; finalize-pwa stamps references with the build
     // revision so browser/offline caches still distinguish deployments.
     rolldownOptions: {
       output: {
         entryFileNames: 'assets/app.js',
         chunkFileNames: 'assets/[name].js',
-        assetFileNames: ({ names }) => names?.[0] === 'index.css'
+        assetFileNames: ({ names }) => names?.some(name => name === 'index.css' || name === 'style.css')
           ? 'assets/app.css' : 'assets/[name][extname]',
       },
     },

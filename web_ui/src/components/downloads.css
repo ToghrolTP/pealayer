@@ -1,0 +1,30 @@
+.download-center { max-width: 1120px; margin-inline: auto; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+.download-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; }
+.download-heading h3 { margin: 0 !important; }
+.download-compose .ant-card-body { display: flex; flex-direction: column; gap: 16px; }
+.download-add { display: flex; gap: 10px; align-items: center; }
+.download-add .ant-input { min-width: 0; }
+.download-compose label { display: inline-flex; align-items: center; gap: 6px; }
+.download-engine-settings { display: flex; flex-wrap: wrap; gap: 10px; align-items: end; }
+.download-compose .download-engine-settings label { flex: 1 1 240px; flex-direction: column; align-items: stretch; text-align: start; }
+.download-engine-settings > .ant-input-affix-wrapper { flex: 1 1 180px; min-width: 0; }
+.download-engine-settings > .ant-btn { flex: 0 0 auto; }
+.download-chart--empty { opacity: 0; }
+.download-name { display: flex; align-items: center; gap: 12px; min-width: 0; }
+.download-name > .anticon { color: var(--accent); font-size: 24px; flex: 0 0 auto; }
+.download-name > div { min-width: 0; display: flex; flex-direction: column; }
+.download-stats { display: flex; flex-wrap: wrap; gap: 16px; color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; }
+.download-chart { width: 100%; height: 38px; margin-block: 10px; color: var(--accent); }
+.download-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
+.download-reorder { display: inline-flex; gap: 6px; margin-inline-start: auto; }
+.download-center .ant-btn { display: inline-flex; align-items: center; justify-content: center; }
+.download-job--paused .download-chart { color: var(--amber); }
+.download-job--failed .download-chart { color: var(--red); }
+.download-job--complete .download-chart { color: var(--green); }
+@media (max-width: 600px) {
+  .download-heading { align-items: center; flex-wrap: wrap; }
+  .download-center .ant-card-body { padding: 14px; }
+  .download-compose label { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+  .download-reorder { margin-inline-start: 0; }
+  .download-actions .ant-btn { flex: 1 1 auto; }
+}
