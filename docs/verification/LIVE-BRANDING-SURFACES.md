@@ -34,5 +34,26 @@ icons in Jump Lists with an application logo.
   ICO shape, configured Preferences icon and live runtime metadata.
 - Test suites remain deferred at the user's request; adding checks is not a
   claim that they were executed.
-- Native build, destination-runtime smoke, deployment and live acceptance are
-  recorded below once completed. No Cafe-PC compilation is permitted.
+- Locked incremental Windows release build passed in 1 minute 30 seconds on
+  David-PC. Seven semantic quick-action resources and UPX integrity passed.
+- David and Cafe staging independently passed runtime smoke with their own
+  retained DLLs. Cafe was updated first through the verified graceful peer
+  updater; only after its loaded, paused media and connected board were healthy
+  was David updated. Both canonical executables match the installed package.
+- David remains Cafe's connected, cache-only consumer without a second local
+  hardware scheduler. Its paused decoded/server positions agree and both
+  processes remain responsive in the interactive desktop session.
+- Erfan received an atomic offline installation with a verified rollback and
+  unchanged destination DLL. KMPlayer remains running; Pealayer was not launched.
+- A temporary API-only preview changed the title and selected Classic artwork.
+  Rust runtime metadata and manifests on both endpoints reported the preview
+  name; David's actual Win32 title and borrowed HWND icon bitmap changed too.
+  Cancel restored the original settings, native title and exact original icon
+  bitmap after asynchronous authority-to-consumer propagation. No preview was
+  saved, hardware commands were not issued, and private artwork was not uploaded.
+- Explorer configuration metadata and its native ICO exist on Cafe. The actual
+  tray hover, About/Preferences interactions, and browser-installed app cache
+  behavior still need human visual acceptance; a question was sent to the user.
+
+Delivered runtime: [branding implementation](https://github.com/ToghrolTP/pealayer/commit/5059b05eff7b327ef5eb6641727c498e4f2adaea).
+Review/checkpoint: [PR #99](https://github.com/ToghrolTP/pealayer/pull/99).
