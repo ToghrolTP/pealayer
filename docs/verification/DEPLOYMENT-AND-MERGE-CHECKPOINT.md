@@ -20,8 +20,28 @@ above the ruler but beneath the Add cue backdrop and other dialogs. New source
 regressions cover default-order persistence and actual modal paint/input blocking
 in light/dark modes; they are deliberately **not run** at the user's request.
 The prior package/test pipeline was stopped, and slow CI waits are deferred.
-The live order correction is delivered; the backdrop code still requires an
-updated executable and live acceptance. No hardware actuation was performed.
+The user visually confirmed both corrected button pairs. The optimized
+executable-only BuildOnly completed in 7m 28s from clean source `c3f3d17`.
+Cafe's graceful peer updater installed that exact executable; API read-back
+confirmed the new commit, matching executable digest, destination-specific mpv
+runtime, authority role, and preserved paused position and complete timeline.
+PCController's independent startup service remained running with the same PID.
+David remains a connected, cache-only remote consumer on its previous binary:
+the tool policy blocked its updater invocation, and the user has been asked to
+run the staged local updater. No hardware actuation was performed.
+
+Backdrop visual/input acceptance is still outstanding. The user has been asked
+to open Add cue without submitting it and check that the ruler buttons are
+dimmed and cannot be activated through the backdrop. Do not label deployment
+or source checks as this live visual proof.
+
+The coordinator separately reported a macOS CI failure in the new backdrop
+test: synthetic frames checked final alpha before egui's Area opening fade had
+finished. A test-only follow-up advances deterministic frame time beyond that
+fade; production animation and assertions remain intact. This correction has
+not been executed locally, and no slow CI was awaited. The deployed executable
+remains the production-equivalent `c3f3d17` artifact; the follow-up changes only
+the test fixture.
 
 ## Cue-clock and startup-service follow-through (9 October)
 
