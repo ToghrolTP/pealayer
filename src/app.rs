@@ -7477,6 +7477,15 @@ impl PealayerApp {
                     .linked
             })
             .cloned()
+            .map(|mut track| {
+                // Relay and PWM solo are one hardware selection, not two
+                // independent solo buses. Keep the track so the live engine
+                // can transmit zero when its previous value was latched.
+                if !self.track_soloed.is_empty() && !track.soloed {
+                    track.muted = true;
+                }
+                track
+            })
             .collect()
     }
 
@@ -7552,6 +7561,13 @@ impl PealayerApp {
         // instead of being overwritten by a success notification.
         self.persist_timeline_track_preferences();
         (id, true)
+    }
+
+    /// Editing uses the visible logical head during decoder settlement. This
+    /// reads position only: inserting a guide must never issue a seek.
+    pub(crate) fn timeline_playhead_time_ms(&self) -> u64 {
+        let position = self.seek_pos.unwrap_or(self.playback_time);
+        if position.is_finite() { (position.max(0.0) * 1_000.0).round() as u64 } else { 0 }
     }
 
     /// Persist and publish a timeline edit that has already mutated the model.
@@ -7694,9 +7710,11 @@ impl PealayerApp {
         );
         let macros = crate::four_d::engine::compile_controller_macros(&self.timeline);
         let strip_effects = crate::four_d::engine::compile_controller_strip_effects(&self.timeline);
-        let direct_pwm = crate::four_d::engine::compile_direct_pwm_cues(&self.timeline);
         let analog=self.linked_analog_tracks();
-        let payload=crate::four_d::media_timeline::compile_plan(&self.timeline,&relays,&analog);
+        let mut output_timeline = self.timeline.clone();
+        output_timeline.analog_tracks = analog.clone();
+        let direct_pwm = crate::four_d::engine::compile_direct_pwm_cues(&output_timeline);
+        let payload=crate::four_d::media_timeline::compile_plan(&output_timeline,&relays,&analog);
         if let Ok(mut plan)=self.engine_handle.prepared_timeline.lock(){plan.replace(payload);}
         let _ = self
             .engine_handle
@@ -8098,16 +8116,16 @@ fn web_hardware_details(
                 .iter()
                 .find(|output| output.key == control.key)
                 .map(|output| output.id);
+            let direction = crate::ui::layout::motion_control_direction(capabilities, control);
+            let indicator_color = crate::ui::layout::active_control_indicator_color(capabilities, control);
             let active = relay_id
                 .map(|relay| capabilities.active_relays.contains(&relay))
                 .or_else(|| {
-                    crate::ui::layout::is_motion_control(control).then(|| {
-                        matches!(
-                            crate::ui::layout::motion_control_direction(capabilities, control),
-                            crate::ui::layout::MotionDirectionState::Up
-                                | crate::ui::layout::MotionDirectionState::Down
-                        )
-                    })
+                    match direction {
+                        crate::ui::layout::MotionDirectionState::Up | crate::ui::layout::MotionDirectionState::Down => Some(true),
+                        crate::ui::layout::MotionDirectionState::Stopped => Some(false),
+                        crate::ui::layout::MotionDirectionState::Unknown => None,
+                    }
                 });
             let pwm_percent = pwm_channel.and_then(|channel| {
                 let status_component = capabilities.status_led.as_ref().and_then(|status| {
@@ -8151,6 +8169,15 @@ fn web_hardware_details(
                 "control": control.control,
                 "icon": control.icon,
                 "color": control.color,
+                "up_color": control.up_color,
+                "down_color": control.down_color,
+                "indicator_color": format!("#{:02X}{:02X}{:02X}", indicator_color.r(), indicator_color.g(), indicator_color.b()),
+                "direction": match direction {
+                    crate::ui::layout::MotionDirectionState::Up => Some("up"),
+                    crate::ui::layout::MotionDirectionState::Down => Some("down"),
+                    crate::ui::layout::MotionDirectionState::Stopped => Some("stop"),
+                    crate::ui::layout::MotionDirectionState::Unknown => None,
+                },
                 "group": control.group,
                 "hidden": control.hidden,
                 "locked": control.locked,
@@ -9827,6 +9854,32 @@ pub(crate) mod tests {
             web_hardware_details(&capabilities, crate::config::MotionControlMode::default());
         let percent = details["controls"][0]["percent"].as_f64().unwrap();
         assert!((percent - (160.0 * 100.0 / 255.0)).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn web_motion_indicators_share_native_direction_and_configured_colors() {
+        use crate::four_d::controller::{HardwareCapabilities, HardwareControl, HardwareMotionState, HardwareMotionSide};
+        let mut capabilities = HardwareCapabilities {
+            board_connected: true,
+            controls: vec![HardwareControl { key: "seat.a".into(), kind: "motion".into(),
+                up_color: "#FF8800".into(), down_color: "#0088FF".into(), ..Default::default() }],
+            ..Default::default()
+        };
+        let unknown = web_hardware_details(&capabilities, Default::default());
+        assert!(unknown["controls"][0]["active"].is_null(), "unknown is not OFF");
+        capabilities.motion = Some(HardwareMotionState { left: HardwareMotionSide {
+            requested: "up".into(), applied: "up".into(), revision: 1, transitioning: false,
+        }, ..Default::default() });
+        let up = web_hardware_details(&capabilities, Default::default());
+        assert_eq!(up["controls"][0]["indicator_color"], "#FF8800");
+        assert_eq!(up["controls"][0]["direction"], "up");
+        assert_eq!(up["controls"][0]["active"], true);
+        let side = &mut capabilities.motion.as_mut().unwrap().left;
+        side.requested = "down".into();
+        side.transitioning = true;
+        let down = web_hardware_details(&capabilities, Default::default());
+        assert_eq!(down["controls"][0]["indicator_color"], "#0088FF");
+        assert_eq!(down["controls"][0]["direction"], "down");
     }
 
     #[test]

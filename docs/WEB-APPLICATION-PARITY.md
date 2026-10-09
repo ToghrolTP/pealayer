@@ -147,6 +147,14 @@ policy blocker is not a completed deployment and must not be bypassed.
 
 ## Regression rules
 
+- **Channel feedback and track-state controls:** Web consumes Rust's computed
+  indicator color and semantic motion direction rather than painting every
+  active output green. Fixed-size Mute/Solo/Lock actions use shared track updates,
+  semantic colors and track exclusion. Direct PWM mute/solo exclusions are also
+  applied to live and prepared playback. Native insert-first cue properties now
+  reuse the dock editor; Web cue-editor consolidation is still a follow-up.
+  See [checkpoint and remaining installed acceptance](verification/CHANNEL-FEEDBACK-AND-CUE-PROPERTIES.md).
+
 - **Seekbar markers and scrub settlement:** Simple and NLE share typed
   `scrub_to` / `finish_scrub` gestures, live coalesced previews, and correlated
   decoder settlement before discarding the local thumb position. Shared Rust

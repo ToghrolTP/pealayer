@@ -2221,7 +2221,7 @@ fn record_action_color() -> egui::Color32 {
 }
 
 fn paint_recording_swatch(ui: &egui::Ui, rect: egui::Rect, value: &str) {
-    let center = egui::pos2(rect.left() + 12.0, rect.center().y);
+    let center = egui::pos2(rect.left() + ui.spacing().button_padding.x + 5.0, rect.center().y);
     ui.painter()
         .circle_filled(center, 5.0, recording_color(value));
     // White must remain distinguishable on light popup surfaces too.
@@ -2235,7 +2235,7 @@ fn recording_color_label(ui: &egui::Ui, label: &str) -> egui::text::LayoutJob {
     // font and selected/hover formatting, making the label visibly jump.
     job.append(
         label,
-        28.0,
+        24.0,
         egui::TextFormat::simple(
             egui::TextStyle::Button.resolve(ui.style()),
             ui.visuals().text_color(),
@@ -2253,9 +2253,22 @@ fn recording_color_picker(ui: &mut egui::Ui, value: &mut String) -> egui::Respon
         .selected_text(recording_color_label(ui, &selected.label))
         .show_ui(ui, |ui| {
             for color in recording_colors() {
-                let label = recording_color_label(ui, &color.label);
-                let row = ui.selectable_value(value, color.id.clone(), label);
+                let (rect, row) = ui.allocate_exact_size(
+                    egui::vec2(ui.available_width(), ui.spacing().interact_size.y.max(26.0)),
+                    egui::Sense::click(),
+                );
+                let selected = *value == color.id;
+                let visuals = ui.style().interact_selectable(&row, selected);
+                ui.painter().rect_filled(rect, 4.0, visuals.weak_bg_fill);
+                ui.painter().rect_stroke(rect, 4.0, egui::Stroke::new(1.0,
+                    if selected { visuals.bg_stroke.color } else { egui::Color32::TRANSPARENT }), egui::StrokeKind::Inside);
+                ui.painter().text(egui::pos2(rect.left() + ui.spacing().button_padding.x + 24.0, rect.center().y),
+                    egui::Align2::LEFT_CENTER, &color.label, egui::TextStyle::Button.resolve(ui.style()), visuals.text_color());
                 paint_recording_swatch(ui, row.rect, &color.id);
+                if row.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
+                    *value = color.id.clone();
+                    ui.close();
+                }
             }
         })
         .response;

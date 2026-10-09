@@ -103,6 +103,8 @@ export interface PlayerState {
     controls: Array<{
       key: string; kind: string; order: number; name: string; default_name: string;
       control: string; icon: string; color: string; group: string; hidden: boolean;
+      up_color?: string; down_color?: string; indicator_color?: string;
+      direction?: 'up' | 'down' | 'stop' | null;
       locked: boolean; channel?: number | null; active?: boolean | null; percent?: number | null;
       actions: Array<{ id: string; verb: string; name: string; icon: string }>;
     }>;
