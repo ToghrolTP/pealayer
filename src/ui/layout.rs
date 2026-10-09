@@ -3187,7 +3187,11 @@ fn direct_cue_behavior_editor(ui: &mut egui::Ui, behavior: &mut crate::four_d::m
         ui.horizontal(|ui| {
             ui.label(if *behavior == DirectCueBehavior::Ramp { "Ramp to" } else { "On exit" });
             if pwm {
-                ui.add(egui::Slider::new(end, 0..=10_000).custom_formatter(|v, _| format!("{:.1}%", v / 100.0)));
+                ui.add(egui::Slider::new(end, 0..=10_000)
+                    .custom_formatter(|v, _| format!("{:.1}%", v / 100.0))
+                    .custom_parser(|text| text.trim().trim_end_matches('%').trim().parse::<f64>().ok()
+                        .filter(|value| value.is_finite())
+                        .map(|value| (value.clamp(0.0, 100.0) * 100.0).round())));
             } else {
                 ui.selectable_value(end, 0, "Off");
                 ui.selectable_value(end, 10_000, "On");
