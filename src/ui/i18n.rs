@@ -111,8 +111,8 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Panels" => "پنل‌ها",
         "Reset Workspace to Default" => "بازنشانی فضای کاری به حالت پیش‌فرض",
         "All workspace panels are closed" => "همه پنل‌های فضای کاری بسته شده‌اند",
-        "Open panels from the Window menu above, or reset the workspace." => {
-            "پنل‌ها را از منوی پنجره در بالا باز کنید یا فضای کاری را بازنشانی نمایید."
+        "Open panels from the Workspace menu above, or reset the workspace." => {
+            "پنل‌ها را از منوی فضای کاری در بالا باز کنید یا فضای کاری را بازنشانی نمایید."
         }
         "Help" => "راهنما",
         "Language" => "زبان",

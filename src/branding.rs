@@ -355,6 +355,7 @@ mod tests {
 
     #[test]
     fn changing_builtin_preset_publishes_a_new_window_icon() {
+        let _lock = crate::app::tests::lock_app_tests();
         let ctx = egui::Context::default();
         let mut config = AppConfig::default();
         crate::platform::interop::set_live_config(config.clone());
@@ -379,6 +380,7 @@ mod tests {
 
     #[test]
     fn icon_sync_records_unrelated_config_revisions() {
+        let _lock = crate::app::tests::lock_app_tests();
         let ctx = egui::Context::default();
         let mut config = crate::config::AppConfig::default();
         crate::platform::interop::set_live_config(config.clone());
@@ -395,6 +397,7 @@ mod tests {
             ))
         });
         assert_eq!(stamp, Some((PlaybackIconState::Stopped, revision)));
+        crate::platform::interop::set_live_config(crate::config::AppConfig::default());
     }
 
     #[test]

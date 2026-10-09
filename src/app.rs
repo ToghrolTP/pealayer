@@ -1883,7 +1883,7 @@ impl eframe::App for PealayerApp {
                                 ui.label(egui::RichText::new(crate::ui::icons::TABS).size(36.0));
                                 ui.add_space(8.0);
                                 ui.heading(self.tr("All workspace panels are closed"));
-                                ui.label(self.tr("Open panels from the Window menu above, or reset the workspace."));
+                                ui.label(self.tr("Open panels from the Workspace menu above, or reset the workspace."));
                                 ui.add_space(12.0);
                                 crate::ui::layout::draw_workspace_tab_menu(self, ui);
                             });
@@ -9195,6 +9195,7 @@ pub(crate) mod tests {
         });
         // Receiver should be empty because JSON serialization and broadcast were bypassed
         assert!(receiver.try_recv().is_err());
+        crate::platform::interop::set_live_config(crate::config::AppConfig::default());
     }
 
     #[test]
