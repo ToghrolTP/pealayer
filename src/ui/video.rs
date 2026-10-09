@@ -948,9 +948,21 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     if !crate::mpv::external::active() || crate::mpv::external::preview() {
         ui.painter().add(callback);
     } else {
-        ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER,
-            if crate::mpv::external::status().connected {"Video is playing in external mpv"} else {"Waiting for external mpv"},
-            egui::FontId::proportional(16.0), ui.visuals().weak_text_color());
+        let status = crate::mpv::external::status();
+        let (tone, message) = external_mpv_notice(&status);
+        let body = status.error.as_deref().filter(|error| !error.is_empty())
+            .map(|error| crate::ui::i18n::visual_text(app.language, error))
+            .unwrap_or_else(|| app.tr(message));
+        crate::ui::sync_elegance_theme(ui.ctx());
+        let width = (rect.width() - 32.0).clamp(1.0, 420.0);
+        let notice_rect = egui::Rect::from_center_size(rect.center(), egui::vec2(width, 76.0));
+        ui.scope_builder(egui::UiBuilder::new().max_rect(notice_rect)
+            .layout(egui::Layout::top_down(egui::Align::Min)), |ui| {
+            ui.set_clip_rect(rect.intersect(ui.clip_rect()));
+            elegance::Callout::new(tone).icon(crate::ui::icons::MONITOR_PLAY)
+                .title(app.tr("External mpv")).body(body).multiline()
+                .show(ui, |_| {});
+        });
     }
 
     let is_hovering_file = ui.input(|i| !i.raw.hovered_files.is_empty());
@@ -1132,9 +1144,49 @@ pub fn calculate_physical_bounds(rect: egui::Rect, ppi: f32) -> (i32, i32) {
     (w.max(1), h.max(1))
 }
 
+fn external_mpv_notice(status: &crate::mpv::external::Status) -> (elegance::CalloutTone, &'static str) {
+    if status.error.as_deref().is_some_and(|error| !error.is_empty()) {
+        return (elegance::CalloutTone::Danger, "Connection problem");
+    }
+    if !status.connected {
+        return (elegance::CalloutTone::Warning, "Waiting for external mpv");
+    }
+    let flag = |name| status.properties.get(name).and_then(serde_json::Value::as_bool);
+    let message = if flag("idle-active") == Some(true) {
+        "No media loaded"
+    } else if flag("paused-for-cache") == Some(true) {
+        "Buffering"
+    } else {
+        match flag("pause") {
+            Some(true) => "Paused",
+            Some(false) => "Playing",
+            None => "Connected to external mpv",
+        }
+    };
+    (elegance::CalloutTone::Neutral, message)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn external_notice_reports_observed_state_not_assumed_playing() {
+        let mut status = crate::mpv::external::Status::default();
+        assert_eq!(external_mpv_notice(&status).1, "Waiting for external mpv");
+        status.connected = true;
+        assert_eq!(external_mpv_notice(&status).1, "Connected to external mpv");
+        status.properties.insert("pause".into(), true.into());
+        assert_eq!(external_mpv_notice(&status).1, "Paused");
+        status.properties.insert("pause".into(), false.into());
+        assert_eq!(external_mpv_notice(&status).1, "Playing");
+        status.properties.insert("paused-for-cache".into(), true.into());
+        assert_eq!(external_mpv_notice(&status).1, "Buffering");
+        status.properties.insert("idle-active".into(), true.into());
+        assert_eq!(external_mpv_notice(&status).1, "No media loaded");
+        status.error = Some("Pipe disconnected".into());
+        assert_eq!(external_mpv_notice(&status).1, "Connection problem");
+    }
 
     #[test]
     fn test_calculate_physical_bounds() {

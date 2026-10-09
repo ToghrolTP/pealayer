@@ -16,6 +16,14 @@ widths, and has been exercised against live state rather than sample data.
 
 ## Current product ledger
 
+Selective native widget integration (9 October): [palette-safe Elegance](verification/PALETTE-SAFE-ELEGANCE.md)
+uses the existing Pealayer appearance contract for every library palette role,
+live OS scheme and typography, without replacing the global style or adding a
+second Web theme. Compact Preferences/Audio/Subtitle cards, neutral cue badges
+and truthful external-player feedback adopt the library; specialized controls
+and hardware input semantics remain intact. Deployment/visual acceptance is
+tracked independently from source tests.
+
 External mpv (9 October): [modes and protocol](external-mpv.md) adds the same
 event-driven player adapter to native/Web/IPC/peer controls and the hardware
 clock: external-only, managed or attached dual preview, and remote control of

@@ -8,7 +8,7 @@ use eframe::egui;
 pub const NAVIGATION_HEIGHT: f32 = 32.0;
 pub const ACTION_HEIGHT: f32 = 28.0;
 pub const NAVIGATION_DETAIL_HEIGHT: f32 = 44.0;
-const ACTION_BUTTON_WIDTH: f32 = 104.0;
+pub(crate) const ACTION_BUTTON_WIDTH: f32 = 104.0;
 const CONTROL_CORNER_RADIUS: f32 = 7.0;
 const CONTROL_TEXT_SIZE: f32 = 13.0;
 
@@ -620,8 +620,9 @@ mod tests {
 
 /// A visually consistent, width-bounded section used inside modal dialogs.
 pub fn section(ui: &mut egui::Ui, icon: &str, title: &str, body: impl FnOnce(&mut egui::Ui)) {
-    egui::Frame::group(ui.style())
-        .inner_margin(egui::Margin::same(12))
+    crate::ui::sync_elegance_theme(ui.ctx());
+    elegance::Card::new()
+        .padding(egui::Margin::same(12))
         .corner_radius(9.0)
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
