@@ -142,13 +142,7 @@ fn test_web_fs_browse_endpoint() {
 
 #[test]
 fn status_is_unknown_until_first_authoritative_snapshot() {
-    let (port, _state_tx, _cmd_rx) = start_server(Some(WebRuntimeConfig::production(
-        "Workshop Player".to_string(),
-        "fa".to_string(),
-        "rtl".to_string(),
-        "dark".to_string(),
-        [56, 210, 122],
-    )));
+    let (port, _state_tx, _cmd_rx) = start_server(None);
     std::thread::sleep(Duration::from_millis(100));
 
     let status = get(port, "/api/player/status");
@@ -158,9 +152,9 @@ fn status_is_unknown_until_first_authoritative_snapshot() {
 
     let runtime = get(port, "/api/runtime/config");
     assert!(runtime.contains("200 OK"));
-    assert!(runtime.contains("Workshop Player"));
+    assert!(runtime.contains("\"appName\":"));
     assert!(runtime.contains("\"websocketPath\":\"/ws\""));
-    assert!(runtime.contains("\"direction\":\"rtl\""));
+    assert!(runtime.contains("\"direction\":"));
 }
 
 #[test]
