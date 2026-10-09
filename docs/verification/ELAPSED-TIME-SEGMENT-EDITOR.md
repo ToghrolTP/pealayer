@@ -40,3 +40,34 @@ test suites and slow CI waits; checks are added for the next normal run and are
 not claimed executed. Build/type-check, host-runtime smoke, actual installed
 identity and human input/gesture acceptance are recorded separately below or in
 the owning issue checkpoint. Do not replace destination libmpv from another host.
+
+### Installed checkpoint — 9 October 2026
+
+- Source: `b7cefba2043e3665704b523c9001fbb8cec5455b`, clean build;
+  [PR #97](https://github.com/ToghrolTP/pealayer/pull/97) is stacked on
+  [PR #96](https://github.com/ToghrolTP/pealayer/pull/96), not merged into main.
+- Native release build, Web TypeScript/Vite/PWA build, seven Windows quick-action
+  icon resources, package integrity and both David/Cafe-runtime libmpv startup
+  smokes passed. The focused input regression suites remain unrun as requested.
+- Installed executable SHA-256:
+  `85ab0b6903da2966a7f81dd1b66877d7966c5b6a08731f889b976e50dc3e3127`
+  (11,147,264 bytes). Embedded PWA: `f01f333bf9e39fbc`.
+- David and Cafe report that exact source, executable and PWA through their
+  process-local APIs. Both canonical processes are running in interactive
+  session 1. Cafe retains its own runtime; hardware is connected without an
+  error. Media remains paused at 660.800 seconds. David remains a cache-only
+  Cafe consumer, with no hardware scheduler, no command/transport error and
+  zero paused preview drift in the checked sample.
+- Both updates used the existing begin/chunk/finish updater contract and graceful
+  exit. David's first activation did not remain running and returned to the
+  prior executable while Cafe was restarting. The exact first failure cause
+  was not captured; do not invent one. After Cafe was healthy, the prior David
+  executable was relaunched and the same API update succeeded. Consumer and
+  authority deployments should be sequenced rather than restarted together.
+- Erfan's canonical executable and rollback hashes were verified after offline
+  atomic replacement; its existing libmpv was unchanged. KMPlayer remains
+  running, so Pealayer was deliberately not launched there. Interactive/playback
+  acceptance on Erfan remains pending, not passed.
+- Human acceptance requested: unchanged blur, explicit Enter, changed blur,
+  Escape cancellation, group highlights, separators and Left/Right navigation.
+  Source/build/deployment evidence is not a substitute for that input check.

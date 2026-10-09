@@ -156,6 +156,13 @@ policy blocker is not a completed deployment and must not be bypassed.
 
 ## Regression rules
 
+- **Elapsed-time editing:** Native and both Web transports use a fixed
+  `HH:MM:SS.sss` segment mask. Unchanged blur does not seek; changed blur and
+  explicit Enter use the existing seek path, while Escape always cancels.
+  Group navigation, separator skipping, invalid-input rejection and local-digit
+  normalization preserve the format. Native selection is painted in the same
+  frame as edits. See [installed checkpoint and input acceptance](verification/ELAPSED-TIME-SEGMENT-EDITOR.md).
+
 - **Channel feedback and track-state controls:** Web consumes Rust's computed
   indicator color and semantic motion direction rather than painting every
   active output green. Fixed-size Mute/Solo/Lock actions use shared track updates,
