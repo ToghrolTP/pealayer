@@ -4,6 +4,7 @@ use serde_json::json;
 use std::sync::{
     Arc, Mutex, Weak,
     atomic::{AtomicBool, Ordering},
+    mpsc::{self, Receiver, SyncSender},
 };
 use std::time::{Duration, Instant};
 
@@ -238,6 +239,80 @@ fn notify_sync_change(
     }
 }
 
+struct ClockMetadataRequest {
+    endpoint: String,
+    generation: u64,
+    id: String,
+    name: String,
+}
+
+struct ClockMetadataReply {
+    endpoint: String,
+    generation: u64,
+    authority: Result<super::authority::Status, String>,
+    authority_elapsed: Duration,
+    report_elapsed: Option<Duration>,
+}
+
+/// Metadata must never occupy the deadline-bound playback RPC stream. Both
+/// directions are capacity-one, so a slow peer cannot build an unbounded queue.
+fn spawn_clock_metadata<F>(mut make_identity: F) -> (SyncSender<ClockMetadataRequest>, Receiver<ClockMetadataReply>)
+where F: FnMut(&ClockMetadataRequest) -> serde_json::Value + Send + 'static {
+    let (request_tx, request_rx) = mpsc::sync_channel::<ClockMetadataRequest>(1);
+    let (reply_tx, reply_rx) = mpsc::sync_channel(1);
+    std::thread::spawn(move || {
+        let mut client: Option<ControllerClient> = None;
+        let mut endpoint = String::new();
+        let mut generation = 0;
+        let mut reported_at = Instant::now() - Duration::from_secs(10);
+        let mut owner_endpoint_cache: (String, Option<String>) = (String::new(), None);
+        let mut owner_endpoint_at = Instant::now() - Duration::from_secs(10);
+        while let Ok(request) = request_rx.recv() {
+            if request.endpoint != endpoint || request.generation != generation {
+                client = None;
+                endpoint.clone_from(&request.endpoint);
+                generation = request.generation;
+                owner_endpoint_cache = (String::new(), None);
+            }
+            let mut authority_elapsed = Duration::ZERO;
+            let mut report_elapsed = None;
+            let authority = (|| -> Result<super::authority::Status, String> {
+                if client.is_none() {
+                    client = Some(ControllerClient::connect_playback_events(&request.endpoint)?);
+                    reported_at = Instant::now() - Duration::from_secs(10);
+                }
+                let rpc = client.as_mut().expect("connected metadata stream");
+                if reported_at.elapsed() >= Duration::from_secs(10) {
+                    let started = Instant::now();
+                    let result = rpc.call("controller.app.instance.report", make_identity(&request));
+                    report_elapsed = Some(started.elapsed());
+                    result?;
+                    reported_at = Instant::now();
+                }
+                let started = Instant::now();
+                let result = rpc.call("controller.media.authority.get", json!({}));
+                authority_elapsed = started.elapsed();
+                let mut status: super::authority::Status = serde_json::from_value(result?)
+                    .map_err(|error| format!("Invalid publishing authority state: {error}"))?;
+                if status.owner_id != owner_endpoint_cache.0 || owner_endpoint_at.elapsed() >= Duration::from_secs(10) {
+                    owner_endpoint_at = Instant::now();
+                    owner_endpoint_cache = (status.owner_id.clone(), if status.owner_id.is_empty() || status.owner_id == request.id { None } else {
+                        rpc.call("controller.app.instance.get", json!({"id": status.owner_id}))
+                            .ok().and_then(|value| super::authority::owner_endpoint(&status.owner_id, &value))
+                    });
+                }
+                status.owner_endpoint = owner_endpoint_cache.1.clone();
+                Ok(status)
+            })();
+            if authority.is_err() { client = None; }
+            if reply_tx.send(ClockMetadataReply { endpoint: request.endpoint, generation: request.generation, authority, authority_elapsed, report_elapsed }).is_err() {
+                break;
+            }
+        }
+    });
+    (request_tx, reply_rx)
+}
+
 pub fn spawn(
     lifecycle: Weak<()>,
     sample: Arc<Mutex<PlaybackSample>>,
@@ -253,7 +328,6 @@ pub fn spawn(
         let mut sequence = 0_u64;
         let mut previous: Option<PlaybackSample> = None;
         let mut sent_at = Instant::now();
-        let mut reported_at = Instant::now();
         let mut retry_at = Instant::now();
         let mut preparation_retry_at = Instant::now();
         let mut preparation_retry_revision = 0_u64;
@@ -261,9 +335,11 @@ pub fn spawn(
         let mut authority_at = Instant::now()-Duration::from_secs(2);
         let mut automatic_claim = AutomaticClaim::default();
         let mut authority_ready = false;
+        let mut authority_ack_at = Instant::now();
+        let mut metadata_pending = false;
+        let mut metadata_generation = 0_u64;
+        let (mut metadata_tx, mut metadata_rx) = spawn_clock_metadata(|request| identity(&request.id, &request.name));
         let mut reconcile_session = true;
-        let mut owner_endpoint_cache: (String, Option<String>) = (String::new(), None);
-        let mut owner_endpoint_at = Instant::now() - Duration::from_secs(10);
         let mut unattended_attempt: Option<(String, String)> = None;
         let mut previous_presentation = None;
         let mut last_clock_send: Option<(Instant, bool)> = None;
@@ -308,8 +384,8 @@ pub fn spawn(
                 match attempt {
                     Ok(new) => {
                         client = Some(new);
+                        metadata_generation = metadata_generation.saturating_add(1);
                         active_endpoint = requested_endpoint;
-                        reported_at = Instant::now();
                         previous = None;
                         authority_ready = false;
                         authority_at = Instant::now() - Duration::from_secs(2);
@@ -327,18 +403,52 @@ pub fn spawn(
                 }
             }
             if let Some(ref mut rpc)=client {
-                if authority_at.elapsed()>=Duration::from_secs(1) {
-                    authority_at=Instant::now();
-                    let result=rpc.call("controller.media.authority.get",json!({})).and_then(|value|
-                        serde_json::from_value::<super::authority::Status>(value).map_err(|error|format!("Invalid publishing authority state: {error}")));
+                if !metadata_pending && authority_at.elapsed() >= Duration::from_secs(1)
+                    && metadata_tx.try_send(ClockMetadataRequest {
+                        endpoint: active_endpoint.clone(), generation: metadata_generation,
+                        id: id.clone(), name: current.name.clone(),
+                    }).is_ok()
+                {
+                    authority_at = Instant::now();
+                    metadata_pending = true;
+                }
+                let reply = match metadata_rx.try_recv() {
+                    Ok(reply) => Some(reply),
+                    Err(mpsc::TryRecvError::Empty) => None,
+                    Err(mpsc::TryRecvError::Disconnected) => {
+                        // Recover an exited metadata worker without retaining
+                        // its old authority or blocking the playback stream.
+                        (metadata_tx, metadata_rx) = spawn_clock_metadata(|request| identity(&request.id, &request.name));
+                        metadata_pending = false;
+                        authority_ready = false;
+                        if let Ok(mut plan) = timeline.lock() {
+                            plan.error = Some("Publishing metadata worker restarted; refreshing authority".into());
+                        }
+                        let _ = take_coordinator_session(&mut client, &timeline);
+                        previous = None;
+                        retry_at = Instant::now() + Duration::from_secs(2);
+                        continue;
+                    }
+                };
+                if let Some(reply) = reply {
+                    metadata_pending = false;
+                    // A result from a replaced endpoint cannot authorize its successor.
+                    if reply.endpoint != active_endpoint || reply.generation != metadata_generation {
+                        authority_at = Instant::now() - Duration::from_secs(2);
+                        continue;
+                    }
                     if let Ok(mut plan) = timeline.lock() {
-                        let elapsed = authority_at.elapsed().as_millis() as u64;
+                        let elapsed = reply.authority_elapsed.as_millis() as u64;
                         plan.clock_transport.last_authority_request_ms = elapsed;
                         plan.clock_transport.max_authority_request_ms = plan.clock_transport.max_authority_request_ms.max(elapsed);
+                        if let Some(elapsed) = reply.report_elapsed {
+                            plan.clock_transport.last_instance_report_ms = elapsed.as_millis() as u64;
+                        }
                     }
-                    match result {
+                    match reply.authority {
                         Ok(mut status)=>{
                             authority_ready = true;
+                            authority_ack_at = Instant::now();
                             if automatic_claim.should_request(current.loaded, &status) {
                                 match rpc.call_detailed("controller.media.authority.change",json!({"client_id":id,"operation":"request"})) {
                                     Ok(value) => {
@@ -360,16 +470,6 @@ pub fn spawn(
                                     }
                                 }
                             }
-                            if status.owner_id != owner_endpoint_cache.0 || owner_endpoint_at.elapsed() >= Duration::from_secs(10) {
-                                owner_endpoint_at = Instant::now();
-                                // Only observers need the remote alternative. Do not
-                                // add an address lookup to the active publisher's clock path.
-                                owner_endpoint_cache = (status.owner_id.clone(), if status.owner_id.is_empty() || status.owner_id == id { None } else {
-                                    rpc.call("controller.app.instance.get", json!({"id": status.owner_id}))
-                                        .ok().and_then(|value| super::authority::owner_endpoint(&status.owner_id, &value))
-                                });
-                            }
-                            status.owner_endpoint = owner_endpoint_cache.1.clone();
                             if let Ok(mut plan)=timeline.lock() {
                                 if plan.update_authority(status) {
                                     previous=None;
@@ -390,16 +490,20 @@ pub fn spawn(
                         }
                     }
                 }
-                if !authority_ready || timeline.lock().is_ok_and(|plan|!plan.may_publish()) {
-                    if reported_at.elapsed()>=Duration::from_secs(10) {
-                        if rpc.call("controller.app.instance.report",identity(&id,&current.name)).is_err() {
-                            let _ = take_coordinator_session(&mut client, &timeline);
-                            authority_ready=false;
-                            previous=None;
-                            retry_at=Instant::now()+Duration::from_secs(2);
-                        }
-                        reported_at=Instant::now();
+                // Clock RPCs still validate ownership on the coordinator. A
+                // stalled metadata worker nevertheless cannot retain local
+                // permission indefinitely or silently replay a stale plan.
+                if authority_ready && authority_ack_at.elapsed() >= Duration::from_secs(3) {
+                    authority_ready = false;
+                    if let Ok(mut plan) = timeline.lock() {
+                        plan.error = Some("Publishing authority refresh expired; playback paused".into());
                     }
+                    let _ = take_coordinator_session(&mut client, &timeline);
+                    previous = None;
+                    retry_at = Instant::now() + Duration::from_secs(2);
+                    continue;
+                }
+                if !authority_ready || timeline.lock().is_ok_and(|plan|!plan.may_publish()) {
                     std::thread::sleep(Duration::from_millis(20));continue;
                 }
             }
@@ -430,6 +534,9 @@ pub fn spawn(
             // A prepared hardware timeline does not make a paused media clock
             // active. Publish at 25 Hz only while playback advances; explicit
             // state changes still bypass the interval through changed_from().
+            // Registration, reconciliation or a prepare may have taken time.
+            // Publish the newest decoder observation, not the loop's old copy.
+            let current = sample.lock().map(|s| s.clone()).unwrap_or_default();
             let interval = playback_publish_interval(&current);
             let due = previous
                 .as_ref()
@@ -665,27 +772,6 @@ pub fn spawn(
                     }
                 }
             }
-            if reported_at.elapsed() >= Duration::from_secs(10)
-                && let Some(ref mut rpc) = client
-            {
-                let report_started = Instant::now();
-                if rpc
-                    .call(
-                        "controller.app.instance.report",
-                        identity(&id, &current.name),
-                    )
-                    .is_err()
-                {
-                    let _ = take_coordinator_session(&mut client, &timeline);
-                    authority_ready = false;
-                    previous = None;
-                    retry_at = Instant::now() + Duration::from_secs(2);
-                }
-                reported_at = Instant::now();
-                if let Ok(mut plan) = timeline.lock() {
-                    plan.clock_transport.last_instance_report_ms = report_started.elapsed().as_millis() as u64;
-                }
-            }
             std::thread::sleep(Duration::from_millis(10));
         }
     });
@@ -696,6 +782,67 @@ fn identity(id: &str, name: &str) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn blocked_metadata_does_not_occupy_the_clock_rpc_stream() {
+        use std::io::{BufRead, BufReader, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("pccontroller://{}", listener.local_addr().unwrap());
+        let (started_tx, started_rx) = mpsc::sync_channel(1);
+        let (release_tx, release_rx) = mpsc::sync_channel(1);
+        let server = std::thread::spawn(move || {
+            let mut handlers = Vec::new();
+            let mut release_rx = Some(release_rx);
+            for _ in 0..2 {
+                let (mut stream, _) = listener.accept().unwrap();
+                let started_tx = started_tx.clone();
+                let release_rx = release_rx.take();
+                handlers.push(std::thread::spawn(move || {
+                    let mut reader = BufReader::new(stream.try_clone().unwrap());
+                    loop {
+                        let mut line = String::new();
+                        if reader.read_line(&mut line).unwrap() == 0 { break; }
+                        let request: serde_json::Value = serde_json::from_str(line.trim()).unwrap();
+                        let method = request["method"].as_str().unwrap();
+                        let result = match method {
+                            "controller.ping" | "controller.app.instance.report" => json!({"ok":true}),
+                            "controller.media.authority.get" => {
+                                started_tx.send(()).unwrap();
+                                release_rx.as_ref().unwrap().recv_timeout(Duration::from_secs(5)).unwrap();
+                                json!({"owner_id":"pealayer:test:8080","owner_label":"Test","exclusive":false,"revision":1,"pending":[]})
+                            }
+                            "controller.media.playback.update" => request["params"].clone(),
+                            other => panic!("Unexpected fixture RPC: {other}"),
+                        };
+                        writeln!(stream, "{}", json!({"jsonrpc":"2.0","id":request["id"],"result":result})).unwrap();
+                        if method.starts_with("controller.media.") { break; }
+                    }
+                }));
+            }
+            for handler in handlers { handler.join().unwrap(); }
+        });
+        // Inject a fixture identity: never consult/persist the user's config.
+        let (metadata_tx, metadata_rx) = spawn_clock_metadata(|request| json!({"id":request.id}));
+        metadata_tx.send(ClockMetadataRequest {
+            endpoint: endpoint.clone(), generation: 1, id: "pealayer:test:8080".into(), name: "Test".into(),
+        }).unwrap();
+        started_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        let mut clock = ControllerClient::connect_playback_events(&endpoint).unwrap();
+        clock.call("controller.app.instance.report", json!({"id":"pealayer:test:8080"})).unwrap();
+        let echo = clock.call("controller.media.playback.update", json!({"sequence":42})).unwrap();
+        assert_eq!(echo["sequence"], 42);
+        assert!(matches!(metadata_rx.try_recv(), Err(mpsc::TryRecvError::Empty)));
+        release_tx.send(()).unwrap();
+        let reply = metadata_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+        assert_eq!(reply.generation, 1);
+        assert_eq!(reply.authority.unwrap().owner_id, "pealayer:test:8080");
+        drop(metadata_tx);
+        drop(metadata_rx);
+        server.join().unwrap();
+    }
+
     #[test]
     fn clock_diagnostics_exclude_idle_gaps_and_retain_playing_starvation() {
         let mut stats = ClockTransportDiagnostics::default();
