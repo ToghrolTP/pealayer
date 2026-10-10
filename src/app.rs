@@ -8781,6 +8781,12 @@ impl Default for PealayerApp {
         let (_web_cmd_tx, web_cmd_rx) = std::sync::mpsc::channel();
         let (media_cmd_tx, media_cmd_rx) = std::sync::mpsc::channel();
         let engine_handle = crate::four_d::engine::spawn_engine();
+        // Production app instances need the independent playback-clock client.
+        // Unit fixtures exercise the shared observed client below and must not
+        // create an additional native client/thread for every `default()` call:
+        // asynchronous libmpv teardown can otherwise race the Windows GNU test
+        // harness after a fixture has already been dropped.
+        #[cfg(not(test))]
         engine_handle.attach_playback_clock(mpv);
         let frame_cache = std::sync::Arc::new(std::sync::RwLock::new(
             crate::mpv::frame_cache::FrameCache::new(128 * 1024 * 1024),
@@ -10678,6 +10684,8 @@ pub(crate) mod tests {
         let first = PealayerApp::default();
         let second = PealayerApp::default();
         assert!(Arc::ptr_eq(&first.mpv_client, &second.mpv_client));
+        assert!(!first.engine_handle.media_clock_owned.load(Ordering::Acquire));
+        assert!(!second.engine_handle.media_clock_owned.load(Ordering::Acquire));
     }
 
     #[test]
