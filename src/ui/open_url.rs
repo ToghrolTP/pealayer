@@ -87,14 +87,14 @@ pub enum ProbeStatus {
     Idle,
     Checking(String),
     Ready(RemoteMediaInfo),
-    Failed { url: String, message: String },
+    Failed { url: String, message: String, route_errors: Vec<crate::remote_location::RouteFailure> },
     NotApplicable { url: String, message: String },
 }
 
 #[derive(Clone, Debug)]
 struct ProbeResult {
     generation: u64,
-    result: Result<RemoteProbePayload, String>,
+    result: Result<RemoteProbePayload, crate::remote_location::RouteProbeError>,
 }
 
 #[derive(Clone, Debug)]
@@ -223,9 +223,9 @@ impl UrlInspector {
                     self.thumbnail_error = payload.thumbnail_error;
                     ProbeStatus::Ready(payload.info)
                 }
-                Err(message) => ProbeStatus::Failed {
-                    url: self.last_input.clone(),
-                    message,
+                Err(error) => {
+                    let (message, route_errors) = error.presentation();
+                    ProbeStatus::Failed { url: self.last_input.clone(), message: message.unwrap_or_default(), route_errors }
                 },
             };
         }
@@ -299,6 +299,7 @@ impl UrlInspector {
                 self.status = ProbeStatus::Failed {
                     url: input.trim().to_owned(),
                     message,
+                    route_errors: Vec::new(),
                 };
             }
         }
@@ -341,7 +342,7 @@ impl UrlInspector {
                         let _ = tx.send(ProbeResult {generation, result: Ok(payload)});
                     }
                 }
-                Err(error) => {let _ = tx.send(ProbeResult {generation, result: Err(error.to_string())});}
+                Err(error) => {let _ = tx.send(ProbeResult {generation, result: Err(error)});}
             }
             ctx.request_repaint();
         });
@@ -1211,7 +1212,7 @@ fn draw_location_and_remote_details(
                     );
                 });
         }
-        ProbeStatus::Failed { url, message } => {
+        ProbeStatus::Failed { url, message, route_errors } => {
             ui.label(
                 egui::RichText::new(format!(
                     "{}  {}",
@@ -1222,6 +1223,7 @@ fn draw_location_and_remote_details(
                 .color(ui.visuals().error_fg_color),
             );
             ui.add_space(3.0);
+            crate::ui::remote_location::draw_route_errors(ui, route_errors);
             egui::Grid::new("open_url_probe_error_details")
                 .num_columns(2)
                 .max_col_width((ui.available_width() * 0.7).max(180.0))
@@ -1234,13 +1236,9 @@ fn draw_location_and_remote_details(
                         &app.tr("Target"),
                         &crate::media::redact_media_target(url),
                     );
-                    metadata_row(
-                        ui,
-                        app.language,
-                        crate::ui::icons::WARNING,
-                        &app.tr("Reason"),
-                        message,
-                    );
+                    if !message.is_empty() {
+                        metadata_row(ui, app.language, crate::ui::icons::WARNING, &app.tr("Reason"), message);
+                    }
                     let proxy = if app.open_url_use_proxy {
                         effective_proxy
                             .map(proxy_display_value)

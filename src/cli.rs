@@ -216,7 +216,7 @@ pub fn parse_cli_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliActi
             "--maximize" => commands.push(InteropCommand::Maximize),
             "--restore" => commands.push(InteropCommand::Restore),
             "--preferences" => commands.push(InteropCommand::OpenPreferences),
-            "--browse" => { let target = args_iter.next().ok_or("--browse requires a remote URL")?; let command = InteropCommand::BrowseRemote { target, use_proxy: None }; command.validate()?; commands.push(command); },
+            "--browse" => { let target = args_iter.next().ok_or("--browse requires a remote URL")?; let command = InteropCommand::BrowseRemote { target, use_proxy: None, clipboard: false }; command.validate()?; commands.push(command); },
             "--no-proxy" => { let Some(InteropCommand::BrowseRemote { use_proxy, .. }) = commands.last_mut() else { return Err("Use --no-proxy immediately after --browse URL".into()); }; *use_proxy = Some(false); },
             "--media-info" => commands.push(InteropCommand::OpenMediaInformation),
             "--media-folder" => commands.push(InteropCommand::OpenMediaFolder),
@@ -443,7 +443,7 @@ mod tests {
     #[test]
     fn remote_folder_cli_uses_the_shared_contract() {
         let CliAction::RunGui(options) = parse_cli_args(["pealayer", "--browse", "https://files.invalid/folder/", "--no-proxy"].map(String::from)).unwrap() else { panic!("GUI expected"); };
-        assert_eq!(options.commands, vec![InteropCommand::BrowseRemote { target: "https://files.invalid/folder/".into(), use_proxy: Some(false) }]);
+        assert_eq!(options.commands, vec![InteropCommand::BrowseRemote { target: "https://files.invalid/folder/".into(), use_proxy: Some(false), clipboard: false }]);
         assert!(parse_cli_args(["pealayer", "--no-proxy"].map(String::from)).is_err());
     }
 

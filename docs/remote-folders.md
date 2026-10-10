@@ -16,10 +16,24 @@ Pealayer discovers HTTP(S) directory indexes and a media file's siblings through
 Preferences → Playback → Open Location / URL provides two default-enabled
 options: **Inspect newly copied HTTP(S) links** and **Automatically choose a
 working proxy or direct connection**. A newly copied, complete HTTP(S) file or
-directory link opens the shared remote-location dialog; it never starts playback.
-Copying a different link updates an already-open dialog. The native Open Location
-input also receives the new link and switches to the directory browser when a
-real index is discovered. Valid edits are inspected after a short debounce.
+directory link is verified before the shared remote-location dialog opens; it
+never starts playback. Unsupported pages leave the current workspace alone.
+Copying a supported different link updates an already-open dialog only after
+verification succeeds. Valid edits are inspected after a short debounce.
+
+**Copied-link verification** has three choices, shared by native and Web:
+
+- **Verify support before opening the dialog** (default): open only after a
+  supported media file or directory index is found. Rejected or superseded
+  results never open or replace a dialog.
+- **Show the dialog while verifying support**: open immediately with bounded
+  loading feedback and show a failure if verification fails.
+- **Show the dialog without verification**: open the address without a network
+  request. Choose Browse to inspect it explicitly; editing the address still
+  follows the separate automatic-information preference.
+
+When Proxy and Direct return the same error, it appears once. Different failures
+appear in separate labeled blocks, ordered Proxy then Direct.
 
 Initial clipboard contents are a baseline, not a new copy. Repeated/dismissed
 links are suppressed in a bounded, memory-only session list. Ordinary clipboard
@@ -59,6 +73,7 @@ Send these JSON commands to native IPC, `POST /api/ipc`, `POST /api/player/comma
 
 ```json
 {"command":"browse_remote","target":"https://files.example/folder/","use_proxy":false}
+{"command":"browse_remote","target":"https://files.example/folder/","clipboard":true}
 {"command":"select_remote","target":"https://files.example/folder/clip.mp4","play":true}
 {"command":"sort_remote","by":"name","descending":false}
 {"command":"close_remote_browser"}
@@ -69,6 +84,11 @@ Equivalent JSON-RPC methods are `pealayer.remote.browse`, `.select`, `.sort`, `.
 ```json
 {"jsonrpc":"2.0","id":1,"method":"pealayer.remote.browse","params":{"target":"https://files.example/folder/","use_proxy":false}}
 ```
+
+`clipboard: true` applies the host's clipboard detection and verification
+preferences. Ordinary Browse remains an explicit user action and always opens.
+Browser state exposes one `error` for shared failures or typed `route_errors`
+with `use_proxy` and `message` for distinct route failures.
 
 `GET /api/remote/state` returns the authoritative browser state. `/api/player/status` and `/ws` snapshots include it as `remote_browser`. `GET /api/remote/thumbnail?url=<encoded-listed-url>` returns HTTP 202 while pending, a JPEG when ready, or a specific error. Thumbnail targets must belong to the current listing. Web file-access and control permissions are enforced for remote browsing/selection commands, including commands nested in launch requests.
 

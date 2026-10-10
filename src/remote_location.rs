@@ -60,8 +60,30 @@ pub struct BrowserState {
     pub descending: bool,
     pub selected: Option<String>,
     pub error: Option<String>,
+    pub route_errors: Vec<RouteFailure>,
     pub listing: Option<RemoteListing>,
     pub thumbnail_status: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ClipboardLinkBehavior {
+    #[default]
+    VerifyBeforeDialog,
+    ShowWhileVerifying,
+    ShowWithoutVerification,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RouteFailure {
+    pub use_proxy: bool,
+    pub message: String,
+}
+
+impl RouteFailure {
+    pub fn label(&self) -> &'static str {
+        if self.use_proxy { "Proxy" } else { "Direct" }
+    }
 }
 #[derive(Clone)]
 pub struct Playback {
@@ -73,6 +95,7 @@ struct Browser {
     current: Option<String>,
     state: BrowserState,
     generation: u64,
+    clipboard_generation: u64,
     pending_play: Option<Playback>,
     playlist: Vec<RemoteEntry>,
     playlist_proxy: bool,
@@ -84,10 +107,35 @@ struct Browser {
 /// Bounded parallel routing. Explicit checkbox choices bypass auto probing.
 /// Return the first validated success without waiting for a failing other route.
 /// The losing bounded HTTP request releases its slot when its timeout expires.
-#[derive(Debug)]
-pub enum RouteProbeError { Busy, Failed(String) }
+#[derive(Clone, Debug)]
+pub enum RouteProbeError { Busy, Failed(Vec<RouteFailure>) }
+impl RouteProbeError {
+    /// Identical failures are one reason; distinct failures retain their route.
+    pub fn presentation(&self) -> (Option<String>, Vec<RouteFailure>) {
+        match self {
+            Self::Busy => (Some("Remote inspection is busy".into()), Vec::new()),
+            Self::Failed(errors) if errors.is_empty() =>
+                (Some("Remote inspection did not produce a response".into()), Vec::new()),
+            Self::Failed(errors) if errors.iter().all(|error| error.message == errors[0].message) =>
+                (Some(errors[0].message.clone()), Vec::new()),
+            Self::Failed(errors) => {
+                let mut errors = errors.clone();
+                errors.sort_by_key(|error| !error.use_proxy);
+                (None, errors)
+            }
+        }
+    }
+}
 impl std::fmt::Display for RouteProbeError {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result { match self { Self::Busy => formatter.write_str("Remote inspection is busy"), Self::Failed(message) => formatter.write_str(message) } }
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let (message, errors) = self.presentation();
+        if let Some(message) = message { return formatter.write_str(&message); }
+        for (index, error) in errors.iter().enumerate() {
+            if index > 0 { formatter.write_str("\n")?; }
+            write!(formatter, "{}: {}", error.label(), error.message)?;
+        }
+        Ok(())
+    }
 }
 pub fn probe_routes<T: Send + 'static>(
     preferred: bool, automatic: bool,
@@ -109,9 +157,9 @@ pub fn probe_routes<T: Send + 'static>(
     drop(tx);
     let mut errors = Vec::new();
     for (proxy, result) in rx {
-        match result { Ok(value) => return Ok((proxy, value)), Err(error) => errors.push(format!("{}: {error}", if proxy {"Proxy"} else {"Direct"})) }
+        match result { Ok(value) => return Ok((proxy, value)), Err(message) => errors.push(RouteFailure { use_proxy: proxy, message }) }
     }
-    Err(RouteProbeError::Failed(if errors.is_empty() { "Remote inspection did not produce a response".into() } else { errors.join("; ") }))
+    Err(RouteProbeError::Failed(errors))
 }
 
 pub fn accept_listing(mut listing: RemoteListing, use_proxy: bool, ctx: &eframe::egui::Context) {
@@ -124,6 +172,7 @@ pub fn accept_listing(mut listing: RemoteListing, use_proxy: bool, ctx: &eframe:
         b.state.target = listing.requested_url.clone();
         b.state.use_proxy = use_proxy;
         b.state.error = None;
+        b.state.route_errors.clear();
         sort_entries(&mut listing.entries, b.state.sort, b.state.descending);
         b.state.selected = listing.file.as_ref().map(|e| e.url.clone());
         b.state.listing = Some(listing);
@@ -623,6 +672,11 @@ pub fn discover(
             warning: None,
         })
     } else {
+        let media_type = content_type.as_deref().unwrap_or_default().split(';').next().unwrap_or_default().trim().to_ascii_lowercase();
+        if !playable(&final_url) && !media_type.starts_with("video/") && !media_type.starts_with("audio/")
+            && !matches!(media_type.as_str(), "application/vnd.apple.mpegurl" | "application/x-mpegurl" | "application/dash+xml" | "application/ogg") {
+            return Err("This link does not expose a supported media file or directory index.".into());
+        }
         let total = header(reqwest::header::CONTENT_RANGE)
             .and_then(|s| s.rsplit_once('/').and_then(|(_, s)| s.parse().ok()))
             .or_else(|| header(reqwest::header::CONTENT_LENGTH).and_then(|s| s.parse().ok()));
@@ -685,17 +739,98 @@ pub fn request(
         if play_files {return client.queue("/api/peer/open",serde_json::json!({"target":target,"use_proxy":use_proxy}));}
         return client.queue("/api/player/command",serde_json::json!({"command":"browse_remote","target":target,"use_proxy":use_proxy}));
     }
-    request_inner(target, use_proxy, play_files, false, ctx)
+    request_inner(target, use_proxy, play_files, RequestMode::Browse, ctx)
+}
+pub fn request_copied_link(target: &str, ctx: &eframe::egui::Context) -> Result<(), String> {
+    if let Some(client) = crate::peer::client() {
+        return client.queue("/api/player/command", serde_json::json!({"command":"browse_remote","target":target,"clipboard":true}));
+    }
+    normalize(target)?;
+    let config = crate::platform::interop::get_live_config();
+    if !config.clipboard_url_detection { return Ok(()); }
+    request_inner(target, None, false, RequestMode::Clipboard(config.clipboard_link_behavior), ctx)
 }
 pub fn prefetch(target: &str, use_proxy: bool, ctx: &eframe::egui::Context) -> Result<(), String> {
     if crate::peer::active(){return Ok(());}
-    request_inner(target, Some(use_proxy), false, true, ctx)
+    request_inner(target, Some(use_proxy), false, RequestMode::Background, ctx)
 }
+
+#[derive(Clone, Copy)]
+enum RequestMode { Browse, Background, Clipboard(ClipboardLinkBehavior) }
+impl RequestMode {
+    fn hidden_verification(self) -> bool {
+        matches!(self, Self::Clipboard(ClipboardLinkBehavior::VerifyBeforeDialog))
+    }
+    fn verifies(self) -> bool {
+        !matches!(self, Self::Clipboard(ClipboardLinkBehavior::ShowWithoutVerification))
+    }
+}
+
+fn prepare_state(browser: &mut Browser, target: &str, use_proxy: bool, mode: RequestMode, config: &crate::config::AppConfig) {
+    browser.state.request_id = browser.generation;
+    browser.state.visible = !matches!(mode, RequestMode::Background);
+    browser.state.target = target.into();
+    browser.state.use_proxy = use_proxy;
+    browser.state.auto_next = config.remote_folder_auto_next;
+    browser.state.thumbnails = config.remote_folder_thumbnails;
+    browser.state.loading = mode.verifies() && !target.is_empty();
+    browser.state.error = None;
+    browser.state.route_errors.clear();
+    browser.state.selected = None;
+    browser.state.thumbnail_status.clear();
+    browser.pending_play = None;
+    if !mode.verifies() {
+        // Showing without verification must not retain another link's files.
+        browser.state.listing = None;
+    }
+    browser.state.revision += 1;
+}
+
+fn finish_request(
+    browser: &mut Browser, generation: u64, clipboard_generation: u64, target: &str,
+    mode: RequestMode, play_files: bool, config: &crate::config::AppConfig,
+    result: Result<(bool, RemoteListing), RouteProbeError>,
+) -> bool {
+    if browser.generation != generation || matches!(mode, RequestMode::Clipboard(_)) && browser.clipboard_generation != clipboard_generation {
+        return false;
+    }
+    if mode.hidden_verification() {
+        if result.is_err() { return false; }
+        browser.generation += 1;
+        prepare_state(browser, target, result.as_ref().unwrap().0, mode, config);
+    }
+    browser.state.loading = false;
+    match result {
+        Ok((use_proxy, mut listing)) => {
+            browser.state.use_proxy = use_proxy;
+            sort_entries(&mut listing.entries, browser.state.sort, browser.state.descending);
+            browser.state.selected = listing.file.as_ref().map(|file| file.url.clone());
+            if matches!(mode, RequestMode::Background) && listing.file.is_some() || play_files && listing.file.is_some() {
+                browser.playlist = listing.entries.clone();
+                browser.playlist_proxy = use_proxy;
+                update_neighbors(browser);
+            }
+            if play_files {
+                if let Some(file) = &listing.file {
+                    browser.pending_play = Some(Playback { target: file.url.clone(), use_proxy });
+                    browser.state.visible = false;
+                }
+            }
+            browser.state.listing = Some(listing);
+        }
+        Err(error) => {
+            (browser.state.error, browser.state.route_errors) = error.presentation();
+        }
+    }
+    browser.state.revision += 1;
+    true
+}
+
 fn request_inner(
     target: &str,
     use_proxy: Option<bool>,
     play_files: bool,
-    background: bool,
+    mode: RequestMode,
     ctx: &eframe::egui::Context,
 ) -> Result<(), String> {
     if !target.trim().is_empty() {
@@ -705,32 +840,24 @@ fn request_inner(
     let mut browser = browser()
         .lock()
         .map_err(|_| "Remote browser unavailable".to_string())?;
+    let background = matches!(mode, RequestMode::Background);
     let manual = use_proxy.or_else(|| if browser.state.visible && !background { browser.proxy_override } else { None });
     let automatic = manual.is_none() && config.open_url_auto_proxy;
     let use_proxy = manual.unwrap_or(config.open_url_use_proxy);
     if !background { browser.proxy_override = manual; }
-    browser.generation += 1;
+    browser.clipboard_generation += 1;
+    if !mode.hidden_verification() { browser.generation += 1; }
     let generation = browser.generation;
-    browser.state.request_id = generation;
-    browser.state.visible = !background;
-    browser.state.target = target.trim().into();
-    browser.state.use_proxy = use_proxy;
-    browser.state.auto_next = config.remote_folder_auto_next;
-    browser.state.thumbnails = config.remote_folder_thumbnails;
-    browser.state.loading = !target.trim().is_empty();
-    browser.state.error = None;
+    let clipboard_generation = browser.clipboard_generation;
     // Keep the last successful listing mounted during refresh; it cannot be
     // acted on while loading. Fast replies no longer flash an empty table.
-    browser.state.selected = None;
-    browser.state.thumbnail_status.clear();
-    browser.pending_play = None;
+    if !mode.hidden_verification() { prepare_state(&mut browser, target.trim(), use_proxy, mode, &config); }
     if background {
         browser.playlist.clear();
         browser.playlist_proxy = use_proxy;
         update_neighbors(&mut browser);
     }
-    browser.state.revision += 1;
-    if target.trim().is_empty() {
+    if target.trim().is_empty() || !mode.verifies() {
         ctx.request_repaint();
         return Ok(());
     }
@@ -739,7 +866,7 @@ fn request_inner(
     drop(browser);
     std::thread::spawn(move || {
         let result = loop {
-            if self::browser().lock().is_ok_and(|b| b.generation != generation) { return; }
+            if self::browser().lock().is_ok_and(|b| b.generation != generation || matches!(mode, RequestMode::Clipboard(_)) && b.clipboard_generation != clipboard_generation) { return; }
             let target = target.clone(); let custom = config.open_url_proxy_url.clone();
             match probe_routes(use_proxy, automatic, move |proxy| discover(&target, proxy, custom.as_deref())) {
                 Err(RouteProbeError::Busy) => std::thread::sleep(Duration::from_millis(250)),
@@ -747,37 +874,7 @@ fn request_inner(
             }
         };
         if let Ok(mut b) = self::browser().lock() {
-            if b.generation != generation {
-                return;
-            }
-            b.state.loading = false;
-            match result {
-                Ok((use_proxy, mut listing)) => {
-                    b.state.use_proxy = use_proxy;
-                    sort_entries(&mut listing.entries, b.state.sort, b.state.descending);
-                    b.state.selected = listing.file.as_ref().map(|f| f.url.clone());
-                    if background && listing.file.is_some() {
-                        b.playlist = listing.entries.clone();
-                        b.playlist_proxy = use_proxy;
-                        update_neighbors(&mut b);
-                    }
-                    if play_files {
-                        if let Some(file) = &listing.file {
-                            b.playlist = listing.entries.clone();
-                            b.playlist_proxy = use_proxy;
-                            update_neighbors(&mut b);
-                            b.pending_play = Some(Playback {
-                                target: file.url.clone(),
-                                use_proxy,
-                            });
-                            b.state.visible = false;
-                        }
-                    }
-                    b.state.listing = Some(listing);
-                }
-                Err(error) => b.state.error = Some(error.to_string()),
-            }
-            b.state.revision += 1;
+            finish_request(&mut b, generation, clipboard_generation, &target, mode, play_files, &config, result);
         }
         ctx.request_repaint();
     });
@@ -975,7 +1072,69 @@ mod tests {
         let (proxy, _) = probe_routes(false, false, |proxy| { assert!(!proxy); Ok(()) }).unwrap();
         assert!(!proxy);
         let error = probe_routes::<()>(true, true, |_| Err("Rejected".into())).unwrap_err();
-        assert!(error.to_string().contains("Proxy: Rejected") && error.to_string().contains("Direct: Rejected"));
+        assert_eq!(error.to_string(), "Rejected");
+        assert_eq!(error.presentation(), (Some("Rejected".into()), Vec::new()));
+        let error = probe_routes::<()>(true, true, |proxy| Err(if proxy {"Proxy unavailable"} else {"Authentication required"}.into())).unwrap_err();
+        assert_eq!(error.to_string(), "Proxy: Proxy unavailable\nDirect: Authentication required");
+        let (message, routes) = error.presentation();
+        assert!(message.is_none());
+        assert_eq!(routes.len(), 2);
+        assert!(routes[0].use_proxy);
+        assert!(!routes[1].use_proxy);
+    }
+    fn test_listing() -> RemoteListing {
+        RemoteListing { requested_url: "https://files.invalid/show/".into(), url: "https://files.invalid/show/".into(),
+            host: "files.invalid".into(), server: None, content_type: Some("text/html".into()), parent_url: None,
+            file: None, entries: Vec::new(), warning: None }
+    }
+    #[test]
+    fn copied_links_only_open_after_support_is_verified_and_ignore_stale_results() {
+        let config = crate::config::AppConfig::default();
+        assert_eq!(config.clipboard_link_behavior, ClipboardLinkBehavior::VerifyBeforeDialog);
+        let mode = RequestMode::Clipboard(config.clipboard_link_behavior);
+        let mut browser = Browser::default();
+        browser.generation = 3;
+        browser.clipboard_generation = 5;
+        let failure = RouteProbeError::Failed(vec![RouteFailure {use_proxy: false, message: "Unsupported".into()}]);
+        let original = browser.state.clone();
+        assert!(!finish_request(&mut browser, 3, 5, "https://files.invalid/show/", mode, false, &config, Err(failure.clone())));
+        assert_eq!(browser.state, original);
+        browser.state.visible = true;
+        browser.state.target = "https://previous.invalid/".into();
+        browser.state.loading = true;
+        let original = browser.state.clone();
+        assert!(!finish_request(&mut browser, 3, 5, "https://files.invalid/show/", mode, false, &config, Err(failure)));
+        assert_eq!(browser.state, original, "Unsupported copies must not replace an existing dialog or pending manual browse");
+        assert!(!finish_request(&mut browser, 3, 4, "https://files.invalid/show/", mode, false, &config, Ok((false, test_listing()))));
+        assert_eq!(browser.state, original);
+        assert!(finish_request(&mut browser, 3, 5, "https://files.invalid/show/", mode, false, &config, Ok((false, test_listing()))));
+        assert!(browser.state.visible);
+        assert!(!browser.state.loading);
+        assert_eq!(browser.state.target, "https://files.invalid/show/");
+        assert!(!browser.state.use_proxy);
+        assert!(browser.pending_play.is_none());
+    }
+    #[test]
+    fn copied_link_dialog_timing_and_verification_are_independent_of_metadata_fetch() {
+        let config = crate::config::AppConfig::default();
+        let mut browser = Browser::default();
+        let mode = RequestMode::Clipboard(ClipboardLinkBehavior::ShowWhileVerifying);
+        prepare_state(&mut browser, "https://files.invalid/show/", true, mode, &config);
+        assert!(browser.state.visible && browser.state.loading && mode.verifies());
+        let failure = RouteProbeError::Failed(vec![RouteFailure {use_proxy: false, message: "Unsupported".into()}]);
+        assert!(finish_request(&mut browser, 0, 0, "https://files.invalid/show/", mode, false, &config, Err(failure)));
+        assert!(browser.state.visible && !browser.state.loading);
+        assert_eq!(browser.state.error.as_deref(), Some("Unsupported"));
+        browser.state.listing = Some(test_listing());
+        let mode = RequestMode::Clipboard(ClipboardLinkBehavior::ShowWithoutVerification);
+        prepare_state(&mut browser, "https://unverified.invalid/", true, mode, &config);
+        assert!(browser.state.visible && !browser.state.loading && !mode.verifies());
+        assert!(browser.state.listing.is_none());
+        assert!(browser.state.error.is_none() && browser.state.route_errors.is_empty());
+        for value in ["verify_before_dialog", "show_while_verifying", "show_without_verification"] {
+            let behavior: ClipboardLinkBehavior = serde_json::from_value(serde_json::json!(value)).unwrap();
+            assert_eq!(serde_json::to_value(behavior).unwrap(), value);
+        }
     }
     #[test]
     fn parses_table_metadata_and_episode_order() {

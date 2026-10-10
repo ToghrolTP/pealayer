@@ -301,7 +301,7 @@ const App: React.FC = () => {
   }, [apiEndpoint]);
   const browseClipboard = useCallback((target: string) => {
     if (state.remote_browser?.visible && state.remote_browser.target === target) return;
-    void sendCmd('pealayer.remote.browse', { target });
+    void sendCmd('pealayer.remote.browse', { target, clipboard: true });
   }, [sendCmd, state.remote_browser?.target, state.remote_browser?.visible]);
   useClipboardUrls(appConfig?.clipboard_url_detection === true, connected, browseClipboard);
 
