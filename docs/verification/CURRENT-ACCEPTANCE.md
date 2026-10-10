@@ -66,6 +66,9 @@ statements are not the present product state.
 - [ ] Complete safe authorized physical cue testing and sustained timing/load
   checks. VirtualBoard ACK timing is not physical edge measurement. Only the
   currently authorized R5–R7 may be used; no seat or R8 test is implied.
+  A later explicit, bounded Seat Left Down authorization was exercised in the
+  [2026-10-11 timing test](seat-cue-timing.md); it failed closed before motion.
+  That receipt is not broader seat/relay permission or completed acceptance.
 - [ ] Exercise recording, offline editing, RF assignments and strip controls
   end to end with real advertised hardware and retain explicit human acceptance.
   [Behavior-based cue duration](../HARDWARE-CUE-MODES.md) corrects strip windows

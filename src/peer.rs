@@ -229,6 +229,7 @@ struct ServerResources {
     capabilities: Arc<Mutex<Option<crate::four_d::controller::HardwareCapabilities>>>,
     media_playback: Arc<Mutex<crate::four_d::media_sync::PlaybackSample>>,
     media_clock_owned: Arc<std::sync::atomic::AtomicBool>,
+    prepared_timeline: Arc<Mutex<crate::four_d::media_timeline::PreparedTimeline>>,
     mpv: &'static libmpv2::Mpv,
     context: eframe::egui::Context,
 }
@@ -242,6 +243,7 @@ pub fn register_server(
         capabilities: engine.hardware_capabilities.clone(),
         media_playback: engine.media_playback.clone(),
         media_clock_owned: engine.media_clock_owned.clone(),
+        prepared_timeline: engine.prepared_timeline.clone(),
         mpv,
         context,
     });
@@ -257,6 +259,50 @@ pub fn playback_clock_diagnostics() -> Value {
             "position_ms": sample.position_ms, "playing": sample.playing,
             "buffering": sample.buffering, "epoch": sample.epoch,
             "sample_age_ms": sample.observed_at.elapsed().as_millis() as u64,
+        }),
+        Err(std::sync::TryLockError::WouldBlock) => serde_json::json!({"state":"busy"}),
+        Err(std::sync::TryLockError::Poisoned(_)) => serde_json::json!({"state":"unavailable"}),
+    }
+}
+/// Read the executor now, not the last UI/Web presentation. In particular ACK
+/// age is monotonic elapsed time at this request, without per-clock repaints.
+pub fn hardware_sync_diagnostics() -> Value {
+    let Some(server) = SERVER.get() else { return Value::Null };
+    snapshot_hardware_sync(&server.prepared_timeline)
+}
+fn snapshot_hardware_sync(
+    timeline: &Mutex<crate::four_d::media_timeline::PreparedTimeline>,
+) -> Value {
+    match timeline.try_lock() {
+        Ok(plan) => serde_json::json!({
+            "state": "available",
+            "revision": plan.revision,
+            "prepared_revision": plan.acknowledged_revision,
+            "clock_ack_revision": plan.clock_ack_revision,
+            "clock_ack_epoch": plan.clock_ack_epoch,
+            "ack_age_ms": plan.last_ack.map(|ack| ack.elapsed().as_millis() as u64),
+            "requires_reprepare": plan.requires_reprepare,
+            "play_requested": plan.play_requested,
+            "error": plan.error,
+            "deferred_reason": plan.deferred_reason,
+            "clock_transport": plan.clock_transport,
+            // Do not expose the compiled payload, publisher identity or labels.
+            "timeline": {
+                "state": plan.feedback["state"],
+                "generation": plan.feedback["generation"],
+                "armed_epoch": plan.feedback["armed_epoch"],
+                "clock_sequence": plan.feedback["clock_sequence"],
+                "clock_position_ms": plan.feedback["clock_position_ms"],
+                "acknowledged": plan.feedback["acknowledged"],
+                "step_count": plan.feedback["step_count"],
+                "last_step": plan.feedback["last_step"],
+                "last_due_ms": plan.feedback["last_due_ms"],
+                "max_dispatch_lateness_ms": plan.feedback["max_dispatch_lateness_ms"],
+                "max_ack_round_trip_ms": plan.feedback["max_ack_round_trip_ms"],
+                "max_ack_lateness_ms": plan.feedback["max_ack_lateness_ms"],
+                "max_restore_ack_ms": plan.feedback["max_restore_ack_ms"],
+                "error": plan.feedback["error"],
+            },
         }),
         Err(std::sync::TryLockError::WouldBlock) => serde_json::json!({"state":"busy"}),
         Err(std::sync::TryLockError::Poisoned(_)) => serde_json::json!({"state":"unavailable"}),
@@ -976,6 +1022,43 @@ fn preserve_geometry(new: &mut Value, old: Option<&Value>) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn hardware_diagnostics_read_monotonic_ack_age_without_private_payloads() {
+        let mut plan = crate::four_d::media_timeline::PreparedTimeline::default();
+        plan.last_ack = Some(Instant::now() - Duration::from_secs(1));
+        plan.revision = 7;
+        plan.acknowledged_revision = 7;
+        plan.clock_ack_revision = 7;
+        plan.clock_ack_epoch = 2;
+        plan.payload = serde_json::json!({"private":"do-not-export"});
+        plan.feedback = serde_json::json!({"state":"faulted", "client_id":"private-publisher",
+            "armed_epoch":2, "acknowledged":0, "error":"deadline missed"});
+        let timeline = Mutex::new(plan);
+        let first = snapshot_hardware_sync(&timeline);
+        assert_eq!(first["state"], "available");
+        assert_eq!(first["revision"], 7);
+        assert_eq!(first["timeline"]["state"], "faulted");
+        assert_eq!(first["timeline"]["error"], "deadline missed");
+        assert!(first["ack_age_ms"].as_u64().unwrap() >= 1_000);
+        assert!(!first.to_string().contains("do-not-export"));
+        assert!(!first.to_string().contains("private-publisher"));
+        timeline.lock().unwrap().last_ack = Some(Instant::now() - Duration::from_secs(2));
+        assert!(snapshot_hardware_sync(&timeline)["ack_age_ms"].as_u64().unwrap() >= 2_000);
+        timeline.lock().unwrap().last_ack = None;
+        assert!(snapshot_hardware_sync(&timeline)["ack_age_ms"].is_null());
+    }
+    #[test]
+    fn hardware_diagnostics_never_wait_for_a_busy_or_poisoned_executor() {
+        let timeline = Mutex::new(crate::four_d::media_timeline::PreparedTimeline::default());
+        let guard = timeline.lock().unwrap();
+        assert_eq!(snapshot_hardware_sync(&timeline), serde_json::json!({"state":"busy"}));
+        drop(guard);
+        let _ = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let _guard = timeline.lock().unwrap();
+            panic!("test poisoned executor");
+        }));
+        assert_eq!(snapshot_hardware_sync(&timeline), serde_json::json!({"state":"unavailable"}));
+    }
     #[test]
     fn process_probe_requires_a_valid_foreign_session_and_sends_loop_identity() {
         use std::io::{Read, Write};

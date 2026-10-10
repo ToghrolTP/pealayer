@@ -38,6 +38,7 @@ pub fn status() -> Value {
         "git_dirty":env!("PEALAYER_GIT_DIRTY")=="true", "runtime":crate::platform::interop::runtime_identity(),
         "local_control_port":crate::config::control_port(),
         "peer":crate::peer::diagnostics(), "playback_clock":crate::peer::playback_clock_diagnostics(),
+        "hardware_sync":crate::peer::hardware_sync_diagnostics(),
         "connect":OPERATION.lock().ok().and_then(|value|value.clone()),
         "effective_unattended_handoff":crate::platform::interop::allow_unattended_hardware_takeover()})
 }
