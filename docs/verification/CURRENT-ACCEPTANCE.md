@@ -32,6 +32,8 @@ statements are not the present product state.
 - Native timeline actions use accent-matched outlines, mouse-down-preserving
   drag offsets and reversible removal previews over Trash:
   [toolbar verification](timeline-toolbar-drag-feedback.md).
+- Effect Controls can show its selected cue in Timeline without seeking or
+  changing hardware track state: [inspector verification](EFFECT-CONTROLS-INSPECTOR.md).
 
 ## Remaining gates · do not silently mark complete
 

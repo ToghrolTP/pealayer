@@ -775,6 +775,31 @@ fn timeline_offset_to_reveal_x(
     revealed.clamp(0.0, max_offset)
 }
 
+fn timeline_offset_to_reveal_cue(
+    current: egui::Vec2,
+    cue: egui::Rect,
+    content: egui::Vec2,
+    viewport: egui::Vec2,
+) -> egui::Vec2 {
+    fn axis(current: f32, start: f32, end: f32, content: f32, viewport: f32,
+        inset: f32, margin: f32) -> f32 {
+        let usable = (viewport - inset).max(0.0);
+        let margin = margin.min(usable * 0.2);
+        let target = if end - start > usable - 2.0 * margin {
+            // Long cues cannot fit without changing zoom. Reveal their start.
+            start - inset - margin
+        } else if start < current + inset + margin || end > current + viewport - margin {
+            (start + end) * 0.5 - inset - usable * 0.5
+        } else { current };
+        target.clamp(0.0, (content - viewport).max(0.0))
+    }
+    egui::vec2(
+        axis(current.x, cue.left(), cue.right(), content.x, viewport.x, 0.0, 24.0),
+        axis(current.y, cue.top(), cue.bottom(), content.y, viewport.y,
+            TIMELINE_RULER_HEIGHT.min(viewport.y), 8.0),
+    )
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TimelineZoomAnchor {
     pub pointer_x_in_viewport: f32,
@@ -2461,6 +2486,75 @@ fn timeline_track_bring_into_view_id() -> egui::Id {
     egui::Id::new("timeline_track_bring_into_view")
 }
 
+fn timeline_cue_reveal_id() -> egui::Id {
+    egui::Id::new("timeline-cue-reveal")
+}
+
+#[derive(Clone, Debug)]
+struct TimelineCueReveal {
+    instance_id: uuid::Uuid,
+    track_key: String,
+    pending_scroll: bool,
+}
+
+fn timeline_cue_track_key(app: &PealayerApp, instance_id: uuid::Uuid) -> Option<String> {
+    let instance = app.timeline.instances.iter().find(|instance| instance.id == instance_id)?;
+    let effect = app.timeline.templates.iter().find(|effect| effect.id == instance.effect_id)?;
+    let rows = all_timeline_track_rows(app);
+    let analog_ids = app.timeline.analog_tracks.iter().map(|track| track.id).collect();
+    let placement = timeline_cue_placement(app, effect, &rows, &analog_ids)?;
+    placement.selected_track_key.or_else(|| rows.get(placement.track_index).map(|row| row.key.clone()))
+}
+
+fn request_timeline_cue_into_view(
+    app: &mut PealayerApp,
+    ctx: &egui::Context,
+    instance_id: uuid::Uuid,
+) -> bool {
+    let Some(track_key) = timeline_cue_track_key(app, instance_id) else {
+        app.set_osd(app.tr("The cue or its timeline track is unavailable"));
+        return false;
+    };
+    // Only presentation changes: hidden/unlinked tracks may be temporarily
+    // rendered, but never relinked, unmuted, unlocked or sent to hardware.
+    ctx.data_mut(|data| {
+        data.insert_temp(egui::Id::new("timeline_track_filter_text"), String::new());
+        data.insert_temp(timeline_cue_reveal_id(), TimelineCueReveal {
+            instance_id, track_key, pending_scroll: true,
+        });
+        // This explicit navigation keeps the cue and closes its modal editor.
+        data.remove::<TimelineCueDialogState>(timeline_cue_dialog_id());
+    });
+    app.open_or_focus_tab(PealayerTab::Timeline);
+    ctx.request_repaint();
+    true
+}
+
+fn timeline_cue_reveal(app: &PealayerApp, ctx: &egui::Context) -> Option<TimelineCueReveal> {
+    let reveal = ctx.data(|data| data.get_temp::<TimelineCueReveal>(timeline_cue_reveal_id()))?;
+    if app.selected_instance_ids.contains(&reveal.instance_id)
+        && timeline_cue_track_key(app, reveal.instance_id).as_deref() == Some(&reveal.track_key)
+    {
+        Some(reveal)
+    } else {
+        ctx.data_mut(|data| data.remove::<TimelineCueReveal>(timeline_cue_reveal_id()));
+        None
+    }
+}
+
+fn timeline_row_visible_for_reveal(
+    row: &TimelineTrackRow,
+    filter: &str,
+    reveal: Option<&TimelineCueReveal>,
+) -> bool {
+    reveal.is_some_and(|reveal| reveal.track_key == row.key)
+        || (row.linked && row.visible && timeline_track_matches_filter(row, filter))
+}
+
+fn effect_controls_reveal_button(ui: &mut egui::Ui, label: &str, help: &str) -> egui::Response {
+    ui.button(format!("{}  {label}", crate::ui::icons::TARGET)).on_hover_text(help)
+}
+
 fn timeline_track_picker_item_is_dimmed(row: &TimelineTrackRow) -> bool {
     !row.linked || !row.visible
 }
@@ -3452,6 +3546,7 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
         let mut timeline_dirty = false;
         let mut delete_cue = false;
         let mut jump_to_cue = false;
+        let mut reveal_cue = false;
         let mut duplicate_cue = false;
         let mut relocate_effect_id = None;
 
@@ -3495,6 +3590,12 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
             let target_output_label = app.tr("Output");
             let delete_cue_label = app.tr("Delete Cue");
             let jump_label = app.tr("Go to cue");
+            let reveal_label = app.tr("Show in timeline");
+            let reveal_help = app.tr(if show_header {
+                "Reveal this cue without seeking or changing playback"
+            } else {
+                "Keep this cue and reveal it on the timeline without seeking"
+            });
             let duplicate_label = app.tr("Duplicate cue");
             let details_label = app.tr("Technical details");
             let target_mismatch_label = app.tr("Target mismatch");
@@ -3965,6 +4066,7 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
                     .show(ui, |ui| {
                         ui.set_width(effect_controls_frame_content_width(panel_width));
                         ui.horizontal_wrapped(|ui| {
+                            reveal_cue = effect_controls_reveal_button(ui, &reveal_label, &reveal_help).clicked();
                             if ui
                                 .button(format!("{}  {jump_label}", crate::ui::icons::SKIP_BACK))
                                 .clicked()
@@ -4111,6 +4213,10 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
             {
                 app.seek_absolute(instance.start_time_ms as f64 / 1_000.0);
             }
+        }
+
+        if reveal_cue {
+            request_timeline_cue_into_view(app, ui.ctx(), id);
         }
 
         if delete_cue {
@@ -9005,6 +9111,165 @@ mod timeline_row_tests {
         assert_eq!(leaf.active, restored.tab);
     }
 
+    fn cue_reveal_fixture() -> (PealayerApp, uuid::Uuid) {
+        use crate::four_d::models::{Effect, EffectInstance};
+        let mut app = PealayerApp::default();
+        app.language = crate::config::AppLanguage::English;
+        app.playback_time = 12.5;
+        app.is_paused = true;
+        app.timeline_follow_playhead = true;
+        let effect = Effect::controller_macro("Test cue".into(), String::new(), 1_000, 7, "host".into());
+        let instance = EffectInstance::new(effect.id, 80_000);
+        let id = instance.id;
+        app.timeline.templates.push(effect);
+        app.timeline.instances.push(instance);
+        app.selected_instance_ids.insert(id);
+        (app, id)
+    }
+
+    #[test]
+    fn cue_reveal_is_view_only_and_restores_the_timeline_tab() {
+        let (mut app, id) = cue_reveal_fixture();
+        let key = timeline_cue_track_key(&app, id).expect("macro lane");
+        app.timeline.set_track_linked(key.clone(), false);
+        app.timeline.set_track_visible(&key, false);
+        app.track_muted.insert(5);
+        app.track_soloed.insert(6);
+        app.track_locked.insert(7);
+        let timeline_before = serde_json::to_value(&app.timeline).unwrap();
+        let undo_before = app.undo_stack.undo_len();
+        let zoom_before = app.timeline_zoom;
+        let path = app.dock_state.find_tab(&PealayerTab::Timeline).unwrap();
+        app.dock_state.remove_tab(path);
+        let ctx = egui::Context::default();
+        ctx.data_mut(|data| {
+            data.insert_temp(egui::Id::new("timeline_track_filter_text"), "missing".to_string());
+            data.insert_temp(timeline_cue_dialog_id(), TimelineCueDialogState {
+                instance_id: id, discard_on_cancel: true,
+                timeline_before_insert: None, undo_before_insert: None,
+            });
+        });
+        assert!(request_timeline_cue_into_view(&mut app, &ctx, id));
+        let reveal = timeline_cue_reveal(&app, &ctx).unwrap();
+        assert_eq!(reveal.instance_id, id);
+        assert_eq!(reveal.track_key, key);
+        assert!(reveal.pending_scroll);
+        let row = all_timeline_track_rows(&app).into_iter().find(|row| row.key == key).unwrap();
+        assert!(!timeline_row_visible_for_reveal(&row, "missing", None));
+        assert!(timeline_row_visible_for_reveal(&row, "missing", Some(&reveal)));
+        let path = app.dock_state.find_tab(&PealayerTab::Timeline).expect("timeline restored");
+        assert_eq!(app.dock_state.leaf(path.node_path()).unwrap().active, path.tab);
+        assert_eq!(app.playback_time, 12.5);
+        assert!(app.is_paused && app.timeline_follow_playhead);
+        assert_eq!(app.timeline_zoom, zoom_before);
+        assert_eq!(serde_json::to_value(&app.timeline).unwrap(), timeline_before);
+        assert_eq!(app.undo_stack.undo_len(), undo_before);
+        assert!(app.track_muted.contains(&5) && app.track_soloed.contains(&6) && app.track_locked.contains(&7));
+        assert_eq!(ctx.data(|data| data.get_temp::<String>(egui::Id::new("timeline_track_filter_text"))), Some(String::new()));
+        assert!(ctx.data(|data| data.get_temp::<TimelineCueDialogState>(timeline_cue_dialog_id())).is_none());
+        app.selected_instance_ids.clear();
+        assert!(timeline_cue_reveal(&app, &ctx).is_none(), "temporary view ends on deselection");
+    }
+
+    #[test]
+    fn cue_reveal_uses_authoritative_pwm_placement_and_rejects_deleted_cues() {
+        use crate::four_d::models::{Effect, EffectInstance};
+        let mut app = PealayerApp::default();
+        app.timeline.analog_tracks.push(crate::four_d::curve::AnalogTrack::new("PWM", 12));
+        let effect = Effect::direct_control("PWM cue".into(), String::new(), 1_000, "pwm.12".into(), 5_000, None);
+        let instance = EffectInstance::new(effect.id, 2_000);
+        let id = instance.id;
+        app.timeline.templates.push(effect);
+        app.timeline.instances.push(instance);
+        app.selected_instance_ids.insert(id);
+        let ctx = egui::Context::default();
+        assert!(request_timeline_cue_into_view(&mut app, &ctx, id));
+        assert_eq!(timeline_cue_reveal(&app, &ctx).unwrap().track_key, "hardware:pwm.12");
+        app.timeline.instances.clear();
+        assert!(timeline_cue_reveal(&app, &ctx).is_none());
+        assert!(!request_timeline_cue_into_view(&mut app, &ctx, id));
+        assert!(ctx.data(|data| data.get_temp::<TimelineCueReveal>(timeline_cue_reveal_id())).is_none());
+    }
+
+    #[test]
+    fn cue_reveal_actual_effect_controls_button_does_not_seek() {
+        let (mut app, id) = cue_reveal_fixture();
+        let ctx = egui::Context::default();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(500.0, 1_800.0));
+        let mut output = ctx.run_ui(egui::RawInput { screen_rect: Some(screen), ..Default::default() }, |ui| {
+            draw_effect_controls(&mut app, ui, true);
+        });
+        let position = output.shapes.iter().find_map(|shape| match &shape.shape {
+            egui::epaint::Shape::Text(text) if text.galley.job.text.contains("Show in timeline") =>
+                Some(text.pos + text.galley.size() * 0.5),
+            _ => None,
+        }).expect("actual inspector renders the action");
+        output.textures_delta.clear();
+        for pressed in [true, false] {
+            discard_ui_output(ctx.run_ui(egui::RawInput {
+                screen_rect: Some(screen),
+                events: vec![egui::Event::PointerMoved(position), egui::Event::PointerButton {
+                    pos: position, button: egui::PointerButton::Primary, pressed,
+                    modifiers: egui::Modifiers::NONE,
+                }], ..Default::default()
+            }, |ui| draw_effect_controls(&mut app, ui, true)));
+        }
+        assert_eq!(timeline_cue_reveal(&app, &ctx).unwrap().instance_id, id);
+        assert_eq!(app.playback_time, 12.5);
+        assert!(app.is_paused);
+    }
+
+    #[test]
+    fn cue_reveal_offset_handles_both_axes_long_cues_and_clamps() {
+        let content = egui::vec2(2_000.0, 1_200.0);
+        let viewport = egui::vec2(400.0, 200.0);
+        let current = egui::vec2(200.0, 100.0);
+        let inside = egui::Rect::from_min_size(egui::pos2(250.0, 150.0), egui::vec2(80.0, 32.0));
+        assert_eq!(timeline_offset_to_reveal_cue(current, inside, content, viewport), current);
+        let outside = egui::Rect::from_min_size(egui::pos2(1_000.0, 850.0), egui::vec2(80.0, 32.0));
+        let offset = timeline_offset_to_reveal_cue(current, outside, content, viewport);
+        let visible = egui::Rect::from_min_max(
+            (offset + egui::vec2(0.0, TIMELINE_RULER_HEIGHT)).to_pos2(),
+            (offset + viewport).to_pos2(),
+        );
+        assert!(visible.contains_rect(outside));
+        let long = egui::Rect::from_min_size(egui::pos2(1_000.0, 850.0), egui::vec2(800.0, 32.0));
+        assert_eq!(timeline_offset_to_reveal_cue(current, long, content, viewport).x, 976.0);
+        let first = egui::Rect::from_min_size(egui::pos2(0.0, TIMELINE_RULER_HEIGHT + 4.0), egui::vec2(8.0, 24.0));
+        assert_eq!(timeline_offset_to_reveal_cue(current, first, content, viewport), egui::Vec2::ZERO);
+        let last = egui::Rect::from_min_size(egui::pos2(1_990.0, 1_165.0), egui::vec2(8.0, 30.0));
+        assert_eq!(timeline_offset_to_reveal_cue(current, last, content, viewport), content - viewport);
+    }
+
+    #[test]
+    fn cue_reveal_scrolls_real_geometry_below_the_frozen_ruler() {
+        for width in [260.0, 700.0] {
+            let ctx = egui::Context::default();
+            let mut offset = egui::Vec2::ZERO;
+            let mut revealed = false;
+            for pass in 0..3 {
+                discard_ui_output(ctx.run_ui(egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 240.0))),
+                    ..Default::default()
+                }, |ui| {
+                    let scroll = egui::ScrollArea::both().id_salt("cue-reveal-fixture")
+                        .content_margin(egui::Margin::ZERO).scroll_offset(offset)
+                        .show_viewport(ui, |ui, viewport| {
+                            let (_, content) = ui.allocate_space(egui::vec2(2_000.0, 1_200.0));
+                            let cue = egui::Rect::from_min_size(content.min + egui::vec2(1_500.0, 850.0), egui::vec2(88.0, 32.0));
+                            let ruler = timeline_frozen_ruler_rect(content, viewport);
+                            let clip = ui.clip_rect();
+                            let body = egui::Rect::from_min_max(egui::pos2(clip.left(), ruler.bottom()), clip.max);
+                            revealed = body.contains_rect(cue);
+                            cue.translate(-content.min.to_vec2())
+                        });
+                    offset = timeline_offset_to_reveal_cue(scroll.state.offset, scroll.inner, scroll.content_size, scroll.inner_rect.size());
+                    if pass > 0 { assert!(revealed, "cue must be visible on both axes below the ruler"); }
+                }));
+            }
+        }
+    }
+
     #[test]
     fn open_or_focus_tab_during_dock_render_persists_restored_tab() {
         let mut app = PealayerApp::default();
@@ -13282,16 +13547,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 .unwrap_or_default()
                         });
                         let all_timeline_rows = all_timeline_track_rows(self.app);
+                        let cue_reveal = timeline_cue_reveal(self.app, ui.ctx());
                         let timeline_rows = all_timeline_rows
                             .iter()
                             .filter(|row| {
-                                row.linked
-                                    && row.visible
-                                    && !hardware_row_has_analog_track(self.app, row)
-                                    && timeline_track_matches_filter(
-                                        row,
-                                        &timeline_track_filter,
-                                    )
+                                !hardware_row_has_analog_track(self.app, row)
+                                    && timeline_row_visible_for_reveal(row, &timeline_track_filter, cue_reveal.as_ref())
                             })
                             .cloned()
                             .collect::<Vec<_>>();
@@ -13330,12 +13591,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         (state.linked, state.visible)
                                     });
                                 let identity = format!("P{} {}", track.channel, track.name);
-                                state.0
+                                cue_reveal.as_ref().is_some_and(|reveal| reveal.track_key == key)
+                                    || (state.0
                                     && state.1
                                     && (timeline_track_filter.trim().is_empty()
                                         || identity.to_lowercase().contains(
                                             &timeline_track_filter.trim().to_lowercase(),
-                                        ))
+                                        )))
                             })
                             .map(|track| track.id)
                             .collect::<std::collections::BTreeSet<_>>();
@@ -14710,6 +14972,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             let popup_was_open = egui::Popup::is_any_open(ui.ctx());
                             let mut keyframe_hit = false;
                             let mut keyframe_context_owned = false;
+                            let mut requested_cue_rect = None;
                             let timeline_scroll = egui::ScrollArea::both()
                                 .id_salt("timeline_scroll")
                                 .content_margin(egui::Margin::ZERO)
@@ -15296,6 +15559,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         track_y + cue_row_height - 4.0,
                                                     ),
                                                 );
+
+                                                // Capture the real placed cue before offscreen
+                                                // culling; indexes and guessed lane heights drift.
+                                                if cue_reveal.as_ref().is_some_and(|reveal| {
+                                                    reveal.pending_scroll && reveal.instance_id == instance.id
+                                                }) {
+                                                    requested_cue_rect = Some(clip_rect.translate(-rect.min.to_vec2()));
+                                                }
 
                                                 let is_active_drag = active_drag_id == Some(instance.id);
                                                 if !is_active_drag && (clip_rect.max.x < viewport_clip.min.x - 20.0 || clip_rect.min.x > viewport_clip.max.x + 20.0) {
@@ -16831,7 +17102,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             let navigation_transition_id =
                                 timeline_scroll_id.with("navigation-transition");
                             let mut active_navigation_transition = None;
-                            if self.app.timeline_animated_navigation {
+                            if self.app.timeline_animated_navigation
+                                && !cue_reveal.as_ref().is_some_and(|reveal| reveal.pending_scroll)
+                            {
                                 if let Some(transition) = ui.data(|data| {
                                     data.get_temp::<TimelineNavigationTransition>(
                                         navigation_transition_id,
@@ -16876,6 +17149,36 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         navigation_transition_id,
                                     );
                                 });
+                            }
+
+                            if let Some(reveal) = cue_reveal.as_ref().filter(|reveal| reveal.pending_scroll) {
+                                if let Some(cue_rect) = requested_cue_rect {
+                                    let target = timeline_offset_to_reveal_cue(
+                                        timeline_scroll_state.offset, cue_rect,
+                                        timeline_content_size, timeline_viewport.size(),
+                                    );
+                                    ui.data_mut(|data| {
+                                        let mut completed = reveal.clone();
+                                        completed.pending_scroll = false;
+                                        data.insert_temp(timeline_cue_reveal_id(), completed);
+                                        data.remove_temp::<TimelineNavigationTransition>(navigation_transition_id);
+                                    });
+                                    if self.app.timeline_animated_navigation {
+                                        start_timeline_navigation_transition(
+                                            ui, navigation_transition_id,
+                                            (timeline_scroll_state.offset, self.app.timeline_zoom),
+                                            (target, self.app.timeline_zoom),
+                                            self.app.timeline_navigation_transition_ms,
+                                        );
+                                    } else {
+                                        timeline_scroll_state.offset = target;
+                                        timeline_scroll_changed = true;
+                                    }
+                                    ui.ctx().request_repaint();
+                                } else {
+                                    ui.data_mut(|data| data.remove::<TimelineCueReveal>(timeline_cue_reveal_id()));
+                                    self.app.set_osd(self.app.tr("The cue or its timeline track is unavailable"));
+                                }
                             }
 
                             // Timeline-local shortcuts mirror the visible toolbar. They only
@@ -16973,6 +17276,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         ));
                                     }
                                     TimelineToolbarAction::BringPlayheadIntoView => {
+                                        ui.data_mut(|data| data.remove::<TimelineCueReveal>(timeline_cue_reveal_id()));
                                         let playhead_x =
                                             (self.app.playback_time.max(0.0) as f32 * current_zoom)
                                                 .min(timeline_content_size.x);
@@ -16988,6 +17292,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         ));
                                     }
                                     TimelineToolbarAction::FollowPlayhead => {
+                                        ui.data_mut(|data| data.remove::<TimelineCueReveal>(timeline_cue_reveal_id()));
                                         self.app.timeline_follow_playhead =
                                             !self.app.timeline_follow_playhead;
                                         self.app.request_timeline_toolbar_save(ui.ctx());
@@ -17409,6 +17714,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             timeline_scroll_changed |= middle_pan_changed;
 
                             if self.app.timeline_follow_playhead
+                                // Explicit cue inspection temporarily takes precedence over
+                                // follow, without changing its persisted preference.
+                                && cue_reveal.is_none()
                                 && !self.app.is_paused
                                 && held_timeline_pan == 0.0
                                 && !middle_pan_active

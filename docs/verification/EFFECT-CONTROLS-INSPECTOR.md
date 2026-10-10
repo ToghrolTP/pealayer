@@ -3,6 +3,33 @@
 Owning trackers: [#80](https://github.com/ToghrolTP/pealayer/issues/80),
 [Web parity #63](https://github.com/ToghrolTP/pealayer/issues/63).
 
+## Show in timeline · 10 October 2026
+
+The native inspector has a separate **Show in timeline** action beside the
+existing seeking **Go to cue**. It restores/focuses Timeline and reveals the
+selected cue on both axes using its actual rendered placement, below the frozen
+ruler. Already-visible cues do not move the viewport; long cues reveal their
+start without changing zoom. Navigation uses the existing animation preference.
+
+Hidden or unlinked rows are rendered temporarily while that cue remains selected.
+This clears the view filter but changes no track linking, visibility preference,
+mute, solo, lock, cue model, undo history or playback state. Automatic follow
+temporarily yields to cue inspection, preserving its preference; deselection,
+a different cue, Bring playhead into view or toggling Follow releases it.
+In Cue properties, this explicit navigation keeps the cue and closes the modal.
+Deleted cues or unavailable authoritative tracks produce an actionable error;
+no hardware row is invented. English/Persian labels and help are included.
+
+Five new focused regressions cover the actual inspector button, view-only
+state and restored tabs, PWM placement and stale IDs, bounded two-axis offsets,
+and real ScrollArea geometry below the ruler at narrow/wide widths. Existing
+inspector, toolbar, cue-dialog and playhead regressions also passed: 25 distinct
+tests in total. These are headless interaction/geometry tests, not human native
+visual acceptance. No Web/controller/firmware contract changed; full Web editor
+parity remains tracked separately.
+
+Package and Cafe delivery evidence follows after verification.
+
 ## Changes
 
 - Docked Effect Controls and native Cue properties continue to call one shared

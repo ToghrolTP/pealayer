@@ -263,6 +263,9 @@ identifiers. The Web direct-cue modal now follows the same timing/output groupin
 and state colors. Full controller/sequence inspector parity remains outstanding;
 this visual refinement is not that broader completion claim. See
 [scope and verification](verification/EFFECT-CONTROLS-INSPECTOR.md).
+Native Effect Controls also has a view-only **Show in timeline** action. This
+viewport navigation does not change the shared cue contract and is not a claim
+of full Web inspector/navigation parity.
 
 ## Mobile button centering
 
