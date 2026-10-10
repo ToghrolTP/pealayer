@@ -301,6 +301,13 @@ fn snapshot_hardware_sync(
                 "max_ack_round_trip_ms": plan.feedback["max_ack_round_trip_ms"],
                 "max_ack_lateness_ms": plan.feedback["max_ack_lateness_ms"],
                 "max_restore_ack_ms": plan.feedback["max_restore_ack_ms"],
+                "last_worker_gap_ms": plan.feedback["last_worker_gap_ms"],
+                "max_worker_gap_ms": plan.feedback["max_worker_gap_ms"],
+                "last_clock_read_ms": plan.feedback["last_clock_read_ms"],
+                "max_clock_read_ms": plan.feedback["max_clock_read_ms"],
+                "last_board_read_ms": plan.feedback["last_board_read_ms"],
+                "max_board_read_ms": plan.feedback["max_board_read_ms"],
+                "clock_timing": plan.feedback["clock_timing"],
                 "error": plan.feedback["error"],
             },
         }),
@@ -1032,13 +1039,17 @@ mod tests {
         plan.clock_ack_epoch = 2;
         plan.payload = serde_json::json!({"private":"do-not-export"});
         plan.feedback = serde_json::json!({"state":"faulted", "client_id":"private-publisher",
-            "armed_epoch":2, "acknowledged":0, "error":"deadline missed"});
+            "armed_epoch":2, "acknowledged":0, "error":"deadline missed",
+            "max_worker_gap_ms":54.5,
+            "clock_timing":{"feedback_interval_ms":47.0,"position_correction_ms":2.0}});
         let timeline = Mutex::new(plan);
         let first = snapshot_hardware_sync(&timeline);
         assert_eq!(first["state"], "available");
         assert_eq!(first["revision"], 7);
         assert_eq!(first["timeline"]["state"], "faulted");
         assert_eq!(first["timeline"]["error"], "deadline missed");
+        assert_eq!(first["timeline"]["max_worker_gap_ms"], 54.5);
+        assert_eq!(first["timeline"]["clock_timing"]["feedback_interval_ms"], 47.0);
         assert!(first["ack_age_ms"].as_u64().unwrap() >= 1_000);
         assert!(!first.to_string().contains("do-not-export"));
         assert!(!first.to_string().contains("private-publisher"));
