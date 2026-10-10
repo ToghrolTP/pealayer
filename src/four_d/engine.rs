@@ -76,6 +76,9 @@ impl HardwareTransport {
         if matches!(command, Command::RelaySet { id: 0, .. }) {
             return Err("relay ID must be non-zero".to_string());
         }
+        if matches!(command, Command::MotionSide { side, motion } if side > 1 || motion > 2) {
+            return Err("motion side or direction is outside the controller contract".to_string());
+        }
         match self {
             Self::Controller(client) => client.send_command(command),
             Self::DirectSerial { port, sequence } => {
@@ -325,6 +328,15 @@ pub struct CompiledAction {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CompiledMotionAction {
+    pub time_ms: u64,
+    /// Zero-based PCController motion side.
+    pub side: u8,
+    /// 0 = Stop, 1 = Up, 2 = Down.
+    pub motion: u8,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct CompiledControllerMacro {
     pub time_ms: u64,
     pub id: u64,
@@ -433,6 +445,7 @@ impl PendingControllerIntents {
 
 pub enum EngineMessage {
     UpdateQueue(Vec<CompiledAction>),
+    UpdateMotionQueue(Vec<CompiledMotionAction>),
     UpdateControllerMacros(Vec<CompiledControllerMacro>),
     UpdateControllerStripEffects(Vec<CompiledControllerStripEffect>),
     UpdateAnalogTracks(Vec<crate::four_d::curve::AnalogTrack>),
@@ -867,6 +880,8 @@ pub fn spawn_engine() -> EngineHandle {
     thread::spawn(move || {
         let mut queue: Vec<CompiledAction> = Vec::new();
         let mut current_queue_index = 0;
+        let mut motion_queue: Vec<CompiledMotionAction> = Vec::new();
+        let mut current_motion_queue_index = 0;
         let mut controller_macros = Vec::<CompiledControllerMacro>::new();
         let mut current_controller_macro_index = 0;
         let mut controller_strip_effects = Vec::<CompiledControllerStripEffect>::new();
@@ -1114,6 +1129,12 @@ pub fn spawn_engine() -> EngineHandle {
                         let current_time = engine_time.load(Ordering::Relaxed);
                         current_queue_index = queue.partition_point(|x| x.time_ms < current_time);
                     }
+                    EngineMessage::UpdateMotionQueue(new_queue) => {
+                        motion_queue = new_queue;
+                        let current_time = engine_time.load(Ordering::Relaxed);
+                        current_motion_queue_index =
+                            motion_queue.partition_point(|action| action.time_ms < current_time);
+                    }
                     EngineMessage::UpdateControllerMacros(new_queue) => {
                         controller_macros = new_queue;
                         let current_time = engine_time.load(Ordering::Relaxed);
@@ -1220,6 +1241,8 @@ pub fn spawn_engine() -> EngineHandle {
                             println!("[{}] ALL_OFF (Seek to {}ms)", port_name, time);
                         }
                         current_queue_index = queue.partition_point(|x| x.time_ms < time);
+                        current_motion_queue_index =
+                            motion_queue.partition_point(|action| action.time_ms < time);
                         current_controller_macro_index =
                             controller_macros.partition_point(|cue| cue.time_ms < time);
                         current_controller_strip_effect_index = if resume_strip {
@@ -1637,6 +1660,27 @@ pub fn spawn_engine() -> EngineHandle {
                 }
 
                 // Process all actions that are due
+                while current_motion_queue_index < motion_queue.len() {
+                    let action = &motion_queue[current_motion_queue_index];
+                    if action.time_ms > current_time {
+                        break;
+                    }
+                    if connected {
+                        if let Some(ref mut transport) = active_transport {
+                            if let Err(error) = transport.send(Command::MotionSide {
+                                side: action.side,
+                                motion: action.motion,
+                            }) {
+                                if let Ok(mut guard) = engine_conn_error.lock() {
+                                    *guard = Some(error);
+                                }
+                                engine_connected.store(false, Ordering::Relaxed);
+                            }
+                        }
+                    }
+                    current_motion_queue_index += 1;
+                }
+
                 while current_queue_index < queue.len() {
                     let action = &queue[current_queue_index];
                     if action.time_ms <= current_time {
@@ -1890,6 +1934,62 @@ pub fn compile_timeline(
     compiled
 }
 
+/// Compile semantic seat cues independently from relay edges so both live
+/// playback and prepared playback use PCController's interlocked side command.
+pub fn compile_direct_motion_cues(
+    timeline: &Timeline,
+    muted: &std::collections::BTreeSet<u8>,
+    soloed: &std::collections::BTreeSet<u8>,
+) -> Vec<CompiledMotionAction> {
+    let has_solo = !soloed.is_empty()
+        || timeline.analog_tracks.iter().any(|track| track.enabled && track.soloed);
+    let mut compiled = Vec::new();
+
+    for side in 0..=1_u8 {
+        let relay_ids = if side == 0 { [1, 2] } else { [3, 4] };
+        if relay_ids.iter().any(|relay| muted.contains(relay))
+            || (has_solo && !relay_ids.iter().any(|relay| soloed.contains(relay)))
+        {
+            continue;
+        }
+
+        let times = timeline.instances.iter().filter_map(|instance| {
+            let effect = timeline.templates.iter().find(|effect| effect.id == instance.effect_id)?;
+            let direct = effect.direct_control.as_ref()?;
+            let motion = direct.motion.filter(|motion| motion.side == side)?;
+            if !timeline.track_state(&super::models::hardware_timeline_track_key(&direct.control_key)).linked {
+                return None;
+            }
+            Some((instance.start_time_ms, instance.start_time_ms.saturating_add(effect.duration_ms), motion.direction))
+        }).collect::<Vec<_>>();
+        if times.is_empty() { continue; }
+
+        let mut interesting = times.iter().flat_map(|(start, end, _)| [*start, *end]).collect::<Vec<_>>();
+        interesting.sort_unstable();
+        interesting.dedup();
+
+        let mut previous = None;
+        for time_ms in interesting {
+            // Later timeline instances are visually and semantically on top.
+            let desired = times.iter().enumerate()
+                .filter(|(_, (start, end, _))| time_ms >= *start && time_ms < *end)
+                .max_by_key(|(index, _)| *index)
+                .map(|(_, (_, _, direction))| *direction);
+            if desired != previous {
+                compiled.push(CompiledMotionAction {
+                    time_ms,
+                    side,
+                    motion: desired.map_or(0, |direction| direction.controller_value()),
+                });
+                previous = desired;
+            }
+        }
+    }
+
+    compiled.sort_by_key(|action| (action.time_ms, action.side));
+    compiled
+}
+
 pub fn compile_direct_pwm_cues(timeline: &Timeline) -> Vec<CompiledDirectPwmCue> {
     let any_solo = timeline.analog_tracks.iter().any(|track| track.enabled && track.soloed);
     timeline
@@ -1999,7 +2099,7 @@ fn spawn_peer_engine() -> EngineHandle {
                         EngineMessage::LiveActuatorOverride {channel,value}=>{let _=client.queue("/api/peer/hardware",serde_json::to_value(Command::PwmSet {channel,value}).unwrap_or_default());}
                         // Only the authority schedules outputs. Local cue edits
                         // are sent through the shared timeline session endpoint.
-                        EngineMessage::UpdateQueue(_) | EngineMessage::UpdateControllerMacros(_) | EngineMessage::UpdateControllerStripEffects(_) | EngineMessage::UpdateAnalogTracks(_) | EngineMessage::UpdateDirectPwmCues(_) | EngineMessage::Seek(_) | EngineMessage::ReconfigureEndpoint {..}=>{}
+                        EngineMessage::UpdateQueue(_) | EngineMessage::UpdateMotionQueue(_) | EngineMessage::UpdateControllerMacros(_) | EngineMessage::UpdateControllerStripEffects(_) | EngineMessage::UpdateAnalogTracks(_) | EngineMessage::UpdateDirectPwmCues(_) | EngineMessage::Seek(_) | EngineMessage::ReconfigureEndpoint {..}=>{}
                     }
             }
             if !connected.load(Ordering::Relaxed){pending.clear();deadlines.clear();}
@@ -2350,6 +2450,46 @@ mod tests {
         assert_eq!(compiled[0].time_ms, 2_000);
         assert_eq!(compiled[0].relay_id, 5);
         assert!(!compiled[0].state);
+    }
+
+    #[test]
+    fn semantic_motion_cue_compiles_to_interlocked_side_start_and_stop() {
+        let mut timeline = Timeline::new();
+        let mut effect = Effect::direct_control(
+            "Seat Left · Up".into(),
+            String::new(),
+            1_250,
+            "seat.a".into(),
+            10_000,
+            None,
+        );
+        effect.direct_control.as_mut().unwrap().motion =
+            Some(crate::four_d::models::DirectMotionCue {
+                side: 0,
+                direction: crate::four_d::models::DirectMotionDirection::Up,
+            });
+        let effect_id = effect.id;
+        timeline.templates.push(effect);
+        timeline
+            .instances
+            .push(EffectInstance::new(effect_id, 2_000));
+
+        assert_eq!(
+            compile_direct_motion_cues(&timeline, &Default::default(), &Default::default()),
+            vec![
+                CompiledMotionAction {
+                    time_ms: 2_000,
+                    side: 0,
+                    motion: 1,
+                },
+                CompiledMotionAction {
+                    time_ms: 3_250,
+                    side: 0,
+                    motion: 0,
+                },
+            ]
+        );
+        assert!(compile_timeline(&timeline, &Default::default(), &Default::default()).is_empty());
     }
 
     #[test]

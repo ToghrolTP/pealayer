@@ -1,7 +1,7 @@
 # Hardware cue modes
 
-A direct cue controls one advertised relay or PWM output. Duration follows
-execution behavior, not the lane/group name. A finite recorded effect is a
+A direct cue controls one advertised relay, PWM output, or semantic seat-motion
+control. Duration follows execution behavior, not the lane/group name. A finite recorded effect is a
 separate reusable program: its intrinsic duration remains move-only. Streamed
 strip lighting instead has an authored active window and can be resized.
 
@@ -10,18 +10,20 @@ strip lighting instead has an authored active window and can be resized.
 | Set and keep | Compact rounded marker, value and `→ ∞`, move grip, no resize edges | Sends the chosen value at its start. No automatic exit. The next command or a safety stop changes it. |
 | Timed hold | Duration block with two resize edges | Sends the start value, then the explicit **On exit** value at the end. Default exit is Off/0%. |
 | PWM ramp | Duration block with a gradient and two resize edges | Transitions linearly from the start percentage to **Ramp to** percentage; retains that endpoint afterward. |
+| Seat motion | Duration block with two resize edges | Sends the advertised side Up or Down at its start and an interlocked Stop at its end. It never exposes the underlying relay pair as an authoring detail. |
 | Finite recording | Intrinsic-duration block, move only | Plays the source sequence once, including any finite repeated steps already inside it. Changing placement must not stretch or repeat the recording. |
 | Streamed strip lighting | Duration block with two resize edges | Runs the referenced strip program for this placement's active window, then stops it. Resizing does not change the source's period or playback speed. |
 
 ## Author and edit
 
-1. Select a linked relay/PWM track. Double-click its lane, or use Add cue.
-2. Choose Set and keep, Timed hold, or (PWM only) PWM ramp.
+1. Select a linked relay/PWM or advertised seat track. Double-click its lane, or use Add cue.
+2. Choose Set and keep, Timed hold, or (PWM only) PWM ramp. Seat cues choose Up or Down and are always timed.
 3. Set the exact start and value. Timed modes also expose duration and exit value.
 4. Drag the cue to move it. Only timed modes have edge handles. A persistent
    marker stays the same screen width when zoom changes; its right edge is not
    a second timestamp and is not a magnetic snap target.
-5. Native double-click/Manage reveals Effect Controls. Web double-click or the
+5. Native double-click uses the configured **Open cue properties in** preference:
+   either the modal editor or the Effect Controls panel. Double-clicking an existing cue uses the same destination. A newly inserted modal cue is removed, with its undo history restored, when **Discard cue** or Escape is used; panel mode keeps the inserted cue immediately. Web double-click or the
    cue context menu opens its direct-cue editor. Jump to cue start is explicit;
    clicking/editing a Web cue does not seek the media.
 
@@ -36,6 +38,8 @@ bypass an emergency stop or guarantee a physical state after disconnection.
 The persisted `direct_control` model contains `control_key`, `value_basis_points`,
 `behavior` (`set-keep`, `hold`, `ramp`) and `end_value_basis_points`. Percentages
 are integer basis points, 0..10000. Relay values use Off/On; ramps require PWM.
+Semantic motion cues additionally store the side and Up/Down direction; they
+compile through PCController's side-motion command rather than raw relay edges.
 The duration field is retained as an editing value when switching modes, but is
 ignored for Set and keep execution, hit testing, resize and snapping.
 
@@ -83,7 +87,8 @@ override that channel's underlying analog curve from their first edge onward.
 
 Source includes fixtures for persistent markers, relay persistence/mute/unlink,
 standalone Off, late single-edge PWM, exact timed exits and ramp endpoints.
-The behavior-based duration follow-up passed 716 Rust library tests, including
+The current direct-cue follow-up passed all 721 Rust library cases (720 passed,
+one pre-existing ignored), including
 stored-policy priority, controller drop/reuse, independent placement edits,
 catalog refresh, prepared strip duration and actual egui pointer hover/resize
 coverage. Web application-parity and responsive-layout source guardrails passed.
@@ -95,7 +100,7 @@ persistence and engine publication. Persistence-capable test runs use a parent-
 provided isolated config path, never the user's OS configuration/Registry.
 These are not physical-hardware or installed-UI acceptance, and source guards
 are not interactive phone/tablet/desktop browser proof.
-The consolidation owner must review the focused PR, build final main, deploy
-using the host-specific runtime through the graceful updater, and verify the
-native/Web gestures and safe output timing on Cafe. No motion outputs were
-actuated in this pass.
+The clean merged commit is packaged on David-PC and delivered through the
+graceful updater with Cafe's host-specific runtime retained. Native/Web gesture
+acceptance and safe physical output timing remain distinct checks. No motion
+outputs were actuated in this pass.

@@ -887,6 +887,7 @@ pub fn run() -> eframe::Result {
                 compact_hardware_controls: loaded_config.compact_hardware_controls,
                 compact_timeline_tracks: loaded_config.compact_timeline_tracks,
                 timeline_hide_cue_text_overflow: loaded_config.timeline_hide_cue_text_overflow,
+                timeline_cue_editor_presentation: loaded_config.timeline_cue_editor_presentation,
                 timeline_header_wheel_vertical_scroll: loaded_config
                     .timeline_header_wheel_vertical_scroll,
                 timeline_plain_wheel_action: loaded_config.timeline_plain_wheel_action,

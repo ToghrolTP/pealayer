@@ -44,6 +44,17 @@ pub enum TimelineWheelBehavior {
     None,
 }
 
+/// Where timeline cue properties open after insertion or double-click.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TimelineCueEditorPresentation {
+    /// Keep the author in context with a focused, blocking properties dialog.
+    #[default]
+    Dialog,
+    /// Reveal the persistent Effect Controls workspace panel.
+    Panel,
+}
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 pub struct TimelineWheelPreferences {
     pub plain: TimelineWheelBehavior,
@@ -815,6 +826,7 @@ pub struct AppConfig {
     /// Keep cue labels inside their clip bounds and elide long text. Disable
     /// this to preserve the legacy overflow behavior for users who prefer it.
     pub timeline_hide_cue_text_overflow: bool,
+    pub timeline_cue_editor_presentation: TimelineCueEditorPresentation,
     pub timeline_header_wheel_vertical_scroll: bool,
     pub timeline_plain_wheel_action: TimelineWheelBehavior,
     pub timeline_ctrl_wheel_action: TimelineWheelBehavior,
@@ -999,6 +1011,7 @@ impl Default for AppConfig {
             compact_hardware_controls: false,
             compact_timeline_tracks: true,
             timeline_hide_cue_text_overflow: true,
+            timeline_cue_editor_presentation: TimelineCueEditorPresentation::Dialog,
             timeline_header_wheel_vertical_scroll: true,
             timeline_plain_wheel_action: TimelineWheelBehavior::VerticalScroll,
             timeline_ctrl_wheel_action: TimelineWheelBehavior::Zoom,

@@ -264,11 +264,16 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
   const [directCueDuration, setDirectCueDuration] = useState(1);
   const [directCueStart, setDirectCueStart] = useState(0);
   const [editingDirectCue, setEditingDirectCue] = useState<string | null>(null);
+  const isMotionControl = (controlKey: string | null) => {
+    const control = state.hardware_details?.controls.find((item) => item.key === controlKey);
+    return control?.kind === 'motion' || control?.kind === 'seat';
+  };
   const openDirectCue = (controlKey: string, cue?: NonNullable<PlayerState['cues']>[number]) => {
+    const motion = isMotionControl(controlKey);
     setDirectCueControl(controlKey);
     setEditingDirectCue(cue?.id ?? null);
-    setDirectCuePercent((cue?.value_basis_points ?? 5000) / 100);
-    setDirectCueBehavior(cue?.behavior ?? 'set-keep');
+    setDirectCuePercent(cue?.motion_direction === 'down' ? 0 : (cue?.value_basis_points ?? (motion ? 10000 : 5000)) / 100);
+    setDirectCueBehavior(motion ? 'hold' : (cue?.behavior ?? 'set-keep'));
     setDirectCueEndPercent((cue?.end_value_basis_points ?? 0) / 100);
     setDirectCueDuration((cue?.duration_ms ?? 1000) / 1000);
     setDirectCueStart((cue?.start_time_ms ?? currentSeconds * 1000) / 1000);
@@ -300,7 +305,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
   const activeSeek = seek.value;
   const directControls = useMemo(
     () => (state.hardware_details?.controls ?? []).filter((control) =>
-      !control.hidden && (control.kind === 'relay' || control.kind === 'pwm' || control.kind === 'mosfet')),
+      !control.hidden && ['relay', 'pwm', 'mosfet', 'motion', 'seat'].includes(control.kind)),
     [state.hardware_details?.controls],
   );
   const timelineLanes = useMemo(() => {
@@ -964,7 +969,13 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                     <Dropdown
                       trigger={['click']}
                       menu={{
-                        items: directControl.kind === 'relay'
+                        items: ['motion', 'seat'].includes(directControl.kind)
+                          ? [
+                            { key: '10000', label: tr(locale, 'Up') },
+                            { key: '0', label: tr(locale, 'Down') },
+                            { key: 'custom', label: tr(locale, 'Timed cue...') },
+                          ]
+                          : directControl.kind === 'relay'
                           ? [
                             { key: '10000', label: tr(locale, 'On') },
                             { key: '0', label: tr(locale, 'Off') },
@@ -981,7 +992,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                               value_basis_points: Number(key),
                               start_time_ms: Math.max(0, Math.round(currentSeconds * 1000)),
                               duration_ms: 1000,
-                              behavior: 'set-keep',
+                              behavior: ['motion', 'seat'].includes(directControl.kind) ? 'hold' : 'set-keep',
                             });
                           }
                         },
@@ -1065,7 +1076,11 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                       }}
                     >
                       {cue.resizable && <span className="timeline-cue__resize timeline-cue__resize--left" aria-hidden="true" />}
-                      <span>{cue.behavior === 'set-keep' ? `${cue.control_key?.startsWith('relay.') ? (Number(cue.value_basis_points) >= 5000 ? 'On' : 'Off') : `${Number(cue.value_basis_points) / 100}%`} → ∞` : cue.name}</span>
+                      <span>{cue.motion_direction
+                        ? `${tr(locale, cue.motion_direction === 'up' ? 'Up' : 'Down')} → ${tr(locale, 'Stop')}`
+                        : cue.behavior === 'set-keep'
+                          ? `${cue.control_key?.startsWith('relay.') ? (Number(cue.value_basis_points) >= 5000 ? 'On' : 'Off') : `${Number(cue.value_basis_points) / 100}%`} → ∞`
+                          : cue.name}</span>
                       <Button
                         className="timeline-cue__delete"
                         type="text"
@@ -1106,8 +1121,8 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
             value_basis_points: Math.round(directCuePercent * 100),
             start_time_ms: Math.max(0, Math.round(directCueStart * 1000)),
             duration_ms: Math.max(50, Math.round(directCueDuration * 1000)),
-            behavior: directCueBehavior,
-            end_value_basis_points: Math.round(directCueEndPercent * 100),
+            behavior: isMotionControl(directCueControl) ? 'hold' : directCueBehavior,
+            end_value_basis_points: isMotionControl(directCueControl) ? 0 : Math.round(directCueEndPercent * 100),
           });
           if (!saved) return;
           if (editingDirectCue && !await sendCmd('pealayer.timeline.effect.update', {
@@ -1132,21 +1147,25 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
             <InputNumber aria-label={tr(locale, 'Start time')} addonAfter="s" min={0} max={Math.max(durationSeconds, directCueStart, 60)} step={.001} value={directCueStart} onChange={(value) => setDirectCueStart(Number(value ?? 0))} />
           </label>
           <label>{tr(locale, 'Duration')}
-            {directCueBehavior === 'set-keep' ? <span className="cue-inspector__read-only">{tr(locale, 'Until next command')}</span> :
+            {directCueBehavior === 'set-keep' && !isMotionControl(directCueControl) ? <span className="cue-inspector__read-only">{tr(locale, 'Until next command')}</span> :
               <InputNumber aria-label={tr(locale, 'Duration')} addonAfter="s" min={.05} max={3600} step={.05} value={directCueDuration} onChange={(value) => setDirectCueDuration(Number(value ?? 1))} />}
           </label>
         </div>
-        {directCueBehavior !== 'set-keep' && <div className="cue-inspector__detail">{tr(locale, 'Ends at')} {formatTime(directCueStart + directCueDuration)}</div>}
+        {(directCueBehavior !== 'set-keep' || isMotionControl(directCueControl)) && <div className="cue-inspector__detail">{tr(locale, 'Ends at')} {formatTime(directCueStart + directCueDuration)}</div>}
         </section>
         <section className="cue-inspector__section">
-        <h3>{configuredEffectGlyph(directCueControl?.startsWith('relay.') ? 'plug' : 'lightbulb')} {tr(locale, 'Direct channel value')}</h3>
+        <h3>{configuredEffectGlyph(isMotionControl(directCueControl) ? 'seat' : directCueControl?.startsWith('relay.') ? 'plug' : 'lightbulb')} {tr(locale, isMotionControl(directCueControl) ? 'Motion direction' : 'Direct channel value')}</h3>
+        {!isMotionControl(directCueControl) && <>
         <label className="cue-inspector__field">{tr(locale, 'Behavior')}
         <Select aria-label={tr(locale, 'Cue behavior')} style={{ width: '100%' }} value={directCueBehavior} onChange={setDirectCueBehavior}
           options={[{ value: 'set-keep', label: tr(locale, 'Set and keep') }, { value: 'hold', label: tr(locale, 'Timed hold') },
             ...(directCueControl?.startsWith('pwm.') ? [{ value: 'ramp', label: tr(locale, 'PWM ramp') }] : [])]} />
         </label>
-        <label className="cue-inspector__field">{tr(locale, directCueBehavior === 'ramp' ? 'Start value' : 'Value')}
-        {directCueControl?.startsWith('relay.') ? <div className="cue-inspector__states" role="group" aria-label={tr(locale, 'State')}>
+        </>}
+        <label className="cue-inspector__field">{tr(locale, isMotionControl(directCueControl) ? 'Direction' : directCueBehavior === 'ramp' ? 'Start value' : 'Value')}
+        {isMotionControl(directCueControl) ? <Select aria-label={tr(locale, 'Direction')} style={{ width: '100%' }} value={directCuePercent >= 50 ? 'up' : 'down'}
+          onChange={(value) => setDirectCuePercent(value === 'up' ? 100 : 0)} options={[{ value: 'up', label: tr(locale, 'Up') }, { value: 'down', label: tr(locale, 'Down') }]} /> :
+        directCueControl?.startsWith('relay.') ? <div className="cue-inspector__states" role="group" aria-label={tr(locale, 'State')}>
           <Button icon={<PoweroffOutlined />} aria-pressed={directCuePercent >= 50} className={directCuePercent >= 50 ? 'cue-inspector__state--on' : ''} onClick={() => setDirectCuePercent(100)}>{tr(locale, 'On')}</Button>
           <Button icon={<StopOutlined />} aria-pressed={directCuePercent < 50} className={directCuePercent < 50 ? 'cue-inspector__state--off' : ''} onClick={() => setDirectCuePercent(0)}>{tr(locale, 'Off')}</Button>
         </div> :
@@ -1171,7 +1190,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
         </Space.Compact>
         }
         </label>
-        {directCueBehavior !== 'set-keep' && <>
+        {directCueBehavior !== 'set-keep' && !isMotionControl(directCueControl) && <>
           <label className="cue-inspector__field">{tr(locale, directCueBehavior === 'ramp' ? 'Ramp to' : 'On exit')}
           {directCueControl?.startsWith('relay.') ? <Select aria-label={tr(locale, 'On exit')} value={directCueEndPercent}
             onChange={setDirectCueEndPercent} options={[{ value: 0, label: tr(locale, 'Exit: Off') }, { value: 100, label: tr(locale, 'Exit: On') }]} /> :

@@ -1822,12 +1822,18 @@ fn effect_controls_kind(
 ) -> (&'static str, &'static str, &'static str) {
     if let Some(direct) = effect.direct_control.as_ref() {
         (
-            if direct.control_key.starts_with("relay.") {
+            if direct.motion.is_some() {
+                crate::ui::icons::SEAT
+            } else if direct.control_key.starts_with("relay.") {
                 crate::ui::icons::PLUG
             } else {
                 crate::ui::icons::SLIDERS_HORIZONTAL
             },
-            "Direct channel cue",
+            if direct.motion.is_some() {
+                "Motion cue"
+            } else {
+                "Direct channel cue"
+            },
             "Timeline effect",
         )
     } else if effect.audio_effect.is_some() {
@@ -2359,8 +2365,15 @@ struct TimelineTrackRow {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum TimelineCueDraftAction {
-    Relay { enabled: bool },
-    Pwm { value_basis_points: u16 },
+    Relay {
+        enabled: bool,
+    },
+    Pwm {
+        value_basis_points: u16,
+    },
+    Motion {
+        direction: crate::four_d::models::DirectMotionDirection,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -2381,6 +2394,10 @@ impl TimelineCueDraft {
                 if enabled { 10_000 } else { 0 }
             }
             TimelineCueDraftAction::Pwm { value_basis_points } => value_basis_points,
+            TimelineCueDraftAction::Motion { direction } => match direction {
+                crate::four_d::models::DirectMotionDirection::Up => 10_000,
+                crate::four_d::models::DirectMotionDirection::Down => 0,
+            },
         }
     }
 }
@@ -3242,6 +3259,20 @@ fn timeline_cue_placement(
             });
     }
 
+    if let Some(direct) = effect.direct_control.as_ref()
+        && direct.motion.is_some()
+    {
+        return rows
+            .iter()
+            .position(|row| row.kind == TimelineTrackKind::Hardware(direct.control_key.clone()))
+            .map(|track_index| TimelineCuePlacement {
+                track_index,
+                relay_id: None,
+                analog_index: None,
+                selected_track_key: None,
+            });
+    }
+
     let relay_id = effect.actions.first().map(|action| action.relay_id)?;
     timeline_row_for_relay(rows, relay_id).map(|track_index| TimelineCuePlacement {
         track_index,
@@ -3265,6 +3296,59 @@ fn is_pwm_control(control: &crate::four_d::controller::HardwareControl) -> bool 
 
 fn timeline_cue_dialog_id() -> egui::Id {
     egui::Id::new("timeline-add-cue-dialog")
+}
+
+#[derive(Clone, Debug)]
+struct TimelineCueDialogState {
+    instance_id: uuid::Uuid,
+    discard_on_cancel: bool,
+    timeline_before_insert: Option<crate::four_d::history::TimelineSnapshot>,
+    undo_before_insert: Option<crate::four_d::history::UndoStack>,
+}
+
+fn open_timeline_cue_editor(
+    app: &mut PealayerApp,
+    context: &egui::Context,
+    state: TimelineCueDialogState,
+) {
+    app.selected_instance_ids.clear();
+    app.selected_instance_ids.insert(state.instance_id);
+    app.selected_keyframes.clear();
+    app.selected_timeline_keyframe = None;
+    match app.timeline_cue_editor_presentation {
+        crate::config::TimelineCueEditorPresentation::Dialog => {
+            context.data_mut(|data| data.insert_temp(timeline_cue_dialog_id(), state));
+        }
+        crate::config::TimelineCueEditorPresentation::Panel => {
+            app.open_or_focus_tab(PealayerTab::EffectControls);
+            app.trigger_effect_controls_ping(context.input(|input| input.time));
+        }
+    }
+    context.request_repaint();
+}
+
+fn discard_inserted_timeline_cue(
+    app: &mut PealayerApp,
+    instance_id: uuid::Uuid,
+    timeline_before_insert: Option<crate::four_d::history::TimelineSnapshot>,
+    undo_before_insert: Option<crate::four_d::history::UndoStack>,
+) {
+    if let Some(snapshot) = timeline_before_insert {
+        app.restore_timeline_snapshot(snapshot);
+    } else {
+        let effect_id = app.timeline.instances.iter()
+            .find(|instance| instance.id == instance_id)
+            .map(|instance| instance.effect_id);
+        app.timeline.instances.retain(|instance| instance.id != instance_id);
+        if let Some(effect_id) = effect_id
+            && !app.timeline.instances.iter().any(|instance| instance.effect_id == effect_id)
+        {
+            app.timeline.templates.retain(|template| template.id != effect_id);
+        }
+    }
+    if let Some(undo) = undo_before_insert { app.undo_stack = undo; }
+    app.selected_instance_ids.remove(&instance_id);
+    app.commit_timeline_edit();
 }
 
 fn direct_cue_behavior_editor(ui: &mut egui::Ui, behavior: &mut crate::four_d::models::DirectCueBehavior,
@@ -3395,8 +3479,12 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
             let fixed_duration_help = app.tr("Duration is defined by the recorded effect");
             let direct_channel_value_label = app.tr("Direct channel value");
             let state_label = app.tr("State");
+            let direction_label = app.tr("Direction");
             let on_label = app.tr("On");
             let off_label = app.tr("Off");
+            let up_label = app.tr("Up");
+            let down_label = app.tr("Down");
+            let motion_stop_help = app.tr("Stops automatically at the cue end");
             let live_output_on_label = app.tr("Live output on");
             let live_output_off_label = app.tr("Live output off");
             let hardware_target_label = app.tr("Hardware target");
@@ -3549,10 +3637,13 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
                 let current_relay_id = template.actions.first().map(|a| a.relay_id).unwrap_or(0);
                 if let Some(direct) = template.direct_control.as_ref() {
                     let is_relay = direct.control_key.starts_with("relay.");
+                    let is_motion = direct.motion.is_some();
                     effect_controls_card(
                         ui,
                         panel_width,
-                        if is_relay {
+                        if is_motion {
+                            crate::ui::icons::SEAT
+                        } else if is_relay {
                             crate::ui::icons::PLUG
                         } else {
                             crate::ui::icons::LIGHTBULB
@@ -3564,9 +3655,45 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
                             let mut value = direct.value_basis_points;
                             let mut behavior = direct.behavior;
                             let mut end = direct.end_value_basis_points;
-                            direct_cue_behavior_editor(ui, &mut behavior, !is_relay);
-                            ui.add_space(6.0);
-                            if is_relay {
+                            if let Some(motion) = direct.motion {
+                                let mut direction = motion.direction;
+                                ui.label(egui::RichText::new(&direction_label).small().weak());
+                                egui::ComboBox::from_id_salt("direct-motion-direction")
+                                    .width(ui.available_width())
+                                    .selected_text(match direction {
+                                        crate::four_d::models::DirectMotionDirection::Up => {
+                                            &up_label
+                                        }
+                                        crate::four_d::models::DirectMotionDirection::Down => {
+                                            &down_label
+                                        }
+                                    })
+                                    .show_ui(ui, |ui| {
+                                        ui.selectable_value(
+                                            &mut direction,
+                                            crate::four_d::models::DirectMotionDirection::Up,
+                                            &up_label,
+                                        );
+                                        ui.selectable_value(
+                                            &mut direction,
+                                            crate::four_d::models::DirectMotionDirection::Down,
+                                            &down_label,
+                                        );
+                                    });
+                                ui.add_space(5.0);
+                                ui.label(egui::RichText::new(&motion_stop_help).small().weak());
+                                value = if direction
+                                    == crate::four_d::models::DirectMotionDirection::Up
+                                {
+                                    10_000
+                                } else {
+                                    0
+                                };
+                            } else {
+                                direct_cue_behavior_editor(ui, &mut behavior, !is_relay);
+                                ui.add_space(6.0);
+                            }
+                            if !is_motion && is_relay {
                                 ui.horizontal(|ui| {
                                     ui.label(egui::RichText::new(&state_label).weak());
                                     ui.with_layout(
@@ -3601,15 +3728,20 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
                                 });
                                 ui.add_space(5.0);
                                 effect_controls_relay_state(ui, &mut value, &on_label, &off_label);
-                            } else {
+                            } else if !is_motion {
                                 ui.label(egui::RichText::new(if behavior == crate::four_d::models::DirectCueBehavior::Ramp {
                                     "Start value" } else { "Value" }).small().weak());
                                 let mut percent = f64::from(value) / 100.0;
                                 draw_pwm_editor_row(ui, &mut percent, true);
                                 value = (percent.clamp(0.0, 100.0) * 100.0).round() as u16;
                             }
-                            direct_cue_exit_editor(ui, behavior, &mut end, !is_relay);
-                            if behavior != direct.behavior || end != direct.end_value_basis_points {
+                            if !is_motion {
+                                direct_cue_exit_editor(ui, behavior, &mut end, !is_relay);
+                            }
+                            if !is_motion
+                                && (behavior != direct.behavior
+                                    || end != direct.end_value_basis_points)
+                            {
                                 update_direct_behavior_to = Some((value, behavior, end));
                             }
                             if value != direct.value_basis_points {
@@ -4206,10 +4338,12 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
 
 fn direct_cue_marker_caption(effect: &crate::four_d::models::Effect) -> String {
     let Some(cue) = &effect.direct_control else { return effect.name.clone(); };
-    let value = if cue.control_key.starts_with("relay.") {
+    let value = if let Some(motion) = cue.motion {
+        motion.direction.label().to_string()
+    } else if cue.control_key.starts_with("relay.") {
         if cue.value_basis_points >= 5_000 { "On".to_string() } else { "Off".to_string() }
     } else { format!("{:.1}%", f32::from(cue.value_basis_points) / 100.0) };
-    format!("{value}  → ∞")
+    if cue.motion.is_some() { format!("{value}  → Stop") } else { format!("{value}  → ∞") }
 }
 
 fn paint_hardware_cue(painter: &egui::Painter, rect: egui::Rect, effect: &crate::four_d::models::Effect,
@@ -4278,7 +4412,11 @@ fn timeline_cue_draft_for_row(
         return Err(format!("Track '{}' is locked", row.name));
     }
 
-    let action = if relay_id_from_control_key(control_key).is_some() {
+    let action = if let Some(_) = motion_side_for_control(&control) {
+        TimelineCueDraftAction::Motion {
+            direction: crate::four_d::models::DirectMotionDirection::Up,
+        }
+    } else if relay_id_from_control_key(control_key).is_some() {
         TimelineCueDraftAction::Relay { enabled: true }
     } else if is_pwm_control(&control) {
         TimelineCueDraftAction::Pwm {
@@ -4296,7 +4434,11 @@ fn timeline_cue_draft_for_row(
         control_key: control_key.to_string(),
         start_time_ms,
         duration_ms: 1_000,
-        behavior: crate::four_d::models::DirectCueBehavior::SetKeep,
+        behavior: if matches!(action, TimelineCueDraftAction::Motion { .. }) {
+            crate::four_d::models::DirectCueBehavior::Hold
+        } else {
+            crate::four_d::models::DirectCueBehavior::SetKeep
+        },
         end_value_basis_points: 0,
         action,
     })
@@ -4312,6 +4454,8 @@ fn request_timeline_cue_dialog(
         app.set_osd(app.tr("Select a relay or PWM timeline track first"));
         return;
     };
+    let timeline_before_insert = app.snapshot_timeline();
+    let undo_before_insert = app.undo_stack.clone();
     let result = timeline_cue_draft_for_row(app, &row, start_time_ms).and_then(|draft| {
         app.add_configured_direct_control_cue(
             &draft.control_key, draft.value_basis_points(), draft.start_time_ms,
@@ -4320,43 +4464,67 @@ fn request_timeline_cue_dialog(
     });
     match result {
         Ok(instance_id) => {
-            // Closing properties never duplicates or discards the inserted cue.
-            app.open_or_focus_tab(PealayerTab::EffectControls);
-            context.data_mut(|data| data.insert_temp(timeline_cue_dialog_id(), instance_id));
-            context.request_repaint();
+            open_timeline_cue_editor(app, context, TimelineCueDialogState {
+                instance_id,
+                discard_on_cancel: true,
+                timeline_before_insert: Some(timeline_before_insert),
+                undo_before_insert: Some(undo_before_insert),
+            });
         }
         Err(error) => app.set_osd(error),
     }
 }
 
 fn draw_timeline_cue_dialog(app: &mut PealayerApp, context: &egui::Context) {
-    let Some(instance_id) = context.data(|data| data.get_temp::<uuid::Uuid>(timeline_cue_dialog_id())) else {
+    let Some(state) = context.data(|data| data.get_temp::<TimelineCueDialogState>(timeline_cue_dialog_id())) else {
         return;
     };
+    let instance_id = state.instance_id;
     if !app.timeline.instances.iter().any(|instance| instance.id == instance_id) {
-        context.data_mut(|data| data.remove::<uuid::Uuid>(timeline_cue_dialog_id()));
+        context.data_mut(|data| data.remove::<TimelineCueDialogState>(timeline_cue_dialog_id()));
         return;
     }
     app.selected_instance_ids.clear();
     app.selected_instance_ids.insert(instance_id);
     let mut open = true;
-    let mut close = false;
+    let mut accept = false;
+    let mut discard = false;
     let done_label = app.tr("Done");
+    let discard_label = app.tr("Discard cue");
+    if !egui::Popup::is_any_open(context)
+        && context.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
+    {
+        if state.discard_on_cancel { discard = true; } else { accept = true; }
+    }
     crate::ui::sync_elegance_theme(context);
     elegance::Modal::new("timeline-add-cue-dialog", &mut open)
-        .heading(app.tr("Cue properties"))
+        .heading(if state.discard_on_cancel { app.tr("New cue properties") } else { app.tr("Cue properties") })
         .header_icon(crate::ui::icons::SLIDERS_HORIZONTAL)
         .max_width(560.0)
+        // The compact multiplication-sign close looked detached from this
+        // dense editor and made destructive cancellation ambiguous.
+        .closable(false)
         .footer(|ui| {
-            close = ui.add(elegance::Button::new(&done_label).outline()).clicked();
+            accept = ui.add(elegance::Button::new(&done_label)).clicked();
+            if state.discard_on_cancel {
+                discard = ui.add(elegance::Button::new(&discard_label).outline()).clicked();
+            }
         })
         .show(context, |ui| {
             ui.push_id(("cue-properties", instance_id), |ui| {
                 draw_effect_controls(app, ui, false);
             });
         });
-    if !open || close || !app.timeline.instances.iter().any(|instance| instance.id == instance_id) {
-        context.data_mut(|data| data.remove::<uuid::Uuid>(timeline_cue_dialog_id()));
+    if state.discard_on_cancel
+        && !app.timeline.instances.iter().any(|instance| instance.id == instance_id)
+    {
+        discard = true;
+    }
+    if discard {
+        discard_inserted_timeline_cue(app, instance_id, state.timeline_before_insert, state.undo_before_insert);
+    }
+    if accept || discard || !app.timeline.instances.iter().any(|instance| instance.id == instance_id) {
+        context.data_mut(|data| data.remove::<TimelineCueDialogState>(timeline_cue_dialog_id()));
     }
 }
 
@@ -5352,6 +5520,22 @@ pub(crate) fn is_motion_control(control: &crate::four_d::controller::HardwareCon
                 "up" | "down" | "stop"
             )
         })
+}
+
+pub(crate) fn motion_side_for_control(
+    control: &crate::four_d::controller::HardwareControl,
+) -> Option<u8> {
+    if !is_motion_control(control) {
+        return None;
+    }
+    let key = control.key.to_ascii_lowercase();
+    if key == "seat.a" || key == "motion.a" || key.contains("left") || key.ends_with(".a") {
+        Some(0)
+    } else if key == "seat.b" || key == "motion.b" || key.contains("right") || key.ends_with(".b") {
+        Some(1)
+    } else {
+        None
+    }
 }
 
 fn card_control_actions<'a>(
@@ -8106,7 +8290,17 @@ mod timeline_row_tests {
             let instance_id = instance.id;
             app.timeline.templates.push(effect);
             app.timeline.instances.push(instance);
-            context.data_mut(|data| data.insert_temp(timeline_cue_dialog_id(), instance_id));
+            context.data_mut(|data| {
+                data.insert_temp(
+                    timeline_cue_dialog_id(),
+                    TimelineCueDialogState {
+                        instance_id,
+                        discard_on_cancel: false,
+                        timeline_before_insert: None,
+                        undo_before_insert: None,
+                    },
+                )
+            });
             let mut clicked = false;
             // Area fades its painter on opening. Advance a deterministic clock
             // beyond that animation before asserting the final backdrop color.
@@ -9123,7 +9317,7 @@ mod timeline_row_tests {
     }
 
     #[test]
-    fn cue_dialog_drafts_valid_actions_for_relay_and_pwm_tracks() {
+    fn cue_dialog_drafts_valid_actions_for_relay_pwm_and_motion_tracks() {
         let mut app = PealayerApp::default();
         app.update_hardware_capabilities(Some(crate::four_d::controller::HardwareCapabilities {
             board_connected: true,
@@ -9140,6 +9334,12 @@ mod timeline_row_tests {
                     name: "House light".to_string(),
                     ..Default::default()
                 },
+                crate::four_d::controller::HardwareControl {
+                    key: "seat.b".to_string(),
+                    kind: "seat".to_string(),
+                    name: "Seat Right".to_string(),
+                    ..Default::default()
+                },
             ],
             ..Default::default()
         }));
@@ -9152,6 +9352,10 @@ mod timeline_row_tests {
             .iter()
             .find(|row| row.key == "hardware:pwm.12")
             .expect("PWM track should be advertised");
+        let motion = rows
+            .iter()
+            .find(|row| row.key == "hardware:seat.b")
+            .expect("motion track should be advertised");
 
         let relay_draft = timeline_cue_draft_for_row(&app, relay, 2_750)
             .expect("relay track should accept a direct cue");
@@ -9163,17 +9367,62 @@ mod timeline_row_tests {
             .expect("PWM track should accept a direct cue");
         assert_eq!(pwm_draft.start_time_ms, 4_000);
         assert_eq!(pwm_draft.value_basis_points(), 5_000);
+        let motion_draft = timeline_cue_draft_for_row(&app, motion, 5_000)
+            .expect("motion track should accept a semantic cue");
+        assert!(matches!(
+            motion_draft.action,
+            TimelineCueDraftAction::Motion {
+                direction: crate::four_d::models::DirectMotionDirection::Up
+            }
+        ));
+        assert_eq!(
+            motion_draft.behavior,
+            crate::four_d::models::DirectCueBehavior::Hold
+        );
         let context = egui::Context::default();
         app.playback_time = 12.5;
         app.workspace_rendering = true; // Match dock rendering; never write real test-host configuration.
         request_timeline_cue_dialog(&mut app, &context, "hardware:relay.5", 2_750);
         assert_eq!(app.timeline.instances.len(), 1, "cue must exist before properties open");
-        let instance_id = context.data(|data| data.get_temp::<uuid::Uuid>(timeline_cue_dialog_id()))
-            .expect("properties must target the actual inserted instance");
+        let instance_id = context.data(|data| data.get_temp::<TimelineCueDialogState>(timeline_cue_dialog_id()))
+            .expect("properties must target the actual inserted instance")
+            .instance_id;
         assert!(app.selected_instance_ids.contains(&instance_id));
         assert_eq!(app.timeline.instances[0].id, instance_id);
         assert_eq!(app.timeline.instances[0].start_time_ms, 2_750);
         assert_eq!(app.playback_time, 12.5, "creation must not seek");
+    }
+
+    #[test]
+    fn discarding_a_new_modal_cue_restores_timeline_and_undo_history() {
+        let mut app = PealayerApp::default();
+        app.workspace_rendering = true;
+        app.update_hardware_capabilities(Some(crate::four_d::controller::HardwareCapabilities {
+            board_connected: true,
+            controls: vec![crate::four_d::controller::HardwareControl {
+                key: "relay.5".to_string(),
+                kind: "relay".to_string(),
+                name: "Fog relay".to_string(),
+                ..Default::default()
+            }],
+            ..Default::default()
+        }));
+        let original_undo = app.undo_stack.undo_len();
+        let context = egui::Context::default();
+        request_timeline_cue_dialog(&mut app, &context, "hardware:relay.5", 1_000);
+        let state = context.data(|data| data.get_temp::<TimelineCueDialogState>(timeline_cue_dialog_id()))
+            .expect("new cue dialog state");
+        assert_eq!(app.timeline.instances.len(), 1);
+
+        discard_inserted_timeline_cue(
+            &mut app,
+            state.instance_id,
+            state.timeline_before_insert,
+            state.undo_before_insert,
+        );
+        assert!(app.timeline.instances.is_empty());
+        assert!(app.timeline.templates.is_empty());
+        assert_eq!(app.undo_stack.undo_len(), original_undo);
     }
 
     #[test]
@@ -15262,6 +15511,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         let mut started_drag = None;
                                         let mut relocate_to_primary = None;
                                         let mut manage_cue_id = None;
+                                        let mut edit_cue_id = None;
                                         let mut jump_to_cue_id = None;
                                         let mut delete_cue_id = None;
 
@@ -15435,7 +15685,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     self.app.selected_timeline_track = selected_track_key.clone().or_else(|| timeline_rows
                                                         .get(track_index)
                                                         .map(|row| row.key.clone()));
-                                                    manage_cue_id = Some(instance.id);
+                                                    edit_cue_id = Some(instance.id);
                                                 } else if clip_response.clicked() {
                                                     let is_ctrl = ui.ctx().input(|i| i.modifiers.command || i.modifiers.ctrl);
                                                     clicked_any_clip = true;
@@ -15608,6 +15858,18 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             self.app.open_or_focus_tab(PealayerTab::EffectControls);
                                             self.app.trigger_effect_controls_ping(ui.input(|i| i.time));
                                             ui.ctx().request_repaint();
+                                        }
+                                        if let Some(cue_id) = edit_cue_id {
+                                            open_timeline_cue_editor(
+                                                self.app,
+                                                ui.ctx(),
+                                                TimelineCueDialogState {
+                                                    instance_id: cue_id,
+                                                    discard_on_cancel: false,
+                                                    timeline_before_insert: None,
+                                                    undo_before_insert: None,
+                                                },
+                                            );
                                         }
                                         if let Some(cue_id) = jump_to_cue_id {
                                             self.app.selected_instance_ids.clear();
@@ -17857,7 +18119,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         && !i.modifiers.alt
                                         && !i.modifiers.shift
                                 }) && ui.ctx().data(|data| {
-                                    data.get_temp::<TimelineCueDraft>(timeline_cue_dialog_id())
+                                    data.get_temp::<TimelineCueDialogState>(timeline_cue_dialog_id())
                                         .is_none()
                                 });
                                 let previous_cue_pressed = ui.input(|i| {

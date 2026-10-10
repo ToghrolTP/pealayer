@@ -1408,6 +1408,8 @@ pub struct WebEffectCue {
     pub control_key: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub value_basis_points: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub motion_direction: Option<crate::four_d::models::DirectMotionDirection>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]

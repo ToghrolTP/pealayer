@@ -10,6 +10,15 @@ fn nonzero_relay<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u8
     }
 }
 
+fn motion_side<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u8, D::Error> {
+    let side = u8::deserialize(deserializer)?;
+    if side <= 1 {
+        Ok(side)
+    } else {
+        Err(serde::de::Error::custom("motion side must be zero or one"))
+    }
+}
+
 /// Represents the smallest unit of a command to a relay.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AtomicAction {
@@ -85,6 +94,40 @@ pub enum DirectCueBehavior {
     Ramp,
 }
 
+/// A semantic cinema-seat movement. The side index is zero-based to match
+/// PCController's prepared-timeline `motion` step contract.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub struct DirectMotionCue {
+    #[serde(deserialize_with = "motion_side")]
+    pub side: u8,
+    pub direction: DirectMotionDirection,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum DirectMotionDirection {
+    #[default]
+    Up,
+    Down,
+}
+
+impl DirectMotionDirection {
+    pub fn controller_value(self) -> u8 {
+        match self {
+            Self::Up => 1,
+            Self::Down => 2,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Up => "Up",
+            Self::Down => "Down",
+        }
+    }
+}
+
 /// An authored channel command. SetKeep has no exit edge; timed commands have
 /// an explicit final value. Neither visual marker width nor zoom affects timing.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -97,6 +140,10 @@ pub struct DirectControlCue {
     pub behavior: DirectCueBehavior,
     #[serde(default)]
     pub end_value_basis_points: u16,
+    /// Present for semantic motion controls. Motion always has a finite active
+    /// interval and an explicit Stop edge; the percentage fields are ignored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub motion: Option<DirectMotionCue>,
 }
 
 impl DirectControlCue {
@@ -328,6 +375,7 @@ impl Effect {
                 value_basis_points: normalized,
                 behavior: DirectCueBehavior::Hold,
                 end_value_basis_points: 0,
+                motion: None,
             }),
             duration_policy: CueDurationPolicy::Resizable,
             audio_effect: None,

@@ -119,6 +119,7 @@ pub fn cobs_decode(input: &[u8]) -> Result<Vec<u8>, ProtocolError> {
 pub enum Command {
     Ping,
     RelaySet { id: u8, state: bool },
+    MotionSide { side: u8, motion: u8 },
     PwmSet { channel: u8, value: u8 },
     AllOff,
 }
@@ -133,6 +134,7 @@ impl Command {
         match self {
             Self::Ping => vec![0x01],
             Self::RelaySet { id, state } => vec![0x02, *id, if *state { 1 } else { 0 }],
+            Self::MotionSide { side, motion } => vec![0x05, *side, *motion],
             Self::PwmSet { channel, value } => vec![0x03, *channel, *value],
             Self::AllOff => vec![0x04],
         }
@@ -199,6 +201,15 @@ pub fn parse_frame(frame: &[u8]) -> Result<Command, ProtocolError> {
             })
         }
         0x04 => Ok(Command::AllOff),
+        0x05 => {
+            if payload.len() < 3 {
+                return Err(ProtocolError::PacketTooShort);
+            }
+            Ok(Command::MotionSide {
+                side: payload[1],
+                motion: payload[2],
+            })
+        }
         _ => Err(ProtocolError::UnknownOpcode(opcode)),
     }
 }
@@ -215,6 +226,9 @@ impl Command {
             Self::Ping => encode_pccontroller_frame(0x01, sequence, &[]),
             Self::RelaySet { id, state } => {
                 encode_pccontroller_frame(0x31, sequence, &[*id, if *state { 1 } else { 0 }])
+            }
+            Self::MotionSide { side, motion } => {
+                encode_pccontroller_frame(0x32, sequence, &[*side, *motion])
             }
             Self::PwmSet { channel, value } => {
                 let pwm_12bit = ((*value as u32 * 4095) / 255) as u16;
