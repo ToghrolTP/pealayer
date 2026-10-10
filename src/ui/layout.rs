@@ -38,7 +38,7 @@ pub fn paint_dock_disclosure_icons(
     }
 }
 
-fn drag_translation(
+pub(super) fn drag_translation(
     pointer: egui::Pos2,
     source_min: egui::Pos2,
     grab_offset: egui::Vec2,
@@ -2239,7 +2239,7 @@ fn primary_effect_drag_active(ctx: &egui::Context, id: egui::Id) -> bool {
     ctx.is_being_dragged(id) && ctx.input(|input| input.pointer.primary_down())
 }
 
-fn remember_effect_drag_offset_on_press(
+pub(super) fn remember_drag_offset_on_press(
     ctx: &egui::Context,
     rect: egui::Rect,
     offset_id: egui::Id,
@@ -2280,7 +2280,7 @@ fn effect_drag_source_with_action_gutter<R>(
     // laid-out source rect so the press frame can always record the grab point
     // before branching on `is_being_dragged`.
     if let Some(source_rect) = ui.data_mut(|data| data.get_temp::<egui::Rect>(source_rect_id)) {
-        remember_effect_drag_offset_on_press(ui.ctx(), source_rect, offset_id);
+        remember_drag_offset_on_press(ui.ctx(), source_rect, offset_id);
     }
     // `Context::is_being_dragged` is deliberately button-agnostic. A moved
     // secondary click can therefore make it true as well, but right-click is
@@ -2315,7 +2315,7 @@ fn effect_drag_source_with_action_gutter<R>(
         // gesture to a drag on a later frame. Recording this only from
         // `drag_started()` is too late: by then this function can already be in
         // the active-drag branch and the preview falls back to its center.
-        remember_effect_drag_offset_on_press(ui.ctx(), response.response.rect, offset_id);
+        remember_drag_offset_on_press(ui.ctx(), response.response.rect, offset_id);
         ui.data_mut(|data| data.insert_temp(source_rect_id, response.response.rect));
         // Action buttons are real child widgets and must own their hover,
         // click, keyboard, and tooltip behavior. Keep the card drag target out

@@ -29,6 +29,9 @@ statements are not the present product state.
 - Native NLE transport now uses contextual enabled/disabled styling, a square
   Stop, and intrinsic-width responsive rows with trailing track/volume controls:
   [transport verification](nle-transport.md).
+- Native timeline actions use accent-matched outlines, mouse-down-preserving
+  drag offsets and reversible removal previews over Trash:
+  [toolbar verification](timeline-toolbar-drag-feedback.md).
 
 ## Remaining gates · do not silently mark complete
 

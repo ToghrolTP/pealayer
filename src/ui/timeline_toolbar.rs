@@ -6,8 +6,177 @@ use eframe::egui::{self, Align2, Color32, FontId, Id, Rect, Response, Sense, Str
 
 const CELL: f32 = super::layout::TIMELINE_RULER_HEIGHT;
 
-#[derive(Clone)]
-struct ToolbarDrag(Action);
+#[derive(Clone, Debug)]
+struct ToolbarDrag {
+    action: Action,
+    source_rect: Rect,
+    grab_offset: egui::Vec2,
+}
+
+fn register_drag(response: &Response, action: Action, moved_for_drag: bool) {
+    let offset_id = response.id.with("pointer-offset");
+    let started_id = response.id.with("payload-started");
+    let fresh_press = response.ctx.input(|input| {
+        input.pointer.button_pressed(egui::PointerButton::Primary)
+            && input
+                .pointer
+                .press_origin()
+                .is_some_and(|pos| response.rect.contains(pos))
+    });
+    if fresh_press {
+        response
+            .ctx
+            .data_mut(|data| data.remove_temp::<bool>(started_id));
+    }
+    let started = response
+        .ctx
+        .data(|data| data.get_temp::<bool>(started_id))
+        .unwrap_or(false);
+    // Use the same mouse-down capture as effect cards, before egui promotes
+    // the gesture. Freeze source geometry in the payload for the whole drag.
+    super::layout::remember_drag_offset_on_press(&response.ctx, response.rect, offset_id);
+    if response.dragged_by(egui::PointerButton::Primary)
+        && moved_for_drag
+        && !started
+        && !egui::DragAndDrop::has_any_payload(&response.ctx)
+    {
+        let grab_offset = response
+            .ctx
+            .data(|data| data.get_temp(offset_id))
+            .unwrap_or_else(|| response.rect.size() * 0.5);
+        egui::DragAndDrop::set_payload(
+            &response.ctx,
+            ToolbarDrag {
+                action,
+                source_rect: response.rect,
+                grab_offset,
+            },
+        );
+        // Escape clears egui's payload at frame start. Do not recreate it
+        // while the same mouse gesture remains held after cancellation.
+        response
+            .ctx
+            .data_mut(|data| data.insert_temp(started_id, true));
+    }
+    if response
+        .ctx
+        .input(|input| input.pointer.button_released(egui::PointerButton::Primary))
+    {
+        response
+            .ctx
+            .data_mut(|data| data.remove_temp::<bool>(started_id));
+    }
+}
+
+fn moved_for_drag(ctx: &egui::Context) -> bool {
+    let distance = ctx.options(|options| options.input_options.max_click_dist);
+    ctx.input(|input| {
+        input
+            .pointer
+            .press_origin()
+            .zip(input.pointer.interact_pos())
+            .is_some_and(|(start, current)| start.distance(current) > distance)
+    })
+}
+
+fn drop_payload(response: &Response) -> Option<std::sync::Arc<ToolbarDrag>> {
+    response
+        .ctx
+        .input(|input| input.pointer.button_released(egui::PointerButton::Primary))
+        .then(|| response.dnd_release_payload::<ToolbarDrag>())
+        .flatten()
+}
+
+fn hide_action(hidden: &mut Vec<Action>, action: Action) -> bool {
+    if hidden.contains(&action) {
+        false
+    } else {
+        hidden.push(action);
+        true
+    }
+}
+
+fn ghost_rect(drag: &ToolbarDrag, pointer: egui::Pos2) -> Rect {
+    drag.source_rect.translate(super::layout::drag_translation(
+        pointer,
+        drag.source_rect.min,
+        drag.grab_offset,
+    ))
+}
+
+fn control_outline(visuals: &egui::Visuals, selected: bool, pressed: bool) -> Stroke {
+    // selection.stroke is contrast ink, NOT the accent outline color.
+    Stroke::new(
+        1.0,
+        if selected || pressed {
+            visuals.selection.bg_fill
+        } else {
+            Color32::TRANSPARENT
+        },
+    )
+}
+
+fn paint_drag_preview(
+    ui: &egui::Ui,
+    drag: &ToolbarDrag,
+    pointer: egui::Pos2,
+    hide_progress: f32,
+) -> Rect {
+    let ghost = ghost_rect(drag, pointer);
+    // Painter-only tooltip layer: visible outside the toolbar, without stealing
+    // hit-testing from the drop target underneath the preview.
+    let layer = egui::LayerId::new(
+        egui::Order::Tooltip,
+        Id::new("timeline-toolbar-drag-preview"),
+    );
+    let painter = ui
+        .ctx()
+        .layer_painter(layer)
+        .with_clip_rect(ui.ctx().content_rect());
+    let progress = hide_progress.clamp(0.0, 1.0);
+    let alpha = 0.8 - 0.48 * progress;
+    let error = ui.visuals().error_fg_color;
+    painter.rect(
+        ghost.shrink(2.0),
+        4.0,
+        ui.visuals()
+            .widgets
+            .hovered
+            .bg_fill
+            .lerp_to_gamma(error, 0.25 * progress)
+            .gamma_multiply(alpha),
+        Stroke::new(
+            1.0,
+            ui.visuals()
+                .widgets
+                .hovered
+                .bg_stroke
+                .color
+                .lerp_to_gamma(error, progress),
+        ),
+        StrokeKind::Inside,
+    );
+    painter.text(
+        ghost.center(),
+        Align2::CENTER_CENTER,
+        super::layout::timeline_toolbar_action_icon(drag.action),
+        FontId::proportional(14.0),
+        ui.visuals()
+            .text_color()
+            .lerp_to_gamma(error, progress)
+            .gamma_multiply(alpha),
+    );
+    if progress > 0.0 {
+        painter.line_segment(
+            [
+                ghost.left_top() + egui::vec2(7.0, 7.0),
+                ghost.right_bottom() - egui::vec2(7.0, 7.0),
+            ],
+            Stroke::new(1.5, error.gamma_multiply(progress)),
+        );
+    }
+    ghost
+}
 
 pub(super) struct Output {
     pub rect: Rect,
@@ -65,11 +234,11 @@ fn control(
     } else {
         Color32::TRANSPARENT
     };
-    let stroke = if selected {
-        ui.visuals().selection.stroke
-    } else {
-        Stroke::new(1.0, Color32::TRANSPARENT)
-    };
+    let stroke = control_outline(
+        ui.visuals(),
+        selected,
+        enabled && response.is_pointer_button_down_on(),
+    );
     ui.painter()
         .rect(rect.shrink(2.0), 4.0, fill, stroke, StrokeKind::Inside);
     let color = if enabled {
@@ -125,16 +294,7 @@ pub(super) fn draw(
     // egui also marks a stationary long press as a drag after its click
     // timeout. Reordering needs real movement, otherwise held Pan buttons
     // would turn into a drag payload and stop panning after 800 ms.
-    let drag_distance = ui
-        .ctx()
-        .options(|options| options.input_options.max_click_dist);
-    let moved_for_drag = ui.input(|input| {
-        input
-            .pointer
-            .press_origin()
-            .zip(input.pointer.interact_pos())
-            .is_some_and(|(start, current)| start.distance(current) > drag_distance)
-    });
+    let moved_for_drag = moved_for_drag(ui.ctx());
     let mut changed = false;
 
     // Keep the existing right-to-left order: first configured action is next
@@ -171,21 +331,18 @@ pub(super) fn draw(
             enabled,
             action == Action::FollowPlayhead && app.timeline_follow_playhead,
         );
-        if response.dragged_by(egui::PointerButton::Primary)
-            && moved_for_drag
-            && !egui::DragAndDrop::has_any_payload(ui.ctx())
-        {
-            egui::DragAndDrop::set_payload(ui.ctx(), ToolbarDrag(action));
-        }
+        register_drag(&response, action, moved_for_drag);
         if let Some(drag) = response.dnd_hover_payload::<ToolbarDrag>() {
             let after = pointer.is_some_and(|pos| pos.x < rect.center().x);
             let x = if after { rect.left() } else { rect.right() };
-            toolbar
-                .painter()
-                .vline(x, rect.y_range().shrink(4.0), ui.visuals().selection.stroke);
-            if let Some(drag) = response.dnd_release_payload::<ToolbarDrag>() {
-                changed |= move_action(&mut order, drag.0, action, after);
-            } else if drag.0 != action {
+            toolbar.painter().vline(
+                x,
+                rect.y_range().shrink(4.0),
+                Stroke::new(1.0, ui.visuals().selection.bg_fill),
+            );
+            if let Some(drag) = drop_payload(&response) {
+                changed |= move_action(&mut order, drag.action, action, after);
+            } else if drag.action != action {
                 ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
             }
         }
@@ -242,6 +399,14 @@ pub(super) fn draw(
         true,
         false,
     );
+    // Hover is a prospective removal only. Persist nothing until an actual
+    // primary-button drop; leaving Trash reverses the preview transition.
+    let hide_hovered = response.dnd_hover_payload::<ToolbarDrag>().is_some();
+    let hide_progress = ui.ctx().animate_bool_with_time(
+        Id::new("timeline-toolbar-removal-preview"),
+        hide_hovered,
+        0.15,
+    );
     if drag_fade > 0.0 {
         toolbar.painter().rect_filled(
             menu_rect.shrink(2.0),
@@ -267,11 +432,8 @@ pub(super) fn draw(
         );
     }
     if drag.is_some() {
-        if let Some(drag) = response.dnd_release_payload::<ToolbarDrag>() {
-            if !app.timeline_toolbar_hidden.contains(&drag.0) {
-                app.timeline_toolbar_hidden.push(drag.0);
-                changed = true;
-            }
+        if let Some(drag) = drop_payload(&response) {
+            changed |= hide_action(&mut app.timeline_toolbar_hidden, drag.action);
         }
         response
             .clone()
@@ -364,20 +526,7 @@ pub(super) fn draw(
     if let Some(drag) = drag
         && let Some(pos) = pointer
     {
-        let ghost = Rect::from_center_size(pos - egui::vec2(0.0, 18.0), egui::vec2(CELL, CELL));
-        let painter = ui.ctx().layer_painter(layer);
-        painter.rect_filled(
-            ghost,
-            4.0,
-            ui.visuals().widgets.hovered.bg_fill.gamma_multiply(0.8),
-        );
-        painter.text(
-            ghost.center(),
-            Align2::CENTER_CENTER,
-            super::layout::timeline_toolbar_action_icon(drag.0),
-            FontId::proportional(14.0),
-            ui.visuals().text_color().gamma_multiply(0.8),
-        );
+        paint_drag_preview(ui, &drag, pos, hide_progress);
         ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
     }
     if changed {
@@ -390,6 +539,325 @@ pub(super) fn draw(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn pointer_button(pos: egui::Pos2, button: egui::PointerButton, pressed: bool) -> egui::Event {
+        egui::Event::PointerButton {
+            pos,
+            button,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        }
+    }
+
+    fn gesture_frame(
+        context: &egui::Context,
+        source: Rect,
+        events: Vec<egui::Event>,
+        hidden: &mut Vec<Action>,
+    ) -> bool {
+        let mut over_trash = false;
+        let mut output = context.run_ui(
+            egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(480.0, 160.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| {
+                let response = control(
+                    ui,
+                    source,
+                    Id::new("gesture-source"),
+                    super::super::icons::LOCK,
+                    "Follow",
+                    true,
+                    false,
+                );
+                register_drag(&response, Action::FollowPlayhead, moved_for_drag(context));
+                let trash = control(
+                    ui,
+                    Rect::from_min_size(egui::pos2(220.0, 20.0), egui::vec2(CELL, CELL)),
+                    Id::new("gesture-trash"),
+                    super::super::icons::TRASH,
+                    "Hide",
+                    true,
+                    false,
+                );
+                over_trash = trash.dnd_hover_payload::<ToolbarDrag>().is_some();
+                if let Some(drag) = drop_payload(&trash) {
+                    hide_action(hidden, drag.action);
+                }
+            },
+        );
+        output.textures_delta.clear();
+        over_trash
+    }
+
+    #[test]
+    fn drag_captures_noncentral_mouse_down_and_keeps_it_after_source_reflow() {
+        let context = egui::Context::default();
+        let source = Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(CELL, CELL));
+        let mut hidden = Vec::new();
+        gesture_frame(&context, source, vec![], &mut hidden);
+        let press = source.min + egui::vec2(5.0, 13.0);
+        gesture_frame(
+            &context,
+            source,
+            vec![
+                egui::Event::PointerMoved(press),
+                pointer_button(press, egui::PointerButton::Primary, true),
+            ],
+            &mut hidden,
+        );
+        assert_eq!(
+            context.data(|data| data
+                .get_temp::<egui::Vec2>(Id::new("gesture-source").with("pointer-offset"))),
+            Some(press - source.min)
+        );
+        assert!(egui::DragAndDrop::payload::<ToolbarDrag>(&context).is_none());
+        let moved = press + egui::vec2(60.0, 35.0);
+        gesture_frame(
+            &context,
+            source,
+            vec![egui::Event::PointerMoved(moved)],
+            &mut hidden,
+        );
+        let drag =
+            egui::DragAndDrop::payload::<ToolbarDrag>(&context).expect("actual primary drag");
+        assert_eq!(ghost_rect(&drag, moved).min + drag.grab_offset, moved);
+        assert_eq!(drag.grab_offset, press - source.min);
+        let before = ghost_rect(&drag, moved);
+        gesture_frame(
+            &context,
+            source.translate(egui::vec2(31.0, 7.0)),
+            vec![],
+            &mut hidden,
+        );
+        let after = egui::DragAndDrop::payload::<ToolbarDrag>(&context).unwrap();
+        assert_eq!(after.source_rect, source);
+        assert_eq!(ghost_rect(&after, moved), before);
+        assert!(hidden.is_empty());
+    }
+
+    #[test]
+    fn trash_hover_is_reversible_and_only_a_drop_hides_the_control() {
+        let context = egui::Context::default();
+        let source = Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(CELL, CELL));
+        let mut hidden = Vec::new();
+        let press = source.min + egui::vec2(6.0, 12.0);
+        gesture_frame(&context, source, vec![], &mut hidden);
+        gesture_frame(
+            &context,
+            source,
+            vec![
+                egui::Event::PointerMoved(press),
+                pointer_button(press, egui::PointerButton::Primary, true),
+            ],
+            &mut hidden,
+        );
+        gesture_frame(
+            &context,
+            source,
+            vec![egui::Event::PointerMoved(press + egui::vec2(65.0, 20.0))],
+            &mut hidden,
+        );
+        let trash_center = egui::pos2(220.0 + CELL * 0.5, 20.0 + CELL * 0.5);
+        assert!(gesture_frame(
+            &context,
+            source,
+            vec![egui::Event::PointerMoved(trash_center)],
+            &mut hidden
+        ));
+        assert!(hidden.is_empty(), "hover must not persist a removal");
+        assert!(!gesture_frame(
+            &context,
+            source,
+            vec![egui::Event::PointerMoved(egui::pos2(320.0, 90.0))],
+            &mut hidden
+        ));
+        assert!(
+            hidden.is_empty(),
+            "leaving Trash must restore the prospective state"
+        );
+        gesture_frame(
+            &context,
+            source,
+            vec![egui::Event::PointerMoved(trash_center)],
+            &mut hidden,
+        );
+        gesture_frame(
+            &context,
+            source,
+            vec![pointer_button(
+                trash_center,
+                egui::PointerButton::Primary,
+                false,
+            )],
+            &mut hidden,
+        );
+        assert_eq!(hidden, vec![Action::FollowPlayhead]);
+        assert!(!hide_action(&mut hidden, Action::FollowPlayhead));
+        assert!(egui::DragAndDrop::payload::<ToolbarDrag>(&context).is_none());
+    }
+
+    #[test]
+    fn secondary_movement_does_not_create_a_toolbar_drag() {
+        let context = egui::Context::default();
+        let source = Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(CELL, CELL));
+        let mut hidden = Vec::new();
+        let press = source.center();
+        gesture_frame(&context, source, vec![], &mut hidden);
+        gesture_frame(
+            &context,
+            source,
+            vec![
+                egui::Event::PointerMoved(press),
+                pointer_button(press, egui::PointerButton::Secondary, true),
+            ],
+            &mut hidden,
+        );
+        gesture_frame(
+            &context,
+            source,
+            vec![egui::Event::PointerMoved(press + egui::vec2(70.0, 15.0))],
+            &mut hidden,
+        );
+        assert!(egui::DragAndDrop::payload::<ToolbarDrag>(&context).is_none());
+        assert!(hidden.is_empty());
+    }
+
+    #[test]
+    fn escape_over_trash_cancels_without_republishing_or_hiding() {
+        let context = egui::Context::default();
+        let source = Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(CELL, CELL));
+        let mut hidden = Vec::new();
+        let press = source.min + egui::vec2(6.0, 12.0);
+        gesture_frame(&context, source, vec![], &mut hidden);
+        gesture_frame(
+            &context,
+            source,
+            vec![
+                egui::Event::PointerMoved(press),
+                pointer_button(press, egui::PointerButton::Primary, true),
+            ],
+            &mut hidden,
+        );
+        gesture_frame(
+            &context,
+            source,
+            vec![egui::Event::PointerMoved(press + egui::vec2(65.0, 20.0))],
+            &mut hidden,
+        );
+        let trash_center = egui::pos2(220.0 + CELL * 0.5, 20.0 + CELL * 0.5);
+        gesture_frame(
+            &context,
+            source,
+            vec![egui::Event::PointerMoved(trash_center)],
+            &mut hidden,
+        );
+        gesture_frame(
+            &context,
+            source,
+            vec![egui::Event::Key {
+                key: egui::Key::Escape,
+                physical_key: Some(egui::Key::Escape),
+                pressed: true,
+                repeat: false,
+                modifiers: egui::Modifiers::NONE,
+            }],
+            &mut hidden,
+        );
+        assert!(egui::DragAndDrop::payload::<ToolbarDrag>(&context).is_none());
+        gesture_frame(&context, source, vec![], &mut hidden);
+        assert!(egui::DragAndDrop::payload::<ToolbarDrag>(&context).is_none());
+        gesture_frame(
+            &context,
+            source,
+            vec![pointer_button(
+                trash_center,
+                egui::PointerButton::Primary,
+                false,
+            )],
+            &mut hidden,
+        );
+        assert!(hidden.is_empty());
+    }
+
+    #[test]
+    fn active_outlines_use_accent_not_contrast_text_and_keep_width() {
+        for dark in [false, true] {
+            for palette in [
+                crate::config::ColorPalette::Native,
+                crate::config::ColorPalette::Studio,
+            ] {
+                let mut visuals = if dark {
+                    egui::Visuals::dark()
+                } else {
+                    egui::Visuals::light()
+                };
+                super::super::palette::apply(&mut visuals, palette);
+                visuals.selection.bg_fill = Color32::from_rgb(24, 170, 105);
+                visuals.selection.stroke = Stroke::new(1.0, Color32::WHITE);
+                for (selected, pressed) in [(true, false), (false, true), (true, true)] {
+                    let stroke = control_outline(&visuals, selected, pressed);
+                    assert_eq!(stroke.color, visuals.selection.bg_fill);
+                    assert_ne!(stroke.color, visuals.selection.stroke.color);
+                    assert_eq!(stroke.width, 1.0);
+                }
+                assert_eq!(control_outline(&visuals, false, false).width, 1.0);
+                assert_eq!(
+                    control_outline(&visuals, false, false).color,
+                    Color32::TRANSPARENT
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn removal_preview_adds_a_red_strike_without_moving_the_grab_point() {
+        let context = egui::Context::default();
+        let drag = ToolbarDrag {
+            action: Action::ZoomIn,
+            source_rect: Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(CELL, CELL)),
+            grab_offset: egui::vec2(5.0, 13.0),
+        };
+        let pointer = egui::pos2(300.0, 100.0);
+        let mut regular_ink = Color32::TRANSPARENT;
+        for progress in [0.0, 1.0, 0.0] {
+            let mut error = Color32::TRANSPARENT;
+            let mut actual = Rect::NOTHING;
+            let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+                error = ui.visuals().error_fg_color;
+                actual = paint_drag_preview(ui, &drag, pointer, progress);
+            });
+            output.textures_delta.clear();
+            assert_eq!(actual.min + drag.grab_offset, pointer);
+            let strike = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::LineSegment { stroke, .. } => Some(*stroke),
+                _ => None,
+            });
+            let ink = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::epaint::Shape::Text(text) => Some(text.fallback_color),
+                    _ => None,
+                })
+                .expect("drag glyph");
+            if progress == 0.0 {
+                assert!(strike.is_none());
+                if regular_ink == Color32::TRANSPARENT {
+                    regular_ink = ink;
+                }
+                assert_eq!(ink, regular_ink, "leaving Trash restores normal ink");
+            } else {
+                assert_eq!(strike.unwrap().color, error);
+                assert!(ink.a() < regular_ink.a(), "removal preview fades the glyph");
+            }
+        }
+    }
 
     #[test]
     fn drag_moves_only_the_requested_action_and_keeps_hidden_slots() {
