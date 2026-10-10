@@ -719,6 +719,10 @@ pub struct PealayerApp {
     pub(crate) hardware_channel_detail_active: bool,
     pub(crate) hardware_control_name_draft: String,
     pub(crate) hardware_control_group_draft: String,
+    pub(crate) channel_folder_pending: bool,
+    pub(crate) channel_folder_sequence: u64,
+    pub(crate) channel_folder_error: Option<String>,
+    pub(crate) channel_folder_result: Option<Result<(), String>>,
     pub(crate) hardware_control_icon_draft: String,
     pub(crate) hardware_control_color_draft: String,
     pub(crate) hardware_control_up_color_draft: String,
@@ -1345,7 +1349,11 @@ impl eframe::App for PealayerApp {
             self.last_web_hardware = hardware.clone();
             let hardware_details = hardware
                 .as_ref()
-                .map(|capabilities| web_hardware_details(capabilities, self.motion_control_mode));
+                .map(|capabilities| {
+                    let mut details = web_hardware_details(capabilities, self.motion_control_mode);
+                    details["folder_update"] = serde_json::json!({ "pending": self.channel_folder_pending, "error": self.channel_folder_error, "sequence": self.channel_folder_sequence });
+                    details
+                });
             let mut controller_effects: Vec<crate::platform::interop::WebControllerEffect> = hardware
                 .as_ref()
                 .map(|capabilities| {
@@ -3710,16 +3718,22 @@ impl PealayerApp {
                             .lock()
                             .map_err(|_| "hardware catalog lock is unavailable".to_string())
                             .and_then(|mut current| {
-                                current
+                                let catalog = current
                                     .as_mut()
-                                    .ok_or_else(|| "hardware catalog is unavailable".to_string())?
-                                    .apply_presentation_update(&value)
-                                    .map(|_| ())
+                                    .ok_or_else(|| "hardware catalog is unavailable".to_string())?;
+                                if result.operation.starts_with("presentation-folder:") {
+                                    catalog.apply_folder_update(&value)
+                                } else { catalog.apply_presentation_update(&value).map(|_| ()) }
                             })
                             .err()
                     } else {
                         None
                     };
+                    if result.operation.starts_with("presentation-folder:") {
+                        self.channel_folder_pending = false;
+                        self.channel_folder_error = presentation_apply_error.clone();
+                        self.channel_folder_result = Some(presentation_apply_error.clone().map_or(Ok(()), Err));
+                    }
                     let output = value
                         .get("output")
                         .and_then(serde_json::Value::as_str)
@@ -3839,6 +3853,11 @@ impl PealayerApp {
                     }
                 }
                 Err(error) => {
+                    if result.operation.starts_with("presentation-folder:") {
+                        self.channel_folder_pending = false;
+                        self.channel_folder_result = Some(Err(error.clone()));
+                        self.channel_folder_error = Some(error.clone());
+                    }
                     if result.operation == "effect-save" { self.hardware_effect_authoring.record_after_publish = None; }
                     if result.operation == "macro-start" { self.hardware_effect_authoring.append_target = None; }
                     if matches!(result.operation.as_str(), "effect-play" | "effect-preview") {
@@ -4587,6 +4606,13 @@ impl PealayerApp {
                     self.set_osd(error);
                     return;
                 }
+            }
+            InteropCommand::UpdateHardwareFolder { fields } => {
+                if let Some(capabilities) = self.advertised_hardware() {
+                    if let Err(error) = crate::ui::layout::request_channel_folder_update(self, &capabilities, fields) {
+                        self.set_osd(error);
+                    }
+                } else { self.set_osd(self.tr("No board is connected or advertising live controls")); }
             }
             InteropCommand::UpdateHardwarePresentation { key, fields } => {
                 let Some(capabilities) = self
@@ -8604,6 +8630,7 @@ fn web_hardware_details(
             "build_timestamp": capabilities.board_identity.build_timestamp,
         },
         "controls": controls,
+        "folders": capabilities.channel_folders,
         "active_relays": capabilities.active_relays,
         "telemetry": {
             "supply_mv": capabilities.telemetry.supply_mv,
@@ -8982,6 +9009,10 @@ impl Default for PealayerApp {
             hardware_channel_detail_active: false,
             hardware_control_name_draft: String::new(),
             hardware_control_group_draft: String::new(),
+            channel_folder_pending: false,
+            channel_folder_sequence: 0,
+            channel_folder_error: None,
+            channel_folder_result: None,
             hardware_control_icon_draft: String::new(),
             hardware_control_color_draft: String::new(),
             hardware_control_up_color_draft: String::new(),

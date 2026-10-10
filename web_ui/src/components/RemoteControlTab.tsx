@@ -108,6 +108,8 @@ export interface PlayerState {
       locked: boolean; channel?: number | null; active?: boolean | null; percent?: number | null;
       actions: Array<{ id: string; verb: string; name: string; icon: string }>;
     }>;
+    folders: Array<{ kind: string; name: string; icon: string }>;
+    folder_update: { pending: boolean; error: string | null; sequence: number };
     telemetry?: Record<string, number | boolean | null>;
     status_led?: { red: number; green: number; blue: number } | null;
     warnings?: Array<{ code: string; severity: string; message: string }>;

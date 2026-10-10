@@ -36,6 +36,9 @@ statements are not the present product state.
   changing hardware track state: [inspector verification](EFFECT-CONTROLS-INSPECTOR.md).
 - Hardware Monitor's hidden-channel menu uses a content-height, right-aligned
   row without a viewport-sized gap: [disclosure verification](hardware-hidden-disclosure.md).
+- Hardware section context menus, persistent channel folders, explicit Ungrouped
+  and same-section folder drops are implemented together with the controller API:
+  [folder verification](channel-folders.md).
 
 ## Remaining gates · do not silently mark complete
 

@@ -6,6 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc && node scripts/test-responsive-layout.mjs && node scripts/test-application-parity.mjs && node scripts/test-timecode-editor.mjs && node scripts/test-preference-files.mjs && node scripts/test-timeline-wheel.mjs && node scripts/test-timeline-time.mjs && node scripts/test-messaging.mjs && node scripts/test-clipboard-urls.mjs && vite build && node scripts/finalize-pwa.mjs && node scripts/verify-pwa.mjs && node scripts/test-web-assets.mjs",
+    "test:folders": "node scripts/test-channel-folders.mjs",
+    "prebuild": "node scripts/test-channel-folders.mjs",
     "verify:pwa": "node scripts/verify-pwa.mjs",
     "preview": "vite preview"
   },

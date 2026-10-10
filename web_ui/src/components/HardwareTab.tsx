@@ -53,6 +53,8 @@ import { GroupSelect } from './GroupSelect';
 import { effectGlyph } from '../effectIcons';
 import { SevenSegmentDisplay } from './SevenSegmentDisplay';
 import { MelodySelect } from './MelodySelect';
+import { useHardwareFolders } from './HardwareFolders';
+import { channelFolderGroups, channelFolderKind, isRawSeatRelay } from '../channelFolders';
 
 interface HardwareTabProps {
   state: PlayerState;
@@ -141,6 +143,8 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
     [details],
   );
   const melodies = details?.melodies ?? [];
+  const channelFolders = useHardwareFolders(details, locale, sendCmd, dragKey,
+    () => { setDragKey(null); setDropKey(null); }, () => { setDetailKey(null); setManagerOpen(true); });
   const selectedMelody = melodies.some((melody) => melody.name === melodyName)
     ? melodyName
     : melodies[0]?.name ?? '';
@@ -254,14 +258,13 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
   const dropControl = (sourceKey: string, targetKey: string) => {
     const source = controls.find((control) => control.key === sourceKey);
     const target = controls.find((control) => control.key === targetKey);
-    if (!source || !target || source.kind !== target.kind || source.key === target.key) return;
+    if (!source || !target || source.kind !== target.kind || source.key === target.key || isRawSeatRelay(source) || isRawSeatRelay(target)) return;
     const peers = controls.filter((control) => control.kind === source.kind);
-    updatePresentation(sourceKey, { order: peers.findIndex((control) => control.key === targetKey) });
+    updatePresentation(sourceKey, { order: peers.findIndex((control) => control.key === targetKey), group: target.group });
   };
   const grouped = useMemo(() => {
     const result = new Map<string, { label: string; order: number; controls: NonNullable<typeof details>['controls'] }>();
     for (const control of details?.controls ?? []) {
-      if (control.hidden) continue;
       const section = semanticSection(control.kind, locale);
       const current = result.get(section.key) ?? { label: section.label, order: section.order, controls: [] };
       current.controls.push(control);
@@ -269,9 +272,12 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
     }
     return [...result.entries()].sort(([, left], [, right]) => left.order - right.order).map(([key, section]) => ({
       key,
-      label: <span className="hardware-section-title">{section.label}<Tag>{section.controls.length}</Tag></span>,
-      children: <div className="hardware-control-grid">
-        {section.controls.sort((left, right) => left.order - right.order).map((control) => {
+      label: channelFolders.sectionMenu(channelFolderKind(section.controls[0]?.kind ?? key), <>{section.label}<Tag>{section.controls.filter((control) => !control.hidden).length}</Tag></>),
+      children: <div className="hardware-folder-list">
+        {channelFolderGroups(section.controls, channelFolders.folders, channelFolderKind(section.controls[0]?.kind ?? key)).map((folder) => <section className="hardware-folder" key={`${folder.raw}:${folder.name}`}>
+          {channelFolders.folderHeader(folder)}
+          {!channelFolders.closed.has(`${folder.kind}:${folder.raw ? 'raw' : folder.name}`) && <div className="hardware-control-grid">
+        {folder.controls.map((control) => {
           const isPwm = /pwm|mosfet/i.test(control.kind);
           const value = pwmDrafts[control.key] ?? control.percent ?? 0;
           const active = displayedActive(control);
@@ -279,6 +285,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
           const contextItems = [
             { key: 'manage', label: tr(locale, 'Manage'), icon: <ToolOutlined /> },
             { key: 'rename', label: tr(locale, 'Rename'), icon: <ExperimentOutlined /> },
+            ...channelFolders.moveItems(control),
             immediateToggle ? { key: 'toggle', label: tr(locale, active ? 'Off' : 'On'), icon: <PoweroffOutlined /> } : null,
             { type: 'divider' as const },
             { key: 'visibility', label: tr(locale, control.hidden ? 'Show in Hardware Monitor' : 'Hide from Hardware Monitor'), icon: control.hidden ? <EyeOutlined /> : <EyeInvisibleOutlined /> },
@@ -295,12 +302,13 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
                 if (key === 'toggle' && immediateToggle) void invokeAction(control, immediateToggle);
                 if (key === 'visibility') updatePresentation(control.key, { hidden: !control.hidden });
                 if (key === 'lock') updatePresentation(control.key, { locked: !control.locked });
+                if (key.startsWith('folder:')) void channelFolders.move(channelFolderKind(control.kind), key.slice(7), [control.key]);
               },
             }}
           ><article
             className={`hardware-control ${control.locked ? 'is-locked' : ''} ${dragKey === control.key ? 'is-dragging' : ''} ${dropKey === control.key ? 'is-drop-target' : ''}`}
             onDragOver={(event) => {
-              if (dragKey && dragKey !== control.key) {
+              if (dragKey && dragKey !== control.key && !isRawSeatRelay(control) && controls.some((source) => source.key === dragKey && source.kind === control.kind && !isRawSeatRelay(source))) {
                 event.preventDefault();
                 setDropKey(control.key);
               }
@@ -316,7 +324,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
             <span className="hardware-control__icon">{controlIcon(control.kind, control.icon)}</span>
             <span
               className="hardware-control__drag"
-              draggable
+              draggable={!isRawSeatRelay(control)}
               title={tr(locale, 'Drag to reorder channel')}
               onDragStart={(event) => {
                 const card = event.currentTarget.closest<HTMLElement>('.hardware-control');
@@ -374,10 +382,11 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
               </Tooltip>)}
             </Space.Compact>
           </article></Dropdown>;
-        })}
+        })}</div>}
+        </section>)}
       </div>,
     }));
-  }, [details, locale, pwmDrafts, sendCmd, state.estop_active, state.hardware_connected, dragKey, dropKey, controls, optimisticActive]);
+  }, [details, locale, pwmDrafts, sendCmd, state.estop_active, state.hardware_connected, dragKey, dropKey, controls, optimisticActive, channelFolders]);
 
   if (!details || !state.controller_connected) {
     return <section className="surface-page hardware-page">
@@ -462,7 +471,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
       {detailKey ? controls.filter((control) => control.key === detailKey).map((control) => <div className="channel-detail" key={control.key}>
         <div className="channel-detail__identity"><span>{controlIcon(control.kind, control.icon)}</span><div><strong>{control.name || control.default_name}</strong><code>{controlIdentity(control)}</code></div></div>
         <label><span>{tr(locale, 'Name')}</span><Input defaultValue={control.name || control.default_name} onPressEnter={(event) => updatePresentation(control.key, { name: event.currentTarget.value.trim() })} /></label>
-        <label><span>{tr(locale, 'Group')}</span><GroupSelect value={control.group ?? ''} groups={controls.map((item) => item.group ?? '')} locale={locale} onChange={(group) => updatePresentation(control.key, { group })} /></label>
+        <label><span>{tr(locale, 'Group')}</span><GroupSelect value={control.group ?? ''} groups={channelFolders.folders.filter((folder) => folder.kind === channelFolderKind(control.kind)).map((folder) => folder.name)} locale={locale} onChange={(group) => !isRawSeatRelay(control) && updatePresentation(control.key, { group })} /></label>
         <dl className="detail-list">
           <div><dt>{tr(locale, 'Order')}</dt><dd>{control.order + 1}</dd></div>
           <div><dt>{tr(locale, 'Type')}</dt><dd>{control.kind}</dd></div>
@@ -521,7 +530,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
                     <span className={`hardware-control__indicator ${active ? 'is-on' : ''}`} style={{ '--indicator-color': control.indicator_color || control.color || 'var(--green)' } as React.CSSProperties} />
                     <span
                       className="channel-manager__drag"
-                      draggable
+                      draggable={!isRawSeatRelay(control)}
                       title={tr(locale, 'Drag to reorder channel')}
                       onDragStart={(event) => {
                         const row = event.currentTarget.closest<HTMLElement>('.channel-manager__row');
@@ -633,6 +642,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
     </div>
 
     <Collapse className="hardware-sections" defaultActiveKey={grouped.map((item) => item.key)} items={grouped} />
+    {channelFolders.dialogs}
     <RfManager rf={state.rf} sendCmd={sendCmd} />
 
     <Card

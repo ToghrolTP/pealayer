@@ -65,6 +65,13 @@ pub struct HardwareControl {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct HardwareChannelFolder {
+    pub kind: String,
+    pub name: String,
+    pub icon: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HardwareBoardProfile {
     pub key: String,
     pub board_identity: String,
@@ -138,6 +145,7 @@ pub struct HardwareCapabilities {
     pub motion: Option<HardwareMotionState>,
     pub board_profile: Option<HardwareBoardProfile>,
     pub controls: Vec<HardwareControl>,
+    pub channel_folders: Vec<HardwareChannelFolder>,
     pub peripheral_names: std::collections::BTreeMap<String, String>,
     pub relays: Vec<HardwareOutput>,
     pub pwm_channels: Vec<HardwareOutput>,
@@ -175,11 +183,40 @@ pub struct HardwareEffectGroup {
 }
 
 impl HardwareCapabilities {
+    pub(crate) fn apply_folder_update(&mut self, result: &Value) -> Result<(), String> {
+        #[derive(serde::Deserialize)]
+        struct Member { key: String, #[serde(default)] group: String }
+        let folders = parse_channel_folders(result)?;
+        let identity = result.pointer("/board_profile/board_identity").and_then(Value::as_str)
+            .ok_or("PCController omitted folder board identity")?;
+        if self.board_profile.as_ref().map(|profile| profile.board_identity.as_str()) != Some(identity) {
+            return Err("PCController returned folders for a different board".into());
+        }
+        let controls: Vec<Member> = serde_json::from_value(result.get("controls")
+            .cloned().ok_or("PCController omitted folder members")?).map_err(|error| error.to_string())?;
+        let revision = result.pointer("/board_profile/revision").and_then(Value::as_str)
+            .filter(|value| !value.is_empty()).ok_or("PCController omitted folder revision")?;
+        let keys = controls.iter().map(|control| control.key.as_str()).collect::<std::collections::BTreeSet<_>>();
+        if controls.len() != self.controls.len() || keys.len() != controls.len()
+            || self.controls.iter().any(|old| !keys.contains(old.key.as_str())) {
+            return Err("PCController returned an incomplete or mismatched folder catalog".into());
+        }
+        // Validate the complete response before touching the last known-good catalog.
+        for update in controls {
+            let control = self.controls.iter_mut().find(|old| old.key == update.key).expect("validated member");
+            control.group = update.group;
+        }
+        self.channel_folders = folders;
+        if let Some(profile) = self.board_profile.as_mut() { profile.revision = revision.to_string(); }
+        Ok(())
+    }
+
     /// Applies PCController's authoritative response to a presentation update
     /// immediately. A background catalog refresh still follows as an
     /// eventual-consistency check, but the UI and the next edit must use the
     /// returned revision instead of racing a stale cached catalog.
     pub(crate) fn apply_presentation_update(&mut self, result: &Value) -> Result<String, String> {
+        let folders = parse_channel_folders(result)?;
         let peripheral = result
             .get("peripheral")
             .and_then(Value::as_object)
@@ -281,6 +318,7 @@ impl HardwareCapabilities {
                 profile.revision = revision.to_string();
             }
         }
+        self.channel_folders = folders;
         Ok(key)
     }
 
@@ -1411,6 +1449,7 @@ impl ControllerClient {
     pub fn hardware_capabilities(&mut self) -> Result<HardwareCapabilities, String> {
         let snapshot = self.call("controller.snapshot", json!({}))?;
         let peripherals = self.call("controller.peripherals.get", json!({}))?;
+        let folders = parse_channel_folders(&peripherals)?;
         // Named melodies are host configuration, not board capability data,
         // but they are part of the current coordinator contract. A malformed
         // or unavailable catalog fails this refresh so the engine retains the
@@ -1425,6 +1464,7 @@ impl ControllerClient {
         // Live updates continue over the controller WebSocket.
         let mut capabilities =
             parse_hardware_capabilities_with_front_panel(&snapshot, &peripherals, None);
+        capabilities.channel_folders = folders;
         if let Some(values) = pwm_values.as_ref() {
             apply_pwm_values(&mut capabilities.telemetry, values);
         }
@@ -1444,6 +1484,22 @@ impl ControllerClient {
         let mut catalog_client = Self::connect(&self.endpoint)?;
         catalog_client.hardware_capabilities()
     }
+}
+
+fn parse_channel_folders(value: &Value) -> Result<Vec<HardwareChannelFolder>, String> {
+    let folders: Vec<HardwareChannelFolder> = serde_json::from_value(value.get("folders").cloned()
+        .ok_or("PCController omitted channel folders")?).map_err(|error| format!("Invalid channel folder catalog: {error}"))?;
+    let mut names = std::collections::BTreeSet::new();
+    if folders.len() > 96 { return Err("Channel folder catalog exceeds 96 entries".into()); }
+    for folder in &folders {
+        if !matches!(folder.kind.as_str(), "motion" | "relay" | "pwm" | "board") || folder.name.trim().is_empty()
+            || folder.name.chars().count() > 64 || folder.name.chars().any(char::is_control)
+            || folder.icon.chars().count() > 64 || folder.icon.chars().any(char::is_control)
+            || !names.insert((folder.kind.clone(), folder.name.to_lowercase())) {
+            return Err("PCController returned invalid channel folders".into());
+        }
+    }
+    Ok(folders)
 }
 
 fn parse_melodies(value: &Value) -> Result<Vec<HardwareMelody>, String> {
@@ -2607,6 +2663,9 @@ fn parse_hardware_capabilities_with_front_panel(
         motion,
         board_profile,
         controls,
+        // The transport boundary validates this required catalog before
+        // publishing capabilities; this parser reconciles sampled board state.
+        channel_folders: Vec::new(),
         peripheral_names,
         relays,
         pwm_channels,
@@ -2758,6 +2817,27 @@ mod tests {
     }
 
     #[test]
+    fn hardware_folder_response_is_atomic_and_preserves_channel_state() {
+        let mut caps = HardwareCapabilities { board_profile: Some(HardwareBoardProfile { board_identity: "board-a".into(), revision: "old".into(), ..Default::default() }),
+            controls: vec![HardwareControl { key: "pwm.14".into(), kind: "pwm".into(), hidden: true, locked: true, name: "Private status".into(), color: "#00FF00".into(), ..Default::default() }], ..Default::default() };
+        let good = json!({"board_profile":{"board_identity":"board-a","revision":"new"},"folders":[{"kind":"pwm","name":"Status","icon":"gauge"}],"controls":[{"key":"pwm.14","group":"Status"}]});
+        for bad in [json!({}), json!({"folders":null}), json!({"folders":[{"kind":"pwm","name":"Status"}]} )] {
+            assert!(parse_channel_folders(&bad).is_err());
+        }
+        for bad in [json!({"board_profile":{"board_identity":"other","revision":"new"},"folders":[],"controls":[{"key":"pwm.14"}]}),
+            json!({"board_profile":{"board_identity":"board-a","revision":"new"},"folders":[],"controls":[]}),
+            json!({"board_profile":{"board_identity":"board-a","revision":"new"},"folders":[],"controls":[{"key":"unknown"}]} )] {
+            let before = caps.clone(); assert!(caps.apply_folder_update(&bad).is_err()); assert_eq!(caps, before);
+        }
+        caps.apply_folder_update(&good).unwrap();
+        assert_eq!(caps.controls[0].group, "Status");
+        assert!(caps.controls[0].hidden && caps.controls[0].locked);
+        assert_eq!(caps.controls[0].name, "Private status"); assert_eq!(caps.controls[0].color, "#00FF00");
+        assert_eq!(caps.board_profile.unwrap().revision, "new");
+        assert_eq!(parse_channel_folders(&good).unwrap().len(), 1);
+    }
+
+    #[test]
     fn presentation_update_immediately_replaces_name_and_profile_revision() {
         let output = HardwareOutput {
             id: 5,
@@ -2784,6 +2864,7 @@ mod tests {
         };
 
         let renamed = serde_json::json!({
+            "folders": [{"kind":"relay","name":"Auditorium","icon":"folder"}],
             "board_profile": {"revision": "renamed-revision"},
             "peripheral": {
                 "key": "relay.5",
@@ -2816,6 +2897,7 @@ mod tests {
         );
 
         let restored = serde_json::json!({
+            "folders": [{"kind":"relay","name":"Auditorium","icon":"folder"}],
             "board_profile": {"revision": "restored-revision"},
             "peripheral": {
                 "key": "relay.5",
@@ -2857,6 +2939,7 @@ mod tests {
             ..Default::default()
         };
         let update = serde_json::json!({
+            "folders": [],
             "peripheral": {"key": "relay.6", "name": "Six", "default_name": "Six"},
             "control": {"key": "relay.6", "name": "Six", "order": 0},
             "controls": [
@@ -3133,7 +3216,7 @@ mod tests {
                         },
                         "outputs": {"melody_id": 17, "melody_name": "attention"}
                     }}),
-                    "controller.peripherals.get" => json!({"jsonrpc":"2.0","id":request["id"],"result":{"peripherals":[]}}),
+                    "controller.peripherals.get" => json!({"jsonrpc":"2.0","id":request["id"],"result":{"peripherals":[],"folders":[]}}),
                     "controller.melodies.list" => json!({"jsonrpc":"2.0","id":request["id"],"result":[{
                         "name": "attention",
                         "notes": [{"frequency_hz": 880, "duration_ms": 100, "gap_ms": 25}]
