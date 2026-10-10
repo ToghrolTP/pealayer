@@ -71,6 +71,7 @@ pub fn draw(app: &mut PealayerApp, ctx: &egui::Context) {
             });
             if state.loading { ui.ctx().request_repaint_after(std::time::Duration::from_millis(50)); }
             if let Some(error) = &state.error { ui.colored_label(ui.visuals().error_fg_color, error); }
+            draw_route_errors(ui, &state.route_errors);
             if let Some(listing) = &state.listing {
                 if let Some(warning) = &listing.warning { ui.label(egui::RichText::new(warning).weak()); }
                 ui.separator();
@@ -162,6 +163,15 @@ pub fn draw(app: &mut PealayerApp, ctx: &egui::Context) {
         if let Err(error) = remote::select(&target, play) {
             app.set_osd(error);
         }
+    }
+}
+
+pub fn draw_route_errors(ui: &mut egui::Ui, errors: &[remote::RouteFailure]) {
+    for error in errors {
+        egui::Frame::group(ui.style()).show(ui, |ui| {
+            ui.label(egui::RichText::new(error.label()).strong().color(ui.visuals().error_fg_color));
+            ui.add(egui::Label::new(&error.message).wrap());
+        });
     }
 }
 

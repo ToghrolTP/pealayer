@@ -9,6 +9,7 @@ export interface RemoteBrowser {
   request_id: number; revision: number; visible: boolean; loading: boolean; target: string; use_proxy: boolean;
   auto_next: boolean; thumbnails: boolean; sort: 'name' | 'date' | 'size'; descending: boolean;
   selected: string | null; error: string | null;
+  route_errors: { use_proxy: boolean; message: string }[];
   listing: { url: string; host: string; server: string | null; content_type: string | null; parent_url: string | null; warning: string | null; file: RemoteEntry | null; entries: RemoteEntry[] } | null;
 }
 const bytes = (value: number | null) => {
@@ -83,6 +84,7 @@ export function RemoteLocationDialog({ state, connected, base, sendCmd, autoInsp
         <Button icon={<ReloadOutlined />} disabled={!connected || state.loading} onClick={() => browse(target)} aria-label="Reload directory" /></>}
     </Space>
     {state.error && <Alert type="error" showIcon message="Cannot open this remote location" description={state.error} />}
+    {state.route_errors.length > 0 && <div className="remote-route-errors">{state.route_errors.map(error => <Alert key={String(error.use_proxy)} type="error" showIcon message={error.use_proxy ? 'Proxy' : 'Direct'} description={error.message} />)}</div>}
     {listing?.warning && <Alert type="warning" showIcon message={listing.warning} />}
     <Input allowClear prefix={<SearchOutlined />} value={filter} placeholder="Filter files..." onChange={e => setFilter(e.target.value)} className="remote-file-filter" />
     <Table<RemoteEntry> size="small" rowKey="url" pagination={listing && listing.entries.length > 100 ? { pageSize: 50, showSizeChanger: false } : false} loading={{ spinning: state.loading, delay: 250 }} scroll={{ y: 320, x: 560 }} dataSource={rows}

@@ -2,6 +2,8 @@
 .remote-location-address .ant-input-affix-wrapper { flex: 1; min-width: 0; }
 .remote-location-options { margin: 12px 0; }
 .remote-file-filter { margin-bottom: 12px; }
+.remote-route-errors { display: grid; gap: 8px; margin: 12px 0; }
+.remote-route-errors .ant-alert-description { white-space: pre-wrap; overflow-wrap: anywhere; }
 .remote-file-name { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .remote-file-name .ant-typography { min-width: 0; }
 .remote-file-thumbnail { width: 64px; height: 38px; display: flex; align-items: center; justify-content: center; flex: 0 0 64px; border-radius: 6px; overflow: hidden; background: var(--surface-2, rgba(128,128,128,.1)); color: var(--muted); font-size: 22px; }

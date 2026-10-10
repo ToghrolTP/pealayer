@@ -169,7 +169,7 @@ pub enum InteropCommand {
     Open {
         target: String,
     },
-    BrowseRemote { #[serde(default)] target: String, #[serde(default)] use_proxy: Option<bool> },
+    BrowseRemote { #[serde(default)] target: String, #[serde(default)] use_proxy: Option<bool>, #[serde(default)] clipboard: bool },
     SelectRemote { target: String, #[serde(default)] play: bool },
     SortRemote { by: crate::remote_location::SortBy, #[serde(default)] descending: bool },
     CloseRemoteBrowser,
@@ -933,7 +933,7 @@ pub fn parse_text_command(input: &str) -> Result<InteropCommand, String> {
         "open" => InteropCommand::Open {
             target: argument.to_string(),
         },
-        "browse_remote" => InteropCommand::BrowseRemote { target: argument.into(), use_proxy: None },
+        "browse_remote" => InteropCommand::BrowseRemote { target: argument.into(), use_proxy: None, clipboard: false },
         "close_remote_browser" => InteropCommand::CloseRemoteBrowser,
         "fullscreen" | "set_fullscreen" | "set-fullscreen" => InteropCommand::SetFullscreen {
             enabled: boolean()?,
@@ -1734,7 +1734,7 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
                 target: string(&["target"])?,
             })
         }
-        "browse_remote" | "pealayer.remote.browse" => Some(InteropCommand::BrowseRemote { target: request.params.get("target").and_then(Value::as_str).unwrap_or_default().into(), use_proxy: request.params.get("use_proxy").and_then(Value::as_bool) }),
+        "browse_remote" | "pealayer.remote.browse" => Some(InteropCommand::BrowseRemote { target: request.params.get("target").and_then(Value::as_str).unwrap_or_default().into(), use_proxy: request.params.get("use_proxy").and_then(Value::as_bool), clipboard: request.params.get("clipboard").and_then(Value::as_bool).unwrap_or(false) }),
         "select_remote" | "pealayer.remote.select" => Some(InteropCommand::SelectRemote { target: string(&["target"])? , play: request.params.get("play").and_then(Value::as_bool).unwrap_or(false) }),
         "sort_remote" | "pealayer.remote.sort" => Some(InteropCommand::SortRemote { by: serde_json::from_value(request.params.get("by").cloned().unwrap_or(Value::String("name".into()))).map_err(|_| "sort must be name, date or size".to_string())?, descending: request.params.get("descending").and_then(Value::as_bool).unwrap_or(false) }),
         "close_remote_browser" | "pealayer.remote.close" => Some(InteropCommand::CloseRemoteBrowser),
@@ -3326,11 +3326,15 @@ mod tests {
     #[test]
     fn remote_folder_json_rpc_ipc_parity() {
         let target = "https://files.invalid/folder/";
-        let expected = InteropCommand::BrowseRemote { target: target.into(), use_proxy: Some(false) };
+        let expected = InteropCommand::BrowseRemote { target: target.into(), use_proxy: Some(false), clipboard: false };
         let json = serde_json::to_string(&expected).unwrap();
         assert_eq!(parse_interop_request(&json).unwrap().1, expected);
         let rpc = JsonRpcRequest { jsonrpc: Some("2.0".into()), id: Value::Null, method: "pealayer.remote.browse".into(), params: serde_json::json!({"target":target,"use_proxy":false}) };
         assert_eq!(command_from_json_rpc(&rpc).unwrap(), Some(expected));
+        let copied = InteropCommand::BrowseRemote { target: target.into(), use_proxy: None, clipboard: true };
+        assert_eq!(parse_interop_request(&serde_json::to_string(&copied).unwrap()).unwrap().1, copied);
+        let rpc = JsonRpcRequest { jsonrpc: Some("2.0".into()), id: Value::Null, method: "pealayer.remote.browse".into(), params: serde_json::json!({"target":target,"clipboard":true}) };
+        assert_eq!(command_from_json_rpc(&rpc).unwrap(), Some(copied));
         assert!(parse_text_command("browse_remote javascript:bad").is_err());
         assert!(matches!(parse_text_command("browse_remote").unwrap(), InteropCommand::BrowseRemote { .. }));
     }

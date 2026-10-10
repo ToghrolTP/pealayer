@@ -1248,10 +1248,7 @@ impl eframe::App for PealayerApp {
         // Reconcile the workspace with the viewport before publishing status.
         crate::remote_location::install_context(ctx);
         if let Some(target) = crate::platform::clipboard_urls::take(ctx) {
-            if self.show_open_url_dialog {
-                self.url_input_buffer = target;
-                self.url_inspector = crate::ui::open_url::UrlInspector::default();
-            } else if let Err(error) = crate::remote_location::request(&target, None, false, ctx) {
+            if let Err(error) = crate::remote_location::request_copied_link(&target, ctx) {
                 self.set_osd(error);
             }
         }
@@ -4065,7 +4062,11 @@ impl PealayerApp {
                 self.disable_media_track(kind);
             }
             InteropCommand::Open { target } => self.load_media_target(&target),
-            InteropCommand::BrowseRemote { target, use_proxy } => { if let Err(error) = crate::remote_location::request(&target, use_proxy, false, ctx) { self.set_osd(error); } },
+            InteropCommand::BrowseRemote { target, use_proxy, clipboard } => {
+                let result = if clipboard { crate::remote_location::request_copied_link(&target, ctx) }
+                    else { crate::remote_location::request(&target, use_proxy, false, ctx) };
+                if let Err(error) = result { self.set_osd(error); }
+            },
             InteropCommand::SelectRemote { target, play } => { if let Err(error) = crate::remote_location::select(&target, play) { self.set_osd(error); } },
             InteropCommand::SortRemote { by, descending } => crate::remote_location::sort(by, descending),
             InteropCommand::CloseRemoteBrowser => crate::remote_location::close(),
