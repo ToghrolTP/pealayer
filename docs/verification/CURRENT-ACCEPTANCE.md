@@ -22,10 +22,11 @@ statements are not the present product state.
   Effect Controls and palette-safe widgets have focused delivery records.
   [Widget delivery](PALETTE-SAFE-ELEGANCE.md) and the subsequent focused records
   below retain exact source/runtime identities, not product summaries.
-- The production controller startup service exists and is running. A short
-  read-only paused sample found responsive applications, fresh media observation,
-  connected hardware and no synchronization error. This is not a CPU soak or
-  physical-output timing acceptance test.
+- The production controller startup service exists. The 2026-10-10 folder update
+  preserved the verified interactive primary on port 8787 and SCM Stopped/Auto;
+  do not infer a running service or reboot acceptance from application health.
+  The live player remained paused, connected and without a hardware error.
+  This is not a CPU soak or physical-output timing acceptance test.
 - Native NLE transport now uses contextual enabled/disabled styling, a square
   Stop, and intrinsic-width responsive rows with trailing track/volume controls:
   [transport verification](nle-transport.md).

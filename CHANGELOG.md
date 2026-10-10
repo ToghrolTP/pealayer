@@ -41,6 +41,10 @@ retroactively attributed to an older download.
   bindings and order, and view live motion/PWM/status feedback.
 - Keep the hidden-channel menu aligned above Hardware Monitor groups without
   reserving a large blank area in the sidebar.
+- Right-click hardware section headings to manage persistent channel folders;
+  rename, choose icons, move or drag channels, and delete folders without deleting
+  outputs. Keep ungrouped channels distinct from named lighting folders and raw
+  seat-wiring relays separate from operator outputs.
 - Control the front panel, buzzer melody catalog and addressable strip through
   the controller contracts; receive catalog changes without rebuilding dialogs.
 - Connect Pealayer peers with authoritative preferences/session commands and
