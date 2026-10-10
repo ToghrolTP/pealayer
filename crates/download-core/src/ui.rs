@@ -370,7 +370,20 @@ mod tests {
     #[test]
     fn rendered_resume_button_changes_the_shared_queue() {
         let root = std::env::temp_dir().join(format!("pealayer-ui-{}", uuid::Uuid::new_v4()));
-        let manager = Manager::open(root.clone()).unwrap();
+        std::fs::create_dir_all(&root).unwrap();
+        // This exercises the real widget and queue actions, not the HTTP
+        // worker. Keep the scheduler out of the fixture: a refused connection
+        // could otherwise fail before Pause, or race the post-click snapshot.
+        let manager = Manager(std::sync::Arc::new(std::sync::Mutex::new(crate::Inner {
+            jobs: Vec::new(),
+            root: root.clone(),
+            max_concurrent: 2,
+            bytes_per_second: 0,
+            revision: 0,
+            _queue_lock: std::fs::File::create(root.join("queue.lock")).unwrap(),
+            engines: EngineSettings::default(),
+            shutting_down: false,
+        })));
         let id = manager
             .add(AddRequest {
                 url: "http://127.0.0.1:9/synthetic.bin".into(),
@@ -418,9 +431,9 @@ mod tests {
             },
         );
         output.textures_delta.clear();
-        assert_ne!(
+        assert_eq!(
             manager.snapshot().jobs[0].state,
-            State::Paused,
+            State::Queued,
             "A widget click must invoke the backend, not just change UI state"
         );
         manager.shutdown(std::time::Duration::from_secs(2)).unwrap();
