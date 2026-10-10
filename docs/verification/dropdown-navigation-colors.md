@@ -53,4 +53,43 @@ in the current acceptance index remain open.
 
 The destination was audited before packaging: clean main, paused NLE, original
 cues, controller connected, no hardware error/EStop and the destination's own
-validated libmpv. Package and peer-updater receipts are appended after delivery.
+validated libmpv. Delivery completed through the product's peer updater:
+
+- Clean packaged source: `759dafebc836e75dac3678fe4722a4bd7c1cb846`,
+  [PR #130](https://github.com/ToghrolTP/pealayer/pull/130).
+- Executable SHA-256:
+  `67c9b721bc00935592e1ca3e7c2dc4f49d8871b966b62949d31059453a96af5a`;
+  46,269,952 bytes. Canonical `build.cmd -SkipTests -NoUpx` reused the existing
+  target and staging directory. Release compile/link took 1m35s; Windows native
+  resources, executable/downloader smoke and Web/PWA guardrails passed. The full
+  native suite ran separately, not redundantly during packaging.
+- Both destination libmpv aliases retained SHA-256
+  `872827614ed0adfca11e68def5273bcfcaea6acf38bbf1950c35980b59f43a5f`.
+  Only the executable was transferred. Candidate identity and smoke tests used
+  the destination's own runtime; no Rust build or workstation DLL replacement
+  occurred on Cafe-PC.
+- Update `update-c641aa40-45b6-42ba-a1a3-46838041a944` completed. The live manifest
+  advertised the exact candidate commit/SHA with `git_dirty=false`.
+- Interactive PID 64876, session 1: paused NLE, original loaded private media,
+  paused position and zero original cues retained; controller connected, no
+  hardware error/EStop, zero reconnect wait samples and no new matching
+  Application Error/WER events. Cafe free space was 16.01 GiB.
+
+This receipt confirms installed identity and continuity, not human native visual
+acceptance or a playback/CPU/physical-output soak. The later receipt-only commit
+does not require rebuilding identical application code.
+
+## Hosted CI boundary
+
+Repository health and CodeQL passed for the packaged source. Its hosted platform
+jobs were still running at delivery. Refresh their final results rather than
+assuming all-green CI from the local MSVC suite.
+
+Separately, the preceding main run
+[38075675309](https://github.com/ToghrolTP/pealayer/actions/runs/38075675309)
+passed Linux and both macOS builds but its Windows GNU unit-test process exited
+with `STATUS_ACCESS_VIOLATION (0xc0000005)` at the EStop confirmation fixture.
+This occurred on main before the dropdown changes. It is additional evidence
+for the existing [native lifecycle investigation #116](https://github.com/ToghrolTP/pealayer/issues/116),
+not proof of its root cause or a fault caused by this fix. Keep that investigation
+and cross-platform release gates open.
