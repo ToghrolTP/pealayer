@@ -41,6 +41,9 @@ assert.equal(config.clipboard_link_behavior, 'verify_before_dialog');
 assert.equal((await state()).visible, false, 'Preserve any existing user dialog');
 const before = await api('/api/player/status');
 assert.equal(before.playing, false, 'Run while playback is paused');
+assert.ok(Array.isArray(before.cues), 'Authoritative cue inventory is required');
+assert.ok(Object.hasOwn(before, 'current_video'), 'Authoritative media state is required');
+assert.equal(typeof before.playback_time, 'number');
 await new Promise(resolve => fixture.listen(0, '127.0.0.1', resolve));
 const source = `http://127.0.0.1:${fixture.address().port}`;
 try {
@@ -60,8 +63,9 @@ try {
   await delay(100); await command({command: 'close_remote_browser'}); await delay(1200);
   assert.equal((await state()).visible, false, 'Dismissed verification cannot reopen the dialog');
   const after = await api('/api/player/status');
-  for (const key of ['playing', 'current_file', 'hardware_connected', 'estop_active']) assert.deepEqual(after[key], before[key]);
-  assert.deepEqual(after.timeline?.cues, before.timeline?.cues);
+  for (const key of ['playing', 'current_video', 'hardware_connected', 'estop_active']) assert.deepEqual(after[key], before[key]);
+  assert.deepEqual(after.cues, before.cues);
+  assert.ok(Math.abs(after.playback_time - before.playback_time) < 0.1, 'Paused position remains unchanged');
   console.log('PASS live copied-link preference, supported/unsupported/non-media links, preserved dialog and dismissed verification');
   console.log('PASS unchanged playback, cue and hardware state');
 } finally {
