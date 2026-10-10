@@ -82,6 +82,9 @@ objects. `hardware_sync.ack_age_ms` is computed from the executor's monotonic
 ACK timestamp **when requested**, not when the UI last refreshed. It includes
 the current prepared/clock revision and epoch, reprepare/error state, clock
 transport counters and an identity-free subset of controller timeline evidence.
+Controller `clock_timing` separates feedback intervals from position corrections;
+worker-gap, clock-read and board-read delays distinguish execution starvation
+from clock updates. Inspect these together with dispatch/ACK lateness.
 Counters and maximum delays are cumulative for this process; compare before and
 after a bounded test rather than attributing an old maximum to a new test.
 This read uses a nonblocking lock: `state: busy` or `unavailable` does not mean
