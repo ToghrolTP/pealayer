@@ -40,7 +40,8 @@ export function useHardwareFolders(details: Details | null | undefined, locale: 
     { key: 'new', label: tr(locale, 'New folder'), disabled: !enabled },
     { key: 'expand', label: tr(locale, 'Expand folders') },
     { key: 'collapse', label: tr(locale, 'Collapse folders') },
-  ], onClick: ({ key }) => {
+  ], onClick: ({ key, domEvent }) => {
+    domEvent.stopPropagation();
     if (key === 'channels') manageChannels();
     if (key === 'folders') setManager(kind);
     if (key === 'new') edit(kind);
@@ -69,9 +70,12 @@ export function useHardwareFolders(details: Details | null | undefined, locale: 
     return <Dropdown trigger={folder.raw ? [] : ['contextMenu']} menu={{ items: [
       { key: 'new', label: tr(locale, 'New folder'), disabled: !enabled },
       { key: 'manage', label: tr(locale, 'Manage folder'), disabled: !enabled || !folder.name },
-    ], onClick: ({ key }) => key === 'new' ? edit(folder.kind) : edit(folder.kind, folder) }}>
+    ], onClick: ({ key, domEvent }) => {
+      domEvent.stopPropagation();
+      if (key === 'new') edit(folder.kind); else edit(folder.kind, folder);
+    } }}>
       <header {...props} className={`hardware-folder-header ${props.className} ${folder.controls.length ? '' : 'is-empty'}`}>
-        <button type="button" disabled={!folder.controls.length} aria-expanded={!closed.has(id)} onClick={() => setClosed((old) => {
+        <button type="button" aria-disabled={!folder.controls.length || undefined} aria-expanded={folder.controls.length ? !closed.has(id) : undefined} onClick={() => folder.controls.length && setClosed((old) => {
           const next = new Set(old); if (next.has(id)) next.delete(id); else next.add(id); return next;
         })}>{folder.controls.length > 0 && <span>{closed.has(id) ? '›' : '⌄'}</span>}{folder.icon ? effectGlyph(folder.icon) : <FolderOpenOutlined />}{folder.raw ? tr(locale, 'Raw relays') : folder.name || tr(locale, 'Ungrouped')}<Tag>{folder.controls.length}</Tag></button>
         {!folder.raw && folder.name && <Button size="small" type="text" icon={<MoreOutlined />} aria-label={tr(locale, 'Manage folder')} disabled={!enabled} onClick={() => edit(folder.kind, folder)} />}
