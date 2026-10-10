@@ -28,7 +28,26 @@ tests in total. These are headless interaction/geometry tests, not human native
 visual acceptance. No Web/controller/firmware contract changed; full Web editor
 parity remains tracked separately.
 
-Package and Cafe delivery evidence follows after verification.
+Delivery: [PR #126](https://github.com/ToghrolTP/pealayer/pull/126).
+The incremental Windows package passed Web/PWA guardrails, native resources,
+seven quick-action icons, libmpv smoke and standalone downloader smoke. The
+native release build took 1m 33s using the shared cache. Package-wide tests and
+UPX were skipped; the focused tests above ran separately with isolated config.
+
+- Clean built source: `f3d46ddbd5a83871f87c0edc17e97cc3abfe3ac6`.
+- Executable SHA-256:
+  `7c4c03d422f9e19711b9a20b4b9a1abdd1999e1bd741af54064cff9ba2ce5a4e`.
+- Cafe retained its verified libmpv:
+  `872827614ed0adfca11e68def5273bcfcaea6acf38bbf1950c35980b59f43a5f`.
+- Graceful peer updater `update-475a5652-c3e6-4c49-b507-2847ef4401e1` completed
+  and acknowledged the exact candidate. Live PID 127736, interactive session 1,
+  canonical installed `bin` path.
+- Exact pre/post loaded-media identity, the empty authoritative cue array,
+  paused position and NLE workspace were preserved. Controller connected with
+  no hardware error, no E-STOP, no reconnect retry and no new Application/WER
+  runtime faults. This is not nonempty-cue preservation or physical acceptance.
+- No playback or physical output action was invoked. Native human visual
+  acceptance remains open; hosted platform CI is separate from this receipt.
 
 ## Changes
 
