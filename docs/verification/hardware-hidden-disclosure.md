@@ -41,8 +41,28 @@ physical-output acceptance. No production output action is needed for this fix.
 
 The destination was freshly checked before replacement: paused media, connected
 controller, no hardware error or EStop, and a clean canonical main checkout.
-Build and updater receipts follow after delivery; no Cafe delivery is claimed
-by a local compile alone.
+
+- Clean packaged source: `bf3980797ef1fa1a369bae9827e511dcc98eea44`,
+  [PR #127](https://github.com/ToghrolTP/pealayer/pull/127).
+- Canonical `build.cmd -SkipTests -NoUpx` reused the shared Cargo cache and
+  existing staging directory. Release compile/link, native resource validation,
+  executable/downloader smoke tests and Web/PWA guardrails passed. The package
+  skipped full-suite execution; the 43 focused tests ran separately.
+- Cafe-PC's validated libmpv stayed unchanged:
+  `872827614ed0adfca11e68def5273bcfcaea6acf38bbf1950c35980b59f43a5f`.
+  The candidate also passed smoke testing with that destination runtime.
+- At 2026-10-10 16:27 UTC, graceful peer operation
+  `update-681335c1-24cd-4293-aba8-322e75240426` completed and acknowledged the
+  installed executable. Live manifest matched the clean source above and SHA-256
+  `ec5816beadad7a5e1227ba70c18f89ec914e2b6b4a6df1c70e53eee1d98534f6`.
+- Native canonical executable ran as PID 29832 in interactive session 1.
+  Authoritative status was paused, controller-connected, no hardware error or
+  EStop, NLE workspace and zero original cues. Exact loaded media, complete cues,
+  workspace and paused position were preserved. No controller reconnect retry
+  was needed and no new application/WER runtime faults were observed.
+- Only the executable was transferred; no Rust compilation occurred on Cafe-PC
+  and no private media/settings were published. Native human visual acceptance
+  and platform CI remain distinct from this runtime/geometry receipt.
 
 ## Human visual acceptance
 

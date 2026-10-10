@@ -20,8 +20,8 @@ statements are not the present product state.
   [external player acceptance](EXTERNAL-MPV-DELIVERY.md).
 - Preferences, live branding, responsive volume, elapsed entry, buzzer catalog,
   Effect Controls and palette-safe widgets have focused delivery records.
-  [Latest widget delivery](PALETTE-SAFE-ELEGANCE.md) links the current installed
-  package; exact source/runtime identities belong there, not in product summaries.
+  [Widget delivery](PALETTE-SAFE-ELEGANCE.md) and the subsequent focused records
+  below retain exact source/runtime identities, not product summaries.
 - The production controller startup service exists and is running. A short
   read-only paused sample found responsive applications, fresh media observation,
   connected hardware and no synchronization error. This is not a CPU soak or
