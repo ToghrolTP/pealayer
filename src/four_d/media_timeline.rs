@@ -138,6 +138,7 @@ impl PreparedTimeline {
 pub fn compile_plan(
     timeline: &Timeline,
     relays: &[engine::CompiledAction],
+    motions: &[engine::CompiledMotionAction],
     analog: &[AnalogTrack],
 ) -> Result<Value, String> {
     let mut cues = Vec::new();
@@ -166,6 +167,13 @@ pub fn compile_plan(
     }
     let mut actions = relays.iter().enumerate().map(|(i, edge)| json!({"id":format!("relay-{i}"),"time_ms":edge.time_ms,
         "step":{"kind":"relay","target":edge.relay_id.saturating_sub(1),"value":u8::from(edge.state)}})).collect::<Vec<_>>();
+    actions.extend(motions.iter().enumerate().map(|(index, edge)| {
+        json!({
+            "id": format!("motion-{index}"),
+            "time_ms": edge.time_ms,
+            "step": {"kind":"motion", "target":edge.side, "value":edge.motion}
+        })
+    }));
     let direct_pwm = engine::compile_direct_pwm_cues(timeline);
     let solo = analog.iter().any(|track| track.enabled && track.soloed);
     let pwm_channels = analog
@@ -420,7 +428,7 @@ mod tests {
         let id = strip.id;
         timeline.templates.push(strip);
         timeline.instances.push(EffectInstance::new(id, 10_000));
-        let plan = compile_plan(&timeline, &[], &[]).unwrap();
+        let plan = compile_plan(&timeline, &[], &[], &[]).unwrap();
         assert_eq!(plan["cues"][0]["reference"], "effect:advertised-strip");
         assert_eq!(plan["cues"][0]["time_ms"], 10_000);
         assert_eq!(plan["cues"][0]["duration_ms"], 8_000);
@@ -582,7 +590,7 @@ mod tests {
         let effect_id = effect.id;
         timeline.templates.push(effect);
         timeline.instances.push(EffectInstance::new(effect_id, 10_000));
-        let plan = compile_plan(&timeline, &[], &[]).expect("direct PWM plan");
+        let plan = compile_plan(&timeline, &[], &[], &[]).expect("direct PWM plan");
         let actions = plan["actions"].as_array().expect("prepared actions");
         assert!(actions.iter().any(|action| {
             action["time_ms"] == 10_000
@@ -597,6 +605,28 @@ mod tests {
     }
 
     #[test]
+    fn prepared_plan_keeps_semantic_motion_steps_out_of_raw_relay_commands() {
+        let timeline = Timeline::new();
+        let motions = vec![
+            engine::CompiledMotionAction {
+                time_ms: 750,
+                side: 1,
+                motion: 2,
+            },
+            engine::CompiledMotionAction {
+                time_ms: 1_750,
+                side: 1,
+                motion: 0,
+            },
+        ];
+        let plan = compile_plan(&timeline, &[], &motions, &[]).unwrap();
+        assert_eq!(plan["actions"][0]["step"]["kind"], "motion");
+        assert_eq!(plan["actions"][0]["step"]["target"], 1);
+        assert_eq!(plan["actions"][0]["step"]["value"], 2);
+        assert_eq!(plan["actions"][1]["step"]["value"], 0);
+    }
+
+    #[test]
     fn persistent_pwm_at_a_late_position_is_a_single_command_without_zero_or_exit() {
         let mut timeline = Timeline::new();
         let mut effect = Effect::direct_control("Keep".into(), String::new(), 1000, "pwm.3".into(), 5000, None);
@@ -604,7 +634,7 @@ mod tests {
         let id = effect.id;
         timeline.templates.push(effect);
         timeline.instances.push(EffectInstance::new(id, 86_000_000));
-        let plan = compile_plan(&timeline, &[], &[]).unwrap();
+        let plan = compile_plan(&timeline, &[], &[], &[]).unwrap();
         let actions = plan["actions"].as_array().unwrap();
         assert_eq!(actions.len(), 1);
         assert_eq!(actions[0]["time_ms"], 86_000_000);
@@ -621,7 +651,7 @@ mod tests {
         let id = effect.id;
         timeline.templates.push(effect);
         timeline.instances.push(EffectInstance::new(id, 10_000));
-        let plan = compile_plan(&timeline, &[], &[]).unwrap();
+        let plan = compile_plan(&timeline, &[], &[], &[]).unwrap();
         let actions = plan["actions"].as_array().unwrap();
         assert_eq!(actions.first().unwrap()["time_ms"], 10_000);
         assert_eq!(actions.first().unwrap()["step"]["value"], 0);
@@ -636,7 +666,7 @@ mod tests {
         track.muted = true;
         let mut timeline = Timeline::new();
         timeline.analog_tracks.push(track.clone());
-        let plan = compile_plan(&timeline, &[], &[track]).unwrap();
+        let plan = compile_plan(&timeline, &[], &[], &[track]).unwrap();
         let actions = plan["actions"].as_array().unwrap();
         assert_eq!(actions.len(), 1);
         assert_eq!(actions[0]["time_ms"], 0);

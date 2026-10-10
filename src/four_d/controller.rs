@@ -1364,6 +1364,9 @@ impl ControllerClient {
         if matches!(command, Command::RelaySet { id: 0, .. }) {
             return Err("relay ID must be non-zero".to_string());
         }
+        if matches!(command, Command::MotionSide { side, motion } if side > 1 || motion > 2) {
+            return Err("motion side or direction is outside the controller contract".to_string());
+        }
         match command {
             Command::Ping => {
                 self.call("controller.ping", json!({}))?;
@@ -1372,6 +1375,19 @@ impl ControllerClient {
                 self.call(
                     "controller.command.execute",
                     json!({"command": format!("relay {id} {}", if state { "on" } else { "off" })}),
+                )?;
+            }
+            Command::MotionSide { side, motion } => {
+                let side = if side == 0 { "left" } else { "right" };
+                let motion = match motion {
+                    0 => "stop",
+                    1 => "up",
+                    2 => "down",
+                    _ => unreachable!("validated above"),
+                };
+                self.call(
+                    "controller.command.execute",
+                    json!({"command": format!("relay side {side} {motion}")}),
                 )?;
             }
             Command::PwmSet { channel, value } => {

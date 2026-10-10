@@ -768,6 +768,7 @@ pub struct PealayerApp {
     pub(crate) compact_hardware_controls: bool,
     pub(crate) compact_timeline_tracks: bool,
     pub(crate) timeline_hide_cue_text_overflow: bool,
+    pub(crate) timeline_cue_editor_presentation: crate::config::TimelineCueEditorPresentation,
     pub(crate) timeline_header_wheel_vertical_scroll: bool,
     pub(crate) timeline_plain_wheel_action: crate::config::TimelineWheelBehavior,
     pub(crate) timeline_ctrl_wheel_action: crate::config::TimelineWheelBehavior,
@@ -1666,6 +1667,10 @@ impl eframe::App for PealayerApp {
                                     .direct_control
                                     .as_ref()
                                     .map(|cue| cue.value_basis_points),
+                                motion_direction: effect
+                                    .direct_control
+                                    .as_ref()
+                                    .and_then(|cue| cue.motion.map(|motion| motion.direction)),
                             })
                     })
                     .collect(),
@@ -6627,6 +6632,7 @@ impl PealayerApp {
         cfg.compact_hardware_controls = self.compact_hardware_controls;
         cfg.compact_timeline_tracks = self.compact_timeline_tracks;
         cfg.timeline_hide_cue_text_overflow = self.timeline_hide_cue_text_overflow;
+        cfg.timeline_cue_editor_presentation = self.timeline_cue_editor_presentation;
         cfg.timeline_header_wheel_vertical_scroll = self.timeline_header_wheel_vertical_scroll;
         cfg.timeline_plain_wheel_action = self.timeline_plain_wheel_action;
         cfg.timeline_ctrl_wheel_action = self.timeline_ctrl_wheel_action;
@@ -6996,6 +7002,7 @@ impl PealayerApp {
         self.compact_hardware_controls = config.compact_hardware_controls;
         self.compact_timeline_tracks = config.compact_timeline_tracks;
         self.timeline_hide_cue_text_overflow = config.timeline_hide_cue_text_overflow;
+        self.timeline_cue_editor_presentation = config.timeline_cue_editor_presentation;
         self.timeline_header_wheel_vertical_scroll = config.timeline_header_wheel_vertical_scroll;
         self.timeline_plain_wheel_action = config.timeline_plain_wheel_action;
         self.timeline_ctrl_wheel_action = config.timeline_ctrl_wheel_action;
@@ -7989,18 +7996,26 @@ impl PealayerApp {
             &muted_tracks,
             &self.track_soloed,
         );
+        let motions = crate::four_d::engine::compile_direct_motion_cues(
+            &self.timeline,
+            &muted_tracks,
+            &self.track_soloed,
+        );
         let macros = crate::four_d::engine::compile_controller_macros(&self.timeline);
         let strip_effects = crate::four_d::engine::compile_controller_strip_effects(&self.timeline);
         let analog=self.linked_analog_tracks();
         let mut output_timeline = self.timeline.clone();
         output_timeline.analog_tracks = analog.clone();
         let direct_pwm = crate::four_d::engine::compile_direct_pwm_cues(&output_timeline);
-        let payload=crate::four_d::media_timeline::compile_plan(&output_timeline,&relays,&analog);
+        let payload=crate::four_d::media_timeline::compile_plan(&output_timeline,&relays,&motions,&analog);
         if let Ok(mut plan)=self.engine_handle.prepared_timeline.lock(){plan.replace(payload);}
         let _ = self
             .engine_handle
             .sender
             .send(crate::four_d::engine::EngineMessage::UpdateQueue(relays));
+        let _ = self.engine_handle.sender.send(
+            crate::four_d::engine::EngineMessage::UpdateMotionQueue(motions),
+        );
         let _ = self
             .engine_handle
             .sender
@@ -8046,7 +8061,8 @@ impl PealayerApp {
             .filter(|id| *id != 0);
         let is_pwm = matches!(control.kind.as_str(), "pwm" | "mosfet")
             || control_key.starts_with("pwm.");
-        if relay_id.is_none() && !is_pwm {
+        let motion_side = crate::ui::layout::motion_side_for_control(&control);
+        if relay_id.is_none() && !is_pwm && motion_side.is_none() {
             return Err(format!("Channel '{}' does not support direct value cues", control.name));
         }
         if behavior == crate::four_d::models::DirectCueBehavior::Ramp && !is_pwm {
@@ -8056,7 +8072,9 @@ impl PealayerApp {
             return Err("Cue values must be between 0 and 100%".into());
         }
         let value = value_basis_points.min(10_000);
-        let value_label = if relay_id.is_some() {
+        let value_label = if motion_side.is_some() {
+            if value >= 5_000 { "Up".to_string() } else { "Down".to_string() }
+        } else if relay_id.is_some() {
             if value >= 5_000 { "On".to_string() } else { "Off".to_string() }
         } else {
             format!("{:.2}%", f32::from(value) / 100.0)
@@ -8070,8 +8088,21 @@ impl PealayerApp {
             relay_id,
         );
         if let Some(direct) = template.direct_control.as_mut() {
-            direct.behavior = behavior;
-            direct.end_value_basis_points = end_value_basis_points;
+            if let Some(side) = motion_side {
+                direct.motion = Some(crate::four_d::models::DirectMotionCue {
+                    side,
+                    direction: if value >= 5_000 {
+                        crate::four_d::models::DirectMotionDirection::Up
+                    } else {
+                        crate::four_d::models::DirectMotionDirection::Down
+                    },
+                });
+                direct.behavior = crate::four_d::models::DirectCueBehavior::Hold;
+                direct.end_value_basis_points = 0;
+            } else {
+                direct.behavior = behavior;
+                direct.end_value_basis_points = end_value_basis_points;
+            }
         }
         let template_id = template.id;
         let instance = crate::four_d::models::EffectInstance::new(template_id, start_time_ms);
@@ -8106,6 +8137,11 @@ impl PealayerApp {
             .and_then(|cue| self.timeline.templates.iter().find(|effect| effect.id == cue.effect_id))
             .and_then(|effect| effect.direct_control.as_ref())
             .ok_or_else(|| "This cue has no direct channel value".to_string())?;
+        if current.motion.is_some()
+            && behavior.is_some_and(|behavior| behavior != crate::four_d::models::DirectCueBehavior::Hold)
+        {
+            return Err("Motion cues are timed and always stop at the cue end".into());
+        }
         if behavior == Some(crate::four_d::models::DirectCueBehavior::Ramp) && !current.control_key.starts_with("pwm.") {
             return Err("Ramps require a PWM channel".into());
         }
@@ -8133,14 +8169,26 @@ impl PealayerApp {
             .ok_or_else(|| "This recorded effect has no direct value".to_string())?;
         let value = value_basis_points.min(10_000);
         direct.value_basis_points = value;
-        if let Some(behavior) = behavior { direct.behavior = behavior; }
-        if let Some(end) = end_value_basis_points { direct.end_value_basis_points = end; }
+        if let Some(motion) = direct.motion.as_mut() {
+            motion.direction = if value >= 5_000 {
+                crate::four_d::models::DirectMotionDirection::Up
+            } else {
+                crate::four_d::models::DirectMotionDirection::Down
+            };
+            direct.behavior = crate::four_d::models::DirectCueBehavior::Hold;
+            direct.end_value_basis_points = 0;
+        } else {
+            if let Some(behavior) = behavior { direct.behavior = behavior; }
+            if let Some(end) = end_value_basis_points { direct.end_value_basis_points = end; }
+        }
         let base_name = effect
             .name
             .split_once(" · ")
             .map_or(effect.name.as_str(), |(base, _)| base)
             .to_string();
-        let value_label = if direct.control_key.starts_with("relay.") {
+        let value_label = if let Some(motion) = direct.motion {
+            motion.direction.label().to_string()
+        } else if direct.control_key.starts_with("relay.") {
             if value >= 5_000 { "On".to_string() } else { "Off".to_string() }
         } else {
             format!("{:.2}%", f32::from(value) / 100.0)
@@ -8972,6 +9020,7 @@ impl Default for PealayerApp {
             compact_hardware_controls: false,
             compact_timeline_tracks: true,
             timeline_hide_cue_text_overflow: true,
+            timeline_cue_editor_presentation: crate::config::TimelineCueEditorPresentation::Dialog,
             timeline_header_wheel_vertical_scroll: true,
             timeline_plain_wheel_action: crate::config::TimelineWheelBehavior::VerticalScroll,
             timeline_ctrl_wheel_action: crate::config::TimelineWheelBehavior::Zoom,

@@ -192,6 +192,7 @@ export interface PlayerState {
     end_value_basis_points?: number | null;
     control_key?: string | null;
     value_basis_points?: number | null;
+    motion_direction?: 'up' | 'down' | null;
   }>;
   timeline_tracks?: Array<{
     key: string;

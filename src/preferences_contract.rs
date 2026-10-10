@@ -706,6 +706,22 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             );
             control
         },
+        {
+            let mut control = PreferenceControl::select(
+                "timeline_cue_editor_presentation",
+                "hardware",
+                "Timeline",
+                "Open cue properties in",
+                &[
+                    ("dialog", "Modal dialog"),
+                    ("panel", "Effect Controls panel"),
+                ],
+            );
+            control.description = Some(
+                "Choose how newly inserted and double-clicked cues are edited. Discarding a new modal cue removes it; panel mode keeps it immediately.",
+            );
+            control
+        },
         PreferenceControl::boolean(
             "timeline_header_wheel_vertical_scroll",
             "input",
@@ -1526,6 +1542,18 @@ mod tests {
         assert!(matches!(overflow_control.kind, PreferenceControlKind::Boolean));
         assert_eq!(overflow_control.section, "hardware");
         assert_eq!(overflow_control.group, "Timeline");
+
+        let cue_editor = controls
+            .iter()
+            .find(|control| control.key == "timeline_cue_editor_presentation")
+            .expect("timeline cue editor presentation preference");
+        assert!(matches!(cue_editor.kind, PreferenceControlKind::Select));
+        assert_eq!(cue_editor.section, "hardware");
+        assert_eq!(cue_editor.group, "Timeline");
+        assert_eq!(
+            cue_editor.options.iter().map(|option| option.value.as_str().unwrap()).collect::<Vec<_>>(),
+            ["dialog", "panel"]
+        );
     }
 
     #[test]
