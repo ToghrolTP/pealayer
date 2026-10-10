@@ -43,6 +43,9 @@ statements are not the present product state.
 - Effects Library and Hardware Monitor share a compact non-overlapping scrollbar
   lane. Library action icons and folder-add buttons reveal on hover or keyboard
   focus without shifting geometry: [library verification](effects-library-hover-spacing.md).
+- Native dropdowns share keyboard choice navigation and stable full-width rows;
+  closed color indicators and the unified Custom picker retain app/session
+  swatches: [dropdown verification](dropdown-navigation-colors.md).
 
 ## Remaining gates · do not silently mark complete
 

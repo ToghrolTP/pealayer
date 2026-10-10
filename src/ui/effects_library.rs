@@ -1,3 +1,4 @@
+use crate::ui::dropdown::DropdownUiExt;
 use crate::app::{ControllerEffectDraft, PealayerApp};
 use eframe::egui;
 
@@ -825,7 +826,7 @@ fn sequence_cue_context_menu(
         ui.menu_button(format!("{} Action", crate::ui::icons::LIGHTNING), |ui| {
             for &(value, caption) in options {
                 if ui
-                    .selectable_label(step.value.unwrap_or_default() == value, caption)
+                    .dropdown_choice(step.value.unwrap_or_default() == value, caption)
                     .clicked()
                 {
                     step.value = Some(value);
@@ -1080,11 +1081,11 @@ fn draw_sequence_timeline(
                 ui.add(egui::Slider::new(&mut zoom, 30.0..=320.0).show_value(false));
                 ui.separator();
                 ui.checkbox(&mut snap, "Snap");
-                egui::ComboBox::from_id_salt((state_prefix.clone(), "grid"))
+                crate::ui::dropdown::ComboBox::from_id_salt((state_prefix.clone(), "grid"))
                     .selected_text(crate::duration::format_time_value_ms(quantum_ms))
                     .show_ui(ui, |ui| {
                         for value in [1_u64, 10, 20, 25, 50, 100, 250, 500, 1_000] {
-                            ui.selectable_value(
+                            ui.dropdown_value(
                                 &mut quantum_ms,
                                 value,
                                 crate::duration::format_time_value_ms(value),
@@ -1615,7 +1616,7 @@ fn draw_timeline_authoring_fields(
 
     if supports_curve && (step.to_value.is_some() || step.to_red.is_some()) {
         ui.label("Easing");
-        egui::ComboBox::from_id_salt(("sequence-easing", index))
+        crate::ui::dropdown::ComboBox::from_id_salt(("sequence-easing", index))
             .selected_text(if step.easing.is_empty() {
                 "Linear"
             } else {
@@ -1628,7 +1629,7 @@ fn draw_timeline_authoring_fields(
                     ("ease-out", "Ease out"),
                     ("ease-in-out", "Ease in/out"),
                 ] {
-                    ui.selectable_value(&mut step.easing, value.to_string(), label);
+                    ui.dropdown_value(&mut step.easing, value.to_string(), label);
                 }
             });
         ui.end_row();
@@ -1741,7 +1742,7 @@ fn draw_sequence_step_editor(
                     .show(ui, |ui| {
                         ui.label("Command");
                         let previous_kind = step.kind.clone();
-                        egui::ComboBox::from_id_salt(("sequence-step-kind", index))
+                        crate::ui::dropdown::ComboBox::from_id_salt(("sequence-step-kind", index))
                             .selected_text(if step.kind.is_empty() {
                                 "Choose…"
                             } else {
@@ -1753,14 +1754,14 @@ fn draw_sequence_step_editor(
                                     && !kinds.iter().any(|kind| *kind == step.kind)
                                 {
                                     let unavailable = step.kind.clone();
-                                    ui.selectable_value(
+                                    ui.dropdown_value(
                                         &mut step.kind,
                                         unavailable.clone(),
                                         format!("{unavailable} (unavailable)"),
                                     );
                                 }
                                 for kind in kinds {
-                                    ui.selectable_value(&mut step.kind, kind.to_string(), kind);
+                                    ui.dropdown_value(&mut step.kind, kind.to_string(), kind);
                                 }
                             });
                         if step.kind != previous_kind {
@@ -1788,15 +1789,15 @@ fn draw_sequence_step_editor(
                                 ui.label("Seat");
                                 let target = step.target.get_or_insert(0);
                                 let selected_name = motion_seat_name(capabilities, *target);
-                                egui::ComboBox::from_id_salt(("motion-side", index))
+                                crate::ui::dropdown::ComboBox::from_id_salt(("motion-side", index))
                                     .selected_text(selected_name)
                                     .show_ui(ui, |ui| {
-                                        ui.selectable_value(
+                                        ui.dropdown_value(
                                             target,
                                             0,
                                             motion_seat_name(capabilities, 0),
                                         );
-                                        ui.selectable_value(
+                                        ui.dropdown_value(
                                             target,
                                             1,
                                             motion_seat_name(capabilities, 1),
@@ -1805,16 +1806,16 @@ fn draw_sequence_step_editor(
                                 ui.end_row();
                                 ui.label("Action");
                                 let value = step.value.get_or_insert(0);
-                                egui::ComboBox::from_id_salt(("motion-action", index))
+                                crate::ui::dropdown::ComboBox::from_id_salt(("motion-action", index))
                                     .selected_text(match *value {
                                         1 => "Up",
                                         2 => "Down",
                                         _ => "Stop",
                                     })
                                     .show_ui(ui, |ui| {
-                                        ui.selectable_value(value, 0, "Stop");
-                                        ui.selectable_value(value, 1, "Up");
-                                        ui.selectable_value(value, 2, "Down");
+                                        ui.dropdown_value(value, 0, "Stop");
+                                        ui.dropdown_value(value, 1, "Up");
+                                        ui.dropdown_value(value, 2, "Down");
                                     });
                                 refresh_semantic_action(step);
                                 ui.end_row();
@@ -1831,12 +1832,12 @@ fn draw_sequence_step_editor(
                                     })
                                     .map(|output| format!("R{} · {}", output.id, output.name))
                                     .unwrap_or_else(|| format!("R{}", target.saturating_add(1)));
-                                egui::ComboBox::from_id_salt(("relay-target", index))
+                                crate::ui::dropdown::ComboBox::from_id_salt(("relay-target", index))
                                     .selected_text(selected)
                                     .show_ui(ui, |ui| {
                                         if let Some(capabilities) = capabilities {
                                             for output in &capabilities.relays {
-                                                ui.selectable_value(
+                                                ui.dropdown_value(
                                                     target,
                                                     output.id.saturating_sub(1),
                                                     format!("R{} · {}", output.id, output.name),
@@ -1847,11 +1848,11 @@ fn draw_sequence_step_editor(
                                 ui.end_row();
                                 ui.label("State");
                                 let value = step.value.get_or_insert(0);
-                                egui::ComboBox::from_id_salt(("relay-state", index))
+                                crate::ui::dropdown::ComboBox::from_id_salt(("relay-state", index))
                                     .selected_text(if *value == 0 { "Off" } else { "On" })
                                     .show_ui(ui, |ui| {
-                                        ui.selectable_value(value, 0, "Off");
-                                        ui.selectable_value(value, 1, "On");
+                                        ui.dropdown_value(value, 0, "Off");
+                                        ui.dropdown_value(value, 1, "On");
                                     });
                                 refresh_semantic_action(step);
                                 ui.end_row();
@@ -1876,12 +1877,12 @@ fn draw_sequence_step_editor(
                                     })
                                     .map(|output| format!("CH{} · {}", output.id, output.name))
                                     .unwrap_or_else(|| format!("CH{target}"));
-                                egui::ComboBox::from_id_salt(("pwm-target", index))
+                                crate::ui::dropdown::ComboBox::from_id_salt(("pwm-target", index))
                                     .selected_text(selected)
                                     .show_ui(ui, |ui| {
                                         if let Some(capabilities) = capabilities {
                                             for output in &capabilities.pwm_channels {
-                                                ui.selectable_value(
+                                                ui.dropdown_value(
                                                     target,
                                                     output.id,
                                                     format!("CH{} · {}", output.id, output.name),
@@ -1908,19 +1909,19 @@ fn draw_sequence_step_editor(
                             }
                             "display" => {
                                 ui.label("Display");
-                                egui::ComboBox::from_id_salt(("display-destination", index))
+                                crate::ui::dropdown::ComboBox::from_id_salt(("display-destination", index))
                                     .selected_text(if step.destination.is_empty() {
                                         "Segments"
                                     } else {
                                         &step.destination
                                     })
                                     .show_ui(ui, |ui| {
-                                        ui.selectable_value(
+                                        ui.dropdown_value(
                                             &mut step.destination,
                                             "segments".to_string(),
                                             "Segments",
                                         );
-                                        ui.selectable_value(
+                                        ui.dropdown_value(
                                             &mut step.destination,
                                             "lcd".to_string(),
                                             "LCD",
@@ -2037,11 +2038,11 @@ fn draw_sequence_step_editor(
                                     .map(|strip| strip.maximum_pixels.min(u16::from(u8::MAX)))
                                     .unwrap_or(100)
                                     as u8;
-                                egui::ComboBox::from_id_salt(("addressable-pixel", index))
+                                crate::ui::dropdown::ComboBox::from_id_salt(("addressable-pixel", index))
                                     .selected_text(format!("Pixel {}", target.saturating_add(1)))
                                     .show_ui(ui, |ui| {
                                         for pixel in 0..maximum {
-                                            ui.selectable_value(
+                                            ui.dropdown_value(
                                                 target,
                                                 pixel,
                                                 format!("Pixel {}", pixel + 1),
@@ -2079,7 +2080,7 @@ fn draw_sequence_step_editor(
                             "menu-action" => {
                                 ui.label("Front-panel action");
                                 let target = step.target.get_or_insert(0);
-                                egui::ComboBox::from_id_salt(("menu-action", index))
+                                crate::ui::dropdown::ComboBox::from_id_salt(("menu-action", index))
                                     .selected_text(match *target {
                                         0 => "Back",
                                         1 => "Enter",
@@ -2087,10 +2088,10 @@ fn draw_sequence_step_editor(
                                         _ => "Increase",
                                     })
                                     .show_ui(ui, |ui| {
-                                        ui.selectable_value(target, 0, "Back");
-                                        ui.selectable_value(target, 1, "Enter");
-                                        ui.selectable_value(target, 2, "Decrease");
-                                        ui.selectable_value(target, 3, "Increase");
+                                        ui.dropdown_value(target, 0, "Back");
+                                        ui.dropdown_value(target, 1, "Enter");
+                                        ui.dropdown_value(target, 2, "Decrease");
+                                        ui.dropdown_value(target, 3, "Increase");
                                     });
                                 ui.end_row();
                             }
@@ -2258,22 +2259,12 @@ fn recording_color_picker(ui: &mut egui::Ui, value: &mut String) -> egui::Respon
         .iter()
         .find(|color| color.id == *value)
         .unwrap_or(&recording_colors()[0]);
-    let response = egui::ComboBox::from_id_salt("effect_recording_color")
+    let response = crate::ui::dropdown::ComboBox::from_id_salt("effect_recording_color")
         .selected_text(recording_color_label(ui, &selected.label))
         .show_ui(ui, |ui| {
             for color in recording_colors() {
-                let (rect, row) = ui.allocate_exact_size(
-                    egui::vec2(ui.available_width(), ui.spacing().interact_size.y.max(26.0)),
-                    egui::Sense::click(),
-                );
-                let selected = *value == color.id;
-                let visuals = ui.style().interact_selectable(&row, selected);
-                ui.painter().rect_filled(rect, 4.0, visuals.weak_bg_fill);
-                ui.painter().rect_stroke(rect, 4.0, egui::Stroke::new(1.0,
-                    if selected { visuals.bg_stroke.color } else { egui::Color32::TRANSPARENT }), egui::StrokeKind::Inside);
-                ui.painter().text(egui::pos2(rect.left() + ui.spacing().button_padding.x + 24.0, rect.center().y),
-                    egui::Align2::LEFT_CENTER, &color.label, egui::TextStyle::Button.resolve(ui.style()), visuals.text_color());
-                paint_recording_swatch(ui, row.rect, &color.id);
+                let row = crate::ui::dropdown::choice(ui, *value == color.id,
+                    &color.label, Some(recording_color(&color.id)));
                 if row.on_hover_cursor(egui::CursorIcon::PointingHand).clicked() {
                     *value = color.id.clone();
                     ui.close();
@@ -2348,8 +2339,8 @@ pub(crate) fn draw_effect_capture_controls(app: &mut PealayerApp, ui: &mut egui:
         ui.add_enabled_ui(!active && !busy && connected, |ui| {
             let has_melodies = hardware.as_ref().is_some_and(|value| !value.melodies.is_empty());
             let combo_id = ui.make_persistent_id("effect_add_melody");
-            let was_open = egui::ComboBox::is_open(ui.ctx(), combo_id);
-            let response = egui::ComboBox::from_id_salt("effect_add_melody")
+            let was_open = crate::ui::dropdown::ComboBox::is_open(ui.ctx(), combo_id);
+            let response = crate::ui::dropdown::ComboBox::from_id_salt("effect_add_melody")
                 .selected_text(if has_melodies {
                     format!("{} Add melody", crate::ui::icons::MUSIC_NOTE)
                 } else {
@@ -2368,7 +2359,7 @@ pub(crate) fn draw_effect_capture_controls(app: &mut PealayerApp, ui: &mut egui:
                             app.language,
                             melody.duration_ms(),
                         );
-                        if ui.selectable_label(
+                        if ui.dropdown_choice(
                             false,
                             format!("{}  {} · {duration}", crate::ui::icons::MUSIC_NOTE, melody.name),
                         ).clicked() {
@@ -2378,17 +2369,17 @@ pub(crate) fn draw_effect_capture_controls(app: &mut PealayerApp, ui: &mut egui:
                     }
                 })
                 .response;
-            refresh_melodies = !was_open && egui::ComboBox::is_open(ui.ctx(), response.id);
+            refresh_melodies = !was_open && crate::ui::dropdown::ComboBox::is_open(ui.ctx(), response.id);
         });
         ui.add_enabled_ui(!active && !busy, |ui| {
-            egui::ComboBox::from_id_salt("effect_capture_clock").width(160.0)
+            crate::ui::dropdown::ComboBox::from_id_salt("effect_capture_clock").width(160.0)
                 .selected_text(match app.hardware_effect_authoring.capture_mode.as_str() {
                     "device-clock" => "Device clock",
                     "board-retained" => "Board capture",
                     _ => "All live sources",
                 }).show_ui(ui, |ui| {
                     for (value, label) in [("automatic", "All live sources"), ("device-clock", "Device clock"), ("board-retained", "Board capture")] {
-                        ui.selectable_value(&mut app.hardware_effect_authoring.capture_mode, value.into(), label);
+                        ui.dropdown_value(&mut app.hardware_effect_authoring.capture_mode, value.into(), label);
                     }
                 });
         });
@@ -2745,24 +2736,24 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                         recording_color_picker(ui, &mut draft.color);
                                         ui.end_row();
                                         ui.label(&labels.10);
-                                        egui::ComboBox::from_id_salt("effect_sequence_engine")
+                                        crate::ui::dropdown::ComboBox::from_id_salt("effect_sequence_engine")
                                             .selected_text(match draft.engine.as_str() {
                                                 "mcu" => "Device clock (forced)",
                                                 "host" => "Host clock (forced)",
                                                 _ => "Automatic (recommended)",
                                             })
                                             .show_ui(ui, |ui| {
-                                                ui.selectable_value(
+                                                ui.dropdown_value(
                                                     &mut draft.engine,
                                                     "auto".to_string(),
                                                     "Automatic (recommended)",
                                                 );
-                                                ui.selectable_value(
+                                                ui.dropdown_value(
                                                     &mut draft.engine,
                                                     "host".to_string(),
                                                     "Host clock (forced)",
                                                 );
-                                                ui.selectable_value(
+                                                ui.dropdown_value(
                                                     &mut draft.engine,
                                                     "mcu".to_string(),
                                                     "Device clock (forced)",

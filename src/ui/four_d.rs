@@ -1,3 +1,4 @@
+use crate::ui::dropdown::DropdownUiExt;
 use crate::app::PealayerApp;
 use eframe::egui;
 
@@ -191,7 +192,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         ui.end_row();
 
                         ui.label(app.tr("Output:"));
-                        egui::ComboBox::from_id_salt("custom_template_relay")
+                        crate::ui::dropdown::ComboBox::from_id_salt("custom_template_relay")
                             .selected_text(
                                 relay_capabilities
                                     .iter()
@@ -201,7 +202,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             )
                             .show_ui(ui, |ui| {
                                 for relay in &relay_capabilities {
-                                    ui.selectable_value(
+                                    ui.dropdown_value(
                                         &mut target_relay,
                                         relay.id,
                                         app.display_text(&relay.name),

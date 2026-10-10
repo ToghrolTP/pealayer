@@ -1,3 +1,4 @@
+use crate::ui::dropdown::DropdownUiExt;
 use crate::app::{MediaTrackInfo, MediaTrackKey, MediaTrackType, PealayerApp};
 use crate::media_info::{MediaCollectionEntry, MediaFileInfo, MediaPropertyGroup};
 use eframe::egui;
@@ -381,7 +382,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         if ui
-                            .selectable_label(
+                            .dropdown_choice(
                                 selection == InspectorSelection::File,
                                 format!("{}  File and metadata", crate::ui::icons::INFO),
                             )
@@ -403,7 +404,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 label.push_str(&format!(" · {language}"));
                             }
                             if ui
-                                .selectable_label(
+                                .dropdown_choice(
                                     selection == InspectorSelection::Track(key),
                                     format!("{}  {label}", track_icon(track.kind)),
                                 )

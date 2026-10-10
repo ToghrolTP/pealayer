@@ -1,3 +1,4 @@
+use crate::ui::dropdown::DropdownUiExt;
 use crate::app::{MediaTrackInfo, MediaTrackKey, MediaTrackType, PealayerApp};
 use eframe::egui;
 
@@ -67,7 +68,7 @@ pub(crate) fn draw_track_menu(app: &mut PealayerApp, ui: &mut egui::Ui, kind: Me
     let current = app.current_media_track_id(kind).to_string();
     let disabled = current == "no";
     if ui
-        .selectable_label(disabled, disabled_label(app, kind))
+        .dropdown_choice(disabled, disabled_label(app, kind))
         .clicked()
     {
         app.disable_media_track(kind);
@@ -81,7 +82,7 @@ pub(crate) fn draw_track_menu(app: &mut PealayerApp, ui: &mut egui::Ui, kind: Me
     }
     for track in tracks {
         let selected = current == track.id.to_string();
-        if ui.selectable_label(selected, track_label(&track)).clicked() {
+        if ui.dropdown_choice(selected, track_label(&track)).clicked() {
             app.select_media_track(MediaTrackKey { kind, id: track.id });
             ui.close();
         }

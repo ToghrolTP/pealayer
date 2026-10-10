@@ -1,4 +1,5 @@
 //! One shared remote-browser state; no directory parsing or network I/O on the UI thread.
+use crate::ui::dropdown::DropdownUiExt;
 use super::{dialog, icons};
 use crate::{app::PealayerApp, remote_location as remote};
 use eframe::egui;
@@ -79,7 +80,7 @@ pub fn draw(app: &mut PealayerApp, ctx: &egui::Context) {
                     ui.label(icons::MAGNIFYING_GLASS);
                     ui.add(crate::ui::dialog::singleline_text_edit(&mut view.filter).hint_text("Filter files...").desired_width(180.0));
                     for (by, label) in [(remote::SortBy::Name, "Name"), (remote::SortBy::Date, "Date"), (remote::SortBy::Size, "Size")] {
-                        if ui.selectable_label(state.sort == by, label).clicked() { remote::sort(by, if state.sort == by { !state.descending } else { false }); }
+                        if ui.dropdown_choice(state.sort == by, label).clicked() { remote::sort(by, if state.sort == by { !state.descending } else { false }); }
                     }
                     ui.label(egui::RichText::new(if state.descending { "Descending" } else { "Ascending" }).weak());
                 });

@@ -1,6 +1,7 @@
 //! One cross-platform icon vocabulary. These are font-backed Phosphor vectors,
 //! not emoji, so glyph availability and color do not vary by host OS.
 
+use crate::ui::dropdown::DropdownUiExt;
 pub use egui_phosphor::regular::{
     APP_WINDOW, ARROW_CLOCKWISE, ARROW_COUNTER_CLOCKWISE, ARROW_DOWN, ARROW_RIGHT,
     ARROW_SQUARE_OUT, ARROW_UP, ARROWS_IN, ARROWS_OUT, BELL, BROADCAST, CAR, CARET_DOWN,
@@ -319,6 +320,7 @@ pub fn searchable_icon_picker_contents(
         })
         .inner;
     ui.data_mut(|data| data.insert_persisted(view_id, grid));
+    crate::ui::dropdown::register_search(ui, &search_response);
     if request_focus || grid != previous_grid {
         search_response.request_focus();
     }
@@ -326,7 +328,7 @@ pub fn searchable_icon_picker_contents(
     if let Some(clear_label) = config.clear_label {
         ui.separator();
         if ui
-            .selectable_label(
+            .dropdown_choice(
                 value.trim().is_empty(),
                 format!("{}  {clear_label}", config.fallback_glyph),
             )
@@ -376,6 +378,7 @@ pub fn searchable_icon_picker_contents(
                                 selected_state,
                                 label,
                             );
+                            let response = crate::ui::dropdown::register_choice(ui, response, selected_state);
                             if response.clicked() {
                                 selected = Some(*key);
                             }
@@ -388,7 +391,7 @@ pub fn searchable_icon_picker_contents(
                 for (key, label, glyph) in &matching {
                     let text = icon_result_text(ui, glyph, label, search, false);
                     if ui
-                        .selectable_label(value.eq_ignore_ascii_case(key), text)
+                        .dropdown_choice(value.eq_ignore_ascii_case(key), text)
                         .clicked()
                     {
                         selected = Some(*key);
@@ -428,7 +431,7 @@ pub fn searchable_icon_picker(
     // and focus is requested only when the popup first opens.
     let button_id = ui.make_persistent_id(egui::IdSalt::new(&id_salt));
     let search_id = button_id.with("search");
-    let was_open = egui::ComboBox::is_open(ui.ctx(), button_id);
+    let was_open = crate::ui::dropdown::ComboBox::is_open(ui.ctx(), button_id);
     let mut search = ui.data_mut(|data| data.get_temp::<String>(search_id).unwrap_or_default());
     let previous = value.clone();
     let selected = icon_preset(config.presets, value);
@@ -448,7 +451,7 @@ pub fn searchable_icon_picker(
         selected_glyph.to_string()
     };
 
-    egui::ComboBox::from_id_salt(&id_salt)
+    crate::ui::dropdown::ComboBox::from_id_salt(&id_salt)
         .width(config.width)
         .height(320.0)
         .truncate()
@@ -471,7 +474,7 @@ pub fn searchable_icon_picker(
             searchable_icon_picker_contents(ui, value, &mut search, search_id, !was_open, config);
         });
 
-    if egui::ComboBox::is_open(ui.ctx(), button_id) {
+    if crate::ui::dropdown::ComboBox::is_open(ui.ctx(), button_id) {
         ui.data_mut(|data| data.insert_temp(search_id, search));
     } else {
         ui.data_mut(|data| data.remove::<String>(search_id));
@@ -524,11 +527,14 @@ pub fn searchable_icon_button(
                 config.width,
                 ui.ctx().content_rect().width(),
             ));
-            searchable_icon_picker_contents(ui, value, &mut search, search_id, !was_open, config);
+            crate::ui::dropdown::menu_ui(ui, picker_id, |ui| {
+                searchable_icon_picker_contents(ui, value, &mut search, search_id, !was_open, config);
+            });
         });
     if egui::Popup::is_id_open(ui.ctx(), popup_id) {
         ui.data_mut(|data| data.insert_temp(search_id, search));
     } else {
+        crate::ui::dropdown::clear_menu(ui.ctx(), picker_id);
         ui.data_mut(|data| data.remove::<String>(search_id));
     }
     *value != previous
@@ -944,7 +950,7 @@ mod tests {
             click_picker(&context, &mut value, compact, button.center());
             let (output, _, picker_id) = picker_frame(&context, &mut value, compact, Vec::new());
             let popup_id = picker_id.with("popup");
-            assert!(egui::Popup::is_id_open(&context, popup_id));
+            assert!(egui::Popup::is_id_open(&context, popup_id), "picker compact={compact}");
             assert!(
                 context.egui_wants_keyboard_input(),
                 "search must receive focus"
@@ -973,7 +979,7 @@ mod tests {
             );
             let lamp = painted_text_rect(&output, &format!("{LAMP}  Lamp"))
                 .expect("search must show the matching preset");
-            assert!(painted_text_rect(&output, &format!("{SEAT}  Seat")).is_none());
+            assert!(painted_text_rect(&output, &format!("{FOLDER_OPEN}  Folder")).is_none());
             click_picker(&context, &mut value, compact, lamp.center());
             assert_eq!(value, "lamp");
             assert!(!egui::Popup::is_id_open(&context, popup_id));
@@ -982,7 +988,8 @@ mod tests {
             click_picker(&context, &mut value, compact, button.center());
             let (output, _, _) = picker_frame(&context, &mut value, compact, Vec::new());
             assert!(painted_text_rect(&output, "Search icons...").is_some());
-            assert!(painted_text_rect(&output, &format!("{SEAT}  Seat")).is_some());
+            // Fixed-height rows scroll; assert an unfiltered row inside the viewport.
+            assert!(painted_text_rect(&output, &format!("{FOLDER_OPEN}  Folder")).is_some());
 
             let (output, _, _) = picker_frame(
                 &context,
@@ -1016,7 +1023,7 @@ mod tests {
             assert!(list_button.right() < grid_button.left());
             assert!((search.center().y - grid_button.center().y).abs() < 4.0);
             click_picker(&context, &mut value, compact, grid_button.center());
-            assert!(egui::Popup::is_id_open(&context, picker_id.with("popup")));
+            assert!(egui::Popup::is_id_open(&context, picker_id.with("popup")), "grid compact={compact}");
             assert!(
                 context
                     .data_mut(|data| data.get_persisted::<bool>(egui::Id::new(ICON_PICKER_GRID_ID)))
@@ -1030,18 +1037,18 @@ mod tests {
             );
             let lamp =
                 painted_text_rect(&output, &format!("{LAMP}\nLamp")).expect("filtered grid tile");
-            assert!(painted_text_rect(&output, &format!("{SEAT}\nSeat")).is_none());
+            assert!(painted_text_rect(&output, &format!("{FOLDER_OPEN}\nFolder")).is_none());
             click_picker(&context, &mut value, compact, lamp.center());
             assert_eq!(value, "lamp");
             assert!(!egui::Popup::is_id_open(&context, picker_id.with("popup")));
             let (_, button, _) = picker_frame(&context, &mut value, compact, Vec::new());
             click_picker(&context, &mut value, compact, button.center());
             let (output, _, _) = picker_frame(&context, &mut value, compact, Vec::new());
-            assert!(painted_text_rect(&output, &format!("{SEAT}\nSeat")).is_some());
+            assert!(painted_text_rect(&output, &format!("{FOLDER_OPEN}\nFolder")).is_some());
             let list_button = painted_text_rect(&output, LIST).unwrap();
             click_picker(&context, &mut value, compact, list_button.center());
             let (output, _, _) = picker_frame(&context, &mut value, compact, Vec::new());
-            assert!(painted_text_rect(&output, &format!("{SEAT}  Seat")).is_some());
+            assert!(painted_text_rect(&output, &format!("{FOLDER_OPEN}  Folder")).is_some());
         }
     }
 

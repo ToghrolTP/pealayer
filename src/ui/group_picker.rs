@@ -1,4 +1,5 @@
 //! One single-value group selector for channel presentation and effect editors.
+use crate::ui::dropdown::DropdownUiExt;
 use crate::config::AppLanguage;
 use eframe::egui;
 
@@ -39,7 +40,7 @@ pub(crate) fn group_picker<'a>(
     let mut search = ui.data_mut(|data| data.get_temp::<String>(search_id).unwrap_or_default());
     let ungrouped = crate::ui::i18n::tr(language, "Ungrouped");
     let width = width.min((ui.ctx().content_rect().width() - 24.0).max(80.0));
-    egui::ComboBox::from_id_salt(&id_salt)
+    crate::ui::dropdown::ComboBox::from_id_salt(&id_salt)
         .width(width)
         .height(280.0)
         .truncate()
@@ -61,13 +62,14 @@ pub(crate) fn group_picker<'a>(
                     .hint_text(crate::ui::i18n::tr(language, "Search or create group..."))
                     .desired_width(ui.available_width()),
             );
+            crate::ui::dropdown::register_search(ui, &edit);
             if !initialized {
                 edit.request_focus();
                 initialized = true;
             }
             ui.separator();
             if ui
-                .selectable_label(value.trim().is_empty(), &ungrouped)
+                .dropdown_choice(value.trim().is_empty(), &ungrouped)
                 .clicked()
             {
                 value.clear();
@@ -80,7 +82,7 @@ pub(crate) fn group_picker<'a>(
                 .filter(|group| group.to_lowercase().contains(&lower))
             {
                 if ui
-                    .selectable_label(
+                    .dropdown_choice(
                         value.trim() == group,
                         crate::ui::i18n::visual_text(language, group),
                     )
@@ -99,7 +101,7 @@ pub(crate) fn group_picker<'a>(
                     crate::ui::i18n::tr(language, "Create group"),
                     crate::ui::i18n::visual_text(language, query)
                 );
-                if ui.add(egui::Button::new(create).truncate()).clicked()
+                if ui.dropdown_choice(false, create).clicked()
                     || ((edit.has_focus() || edit.lost_focus())
                         && ui.input(|input| input.key_pressed(egui::Key::Enter)))
                 {
@@ -114,7 +116,7 @@ pub(crate) fn group_picker<'a>(
                 ui.close();
             }
         });
-    if egui::ComboBox::is_open(ui.ctx(), id) {
+    if crate::ui::dropdown::ComboBox::is_open(ui.ctx(), id) {
         ui.data_mut(|data| {
             data.insert_temp(search_id, search);
             data.insert_temp(focus_id, initialized);
@@ -139,7 +141,7 @@ pub(crate) fn effect_group_picker(
     language: AppLanguage,
 ) -> bool {
     let mut new_group = false;
-    egui::ComboBox::from_id_salt(id_salt)
+    crate::ui::dropdown::ComboBox::from_id_salt(id_salt)
         .width(width)
         .height(280.0)
         .truncate()
@@ -151,16 +153,15 @@ pub(crate) fn effect_group_picker(
         .show_ui(ui, |ui| {
             ui.set_width(width.min((ui.ctx().content_rect().width() - 24.0).max(80.0)));
             for group in groups {
-                if ui.add_sized([ui.available_width(), 26.0], egui::Button::new(
-                    crate::ui::i18n::visual_text(language, &group.name))
-                    .selected(*value == group.name).truncate()).on_hover_text(&group.name).clicked() {
+                if ui.dropdown_choice(*value == group.name,
+                    crate::ui::i18n::visual_text(language, &group.name)).on_hover_text(&group.name).clicked() {
                     *value = group.name.clone();
                     ui.close();
                 }
             }
             ui.separator();
             if ui
-                .button(format!(
+                .dropdown_choice(false, format!(
                     "{} {}",
                     crate::ui::icons::PLUS,
                     crate::ui::i18n::tr(language, "New...")

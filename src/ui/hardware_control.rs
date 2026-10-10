@@ -1,3 +1,4 @@
+use crate::ui::dropdown::DropdownUiExt;
 use crate::app::PealayerApp;
 use crate::four_d::controller::{HardwareAction, HardwareCapabilities, HardwareControl};
 use eframe::egui;
@@ -772,7 +773,7 @@ fn draw_motion_mode_selector(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let toggle_help = app.tr("Keep moving until Stop is pressed");
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 3.0;
-        ui.selectable_value(
+        ui.dropdown_value(
             &mut app.motion_control_mode,
             crate::config::MotionControlMode::Toggle,
             toggle,
@@ -780,7 +781,7 @@ fn draw_motion_mode_selector(app: &mut PealayerApp, ui: &mut egui::Ui) {
         .on_hover_text(toggle_help);
         // This selector is hosted in a right-to-left action slot. Paint Toggle
         // first so the user-facing order remains Push, then Toggle.
-        ui.selectable_value(
+        ui.dropdown_value(
             &mut app.motion_control_mode,
             crate::config::MotionControlMode::Hold,
             hold,
@@ -1797,7 +1798,7 @@ fn draw_binding_action_editor(
     let is_pwm = matches!(control.kind.as_str(), "pwm" | "mosfet");
     let has_hold_pair = control.actions.len() >= 2;
     let mut mode = binding_editor_mode(&draft.action);
-    egui::ComboBox::from_id_salt(("hardware-binding-mode", &draft.id))
+    crate::ui::dropdown::ComboBox::from_id_salt(("hardware-binding-mode", &draft.id))
         .selected_text(match mode {
             BindingEditorMode::Action => app.tr("Run one action"),
             BindingEditorMode::Toggle => app.tr("Toggle On / Off"),
@@ -1806,23 +1807,23 @@ fn draw_binding_action_editor(
         })
         .width(250.0)
         .show_ui(ui, |ui| {
-            ui.selectable_value(
+            ui.dropdown_value(
                 &mut mode,
                 BindingEditorMode::Action,
                 app.tr("Run one action"),
             );
             ui.add_enabled_ui(has_toggle, |ui| {
-                ui.selectable_value(
+                ui.dropdown_value(
                     &mut mode,
                     BindingEditorMode::Toggle,
                     app.tr("Toggle On / Off"),
                 );
             });
             ui.add_enabled_ui(is_pwm, |ui| {
-                ui.selectable_value(&mut mode, BindingEditorMode::Pwm, app.tr("Set PWM level"));
+                ui.dropdown_value(&mut mode, BindingEditorMode::Pwm, app.tr("Set PWM level"));
             });
             ui.add_enabled_ui(has_hold_pair, |ui| {
-                ui.selectable_value(
+                ui.dropdown_value(
                     &mut mode,
                     BindingEditorMode::Hold,
                     app.tr("While key is held"),
@@ -1842,13 +1843,13 @@ fn draw_binding_action_editor(
                 .find(|action| action.id == *action_id)
                 .map(|action| action.name.as_str())
                 .unwrap_or(action_id);
-            egui::ComboBox::from_id_salt(("hardware-binding-action", &draft.id))
+            crate::ui::dropdown::ComboBox::from_id_salt(("hardware-binding-action", &draft.id))
                 .selected_text(selected)
                 .width(250.0)
                 .show_ui(ui, |ui| {
                     for action in &control.actions {
                         if ui
-                            .selectable_label(action.id == *action_id, &action.name)
+                            .dropdown_choice(action.id == *action_id, &action.name)
                             .clicked()
                         {
                             *action_id = action.id.clone();
@@ -1891,13 +1892,13 @@ fn draw_binding_action_editor(
                 .spacing(egui::vec2(12.0, 8.0))
                 .show(ui, |ui| {
                     ui.label(app.tr("Key pressed"));
-                    egui::ComboBox::from_id_salt(("binding-press", &draft.id))
+                    crate::ui::dropdown::ComboBox::from_id_salt(("binding-press", &draft.id))
                         .selected_text(press_label.as_str())
                         .width(220.0)
                         .show_ui(ui, |ui| {
                             for action in &control.actions {
                                 if ui
-                                    .selectable_label(action.id == *press_action_id, &action.name)
+                                    .dropdown_choice(action.id == *press_action_id, &action.name)
                                     .clicked()
                                 {
                                     *press_action_id = action.id.clone();
@@ -1908,13 +1909,13 @@ fn draw_binding_action_editor(
                         });
                     ui.end_row();
                     ui.label(app.tr("Key released"));
-                    egui::ComboBox::from_id_salt(("binding-release", &draft.id))
+                    crate::ui::dropdown::ComboBox::from_id_salt(("binding-release", &draft.id))
                         .selected_text(release_label.as_str())
                         .width(220.0)
                         .show_ui(ui, |ui| {
                             for action in &control.actions {
                                 if ui
-                                    .selectable_label(action.id == *release_action_id, &action.name)
+                                    .dropdown_choice(action.id == *release_action_id, &action.name)
                                     .clicked()
                                 {
                                     *release_action_id = action.id.clone();
