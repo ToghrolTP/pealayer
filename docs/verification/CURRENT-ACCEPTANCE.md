@@ -26,6 +26,9 @@ statements are not the present product state.
   read-only paused sample found responsive applications, fresh media observation,
   connected hardware and no synchronization error. This is not a CPU soak or
   physical-output timing acceptance test.
+- Native NLE transport now uses contextual enabled/disabled styling, a square
+  Stop, and intrinsic-width responsive rows with trailing track/volume controls:
+  [transport verification](nle-transport.md).
 
 ## Remaining gates · do not silently mark complete
 
