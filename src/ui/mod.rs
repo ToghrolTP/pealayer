@@ -2,6 +2,7 @@ pub mod about;
 pub mod audio;
 pub mod board_info;
 pub mod controls;
+mod monitor_controls;
 pub mod color_picker;
 pub mod dialog;
 pub mod effects_library;

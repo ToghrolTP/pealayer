@@ -71,7 +71,9 @@ the user's confirmation, not inferred from compilation.
 
 NLE volume (9 October): [responsive transport correction](verification/NLE-VOLUME-AND-RESPONSIVE-TRANSPORT.md)
 separates seeking from the native action row and exposes a full-width volume
-strip on narrow monitor panels. Web Simple/NLE now share volume, mute and
+strip on narrow monitor panels. The [10 October native transport correction](verification/nle-transport.md)
+supersedes the fixed-row layout: one row when it fits, with trailing
+track selectors/volume in multi-row layouts. Web Simple/NLE now share volume, mute and
 percentage controls using the same session commands. The build is installed on
 David and Cafe with live volume/mute synchronization verified; Erfan is installed
 without launching alongside KMPlayer. Narrow native layout was inspected through

@@ -27,22 +27,76 @@ pub(crate) fn playback_button_role(app: &PealayerApp) -> &'static str {
     if app.is_paused || app.is_playback_finished() { "green" } else { "amber" }
 }
 
+/// Neutral at rest; intent color belongs to an enabled hover/focus/press,
+/// or to a genuine active state (Pause while playing, for example).
+/// Keep egui's disabled visuals and opacity instead of overriding glyph ink.
+pub(crate) fn contextual_transport_style(
+    style: &mut egui::Style,
+    palette: crate::config::ColorPalette,
+    role: &str,
+    active: bool,
+    enabled: bool,
+) {
+    if !enabled { return; }
+    let intent = crate::ui::palette::color(palette, style.visuals.dark_mode, role);
+    let surface = crate::ui::palette::color(palette, style.visuals.dark_mode, "surface-2");
+    let fill = egui::Color32::from_rgb(
+        ((surface.r() as u16 * 88 + intent.r() as u16 * 12) / 100) as u8,
+        ((surface.g() as u16 * 88 + intent.g() as u16 * 12) / 100) as u8,
+        ((surface.b() as u16 * 88 + intent.b() as u16 * 12) / 100) as u8,
+    );
+    let tint = |visuals: &mut egui::style::WidgetVisuals| {
+        visuals.fg_stroke.color = intent;
+        visuals.weak_bg_fill = fill;
+        visuals.bg_fill = fill;
+        visuals.bg_stroke = egui::Stroke::new(1.0, intent.gamma_multiply(0.45));
+    };
+    style.visuals.override_text_color = None;
+    tint(&mut style.visuals.widgets.hovered);
+    tint(&mut style.visuals.widgets.active);
+    if active { tint(&mut style.visuals.widgets.inactive); }
+}
+
+pub(crate) fn draw_contextual_transport_button(
+    palette: crate::config::ColorPalette,
+    ui: &mut egui::Ui,
+    icon: &str,
+    role: &str,
+    active: bool,
+) -> egui::Response {
+    ui.scope(|ui| {
+        let enabled = ui.is_enabled();
+        contextual_transport_style(ui.style_mut(), palette, role, active, enabled);
+        ui.add_sized([30.0, 22.0], egui::Button::new(icon))
+    }).inner
+}
+
 /// A bounded horizontal volume strip, shared by responsive monitor layouts.
 /// Session commands also control the authority when this app is a consumer.
 pub(crate) fn draw_volume_strip(app: &mut PealayerApp, ui: &mut egui::Ui) {
-    let icon = if app.is_muted { crate::ui::icons::SPEAKER_SLASH } else { crate::ui::icons::SPEAKER_HIGH };
-    if ui.add_sized([30.0, 22.0], transport_button(app.color_palette, ui, icon,
-        if app.is_muted { "amber" } else { "muted" }))
-        .on_hover_text(app.tr(if app.is_muted { "Unmute" } else { "Mute" })).clicked() {
+    let (toggle_mute, volume_update) = draw_volume_widgets(
+        ui, app.color_palette, app.is_muted, app.volume,
+        &app.tr(if app.is_muted { "Unmute" } else { "Mute" }), &app.tr("Volume"));
+    if toggle_mute {
         app.apply_interop_command(&ui.ctx().clone(), crate::platform::interop::InteropCommand::ToggleMute,
             "Volume control");
     }
-    let mut volume = app.volume;
+    if let Some(volume) = volume_update {
+        app.apply_interop_command(&ui.ctx().clone(), crate::platform::interop::InteropCommand::SetVolume { value: volume },
+            "Volume control");
+    }
+}
+
+pub(super) fn draw_volume_widgets(ui: &mut egui::Ui, palette: crate::config::ColorPalette,
+    muted: bool, mut volume: f64, mute_tooltip: &str, volume_label: &str) -> (bool, Option<f64>) {
+    let icon = if muted { crate::ui::icons::SPEAKER_SLASH } else { crate::ui::icons::SPEAKER_HIGH };
+    let toggle_mute = ui.add_sized([30.0, 22.0], transport_button(palette, ui, icon,
+        if muted { "amber" } else { "muted" })).on_hover_text(mute_tooltip).clicked();
     let old_width = ui.spacing().slider_width;
     // Reserve a stable percentage column, even when the value has fewer digits.
-    ui.spacing_mut().slider_width = (ui.available_width() - 44.0 - ui.spacing().item_spacing.x).max(1.0);
+    ui.spacing_mut().slider_width = (ui.available_width() - 44.0 - 2.0 * ui.spacing().item_spacing.x).max(1.0);
     let response = ui.add(egui::Slider::new(&mut volume, 0.0..=130.0).show_value(false))
-        .on_hover_text(format!("{}: {:.0}%", app.tr("Volume"), volume));
+        .on_hover_text(format!("{volume_label}: {volume:.0}%"));
     ui.spacing_mut().slider_width = old_width;
     let wheel = if response.hovered() {
         ui.input(|input| input.smooth_scroll_delta.y)
@@ -51,12 +105,9 @@ pub(crate) fn draw_volume_strip(app: &mut PealayerApp, ui: &mut egui::Ui) {
         volume = (volume + f64::from(wheel.signum()) * 2.0).clamp(0.0, 130.0);
         ui.input_mut(|input| input.smooth_scroll_delta.y = 0.0);
     }
-    if response.changed() || wheel != 0.0 {
-        app.apply_interop_command(&ui.ctx().clone(), crate::platform::interop::InteropCommand::SetVolume { value: volume },
-            "Volume control");
-    }
     ui.add_sized([44.0, 22.0], egui::Label::new(timecode_text(format!("{:.0}%", volume))))
-        .on_hover_text(app.tr("Volume"));
+        .on_hover_text(volume_label);
+    (toggle_mute, (response.changed() || wheel != 0.0).then_some(volume))
 }
 
 pub fn timecode_text(value: impl Into<String>) -> egui::RichText {
@@ -1360,6 +1411,34 @@ pub fn parse_timecode(value: &str) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn contextual_transport_uses_neutral_idle_and_untinted_disabled_states() {
+        for palette in [crate::config::ColorPalette::Studio, crate::config::ColorPalette::Native] {
+            for dark in [true, false] {
+                let mut original = egui::Style::default();
+                original.visuals = if dark { egui::Visuals::dark() } else { egui::Visuals::light() };
+                crate::ui::palette::apply(&mut original.visuals, palette);
+                for role in ["green", "amber", "red"] {
+                    let mut idle = original.clone();
+                    contextual_transport_style(&mut idle, palette, role, false, true);
+                    assert_eq!(idle.visuals.widgets.inactive, original.visuals.widgets.inactive);
+                    assert_eq!(idle.visuals.widgets.noninteractive, original.visuals.widgets.noninteractive);
+                    assert_eq!(idle.visuals.widgets.hovered.fg_stroke.color,
+                        crate::ui::palette::color(palette, dark, role));
+                    let mut active = original.clone();
+                    contextual_transport_style(&mut active, palette, role, true, true);
+                    assert_eq!(active.visuals.widgets.inactive.fg_stroke.color,
+                        idle.visuals.widgets.hovered.fg_stroke.color);
+                    for active_state in [true, false] {
+                        let mut disabled = original.clone();
+                        contextual_transport_style(&mut disabled, palette, role, active_state, false);
+                        assert_eq!(disabled.visuals, original.visuals);
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn chapter_snapping_uses_thumb_range_and_preserves_exact_timestamp() {

@@ -88,6 +88,10 @@ pub(crate) fn draw_track_menu(app: &mut PealayerApp, ui: &mut egui::Ui, kind: Me
     }
 }
 
+pub(crate) fn menu_button_label(kind: MediaTrackType) -> String {
+    format!("{} {}", icon(kind), crate::ui::icons::CARET_DOWN)
+}
+
 pub(crate) fn menu_button(
     app: &mut PealayerApp,
     ui: &mut egui::Ui,
@@ -100,11 +104,7 @@ pub(crate) fn menu_button(
         current_track_label(app, kind)
     );
     ui.push_id(id_salt, |ui| {
-        let response = egui::containers::menu::MenuButton::from_button(egui::Button::new(format!(
-            "{} {}",
-            icon(kind),
-            crate::ui::icons::CARET_DOWN
-        )))
+        let response = egui::containers::menu::MenuButton::from_button(egui::Button::new(menu_button_label(kind)))
         .ui(ui, |ui| draw_track_menu(app, ui, kind))
         .0;
         response.on_hover_text(tooltip)
