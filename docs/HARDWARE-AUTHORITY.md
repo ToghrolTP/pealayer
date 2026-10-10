@@ -77,6 +77,25 @@ handoff permission, and any current connection operation. It is not a relayed
 copy of the server's application identity. `/api/client/status` remains the
 smaller local peer diagnostic snapshot.
 
+For timing diagnostics, use its direct `playback_clock` and `hardware_sync`
+objects. `hardware_sync.ack_age_ms` is computed from the executor's monotonic
+ACK timestamp **when requested**, not when the UI last refreshed. It includes
+the current prepared/clock revision and epoch, reprepare/error state, clock
+transport counters and an identity-free subset of controller timeline evidence.
+Controller `clock_timing` separates feedback intervals from position corrections;
+worker-gap, clock-read and board-read delays distinguish execution starvation
+from clock updates. Inspect these together with dispatch/ACK lateness.
+Pealayer `clock_transport` counters and maxima are cumulative for this process.
+Controller timeline worker/read/dispatch/ACK maxima belong to the prepared plan;
+`clock_timing` maxima belong to a contiguous playing-clock interval and reset
+on pause/unload, publisher/plan/epoch change or a new playing interval. Compare
+before and after a bounded test; do not attribute an old maximum to a new test.
+This read uses a nonblocking lock: `state: busy` or `unavailable` does not mean
+healthy/empty hardware. Before registration the value is null. This is diagnostic
+evidence, not permission to bypass the executor's fresh-ACK or safety checks.
+`/api/player/status` is a cached UI presentation; do not use its cached ACK age
+as an authoritative live preflight gate. No extra heartbeat repaints are needed.
+
 Send `pealayer.process.connect` through native IPC, `/api/rpc`, `/api/ipc`,
 `/api/process/command`, or `/ws`. All paths use the same validated Rust command;
 the native connection dialog uses it too. For example:

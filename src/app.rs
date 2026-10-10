@@ -1547,7 +1547,8 @@ impl eframe::App for PealayerApp {
                         "clock_ack_revision":plan.clock_ack_revision,"clock_ack_epoch":plan.clock_ack_epoch,
                         "ack_age_ms":plan.last_ack.map(|ack|ack.elapsed().as_millis() as u64),
                         "error":plan.error,"deferred_reason":plan.deferred_reason,
-                        "requires_reprepare":plan.requires_reprepare,"timeline":plan.feedback
+                        "requires_reprepare":plan.requires_reprepare,"timeline":plan.feedback,
+                        "clock_transport":plan.clock_transport
                     })).unwrap_or(serde_json::Value::Null),
                 hardware_error: self
                     .engine_handle
