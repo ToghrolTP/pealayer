@@ -8747,8 +8747,11 @@ fn default_mpv_client(mpv: &libmpv2::Mpv) -> Arc<libmpv2::Mpv> {
 }
 
 #[cfg(test)]
-std::thread_local! {
-    static TEST_MPV_CLIENT: Arc<libmpv2::Mpv> = {
+static TEST_MPV_CLIENT: std::sync::OnceLock<Arc<libmpv2::Mpv>> = std::sync::OnceLock::new();
+
+#[cfg(test)]
+fn shared_test_mpv_client() -> Arc<libmpv2::Mpv> {
+    Arc::clone(TEST_MPV_CLIENT.get_or_init(|| {
         let mpv_client = Arc::new(
             get_shared_mpv()
                 .create_client(None)
@@ -8756,15 +8759,17 @@ std::thread_local! {
         );
         observe_default_mpv_client(&mpv_client);
         mpv_client
-    };
+    }))
 }
 
 #[cfg(test)]
 fn default_mpv_client(_mpv: &libmpv2::Mpv) -> Arc<libmpv2::Mpv> {
-    let mpv_client = TEST_MPV_CLIENT.with(Arc::clone);
+    let mpv_client = shared_test_mpv_client();
     // Every unit fixture starts with an empty client event queue. The player
-    // core was already process-global; sharing this client only avoids the
-    // native create/destroy churn that can crash the Windows GNU harness.
+    // core and client are both process-global. Rust's test harness creates a
+    // fresh worker thread for each test even with `--test-threads=1`, so a
+    // thread-local client would still be destroyed between fixtures and race
+    // libmpv's asynchronous teardown on Windows GNU.
     while mpv_client.wait_event(0.0).is_some() {}
     mpv_client
 }
@@ -10679,7 +10684,7 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn unit_app_fixtures_reuse_one_observed_mpv_client_per_test_thread() {
+    fn unit_app_fixtures_reuse_one_process_global_observed_mpv_client() {
         let _lock = lock_app_tests();
         let first = PealayerApp::default();
         let second = PealayerApp::default();
