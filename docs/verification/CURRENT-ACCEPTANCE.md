@@ -20,8 +20,8 @@ statements are not the present product state.
   [external player acceptance](EXTERNAL-MPV-DELIVERY.md).
 - Preferences, live branding, responsive volume, elapsed entry, buzzer catalog,
   Effect Controls and palette-safe widgets have focused delivery records.
-  [Latest widget delivery](PALETTE-SAFE-ELEGANCE.md) links the current installed
-  package; exact source/runtime identities belong there, not in product summaries.
+  [Widget delivery](PALETTE-SAFE-ELEGANCE.md) and the subsequent focused records
+  below retain exact source/runtime identities, not product summaries.
 - The production controller startup service exists and is running. A short
   read-only paused sample found responsive applications, fresh media observation,
   connected hardware and no synchronization error. This is not a CPU soak or
@@ -34,6 +34,8 @@ statements are not the present product state.
   [toolbar verification](timeline-toolbar-drag-feedback.md).
 - Effect Controls can show its selected cue in Timeline without seeking or
   changing hardware track state: [inspector verification](EFFECT-CONTROLS-INSPECTOR.md).
+- Hardware Monitor's hidden-channel menu uses a content-height, right-aligned
+  row without a viewport-sized gap: [disclosure verification](hardware-hidden-disclosure.md).
 
 ## Remaining gates · do not silently mark complete
 

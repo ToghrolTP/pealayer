@@ -7910,39 +7910,43 @@ fn draw_control_card_grid(
         .filter(|control| control.hidden && control_supports_presentation_policy(control))
         .collect::<Vec<_>>();
     if !hidden.is_empty() {
-        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            ui.menu_button(
-                format!(
-                    "{} {} {}",
-                    crate::ui::icons::EYE_SLASH,
-                    hidden.len(),
-                    app.tr("hidden")
-                ),
-                |ui| {
-                    ui.label(egui::RichText::new(app.tr("Hidden channels")).strong());
-                    ui.separator();
-                    for control in &hidden {
-                        if ui
-                            .button(format!(
-                                "{} {}",
-                                crate::ui::icons::EYE,
-                                crate::ui::i18n::visual_text(app.language, &control.name)
-                            ))
-                            .on_hover_text(app.tr("Show channel"))
-                            .clicked()
-                        {
-                            update_control_presentation_flags(
-                                app,
-                                capabilities,
-                                control,
-                                Some(false),
-                                None,
-                            );
-                            ui.close();
+        // Bound the right-aligned menu to a content-height row. On its own,
+        // with_layout centers it in the remaining panel height and reserves a gap.
+        ui.horizontal(|ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.menu_button(
+                    format!(
+                        "{} {} {}",
+                        crate::ui::icons::EYE_SLASH,
+                        hidden.len(),
+                        app.tr("hidden")
+                    ),
+                    |ui| {
+                        ui.label(egui::RichText::new(app.tr("Hidden channels")).strong());
+                        ui.separator();
+                        for control in &hidden {
+                            if ui
+                                .button(format!(
+                                    "{} {}",
+                                    crate::ui::icons::EYE,
+                                    crate::ui::i18n::visual_text(app.language, &control.name)
+                                ))
+                                .on_hover_text(app.tr("Show channel"))
+                                .clicked()
+                            {
+                                update_control_presentation_flags(
+                                    app,
+                                    capabilities,
+                                    control,
+                                    Some(false),
+                                    None,
+                                );
+                                ui.close();
+                            }
                         }
-                    }
-                },
-            );
+                    },
+                );
+            });
         });
         ui.add_space(4.0);
     }
@@ -9968,6 +9972,137 @@ mod timeline_row_tests {
         assert_eq!(control_grid_columns(720.0), 2);
         assert_eq!(action_grid_columns(280.0, 2), 2);
         assert_eq!(action_grid_columns(420.0, 3), 3);
+    }
+
+    fn hardware_hidden_disclosure_fixture(hidden_count: usize) -> (
+        PealayerApp,
+        crate::four_d::controller::HardwareCapabilities,
+    ) {
+        let mut capabilities = crate::four_d::controller::HardwareCapabilities::default();
+        for index in 0..=hidden_count {
+            let control = crate::four_d::controller::HardwareControl {
+                key: format!("pwm.{index}"),
+                kind: "pwm".into(),
+                name: if index == 0 { "Front accent lights".into() } else { format!("Hidden PWM {index}") },
+                group: "Cinema lighting".into(),
+                hidden: index != 0,
+                ..Default::default()
+            };
+            capabilities.pwm_channels.push(crate::four_d::controller::HardwareOutput {
+                id: index as u8,
+                key: control.key.clone(),
+                name: control.name.clone(),
+                role: "user-output".into(),
+                control: "pwm-user".into(),
+            });
+            capabilities.controls.push(control);
+        }
+        (PealayerApp::default(), capabilities)
+    }
+
+    fn render_hardware_hidden_disclosure(
+        context: &egui::Context,
+        app: &mut PealayerApp,
+        capabilities: &crate::four_d::controller::HardwareCapabilities,
+        size: egui::Vec2,
+        events: Vec<egui::Event>,
+    ) -> (egui::FullOutput, egui::Rect) {
+        let mut grid_rect = egui::Rect::NOTHING;
+        let output = context.run_ui(egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+            events,
+            ..Default::default()
+        }, |ui| {
+            egui::ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+                hardware_section(ui, "hidden-relay-fixture", crate::ui::icons::PLUG,
+                    "Relay outputs (8)", false, |_| panic!("relay section stays closed"));
+                hardware_section(ui, "hidden-pwm-fixture", crate::ui::icons::WAVEFORM,
+                    "PWM outputs (16)", true, |ui| {
+                        let start = ui.next_widget_position();
+                        let right = ui.max_rect().right();
+                        draw_control_card_grid(app, ui, capabilities, &capabilities.controls);
+                        grid_rect = egui::Rect::from_min_max(start, egui::pos2(right, ui.min_rect().bottom()));
+                    });
+            });
+        });
+        (output, grid_rect)
+    }
+
+    fn hardware_disclosure_text_rect(output: &egui::FullOutput, contains: &str) -> egui::Rect {
+        output.shapes.iter().find_map(|shape| match &shape.shape {
+            egui::epaint::Shape::Text(text) if text.galley.job.text.contains(contains) =>
+                Some(egui::Rect::from_min_size(text.pos, text.galley.size())),
+            _ => None,
+        }).unwrap_or_else(|| panic!("missing painted text: {contains}"))
+    }
+
+    #[test]
+    fn hardware_hidden_disclosure_is_top_right_without_a_viewport_height_gap() {
+        for width in [280.0, 320.0, 720.0] {
+            for height in [240.0, 900.0] {
+                for light in [false, true] {
+                    for compact in [false, true] {
+                        for pixels_per_point in [1.0, 1.5, 2.0] {
+                            let context = egui::Context::default();
+                            context.set_visuals(if light { egui::Visuals::light() } else { egui::Visuals::dark() });
+                            context.set_pixels_per_point(pixels_per_point);
+                            let (mut app, capabilities) = hardware_hidden_disclosure_fixture(3);
+                            app.compact_hardware_controls = compact;
+                            let (output, grid) = render_hardware_hidden_disclosure(
+                                &context, &mut app, &capabilities, egui::vec2(width, height), Vec::new());
+                            let menu = hardware_disclosure_text_rect(&output, "3 hidden");
+                            let group = hardware_disclosure_text_rect(&output, "Cinema lighting");
+                            assert!((0.0..12.0).contains(&(menu.top() - grid.top())), "menu is at the top: {menu:?} {grid:?}");
+                            assert!((0.0..16.0).contains(&(grid.right() - menu.right())), "menu aligns with the cards' right edge");
+                            assert!((4.0..24.0).contains(&(group.top() - menu.bottom())), "normal menu/group spacing: {menu:?} {group:?}");
+                            assert!(grid.height() < 180.0, "content does not consume the viewport height: {grid:?}");
+                            discard_ui_output(output);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn hardware_hidden_disclosure_opens_the_existing_channel_menu_without_changing_state() {
+        let context = egui::Context::default();
+        let (mut app, capabilities) = hardware_hidden_disclosure_fixture(3);
+        let controls_before = capabilities.controls.clone();
+        let playback_before = (app.is_paused, app.playback_time);
+        let size = egui::vec2(320.0, 480.0);
+        let (output, _) = render_hardware_hidden_disclosure(&context, &mut app, &capabilities, size, Vec::new());
+        let position = hardware_disclosure_text_rect(&output, "3 hidden").center();
+        discard_ui_output(output);
+        for pressed in [true, false] {
+            let (output, _) = render_hardware_hidden_disclosure(&context, &mut app, &capabilities, size,
+                vec![egui::Event::PointerMoved(position), egui::Event::PointerButton {
+                    pos: position, button: egui::PointerButton::Primary, pressed,
+                    modifiers: egui::Modifiers::NONE,
+                }]);
+            discard_ui_output(output);
+        }
+        let (output, _) = render_hardware_hidden_disclosure(&context, &mut app, &capabilities, size, Vec::new());
+        hardware_disclosure_text_rect(&output, "Hidden channels");
+        for index in 1..=3 {
+            hardware_disclosure_text_rect(&output, &format!("Hidden PWM {index}"));
+        }
+        assert_eq!(capabilities.controls, controls_before);
+        assert_eq!((app.is_paused, app.playback_time), playback_before);
+        discard_ui_output(output);
+    }
+
+    #[test]
+    fn hardware_hidden_disclosure_reserves_no_row_when_no_channels_are_hidden() {
+        let context = egui::Context::default();
+        let (mut app, capabilities) = hardware_hidden_disclosure_fixture(0);
+        let (output, grid) = render_hardware_hidden_disclosure(&context, &mut app, &capabilities,
+            egui::vec2(320.0, 900.0), Vec::new());
+        let group = hardware_disclosure_text_rect(&output, "Cinema lighting");
+        assert!((0.0..8.0).contains(&(group.top() - grid.top())));
+        assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
+            egui::epaint::Shape::Text(text) if text.galley.job.text.contains(" hidden"))));
+        discard_ui_output(output);
     }
 
     #[test]
