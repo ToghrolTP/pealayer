@@ -5,6 +5,7 @@ pub mod controls;
 mod monitor_controls;
 pub mod color_picker;
 pub mod dialog;
+pub mod dropdown;
 pub mod effects_library;
 mod elegance_theme;
 pub use elegance_theme::sync_elegance_theme;

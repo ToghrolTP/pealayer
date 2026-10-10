@@ -1,3 +1,4 @@
+use crate::ui::dropdown::DropdownUiExt;
 use crate::app::PealayerApp;
 use eframe::egui;
 
@@ -945,12 +946,12 @@ fn enum_combo(ui: &mut egui::Ui, id: &'static str, value: &mut u8, options: &[(u
         .find(|(candidate, _)| candidate == value)
         .map(|(_, label)| label.clone())
         .unwrap_or_else(|| value.to_string());
-    egui::ComboBox::from_id_salt(id)
+    crate::ui::dropdown::ComboBox::from_id_salt(id)
         .selected_text(selected)
         .width(ui.available_width().max(180.0))
         .show_ui(ui, |ui| {
             for (candidate, label) in options {
-                ui.selectable_value(value, *candidate, label);
+                ui.dropdown_value(value, *candidate, label);
             }
         });
 }

@@ -1,3 +1,4 @@
+use crate::ui::dropdown::DropdownUiExt;
 use crate::app::PealayerApp;
 use eframe::egui;
 
@@ -42,7 +43,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 (crate::config::StatusBarFpsMode::Media, crate::ui::icons::FILE_VIDEO, "Media frame rate"),
                                 (crate::config::StatusBarFpsMode::Ui, crate::ui::icons::GAUGE, "UI render rate"),
                             ] {
-                                if ui.selectable_label(app.status_bar.fps_mode == mode, format!("{icon}  {}", app.tr(label))).clicked() {
+                                if ui.dropdown_choice(app.status_bar.fps_mode == mode, format!("{icon}  {}", app.tr(label))).clicked() {
                                     app.status_bar.fps_mode = mode; changed = true; ui.close();
                                 }
                             }

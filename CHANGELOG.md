@@ -62,6 +62,10 @@ retroactively attributed to an older download.
   while adopting compact palette-safe Elegance cards, badges and callouts.
 - Organize Preferences without repeated cards; preview changes live, Browse for
   custom icons, retain Current/Classic icons and propagate configured branding.
+- Navigate open native dropdowns with arrows, Home/End and Enter while keeping
+  searchable pickers editable. Color choices retain their closed-control swatch;
+  full-width rows stay aligned on hover. Custom accents open one integrated HEX
+  and color picker with app swatches and bounded session recents.
 - Inspect copied links by default, refresh an existing source dialog, discover
   remote folders and choose a working proxy/direct route without overriding an
   explicit choice. Refreshes keep lists stable and stale replies cannot win.

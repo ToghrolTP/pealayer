@@ -1,3 +1,4 @@
+use crate::ui::dropdown::DropdownUiExt;
 use crate::app::PealayerApp;
 use eframe::egui;
 use serde_json::{Value, json};
@@ -109,8 +110,8 @@ fn choices(ui: &mut egui::Ui, label: &str, value: &mut Value, field: &str, optio
     ui.label(label);
     let mut selected = value[field].as_str().unwrap_or_default().to_string();
     let caption = options.iter().find(|(id,_)| *id == selected).map(|(_,name)|name.as_str()).unwrap_or(&selected);
-    egui::ComboBox::from_id_salt((ui.id(),field)).selected_text(caption).width(ui.available_width().min(360.0)).show_ui(ui, |ui| {
-        for (id,name) in options { ui.selectable_value(&mut selected,id.clone(),name); }
+    crate::ui::dropdown::ComboBox::from_id_salt((ui.id(),field)).selected_text(caption).width(ui.available_width().min(360.0)).show_ui(ui, |ui| {
+        for (id,name) in options { ui.dropdown_value(&mut selected,id.clone(),name); }
     });
     value[field] = json!(selected);
     ui.end_row();
@@ -196,7 +197,7 @@ pub fn draw(app:&mut PealayerApp, ui:&mut egui::Ui) {
         .constrain_to(geometry.bounds).resizable(true).collapsible(false).order(egui::Order::Foreground)
         .frame(crate::ui::dialog::opaque_window_frame(ui)).show(ui.ctx(),|ui| {
             ui.horizontal(|ui| {
-                for (i,caption) in ["Assignments","Remotes","Transmit","Activity"].iter().enumerate() { ui.selectable_value(&mut app.rf.tab,i,*caption); }
+                for (i,caption) in ["Assignments","Remotes","Transmit","Activity"].iter().enumerate() { ui.dropdown_value(&mut app.rf.tab,i,*caption); }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui| {
                     if ui.add_enabled(!app.rf.pending,egui::Button::new(crate::ui::icons::ARROW_CLOCKWISE)).on_hover_text("Refresh learned buttons").clicked() { request(app,"catalog",json!({"read_board":true})); }
                     if app.rf.pending { ui.spinner(); }
@@ -221,7 +222,7 @@ pub fn draw(app:&mut PealayerApp, ui:&mut egui::Ui) {
                             ui.horizontal(|ui| {
                                 let mut enabled=binding["enabled"].as_bool().unwrap_or(false);
                                 if ui.checkbox(&mut enabled,"").changed() { let mut updated=binding.clone(); updated["enabled"]=json!(enabled); request(app,"binding.put",json!({"binding":updated})); }
-                                if ui.selectable_label(app.rf.previous_name==binding["name"].as_str().unwrap_or_default(),binding["name"].as_str().unwrap_or("Assignment")).clicked() { app.rf.draft=binding.clone(); app.rf.previous_name=binding["name"].as_str().unwrap_or_default().into(); }
+                                if ui.dropdown_choice(app.rf.previous_name==binding["name"].as_str().unwrap_or_default(),binding["name"].as_str().unwrap_or("Assignment")).clicked() { app.rf.draft=binding.clone(); app.rf.previous_name=binding["name"].as_str().unwrap_or_default().into(); }
                                 ui.label(egui::RichText::new(format!("{} · {}",binding["match"]["rf_code"],binding["match"]["gesture"].as_str().unwrap_or_default())).weak());
                             });
                         }

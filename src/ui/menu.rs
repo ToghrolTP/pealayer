@@ -1,3 +1,4 @@
+use crate::ui::dropdown::DropdownUiExt;
 use crate::app::PealayerApp;
 use eframe::egui;
 
@@ -446,7 +447,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 chapter.title
                             );
                             if ui
-                                .selectable_label(current == Some(chapter.index), label)
+                                .dropdown_choice(current == Some(chapter.index), label)
                                 .clicked()
                             {
                                 action = Some(ChapterAction::Jump(chapter.index));
@@ -477,7 +478,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             crate::ui::icons::workspace_icon(&profile.icon),
                             profile.name
                         );
-                        if ui.selectable_label(active, label).clicked() {
+                        if ui.dropdown_choice(active, label).clicked() {
                             app.restore_workspace_profile(ui.ctx(), &id);
                             ui.close();
                         }
@@ -526,7 +527,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             (crate::config::AppLanguage::Persian, app.tr("Persian")),
                         ] {
                             if ui
-                                .selectable_label(app.language_preference == preference, label)
+                                .dropdown_choice(app.language_preference == preference, label)
                                 .clicked()
                             {
                                     app.set_language(ui.ctx(), preference);
@@ -541,7 +542,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             (crate::config::AppDirection::Rtl, app.tr("Right to left")),
                         ] {
                             if ui
-                                .selectable_label(app.direction_preference == preference, label)
+                                .dropdown_choice(app.direction_preference == preference, label)
                                 .clicked()
                             {
                                 app.set_direction(preference);
@@ -667,7 +668,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     let mut endpoint_changed = false;
                     ui.add_enabled_ui(!app.is_connected && !connection_requested, |ui| {
                         ui.allocate_ui(egui::vec2(154.0, 20.0), |ui| {
-                            egui::ComboBox::from_id_salt("hardware_endpoint_select")
+                            crate::ui::dropdown::ComboBox::from_id_salt("hardware_endpoint_select")
                                 .selected_text(&app.serial_port)
                                 .width(154.0)
                                 .height(240.0)
@@ -675,7 +676,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     for endpoint in crate::four_d::controller::available_endpoints()
                                     {
                                         endpoint_changed |= ui
-                                            .selectable_value(
+                                            .dropdown_value(
                                                 &mut app.serial_port,
                                                 endpoint.clone(),
                                                 endpoint,

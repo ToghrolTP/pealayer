@@ -1,3 +1,4 @@
+use crate::ui::dropdown::DropdownUiExt;
 use crate::app::{MediaTrackKey, MediaTrackType, PealayerApp};
 use crate::ui::{dialog, icons};
 use eframe::egui;
@@ -105,13 +106,13 @@ fn draw_subtitle_track(app: &mut PealayerApp, ui: &mut egui::Ui) {
             &app.tr("Subtitle track"),
             Some(&app.tr("Choose an embedded or externally loaded track")),
             |ui| {
-                egui::ComboBox::from_id_salt("sub_track_combo_v4")
+                crate::ui::dropdown::ComboBox::from_id_salt("sub_track_combo_v4")
                     .selected_text(current_label)
                     .width(ui.available_width().clamp(150.0, 275.0))
                     .height(SUBTITLE_TRACK_POPUP_HEIGHT)
                     .show_ui(ui, |ui| {
                         if ui
-                            .selectable_label(app.current_sid == "no", app.tr("None"))
+                            .dropdown_choice(app.current_sid == "no", app.tr("None"))
                             .clicked()
                         {
                             app.disable_media_track(MediaTrackType::Subtitle);
@@ -119,7 +120,7 @@ fn draw_subtitle_track(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         for track in tracks {
                             let id = track.id.to_string();
                             let label = subtitle_track_label(app, &id);
-                            if ui.selectable_label(app.current_sid == id, label).clicked() {
+                            if ui.dropdown_choice(app.current_sid == id, label).clicked() {
                                 app.select_media_track(MediaTrackKey {
                                     kind: MediaTrackType::Subtitle,
                                     id: track.id,
@@ -145,7 +146,7 @@ fn draw_subtitle_appearance(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 Some(&app.tr("Automatic, left-to-right, or right-to-left layout")),
                 |ui| {
                     let mut direction = app.subtitle_direction;
-                    egui::ComboBox::from_id_salt("subtitle_direction_combo")
+                    crate::ui::dropdown::ComboBox::from_id_salt("subtitle_direction_combo")
                         .selected_text(match direction {
                             crate::subtitle::SubtitleDirection::Auto => app.tr("Automatic"),
                             crate::subtitle::SubtitleDirection::Ltr => app.tr("Left to right"),
@@ -153,17 +154,17 @@ fn draw_subtitle_appearance(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         })
                         .width(150.0)
                         .show_ui(ui, |ui| {
-                            ui.selectable_value(
+                            ui.dropdown_value(
                                 &mut direction,
                                 crate::subtitle::SubtitleDirection::Auto,
                                 app.tr("Automatic"),
                             );
-                            ui.selectable_value(
+                            ui.dropdown_value(
                                 &mut direction,
                                 crate::subtitle::SubtitleDirection::Ltr,
                                 app.tr("Left to right"),
                             );
-                            ui.selectable_value(
+                            ui.dropdown_value(
                                 &mut direction,
                                 crate::subtitle::SubtitleDirection::Rtl,
                                 app.tr("Right to left"),
@@ -192,7 +193,7 @@ fn draw_subtitle_appearance(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         SubtitleAlignment::Right => "Right",
                         SubtitleAlignment::SubtitleStyle => "Subtitle style",
                     };
-                    egui::ComboBox::from_id_salt("subtitle_alignment_combo")
+                    crate::ui::dropdown::ComboBox::from_id_salt("subtitle_alignment_combo")
                         .selected_text(app.tr(label))
                         .width(150.0)
                         .show_ui(ui, |ui| {
@@ -202,7 +203,7 @@ fn draw_subtitle_appearance(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 (SubtitleAlignment::Right, "Right", icons::TEXT_ALIGN_RIGHT),
                                 (SubtitleAlignment::SubtitleStyle, "Subtitle style", icons::SUBTITLES),
                             ] {
-                                let response = ui.selectable_value(&mut alignment, value, format!("{icon}  {}", app.tr(label)));
+                                let response = ui.dropdown_value(&mut alignment, value, format!("{icon}  {}", app.tr(label)));
                                 if value == SubtitleAlignment::SubtitleStyle {
                                     response.on_hover_text(app.tr("Preserve subtitle styling without text processing; processed text stays centered"));
                                 }

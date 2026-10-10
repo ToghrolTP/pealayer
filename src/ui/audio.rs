@@ -1,3 +1,4 @@
+use crate::ui::dropdown::DropdownUiExt;
 use crate::app::{MediaTrackKey, MediaTrackType, PealayerApp};
 use crate::ui::{dialog, icons};
 use eframe::egui;
@@ -22,8 +23,8 @@ pub(crate) fn draw_sfx_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
             egui::ScrollArea::vertical().id_salt("sfx-editor").show(ui, |ui| {
                 ui.horizontal(|ui| {
                     let selected = app.effect_library_draft.name.clone();
-                    egui::ComboBox::from_id_salt("sfx-library-selection").selected_text(if selected.is_empty() { "New audio effect" } else { &selected }).show_ui(ui, |ui| {
-                        for effect in &effects { if ui.selectable_label(app.effect_library_draft.id == effect.id.to_string(), &effect.name).clicked() { app.select_audio_effect(effect.id); } }
+                    crate::ui::dropdown::ComboBox::from_id_salt("sfx-library-selection").selected_text(if selected.is_empty() { "New audio effect" } else { &selected }).show_ui(ui, |ui| {
+                        for effect in &effects { if ui.dropdown_choice(app.effect_library_draft.id == effect.id.to_string(), &effect.name).clicked() { app.select_audio_effect(effect.id); } }
                     });
                     if ui.button(format!("{} New", icons::PLUS)).clicked() { app.begin_audio_effect(); }
                 });
@@ -45,9 +46,9 @@ pub(crate) fn draw_sfx_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     ui.label("Volume"); ui.add(egui::Slider::new(&mut program.volume, 0..=100).suffix("%")); ui.end_row();
                     ui.label("Output device / backend");
                     let selected = devices.iter().find(|d| d.name == program.output_device).map(|d| d.description.as_str()).unwrap_or(if program.output_device.is_empty() { "Preferences SFX output" } else { "Unavailable device" });
-                    let popup = egui::ComboBox::from_id_salt("sfx-output").width(ui.available_width()).selected_text(selected).show_ui(ui, |ui| {
-                        ui.selectable_value(&mut program.output_device, String::new(), "Preferences SFX output");
-                        for device in &devices { ui.selectable_value(&mut program.output_device, device.name.clone(), &device.description).on_hover_text(&device.name); }
+                    let popup = crate::ui::dropdown::ComboBox::from_id_salt("sfx-output").width(ui.available_width()).selected_text(selected).show_ui(ui, |ui| {
+                        ui.dropdown_value(&mut program.output_device, String::new(), "Preferences SFX output");
+                        for device in &devices { ui.dropdown_value(&mut program.output_device, device.name.clone(), &device.description).on_hover_text(&device.name); }
                     });
                     let key = ui.id().with("sfx-output-open"); let was_open = ui.data_mut(|d| d.get_temp::<bool>(key).unwrap_or(false));
                     if popup.inner.is_some() && !was_open {
@@ -151,13 +152,13 @@ fn draw_audio_track(app: &mut PealayerApp, ui: &mut egui::Ui) {
             &app.tr("Active track"),
             Some(&app.tr("Choose an embedded or externally loaded audio stream")),
             |ui| {
-                egui::ComboBox::from_id_salt("audio_track_combo_v4")
+                crate::ui::dropdown::ComboBox::from_id_salt("audio_track_combo_v4")
                     .selected_text(current_label)
                     .width(ui.available_width().clamp(150.0, 275.0))
                     .height(AUDIO_TRACK_POPUP_HEIGHT)
                     .show_ui(ui, |ui| {
                         if ui
-                            .selectable_label(app.current_aid == "no", app.tr("None"))
+                            .dropdown_choice(app.current_aid == "no", app.tr("None"))
                             .clicked()
                         {
                             app.disable_media_track(MediaTrackType::Audio);
@@ -165,7 +166,7 @@ fn draw_audio_track(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         for track in tracks {
                             let id = track.id.to_string();
                             let label = audio_track_label(app, &id);
-                            if ui.selectable_label(app.current_aid == id, label).clicked() {
+                            if ui.dropdown_choice(app.current_aid == id, label).clicked() {
                                 app.select_media_track(MediaTrackKey {
                                     kind: MediaTrackType::Audio,
                                     id: track.id,

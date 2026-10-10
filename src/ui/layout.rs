@@ -1,3 +1,4 @@
+use crate::ui::dropdown::DropdownUiExt;
 use crate::app::{EffectDragPayload, PealayerApp};
 use crate::config::TimelineToolbarAction;
 use eframe::egui;
@@ -3503,7 +3504,7 @@ fn direct_cue_behavior_editor(ui: &mut egui::Ui, behavior: &mut crate::four_d::m
     pwm: bool) {
     use crate::four_d::models::DirectCueBehavior;
     ui.label(egui::RichText::new("Behavior").small().weak());
-    egui::ComboBox::from_id_salt("direct-cue-behavior")
+    crate::ui::dropdown::ComboBox::from_id_salt("direct-cue-behavior")
         .width(ui.available_width())
         .selected_text(match behavior {
             DirectCueBehavior::SetKeep => "Set and keep",
@@ -3511,11 +3512,11 @@ fn direct_cue_behavior_editor(ui: &mut egui::Ui, behavior: &mut crate::four_d::m
             DirectCueBehavior::Ramp => "PWM ramp",
         })
         .show_ui(ui, |ui| {
-            ui.selectable_value(behavior, DirectCueBehavior::SetKeep, "Set and keep")
+            ui.dropdown_value(behavior, DirectCueBehavior::SetKeep, "Set and keep")
                 .on_hover_text("Set the value once; keep it until the next command");
-            ui.selectable_value(behavior, DirectCueBehavior::Hold, "Timed hold")
+            ui.dropdown_value(behavior, DirectCueBehavior::Hold, "Timed hold")
                 .on_hover_text("Apply the value for the cue duration, then apply the exit value");
-            if pwm { ui.selectable_value(behavior, DirectCueBehavior::Ramp, "PWM ramp")
+            if pwm { ui.dropdown_value(behavior, DirectCueBehavior::Ramp, "PWM ramp")
                 .on_hover_text("Transition from the start value to the end value over the cue duration"); }
         });
 }
@@ -3813,7 +3814,7 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
                             if let Some(motion) = direct.motion {
                                 let mut direction = motion.direction;
                                 ui.label(egui::RichText::new(&direction_label).small().weak());
-                                egui::ComboBox::from_id_salt("direct-motion-direction")
+                                crate::ui::dropdown::ComboBox::from_id_salt("direct-motion-direction")
                                     .width(ui.available_width())
                                     .selected_text(match direction {
                                         crate::four_d::models::DirectMotionDirection::Up => {
@@ -3824,12 +3825,12 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
                                         }
                                     })
                                     .show_ui(ui, |ui| {
-                                        ui.selectable_value(
+                                        ui.dropdown_value(
                                             &mut direction,
                                             crate::four_d::models::DirectMotionDirection::Up,
                                             &up_label,
                                         );
-                                        ui.selectable_value(
+                                        ui.dropdown_value(
                                             &mut direction,
                                             crate::four_d::models::DirectMotionDirection::Down,
                                             &down_label,
@@ -3973,7 +3974,7 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
                                         },
                                         crate::ui::icons::DOT_OUTLINE,
                                     );
-                                    egui::ComboBox::from_id_salt("relay_combo")
+                                    crate::ui::dropdown::ComboBox::from_id_salt("relay_combo")
                                         .width((ui.available_width() - 8.0).max(80.0))
                                         .selected_text(
                                             advertised_relays
@@ -3991,7 +3992,7 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
                                         )
                                         .show_ui(ui, |ui| {
                                             for relay in &advertised_relays {
-                                                ui.selectable_value(
+                                                ui.dropdown_value(
                                                     &mut selected_relay,
                                                     relay.id,
                                                     crate::ui::i18n::visual_text(
@@ -6296,8 +6297,8 @@ fn draw_buzzer_tool(
                     melody.clone()
                 };
                 let combo_id = ui.make_persistent_id("hardware_buzzer_melody_combo");
-                let was_open = egui::ComboBox::is_open(ui.ctx(), combo_id);
-                let response = egui::ComboBox::from_id_salt("hardware_buzzer_melody_combo")
+                let was_open = crate::ui::dropdown::ComboBox::is_open(ui.ctx(), combo_id);
+                let response = crate::ui::dropdown::ComboBox::from_id_salt("hardware_buzzer_melody_combo")
                     .width((ui.available_width() - 32.0).max(1.0))
                     .wrap_mode(egui::TextWrapMode::Truncate)
                     .selected_text(selected_text)
@@ -6316,7 +6317,7 @@ fn draw_buzzer_tool(
                                 item.notes.len(),
                                 app.tr("notes")
                             );
-                            ui.selectable_value(
+                            ui.dropdown_value(
                                 &mut melody,
                                 item.name.clone(),
                                 format!("{}  {}  ·  {detail}", crate::ui::icons::MUSIC_NOTE, item.name),
@@ -6324,7 +6325,7 @@ fn draw_buzzer_tool(
                         }
                     })
                     .response;
-                refresh_catalog |= !was_open && egui::ComboBox::is_open(ui.ctx(), response.id);
+                refresh_catalog |= !was_open && crate::ui::dropdown::ComboBox::is_open(ui.ctx(), response.id);
                 if ui
                     .small_button(crate::ui::icons::ARROW_CLOCKWISE)
                     .on_hover_text(app.tr("Refresh melody catalog"))
@@ -6605,7 +6606,7 @@ fn draw_addressable_strip_tool(
                     ui.end_row();
 
                     ui.label(app.tr("Mode"));
-                    egui::ComboBox::from_id_salt("hardware_strip_mode_combo")
+                    crate::ui::dropdown::ComboBox::from_id_salt("hardware_strip_mode_combo")
                         .selected_text(match mode.as_str() {
                             "solid" => app.tr("Solid color"),
                             "pixel" => app.tr("Single pixel"),
@@ -6624,7 +6625,7 @@ fn draw_addressable_strip_tool(
                                     "effect" => app.tr("Effect"),
                                     _ => (*advertised).to_string(),
                                 };
-                                ui.selectable_value(&mut mode, (*advertised).to_string(), label);
+                                ui.dropdown_value(&mut mode, (*advertised).to_string(), label);
                             }
                         });
                     ui.end_row();
@@ -6753,7 +6754,7 @@ fn draw_addressable_strip_tool(
                         ui.weak(app.tr("No addressable LED effects are advertised"));
                     } else {
                         ui.horizontal_wrapped(|ui| {
-                            egui::ComboBox::from_id_salt("hardware_strip_effect_combo")
+                            crate::ui::dropdown::ComboBox::from_id_salt("hardware_strip_effect_combo")
                                 .selected_text(
                                     capabilities
                                         .strip_effects
@@ -6764,7 +6765,7 @@ fn draw_addressable_strip_tool(
                                 )
                                 .show_ui(ui, |ui| {
                                     for effect in &capabilities.strip_effects {
-                                        ui.selectable_value(
+                                        ui.dropdown_value(
                                             &mut effect_id,
                                             effect.id.clone(),
                                             app.display_text(&effect.name),
@@ -6923,24 +6924,24 @@ fn draw_display_text_tool(
             ui.add_space(6.0);
             ui.horizontal_wrapped(|ui| {
                 if capabilities.supports_segment_display && capabilities.supports_lcd_display {
-                    egui::ComboBox::from_id_salt("hardware_display_target_combo")
+                    crate::ui::dropdown::ComboBox::from_id_salt("hardware_display_target_combo")
                         .selected_text(match target.as_str() {
                             "segments" => app.tr("Segments"),
                             "lcd" => app.tr("LCD"),
                             _ => app.tr("Both displays"),
                         })
                         .show_ui(ui, |ui| {
-                            ui.selectable_value(
+                            ui.dropdown_value(
                                 &mut target,
                                 "both".to_string(),
                                 app.tr("Both displays"),
                             );
-                            ui.selectable_value(
+                            ui.dropdown_value(
                                 &mut target,
                                 "segments".to_string(),
                                 app.tr("Segments"),
                             );
-                            ui.selectable_value(&mut target, "lcd".to_string(), app.tr("LCD"));
+                            ui.dropdown_value(&mut target, "lcd".to_string(), app.tr("LCD"));
                         });
                 } else {
                     ui.label(
@@ -14329,7 +14330,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 media_control_clicked |= selector.clicked();
                                                 let visible = track_row.active && track_row.enabled;
                                                 let visibility = ui
-                                                    .selectable_label(
+                                                    .dropdown_choice(
                                                         visible,
                                                         if visible {
                                                             crate::ui::icons::EYE
@@ -14857,7 +14858,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         };
                                         let arm_btn = ui
                                             .add_enabled_ui(!track.locked, |ui| {
-                                                ui.selectable_label(
+                                                ui.dropdown_choice(
                                                     track.armed,
                                                     egui::RichText::new(crate::ui::icons::RECORD)
                                                         .size(12.0)
