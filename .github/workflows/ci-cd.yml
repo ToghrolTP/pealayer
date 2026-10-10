@@ -57,6 +57,8 @@ jobs:
         run: npm run build --prefix web_ui
       - name: "🦀 Verify shared library and executable boundary"
         run: node scripts/check-crate-boundary.mjs
+      - name: "💾 Verify low-write build defaults"
+        run: node scripts/check-build-policy.mjs
       - name: "🦀 Install Rust for independent transfer checks"
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
         with:
@@ -131,6 +133,10 @@ jobs:
         uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           toolchain: stable
+      - name: "💾 Verify Windows cleanup safety without compiling"
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: ./scripts/test-storage-hygiene.ps1
       - name: "⚡ Restore Rust build cache"
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
         with:
