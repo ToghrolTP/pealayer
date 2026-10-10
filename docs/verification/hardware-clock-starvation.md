@@ -36,6 +36,8 @@ scheduling and client-side metadata work can still exceed a clock's budget.
 Authority refresh, instance reporting and remote-owner endpoint lookup now use
 a separate bounded RPC worker. Capacity-one request/reply channels prevent
 backlog; endpoint and coordinator-session generations reject obsolete replies.
+Snapshot expiry uses its monotonic acquisition time, not queue-consumption time;
+delayed consumption cannot renew an old authority lease.
 Only a successfully refreshed current authority allows preparation. A failed,
 exited or expired metadata worker invalidates the old arm and refreshes it;
 clock updates continue to validate publisher ownership on the controller.

@@ -252,6 +252,17 @@ struct ClockMetadataReply {
     authority: Result<super::authority::Status, String>,
     authority_elapsed: Duration,
     report_elapsed: Option<Duration>,
+    observed_at: Instant,
+}
+
+impl ClockMetadataReply {
+    fn matches_session(&self, endpoint: &str, generation: u64) -> bool {
+        self.endpoint == endpoint && self.generation == generation
+    }
+
+    fn is_fresh(&self) -> bool {
+        self.observed_at.elapsed() < Duration::from_secs(3)
+    }
 }
 
 /// Metadata must never occupy the deadline-bound playback RPC stream. Both
@@ -276,6 +287,7 @@ where F: FnMut(&ClockMetadataRequest) -> serde_json::Value + Send + 'static {
             }
             let mut authority_elapsed = Duration::ZERO;
             let mut report_elapsed = None;
+            let mut observed_at = Instant::now();
             let authority = (|| -> Result<super::authority::Status, String> {
                 if client.is_none() {
                     client = Some(ControllerClient::connect_playback_events(&request.endpoint)?);
@@ -292,6 +304,7 @@ where F: FnMut(&ClockMetadataRequest) -> serde_json::Value + Send + 'static {
                 let started = Instant::now();
                 let result = rpc.call("controller.media.authority.get", json!({}));
                 authority_elapsed = started.elapsed();
+                observed_at = Instant::now();
                 let mut status: super::authority::Status = serde_json::from_value(result?)
                     .map_err(|error| format!("Invalid publishing authority state: {error}"))?;
                 if status.owner_id != owner_endpoint_cache.0 || owner_endpoint_at.elapsed() >= Duration::from_secs(10) {
@@ -305,7 +318,7 @@ where F: FnMut(&ClockMetadataRequest) -> serde_json::Value + Send + 'static {
                 Ok(status)
             })();
             if authority.is_err() { client = None; }
-            if reply_tx.send(ClockMetadataReply { endpoint: request.endpoint, generation: request.generation, authority, authority_elapsed, report_elapsed }).is_err() {
+            if reply_tx.send(ClockMetadataReply { endpoint: request.endpoint, generation: request.generation, authority, authority_elapsed, report_elapsed, observed_at }).is_err() {
                 break;
             }
         }
@@ -433,8 +446,18 @@ pub fn spawn(
                 if let Some(reply) = reply {
                     metadata_pending = false;
                     // A result from a replaced endpoint cannot authorize its successor.
-                    if reply.endpoint != active_endpoint || reply.generation != metadata_generation {
+                    if !reply.matches_session(&active_endpoint, metadata_generation) {
                         authority_at = Instant::now() - Duration::from_secs(2);
+                        continue;
+                    }
+                    if !reply.is_fresh() {
+                        authority_ready = false;
+                        if let Ok(mut plan) = timeline.lock() {
+                            plan.error = Some("Publishing authority snapshot expired; refreshing before playback".into());
+                        }
+                        let _ = take_coordinator_session(&mut client, &timeline);
+                        previous = None;
+                        retry_at = Instant::now() + Duration::from_secs(2);
                         continue;
                     }
                     if let Ok(mut plan) = timeline.lock() {
@@ -448,7 +471,8 @@ pub fn spawn(
                     match reply.authority {
                         Ok(mut status)=>{
                             authority_ready = true;
-                            authority_ack_at = Instant::now();
+                            // Queueing/slow preparation cannot renew an old lease.
+                            authority_ack_at = reply.observed_at;
                             if automatic_claim.should_request(current.loaded, &status) {
                                 match rpc.call_detailed("controller.media.authority.change",json!({"client_id":id,"operation":"request"})) {
                                     Ok(value) => {
@@ -782,6 +806,21 @@ fn identity(id: &str, name: &str) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn queued_metadata_keeps_its_observation_age_and_session() {
+        let mut reply = ClockMetadataReply {
+            endpoint: "pccontroller://127.0.0.1:1234".into(), generation: 7,
+            authority: Err("unused fixture".into()), authority_elapsed: Duration::ZERO,
+            report_elapsed: None, observed_at: Instant::now(),
+        };
+        assert!(reply.matches_session("pccontroller://127.0.0.1:1234", 7));
+        assert!(!reply.matches_session("pccontroller://127.0.0.1:1234", 8));
+        assert!(!reply.matches_session("pccontroller://127.0.0.1:5678", 7));
+        assert!(reply.is_fresh());
+        reply.observed_at = Instant::now() - Duration::from_secs(4);
+        assert!(!reply.is_fresh(), "Consuming a queued snapshot must not renew it");
+    }
 
     #[test]
     fn blocked_metadata_does_not_occupy_the_clock_rpc_stream() {
