@@ -34,6 +34,7 @@ verification succeeds. Valid edits are inspected after a short debounce.
 
 When Proxy and Direct return the same error, it appears once. Different failures
 appear in separate labeled blocks, ordered Proxy then Direct.
+See the [verification and Cafe delivery receipt](verification/copied-link-verification.md).
 
 Initial clipboard contents are a baseline, not a new copy. Repeated/dismissed
 links are suppressed in a bounded, memory-only session list. Ordinary clipboard
