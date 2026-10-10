@@ -1137,7 +1137,7 @@ enum ControllerBackend {
 pub struct ControllerClient {
     endpoint: String,
     backend: ControllerBackend,
-    identity_registered: bool,
+    registered_id: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1240,7 +1240,7 @@ impl ControllerClient {
                     return Ok(Self {
                         endpoint: endpoint.to_string(),
                         backend: ControllerBackend::Embedded(host),
-                        identity_registered: false,
+                        registered_id: None,
                     });
                 }
                 Err(embedded_error) => {
@@ -1284,7 +1284,7 @@ impl ControllerClient {
         );
         let mut client = Self {
             endpoint: endpoint.to_string(),
-            identity_registered: false,
+            registered_id: None,
             backend: ControllerBackend::Tcp {
                 writer,
                 reader,
@@ -1331,14 +1331,22 @@ impl ControllerClient {
         self.call_detailed(method, params).map_err(|error| error.message)
     }
     pub(crate) fn call_detailed(&mut self, method: &str, params: Value) -> Result<Value, ControllerRpcError> {
-        if !self.identity_registered && method != "controller.app.instance.report" && method != "controller.ping" {
+        if self.registered_id.is_none() && method != "controller.app.instance.report" && method != "controller.ping" {
             let id = crate::platform::interop::controller_instance_id();
             self.call_detailed("controller.app.instance.report", crate::platform::interop::controller_instance_identity(
                 &id, &crate::config::resolved_app_name(&crate::platform::interop::get_live_config())))?;
-            self.identity_registered = true;
         }
+        // Retain the identity acknowledged on this stream. Re-resolving it on
+        // every 25 Hz clock packet used to reload/validate the full config.
+        let reported_id = (method == "controller.app.instance.report")
+            .then(|| params.get("id").and_then(Value::as_str).map(str::to_owned))
+            .flatten();
         let (writer, reader, next_id) = match &mut self.backend {
-            ControllerBackend::Embedded(host) => return host.call_detailed(method, params),
+            ControllerBackend::Embedded(host) => {
+                let result = host.call_detailed(method, params);
+                if result.is_ok() && let Some(id) = reported_id { self.registered_id = Some(id); }
+                return result;
+            }
             ControllerBackend::Tcp {
                 writer,
                 reader,
@@ -1360,7 +1368,7 @@ impl ControllerClient {
             "id": id,
             "method": method,
             "params": params,
-            "client_id": if self.identity_registered {Some(crate::platform::interop::controller_instance_id())} else {None},
+            "client_id": self.registered_id.as_deref(),
         });
         serde_json::to_writer(&mut *writer, &request)
             .map_err(|error| ControllerRpcError::transport(format!("encode PCController JSON-RPC request: {error}")))?;
@@ -1387,6 +1395,7 @@ impl ControllerClient {
                 return Err(controller_json_rpc_error(error));
             }
             let _ = reader.get_ref().set_read_timeout(previous_timeout);
+            if let Some(id) = reported_id { self.registered_id = Some(id); }
             return Ok(response.get("result").cloned().unwrap_or(Value::Null));
         }
     }
@@ -3158,6 +3167,32 @@ mod tests {
         let disconnected = parse_hardware_capabilities(&disconnected_snapshot, &catalog);
         assert_eq!(disconnected.strip_effects.len(), 1);
         assert!(disconnected.strip_control.is_none());
+    }
+
+    #[test]
+    fn explicit_registration_keeps_one_identity_on_the_clock_stream() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            for expected in ["controller.ping", "controller.app.instance.report",
+                "controller.media.authority.get", "controller.media.playback.update"] {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                let request: Value = serde_json::from_str(line.trim()).unwrap();
+                assert_eq!(request["method"], expected, "Do not re-register before clock telemetry");
+                if expected.starts_with("controller.media.") {
+                    assert_eq!(request["client_id"], "pealayer:test:8080");
+                }
+                writeln!(stream, "{}", json!({"jsonrpc":"2.0","id":request["id"],"result":{"ok":true}})).unwrap();
+            }
+        });
+        let mut client = ControllerClient::connect_playback_events(&format!("pccontroller://{address}")).unwrap();
+        client.call("controller.app.instance.report", json!({"id":"pealayer:test:8080"})).unwrap();
+        client.call("controller.media.authority.get", json!({})).unwrap();
+        client.call("controller.media.playback.update", json!({})).unwrap();
+        server.join().unwrap();
     }
 
     #[test]

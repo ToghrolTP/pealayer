@@ -7,6 +7,38 @@ use std::sync::{
 };
 use std::time::{Duration, Instant};
 
+/// Bounded, process-local evidence for clock starvation; no media paths or logs.
+/// These counters do not trigger UI repaints on every telemetry packet.
+#[derive(Default, serde::Serialize)]
+pub struct ClockTransportDiagnostics {
+    updates: u64,
+    failed_updates: u64,
+    stale_observation_skips: u64,
+    last_send_gap_ms: u64,
+    max_playing_send_gap_ms: u64,
+    last_round_trip_ms: u64,
+    max_round_trip_ms: u64,
+    last_observation_age_ms: u64,
+    last_authority_request_ms: u64,
+    max_authority_request_ms: u64,
+    last_instance_report_ms: u64,
+}
+
+impl ClockTransportDiagnostics {
+    fn record_update(&mut self, gap: Option<(Duration, bool)>, round_trip: Duration,
+        observation_age: Duration, failed: bool) {
+        self.updates = self.updates.saturating_add(1);
+        self.failed_updates = self.failed_updates.saturating_add(u64::from(failed));
+        self.last_send_gap_ms = gap.map_or(0, |(gap, _)| gap.as_millis() as u64);
+        if gap.is_some_and(|(_, was_playing)| was_playing) {
+            self.max_playing_send_gap_ms = self.max_playing_send_gap_ms.max(self.last_send_gap_ms);
+        }
+        self.last_round_trip_ms = round_trip.as_millis() as u64;
+        self.max_round_trip_ms = self.max_round_trip_ms.max(self.last_round_trip_ms);
+        self.last_observation_age_ms = observation_age.as_millis() as u64;
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct PlaybackSample {
     pub name: String,
@@ -234,6 +266,7 @@ pub fn spawn(
         let mut owner_endpoint_at = Instant::now() - Duration::from_secs(10);
         let mut unattended_attempt: Option<(String, String)> = None;
         let mut previous_presentation = None;
+        let mut last_clock_send: Option<(Instant, bool)> = None;
         loop {
             notify_sync_change(&timeline, &notifier, &mut previous_presentation);
             let alive = lifecycle.strong_count() > 0;
@@ -282,6 +315,7 @@ pub fn spawn(
                         authority_at = Instant::now() - Duration::from_secs(2);
                         automatic_claim = AutomaticClaim::default();
                         reconcile_session = true;
+                        last_clock_send = None;
                     }
                     Err(error) => {
                         if error != last_error {
@@ -297,6 +331,11 @@ pub fn spawn(
                     authority_at=Instant::now();
                     let result=rpc.call("controller.media.authority.get",json!({})).and_then(|value|
                         serde_json::from_value::<super::authority::Status>(value).map_err(|error|format!("Invalid publishing authority state: {error}")));
+                    if let Ok(mut plan) = timeline.lock() {
+                        let elapsed = authority_at.elapsed().as_millis() as u64;
+                        plan.clock_transport.last_authority_request_ms = elapsed;
+                        plan.clock_transport.max_authority_request_ms = plan.clock_transport.max_authority_request_ms.max(elapsed);
+                    }
                     match result {
                         Ok(mut status)=>{
                             authority_ready = true;
@@ -501,6 +540,13 @@ pub fn spawn(
                     .map(|plan| plan.acknowledged_revision)
                     .unwrap_or(0);
                 if current.playing && current.observed_at.elapsed() > Duration::from_millis(250) {
+                    if let Ok(mut plan) = timeline.lock() {
+                        plan.clock_transport.stale_observation_skips = plan.clock_transport.stale_observation_skips.saturating_add(1);
+                        plan.clock_transport.last_observation_age_ms = current.observed_at.elapsed().as_millis() as u64;
+                    }
+                    // The stale clock remains fail-closed. Busy-spinning here
+                    // consumed a core and further starved the media observer.
+                    std::thread::sleep(Duration::from_millis(10));
                     continue;
                 }
                 let has_hardware = timeline.lock().is_ok_and(|plan| plan.has_items());
@@ -516,9 +562,16 @@ pub fn spawn(
                     current.playing
                 };
                 sequence += 1;
+                let started = Instant::now();
+                let observation_age = current.observed_at.elapsed();
+                let gap = last_clock_send.map(|(last, playing)| (started.duration_since(last), playing));
+                last_clock_send = Some((started, outgoing_playing));
                 let result = rpc.call("controller.media.playback.update",json!({
                     "client_id":id,"sequence":sequence,"position_ms":current.position_now(),
                     "duration_ms":current.duration_ms,"playing":outgoing_playing,"loaded":current.loaded,"rate":current.rate,"epoch":current.epoch,"plan_revision":revision}));
+                if let Ok(mut plan) = timeline.lock() {
+                    plan.clock_transport.record_update(gap, started.elapsed(), observation_age, result.is_err());
+                }
                 match result {
                     Ok(feedback) => {
                         let valid_echo = feedback["sequence"].as_u64() == Some(sequence)
@@ -615,6 +668,7 @@ pub fn spawn(
             if reported_at.elapsed() >= Duration::from_secs(10)
                 && let Some(ref mut rpc) = client
             {
+                let report_started = Instant::now();
                 if rpc
                     .call(
                         "controller.app.instance.report",
@@ -628,6 +682,9 @@ pub fn spawn(
                     retry_at = Instant::now() + Duration::from_secs(2);
                 }
                 reported_at = Instant::now();
+                if let Ok(mut plan) = timeline.lock() {
+                    plan.clock_transport.last_instance_report_ms = report_started.elapsed().as_millis() as u64;
+                }
             }
             std::thread::sleep(Duration::from_millis(10));
         }
@@ -639,6 +696,18 @@ fn identity(id: &str, name: &str) -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn clock_diagnostics_exclude_idle_gaps_and_retain_playing_starvation() {
+        let mut stats = ClockTransportDiagnostics::default();
+        stats.record_update(Some((Duration::from_secs(1), false)), Duration::from_millis(2), Duration::from_millis(5), false);
+        assert_eq!(stats.max_playing_send_gap_ms, 0);
+        stats.record_update(Some((Duration::from_millis(310), true)), Duration::from_millis(270), Duration::from_millis(8), true);
+        stats.record_update(Some((Duration::from_millis(40), true)), Duration::from_millis(1), Duration::from_millis(3), false);
+        assert_eq!(stats.max_playing_send_gap_ms, 310);
+        assert_eq!(stats.max_round_trip_ms, 270);
+        assert_eq!(stats.failed_updates, 1);
+        assert_eq!(stats.updates, 3);
+    }
     #[test]
     fn automatic_claim_recovers_after_release_or_reconnect_without_taking_an_owner() {
         let mut status = super::super::authority::Status {

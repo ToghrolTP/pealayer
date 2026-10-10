@@ -20,6 +20,7 @@ pub struct PreparedTimeline {
     pub requires_reprepare: bool,
     pub last_ack: Option<Instant>,
     pub play_requested: bool,
+    pub clock_transport: super::media_sync::ClockTransportDiagnostics,
 }
 impl Default for PreparedTimeline {
     fn default() -> Self {
@@ -38,6 +39,7 @@ impl Default for PreparedTimeline {
             requires_reprepare: false,
             last_ack: None,
             play_requested: false,
+            clock_transport: Default::default(),
         }
     }
 }
