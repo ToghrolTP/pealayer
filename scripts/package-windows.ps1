@@ -165,8 +165,8 @@ $effectiveExecutableFile = "$effectiveExecutableName.exe"
 $stagedExecutable = Join-Path $stagingDirectory $effectiveExecutableFile
 $stagedRuntime = Join-Path $stagingDirectory 'libmpv-2.dll'
 $stagedDownloader = Join-Path $stagingDirectory 'pealayer-downloader.exe'
-Copy-Item -LiteralPath (Join-Path $releaseDirectory 'pealayer.exe') -Destination $stagedExecutable -Force
-Copy-Item -LiteralPath (Join-Path $releaseDirectory 'pealayer-downloader.exe') -Destination $stagedDownloader -Force
+[void](Copy-PealayerFileLowWrite -Source (Join-Path $releaseDirectory 'pealayer.exe') -Destination $stagedExecutable)
+[void](Copy-PealayerFileLowWrite -Source (Join-Path $releaseDirectory 'pealayer-downloader.exe') -Destination $stagedDownloader)
 Copy-PealayerLibmpvRuntime -RuntimeLibrary $libmpvRuntime -DestinationDirectory $stagingDirectory
 
 $resource = (Get-Item -LiteralPath $stagedExecutable).VersionInfo
@@ -211,8 +211,8 @@ if ($embeddedIdentity.commit -ne $packageCommit -or $embeddedIdentity.dirty) {
 }
 Assert-PackageSourceStable -RepositoryRoot $repositoryRoot -ExpectedCommit $packageCommit
 
-Copy-Item -LiteralPath $stagedExecutable -Destination $outputDirectory -Force
-Copy-Item -LiteralPath $stagedDownloader -Destination $outputDirectory -Force
+[void](Copy-PealayerFileLowWrite -Source $stagedExecutable -Destination (Join-Path $outputDirectory $effectiveExecutableFile))
+[void](Copy-PealayerFileLowWrite -Source $stagedDownloader -Destination (Join-Path $outputDirectory 'pealayer-downloader.exe'))
 Copy-PealayerLibmpvRuntime -RuntimeLibrary $stagedRuntime -DestinationDirectory $outputDirectory
 $fontSource = Join-Path $repositoryRoot 'assets\fonts\Vazirmatn-Regular.ttf'
 if (-not (Test-Path -LiteralPath $fontSource -PathType Leaf)) {
@@ -221,7 +221,7 @@ if (-not (Test-Path -LiteralPath $fontSource -PathType Leaf)) {
 $fontDirectory = Join-Path $outputDirectory 'assets\fonts'
 New-Item -ItemType Directory -Force -Path $fontDirectory | Out-Null
 $packagedFont = Join-Path $fontDirectory 'Vazirmatn-Regular.ttf'
-Copy-Item -LiteralPath $fontSource -Destination $packagedFont -Force
+[void](Copy-PealayerFileLowWrite -Source $fontSource -Destination $packagedFont)
 $webDistribution = Join-Path $repositoryRoot 'web_ui\dist'
 $webUiPackaged = $false
 if (Test-Path -LiteralPath (Join-Path $webDistribution 'index.html')) {

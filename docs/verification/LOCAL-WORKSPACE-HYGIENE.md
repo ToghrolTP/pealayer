@@ -43,6 +43,14 @@ set, avoiding interference with other Rust projects. Running David/Cafe binaries
 media, controller service and settings were not replaced for this path-only
 change. No symlink or compatibility alias was left in `C:\development`.
 
+Windows launch and packaging reject a `CARGO_TARGET_DIR` located inside the
+source checkout. Repeated publication hashes existing payloads first and
+hard-links immutable libmpv assets when the filesystem permits, instead of
+rewriting identical large files. `scripts/storage-hygiene.ps1` provides a
+read-only inventory by default; its explicit `-PruneRepositoryTarget` mode only
+accepts the exact ignored `target` child, refuses unknown evidence, and refuses
+to remove an executable used by a running process.
+
 This relocation is not a claim that other historical caches or worktrees have
 been deleted. Preserve their owners and follow the older inventory below before
 any separate cleanup.
