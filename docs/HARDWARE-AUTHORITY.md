@@ -85,8 +85,11 @@ transport counters and an identity-free subset of controller timeline evidence.
 Controller `clock_timing` separates feedback intervals from position corrections;
 worker-gap, clock-read and board-read delays distinguish execution starvation
 from clock updates. Inspect these together with dispatch/ACK lateness.
-Counters and maximum delays are cumulative for this process; compare before and
-after a bounded test rather than attributing an old maximum to a new test.
+Pealayer `clock_transport` counters and maxima are cumulative for this process.
+Controller timeline worker/read/dispatch/ACK maxima belong to the prepared plan;
+`clock_timing` maxima belong to a contiguous playing-clock interval and reset
+on pause/unload, publisher/plan/epoch change or a new playing interval. Compare
+before and after a bounded test; do not attribute an old maximum to a new test.
 This read uses a nonblocking lock: `state: busy` or `unavailable` does not mean
 healthy/empty hardware. Before registration the value is null. This is diagnostic
 evidence, not permission to bypass the executor's fresh-ACK or safety checks.
