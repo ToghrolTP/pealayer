@@ -34,6 +34,9 @@ retroactively attributed to an older download.
   consistently across native and Web commands.
 - Refine library cards, group controls, icon/color pickers and the shared Cue
   properties/Effect Controls editor.
+- Keep Effects Library and Hardware Monitor cards clear of their scrollbars;
+  reveal library card actions and folder-add icons on hover or keyboard focus
+  without shifting buttons or card edges.
 
 ### 🔌 Hardware and remote control
 

@@ -40,6 +40,9 @@ statements are not the present product state.
 - Hardware section context menus, persistent channel folders, explicit Ungrouped
   and same-section folder drops are implemented together with the controller API:
   [folder verification](channel-folders.md).
+- Effects Library and Hardware Monitor share a compact non-overlapping scrollbar
+  lane. Library action icons and folder-add buttons reveal on hover or keyboard
+  focus without shifting geometry: [library verification](effects-library-hover-spacing.md).
 
 ## Remaining gates · do not silently mark complete
 
