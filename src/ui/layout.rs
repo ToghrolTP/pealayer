@@ -50,17 +50,47 @@ pub(super) fn drag_translation(
     pointer - source_min - grab_offset
 }
 
+const SIDEBAR_SCROLLBAR_WIDTH: f32 = 6.0;
+const SIDEBAR_SCROLLBAR_GAP: f32 = 3.0;
+
+fn sidebar_content_width(available_width: f32) -> f32 {
+    (available_width - SIDEBAR_SCROLLBAR_WIDTH - SIDEBAR_SCROLLBAR_GAP).max(1.0)
+}
+
+fn sidebar_scroll<R>(
+    ui: &mut egui::Ui,
+    id: &str,
+    body: impl FnOnce(&mut egui::Ui) -> R,
+) -> egui::scroll_area::ScrollAreaOutput<R> {
+    let width = sidebar_content_width(ui.available_width());
+    ui.scope(|ui| {
+        // One small, solid scrollbar lane, never an expanding overlay on cards.
+        // Reserve it once, even during egui's show/hide animation, so fixed
+        // toolbar rows and scrolling cards keep the same trailing edge.
+        let scroll = &mut ui.spacing_mut().scroll;
+        scroll.floating = false;
+        scroll.content_margin = egui::Margin::ZERO;
+        scroll.bar_width = SIDEBAR_SCROLLBAR_WIDTH;
+        scroll.bar_inner_margin = SIDEBAR_SCROLLBAR_GAP;
+        scroll.bar_outer_margin = 0.0;
+        egui::ScrollArea::vertical()
+            .id_salt(id)
+            .max_height(ui.available_height())
+            .auto_shrink([false, false])
+            .show(ui, |ui| {
+                ui.set_width(width);
+                body(ui)
+            })
+    }).inner
+}
+
 fn hardware_monitor_scroll<R>(
     ui: &mut egui::Ui,
     body: impl FnOnce(&mut egui::Ui) -> R,
 ) -> egui::scroll_area::ScrollAreaOutput<R> {
     // Dock scrolling is disabled for this panel: it owns one bounded vertical
     // viewport so cards cannot grow the panel or strand lower sections.
-    let output = egui::ScrollArea::vertical()
-        .id_salt("hardware-monitor-scroll")
-        .max_height(ui.available_height())
-        .auto_shrink([false, false])
-        .show(ui, body);
+    let output = sidebar_scroll(ui, "hardware-monitor-scroll", body);
     // A release may target a folder in a later section; clear only after all
     // sections have had a chance to consume it.
     clear_released_hardware_channel_drag(ui, HardwareChannelDragSurface::Monitor);
@@ -91,8 +121,8 @@ pub(crate) fn left_aligned_click_label(
     response
 }
 
-const EFFECTS_PANEL_RIGHT_GUTTER: f32 = 10.0;
-// Grip, icon, three compact actions and a readable title need this minimum.
+// Exercise the most constrained supported action row in the geometry tests.
+#[cfg(test)]
 const EFFECT_CARD_MIN_WIDTH: f32 = 160.0;
 const EFFECT_CARD_HORIZONTAL_MARGIN: i8 = 9;
 const EFFECT_CARD_STROKE_WIDTH: f32 = 1.0;
@@ -1175,7 +1205,36 @@ fn sorted_cue_ids(timeline: &crate::four_d::models::Timeline) -> Vec<uuid::Uuid>
 }
 
 fn effects_panel_content_width(available_width: f32) -> f32 {
-    (available_width - EFFECTS_PANEL_RIGHT_GUTTER).max(EFFECT_CARD_MIN_WIDTH)
+    available_width.max(1.0)
+}
+
+fn hover_icon_action(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    icon: &str,
+    size: egui::Vec2,
+    visible: bool,
+    enabled: bool,
+    tooltip: &str,
+) -> egui::Response {
+    let previous_widget = ui.data(|data| data.get_temp::<egui::Id>(id.with("widget")));
+    let focused = previous_widget.is_some_and(|widget| ui.memory(|memory| memory.has_focus(widget)));
+    let response = ui.scope_builder(egui::UiBuilder::new().id(id), |ui| {
+        // Keep stable geometry and keyboard traversal. Pointer actions reveal
+        // anywhere on the card; keyboard focus reveals its action immediately.
+        if !visible && !focused {
+            ui.multiply_opacity(0.0);
+        }
+        ui.add_enabled_ui(enabled, |ui| {
+            ui.add_sized(size, egui::Button::new(icon).frame(false))
+                .on_hover_text(tooltip)
+        }).inner
+    }).inner;
+    ui.data_mut(|data| data.insert_temp(id.with("widget"), response.id));
+    if response.gained_focus() {
+        ui.ctx().request_repaint();
+    }
+    response
 }
 
 fn effects_library_toolbar(app: &mut PealayerApp, ui: &mut egui::Ui, width: f32) -> (egui::Rect, egui::Rect) {
@@ -1264,11 +1323,12 @@ fn effect_library_card_header(
             source_rect,
             ui.max_rect(),
             primary_effect_drag_active(ui.ctx(), id),
-        );
+        ) && ui.rect_contains_pointer(source_rect.unwrap_or(ui.max_rect()).intersect(ui.clip_rect()));
+        let actions_visible = hovered || egui::Popup::is_id_open(ui.ctx(), id.with("context-menu"));
         let hover = ui
             .ctx()
             .animate_bool_with_time(id.with("grip-hover"), hovered, 0.12);
-        // Discoverable even at rest; hover emphasis must not change row geometry.
+        // Match the Hardware Monitor grip without changing row geometry.
         let grip = ui
             .add_sized(
                 [14.0, 24.0],
@@ -1278,7 +1338,7 @@ fn effect_library_card_header(
                         .color(
                             ui.visuals()
                                 .weak_text_color()
-                                .gamma_multiply(0.45 + 0.55 * hover),
+                                .gamma_multiply(hover),
                         ),
                 )
                 .sense(egui::Sense::hover()),
@@ -1319,33 +1379,15 @@ fn effect_library_card_header(
                 egui::Layout::right_to_left(egui::Align::Center),
                 |ui| {
                     ui.set_min_width(actions_width);
-                    let more = ui
-                        .add_sized(
-                            [action_button_width, 24.0],
-                            egui::Button::new(crate::ui::icons::DOTS_THREE).frame(false),
-                        )
-                        .on_hover_text(tooltips[5]);
-                    let place = ui
-                        .add_sized(
-                            [action_button_width, 24.0],
-                            egui::Button::new(crate::ui::icons::PLUS).frame(false),
-                        )
-                        .on_hover_text(tooltips[4]);
-                    let run = ui
-                        .add_enabled_ui(primary_action_enabled, |ui| {
-                            ui.add_sized(
-                                [action_button_width, 24.0],
-                                egui::Button::new(primary_action_icon).frame(false),
-                            )
-                        })
-                        .inner
-                        .on_hover_text(tooltips[3]);
-                    let rename = ui
-                        .add_sized(
-                            [action_button_width, 24.0],
-                            egui::Button::new(crate::ui::icons::PENCIL_SIMPLE).frame(false),
-                        )
-                        .on_hover_text(tooltips[6]);
+                    let size = egui::vec2(action_button_width, 24.0);
+                    let more = hover_icon_action(ui, id.with("more"), crate::ui::icons::DOTS_THREE,
+                        size, actions_visible, true, tooltips[5]);
+                    let place = hover_icon_action(ui, id.with("place"), crate::ui::icons::PLUS,
+                        size, actions_visible, true, tooltips[4]);
+                    let run = hover_icon_action(ui, id.with("run"), primary_action_icon,
+                        size, actions_visible, primary_action_enabled, tooltips[3]);
+                    let rename = hover_icon_action(ui, id.with("rename"), crate::ui::icons::PENCIL_SIMPLE,
+                        size, actions_visible, true, tooltips[6]);
                     (more, place, run, rename)
                 },
             )
@@ -1426,7 +1468,11 @@ fn effect_group_action_header(
     add_tooltip: &str,
 ) -> (egui::Response, egui::Response) {
     let empty = count == 0;
-    effect_group_header(ui, outer_width, |ui| {
+    let id = ui.make_persistent_id(("effect-group-actions", title));
+    let previous_rect = ui.data(|data| data.get_temp::<egui::Rect>(id.with("rect")));
+    let fallback_rect = egui::Rect::from_min_size(ui.next_widget_position(), egui::vec2(outer_width, 38.0));
+    let hovered = ui.rect_contains_pointer(previous_rect.unwrap_or(fallback_rect).intersect(ui.clip_rect()));
+    let header = effect_group_header(ui, outer_width, |ui| {
         ui.horizontal(|ui| {
             let spacing = ui.spacing().item_spacing.x;
             let count_text = count.to_string();
@@ -1470,9 +1516,8 @@ fn effect_group_action_header(
                 } else {
                     egui::Sense::click()
                 });
-            let add_response = ui
-                .add_sized([24.0, 24.0], egui::Button::new(crate::ui::icons::PLUS))
-                .on_hover_text(add_tooltip);
+            let add_response = hover_icon_action(ui, id.with("add"), crate::ui::icons::PLUS,
+                egui::vec2(24.0, 24.0), hovered, true, add_tooltip);
             egui::Frame::new()
                 .fill(ui.visuals().widgets.inactive.weak_bg_fill)
                 .stroke(ui.visuals().widgets.noninteractive.bg_stroke)
@@ -1485,8 +1530,9 @@ fn effect_group_action_header(
             (title_response, add_response)
         })
         .inner
-    })
-    .inner
+    });
+    ui.data_mut(|data| data.insert_temp(id.with("rect"), header.response.rect));
+    header.inner
 }
 
 /// Neutral metadata never inherits the accent selection fill. Reserve the
@@ -10971,6 +11017,84 @@ mod timeline_row_tests {
     }
 
     #[test]
+    fn effects_sidebar_scroll_reserves_one_lane_without_clipping_cards() {
+        for width in [180.0, 309.0, 520.0] {
+            for tall in [false, true] {
+                let context = egui::Context::default();
+                for frame in 0..4 {
+                    let output = context.run_ui(egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 240.0))),
+                        time: Some(frame as f64 * 0.3),
+                        events: vec![egui::Event::PointerMoved(egui::pos2(width - 3.0, 100.0))],
+                        ..Default::default()
+                    }, |ui| {
+                        let outer_right = ui.max_rect().right();
+                        let expected = sidebar_content_width(ui.available_width());
+                        let original_scroll = ui.spacing().scroll;
+                        let card = std::cell::Cell::new(egui::Rect::NOTHING);
+                        let scroll = sidebar_scroll(ui, "effects-scroll-geometry", |ui| {
+                            card.set(effect_card(ui, ui.available_width(), |ui| {
+                                ui.label("Effect");
+                            }).response.rect);
+                            if tall { ui.allocate_space(egui::vec2(1.0, 500.0)); }
+                        });
+                        assert!((card.get().width() - expected).abs() < 0.1);
+                        assert!((outer_right - card.get().right() - 9.0).abs() < 0.1);
+                        assert!(card.get().right() <= scroll.inner_rect.right() + 0.1,
+                            "card clips into scrollbar: width={width}, tall={tall}, frame={frame}");
+                        assert_eq!(ui.spacing().scroll, original_scroll, "sidebar style leaked");
+                    });
+                    discard_ui_output(output);
+                }
+            }
+        }
+        assert_eq!(effects_panel_content_width(120.0), 120.0, "narrow panels must not be widened");
+    }
+
+    #[test]
+    fn effect_card_and_folder_actions_reveal_on_hover_and_keyboard_focus_without_shifting() {
+        for dark in [false, true] {
+            let context = egui::Context::default();
+            context.set_visuals(if dark { egui::Visuals::dark() } else { egui::Visuals::light() });
+            let id = egui::Id::new("hover-card-actions");
+            let frame = |pointer: Option<egui::Pos2>| {
+                let mut responses = None;
+                let output = context.run_ui(egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 240.0))),
+                    events: pointer.map(egui::Event::PointerMoved).into_iter().collect(),
+                    ..Default::default()
+                }, |ui| {
+                    let (_, add) = effect_group_action_header(ui, 300.0, "Lighting", crate::ui::icons::FOLDER_OPEN,
+                        true, 2, "New effect in group");
+                    let card = effect_card(ui, 300.0, |ui| effect_library_card_header(ui, id,
+                        crate::ui::icons::SPARKLE, "Seat test", crate::ui::icons::PLAY, true,
+                        ["Drag", "Icon", "Rename", "Run", "Place", "More", "Rename"]));
+                    ui.data_mut(|data| data.insert_temp(id.with("source-rect"), card.response.rect));
+                    responses = Some((add, card.inner.place, card.inner.run, card.inner.more, card.response.rect));
+                });
+                let plus_count = output.shapes.iter().filter(|shape| matches!(&shape.shape,
+                    egui::epaint::Shape::Text(text) if text.galley.job.text == crate::ui::icons::PLUS)).count();
+                discard_ui_output(output);
+                (responses.unwrap(), plus_count)
+            };
+            let (rest, hidden_count) = frame(Some(egui::pos2(390.0, 230.0)));
+            assert_eq!(hidden_count, 0, "resting actions should not paint");
+            let (hover, hover_count) = frame(Some(rest.4.center()));
+            assert_eq!(hover_count, 1, "whole-card hover should reveal placement");
+            assert_eq!(rest.1.rect, hover.1.rect);
+            assert_eq!(rest.2.rect, hover.2.rect);
+            assert_eq!(rest.3.rect, hover.3.rect);
+            assert_eq!(rest.4, hover.4);
+            let (folder, folder_count) = frame(Some(rest.0.rect.center()));
+            assert_eq!(folder_count, 1, "folder add uses the same hover policy");
+            assert_eq!(rest.0.rect, folder.0.rect);
+            context.memory_mut(|memory| memory.request_focus(rest.1.id));
+            let (_, focused_count) = frame(Some(egui::pos2(390.0, 230.0)));
+            assert_eq!(focused_count, 1, "keyboard-focused placement must remain visible");
+        }
+    }
+
+    #[test]
     fn effect_cards_keep_identical_geometry_across_rows_and_frames() {
         let context = egui::Context::default();
         let payload = EffectDragPayload {
@@ -11054,8 +11178,8 @@ mod timeline_row_tests {
     fn effect_group_headers_and_cards_share_the_same_outer_width() {
         let outer = effects_panel_content_width(327.0);
         let content = effects_frame_content_width(outer);
-        assert_eq!(outer, 317.0);
-        assert_eq!(content, 297.0);
+        assert_eq!(outer, 327.0);
+        assert_eq!(content, 307.0);
         assert_eq!(
             content + (f32::from(EFFECT_CARD_HORIZONTAL_MARGIN) + EFFECT_CARD_STROKE_WIDTH) * 2.0,
             outer
@@ -12570,9 +12694,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                     }
                     PealayerTab::EffectsLibrary => {
                         // Fixed rows and scrolling cards share one trailing edge.
-                        let scroll = &ui.spacing().scroll;
-                        let scrollbar_width = scroll.bar_width + scroll.bar_inner_margin + scroll.bar_outer_margin;
-                        let effects_width = effects_panel_content_width(ui.available_width() - scrollbar_width);
+                        let effects_width = effects_panel_content_width(sidebar_content_width(ui.available_width()));
                         effects_library_toolbar(self.app, ui, effects_width);
 
                         // Filter presets based on query
@@ -12611,13 +12733,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 }
                             });
                         } else {
-                            egui::ScrollArea::vertical()
-                                .id_salt("effects_scroll")
-                                .show(ui, |ui| {
-                                    // Keep a deliberate gutter between cards and the scrollbar /
-                                    // right panel edge. The previous full-width inner frame caused
-                                    // its stroke and action row to crowd or clip against that edge.
-                                    ui.set_width(effects_width);
+                            sidebar_scroll(ui, "effects_scroll", |ui| {
                                     for (category, presets) in categorized {
                                         let group_id = ui.make_persistent_id(("effect-group", &category));
                                         let mut open = ui.data_mut(|data| {
