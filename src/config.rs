@@ -1441,8 +1441,11 @@ pub fn runtime_port(env_name: &str, default: u16) -> u16 {
 /// The single TCP port used by Pealayer's HTTP, WebSocket, and local IPC APIs.
 pub fn control_port() -> u16 {
     if let Some(client)=crate::peer::client(){return client.local_port}
-    let config = AppConfig::load();
-    runtime_port("PEALAYER_PORT", config.web_port)
+    // Clock RPC headers and status rendering call this frequently. Once the
+    // application is initialized, read the scalar live value, not its file.
+    let port = crate::platform::interop::live_control_port()
+        .unwrap_or_else(|| AppConfig::load().web_port);
+    runtime_port("PEALAYER_PORT", port)
 }
 
 pub fn resolved_web_enabled(config: &AppConfig) -> bool {

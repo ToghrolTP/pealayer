@@ -2389,6 +2389,11 @@ pub(crate) fn allow_unattended_hardware_takeover() -> bool {
         .unwrap_or(false)
 }
 
+pub(crate) fn live_control_port() -> Option<u16> {
+    LIVE_CONFIG.read().ok()
+        .and_then(|config| config.as_ref().map(|config| config.web_port))
+}
+
 pub fn get_socket_path() -> PathBuf {
     if let Ok(path) = std::env::var("PEALAYER_SOCKET_PATH") {
         return PathBuf::from(path);
@@ -2984,19 +2989,21 @@ fn controller_host_name() -> String {
 
 pub(crate) fn controller_instance_identity(instance_id: &str, name: &str) -> Value {
     let config = get_live_config();
+    let port = crate::peer::client().map(|client| client.local_port)
+        .unwrap_or_else(|| crate::config::runtime_port("PEALAYER_PORT", config.web_port));
     let remotely_listening = crate::config::resolved_web_enabled(&config)
         && crate::config::resolved_web_bind_addresses(&config)
             .is_ok_and(|addresses| addresses.iter().any(|address| !address.is_loopback()));
     let peer_origin = if remotely_listening {
-        format!("http://{}:{}/", controller_host_name(), crate::config::control_port())
+        format!("http://{}:{}/", controller_host_name(), port)
     } else { String::new() };
     serde_json::json!({
         "id": instance_id, "surface":"pealayer", "page":"player", "state":"active", "lease_seconds":45,
         "self":{"kind":"native","pid":std::process::id(),"vars":{
-            "rpc":format!("http://127.0.0.1:{}/api/rpc",crate::config::control_port()),
-            "websocket":format!("ws://127.0.0.1:{}/ws",crate::config::control_port()),
-            "ipc":format!("http://127.0.0.1:{}/api/ipc",crate::config::control_port()),
-            "web_ui":format!("http://127.0.0.1:{}/",crate::config::control_port())}},
+            "rpc":format!("http://127.0.0.1:{port}/api/rpc"),
+            "websocket":format!("ws://127.0.0.1:{port}/ws"),
+            "ipc":format!("http://127.0.0.1:{port}/api/ipc"),
+            "web_ui":format!("http://127.0.0.1:{port}/")}},
         "values":{"application":name,"version":env!("CARGO_PKG_VERSION"),"commit":env!("PEALAYER_GIT_COMMIT"),
             "peer_origin":peer_origin,
             "os":std::env::consts::OS,"arch":std::env::consts::ARCH,"host":controller_host_name(),
