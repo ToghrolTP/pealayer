@@ -2682,14 +2682,14 @@ fn draw_channel_detail_page(
                                         crate::ui::icons::FOLDER_OPEN,
                                         app.tr("Group")
                                     ));
-                                    crate::ui::group_picker::group_picker(
+                                    ui.add_enabled_ui(!crate::ui::layout::channel_control_is_raw_relay(&capabilities, &control), |ui| crate::ui::group_picker::group_picker(
                                         ui,
                                         ("channel-group", &control.key),
                                         &mut app.hardware_control_group_draft,
-                                        capabilities.controls.iter().map(|item| item.group.as_str()),
+                                        crate::ui::layout::channel_folder_names(&capabilities, &control.kind),
                                         field_width,
                                         app.language,
-                                    );
+                                    ));
                                     ui.end_row();
 
                                     ui.label(format!(

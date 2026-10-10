@@ -3,6 +3,10 @@ use crate::config::TimelineToolbarAction;
 use eframe::egui;
 use egui_dock::TabViewer;
 
+mod channel_folders;
+pub(crate) use channel_folders::{request_channel_folder_update, channel_folder_names};
+pub(crate) use channel_folders::raw_relay as channel_control_is_raw_relay;
+
 pub fn paint_dock_disclosure_icons(
     ui: &mut egui::Ui,
     dock_state: &egui_dock::DockState<PealayerTab>,
@@ -52,11 +56,15 @@ fn hardware_monitor_scroll<R>(
 ) -> egui::scroll_area::ScrollAreaOutput<R> {
     // Dock scrolling is disabled for this panel: it owns one bounded vertical
     // viewport so cards cannot grow the panel or strand lower sections.
-    egui::ScrollArea::vertical()
+    let output = egui::ScrollArea::vertical()
         .id_salt("hardware-monitor-scroll")
         .max_height(ui.available_height())
         .auto_shrink([false, false])
-        .show(ui, body)
+        .show(ui, body);
+    // A release may target a folder in a later section; clear only after all
+    // sections have had a chance to consume it.
+    clear_released_hardware_channel_drag(ui, HardwareChannelDragSurface::Monitor);
+    output
 }
 
 pub(crate) fn left_aligned_click_label(
@@ -454,8 +462,8 @@ pub(crate) fn hardware_channel_drag_handle(
             )
             .sense(egui::Sense::drag()),
         )
-        .on_hover_text(app.tr("Drag to reorder channel"));
-    if response.drag_started() {
+        .on_hover_text(app.tr(if control.control == "seat-internal" { "Raw relays" } else { "Drag to reorder channel" }));
+    if response.drag_started_by(egui::PointerButton::Primary) && control.control != "seat-internal" {
         let source_rect = source_rect.unwrap_or(response.rect);
         let grab_offset = ui
             .ctx()
@@ -5463,10 +5471,12 @@ pub(crate) fn persist_channel_drop(
     else {
         return;
     };
+    let Some(target) = capabilities.controls.iter().find(|target| target.key == drop.target_key) else { return; };
+    if channel_folders::raw_relay(capabilities, control) || channel_folders::raw_relay(capabilities, target) { return; }
     let params = control_presentation_update_params(
         capabilities,
         control,
-        serde_json::json!({"order": order}),
+        serde_json::json!({"order": order, "group": target.group}),
     );
     if let Err(error) = app.engine_handle.request_controller_call(
         format!("presentation-order:{}", control.key),
@@ -5976,7 +5986,8 @@ fn draw_control_context_menu(
         });
         ui.close();
     }
-    if ui
+    channel_folders::control_move_menu(app, ui, capabilities, control);
+    if !channel_folders::raw_relay(capabilities, control) && ui
         .button(format!(
             "{} {}",
             crate::ui::icons::FOLDER_OPEN,
@@ -6059,11 +6070,11 @@ fn hardware_section(
     title: &str,
     default_open: bool,
     body: impl FnOnce(&mut egui::Ui),
-) {
+) -> egui::Response {
     let id = ui.make_persistent_id(id_salt);
     let mut open = ui.data_mut(|data| data.get_persisted::<bool>(id).unwrap_or(default_open));
     ui.add_space(7.0);
-    ui.horizontal(|ui| {
+    let header = ui.horizontal(|ui| {
         let caret = if open {
             crate::ui::icons::CARET_DOWN
         } else {
@@ -6090,6 +6101,22 @@ fn hardware_section(
             body(ui);
         });
     }
+    header.response
+}
+
+fn hardware_channel_section(
+    app: &mut PealayerApp,
+    ui: &mut egui::Ui,
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
+    id_salt: &str,
+    icon: &str,
+    title: &str,
+    controls: &[crate::four_d::controller::HardwareControl],
+) {
+    let response = hardware_section(ui, id_salt, icon, title, true, |ui| {
+        draw_control_card_grid(app, ui, capabilities, controls);
+    });
+    channel_folders::section_menu(app, ui, &response, capabilities, controls);
 }
 
 fn parse_rf_code(value: &str) -> Option<u32> {
@@ -7134,7 +7161,7 @@ fn draw_compact_control_card(
                         ui,
                         group_draft_id,
                         &mut draft,
-                        capabilities.controls.iter().map(|item| item.group.as_str()),
+                        channel_folder_names(capabilities, &control.kind),
                         edit_width,
                         app.language,
                     );
@@ -7539,7 +7566,7 @@ fn draw_control_card(
                                 ui,
                                 group_draft_id,
                                 &mut draft,
-                                capabilities.controls.iter().map(|item| item.group.as_str()),
+                                channel_folder_names(capabilities, &control.kind),
                                 ui.available_width().max(80.0) - 52.0,
                                 app.language,
                             );
@@ -7950,31 +7977,19 @@ fn draw_control_card_grid(
         });
         ui.add_space(4.0);
     }
-    let mut ordered_controls = controls.iter().collect::<Vec<_>>();
-    ordered_controls.sort_by(|left, right| {
-        left.order
-            .cmp(&right.order)
-            .then_with(|| left.key.cmp(&right.key))
-    });
-    let mut groups: Vec<(String, Vec<&crate::four_d::controller::HardwareControl>)> = Vec::new();
-    for control in ordered_controls
-        .into_iter()
-        .filter(|control| !control.hidden)
-        .filter(|control| global_control_is_visible(app, capabilities, control))
-    {
-        let group = control.group.trim();
-        if let Some((_, members)) = groups.iter_mut().find(|(name, _)| name == group) {
-            members.push(control);
-        } else {
-            groups.push((group.to_string(), vec![control]));
-        }
-    }
+    let groups = channel_folders::groups(app, capabilities, controls);
     if groups.is_empty() {
         ui.label(egui::RichText::new(app.tr("All channels are hidden")).weak());
         return;
     }
-    let show_group_headers = groups.iter().any(|(name, _)| !name.is_empty());
-    for (group, members) in groups {
+    let show_group_headers = groups.iter().any(|group| !group.name.is_empty());
+    let kind = controls.first().map(|control| channel_folders::kind(&control.kind)).unwrap_or("board");
+    for group in groups {
+        let members = &group.members;
+        if show_group_headers {
+            if !channel_folders::draw_header(app, ui, capabilities, kind, &group) { continue; }
+            ui.add_space(4.0);
+        }
         if app.compact_hardware_controls
             && members.len() > 1
             && members
@@ -7991,25 +8006,13 @@ fn draw_control_card_grid(
                     ui.set_opacity(0.58);
                 }
                 if let Some(drop) =
-                    draw_compact_relay_group(app, ui, capabilities, &group, &members)
+                    draw_compact_relay_group(app, ui, capabilities, &group.name, members)
                 {
                     pending_drop = Some(drop);
                 }
             });
             ui.add_space(6.0);
             continue;
-        }
-        if show_group_headers && !group.is_empty() {
-            ui.horizontal(|ui| {
-                ui.label(crate::ui::icons::FOLDER_OPEN);
-                ui.label(
-                    egui::RichText::new(crate::ui::i18n::visual_text(app.language, &group))
-                        .small()
-                        .strong(),
-                );
-                ui.separator();
-            });
-            ui.add_space(4.0);
         }
         let columns = control_grid_columns(ui.available_width());
         for row in members.chunks(columns) {
@@ -8030,14 +8033,12 @@ fn draw_control_card_grid(
             });
             ui.add_space(8.0);
         }
-        if show_group_headers && !group.is_empty() {
+        if show_group_headers {
             ui.add_space(3.0);
         }
     }
     if let Some(drop) = pending_drop {
         persist_channel_drop(app, capabilities, drop);
-    } else {
-        clear_released_hardware_channel_drag(ui, HardwareChannelDragSurface::Monitor);
     }
 }
 
@@ -13197,6 +13198,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                     PealayerTab::HardwareMonitor => {
                         crate::four_d::authority::draw_controls(self.app,ui);
                         let capabilities = self.app.advertised_hardware();
+                        if let Some(capabilities) = &capabilities {
+                            channel_folders::draw_dialogs(self.app, ui, capabilities);
+                        }
                         ui.horizontal(|ui| {
                             ui.heading(self.app.tr("Hardware Monitor Dashboard"));
                             if crate::ui::hardware_control::channel_manager_available(
@@ -13417,21 +13421,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     self.app.tr("Motion / seat controls"),
                                     motion_controls.len()
                                 );
-                                hardware_section(
-                                    ui,
-                                    "hardware_motion_section",
-                                    crate::ui::icons::SEAT,
-                                    &title,
-                                    true,
-                                    |ui| {
-                                        draw_control_card_grid(
-                                            self.app,
-                                            ui,
-                                            &capabilities,
-                                            &motion_controls,
-                                        );
-                                    },
-                                );
+                                hardware_channel_section(self.app, ui, &capabilities,
+                                    "hardware_motion_section", crate::ui::icons::SEAT, &title, &motion_controls);
                             }
 
                             let semantic_controls = capabilities
@@ -13456,21 +13447,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     self.app.tr("Board controls"),
                                     semantic_controls.len()
                                 );
-                                hardware_section(
-                                    ui,
-                                    "hardware_semantic_controls_section",
-                                    crate::ui::icons::SLIDERS_HORIZONTAL,
-                                    &title,
-                                    true,
-                                    |ui| {
-                                        draw_control_card_grid(
-                                            self.app,
-                                            ui,
-                                            &capabilities,
-                                            &semantic_controls,
-                                        );
-                                    },
-                                );
+                                hardware_channel_section(self.app, ui, &capabilities,
+                                    "hardware_semantic_controls_section", crate::ui::icons::SLIDERS_HORIZONTAL, &title, &semantic_controls);
                             }
 
                             if !capabilities.relays.is_empty() {
@@ -13485,11 +13463,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 name: relay.name.clone(),
                                                 default_name: relay.name.clone(),
                                                 control: relay.control.clone(),
-                                                group: if relay.id <= 4 {
-                                                    self.app.tr("Raw relays")
-                                                } else {
-                                                    relay.role.clone()
-                                                },
                                                 ..Default::default()
                                             })
                                     })
@@ -13501,21 +13474,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         self.app.tr("Relay outputs"),
                                         relay_controls.len()
                                     );
-                                    hardware_section(
-                                        ui,
-                                        "hardware_relay_section",
-                                        crate::ui::icons::PLUG,
-                                        &title,
-                                        true,
-                                        |ui| {
-                                            draw_control_card_grid(
-                                                self.app,
-                                                ui,
-                                                &capabilities,
-                                                &relay_controls,
-                                            );
-                                        },
-                                    );
+                                    hardware_channel_section(self.app, ui, &capabilities,
+                                        "hardware_relay_section", crate::ui::icons::PLUG, &title, &relay_controls);
                                 }
                             }
 
@@ -13531,7 +13491,6 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 name: channel.name.clone(),
                                                 default_name: channel.name.clone(),
                                                 control: channel.control.clone(),
-                                                group: channel.role.clone(),
                                                 ..Default::default()
                                             })
                                     })
@@ -13542,21 +13501,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     self.app.tr("PWM outputs"),
                                     pwm_controls.len()
                                 );
-                                hardware_section(
-                                    ui,
-                                    "hardware_pwm_section",
-                                    crate::ui::icons::WAVEFORM,
-                                    &title,
-                                    true,
-                                    |ui| {
-                                        draw_control_card_grid(
-                                            self.app,
-                                            ui,
-                                            &capabilities,
-                                            &pwm_controls,
-                                        );
-                                    },
-                                );
+                                hardware_channel_section(self.app, ui, &capabilities,
+                                    "hardware_pwm_section", crate::ui::icons::WAVEFORM, &title, &pwm_controls);
                             }
 
                             hardware_section(

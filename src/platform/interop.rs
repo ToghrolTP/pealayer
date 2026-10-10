@@ -342,6 +342,7 @@ pub enum InteropCommand {
         key: String,
         fields: Value,
     },
+    UpdateHardwareFolder { fields: Value },
     ConfigureAddressableStrip {
         pixels: u16,
     },
@@ -637,6 +638,9 @@ impl InteropCommand {
                     || !fields.is_object() =>
             {
                 Err("hardware presentation update is invalid".to_string())
+            }
+            Self::UpdateHardwareFolder { fields } if !fields.is_object() => {
+                Err("hardware folder update is invalid".into())
             }
             Self::PressFrontPanelKey { key }
                 if !matches!(key.to_ascii_uppercase().as_str(), "K1" | "K2" | "K3" | "K4") =>
@@ -2137,6 +2141,7 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
                     .ok_or_else(|| "missing hardware presentation fields".to_string())?,
             })
         }
+        "hardware.folder.update" => Some(InteropCommand::UpdateHardwareFolder { fields: request.params.clone() }),
         "hardware.strip.configure" | "pealayer.hardware.strip.configure" => {
             let pixels = request
                 .params
@@ -3994,6 +3999,10 @@ mod tests {
 
     #[test]
     fn parses_hardware_presentation_updates_for_web_channel_management() {
+        let folder: JsonRpcRequest = serde_json::from_str(r#"{"jsonrpc":"2.0","id":"folder","method":"hardware.folder.update","params":{"operation":"move","kind":"pwm","name":"Lighting","keys":["pwm.0"]}}"#).unwrap();
+        assert!(matches!(command_from_json_rpc(&folder).unwrap(), Some(InteropCommand::UpdateHardwareFolder { fields }) if fields["operation"] == "move" && fields["keys"][0] == "pwm.0"));
+        let invalid: JsonRpcRequest = serde_json::from_str(r#"{"jsonrpc":"2.0","id":"folder","method":"hardware.folder.update","params":[]}"#).unwrap();
+        assert!(command_from_json_rpc(&invalid).is_err());
         let request: JsonRpcRequest = serde_json::from_str(
             r#"{"jsonrpc":"2.0","id":"channel","method":"hardware.presentation.update","params":{"key":"relay.5","fields":{"name":"Seat fan","order":2}}}"#,
         )
