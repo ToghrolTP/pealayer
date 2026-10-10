@@ -42,4 +42,28 @@ open. This pass does not change firmware, controller contracts or Web behavior.
 
 Before packaging, Cafe source was clean main and the running application was
 paused, connected, without hardware error, and in NLE with its original cues.
-Build and destination-updater receipts are recorded after delivery below.
+Delivery completed through the product's peer updater, not a manual running-file
+replacement or production-host build:
+
+- Clean packaged source: `fa062a91d4afadc6c757db9b7ed8a0dfae0b00ec`,
+  [PR #129](https://github.com/ToghrolTP/pealayer/pull/129).
+- Executable SHA-256:
+  `23aba6871ba45af3992f6a9b4d34f7703f87b98348536246519b554f6da57c64`.
+- Canonical `build.cmd -SkipTests -NoUpx` reused the existing shared Cargo target
+  and staging directory. Release compile/link, native Windows resource checks,
+  executable/downloader smoke tests and Web/PWA guardrails passed. The full
+  native suite ran separately; packaging did not redundantly rerun it.
+- Both Cafe runtime aliases retained SHA-256
+  `872827614ed0adfca11e68def5273bcfcaea6acf38bbf1950c35980b59f43a5f`.
+  No workstation DLL was copied to production; destination candidate identity
+  and smoke tests passed against the destination's own runtime before updating.
+- Update `update-570ea143-3aca-4c39-909d-8102b19b99a6` completed. Its live manifest
+  advertised the exact executable SHA/commit with `git_dirty=false`.
+- The new process was PID 66840, interactive session 1. Loaded private media,
+  original zero cues, paused position and NLE workspace were preserved. Hardware
+  remained connected with no error/EStop, no reconnect wait samples and no new
+  matching Application Error/WER events. Cafe free space remained 15.91 GiB.
+
+This receipt proves package and installed-runtime identity/continuity. Production
+hover appearance and scrollbar use still need human/native visual acceptance;
+no effect preview, playback or physical output was triggered for this layout fix.
