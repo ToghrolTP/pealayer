@@ -10,6 +10,10 @@ statements are not the present product state.
 
 ## Delivered source and deployment
 
+- Erfan is installed and opened in its signed-in NLE workspace with Cafe's real
+  board connected and publishing handed off while paused; original cues and
+  private work are preserved. [Authoring readiness](ERFAN-AUTHORING-READINESS.md)
+  records runtime/ACK evidence and the unavailable visual verification gate.
 - PRs #77 and #79 and CPU fixes #78/#81/#82 are merged. Subsequent feature and
   recovery PRs through #108 are integrated; none should be fetched as a stale
   replacement for current main.
