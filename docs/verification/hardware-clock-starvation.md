@@ -3,8 +3,9 @@
 The recurring Hardware timing fault reported on 2026-10-11 was a controller
 `video clock feedback expired` fault, with an authenticated board and no
 dispatched cue in the faulted plan. The earlier explicit-Play re-arming fix was
-already installed. This report therefore concerns clock delivery, not a failed
-board acknowledgement or the old Play-button recovery defect.
+already installed. Initial evidence concerns clock delivery; later bounded
+playback also exposed restore-ACK deadlines and a paused-arm race in the
+controller. These are separate from the old Play-button recovery defect.
 
 ## Clock-path corrections
 
@@ -23,6 +24,29 @@ board acknowledgement or the old Play-button recovery defect.
 
 The 250 ms freshness guard and cue deadline remain unchanged. Routine transport
 recovery cannot clear a semantic timing fault or replay missed cues.
+
+## Isolate metadata from the clock
+
+The first correction was built, smoke-tested, deployed and merged as PR #132.
+With the controller corrections installed, live use still recorded a 489 ms
+active send gap; a nearby authority query took 215 ms and the observer copy was
+218 ms old. Authority snapshots are inexpensive on the server, but network,
+scheduling and client-side metadata work can still exceed a clock's budget.
+
+Authority refresh, instance reporting and remote-owner endpoint lookup now use
+a separate bounded RPC worker. Capacity-one request/reply channels prevent
+backlog; endpoint and coordinator-session generations reject obsolete replies.
+Snapshot expiry uses its monotonic acquisition time, not queue-consumption time;
+delayed consumption cannot renew an old authority lease.
+Only a successfully refreshed current authority allows preparation. A failed,
+exited or expired metadata worker invalidates the old arm and refreshes it;
+clock updates continue to validate publisher ownership on the controller.
+Authority mutations remain serialized on the control stream, never silently
+retried. The newest decoder sample is read after registration/reconciliation
+rather than sending the loop's pre-query observer copy.
+
+This does not extrapolate a stale decoder, increase the 250 ms freshness guard,
+increase cue deadlines, or convert a failed physical ACK into success.
 
 ## Evidence and diagnostics
 
@@ -47,8 +71,20 @@ diagnostic coverage verifies that idle gaps are excluded and active starvation
 and failed updates remain visible. No local Rust compilation or linking is
 permitted on the production host.
 
-Deployment and sustained playback acceptance are pending an exact successful
-Windows build. Preserve the destination-validated libmpv aliases, deploy using
-the product updater, verify smoke/startup and actual playback, and inspect these
-clock counters before claiming the recurring fault has been resolved. No
-physical cue acceptance is implied by loopback or read-only diagnostics.
+The isolated-metadata regression holds an authority response behind a fixture
+barrier and proves a separate playback stream completes before that barrier is
+released. Both clients use explicit fixture identities, without consulting
+user configuration or actuating hardware.
+
+First installed Pealayer source: `86e6ae341c4d838676f3aa1b643f311521769c20`.
+Its Windows smoke/health/RPC/media restoration passed; native screenshot capture
+timed out, so visual acceptance was not claimed. Controller PR #627 introduced
+queued UART priority, restore-ACK timing and exact paused-worker arming; the
+candidate at `b1d7d4b5f169e7334b097f22484846c4c0d3a5b0` is installed, but the
+later stale-clock trace means joint timing acceptance has not yet passed.
+
+The isolated metadata follow-up still needs its exact Windows build/deployment
+and sustained playback check. Preserve destination-validated libmpv aliases,
+use the product updater, verify actual media and both identities, and inspect
+clock/restore counters before calling the recurring fault resolved. No physical
+edge-timing acceptance is implied by loopback or read-only diagnostics.
