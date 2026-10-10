@@ -22,14 +22,73 @@ function Get-PealayerCargoTargetDirectory {
     [CmdletBinding()]
     param([Parameter(Mandatory = $true)][string]$RepositoryRoot)
 
-    if (-not [string]::IsNullOrWhiteSpace($env:CARGO_TARGET_DIR)) {
+    $targetDirectory = if (-not [string]::IsNullOrWhiteSpace($env:CARGO_TARGET_DIR)) {
         $configured = [Environment]::ExpandEnvironmentVariables($env:CARGO_TARGET_DIR)
         if (-not [System.IO.Path]::IsPathRooted($configured)) {
             $configured = Join-Path $RepositoryRoot $configured
         }
-        return [System.IO.Path]::GetFullPath($configured)
+        [System.IO.Path]::GetFullPath($configured)
+    } else {
+        (Get-PealayerWindowsHostPaths -RepositoryRoot $RepositoryRoot).CargoTargetDirectory
     }
-    return (Get-PealayerWindowsHostPaths -RepositoryRoot $RepositoryRoot).CargoTargetDirectory
+    $repository = [System.IO.Path]::GetFullPath($RepositoryRoot).TrimEnd('\', '/')
+    $targetDirectory = [System.IO.Path]::GetFullPath($targetDirectory).TrimEnd('\', '/')
+    if ($targetDirectory -ieq $repository -or $targetDirectory.StartsWith(
+        $repository + [System.IO.Path]::DirectorySeparatorChar,
+        [System.StringComparison]::OrdinalIgnoreCase
+    )) {
+        throw "Pealayer Cargo output must not be stored inside the source checkout: $targetDirectory. Use the shared program-root build cache."
+    }
+    return $targetDirectory
+}
+
+function Test-PealayerFileContentEqual {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Left,
+        [Parameter(Mandatory = $true)][string]$Right
+    )
+
+    if (-not (Test-Path -LiteralPath $Left -PathType Leaf) -or
+        -not (Test-Path -LiteralPath $Right -PathType Leaf)) {
+        return $false
+    }
+    $leftFile = Get-Item -LiteralPath $Left
+    $rightFile = Get-Item -LiteralPath $Right
+    if ($leftFile.Length -ne $rightFile.Length) { return $false }
+    return (Get-FileHash -LiteralPath $Left -Algorithm SHA256).Hash -eq
+        (Get-FileHash -LiteralPath $Right -Algorithm SHA256).Hash
+}
+
+function Copy-PealayerFileLowWrite {
+    [CmdletBinding()]
+    param(
+        [Parameter(Mandatory = $true)][string]$Source,
+        [Parameter(Mandatory = $true)][string]$Destination,
+        [switch]$PreferHardLink
+    )
+
+    $sourcePath = (Resolve-Path -LiteralPath $Source -ErrorAction Stop).Path
+    $destinationPath = [System.IO.Path]::GetFullPath($Destination)
+    if ($sourcePath -ieq $destinationPath) { return $false }
+    if (Test-PealayerFileContentEqual -Left $sourcePath -Right $destinationPath) {
+        return $false
+    }
+    New-Item -ItemType Directory -Path (Split-Path -Parent $destinationPath) -Force | Out-Null
+    if (Test-Path -LiteralPath $destinationPath) {
+        Remove-Item -LiteralPath $destinationPath -Force
+    }
+    if ($PreferHardLink) {
+        try {
+            New-Item -ItemType HardLink -Path $destinationPath -Target $sourcePath -ErrorAction Stop | Out-Null
+            return $true
+        } catch {
+            # Cross-volume and filesystems without hard-link support fall back
+            # to one verified copy. Existing identical files were handled above.
+        }
+    }
+    Copy-Item -LiteralPath $sourcePath -Destination $destinationPath
+    return $true
 }
 
 function Get-PealayerFileIdentity {
@@ -173,7 +232,7 @@ function Copy-PealayerLibmpvRuntime {
     foreach ($name in @('libmpv-2.dll', 'mpv-2.dll')) {
         $destination = Join-Path $DestinationDirectory $name
         if ([System.IO.Path]::GetFullPath($RuntimeLibrary) -ine [System.IO.Path]::GetFullPath($destination)) {
-            Copy-Item -LiteralPath $RuntimeLibrary -Destination $destination -Force
+            [void](Copy-PealayerFileLowWrite -Source $RuntimeLibrary -Destination $destination -PreferHardLink)
         }
     }
 }
