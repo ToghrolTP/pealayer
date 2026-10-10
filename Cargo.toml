@@ -81,5 +81,17 @@ windows = { version = "0.62", features = [
     "Win32_Graphics_Gdi",
 ] }
 
+[profile.dev]
+# Routine builds reuse dependencies without large symbol files or incremental snapshots.
+# Opt in to symbols only for a specific diagnosis; see LOCAL-WORKSPACE-HYGIENE.md.
+debug = 0
+incremental = false
+
+[profile.test]
+debug = 0
+incremental = false
+
 [profile.release]
+debug = 0
+incremental = false
 strip = "symbols"

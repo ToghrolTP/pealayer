@@ -3,6 +3,11 @@
 Owning tracker: [issue #80](https://github.com/ToghrolTP/pealayer/issues/80). Post subsequent checkpoints and child-issue links there.
 
 Current continuation: [current acceptance and next steps](CURRENT-ACCEPTANCE.md).
+For current build/cache policy, read [workspace hygiene](LOCAL-WORKSPACE-HYGIENE.md).
+Routine dev/test symbols and incremental snapshots are disabled; dependencies,
+release caches, private state and rollback remain protected. Do not repeat a
+build/test pass without completion, significant progress or a specific diagnostic
+need, and never clean the shared cache merely to check build-policy settings.
 PRs #77/#79 and subsequent consolidation/features through #108 are merged;
 SFX, copied-link browsing and external mpv are now implemented and deployed.
 The unchecked historical checklist below must be reconciled against that current
@@ -88,7 +93,7 @@ These requests have been worked on across multiple PRs. Inspect current code and
 
 ## Deployment and coordination rules
 
-- No local Rust compile/link or clean builds on the production machine. Prefer existing CI or incremental builds on the faster authorized host; coordinate its active agent first. If Pealayer is running there, replace it only after arranging ownership and using that host's validated runtime.
+- No local Rust compile/link or clean builds on the production machine. Prefer existing CI or cached-dependency builds on the faster authorized host, without routine symbols or incremental snapshots; coordinate its active agent first. If Pealayer is running there, replace it only after arranging ownership and using that host's validated runtime.
 - Use Pealayer IPC/RPC for running-application build/status diagnostics. Shell commands remain appropriate for repository, toolchain and file transfer work.
 - Never copy another host's libmpv runtime into a live deployment. A candidate Program Files runtime that passed smoke-test has crashed on CAFE-PC during actual media initialization with `0xc000001d`. Rejected SHA-256: `0A81C004AAE0EE7D512B9A26E38F66281F9591E84E1663215CC3A36A4BDE6F6A`. Known-good generic CI runtime at commit `52be44c1aceb52bf04db8fe462d27af9b46be5d6`: `D10D0994BD1398813DA87FDB299961B378C71561BAE1D135CB2B641B5864D7EB`. Validate any replacement independently; the two adjacent DLL aliases must match.
 - Launch GUI from the logged-in Explorer desktop, not SSH service session 0 or PsExec injection. Verify the actual interactive session rather than assuming a historical session number.

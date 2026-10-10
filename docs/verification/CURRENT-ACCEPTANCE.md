@@ -10,6 +10,12 @@ statements are not the present product state.
 
 ## Delivered source and deployment
 
+- Routine dev/test builds suppress symbols and incremental snapshots while
+  retaining the shared dependency cache. Debug-only cleanup verifies cache,
+  path/link and active-writer safety before deletion; no runtime rebuild or
+  replacement is needed for this build-policy change.
+  [Low-write workflow](LOCAL-WORKSPACE-HYGIENE.md) retains diagnostic opt-ins and
+  measured RAM-disk sizing constraints.
 - Erfan is installed and opened in its signed-in NLE workspace with Cafe's real
   board connected and publishing handed off while paused; original cues and
   private work are preserved. [Authoring readiness](ERFAN-AUTHORING-READINESS.md)
