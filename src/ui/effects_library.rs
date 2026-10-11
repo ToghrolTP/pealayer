@@ -1636,8 +1636,6 @@ fn draw_sequence_timeline(
                     });
                 });
 
-            let nudge_enabled =
-                !ui.ctx().egui_wants_keyboard_input() && !egui::Popup::is_any_open(ui.ctx());
             let shortcut_enabled = ui.is_enabled() && !egui::Popup::is_any_open(ui.ctx())
                 && (cue_has_focus || (!ui.ctx().egui_wants_keyboard_input() && ui.rect_contains_pointer(ui.max_rect())));
             if shortcut_enabled {
@@ -1650,13 +1648,17 @@ fn draw_sequence_timeline(
                     bulk_action = Some(SequenceBulkAction::Duplicate);
                 }
             }
-            if nudge_enabled && ui.input(|input| input.key_pressed(egui::Key::ArrowLeft)) {
-                let step = &mut draft.steps[*selected_index];
-                step.at_us = step.at_us.saturating_sub(quantum_ms.saturating_mul(1_000));
+            if shortcut_enabled && !selection.indices.is_empty()
+                && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft)) {
+                let earliest = selection.indices.iter().filter_map(|index| draft.steps.get(*index)).map(|step| step.at_us).min().unwrap_or(0);
+                let delta = quantum_ms.saturating_mul(1_000).min(earliest);
+                for index in &selection.indices { draft.steps[*index].at_us -= delta; }
             }
-            if nudge_enabled && ui.input(|input| input.key_pressed(egui::Key::ArrowRight)) {
-                let step = &mut draft.steps[*selected_index];
-                step.at_us = step.at_us.saturating_add(quantum_ms.saturating_mul(1_000));
+            if shortcut_enabled && !selection.indices.is_empty()
+                && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight)) {
+                for index in &selection.indices {
+                    draft.steps[*index].at_us = draft.steps[*index].at_us.saturating_add(quantum_ms.saturating_mul(1_000));
+                }
             }
         });
 
@@ -3407,6 +3409,11 @@ mod tests {
         render(vec![egui::Event::PointerMoved(egui::pos2(30.0, 180.0)), key(egui::Key::A, egui::Modifiers::COMMAND)], &mut draft, &mut selected, &mut text, false);
         let selection_id = sequence_selection_id(&draft);
         assert_eq!(context.data_mut(|data| data.get_temp::<SequenceCueSelection>(selection_id).unwrap().indices), std::collections::BTreeSet::from([0, 1]));
+        render(vec![key(egui::Key::ArrowRight, egui::Modifiers::NONE)], &mut draft, &mut selected, &mut text, false);
+        assert_eq!(draft.steps[0].at_us, 50_000);
+        assert_eq!(draft.steps[1].at_us, 2_050_000);
+        render(vec![key(egui::Key::ArrowLeft, egui::Modifiers::NONE)], &mut draft, &mut selected, &mut text, false);
+        assert_eq!(draft.steps, original, "group nudges must preserve relative timing");
         render(vec![], &mut draft, &mut selected, &mut text, true);
         render(vec![key(egui::Key::A, egui::Modifiers::COMMAND), key(egui::Key::Delete, egui::Modifiers::NONE)], &mut draft, &mut selected, &mut text, true);
         assert_eq!(draft.steps, original, "text-field editing must not delete cues");
