@@ -3376,6 +3376,52 @@ mod tests {
     }
 
     #[test]
+    fn designer_bulk_shortcuts_keep_text_editing_and_delete_only_selected_cues() {
+        let context = egui::Context::default();
+        context.all_styles_mut(|style| style.animation_time = 0.0);
+        let mut draft = ControllerEffectDraft::default();
+        draft.steps = vec![
+            crate::four_d::controller::HardwareMacroStep { kind: "motion".into(), target: Some(0), value: Some(1), duration_ms: Some(500), ..Default::default() },
+            crate::four_d::controller::HardwareMacroStep { kind: "motion".into(), target: Some(1), value: Some(2), at_us: 2_000_000, duration_ms: Some(200), ..Default::default() },
+        ];
+        let original = draft.steps.clone();
+        let mut selected = 0;
+        let mut text = String::from("Editable name");
+        let render = |events, draft: &mut ControllerEffectDraft, selected: &mut usize, text: &mut String, edit_text: bool| {
+            let mut output = context.run_ui(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 700.0))),
+                events,
+                ..Default::default()
+            }, |ui| {
+                if edit_text { ui.text_edit_singleline(text).request_focus(); }
+                draw_sequence_timeline(ui, draft, selected, true, true, None);
+            });
+            output.textures_delta.clear();
+        };
+        let key = |key, modifiers| egui::Event::Key {
+            key, physical_key: None, pressed: true, repeat: false, modifiers,
+        };
+        render(vec![], &mut draft, &mut selected, &mut text, false);
+        // Focus the canvas through its existing pointer shortcut scope. No
+        // PealayerApp or libmpv fixture is needed for this authoring test.
+        render(vec![egui::Event::PointerMoved(egui::pos2(30.0, 180.0)), key(egui::Key::A, egui::Modifiers::COMMAND)], &mut draft, &mut selected, &mut text, false);
+        let selection_id = sequence_selection_id(&draft);
+        assert_eq!(context.data_mut(|data| data.get_temp::<SequenceCueSelection>(selection_id).unwrap().indices), std::collections::BTreeSet::from([0, 1]));
+        render(vec![], &mut draft, &mut selected, &mut text, true);
+        render(vec![key(egui::Key::A, egui::Modifiers::COMMAND), key(egui::Key::Delete, egui::Modifiers::NONE)], &mut draft, &mut selected, &mut text, true);
+        assert_eq!(draft.steps, original, "text-field editing must not delete cues");
+        let text_focus = context.memory(|memory| memory.focused());
+        if let Some(id) = text_focus { context.memory_mut(|memory| memory.surrender_focus(id)); }
+        render(vec![key(egui::Key::D, egui::Modifiers::COMMAND)], &mut draft, &mut selected, &mut text, false);
+        assert_eq!(draft.steps.len(), 4);
+        assert_eq!(selected, 2);
+        assert_eq!(context.data_mut(|data| data.get_temp::<SequenceCueSelection>(selection_id).unwrap().indices), std::collections::BTreeSet::from([2, 3]));
+        render(vec![], &mut draft, &mut selected, &mut text, false);
+        render(vec![key(egui::Key::Delete, egui::Modifiers::NONE)], &mut draft, &mut selected, &mut text, false);
+        assert_eq!(draft.steps, original, "bulk Delete must preserve unselected original cues");
+    }
+
+    #[test]
     fn sequence_cue_right_click_targets_pointer_cue_and_duplicate_preserves_data() {
         fn text_positions(
             shape: &egui::epaint::Shape,
