@@ -9635,6 +9635,37 @@ mod timeline_row_tests {
     }
 
     #[test]
+    fn seat_track_titles_follow_catalog_renames_without_changing_track_identity() {
+        let app = PealayerApp::default();
+        let mut capabilities = crate::four_d::controller::HardwareCapabilities {
+            board_connected: true,
+            controls: [("seat.a", "Seat Left"), ("seat.b", "Seat Right")]
+                .into_iter()
+                .map(|(key, name)| crate::four_d::controller::HardwareControl {
+                    key: key.into(),
+                    name: name.into(),
+                    kind: "seat".into(),
+                    ..Default::default()
+                })
+                .collect(),
+            ..Default::default()
+        };
+        for names in [["Seat Left", "Seat Right"], ["VIP Left", "VIP Right"]] {
+            for (control, name) in capabilities.controls.iter_mut().zip(names) {
+                control.name = name.into();
+            }
+            app.update_hardware_capabilities(Some(capabilities.clone()));
+            let rows = all_timeline_track_rows(&app);
+            for (key, name) in ["seat.a", "seat.b"].into_iter().zip(names) {
+                let row = rows.iter().find(|row| row.control_key.as_deref() == Some(key)).unwrap();
+                assert_eq!(row.key, format!("hardware:{key}"));
+                assert_eq!(row.name, name);
+            }
+            assert!(!rows.iter().any(|row| matches!(row.name.as_str(), "Seat A" | "Seat B")));
+        }
+    }
+
+    #[test]
     fn cue_dialog_drafts_valid_actions_for_relay_pwm_and_motion_tracks() {
         let mut app = PealayerApp::default();
         app.update_hardware_capabilities(Some(crate::four_d::controller::HardwareCapabilities {

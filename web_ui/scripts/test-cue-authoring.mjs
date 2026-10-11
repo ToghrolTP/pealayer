@@ -1,6 +1,16 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { duplicateStep, moveSequenceStep, parseTimeMs, formatTimeMs, repeatedSequenceDurationMs, sequenceKindLabels, selectCueIndices, duplicateSequenceCues, deleteSequenceCues } from '../src/cueAuthoring.ts';
+import { duplicateStep, moveSequenceStep, parseTimeMs, formatTimeMs, repeatedSequenceDurationMs, sequenceKindLabels, sequenceLaneName, selectCueIndices, duplicateSequenceCues, deleteSequenceCues } from '../src/cueAuthoring.ts';
+const controls = [
+  { key: 'seat.a', name: 'Seat Left', default_name: 'Seat A' },
+  { key: 'seat.b', name: 'صندلی راست', default_name: 'Seat B' },
+];
+assert.equal(sequenceLaneName('seat.a', controls), 'Seat Left');
+assert.equal(sequenceLaneName('seat.b', controls), 'صندلی راست');
+assert.equal(sequenceLaneName('seat.a', [{ ...controls[0], name: 'VIP Left' }]), 'VIP Left');
+assert.equal(sequenceLaneName('seat.b', [{ ...controls[1], name: '  ' }]), 'Seat B');
+assert.equal(sequenceLaneName('seat.a', []), 'seat.a');
+assert.equal(sequenceLaneName('seat.b', []), 'seat.b');
 const original = { at_us: 404000, kind: 'motion', target: 0, value: 2, duration_ms: 500, action_ids: ['seat.a.down'] };
 const copy = duplicateStep(original);
 assert.equal(copy.at_us, 1404000);
@@ -38,6 +48,7 @@ assert.equal(repeatedSequenceDurationMs(fractional, 0, 0), null);
 assert.equal(repeatedSequenceDurationMs([], 2, 0), null);
 assert.equal(repeatedSequenceDurationMs(fractional, 1000, 3600000), null);
 const timeline = readFileSync(new URL('../src/components/SequenceTimeline.tsx', import.meta.url), 'utf8');
+assert.ok(timeline.includes('sequenceLaneName(lane, controls)') && !timeline.includes("tr(locale, 'Seat A')") && !timeline.includes("tr(locale, 'Seat B')"));
 assert.ok(timeline.includes('setPointerCapture') && timeline.includes('onPointerCancel'));
 assert.ok(timeline.includes('active.copy') && timeline.includes('reveal(primary.current)') && timeline.includes('reveal(destination)'));
 assert.ok(timeline.includes("event.key.toLowerCase() === 'a'") && timeline.includes("event.key === 'Delete'"));

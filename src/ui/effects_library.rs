@@ -2410,11 +2410,7 @@ fn motion_seat_name(
     capabilities: Option<&crate::four_d::controller::HardwareCapabilities>,
     target: u8,
 ) -> String {
-    let (key, fallback) = if target == 0 {
-        ("seat.a", "Seat A")
-    } else {
-        ("seat.b", "Seat B")
-    };
+    let key = if target == 0 { "seat.a" } else { "seat.b" };
     capabilities
         .and_then(|value| {
             value
@@ -2430,8 +2426,14 @@ fn motion_seat_name(
                         .map(|name| name.trim())
                         .filter(|name| !name.is_empty())
                 })
+                .or_else(|| {
+                    value.controls.iter().find(|control| control.key == key)
+                        .map(|control| control.default_name.trim())
+                        .filter(|name| !name.is_empty())
+                })
         })
-        .unwrap_or(fallback)
+        // Without a catalog we know the identity, not the current human title.
+        .unwrap_or(key)
         .to_string()
 }
 
@@ -3969,6 +3971,13 @@ mod tests {
             },
         ];
         let mut selected = 0;
+        let capabilities = crate::four_d::controller::HardwareCapabilities {
+            controls: [("seat.a", "Seat Left"), ("seat.b", "Seat Right")].into_iter()
+                .map(|(key, name)| crate::four_d::controller::HardwareControl {
+                    key: key.into(), name: name.into(), kind: "motion".into(), ..Default::default()
+                }).collect(),
+            ..Default::default()
+        };
         let render = |events, draft: &mut ControllerEffectDraft, selected: &mut usize| {
             let mut output = context.run_ui(
                 egui::RawInput {
@@ -3979,7 +3988,7 @@ mod tests {
                     events,
                     ..Default::default()
                 },
-                |ui| draw_sequence_timeline(ui, draft, selected, true, true, None),
+                |ui| draw_sequence_timeline(ui, draft, selected, true, true, Some(&capabilities)),
             );
             output.textures_delta.clear();
             output
@@ -3988,12 +3997,16 @@ mod tests {
         let output = render(vec![], &mut draft, &mut selected);
         let mut up_positions = vec![];
         let mut seat_b_positions = vec![];
+        let mut default_positions = vec![];
         for shape in &output.shapes {
             text_positions(&shape.shape, "Up", &mut up_positions);
-            text_positions(&shape.shape, "Seat B", &mut seat_b_positions);
+            text_positions(&shape.shape, "Seat Right", &mut seat_b_positions);
+            text_positions(&shape.shape, "Seat A", &mut default_positions);
+            text_positions(&shape.shape, "Seat B", &mut default_positions);
         }
-        let cue = *up_positions.first().expect("Seat A Up cue was not painted");
-        let seat_b = *seat_b_positions.first().expect("Seat B lane was not painted");
+        assert!(default_positions.is_empty(), "renamed lanes must not paint default seat titles");
+        let cue = *up_positions.first().expect("Seat Left Up cue was not painted");
+        let seat_b = *seat_b_positions.first().expect("Seat Right lane was not painted");
         let destination = egui::pos2(cue.x, seat_b.y);
         let pointer_button = |pos, pressed| egui::Event::PointerButton {
             pos,
@@ -4027,7 +4040,7 @@ mod tests {
 
     #[test]
     fn effect_editor_uses_current_seat_presentation_names() {
-        let capabilities = crate::four_d::controller::HardwareCapabilities {
+        let mut capabilities = crate::four_d::controller::HardwareCapabilities {
             controls: vec![
                 crate::four_d::controller::HardwareControl {
                     key: "seat.a".to_string(),
@@ -4040,12 +4053,18 @@ mod tests {
                     ..Default::default()
                 },
             ],
+            peripheral_names: [("seat.a".into(), "Old left".into()), ("seat.b".into(), "Old right".into())].into(),
             ..Default::default()
         };
 
         assert_eq!(motion_seat_name(Some(&capabilities), 0), "Seat Left");
         assert_eq!(motion_seat_name(Some(&capabilities), 1), "Seat Right");
-        assert_eq!(motion_seat_name(None, 0), "Seat A");
-        assert_eq!(motion_seat_name(None, 1), "Seat B");
+        capabilities.controls[0].name = "VIP Left".into();
+        assert_eq!(motion_seat_name(Some(&capabilities), 0), "VIP Left");
+        capabilities.controls.clear();
+        capabilities.peripheral_names.insert("seat.a".into(), "Saved Left".into());
+        assert_eq!(motion_seat_name(Some(&capabilities), 0), "Saved Left");
+        assert_eq!(motion_seat_name(None, 0), "seat.a");
+        assert_eq!(motion_seat_name(None, 1), "seat.b");
     }
 }

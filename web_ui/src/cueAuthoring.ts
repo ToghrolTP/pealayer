@@ -6,6 +6,12 @@ export const sequenceKindLabels: Record<string, string> = {
   rgb: 'Status RGB', addressable: 'Strip pixel', menu: 'Page', 'menu-action': 'Front-panel action', opcode: 'Raw opcode',
 };
 
+/** Catalog titles are user-authored; never translate or invent seat names. */
+export function sequenceLaneName(lane: string, controls: ReadonlyArray<{ key: string; name: string; default_name?: string }>): string {
+  const control = controls.find(control => control.key === lane);
+  return control?.name.trim() || control?.default_name?.trim() || lane;
+}
+
 export const newCueId = () => {
   const bytes = crypto.getRandomValues(new Uint8Array(16));
   bytes[6] = (bytes[6] & 15) | 64; bytes[8] = (bytes[8] & 63) | 128;

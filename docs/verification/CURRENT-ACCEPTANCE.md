@@ -59,6 +59,10 @@ statements are not the present product state.
 - Native dropdowns share keyboard choice navigation and stable full-width rows;
   closed color indicators and the unified Custom picker retain app/session
   swatches: [dropdown verification](dropdown-navigation-colors.md).
+- Seat titles in hardware descriptions, NLE tracks and native/Web Effects
+  Designer use current controller presentation names while preserving stable
+  keys and action IDs: [seat-title verification](renamed-seat-titles.md).
+  Cafe installed acceptance remains blocked by the recorded launch denial.
 
 ## Remaining gates · do not silently mark complete
 
@@ -66,7 +70,7 @@ statements are not the present product state.
   [PR #142](https://github.com/ToghrolTP/pealayer/pull/142) has verified source
   implementation and [PCController PR #634](https://github.com/atomicdeploy/PCController/pull/634)
   is merged; see [source and delivery gates](effects-designer-gestures.md).
-  Final integrated-head CI remains the source merge gate. Preserve exact persisted
+  PR #142 and its integrated main have passed platform CI. Preserve exact persisted
   per-step repetition schedules before deploying the new rejecting contract.
   Cafe's recorded smoke-launch tool denial remains a deployment blocker unless
   explicitly cleared; its staged package is not delivery evidence. The controller
