@@ -54,7 +54,7 @@ import { MelodySelect } from './MelodySelect';
 import { SoundEffectFields } from './SoundEffectFields';
 import { SequenceTimeline } from './SequenceTimeline';
 import { TimeValueField } from './TimeValueField';
-import { formatTimeMs, repeatedDurationMs } from '../cueAuthoring';
+import { formatTimeMs, repeatedSequenceDurationMs } from '../cueAuthoring';
 
 interface EffectsTabProps {
   state: PlayerState;
@@ -475,8 +475,8 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale, 
             <label><span>{tr(locale, 'Repeat effect')}</span><InputNumber min={1} max={1000} value={draft.repeat_count} onChange={value => setDraft({ ...draft, repeat_count: value ?? 1 })} /></label>
             <label><span>{tr(locale, 'Interval')}</span><TimeValueField value={draft.repeat_interval_ms} human={state.human_readable_time_units !== false} onChange={value => setDraft({ ...draft, repeat_interval_ms: Math.round(value) })} />
               <Typography.Text type="secondary">{tr(locale, '0s uses the full effect length; interval is start-to-start')}</Typography.Text></label>
-            <Typography.Text type={repeatedDurationMs(sequenceDurationMs(draft.steps), draft.repeat_count, draft.repeat_interval_ms) === null ? 'danger' : 'secondary'}>
-              {repeatedDurationMs(sequenceDurationMs(draft.steps), draft.repeat_count, draft.repeat_interval_ms) === null ? tr(locale, 'Effect repeat interval cannot be shorter than its length') : formatTimeMs(repeatedDurationMs(sequenceDurationMs(draft.steps), draft.repeat_count, draft.repeat_interval_ms)!, state.human_readable_time_units !== false)}
+            <Typography.Text type={repeatedSequenceDurationMs(draft.steps, draft.repeat_count, draft.repeat_interval_ms) === null ? 'danger' : 'secondary'}>
+              {repeatedSequenceDurationMs(draft.steps, draft.repeat_count, draft.repeat_interval_ms) === null ? tr(locale, 'Effect repeat interval cannot be shorter than its length') : formatTimeMs(repeatedSequenceDurationMs(draft.steps, draft.repeat_count, draft.repeat_interval_ms)!, state.human_readable_time_units !== false)}
             </Typography.Text>
             <Button disabled={captureBusy || saving || !state.controller_connected || !draft.name.trim()} icon={<PlayCircleOutlined />} onClick={() => { void sendCmd('controller_effect.publish_and_run', draftPayload(draft)); }}>{tr(locale, 'Publish & Run')}</Button>
           </>}

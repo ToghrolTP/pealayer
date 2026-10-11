@@ -333,6 +333,10 @@ mod tests {
 
     #[test]
     fn editable_time_values_use_compact_human_units() {
+        for human in [false, true] {
+            assert_eq!(format_time_value_ms_with_preference(0, human), "0s");
+            assert_eq!(format_time_value_us_with_preference(0, human), "0s");
+        }
         assert_eq!(format_time_value_ms(0), "0s");
         assert_eq!(format_time_value_ms(250), "250ms");
         assert_eq!(format_time_value_ms(5_000), "5s");

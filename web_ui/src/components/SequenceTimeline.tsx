@@ -1,4 +1,4 @@
-import React, { useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { Button, Dropdown, Space, Tooltip } from 'antd';
 import { CopyOutlined, DeleteOutlined } from '@ant-design/icons';
 import { duplicateStep, formatTimeMs, moveSequenceStep, SequenceStep } from '../cueAuthoring';

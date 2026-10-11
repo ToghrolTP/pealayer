@@ -488,6 +488,7 @@ pub struct HardwareWarning {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct HardwareEffectRecording {
     pub active: bool,
     pub id: u8,
@@ -540,6 +541,7 @@ pub struct HardwareCaptureOpcode {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HardwareMacroStep {
     #[serde(default)]
     pub at_us: u64,

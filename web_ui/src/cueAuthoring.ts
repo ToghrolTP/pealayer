@@ -43,3 +43,13 @@ export function repeatedDurationMs(base: number, count = 1, interval = 0): numbe
   const total = base + (count - 1) * period;
   return Number.isSafeInteger(total) ? total : null;
 }
+
+/** Keep microsecond cue placement until the final display rounding. */
+export function repeatedSequenceDurationMs(steps: SequenceStep[], count = 1, interval = 0): number | null {
+  if (!Number.isInteger(count) || count < 1 || count > 1000 || !Number.isInteger(interval) || interval < 0 || interval > 3600000) return null;
+  const baseUs = steps.reduce((end, step) => Math.max(end, step.at_us + (step.duration_ms ?? 0) * 1000), 0);
+  const periodUs = interval === 0 ? baseUs : interval * 1000;
+  if (periodUs < baseUs || (count > 1 && periodUs === 0)) return null;
+  const totalUs = baseUs + (count - 1) * periodUs;
+  return Number.isSafeInteger(totalUs) && totalUs <= 2147483647 && periodUs <= 2147483647 ? Math.ceil(totalUs / 1000) : null;
+}

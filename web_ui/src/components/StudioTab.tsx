@@ -53,7 +53,7 @@ import { MediaTrackSelectors } from './MediaTrackSelectors';
 import { PlaybackButton } from './PlaybackButton';
 import { SequenceTimeline } from './SequenceTimeline';
 import { TimeValueField } from './TimeValueField';
-import { newCueId, repeatedDurationMs, formatTimeMs } from '../cueAuthoring';
+import { newCueId, repeatedSequenceDurationMs, formatTimeMs } from '../cueAuthoring';
 
 interface StudioTabProps {
   state: PlayerState;
@@ -610,7 +610,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                   <label>{tr(locale, 'Repeat effect')} <InputNumber min={1} max={1000} value={effectDraft.repeat_count ?? 1} onChange={value => setEffectDraft({ ...effectDraft, repeat_count: value ?? 1 })} /></label>
                   <label>{tr(locale, 'Interval')} <TimeValueField value={effectDraft.repeat_interval_ms ?? 0} human={state.human_readable_time_units !== false} onChange={value => setEffectDraft({ ...effectDraft, repeat_interval_ms: Math.round(value) })} /></label>
                   <span className="muted">{tr(locale, '0s uses the full effect length; interval is start-to-start')}</span>
-                  <span>{repeatedDurationMs(sequenceDurationMs(effectDraft.steps), effectDraft.repeat_count ?? 1, effectDraft.repeat_interval_ms ?? 0) === null ? tr(locale, 'Effect repeat interval cannot be shorter than its length') : formatTimeMs(repeatedDurationMs(sequenceDurationMs(effectDraft.steps), effectDraft.repeat_count ?? 1, effectDraft.repeat_interval_ms ?? 0)!, state.human_readable_time_units !== false)}</span>
+                  <span>{repeatedSequenceDurationMs(effectDraft.steps, effectDraft.repeat_count ?? 1, effectDraft.repeat_interval_ms ?? 0) === null ? tr(locale, 'Effect repeat interval cannot be shorter than its length') : formatTimeMs(repeatedSequenceDurationMs(effectDraft.steps, effectDraft.repeat_count ?? 1, effectDraft.repeat_interval_ms ?? 0)!, state.human_readable_time_units !== false)}</span>
                   <Button disabled={captureBusy || savingEffect || !state.controller_connected || !effectDraft.name?.trim()} icon={<CaretRightFilled />} onClick={() => { void sendCmd('controller_effect.publish_and_run', effectPayload(effectDraft)); }}>{tr(locale, 'Publish & Run')}</Button>
                 </Space>
                 <SequenceTimeline steps={effectDraft.steps} locale={locale} controls={state.hardware_details?.controls} disabled={captureBusy}

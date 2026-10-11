@@ -592,13 +592,19 @@ pub(crate) fn repeated_sequence_duration_ms(
     if !(1..=1_000).contains(&count) {
         return Err("Effect repeat count must be 1–1000".into());
     }
-    let base = sequence_duration_ms(steps);
-    let interval = if interval_ms == 0 { base } else { u64::from(interval_ms) };
-    if count > 1 && interval < base {
+    if interval_ms > 3_600_000 { return Err("Effect repeat interval must be 0–3600000ms".into()); }
+    let base = steps.iter().map(|step| step.at_us.saturating_add(u64::from(step.duration_ms.unwrap_or(0)) * 1_000)).max().unwrap_or(0);
+    let interval = if interval_ms == 0 { base } else { u64::from(interval_ms) * 1_000 };
+    if interval < base {
         return Err("Effect repeat interval cannot be shorter than its length".into());
     }
-    interval.checked_mul(u64::from(count - 1)).and_then(|offset| offset.checked_add(base))
-        .ok_or_else(|| "Repeated effect length overflows".into())
+    if count > 1 && interval == 0 { return Err("Zero-length repetition requires a nonzero interval".into()); }
+    let total = interval.checked_mul(u64::from(count - 1)).and_then(|offset| offset.checked_add(base))
+        .ok_or_else(|| "Repeated effect length overflows".to_string())?;
+    if total > i32::MAX as u64 || interval > i32::MAX as u64 {
+        return Err("Repeated effect exceeds the controller timestamp range".into());
+    }
+    Ok(total.div_ceil(1_000))
 }
 
 fn update_sequence_duration(draft: &mut ControllerEffectDraft) {
@@ -851,7 +857,7 @@ fn sequence_cue_context_menu(
     ));
     ui.separator();
     if ui
-        .button(format!("{} Edit cue…", crate::ui::icons::PENCIL_SIMPLE))
+        .button(format!("{} {}", crate::ui::icons::PENCIL_SIMPLE, designer_tr(ui, "Edit cue…")))
         .clicked()
     {
         action = Some(SequenceCueMenuAction::Edit);
@@ -859,7 +865,7 @@ fn sequence_cue_context_menu(
     }
     let options = sequence_cue_value_options(&step.kind);
     if !options.is_empty() {
-        ui.menu_button(format!("{} Action", crate::ui::icons::LIGHTNING), |ui| {
+        ui.menu_button(format!("{} {}", crate::ui::icons::LIGHTNING, designer_tr(ui, "Action")), |ui| {
             for &(value, caption) in options {
                 if ui
                     .dropdown_choice(step.value.unwrap_or_default() == value, caption)
@@ -873,7 +879,7 @@ fn sequence_cue_context_menu(
         });
     } else if step.kind == "pwm" {
         ui.menu_button(
-            format!("{} Intensity", crate::ui::icons::SLIDERS_HORIZONTAL),
+            format!("{} {}", crate::ui::icons::SLIDERS_HORIZONTAL, designer_tr(ui, "Intensity")),
             |ui| {
                 let mut percent = f64::from(step.value.unwrap_or_default()) * 100.0 / 4095.0;
                 if ui
@@ -885,7 +891,7 @@ fn sequence_cue_context_menu(
             },
         );
     } else if matches!(step.kind.as_str(), "rgb" | "addressable") {
-        ui.menu_button(format!("{} Color", crate::ui::icons::PALETTE), |ui| {
+        ui.menu_button(format!("{} {}", crate::ui::icons::PALETTE, designer_tr(ui, "Color")), |ui| {
             let mut color = egui::Color32::from_rgb(
                 step.red.unwrap_or_default(),
                 step.green.unwrap_or_default(),
@@ -898,7 +904,7 @@ fn sequence_cue_context_menu(
             }
         });
     }
-    ui.menu_button(format!("{} Timing", crate::ui::icons::CLOCK), |ui| {
+    ui.menu_button(format!("{} {}", crate::ui::icons::CLOCK, designer_tr(ui, "Timing")), |ui| {
         ui.horizontal(|ui| {
             ui.label(designer_tr(ui, "Start"));
             let mut at_us = step.at_us;
@@ -916,7 +922,7 @@ fn sequence_cue_context_menu(
         });
         ui.horizontal(|ui| {
             let mut sustained = step.duration_ms.is_some();
-            if ui.checkbox(&mut sustained, "Duration").changed() {
+            if ui.checkbox(&mut sustained, designer_tr(ui, "Length")).changed() {
                 step.duration_ms = sustained.then_some(1000);
             }
             if let Some(duration) = &mut step.duration_ms {
@@ -954,14 +960,14 @@ fn sequence_cue_context_menu(
     });
     ui.separator();
     if ui
-        .button(format!("{} Duplicate", crate::ui::icons::COPY))
+        .button(format!("{} {}", crate::ui::icons::COPY, designer_tr(ui, "Duplicate")))
         .clicked()
     {
         action = Some(SequenceCueMenuAction::Duplicate);
         ui.close();
     }
     if ui
-        .button(format!("{} Delete", crate::ui::icons::TRASH))
+        .button(format!("{} {}", crate::ui::icons::TRASH, designer_tr(ui, "Delete")))
         .clicked()
     {
         action = Some(SequenceCueMenuAction::Delete);
@@ -1102,12 +1108,12 @@ fn draw_sequence_timeline(
         .inner_margin(egui::Margin::same(10))
         .show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
-                ui.strong(format!("{} Effect timeline", crate::ui::icons::WAVEFORM));
+                ui.strong(format!("{} {}", crate::ui::icons::WAVEFORM, designer_tr(ui, "Effect timeline")));
                 ui.separator();
                 ui.label(designer_tr(ui, "Zoom"));
                 ui.add(egui::Slider::new(&mut zoom, 30.0..=320.0).show_value(false));
                 ui.separator();
-                ui.checkbox(&mut snap, "Snap");
+                ui.checkbox(&mut snap, designer_tr(ui, "Snap"));
                 crate::ui::dropdown::ComboBox::from_id_salt((state_prefix.clone(), "grid"))
                     .selected_text(crate::duration::format_time_value_ms(quantum_ms))
                     .show_ui(ui, |ui| {
@@ -1120,13 +1126,13 @@ fn draw_sequence_timeline(
                         }
                     });
                 if ui
-                    .button(format!("{} Quantize", crate::ui::icons::SELECTION_ALL))
+                    .button(format!("{} {}", crate::ui::icons::SELECTION_ALL, designer_tr(ui, "Quantize")))
                     .clicked()
                 {
                     quantize_sequence(&mut draft.steps, quantum_ms);
                 }
                 if ui
-                    .button(format!("{} Remove delay", crate::ui::icons::SCISSORS))
+                    .button(format!("{} {}", crate::ui::icons::SCISSORS, designer_tr(ui, "Remove delay")))
                     .on_hover_text(designer_tr(ui, "Move the first cue to zero without changing relative timing"))
                     .clicked()
                 {
@@ -1483,7 +1489,7 @@ fn draw_sequence_timeline(
                     canvas_response.context_menu(|ui| {
                         ui.strong(designer_tr(ui, "Effect timeline"));
                         ui.separator();
-                        ui.checkbox(&mut snap, "Snap to grid");
+                        ui.checkbox(&mut snap, designer_tr(ui, "Snap to grid"));
                         if ui
                             .button(format!(
                                 "{} Quantize all cues",
@@ -1632,7 +1638,7 @@ fn draw_timeline_authoring_fields(
         ui.label(designer_tr(ui, "Transition"));
         ui.horizontal(|ui| {
             let mut enabled = step.to_value.is_some();
-            if ui.checkbox(&mut enabled, "Fade to").changed() {
+            if ui.checkbox(&mut enabled, designer_tr(ui, "Fade to")).changed() {
                 step.to_value = enabled.then_some(step.value.unwrap_or_default());
             }
             if enabled {
@@ -1644,7 +1650,7 @@ fn draw_timeline_authoring_fields(
         ui.label(designer_tr(ui, "Transition"));
         ui.horizontal(|ui| {
             let mut enabled = step.to_red.is_some();
-            if ui.checkbox(&mut enabled, "Fade to").changed() {
+            if ui.checkbox(&mut enabled, designer_tr(ui, "Fade to")).changed() {
                 if enabled {
                     step.to_red = step.red;
                     step.to_green = step.green;
@@ -2212,7 +2218,7 @@ fn draw_sequence_step_editor(
                     step.action_ids.remove(action_index);
                 }
                 if ui
-                    .small_button(format!("{} Add semantic action", crate::ui::icons::PLUS))
+                    .small_button(format!("{} {}", crate::ui::icons::PLUS, designer_tr(ui, "Add semantic action")))
                     .clicked()
                 {
                     step.action_ids.push(String::new());
@@ -2391,7 +2397,7 @@ pub(crate) fn draw_effect_capture_controls(app: &mut PealayerApp, ui: &mut egui:
     let mut choose_capture = false;
     ui.horizontal_wrapped(|ui| {
         ui.strong(designer_tr(ui, "Sequence steps"));
-        if ui.add_enabled(!active && !busy, egui::Button::new(format!("{} Add step", crate::ui::icons::PLUS))).clicked() {
+        if ui.add_enabled(!active && !busy, egui::Button::new(format!("{} {}", crate::ui::icons::PLUS, designer_tr(ui, "Add step")))).clicked() {
             let draft = &mut app.effect_library_draft;
             let at_us = sequence_duration_ms(&draft.steps).saturating_mul(1000);
             let mut step = crate::four_d::controller::HardwareMacroStep { at_us, ..Default::default() };
@@ -2407,7 +2413,7 @@ pub(crate) fn draw_effect_capture_controls(app: &mut PealayerApp, ui: &mut egui:
             let was_open = crate::ui::dropdown::ComboBox::is_open(ui.ctx(), combo_id);
             let response = crate::ui::dropdown::ComboBox::from_id_salt("effect_add_melody")
                 .selected_text(if has_melodies {
-                    format!("{} Add melody", crate::ui::icons::MUSIC_NOTE)
+                    format!("{} {}", crate::ui::icons::MUSIC_NOTE, designer_tr(ui, "Add melody"))
                 } else {
                     "No melodies".to_string()
                 })
@@ -2453,13 +2459,13 @@ pub(crate) fn draw_effect_capture_controls(app: &mut PealayerApp, ui: &mut egui:
         if active {
             ui.label(egui::RichText::new(format!("{} {} actions", crate::ui::icons::RECORD, recording.steps))
                 .color(record_action_color()));
-            finish = ui.add_enabled(!busy, egui::Button::new(format!("{} Finish", crate::ui::icons::STOP_CIRCLE))).clicked();
-            discard = ui.add_enabled(!busy, egui::Button::new(format!("{} Discard take", crate::ui::icons::TRASH)))
+            finish = ui.add_enabled(!busy, egui::Button::new(format!("{} {}", crate::ui::icons::STOP_CIRCLE, designer_tr(ui, "Finish")))).clicked();
+            discard = ui.add_enabled(!busy, egui::Button::new(format!("{} {}", crate::ui::icons::TRASH, designer_tr(ui, "Discard take"))))
                 .on_hover_text(designer_tr(ui, "Discard only this capture; existing sequence steps are retained")).clicked();
         } else {
             start = ui.add_enabled(connected && !busy && !app.effect_library_draft.name.trim().is_empty()
                 && !app.hardware_effect_authoring.capture_selection.is_empty(),
-                egui::Button::new(egui::RichText::new(format!("{} Record", crate::ui::icons::RECORD))
+                egui::Button::new(egui::RichText::new(format!("{} {}", crate::ui::icons::RECORD, designer_tr(ui, "Record")))
                     .color(egui::Color32::WHITE))
                     .fill(record_action_color())
                     .stroke(egui::Stroke::new(1.0, record_action_color())))
