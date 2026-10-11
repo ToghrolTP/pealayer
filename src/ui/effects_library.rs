@@ -2488,7 +2488,7 @@ pub(crate) fn draw_effect_capture_controls(app: &mut PealayerApp, ui: &mut egui:
                 });
         });
         if active {
-            ui.label(egui::RichText::new(format!("{} {} actions", crate::ui::icons::RECORD, recording.steps))
+            ui.label(egui::RichText::new(format!("{} {} {}", crate::ui::icons::RECORD, recording.steps, designer_tr(ui, "Actions")))
                 .color(record_action_color()));
             finish = ui.add_enabled(!busy, egui::Button::new(format!("{} {}", crate::ui::icons::STOP_CIRCLE, designer_tr(ui, "Finish")))).clicked();
             discard = ui.add_enabled(!busy, egui::Button::new(format!("{} {}", crate::ui::icons::TRASH, designer_tr(ui, "Discard take"))))

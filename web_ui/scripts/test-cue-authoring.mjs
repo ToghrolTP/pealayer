@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { duplicateStep, moveSequenceStep, parseTimeMs, formatTimeMs, repeatedSequenceDurationMs } from '../src/cueAuthoring.ts';
+import { duplicateStep, moveSequenceStep, parseTimeMs, formatTimeMs, repeatedSequenceDurationMs, sequenceKindLabels } from '../src/cueAuthoring.ts';
 const original = { at_us: 404000, kind: 'motion', target: 0, value: 2, duration_ms: 500, action_ids: ['seat.a.down'] };
 const copy = duplicateStep(original);
 assert.equal(copy.at_us, 1404000);
@@ -25,6 +25,7 @@ assert.equal(repeatedSequenceDurationMs(fractional, 1000, 3600000), null);
 const timeline = readFileSync(new URL('../src/components/SequenceTimeline.tsx', import.meta.url), 'utf8');
 assert.ok(timeline.includes('setPointerCapture') && timeline.includes('onPointerCancel'));
 assert.ok(timeline.includes('active.copy') && timeline.includes('reveal(index + 1)'));
+assert.ok(timeline.includes('suppressClick.current = index') && timeline.includes('suppressClick.current === index'), 'release click must not deselect the new copy');
 assert.ok(!timeline.includes('sendCmd') && !timeline.includes('seek_to'), 'designer gestures must not actuate or seek');
 for (const file of ['EffectsTab', 'StudioTab']) {
   const source = readFileSync(new URL(`../src/components/${file}.tsx`, import.meta.url), 'utf8');
@@ -52,4 +53,5 @@ for (const file of ['EffectsTab', 'StudioTab', 'EffectRecorder', 'SequenceTimeli
 for (const key of ['Effects Designer', 'Sequence step', 'Repeat effect', 'Interval', 'Length', 'Finish', 'Capture selection', 'Publish & Run', 'Rest', 'All relays off', 'All PWM outputs off', 'Status RGB', 'Raw opcode', 'Choose…']) {
   assert.ok(nativeKeys.has(key) && webKeys.has(key), `Designer translation parity missing: ${key}`);
 }
+for (const label of Object.values(sequenceKindLabels)) assert.ok(webKeys.has(label), `Missing command caption: ${label}`);
 console.log('Cue copy/retarget, exact repeated timing, units and shared authoring surface checks passed.');

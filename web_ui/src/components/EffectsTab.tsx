@@ -54,7 +54,7 @@ import { MelodySelect } from './MelodySelect';
 import { SoundEffectFields } from './SoundEffectFields';
 import { SequenceTimeline } from './SequenceTimeline';
 import { TimeValueField } from './TimeValueField';
-import { formatTimeMs, repeatedSequenceDurationMs } from '../cueAuthoring';
+import { formatTimeMs, repeatedSequenceDurationMs, sequenceKindLabels } from '../cueAuthoring';
 
 interface EffectsTabProps {
   state: PlayerState;
@@ -518,7 +518,7 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale, 
             human={state.human_readable_time_units !== false} onSelect={index => setActiveStep(String(index))} onChange={steps => setDraft({ ...draft, steps })} />
           <Collapse className="effect-step-list" activeKey={[activeStep]} onChange={keys => setActiveStep(String(Array.isArray(keys) ? keys[0] ?? '' : keys))} items={draft.steps.map((step, index) => ({
             key: String(index),
-            label: <span className="effect-step-title"><Tag>{index + 1}</Tag><strong>{step.kind}</strong><span>{(step.at_us / 1000).toLocaleString()} ms</span></span>,
+            label: <span className="effect-step-title"><Tag>{index + 1}</Tag><strong>{tr(locale, sequenceKindLabels[step.kind] ?? step.kind)}</strong><span>{formatTimeMs(step.at_us / 1000, state.human_readable_time_units !== false)}</span></span>,
             extra: <Space.Compact onClick={(event) => event.stopPropagation()}>
               <Button size="small" icon={<ArrowUpOutlined />} disabled={index === 0} onClick={() => moveStep(index, -1)} />
               <Button size="small" icon={<ArrowDownOutlined />} disabled={index === draft.steps.length - 1} onClick={() => moveStep(index, 1)} />
@@ -526,7 +526,7 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale, 
             </Space.Compact>,
             children: <div className="effect-step-grid">
               <label><span>{tr(locale, 'Start')}</span><TimeValueField value={step.at_us / 1000} human={state.human_readable_time_units !== false} onChange={value => updateStep(index, { at_us: Math.round(value * 1000) })} /></label>
-              <label><span>{tr(locale, 'Command')}</span><Select value={step.kind} options={['relay','relay-mask','pwm','display','rf','beep','rgb','opcode'].map((kind) => ({ value: kind, label: kind }))} onChange={(kind) => updateStep(index, { kind })} /></label>
+              <label><span>{tr(locale, 'Command')}</span><Select value={step.kind} options={Object.entries(sequenceKindLabels).map(([kind, label]) => ({ value: kind, label: tr(locale, label) }))} onChange={(kind) => updateStep(index, { kind })} /></label>
               <label><span>{tr(locale, 'Target')}</span><InputNumber min={0} value={step.target} onChange={(target) => updateStep(index, { target: target ?? undefined })} /></label>
               <label><span>{tr(locale, 'Value')}</span><InputNumber min={0} value={step.value} onChange={(value) => updateStep(index, { value: value ?? undefined })} /></label>
               <label><span>{tr(locale, 'Length')}</span><TimeValueField max={65535} value={step.duration_ms ?? 0} human={state.human_readable_time_units !== false} onChange={value => updateStep(index, { duration_ms: Math.round(value) })} /></label>
@@ -535,8 +535,8 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale, 
               <label className="effect-editor__wide"><span>{tr(locale, 'Text')}</span><Input value={step.text} onChange={(event) => updateStep(index, { text: event.target.value })} /></label>
               <label><span>{tr(locale, 'Destination')}</span><Input value={step.destination} onChange={(event) => updateStep(index, { destination: event.target.value })} /></label>
               <label><span>{tr(locale, 'Action IDs')}</span><Input value={(step.action_ids ?? []).join(', ')} onChange={(event) => updateStep(index, { action_ids: event.target.value.split(',').map((value) => value.trim()).filter(Boolean) })} /></label>
-              <label><span>RF code</span><InputNumber min={0} value={step.code} onChange={(code) => updateStep(index, { code: code ?? undefined })} /></label>
-              <label><span>RF bits</span><InputNumber min={0} max={64} value={step.bits} onChange={(bits) => updateStep(index, { bits: bits ?? undefined })} /></label>
+              <label><span>{tr(locale, 'RF code')}</span><InputNumber min={0} value={step.code} onChange={(code) => updateStep(index, { code: code ?? undefined })} /></label>
+              <label><span>{tr(locale, 'RF bits')}</span><InputNumber min={0} max={64} value={step.bits} onChange={(bits) => updateStep(index, { bits: bits ?? undefined })} /></label>
               <label><span>RGB</span><ColorPicker disabledAlpha value={`#${[step.red ?? 0, step.green ?? 0, step.blue ?? 0].map((value) => value.toString(16).padStart(2, '0')).join('')}`} onChangeComplete={(color) => { const [red, green, blue] = color.toRgbString().match(/\d+/g)?.map(Number) ?? [0,0,0]; updateStep(index, { red, green, blue }); }} /></label>
               <label><span>{tr(locale, 'Brightness')}</span><InputNumber min={0} max={255} value={step.brightness} onChange={(brightness) => updateStep(index, { brightness: brightness ?? undefined })} /></label>
               <label><span>{tr(locale, 'Payload')}</span><Input value={step.payload_hex} onChange={(event) => updateStep(index, { payload_hex: event.target.value })} /></label>

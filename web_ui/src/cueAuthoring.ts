@@ -1,5 +1,11 @@
 export type SequenceStep = { at_us: number; kind: string; target?: number; value?: number; duration_ms?: number; action_ids?: string[]; [key: string]: unknown };
 
+export const sequenceKindLabels: Record<string, string> = {
+  motion: 'Seat motion', relay: 'Relay', 'relay-mask': 'Relay mask', 'relays-off': 'All relays off',
+  pwm: 'PWM', 'pwm-off': 'All PWM outputs off', display: 'Display', rf: 'RF', beep: 'Buzzer',
+  rgb: 'Status RGB', addressable: 'Strip pixel', menu: 'Page', 'menu-action': 'Front-panel action', opcode: 'Raw opcode',
+};
+
 export const newCueId = () => {
   const bytes = crypto.getRandomValues(new Uint8Array(16));
   bytes[6] = (bytes[6] & 15) | 64; bytes[8] = (bytes[8] & 63) | 128;
@@ -34,14 +40,6 @@ export function formatTimeMs(value: number, human = true): string {
   if (!human) return `${value}ms`;
   const unit = value >= 3600000 ? ['h', 3600000] as const : value >= 60000 ? ['min', 60000] as const : value >= 1000 ? ['s', 1000] as const : ['ms', 1] as const;
   return `${Number((value / unit[1]).toFixed(6))}${unit[0]}`;
-}
-
-export function repeatedDurationMs(base: number, count = 1, interval = 0): number | null {
-  if (!Number.isInteger(count) || count < 1 || count > 1000 || interval < 0 || !Number.isInteger(interval)) return null;
-  const period = interval || base;
-  if (count > 1 && period < base) return null;
-  const total = base + (count - 1) * period;
-  return Number.isSafeInteger(total) ? total : null;
 }
 
 /** Keep microsecond cue placement until the final display rounding. */

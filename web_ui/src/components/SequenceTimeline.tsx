@@ -1,7 +1,7 @@
 import { useRef, useState } from 'react';
 import { Button, Dropdown, Space, Tooltip } from 'antd';
 import { CopyOutlined, DeleteOutlined } from '@ant-design/icons';
-import { duplicateStep, formatTimeMs, moveSequenceStep, SequenceStep } from '../cueAuthoring';
+import { duplicateStep, formatTimeMs, moveSequenceStep, sequenceKindLabels, SequenceStep } from '../cueAuthoring';
 import { sequenceDurationMs } from '../melodyCatalog';
 import { tr, UiLocale } from '../i18n';
 
@@ -15,6 +15,7 @@ export function SequenceTimeline<T extends SequenceStep>({ steps, onChange, loca
   const [preview, setPreview] = useState<{ index: number; step: T; copy: boolean } | null>(null);
   const drag = useRef<null | { index: number; origin: number; at: number; scale: number; step: T; copy: boolean; moved: boolean }>(null);
   const container = useRef<HTMLDivElement>(null);
+  const suppressClick = useRef<number | null>(null);
   const laneFor = (step: T) => step.kind === 'motion' ? (step.target === 1 ? 'seat.b' : 'seat.a') : `${step.kind}.${step.target ?? 0}`;
   const lanes = [...new Set([...controls.filter(c => c.kind === 'motion' && !c.locked).map(c => c.key), ...steps.map(laneFor)])];
   const span = Math.max(1000, sequenceDurationMs(steps));
@@ -44,7 +45,7 @@ export function SequenceTimeline<T extends SequenceStep>({ steps, onChange, loca
               const shown = preview?.index === index && !preview.copy ? { ...step, at_us: preview.step.at_us } : step;
               if (laneFor(shown) !== lane) return null;
               const length = Math.max(38, Number(shown.duration_ms ?? 0) * scale);
-              const label = step.kind === 'motion' ? tr(locale, step.value === 1 ? 'Up' : step.value === 2 ? 'Down' : 'Stop') : step.kind;
+              const label = step.kind === 'motion' ? tr(locale, step.value === 1 ? 'Up' : step.value === 2 ? 'Down' : 'Stop') : tr(locale, sequenceKindLabels[step.kind] ?? step.kind);
               return <Dropdown key={index} trigger={['contextMenu']} menu={{ items: [
                 { key: 'duplicate', label: tr(locale, 'Duplicate cue'), icon: <CopyOutlined />, disabled },
                 { key: 'delete', label: tr(locale, 'Delete cue'), icon: <DeleteOutlined />, disabled, danger: true },
@@ -52,7 +53,7 @@ export function SequenceTimeline<T extends SequenceStep>({ steps, onChange, loca
                 <button type="button" className={`sequence-authoring__cue ${selected === index ? 'is-selected' : ''}`}
                   data-step-index={index} style={{ left: shown.at_us / 1000 * scale, width: length }} disabled={disabled}
                   title={`${label} · ${formatTimeMs(shown.at_us / 1000, human)} · ${formatTimeMs(Number(shown.duration_ms ?? 0), human)}`}
-                  onClick={() => choose(index)} onKeyDown={event => {
+                  onClick={() => { if (suppressClick.current === index) { suppressClick.current = null; return; } choose(index); }} onKeyDown={event => {
                     if (event.key === 'Delete' && !disabled) { event.preventDefault(); onChange(steps.filter((_, i) => i !== index)); choose(Math.max(0, index - 1)); }
                   }} onPointerDown={event => {
                     if (event.button !== 0 || disabled) return;
@@ -69,6 +70,8 @@ export function SequenceTimeline<T extends SequenceStep>({ steps, onChange, loca
                     const target = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('[data-sequence-lane]')?.dataset.sequenceLane;
                     const moved = moveSequenceStep(active.step, active.at + (event.clientX - active.origin) / active.scale * 1000, target) as T;
                     if (active.moved) {
+                      suppressClick.current = index;
+                      window.setTimeout(() => { suppressClick.current = null; }, 0);
                       const next = [...steps]; if (active.copy) { next.splice(index + 1, 0, moved); choose(index + 1); reveal(index + 1); } else next[index] = moved;
                       onChange(next);
                     }
