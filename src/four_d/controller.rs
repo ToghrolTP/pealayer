@@ -1863,6 +1863,19 @@ fn parse_strip_control(snapshot: &Value, catalog: &Value) -> Option<HardwareStri
     })
 }
 
+pub(crate) fn parse_effect_repeat(effect: &Value) -> Result<(u16, u32), String> {
+    let count = effect.get("repeat_count").map(|value| value.as_u64()
+        .and_then(|value| u16::try_from(value).ok()).ok_or("Invalid effect repeat count"))
+        .transpose()?.unwrap_or(1);
+    let interval = effect.get("repeat_interval_ms").map(|value| value.as_u64()
+        .and_then(|value| u32::try_from(value).ok()).ok_or("Invalid effect repeat interval"))
+        .transpose()?.unwrap_or(0);
+    if !(1..=1_000).contains(&count) || interval > 3_600_000 {
+        return Err("Invalid effect repeat count or interval".into());
+    }
+    Ok((count, interval))
+}
+
 fn validate_effect_snapshot(snapshot: &Value) -> Result<(), String> {
     if let Some(library) = snapshot.pointer("/macros/library") {
         let library = library.as_array().ok_or("Effect library must be an array")?;
@@ -1873,12 +1886,7 @@ fn validate_effect_snapshot(snapshot: &Value) -> Result<(), String> {
                 Some(value) => serde_json::from_value::<Vec<HardwareMacroStep>>(value.clone())
                     .map_err(|error| format!("Invalid current effect sequence: {error}"))?,
             };
-            let count = effect.get("repeat_count").map(|value| value.as_u64()
-                .and_then(|value| u16::try_from(value).ok()).ok_or("Invalid effect repeat count"))
-                .transpose()?.unwrap_or(1);
-            let interval = effect.get("repeat_interval_ms").map(|value| value.as_u64()
-                .and_then(|value| u32::try_from(value).ok()).ok_or("Invalid effect repeat interval"))
-                .transpose()?.unwrap_or(0);
+            let (count, interval) = parse_effect_repeat(effect)?;
             crate::ui::effects_library::repeated_sequence_duration_ms(&steps, count, interval)?;
         }
     }
@@ -2854,6 +2862,11 @@ mod tests {
         assert_eq!(capabilities.controls[0].name, "Seat Left");
         assert!(super::parse_capture_capabilities("{}").is_err());
         assert!(super::parse_capture_capabilities(r#"{"controls":[],"opcodes":[]}"#).is_ok());
+        assert_eq!(super::parse_effect_repeat(&serde_json::json!({})).unwrap(), (1, 0));
+        for invalid in [serde_json::json!({"repeat_count":65536}), serde_json::json!({"repeat_count":0}),
+            serde_json::json!({"repeat_interval_ms":4294967296_u64}), serde_json::json!({"repeat_count":"2"})] {
+            assert!(super::parse_effect_repeat(&invalid).is_err());
+        }
         assert!(super::validate_effect_snapshot(&serde_json::json!({"macros":{"library":[{
             "steps":[{"kind":"motion","repeat_count":2}]
         }]}})).is_err());

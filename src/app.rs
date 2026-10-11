@@ -4550,6 +4550,12 @@ impl PealayerApp {
                     Vec::new()
                 };
                 let properties = effect.program.get("properties");
+                let (repeat_count, repeat_interval_ms) = if effect.kind == "sequence" {
+                    match crate::four_d::controller::parse_effect_repeat(&effect.program) {
+                        Ok(value) => value,
+                        Err(error) => { self.set_osd(error); return; }
+                    }
+                } else { (1, 0) };
                 let property_string = |name: &str| {
                     properties
                         .and_then(|value| value.get(name))
@@ -4581,10 +4587,8 @@ impl PealayerApp {
                         .unwrap_or("auto")
                         .to_string(),
                     steps,
-                    repeat_count: effect.program.get("repeat_count").and_then(serde_json::Value::as_u64)
-                        .and_then(|value| u16::try_from(value).ok()).unwrap_or(1),
-                    repeat_interval_ms: effect.program.get("repeat_interval_ms").and_then(serde_json::Value::as_u64)
-                        .and_then(|value| u32::try_from(value).ok()).unwrap_or(0),
+                    repeat_count,
+                    repeat_interval_ms,
                     label: property_string("label"),
                     lcd_message: property_string("lcd_message"),
                     timing_tolerance_us: properties
