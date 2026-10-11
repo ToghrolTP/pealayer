@@ -1700,7 +1700,7 @@ fn draw_timeline_authoring_fields(
                 ui.add(
                     egui::DragValue::new(step.to_brightness.get_or_insert(255))
                         .range(0..=255)
-                        .prefix("Brightness "),
+                        .prefix(format!("{} ", designer_tr(ui, "Brightness"))),
                 );
             }
         });
@@ -1992,21 +1992,17 @@ fn draw_sequence_step_editor(
                             }
                             "pwm-off" | "relays-off" => {
                                 ui.label(designer_tr(ui, "Action"));
-                                ui.label(if step.kind == "pwm-off" {
-                                    "Turn every PWM output off"
+                                ui.label(designer_tr(ui, if step.kind == "pwm-off" {
+                                    "All PWM outputs off"
                                 } else {
-                                    "Turn every relay off"
-                                });
+                                    "All relays off"
+                                }));
                                 ui.end_row();
                             }
                             "display" => {
                                 ui.label(designer_tr(ui, "Display"));
                                 crate::ui::dropdown::ComboBox::from_id_salt(("display-destination", index))
-                                    .selected_text(if step.destination.is_empty() {
-                                        "Segments"
-                                    } else {
-                                        &step.destination
-                                    })
+                                    .selected_text(designer_tr(ui, if step.destination == "lcd" { "LCD" } else { "Segments" }))
                                     .show_ui(ui, |ui| {
                                         ui.dropdown_value(
                                             &mut step.destination,
@@ -2028,7 +2024,7 @@ fn draw_sequence_step_editor(
                                         .horizontal_align(text_align),
                                 );
                                 ui.end_row();
-                                ui.label(designer_tr(ui, "Visible for"));
+                                ui.label(designer_tr(ui, "Length"));
                                 let mut duration_ms =
                                     u64::from(*step.duration_ms.get_or_insert(1_500));
                                 if ui
@@ -2137,7 +2133,7 @@ fn draw_sequence_step_editor(
                                             ui.dropdown_value(
                                                 target,
                                                 pixel,
-                                                format!("Pixel {}", pixel + 1),
+                                                format!("{} {}", designer_tr(ui, "Pixel"), pixel + 1),
                                             );
                                         }
                                     });
