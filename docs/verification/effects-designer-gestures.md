@@ -61,7 +61,7 @@ That report is not Windows installed-window or physical-output proof.
 
 Deployment remains blocked by the recorded command-tool rejection of runtime smoke validation. Do not bypass that rejection with a different launch route. The existing production player, controller and physical outputs are unchanged during this source pass. Previous physical seat-motion acceptance is separately pending and is not covered by editor tests.
 
-Four production effect definitions contain nontrivial per-step repeats. Before paired deployment, explicitly preserve their complete scheduled actions and timings under the current contract; do not simply remove fields or reinterpret interleaved step repeats as whole-effect repeats. Private production definitions are not copied into this repository. Autonomous command-tail completion (running until a final beep/PWM/display hold has ended) is a separate controller lifecycle gate; computed editor length alone does not establish physical completion.
+Existing production definitions include nontrivial per-step repeats. Before paired deployment, explicitly preserve their complete scheduled actions and timings under the current contract; do not simply remove fields or reinterpret interleaved step repeats as whole-effect repeats. Private production definitions are not copied into this repository. Autonomous command-tail completion (running until a final beep/PWM/display hold has ended) is a separate controller lifecycle gate; computed editor length alone does not establish physical completion.
 
 ## Handoff
 
