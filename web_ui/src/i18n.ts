@@ -1,6 +1,7 @@
 export type UiLocale = 'en' | 'fa';
 
 const fa: Record<string, string> = {
+  "RF": "فرمان رادیویی",
   "RF bits": "تعداد بیت RF",
   "Pixels": "پیکسل‌ها",
   "Action": "عملکرد",

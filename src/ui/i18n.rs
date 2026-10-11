@@ -62,6 +62,7 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         return english.to_owned();
     }
     let translated = match english {
+        "RF" => "فرمان رادیویی",
         "Effect is no longer available" => "این جلوه دیگر در دسترس نیست",
         "New effect" => "جلوهٔ جدید",
         "Timed multi-peripheral sequence" => "توالی زمان‌بندی‌شدهٔ چند دستگاه",
