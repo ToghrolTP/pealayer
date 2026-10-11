@@ -165,3 +165,12 @@ fn test_exact_cache_preview_still_moves_decoder_and_rejects_nearby_frames() {
 
     wait_for_seek_target(&seeks, 12.0);
 }
+
+#[test]
+fn test_seek_controller_drops_cleanly_without_deadlock() {
+    for _ in 0..100 {
+        let backend = MockSeekBackend::default();
+        let controller = SeekController::new(backend);
+        drop(controller);
+    }
+}

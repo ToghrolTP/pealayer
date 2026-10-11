@@ -116,10 +116,10 @@ impl SeekController {
 
         let worker_handle = thread::spawn(move || {
             let (lock, cvar) = &*state_clone;
-            while is_running_clone.load(Ordering::Relaxed) {
+            while is_running_clone.load(Ordering::SeqCst) {
                 let seek_req = {
                     let mut guard = lock.lock().unwrap();
-                    while guard.is_none() && is_running_clone.load(Ordering::Relaxed) {
+                    while guard.is_none() && is_running_clone.load(Ordering::SeqCst) {
                         guard = cvar.wait(guard).unwrap();
                     }
                     guard.take()
@@ -187,9 +187,12 @@ impl SeekController {
 
 impl Drop for SeekController {
     fn drop(&mut self) {
-        self.is_running.store(false, Ordering::Relaxed);
-        let (_, cvar) = &*self.state;
-        cvar.notify_all();
+        let (lock, cvar) = &*self.state;
+        {
+            let _guard = lock.lock().unwrap();
+            self.is_running.store(false, Ordering::SeqCst);
+            cvar.notify_all();
+        }
         if let Some(handle) = self.worker_handle.take() {
             let _ = handle.join();
         }
