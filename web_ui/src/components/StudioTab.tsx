@@ -300,6 +300,21 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
   const suppressCueClick = useRef<string | null>(null);
   const effects = state.effects ?? [];
   const controllerEffects = state.controller_effects ?? [];
+  const previousEffectIdentities = useRef(new Map<string, { name: string; icon: string; category: string }>());
+  useEffect(() => {
+    const baseline = previousEffectIdentities.current;
+    setEffectDraft(current => {
+      if (!current || current.is_new) return current;
+      const next = controllerEffects.find(effect => effect.reference === current.reference);
+      const previous = baseline.get(current.reference);
+      if (!next || !previous) return current;
+      const name = current.name === previous.name ? next.name : current.name;
+      const icon = current.icon === previous.icon ? next.icon : current.icon;
+      const category = current.category === previous.category ? next.category : current.category;
+      return name === current.name && icon === current.icon && category === current.category ? current : { ...current, name, icon, category };
+    });
+    previousEffectIdentities.current = new Map(controllerEffects.map(effect => [effect.reference, { name: effect.name, icon: effect.icon, category: effect.category }]));
+  }, [controllerEffects]);
   const cues = state.cues ?? [];
   useEffect(() => {
     if (!focusCue.current || !cues.some(cue => cue.id === focusCue.current)) return;

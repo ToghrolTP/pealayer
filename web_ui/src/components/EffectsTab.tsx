@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 
 // getRandomValues also works on LAN HTTP origins, unlike randomUUID.
 const newAudioId = () => {
@@ -138,6 +138,21 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale, 
   const [draft, setDraft] = useState<EffectDraft | null>(null);
   const [saving, setSaving] = useState(false);
   const [activeStep, setActiveStep] = useState('0');
+  const previousIdentities = useRef(new Map<string, { name: string; icon: string; category: string }>());
+  useEffect(() => {
+    const baseline = previousIdentities.current;
+    setDraft(current => {
+      if (!current || current.is_new) return current;
+      const next = effects.find(effect => effect.reference === current.reference);
+      const previous = baseline.get(current.reference);
+      if (!next || !previous) return current;
+      const name = current.name === previous.name ? next.name : current.name;
+      const icon = current.icon === previous.icon ? next.icon : current.icon;
+      const category = current.category === previous.category ? next.category : current.category;
+      return name === current.name && icon === current.icon && category === current.category ? current : { ...current, name, icon, category };
+    });
+    previousIdentities.current = new Map(effects.map(effect => [effect.reference, { name: effect.name, icon: effect.icon, category: effect.category }]));
+  }, [effects]);
   useEffect(() => {
     if (draft?.kind !== 'audio') return;
     const saved = effects.find((effect) => effect.kind === 'audio' && effect.id === draft.id);

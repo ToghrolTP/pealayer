@@ -510,6 +510,7 @@ pub struct HardwareEffectRecording {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HardwareCaptureSelection {
     #[serde(default)] pub all: bool,
     #[serde(default)] pub control_keys: Vec<String>,
@@ -2794,6 +2795,22 @@ pub fn direct_serial_name(endpoint: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn current_capture_contract_is_numeric_explicit_and_rejects_step_repetition() {
+        let selection: super::HardwareCaptureSelection = serde_json::from_value(serde_json::json!({
+            "all":false,"control_keys":["seat.a"],"opcodes":[16,17]
+        })).unwrap();
+        assert!(!selection.is_empty());
+        assert!(super::HardwareCaptureSelection::default().is_empty());
+        assert_eq!(serde_json::to_value(&selection).unwrap()["opcodes"], serde_json::json!([16,17]));
+        assert!(serde_json::from_value::<super::HardwareCaptureSelection>(serde_json::json!({"opcodes":"EBE="})).is_err());
+        assert!(serde_json::from_value::<super::HardwareMacroStep>(serde_json::json!({"kind":"motion","repeat_count":2})).is_err());
+        let capabilities: super::HardwareCaptureCapabilities = serde_json::from_value(serde_json::json!({
+            "controls":[{"key":"seat.a","name":"Seat Left","kind":"motion","actions":[]}],
+            "opcodes":[{"opcode":16,"name":"relay","capture_modes":["automatic"]}]
+        })).unwrap();
+        assert_eq!(capabilities.controls[0].name, "Seat Left");
+    }
     use super::*;
 
     #[test]

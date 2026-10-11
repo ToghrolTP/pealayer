@@ -3000,6 +3000,22 @@ impl PealayerApp {
         if catalog == self.hardware_effect_authoring.timeline_catalog {
             return false;
         }
+        if !self.effect_library_draft.is_new {
+            let key = if self.effect_library_draft.kind == "sequence" {
+                self.effect_library_draft.id.parse().ok().map(ControllerEffectCatalogKey::Macro)
+            } else { Some(ControllerEffectCatalogKey::Strip(self.effect_library_draft.id.clone())) };
+            if let Some(key) = key {
+                if let (Some(previous), Some(next)) = (
+                    self.hardware_effect_authoring.timeline_catalog.iter().find(|entry| entry.key == key),
+                    catalog.iter().find(|entry| entry.key == key),
+                ) {
+                    // Preserve intentional unsaved edits, but follow an
+                    // externally acknowledged rename in a clean open editor.
+                    if self.effect_library_draft.name == previous.name { self.effect_library_draft.name = next.name.clone(); }
+                    if self.effect_library_draft.icon == previous.icon { self.effect_library_draft.icon = next.icon.clone(); }
+                }
+            }
+        }
         self.hardware_effect_authoring.timeline_catalog = catalog.clone();
         reconcile_controller_effect_templates(&mut self.timeline, &catalog)
     }
@@ -3814,8 +3830,17 @@ impl PealayerApp {
                             Ok(capabilities) => self.hardware_effect_authoring.capture_capabilities = capabilities,
                             Err(error) => self.set_osd(format!("Invalid capture capabilities: {error}")),
                         },
-                        "macro-status" => match serde_json::from_str::<crate::four_d::controller::HardwareEffectRecording>(&output) {
-                            Ok(recording) => self.hardware_effect_authoring.active = recording.active,
+                        "macro-status" => match serde_json::from_str::<serde_json::Value>(&output)
+                            .map_err(|error| error.to_string()).and_then(|value| {
+                                if value.get("active").and_then(serde_json::Value::as_bool).is_none() {
+                                    return Err("recording status requires active".into());
+                                }
+                                serde_json::from_value::<crate::four_d::controller::HardwareEffectRecording>(value).map_err(|error| error.to_string())
+                            }) {
+                            Ok(recording) => {
+                                self.hardware_effect_authoring.active = recording.active;
+                                self.hardware_effect_authoring.capture_capabilities = recording.capabilities;
+                            },
                             Err(error) => self.set_osd(format!("Invalid recording status: {error}")),
                         },
                         "macro-save" => {
@@ -4641,7 +4666,7 @@ impl PealayerApp {
                         self.set_osd(self.tr("Choose a compatible unlocked seat track")); return;
                     };
                     if !self.timeline.templates.iter().any(|template| template.id == source.effect_id
-                        && template.direct_cue.as_ref().is_some_and(|direct| direct.motion.is_some())) {
+                        && template.direct_control.as_ref().is_some_and(|direct| direct.motion.is_some())) {
                         self.set_osd(self.tr("Choose a compatible unlocked seat track")); return;
                     }
                     Some(control)
@@ -9901,6 +9926,33 @@ pub(crate) mod tests {
             let isolated = app.timeline.templates.iter().find(|item| item.id == isolated_id).unwrap();
             assert_eq!(isolated.duration_resizable(), is_strip);
         }
+    }
+
+    #[test]
+    fn externally_renamed_effect_updates_clean_designer_without_erasing_unsaved_identity() {
+        let mut app = PealayerApp::default();
+        let mut effect = crate::four_d::controller::HardwareMacro {
+            id: 7, name: "Original".into(), icon: "seat".into(), duration_ms: 500,
+            ..Default::default()
+        };
+        app.update_hardware_capabilities(Some(crate::four_d::controller::HardwareCapabilities {
+            macros: vec![effect.clone()], ..Default::default()
+        }));
+        crate::ui::effects_library::select_sequence(&mut app, &effect);
+        app.refresh_controller_effect_timeline_metadata();
+        effect.name = "Renamed".into();
+        app.update_hardware_capabilities(Some(crate::four_d::controller::HardwareCapabilities {
+            macros: vec![effect.clone()], ..Default::default()
+        }));
+        app.refresh_controller_effect_timeline_metadata();
+        assert_eq!(app.effect_library_draft.name, "Renamed");
+        app.effect_library_draft.name = "Unsaved identity".into();
+        effect.name = "Renamed elsewhere".into();
+        app.update_hardware_capabilities(Some(crate::four_d::controller::HardwareCapabilities {
+            macros: vec![effect], ..Default::default()
+        }));
+        app.refresh_controller_effect_timeline_metadata();
+        assert_eq!(app.effect_library_draft.name, "Unsaved identity");
     }
 
     #[test]

@@ -2064,7 +2064,7 @@ fn draw_sequence_step_editor(
                                         .suffix(" Hz"),
                                 );
                                 ui.end_row();
-                                ui.label(designer_tr(ui, "Duration"));
+                                ui.label(designer_tr(ui, "Length"));
                                 let mut duration_ms =
                                     u64::from(*step.duration_ms.get_or_insert(120));
                                 if ui
