@@ -29,7 +29,7 @@ import {
   UnlockOutlined,
   VideoCameraOutlined,
 } from '@ant-design/icons';
-import { Button, ConfigProvider, Divider, Dropdown, Empty, Input, InputNumber, message, Modal, Popconfirm, Select, Slider, Space, Tooltip } from 'antd';
+import { Button, Collapse, ConfigProvider, Divider, Dropdown, Empty, Input, InputNumber, message, Modal, Popconfirm, Select, Slider, Space, Tooltip } from 'antd';
 import type { PlayerState } from './RemoteControlTab';
 import { tr, UiLocale } from '../i18n';
 import { EffectIconPicker, effectGlyph as configuredEffectGlyph } from '../effectIcons';
@@ -51,10 +51,13 @@ import type { TimelineWheelPreferences } from '../timelineWheel';
 import { appendMelodySteps, sequenceDurationMs } from '../melodyCatalog';
 import { MediaTrackSelectors } from './MediaTrackSelectors';
 import { PlaybackButton } from './PlaybackButton';
-import { SequenceTimeline } from './SequenceTimeline';
+import { SequenceTimeline, SequenceTimelineActions } from './SequenceTimeline';
+import { ColorDropdown } from './ColorDropdown';
+import { DesignerFieldLabel } from './DesignerFieldLabel';
+import { sequenceExtraKinds } from '../cueAuthoring';
 import { StepRepeatFields } from './StepRepeatFields';
 import { TimeValueField } from './TimeValueField';
-import { newCueId, repeatedSequenceDurationMs, formatTimeMs } from '../cueAuthoring';
+import { newCueId, repeatedSequenceDurationMs, formatTimeMs, sequenceStepTemplate, moveSequenceStep, sequenceLaneKey } from '../cueAuthoring';
 
 interface StudioTabProps {
   state: PlayerState;
@@ -249,6 +252,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
   const [effectEditorOpen, setEffectEditorOpen] = useState(false);
   const [savingEffect, setSavingEffect] = useState(false);
   const [effectDraft, setEffectDraft] = useState<Record<string, any> | null>(null);
+  const sequenceActions = useRef<SequenceTimelineActions | null>(null);
   const captureBusy = Boolean(state.effect_recording?.active || state.effect_recording?.pending);
   const effectPayload = (draft: Record<string, any>) => {
     const { programText, steps, engine, ...payload } = draft;
@@ -475,17 +479,6 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
     setEffectEditorOpen(true);
   };
 
-  const addSequenceStep = () => {
-    if (!effectDraft) return;
-    const previous = effectDraft.steps?.[effectDraft.steps.length - 1];
-    setEffectDraft({
-      ...effectDraft,
-      steps: [...(effectDraft.steps ?? []), {
-        at_us: previous ? Number(previous.at_us ?? 0) + 250_000 : 0,
-        kind: 'relay', target: 4, value: 1,
-      }],
-    });
-  };
   const addMelody = (name: string) => {
     if (!effectDraft) return;
     const melody = state.hardware_details?.melodies?.find((item) => item.name === name);
@@ -528,9 +521,9 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                   event.dataTransfer.setData('text/plain', effect.name);
                 }}
               >
-                <span className="effect-profile__icon">{configuredEffectGlyph(effect.icon)}</span>
+                <span className="effect-profile__icon">{configuredEffectGlyph(effectDraft?.reference === effect.reference ? effectDraft.icon : effect.icon)}</span>
                 <div className="effect-profile__body">
-                  <strong>{effect.name}</strong>
+                  <strong>{effectDraft?.reference === effect.reference ? effectDraft.name : effect.name}</strong>
                   <span>{effect.category} · {effect.action_count} {tr(locale, 'actions')} · {effect.duration_display}</span>
                 </div>
                 <Tooltip title={tr(locale, 'Play effect')}>
@@ -607,26 +600,30 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
       >
         {effectDraft && (
           <ConfigProvider componentDisabled={captureBusy}><div className="effect-editor-grid">
-            <label><span>{tr(locale, 'Type')}</span><Select disabled={effectDraft.kind === 'audio'} value={effectDraft.kind} options={[{ value: 'sequence', label: tr(locale, 'Timed sequence') }, { value: 'strip-stream', label: tr(locale, 'Addressable lighting') }, ...(effectDraft.kind === 'audio' ? [{ value: 'audio', label: tr(locale, 'Audio effect') }] : [])]} onChange={(kind) => setEffectDraft({ ...effectDraft, kind })} /></label>
-            {effectDraft.kind !== 'audio' && <label><span>{tr(locale, 'ID')}</span><Input value={effectDraft.id} onChange={(event) => setEffectDraft({ ...effectDraft, id: event.target.value })} /></label>}
-            <label><span>{tr(locale, 'Name')}</span><Input value={effectDraft.name} onChange={(event) => setEffectDraft({ ...effectDraft, name: event.target.value })} /></label>
-            <label><span>{tr(locale, 'Icon')}</span><EffectIconPicker value={effectDraft.icon} searchPlaceholder={tr(locale, 'Search icons...')} presetsLabel={tr(locale, 'Presets')} emptyLabel={tr(locale, 'No matching icons')} onChange={(icon) => setEffectDraft({ ...effectDraft, icon })} /></label>
-            <label><span>{tr(locale, 'Group')}</span><GroupSelect value={effectDraft.category} groups={[...new Set(controllerEffects.map((effect) => effect.category))]} locale={locale} onChange={(category) => setEffectDraft({ ...effectDraft, category })} onCreate={() => {
+            <label><DesignerFieldLabel label="Type" locale={locale} /><Select disabled={effectDraft.kind === 'audio'} value={effectDraft.kind} options={[{ value: 'sequence', label: tr(locale, 'Timed sequence') }, { value: 'strip-stream', label: tr(locale, 'Addressable lighting') }, ...(effectDraft.kind === 'audio' ? [{ value: 'audio', label: tr(locale, 'Audio effect') }] : [])]} onChange={(kind) => setEffectDraft({ ...effectDraft, kind })} /></label>
+            {effectDraft.kind !== 'audio' && <label><DesignerFieldLabel label="ID" locale={locale} /><Input value={effectDraft.id} onChange={(event) => setEffectDraft({ ...effectDraft, id: event.target.value })} /></label>}
+            <label><DesignerFieldLabel label="Name" locale={locale} /><Input value={effectDraft.name} onChange={(event) => setEffectDraft({ ...effectDraft, name: event.target.value })} /></label>
+            <label><DesignerFieldLabel label="Icon" locale={locale} /><EffectIconPicker locale={locale} value={effectDraft.icon} searchPlaceholder={tr(locale, 'Search icons...')} presetsLabel={tr(locale, 'Presets')} emptyLabel={tr(locale, 'No matching icons')} onChange={(icon) => setEffectDraft({ ...effectDraft, icon })} /></label>
+            <label><DesignerFieldLabel label="Group" locale={locale} /><GroupSelect value={effectDraft.category} groups={[...new Set(controllerEffects.map((effect) => effect.category))]} locale={locale} onChange={(category) => setEffectDraft({ ...effectDraft, category })} onCreate={() => {
               let name = '';
               Modal.confirm({ title: tr(locale, 'New group'), content: <Input maxLength={64} onChange={(event) => { name = event.target.value.trim(); }} />, onOk: () => { if (!name) return Promise.reject(); setEffectDraft({ ...effectDraft, category: name }); } });
             }} /></label>
-            <label className="effect-editor-grid__wide"><span>{tr(locale, 'Description')}</span><Input value={effectDraft.description} onChange={(event) => setEffectDraft({ ...effectDraft, description: event.target.value })} /></label>
-            <label><span>{tr(locale, 'Length')}</span>{effectDraft.kind === 'audio' ? <Typography.Text type="secondary">{formatTimeMs(effectDraft.duration_ms, state.human_readable_time_units !== false)}</Typography.Text> : effectDraft.kind === 'sequence' ? <Typography.Text type="secondary">{repeatedSequenceDurationMs(effectDraft.steps, effectDraft.repeat_count, effectDraft.repeat_interval_ms) === null ? '—' : formatTimeMs(repeatedSequenceDurationMs(effectDraft.steps, effectDraft.repeat_count, effectDraft.repeat_interval_ms)!, state.human_readable_time_units !== false)}</Typography.Text> : <TimeValueField min={1} value={effectDraft.duration_ms} human={state.human_readable_time_units !== false} onChange={duration_ms => setEffectDraft({ ...effectDraft, duration_ms: Math.round(duration_ms) })} />}</label>
+            <label className="effect-editor-grid__wide"><DesignerFieldLabel label="Description" locale={locale} /><Input value={effectDraft.description} onChange={(event) => setEffectDraft({ ...effectDraft, description: event.target.value })} /></label>
+            <label><DesignerFieldLabel label="Length" locale={locale} />{effectDraft.kind === 'audio' ? <Typography.Text type="secondary">{formatTimeMs(effectDraft.duration_ms, state.human_readable_time_units !== false)}</Typography.Text> : effectDraft.kind === 'sequence' ? <Typography.Text type="secondary">{repeatedSequenceDurationMs(effectDraft.steps, effectDraft.repeat_count, effectDraft.repeat_interval_ms) === null ? '—' : formatTimeMs(repeatedSequenceDurationMs(effectDraft.steps, effectDraft.repeat_count, effectDraft.repeat_interval_ms)!, state.human_readable_time_units !== false)}</Typography.Text> : <TimeValueField min={1} value={effectDraft.duration_ms} human={state.human_readable_time_units !== false} onChange={duration_ms => setEffectDraft({ ...effectDraft, duration_ms: Math.round(duration_ms) })} />}</label>
             {effectDraft.kind === 'audio' && <SoundEffectFields program={JSON.parse(effectDraft.programText || '{}')} onChange={(patch) => setEffectDraft({ ...effectDraft, programText: JSON.stringify({ ...JSON.parse(effectDraft.programText || '{}'), ...patch }) })} state={state} reference={effectDraft.reference} apiBaseUrl={apiBaseUrl} locale={locale} sendCmd={sendCmd} />}
-            {effectDraft.kind === 'strip-stream' && <label><span>{tr(locale, 'Frames per second')}</span><InputNumber min={1} max={120} value={effectDraft.default_fps} onChange={(default_fps) => setEffectDraft({ ...effectDraft, default_fps: default_fps ?? 20 })} /></label>}
-            {effectDraft.kind === 'strip-stream' && <label><span>{tr(locale, 'Pixels')}</span><InputNumber min={1} value={effectDraft.default_pixels} onChange={(default_pixels) => setEffectDraft({ ...effectDraft, default_pixels: default_pixels ?? 100 })} /></label>}
-            {effectDraft.kind === 'sequence' && <label><span>{tr(locale, 'Color')}</span><Select disabled={captureBusy} value={effectDraft.color} onChange={(color) => setEffectDraft({ ...effectDraft, color })} options={recordingColors.map((color) => ({ value: color.id, label: <span className="recording-color-option"><span className="recording-color-swatch" style={{ backgroundColor: color.hex }} />{tr(locale, color.label)}</span> }))} /></label>}
-            {effectDraft.kind === 'sequence' && <label><span>{tr(locale, 'Execution')}</span><Select value={effectDraft.engine ?? 'auto'} options={[
+            {effectDraft.kind === 'strip-stream' && <label><DesignerFieldLabel label="Frames per second" locale={locale} /><InputNumber min={1} max={120} value={effectDraft.default_fps} onChange={(default_fps) => setEffectDraft({ ...effectDraft, default_fps: default_fps ?? 20 })} /></label>}
+            {effectDraft.kind === 'strip-stream' && <label><DesignerFieldLabel label="Pixels" locale={locale} /><InputNumber min={1} value={effectDraft.default_pixels} onChange={(default_pixels) => setEffectDraft({ ...effectDraft, default_pixels: default_pixels ?? 100 })} /></label>}
+            {effectDraft.kind === 'sequence' && <label><DesignerFieldLabel label="Color" locale={locale} /><ColorDropdown disabled={captureBusy} locale={locale}
+              value={effectDraft.color.startsWith('#') ? 'custom' : effectDraft.color}
+              customHex={effectDraft.color.startsWith('#') ? effectDraft.color : (recordingColors.find(color => color.id === effectDraft.color)?.hex ?? '#38D27A')}
+              options={recordingColors.map(color => ({ value: color.id, label: tr(locale, color.label), color: color.hex }))}
+              onChange={(color, hex) => setEffectDraft({ ...effectDraft, color: color === 'custom' ? hex! : color })} /></label>}
+            {effectDraft.kind === 'sequence' && <label><DesignerFieldLabel label="Execution" locale={locale} /><Select value={effectDraft.engine ?? 'auto'} options={[
               { value: 'auto', label: tr(locale, 'Automatic (recommended)') },
               { value: 'host', label: tr(locale, 'Host clock') },
               { value: 'mcu', label: tr(locale, 'Device clock') },
             ]} onChange={(engine) => setEffectDraft({ ...effectDraft, engine })} /></label>}
-            {effectDraft.kind === 'strip-stream' && <label className="effect-editor-grid__wide"><span>{tr(locale, 'Program')}</span><Input.TextArea autoSize={{ minRows: 7, maxRows: 16 }} value={effectDraft.programText} onChange={(event) => setEffectDraft({ ...effectDraft, programText: event.target.value })} /></label>}
+            {effectDraft.kind === 'strip-stream' && <Collapse className="effect-editor-grid__wide" items={[{ key: 'technical', label: tr(locale, 'Technical'), children: <label><DesignerFieldLabel label="Program" locale={locale} /><Input.TextArea autoSize={{ minRows: 7, maxRows: 16 }} value={effectDraft.programText} onChange={(event) => setEffectDraft({ ...effectDraft, programText: event.target.value })} /></label> }]} />}
             {effectDraft.kind === 'sequence' && (
               <div className="effect-editor-grid__wide sequence-editor-web">
                 <Space wrap>
@@ -636,14 +633,16 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                   <span>{repeatedSequenceDurationMs(effectDraft.steps, effectDraft.repeat_count ?? 1, effectDraft.repeat_interval_ms ?? 0) === null ? tr(locale, 'Effect repeat interval cannot be shorter than its length') : formatTimeMs(repeatedSequenceDurationMs(effectDraft.steps, effectDraft.repeat_count ?? 1, effectDraft.repeat_interval_ms ?? 0)!, state.human_readable_time_units !== false)}</span>
                   <Button disabled={captureBusy || savingEffect || !state.controller_connected || !effectDraft.name?.trim()} icon={<CaretRightFilled />} onClick={() => { void sendCmd('controller_effect.publish_and_run', effectPayload(effectDraft)); }}>{tr(locale, 'Publish & Run')}</Button>
                 </Space>
-                <SequenceTimeline key={effectDraft.id} steps={effectDraft.steps} locale={locale} controls={state.hardware_details?.controls} disabled={captureBusy}
-                  human={state.human_readable_time_units !== false} onSelect={index => {
-                    document.querySelector<HTMLElement>(`[data-step-properties="${index}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                <SequenceTimeline key={effectDraft.id} steps={effectDraft.steps} locale={locale} controls={state.hardware_details?.controls} disabled={captureBusy} actionsRef={sequenceActions} extraKinds={sequenceExtraKinds(state.hardware_details)}
+                  human={state.human_readable_time_units !== false} onEdit={index => {
+                    const panel = document.querySelector<HTMLElement>(`[data-step-properties="${index}"]`);
+                    panel?.scrollIntoView({ block: 'nearest', behavior: document.documentElement.dataset.motion === 'disabled' ? 'auto' : 'smooth' });
+                    panel?.querySelector<HTMLInputElement>('input')?.focus({preventScroll:true});
                   }} onChange={steps => setEffectDraft({ ...effectDraft, steps })} />
                 <Divider titlePlacement="start" plain>{tr(locale, 'Sequence steps')}</Divider>
                 <div className="sequence-editor-web__toolbar">
                   <ConfigProvider componentDisabled={false}><EffectRecorder state={state} sendCmd={sendCmd} locale={locale} effect={effectPayload(effectDraft)} onSequenceChange={(steps, id) => setEffectDraft((current) => current ? { ...current, steps, id: String(id), reference: `effect:${id}`, is_new: false } : current)} /></ConfigProvider>
-                  <Button icon={<PlusOutlined />} onClick={addSequenceStep}>{tr(locale, 'Add step')}</Button>
+                  <Button disabled={captureBusy} icon={<PlusOutlined />} onClick={() => sequenceActions.current?.addStep()}>{tr(locale, 'Add step')}</Button>
                   <Select
                     className="effect-melody-picker"
                     disabled={captureBusy || !state.controller_connected}
@@ -668,10 +667,10 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                         const steps = [...effectDraft.steps]; steps[index] = { ...step, ...patch }; setEffectDraft({ ...effectDraft, steps });
                       }} />
                       <span className="sequence-step-row__index">{index + 1}</span>
-                      <label><span>{tr(locale, 'Start')}</span><TimeValueField value={Number(step.at_us ?? 0) / 1000} human={state.human_readable_time_units !== false} onChange={(value) => {
+                      <label><DesignerFieldLabel label="Start" locale={locale} /><TimeValueField value={Number(step.at_us ?? 0) / 1000} human={state.human_readable_time_units !== false} onChange={(value) => {
                         const steps = [...effectDraft.steps]; steps[index] = { ...step, at_us: Math.max(0, Number(value ?? 0)) * 1000 }; setEffectDraft({ ...effectDraft, steps });
                       }} /></label>
-                      <label><span>{tr(locale, 'Action')}</span><Select value={step.kind} options={[
+                      <label><DesignerFieldLabel label="Action" locale={locale} /><Select value={step.kind} options={[
                         { value: 'relay', label: tr(locale, 'Relay') },
                         { value: 'motion', label: tr(locale, 'Seat motion') },
                         { value: 'pwm', label: tr(locale, 'PWM') },
@@ -681,18 +680,18 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                         { value: 'rf', label: tr(locale, 'RF code') },
                         { value: 'beep', label: tr(locale, 'Buzzer') },
                       ]} onChange={(kind) => {
-                        const steps = [...effectDraft.steps]; steps[index] = { at_us: step.at_us ?? 0, kind, repeat_count: step.repeat_count, repeat_interval_ms: step.repeat_interval_ms, target: 0, value: kind === 'motion' ? 1 : 0 }; setEffectDraft({ ...effectDraft, steps });
+                        const steps = [...effectDraft.steps]; steps[index] = { ...sequenceStepTemplate(kind), at_us: step.at_us ?? 0, repeat_count: step.repeat_count, repeat_interval_ms: step.repeat_interval_ms }; setEffectDraft({ ...effectDraft, steps });
                       }} /></label>
                       {['relay', 'motion', 'pwm', 'addressable'].includes(step.kind) && <label><span>{tr(locale, step.kind === 'motion' ? 'Side' : 'Channel')}</span><InputNumber min={0} max={step.kind === 'relay' ? 7 : step.kind === 'motion' ? 1 : 15} value={step.target ?? 0} onChange={(target) => {
-                        const steps = [...effectDraft.steps]; steps[index] = { ...step, target: Number(target ?? 0) }; setEffectDraft({ ...effectDraft, steps });
+                        const steps = [...effectDraft.steps]; const next = { ...step, kind: step.kind, at_us: Number(step.at_us ?? 0), target: Number(target ?? 0) }; steps[index] = moveSequenceStep(next, next.at_us, sequenceLaneKey(next)); setEffectDraft({ ...effectDraft, steps });
                       }} /></label>}
-                      {['relay', 'motion', 'pwm'].includes(step.kind) && <label><span>{tr(locale, 'Value')}</span><InputNumber min={0} max={step.kind === 'relay' ? 1 : step.kind === 'motion' ? 2 : 4095} value={step.value ?? 0} onChange={(value) => {
-                        const steps = [...effectDraft.steps]; steps[index] = { ...step, value: Number(value ?? 0) }; setEffectDraft({ ...effectDraft, steps });
+                      {['relay', 'motion', 'pwm'].includes(step.kind) && <label><DesignerFieldLabel label="Value" locale={locale} /><InputNumber min={0} max={step.kind === 'relay' ? 1 : step.kind === 'motion' ? 2 : 4095} value={step.value ?? 0} onChange={(value) => {
+                        const steps = [...effectDraft.steps]; const next = { ...step, kind: step.kind, at_us: Number(step.at_us ?? 0), value: Number(value ?? 0) }; steps[index] = moveSequenceStep(next, next.at_us, sequenceLaneKey(next)); setEffectDraft({ ...effectDraft, steps });
                       }} /></label>}
-                      <label><span>{tr(locale, 'Length')}</span><TimeValueField max={65535} value={step.duration_ms ?? 0} human={state.human_readable_time_units !== false} onChange={(duration_ms) => {
+                      <label><DesignerFieldLabel label="Length" locale={locale} /><TimeValueField max={65535} value={step.duration_ms ?? 0} human={state.human_readable_time_units !== false} onChange={(duration_ms) => {
                         const steps = [...effectDraft.steps]; steps[index] = { ...step, duration_ms: Number(duration_ms ?? 0) || undefined }; setEffectDraft({ ...effectDraft, steps });
                       }} /></label>
-                      <label><span>{tr(locale, 'Finish')}</span><TimeValueField min={Number(step.at_us ?? 0) / 1000} max={Number(step.at_us ?? 0) / 1000 + 65535} value={Number(step.at_us ?? 0) / 1000 + (step.duration_ms ?? 0)} human={state.human_readable_time_units !== false} onChange={(finish) => {
+                      <label><DesignerFieldLabel label="Finish" locale={locale} /><TimeValueField min={Number(step.at_us ?? 0) / 1000} max={Number(step.at_us ?? 0) / 1000 + 65535} value={Number(step.at_us ?? 0) / 1000 + (step.duration_ms ?? 0)} human={state.human_readable_time_units !== false} onChange={(finish) => {
                         const steps = [...effectDraft.steps]; steps[index] = { ...step, duration_ms: Math.round(finish - Number(step.at_us ?? 0) / 1000) }; setEffectDraft({ ...effectDraft, steps });
                       }} /></label>
                       <Space.Compact className="sequence-step-row__actions">

@@ -685,10 +685,9 @@ fn draw_preferences_editor(draft: &mut PreferencesDraft, ui: &mut egui::Ui) -> P
                 ui,
                 rtl,
                 |ui| {
-                    let alpha = ui.ctx().animate_bool_with_time(
+                    let alpha = crate::ui::motion::hover_alpha(ui,
                         egui::Id::new("preferences-footer-status-visible"),
                         footer_visible,
-                        0.2,
                     );
                     if alpha > 0.01 {
                         ui.scope(|ui| {
@@ -942,48 +941,22 @@ fn render_contract_control(
     match control.kind {
         PreferenceControlKind::Accent => {
             let selected = current.as_str().unwrap_or("system");
-            let selected_option = control.options.iter().find(|option| option.value.as_str() == Some(selected));
-            let selected_label = selected_option.map(|option| tr(option.label)).unwrap_or_else(|| selected.to_string());
             let custom_key = control.custom_key.unwrap_or("custom_accent_color");
             let mut custom_hex = value_at_path(values, custom_key).and_then(serde_json::Value::as_str)
                 .unwrap_or("#0078d4").to_string();
-            let selected_rgb = if selected == "custom" { crate::config::parse_rgb_hex(&custom_hex) }
-                else { selected_option.and_then(|option| option.color.as_deref()).and_then(crate::config::parse_rgb_hex) };
             preference_row(ui, control_icon, &tr(control.label), label_width, |ui| {
                 let width = ui.available_width().min(PREFERENCE_CONTROL_MAX_WIDTH);
-                let palette_id = ui.make_persistent_id(("preference-accent-palette", control.key));
-                let mut open_custom = false;
-                let combo = crate::ui::dropdown::ComboBox::from_id_salt(("preference-accent", control.key))
-                    .width(width)
-                    .selected_text(crate::ui::dropdown::color_label(ui, &selected_label))
-                    .show_ui(ui, |ui| {
-                        ui.set_min_width(310.0);
-                        for option in &control.options {
-                            let custom = option.value.as_str() == Some("custom");
-                            let rgb = if custom { crate::config::parse_rgb_hex(&custom_hex) }
-                                else { option.color.as_deref().and_then(crate::config::parse_rgb_hex) };
-                            let response = if custom {
-                                crate::ui::color_picker::custom_menu_row(ui, option.value == current,
-                                    &tr(option.label), &custom_hex, rgb.unwrap_or([0,120,212]))
-                            } else {
-                                crate::ui::dropdown::choice(ui, option.value == current, tr(option.label),
-                                    rgb.map(|[r,g,b]| egui::Color32::from_rgb(r,g,b)))
-                            };
-                            if response.clicked() {
-                                replacement = Some(option.value.clone());
-                                open_custom = custom;
-                                ui.close();
-                            }
-                        }
-                    });
-                if let Some([r,g,b]) = selected_rgb {
-                    crate::ui::dropdown::paint_swatch(ui, combo.response.rect, egui::Color32::from_rgb(r,g,b));
-                }
-                if crate::ui::color_picker::palette_popup(ui, &combo.response, palette_id, open_custom,
-                    &mut custom_hex, [0,120,212]) {
-                    companion_changed |= set_value_at_path(values, custom_key,
-                        serde_json::Value::String(custom_hex.trim().to_string())).is_ok();
-                    replacement = Some(serde_json::json!("custom"));
+                let options = control.options.iter().filter(|option| option.value.as_str() != Some("custom"))
+                    .map(|option| crate::ui::color_picker::ColorChoice { value: option.value.as_str().unwrap_or_default().into(),
+                        label: tr(option.label), rgb: option.color.as_deref().and_then(crate::config::parse_rgb_hex).unwrap_or([0,120,212]) }).collect::<Vec<_>>();
+                let mut choice = selected.to_string();
+                if crate::ui::color_picker::color_dropdown(ui, ("preference-accent", control.key), &mut choice,
+                    &mut custom_hex, &options, width, &tr("Custom")).changed() {
+                    if choice == "custom" {
+                        companion_changed |= set_value_at_path(values, custom_key,
+                            serde_json::Value::String(custom_hex.trim().to_string())).is_ok();
+                    }
+                    replacement = Some(serde_json::Value::String(choice));
                 }
             });
         }
@@ -1910,9 +1883,15 @@ mod tests {
                     accent_click(&ctx,&control,&mut values,trigger);
                     accent_frame(&ctx,&control,&mut values,vec![]);
                     let open = accent_frame(&ctx,&control,&mut values,vec![]);
+                    let blue = accent_text_position(&open,"macOS blue");
+                    let menu_width = open.shapes.iter().find_map(|shape| match &shape.shape {
+                        egui::epaint::Shape::Rect(rect) if rect.rect.height() == crate::ui::dropdown::ROW_HEIGHT && rect.rect.contains(blue) => Some(rect.rect.width()), _=>None,
+                    }).expect("preset row");
                     let rows: Vec<_> = open.shapes.iter().filter_map(|shape| match &shape.shape {
                         egui::epaint::Shape::Rect(rect) if rect.rect.height() == crate::ui::dropdown::ROW_HEIGHT
-                            && rect.rect.width() >= 310.0 => Some(rect.rect), _ => None,
+                            && rect.rect.width() == menu_width
+                            && rect.rect.center().y >= blue.y - 2.0 * (crate::ui::dropdown::ROW_HEIGHT + 2.0) - 0.5
+                            && rect.rect.center().y <= blue.y + crate::ui::dropdown::ROW_HEIGHT + 2.5 => Some(rect.rect), _ => None,
                     }).collect();
                     assert_eq!(rows.len(),4,"four full-width rows at scale {scale}");
                     assert!(rows.iter().all(|row| row.width() == rows[0].width()));
@@ -1926,7 +1905,7 @@ mod tests {
                     accent_frame(&ctx,&control,&mut values,vec![]);
                     let palette = accent_frame(&ctx,&control,&mut values,vec![]);
                     assert_eq!(values["accent_color"],"custom");
-                    accent_text_position(&palette,"Recent colors");
+                    assert!(palette.shapes.iter().any(|shape| matches!(&shape.shape, egui::epaint::Shape::Text(shape) if shape.galley.job.text == "Recent colors")), "palette texts: {:?}", palette.shapes.iter().filter_map(|shape| match &shape.shape { egui::epaint::Shape::Text(shape)=>Some(&shape.galley.job.text), _=>None }).collect::<Vec<_>>());
                     accent_text_position(&palette,"Pealayer colors");
                     assert!(palette.shapes.iter().any(|shape| matches!(&shape.shape,
                         egui::epaint::Shape::Circle(circle) if circle.radius == 7.0

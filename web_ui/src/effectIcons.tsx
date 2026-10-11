@@ -1,5 +1,7 @@
-import React, { useMemo, useState } from 'react';
+import React, { useMemo, useRef, useState } from 'react';
+import { tr, UiLocale } from './i18n';
 import { Divider, Input, Select } from 'antd';
+import type { RefSelectProps } from 'antd';
 import {
   ApiOutlined,
   BellOutlined,
@@ -16,6 +18,7 @@ import {
   ThunderboltOutlined,
   WifiOutlined,
   SearchOutlined,
+  StarOutlined,
 } from '@ant-design/icons';
 
 const presets = [
@@ -31,6 +34,8 @@ const presets = [
 
 export const effectGlyph = (icon: string) => {
   switch (icon.trim().toLowerCase()) {
+    case 'sparkle': return <StarOutlined />;
+    case 'plug': return <ApiOutlined />;
     case 'folder': return <FolderOpenOutlined />;
     case 'lightning': return <ThunderboltOutlined />;
     case 'lightbulb':
@@ -65,6 +70,8 @@ interface EffectIconPickerProps {
   presetsLabel: string;
   emptyLabel: string;
   className?: string;
+  compact?: boolean;
+  locale?: UiLocale;
 }
 
 /**
@@ -79,24 +86,29 @@ export const EffectIconPicker: React.FC<EffectIconPickerProps> = ({
   presetsLabel,
   emptyLabel,
   className,
+  compact = false,
+  locale = 'en',
 }) => {
   const [open, setOpen] = useState(false);
   const [query, setQuery] = useState('');
+  const select = useRef<RefSelectProps>(null);
   const filteredOptions = useMemo(() => {
     const normalized = query.trim().toLocaleLowerCase();
     return presets
       .filter(([presetValue, label]) => !normalized
         || presetValue.toLocaleLowerCase().includes(normalized)
-        || label.toLocaleLowerCase().includes(normalized))
+        || label.toLocaleLowerCase().includes(normalized) || tr(locale, label).toLocaleLowerCase().includes(normalized))
       .map(([presetValue, label]) => ({
         value: presetValue,
-        label: <span className="effect-icon-option">{effectGlyph(presetValue)}<span>{label}</span></span>,
+        label: <span className="effect-icon-option">{effectGlyph(presetValue)}<span>{tr(locale, label)}</span></span>,
       }));
-  }, [query]);
+  }, [query, locale]);
 
   return <Select
+    ref={select}
     className={className ? `effect-icon-picker ${className}` : 'effect-icon-picker'}
     value={value}
+    labelRender={compact ? () => <span className="effect-icon-picker__compact">{effectGlyph(value)}</span> : undefined}
     open={open}
     onOpenChange={(nextOpen) => {
       setOpen(nextOpen);
@@ -118,7 +130,11 @@ export const EffectIconPicker: React.FC<EffectIconPickerProps> = ({
           value={query}
           placeholder={searchPlaceholder}
           onChange={(event) => setQuery(event.target.value)}
-          onKeyDown={(event) => event.stopPropagation()}
+          onKeyDown={(event) => {
+            if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); select.current?.focus(); }
+            else if (event.key === 'Escape') { event.preventDefault(); setOpen(false); }
+            event.stopPropagation();
+          }}
         />
       </div>
       <Divider className="effect-icon-picker__divider" />

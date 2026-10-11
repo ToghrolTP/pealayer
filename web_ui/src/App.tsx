@@ -101,6 +101,15 @@ const App: React.FC = () => {
   const siderRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
   const appearance = state.appearance;
+  const [systemReducedMotion, setSystemReducedMotion] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  useEffect(() => {
+    const media = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const change = () => setSystemReducedMotion(media.matches);
+    media.addEventListener('change', change); return () => media.removeEventListener('change', change);
+  }, []);
+  const motionMode = appearance?.ui_animation_mode ?? appConfig?.ui_animation_mode ?? 'system';
+  const animationsEnabled = motionMode === 'enabled' || (motionMode === 'system' && !systemReducedMotion);
+  useEffect(() => { document.documentElement.dataset.motion = animationsEnabled ? 'enabled' : 'disabled'; }, [animationsEnabled]);
 
   useEffect(() => {
     window.localStorage.setItem('pealayer.sidebarCollapsed', String(collapsed));
@@ -177,12 +186,14 @@ const App: React.FC = () => {
       if (previous?.theme === appearance.theme
         && previous?.color_palette === appearance.color_palette
         && previous?.accent_color === appearance.accent_color
-        && previous?.custom_accent_color === appearance.custom_accent_color) return previous;
+        && previous?.custom_accent_color === appearance.custom_accent_color
+        && previous?.ui_animation_mode === appearance.ui_animation_mode) return previous;
+        // Motion is part of the shared appearance contract, not a browser-only toggle.
       const next = mergeAppearance(previous ?? {}, appearance);
       persistJson(STORAGE.config, next);
       return next;
     });
-  }, [appearance?.theme, appearance?.color_palette, appearance?.accent_color, appearance?.custom_accent_color]);
+  }, [appearance?.theme, appearance?.color_palette, appearance?.accent_color, appearance?.custom_accent_color, appearance?.ui_animation_mode]);
 
   const accentColor = resolvedAccent(runtime, appConfig, appearance);
   const accentTextColor = accentForeground(accentColor);
@@ -534,7 +545,8 @@ const App: React.FC = () => {
     <ConfigProvider direction={runtime?.direction}
       theme={{
         algorithm: resolvedTheme === 'light' ? theme.defaultAlgorithm : theme.darkAlgorithm,
-        token: {
+          token: {
+            motion: animationsEnabled,
           colorPrimary: accentColor,
           colorTextLightSolid: accentTextColor,
           // Ant Design derives additional colors from these tokens. Supply

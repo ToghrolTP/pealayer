@@ -1,4 +1,5 @@
 export interface AppearanceState {
+  ui_animation_mode: 'system' | 'enabled' | 'disabled';
   theme: 'system' | 'light' | 'dark';
   color_palette: 'studio' | 'native';
   accent_color: string;
@@ -14,6 +15,7 @@ export function mergeAppearance<T extends Record<string, any>>(
 ): T {
   return {
     ...values,
+    ui_animation_mode: appearance.ui_animation_mode,
     theme: appearance.theme,
     color_palette: appearance.color_palette,
     accent_color: appearance.accent_color,

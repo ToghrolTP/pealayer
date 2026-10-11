@@ -40,6 +40,62 @@ export const sequenceKindLabels: Record<string, string> = {
   rgb: 'Status RGB', addressable: 'Strip pixel', menu: 'Page', 'menu-action': 'Front-panel action', opcode: 'Raw opcode',
 };
 
+export function sequenceLaneKey(step: SequenceStep): string {
+  if (step.kind === 'motion') return step.target === 1 ? 'seat.b' : 'seat.a';
+  if (step.kind === 'relay') return `relay.${(step.target ?? 0) + 1}`;
+  if (step.kind === 'display') return `display.${step.destination ?? 'segments'}`;
+  return `${step.kind}.${step.target ?? 0}`;
+}
+export function sequenceStepTemplate(kind: string, target = 0, destination = 'segments'): SequenceStep {
+  const step: SequenceStep = { at_us: 0, kind };
+  if (kind === 'motion') Object.assign(step, { target, value: 1, duration_ms: 500, action_ids: [target === 1 ? 'seat.b.up' : 'seat.a.up'] });
+  else if (kind === 'relay') Object.assign(step, { target, value: 1, duration_ms: 500, action_ids: [`relay.${target + 1}.on`] });
+  else if (kind === 'pwm') Object.assign(step, { target, value: 0, duration_ms: 1000 });
+  else if (kind === 'beep') Object.assign(step, { frequency_hz: 1000, duration_ms: 120 });
+  else if (kind === 'display') Object.assign(step, { destination, text: '', duration_ms: 1500 });
+  else if (kind === 'rgb' || kind === 'addressable') Object.assign(step, { target, red: 255, green: 255, blue: 255, brightness: 255, duration_ms: 1000 });
+  else if (kind === 'rf') Object.assign(step, { code: 0, bits: 24, protocol: 1, pulse_us: 350 });
+  else if (kind === 'menu' || kind === 'menu-action') step.target = 0;
+  return step;
+}
+export interface SequenceLaneChoice { key: string; name: string; template: SequenceStep; translated?: boolean }
+export function sequenceExtraKinds(details?: Record<string, any> | null): string[] {
+  const kinds: string[] = [];
+  if (details?.supports?.segment_display) kinds.push('display');
+  if (details?.supports?.lcd_display) kinds.push('display.lcd');
+  if (details?.supports?.rf_transmit) kinds.push('rf');
+  if (details?.buzzer) kinds.push('beep');
+  if (details?.status_led) kinds.push('rgb');
+  if (details?.supports?.addressable_led) kinds.push('addressable');
+  if (details?.front_panel) kinds.push('menu', 'menu-action');
+  return kinds;
+}
+export function sequenceLaneChoices(controls: ReadonlyArray<{ key: string; name: string; kind: string; locked?: boolean }>, extraKinds: string[] = []): SequenceLaneChoice[] {
+  const choices: SequenceLaneChoice[] = [];
+  for (const control of controls.filter(control => !control.locked)) {
+    let template: SequenceStep | undefined;
+    if (control.key === 'seat.a' || control.key === 'seat.b') template = sequenceStepTemplate('motion', control.key === 'seat.b' ? 1 : 0);
+    else if (/^relay\.\d+$/.test(control.key) && control.kind === 'relay') template = sequenceStepTemplate('relay', Number(control.key.split('.')[1]) - 1);
+    else if (/^pwm\.\d+$/.test(control.key) && ['pwm', 'mosfet'].includes(control.kind)) template = sequenceStepTemplate('pwm', Number(control.key.split('.')[1]));
+    if (template) choices.push({ key: sequenceLaneKey(template), name: control.name || control.key, template });
+  }
+  for (const kind of extraKinds) {
+    const template = kind === 'display.lcd' ? sequenceStepTemplate('display', 0, 'lcd') : sequenceStepTemplate(kind);
+    if (!choices.some(choice => choice.key === sequenceLaneKey(template))) choices.push({ key: sequenceLaneKey(template), name: kind === 'display.lcd' ? 'LCD display' : sequenceKindLabels[kind] ?? kind, template, translated: true });
+  }
+  return choices;
+}
+export function sequenceNeedsQuantize(steps: SequenceStep[], quantumMs: number): boolean {
+  const q = Math.max(1, quantumMs);
+  return steps.some(step => step.at_us !== Math.round(Math.ceil(step.at_us / 1000) / q) * q * 1000
+    || (step.duration_ms != null && step.duration_ms !== Math.max(1, Math.min(65535, Math.round(step.duration_ms / q) * q))));
+}
+export function quantizeSequence<T extends SequenceStep>(steps: T[], quantumMs: number): T[] {
+  const q = Math.max(1, quantumMs);
+  return steps.map(step => ({ ...step, at_us: Math.round(Math.ceil(step.at_us / 1000) / q) * q * 1000,
+    ...(step.duration_ms != null ? { duration_ms: Math.max(1, Math.min(65535, Math.round(step.duration_ms / q) * q)) } : {}) }));
+}
+
 /** Catalog titles are user-authored; never translate or invent seat names. */
 export function sequenceLaneName(lane: string, controls: ReadonlyArray<{ key: string; name: string; default_name?: string }>): string {
   const control = controls.find(control => control.key === lane);
@@ -82,12 +138,18 @@ export function deleteSequenceCues<T extends SequenceStep>(steps: T[], indices: 
 }
 
 export function moveSequenceStep(step: SequenceStep, atUs: number, lane?: string): SequenceStep {
-  const moved = { ...step, at_us: Math.max(0, Math.round(atUs)) };
+  const moved: SequenceStep = { ...step, at_us: Math.max(0, Math.round(atUs)) };
   if (step.kind === 'motion' && (lane === 'seat.a' || lane === 'seat.b')) {
     moved.target = lane === 'seat.a' ? 0 : 1;
     const action = step.value === 1 ? 'up' : step.value === 2 ? 'down' : 'stop';
     moved.action_ids = [`${lane}.${action}`];
   }
+  if (step.kind === 'relay' && /^relay\.\d+$/.test(lane ?? '')) {
+    moved.target = Number(lane!.split('.')[1]) - 1;
+    moved.action_ids = [`${lane}.${step.value ? 'on' : 'off'}`];
+  }
+  if ((step.kind === 'pwm' || step.kind === 'addressable') && lane?.startsWith(`${step.kind}.`)) moved.target = Number(lane.split('.')[1]);
+  if (step.kind === 'display' && lane?.startsWith('display.')) moved.destination = lane.slice('display.'.length);
   return moved;
 }
 

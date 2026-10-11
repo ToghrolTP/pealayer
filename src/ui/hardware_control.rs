@@ -916,14 +916,8 @@ fn manager_channel_name(
                 if editing {
                     let input_width =
                         (width - 2.0 * (MANAGER_NAME_ACTION_WIDTH + MANAGER_NAME_GAP)).max(1.0);
-                    let edit = ui.add_sized(
-                        [input_width, MANAGER_NAME_HEIGHT],
-                        crate::ui::dialog::singleline_text_edit(draft)
-                            .id(input_id)
-                            .font(egui::FontId::proportional(MANAGER_NAME_FONT_SIZE))
-                            .margin(egui::Margin::symmetric(4, 0))
-                            .vertical_align(egui::Align::Center),
-                    );
+                    let edit = crate::ui::dialog::inline_caption_edit(ui, input_id, draft,
+                        egui::vec2(input_width, MANAGER_NAME_HEIGHT), egui::FontId::proportional(MANAGER_NAME_FONT_SIZE), egui::Align::Min);
                     if request_focus {
                         edit.request_focus();
                     }
@@ -1247,7 +1241,7 @@ fn draw_channel_manager_page(
                     .is_some_and(|pointer| predicted_rect.contains(pointer));
                 let row_selected = selected.contains(&control.key);
                 let order_focused = ui.memory(|memory| memory.has_focus(order_edit_id));
-                let order_alpha = ui.ctx().animate_bool(
+                let order_alpha = crate::ui::motion::hover_alpha(ui,
                     egui::Id::new(("manager-order-visible", &control.key)),
                     row_hovered || order_focused,
                 );

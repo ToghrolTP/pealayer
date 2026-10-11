@@ -353,11 +353,9 @@ pub fn draw_contextual_transport_nudge(
     density: TransportNudgeDensity,
 ) -> egui::Response {
     let mode = transport_nudge_mode(app.is_paused);
-    let paused_t = ui.ctx().animate_bool_with_time_and_easing(
+    let paused_t = crate::ui::motion::hover_alpha(ui,
         id.with("paused-mode"),
         matches!(mode, TransportNudgeMode::FrameStep),
-        0.18,
-        egui::emath::easing::cubic_out,
     );
     let backwards = direction < 0;
     let quick_text = compact_number(app.quick_seek_seconds);

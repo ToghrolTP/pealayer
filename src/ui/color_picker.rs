@@ -2,6 +2,14 @@
 //! The swatch is a click target inside the text field's reserved leading margin.
 use eframe::egui;
 
+pub fn configure_language(ctx: &egui::Context, language: crate::config::AppLanguage) {
+    ctx.data_mut(|data| data.insert_temp(egui::Id::new("color-picker-language"), language));
+}
+fn palette_tr(ui: &egui::Ui, key: &'static str) -> String {
+    let language = ui.data(|data| data.get_temp::<crate::config::AppLanguage>(egui::Id::new("color-picker-language"))).unwrap_or(crate::config::AppLanguage::English);
+    crate::ui::i18n::tr(language, key)
+}
+
 #[derive(serde::Deserialize)]
 pub struct PaletteSwatch {
     pub label: String,
@@ -40,7 +48,7 @@ fn recent_row(ui: &mut egui::Ui) -> Option<egui::Color32> {
     if colors.is_empty() {
         return None;
     }
-    ui.label("Recent colors");
+    ui.label(palette_tr(ui, "Recent colors"));
     let mut selected = None;
     ui.horizontal_wrapped(|ui| {
         for color in colors {
@@ -70,7 +78,7 @@ fn recent_row(ui: &mut egui::Ui) -> Option<egui::Color32> {
 
 fn swatch_row(ui: &mut egui::Ui) -> Option<egui::Color32> {
     let mut selected = recent_row(ui);
-    ui.label("Pealayer colors");
+    ui.label(palette_tr(ui, "Pealayer colors"));
     ui.horizontal_wrapped(|ui| {
         for swatch in semantic_swatches() {
             let [r, g, b] = crate::config::parse_rgb_hex(&swatch.hex).expect("valid shared swatch");
@@ -83,7 +91,9 @@ fn swatch_row(ui: &mut egui::Ui) -> Option<egui::Color32> {
                 7.0,
                 ui.visuals().widgets.noninteractive.bg_stroke,
             );
-            if response.on_hover_text(&swatch.label).clicked() {
+            let label = match swatch.label.as_str() { "Red" => "Red", "Orange" => "Orange", "Amber" => "Amber",
+                "Pealayer green" => "Pealayer green", "Blue" => "Blue", "Cyan" => "Cyan", "Violet" => "Violet", "Grey" => "Grey", "White" => "White", _ => "Black" };
+            if response.on_hover_text(palette_tr(ui, label)).clicked() {
                 selected = Some(color);
             }
         }
@@ -104,7 +114,7 @@ pub fn custom_menu_row(
     rgb: [u8; 3],
 ) -> egui::Response {
     let color = egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
-    let response = crate::ui::dropdown::choice(ui, selected, label, Some(color));
+    let response = crate::ui::dropdown::choice_with_close(ui, selected, label, Some(color), false);
     let field = egui::Rect::from_center_size(
         egui::pos2(response.rect.right() - 70.0, response.rect.center().y),
         egui::vec2(124.0, 28.0),
@@ -117,10 +127,10 @@ pub fn custom_menu_row(
         egui::StrokeKind::Inside,
     );
     ui.painter().with_clip_rect(field.shrink(2.0)).text(
-        field.center(),
-        egui::Align2::CENTER_CENTER,
+        field.left_center() + egui::vec2(7.0,0.0),
+        egui::Align2::LEFT_CENTER,
         hex,
-        egui::FontId::monospace(12.0),
+        egui::TextStyle::Button.resolve(ui.style()),
         ui.visuals().text_color(),
     );
     response
@@ -159,6 +169,7 @@ pub fn palette_popup(
             let field = ui.add_sized(
                 [ui.available_width(), 28.0],
                 crate::ui::dialog::singleline_text_edit(&mut draft)
+                    .font(egui::TextStyle::Button.resolve(ui.style()))
                     .char_limit(7)
                     .hint_text("#RRGGBB"),
             );
@@ -242,13 +253,14 @@ pub fn color_field(
     let mut response = ui.add_sized(
         [width, 28.0],
         crate::ui::dialog::singleline_text_edit(hex)
+            .font(egui::TextStyle::Button.resolve(ui.style()))
             .id(id)
             .desired_width(width)
             .margin(egui::Margin {
                 left: 30,
                 right: 6,
-                top: 5,
-                bottom: 5,
+                top: 0,
+                bottom: 0,
             })
             .char_limit(7)
             .hint_text("#RRGGBB"),
@@ -306,6 +318,94 @@ pub fn color_field(
     response
 }
 
+pub struct ColorChoice { pub value: String, pub label: String, pub rgb: [u8; 3] }
+
+fn palette_contents(ui: &mut egui::Ui, id: egui::Id, hex: &mut String, fallback: [u8; 3]) -> bool {
+    let (mut draft, baseline) = ui.data(|data| data.get_temp::<(String, String)>(id)).unwrap_or_else(|| (hex.clone(), hex.clone()));
+    if baseline != *hex { draft = hex.clone(); }
+    let mut changed = false;
+    if let Some(color) = swatch_row(ui) {
+        draft = format!("#{:02X}{:02X}{:02X}", color.r(), color.g(), color.b());
+        changed = true;
+    }
+    ui.separator();
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let frame = egui::Frame::NONE.inner_margin(egui::Margin::symmetric(6, 0)).fill(ui.visuals().extreme_bg_color)
+        .stroke(ui.visuals().widgets.inactive.bg_stroke).corner_radius(3.0);
+    let field = ui.add_sized([ui.available_width(), 28.0], crate::ui::dialog::singleline_text_edit(&mut draft)
+        .id(id.with("input")).font(font).frame(frame).char_limit(7).hint_text("#RRGGBB"));
+    let rgb = crate::config::parse_rgb_hex(&draft).unwrap_or(fallback);
+    let mut color = egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
+    changed |= field.changed() && crate::config::parse_rgb_hex(&draft).is_some();
+    if egui::color_picker::color_picker_color32(ui, &mut color, egui::color_picker::Alpha::Opaque) {
+        draft = format!("#{:02X}{:02X}{:02X}", color.r(), color.g(), color.b()); changed = true;
+    }
+    if changed { *hex = draft.clone(); }
+    if (field.lost_focus() || ui.input(|input| input.pointer.any_released())) && crate::config::parse_rgb_hex(&draft).is_some() {
+        remember_color(ui.ctx(), color);
+    }
+    ui.data_mut(|data| data.insert_temp(id, (draft, hex.clone())));
+    changed
+}
+
+/// Presets and the expanded Custom palette share one popup and one focus owner.
+pub fn color_dropdown(ui: &mut egui::Ui, salt: impl std::hash::Hash + std::fmt::Debug,
+    value: &mut String, custom_hex: &mut String, options: &[ColorChoice], width: f32, custom_label: &str) -> egui::Response {
+    let id = ui.make_persistent_id(egui::IdSalt::new(&salt));
+    let expanded_id = id.with("custom-expanded");
+    let draft_id = id.with("custom-hex");
+    let mut expanded = ui.data(|data| data.get_temp::<bool>(expanded_id)).unwrap_or(false);
+    let custom_rgb = crate::config::parse_rgb_hex(custom_hex).unwrap_or([0,120,212]);
+    let selected = options.iter().find(|option| option.value == *value);
+    let label = if value == "custom" { custom_label } else { selected.map(|option| option.label.as_str()).unwrap_or(value) };
+    let rgb = selected.map(|option| option.rgb).unwrap_or(custom_rgb);
+    let mut changed = false;
+    let mut response = ui.push_id(&salt, |ui| ui.add_sized([width, crate::ui::dropdown::ROW_HEIGHT],
+        egui::Button::new(""))).inner;
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, ui.is_enabled(), label));
+    let galley = ui.painter().layout_no_wrap(label.to_owned(), egui::TextStyle::Button.resolve(ui.style()), ui.visuals().text_color());
+    ui.painter().with_clip_rect(response.rect.shrink(1.0)).galley(
+        egui::pos2(response.rect.left()+27.0,response.rect.center().y-galley.size().y/2.0),galley,ui.visuals().text_color());
+    crate::ui::dropdown::paint_swatch(ui, response.rect, egui::Color32::from_rgb(rgb[0],rgb[1],rgb[2]));
+    ui.painter().text(response.rect.right_center() - egui::vec2(10.0,0.0), egui::Align2::CENTER_CENTER,
+        crate::ui::icons::CARET_DOWN, egui::FontId::proportional(12.0), ui.visuals().weak_text_color());
+    let max_height = (ui.ctx().content_rect().height() - 32.0).clamp(120.0,720.0);
+    if response.has_focus() && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE,egui::Key::ArrowDown)
+        || input.consume_key(egui::Modifiers::NONE,egui::Key::ArrowUp)) {
+        egui::Popup::open_id(ui.ctx(),id.with("color-popup"));
+    }
+    let output = egui::Popup::menu(&response).id(id.with("color-popup")).width(width)
+        .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside).show(|ui| {
+            ui.set_width(width.max(310.0).min((ui.ctx().content_rect().width() - 32.0).max(120.0)));
+            // Area remembers the collapsed size. Explicitly permit growth before
+            // constructing the scroll viewport when Custom expands in place.
+            ui.set_max_height(max_height);
+            egui::ScrollArea::vertical().max_height(max_height).show(ui, |ui| {
+                crate::ui::dropdown::menu_ui(ui, response.id, |ui| {
+                    for option in options {
+                        if crate::ui::dropdown::choice(ui, *value == option.value, &option.label,
+                            Some(egui::Color32::from_rgb(option.rgb[0], option.rgb[1], option.rgb[2]))).clicked() {
+                            *value = option.value.clone(); changed = true; ui.close();
+                        }
+                    }
+                    if custom_menu_row(ui, *value == "custom", custom_label, custom_hex, custom_rgb).clicked() {
+                        *value = "custom".into(); changed = true; expanded = !expanded;
+                    }
+                    if expanded {
+                        ui.separator();
+                        if palette_contents(ui, draft_id, custom_hex, custom_rgb) { *value = "custom".into(); changed = true; }
+                    }
+                });
+            });
+        });
+    if output.is_some() { ui.data_mut(|data| data.insert_temp(expanded_id, expanded)); }
+    else {
+        crate::ui::dropdown::clear_menu(ui.ctx(),response.id);
+        ui.data_mut(|data| { data.remove::<bool>(expanded_id); data.remove::<(String,String)>(draft_id); });
+    }
+    if changed { response.mark_changed(); }
+    response
+}
 #[cfg(test)]
 mod tests {
     use super::*;

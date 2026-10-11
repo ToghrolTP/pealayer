@@ -5,6 +5,22 @@ const controls = [
   { key: 'seat.a', name: 'Seat Left', default_name: 'Seat A' },
   { key: 'seat.b', name: 'صندلی راست', default_name: 'Seat B' },
 ];
+const { sequenceLaneChoices, sequenceStepTemplate, sequenceNeedsQuantize, quantizeSequence, sequenceExtraKinds } = await import('../src/cueAuthoring.ts');
+const choices = sequenceLaneChoices([
+  { key:'seat.b', name:'VIP Right', kind:'seat' }, { key:'relay.5', name:'Screen', kind:'relay' },
+  { key:'pwm.3', name:'Orange spots', kind:'mosfet' }, { key:'relay.1', name:'Internal', kind:'relay', locked:true },
+], sequenceExtraKinds({ supports:{ lcd_display:true, segment_display:true }, buzzer:{} }));
+assert.equal(choices.find(choice => choice.key === 'seat.b').template.target, 1);
+assert.equal(choices.find(choice => choice.key === 'seat.b').name, 'VIP Right');
+assert.equal(choices.find(choice => choice.key === 'relay.5').template.target, 4);
+assert.equal(choices.find(choice => choice.key === 'pwm.3').template.target, 3);
+assert.ok(!choices.some(choice => choice.key === 'relay.1'));
+assert.equal(choices.find(choice => choice.key === 'display.lcd').template.destination, 'lcd');
+assert.ok(choices.some(choice => choice.key === 'display.segments'));
+const template = sequenceStepTemplate('motion',1); assert.deepEqual(template.action_ids,['seat.b.up']);
+assert.equal(sequenceNeedsQuantize([template],50),false);
+assert.equal(sequenceNeedsQuantize([{...template,at_us:125001,duration_ms:503}],50),true);
+assert.deepEqual(quantizeSequence([{...template,at_us:125001,duration_ms:503}],50)[0],{...template,at_us:150000,duration_ms:500});
 assert.equal(sequenceLaneName('seat.a', controls), 'Seat Left');
 assert.equal(sequenceLaneName('seat.b', controls), 'صندلی راست');
 assert.equal(sequenceLaneName('seat.a', [{ ...controls[0], name: 'VIP Left' }]), 'VIP Left');
@@ -48,7 +64,7 @@ assert.equal(repeatedSequenceDurationMs(fractional, 0, 0), null);
 assert.equal(repeatedSequenceDurationMs([], 2, 0), null);
 assert.equal(repeatedSequenceDurationMs(fractional, 1000, 3600000), null);
 const timeline = readFileSync(new URL('../src/components/SequenceTimeline.tsx', import.meta.url), 'utf8');
-assert.ok(timeline.includes('sequenceLaneName(lane, controls)') && !timeline.includes("tr(locale, 'Seat A')") && !timeline.includes("tr(locale, 'Seat B')"));
+assert.ok(timeline.includes('sequenceLaneName(key, controls)') && !timeline.includes("tr(locale, 'Seat A')") && !timeline.includes("tr(locale, 'Seat B')"));
 assert.ok(timeline.includes('setPointerCapture') && timeline.includes('onPointerCancel'));
 assert.ok(timeline.includes('active.copy') && timeline.includes('reveal(primary.current)') && timeline.includes('reveal(destination)'));
 assert.ok(timeline.includes("event.key.toLowerCase() === 'a'") && timeline.includes("event.key === 'Delete'"));
@@ -72,15 +88,16 @@ const webDictionary = readFileSync(new URL('../src/i18n.ts', import.meta.url), '
 const webKeys = new Set([...webDictionary.matchAll(/(?:'([^'\n]+)'|"([^"\n]+)")\s*:/g)].map(match => match[1] ?? match[2]));
 for (const file of ['effects_library', 'audio']) {
   const source = readFileSync(new URL(`../../src/ui/${file}.rs`, import.meta.url), 'utf8');
-  for (const match of source.matchAll(/(?:designer_tr\(ui,|app\.tr\()\s*"([^"\n]+)"/g)) {
+  for (const match of source.matchAll(/(?:designer_(?:tr|label)\(ui,|app\.tr\()\s*"([^"\n]+)"/g)) {
     assert.ok(nativeKeys.has(match[1]), `Missing native designer Persian translation: ${match[1]}`);
   }
 }
-for (const file of ['EffectsTab', 'StudioTab', 'EffectRecorder', 'SequenceTimeline', 'SoundEffectFields']) {
+for (const file of ['EffectsTab', 'StudioTab', 'EffectRecorder', 'SequenceTimeline', 'SoundEffectFields', 'ColorDropdown', 'DesignerFieldLabel']) {
   const source = readFileSync(new URL(`../src/components/${file}.tsx`, import.meta.url), 'utf8');
   for (const match of source.matchAll(/tr\(locale, '([^'\n]+)'/g)) {
     assert.ok(webKeys.has(match[1]), `Missing Web designer Persian translation: ${match[1]}`);
   }
+  for (const match of source.matchAll(/DesignerFieldLabel label="([^"]+)"/g)) assert.ok(webKeys.has(match[1]), `Missing field caption: ${match[1]}`);
 }
 for (const key of ['Effects Designer', 'Sequence step', 'Repeat effect', 'Repeat step', 'Interval', 'Length', 'Finish', 'Capture selection', 'Publish & Run', 'Rest', 'All relays off', 'All PWM outputs off', 'Status RGB', 'Raw opcode', 'Choose…']) {
   assert.ok(nativeKeys.has(key) && webKeys.has(key), `Designer translation parity missing: ${key}`);
