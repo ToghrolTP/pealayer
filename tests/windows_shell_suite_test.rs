@@ -1,3 +1,4 @@
+#[cfg(target_os = "windows")]
 use pealayer::app::PealayerApp;
 use pealayer::platform::windows::{
     THUMB_BUTTON_PLAYPAUSE, TRAY_CMD_PLAYPAUSE, TaskbarProgressFlag, WINDOWS_QUICK_ACTIONS,
@@ -31,6 +32,7 @@ fn test_windows_shell_suite_end_to_end_states() {
 }
 
 #[test]
+#[cfg(target_os = "windows")]
 fn test_windows_shell_lifecycle_integration() {
     let mut app = PealayerApp::default();
     assert_eq!(app.window_handle, None);
@@ -41,20 +43,16 @@ fn test_windows_shell_lifecycle_integration() {
 
     // Register a simulated HWND. Windows must reject it instead of claiming
     // that the tray/message hook was installed; the app will retry when the
-    // real eframe HWND arrives. Non-Windows shims remain successful no-ops.
+    // real eframe HWND arrives. This app-owned lifecycle belongs to Windows;
+    // non-Windows no-op contracts are exercised directly below, without an
+    // unrelated native media-player lifecycle.
     app.window_handle = Some(42);
     app.ensure_shell_initialized();
-    #[cfg(target_os = "windows")]
     assert!(!app.shell_initialized);
-    #[cfg(not(target_os = "windows"))]
-    assert!(app.shell_initialized);
 
     // A retry with the same invalid handle must remain safe and truthful.
     app.ensure_shell_initialized();
-    #[cfg(target_os = "windows")]
     assert!(!app.shell_initialized);
-    #[cfg(not(target_os = "windows"))]
-    assert!(app.shell_initialized);
 
     // State update with playback time, duration, paused, and error
     app.playback_time = 15.0;
@@ -65,8 +63,27 @@ fn test_windows_shell_lifecycle_integration() {
 
     // Exit teardown
     let hwnd = app.window_handle.unwrap();
-    #[cfg(not(target_os = "windows"))]
-    assert!(pealayer::platform::windows::remove_system_tray_icon(hwnd).is_ok());
-    #[cfg(target_os = "windows")]
     let _ = pealayer::platform::windows::remove_system_tray_icon(hwnd);
+}
+
+#[test]
+#[cfg(not(target_os = "windows"))]
+fn test_non_windows_shell_shims_are_safe_no_ops() {
+    use pealayer::platform::windows;
+
+    // Do not construct PealayerApp/libmpv merely to check Windows-only shims.
+    // macOS/Linux playback and native-client lifecycles have separate coverage.
+    for hwnd in [0, 42] {
+        assert!(windows::install_shell_message_hook(hwnd).is_ok());
+        assert!(
+            windows::init_taskbar_thumbnail_toolbar(hwnd, true, false, false, false, true).is_ok()
+        );
+        assert!(windows::register_system_tray_icon(hwnd, "Shell fixture").is_ok());
+        assert!(
+            windows::update_taskbar_thumbnail_buttons(hwnd, false, true, false, true, true).is_ok()
+        );
+        assert!(windows::update_video_taskbar_thumbnail(hwnd, None).is_ok());
+        windows::update_windows_taskbar_state_ext(15.0, 60.0, true, true);
+        assert!(windows::remove_system_tray_icon(hwnd).is_ok());
+    }
 }
