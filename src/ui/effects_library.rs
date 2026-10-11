@@ -801,6 +801,24 @@ fn sequence_cue_label(step: &crate::four_d::controller::HardwareMacroStep) -> St
     }
 }
 
+fn displayed_sequence_cue_label(ui: &egui::Ui, step: &crate::four_d::controller::HardwareMacroStep) -> String {
+    if let Some((_, caption)) = sequence_cue_value_options(&step.kind).iter().find(|(value, _)| *value == step.value.unwrap_or_default()) {
+        designer_tr(ui, caption)
+    } else if step.kind == "beep" && step.frequency_hz.unwrap_or_default() == 0 {
+        designer_tr(ui, "Rest")
+    } else { sequence_cue_label(step) }
+}
+
+fn sequence_kind_title(kind: &str) -> &'static str {
+    match kind {
+        "motion" => "Seat motion", "relay" => "Relay", "relay-mask" => "Relay mask",
+        "relays-off" => "All relays off", "pwm" => "PWM", "pwm-off" => "All PWM outputs off",
+        "display" => "Display", "rf" => "RF", "beep" => "Buzzer", "rgb" => "Status RGB",
+        "addressable" => "Strip pixel", "menu" => "Page", "menu-action" => "Front-panel action",
+        "opcode" => "Raw opcode", _ => "Choose…",
+    }
+}
+
 fn quantize_time(value_ms: i64, quantum_ms: u64) -> u64 {
     let quantum = quantum_ms.max(1) as i64;
     let value = value_ms.max(0);
@@ -853,7 +871,7 @@ fn sequence_cue_context_menu(
     ui.strong(format!(
         "{} · {}",
         sequence_lane(step, None).1,
-        sequence_cue_label(step)
+        displayed_sequence_cue_label(ui, step)
     ));
     ui.separator();
     if ui
@@ -1291,7 +1309,7 @@ fn draw_sequence_timeline(
                                 egui::Id::new((state_prefix.clone(), "cue", index)),
                                 egui::Sense::click_and_drag(),
                             );
-                            let cue_label = sequence_cue_label(step);
+                            let cue_label = displayed_sequence_cue_label(ui, step);
                             let duration_label = step.duration_ms.map_or_else(
                                 || "Instant cue (drag to move)".to_string(),
                                 |duration| crate::duration::format_time_value_ms(u64::from(duration)),
@@ -1632,6 +1650,11 @@ fn draw_timeline_authoring_fields(
             step.duration_ms = Some(finish_us.saturating_sub(step.at_us).div_ceil(1_000).clamp(1, u64::from(u16::MAX)) as u16);
         }
         ui.end_row();
+    } else {
+        // Instantaneous commands still have an explicit finish (equal to start).
+        ui.label(designer_tr(ui, "Finish"));
+        ui.weak(crate::duration::format_time_value_us_with_preference(step.at_us, human_readable_time_units));
+        ui.end_row();
     }
 
     if step.kind == "pwm" {
@@ -1687,11 +1710,10 @@ fn draw_timeline_authoring_fields(
     if supports_curve && (step.to_value.is_some() || step.to_red.is_some()) {
         ui.label(designer_tr(ui, "Easing"));
         crate::ui::dropdown::ComboBox::from_id_salt(("sequence-easing", index))
-            .selected_text(if step.easing.is_empty() {
-                "Linear"
-            } else {
-                step.easing.as_str()
-            })
+            .selected_text(designer_tr(ui, match step.easing.as_str() {
+                "ease-in" => "Ease in", "ease-out" => "Ease out",
+                "ease-in-out" => "Ease in/out", _ => "Linear",
+            }))
             .show_ui(ui, |ui| {
                 for (value, label) in [
                     ("linear", "Linear"),
@@ -1746,7 +1768,7 @@ fn draw_sequence_step_editor(
                 ui.label(egui::RichText::new(designer_tr(ui, "This sequence has no actions yet.")).strong());
                 ui.label(
                     egui::RichText::new(
-                        "Add a step, choose the peripheral command, then set its exact time and parameters.",
+                        designer_tr(ui, "Add a step, choose the peripheral command, then set its exact time and parameters."),
                     )
                     .weak(),
                 );
@@ -1769,6 +1791,7 @@ fn draw_sequence_step_editor(
     }
     let mut move_step = None;
     let mut remove_step = None;
+    let mut duplicate_step = None;
     for index in selected_index..=selected_index {
         let step_count = draft.steps.len();
         let step = &mut draft.steps[index];
@@ -1776,9 +1799,12 @@ fn draw_sequence_step_editor(
             .inner_margin(egui::Margin::same(10))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    ui.strong(format!("Step {}", index + 1));
+                    ui.strong(format!("{} {}", designer_tr(ui, "Sequence step"), index + 1));
                     ui.label(egui::RichText::new(&step.kind).monospace().weak());
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.button(crate::ui::icons::COPY).on_hover_text(designer_tr(ui, "Duplicate cue")).clicked() {
+                            duplicate_step = Some(index);
+                        }
                         if ui
                             .button(crate::ui::icons::TRASH)
                             .on_hover_text(designer_tr(ui, "Remove step"))
@@ -1813,11 +1839,7 @@ fn draw_sequence_step_editor(
                         ui.label(designer_tr(ui, "Command"));
                         let previous_kind = step.kind.clone();
                         crate::ui::dropdown::ComboBox::from_id_salt(("sequence-step-kind", index))
-                            .selected_text(if step.kind.is_empty() {
-                                "Choose…"
-                            } else {
-                                &step.kind
-                            })
+                            .selected_text(designer_tr(ui, sequence_kind_title(&step.kind)))
                             .show_ui(ui, |ui| {
                                 let kinds = sequence_step_kinds(capabilities);
                                 if !step.kind.is_empty()
@@ -1831,7 +1853,7 @@ fn draw_sequence_step_editor(
                                     );
                                 }
                                 for kind in kinds {
-                                    ui.dropdown_value(&mut step.kind, kind.to_string(), kind);
+                                    ui.dropdown_value(&mut step.kind, kind.to_string(), designer_tr(ui, sequence_kind_title(kind)));
                                 }
                             });
                         if step.kind != previous_kind {
@@ -1877,11 +1899,11 @@ fn draw_sequence_step_editor(
                                 ui.label(designer_tr(ui, "Action"));
                                 let value = step.value.get_or_insert(0);
                                 crate::ui::dropdown::ComboBox::from_id_salt(("motion-action", index))
-                                    .selected_text(match *value {
+                                    .selected_text(designer_tr(ui, match *value {
                                         1 => "Up",
                                         2 => "Down",
                                         _ => "Stop",
-                                    })
+                                    }))
                                     .show_ui(ui, |ui| {
                                         ui.dropdown_value(value, 0, designer_tr(ui, "Stop"));
                                         ui.dropdown_value(value, 1, designer_tr(ui, "Up"));
@@ -1919,7 +1941,7 @@ fn draw_sequence_step_editor(
                                 ui.label(designer_tr(ui, "State"));
                                 let value = step.value.get_or_insert(0);
                                 crate::ui::dropdown::ComboBox::from_id_salt(("relay-state", index))
-                                    .selected_text(if *value == 0 { "Off" } else { "On" })
+                                    .selected_text(designer_tr(ui, if *value == 0 { "Off" } else { "On" }))
                                     .show_ui(ui, |ui| {
                                         ui.dropdown_value(value, 0, designer_tr(ui, "Off"));
                                         ui.dropdown_value(value, 1, designer_tr(ui, "On"));
@@ -2109,7 +2131,7 @@ fn draw_sequence_step_editor(
                                     .unwrap_or(100)
                                     as u8;
                                 crate::ui::dropdown::ComboBox::from_id_salt(("addressable-pixel", index))
-                                    .selected_text(format!("Pixel {}", target.saturating_add(1)))
+                                    .selected_text(format!("{} {}", designer_tr(ui, "Pixel"), target.saturating_add(1)))
                                     .show_ui(ui, |ui| {
                                         for pixel in 0..maximum {
                                             ui.dropdown_value(
@@ -2151,12 +2173,12 @@ fn draw_sequence_step_editor(
                                 ui.label(designer_tr(ui, "Front-panel action"));
                                 let target = step.target.get_or_insert(0);
                                 crate::ui::dropdown::ComboBox::from_id_salt(("menu-action", index))
-                                    .selected_text(match *target {
+                                    .selected_text(designer_tr(ui, match *target {
                                         0 => "Back",
                                         1 => "Enter",
                                         2 => "Decrease",
                                         _ => "Increase",
-                                    })
+                                    }))
                                     .show_ui(ui, |ui| {
                                         ui.dropdown_value(target, 0, designer_tr(ui, "Back"));
                                         ui.dropdown_value(target, 1, designer_tr(ui, "Enter"));
@@ -2233,6 +2255,14 @@ fn draw_sequence_step_editor(
     if let Some(index) = remove_step {
         draft.steps.remove(index);
         selected_index = selected_index.min(draft.steps.len().saturating_sub(1));
+    }
+    if let Some(index) = duplicate_step {
+        let mut copy = draft.steps[index].clone();
+        copy.at_us = copy.at_us.saturating_add(u64::from(copy.duration_ms.unwrap_or(0)).max(1_000) * 1_000);
+        draft.steps.insert(index + 1, copy);
+        selected_index = index + 1;
+        let prefix = ("effect-sequence-timeline", draft.reference.clone(), draft.id.clone());
+        ui.data_mut(|data| data.insert_temp(egui::Id::new((prefix, "reveal-cue")), true));
     }
     ui.data_mut(|data| data.insert_persisted(selection_id, selected_index));
     update_sequence_duration(draft);
@@ -2395,6 +2425,7 @@ pub(crate) fn draw_effect_capture_controls(app: &mut PealayerApp, ui: &mut egui:
     let mut selected_melody = None;
     let mut refresh_melodies = false;
     let mut choose_capture = false;
+    let old_capture_mode = app.hardware_effect_authoring.capture_mode.clone();
     ui.horizontal_wrapped(|ui| {
         ui.strong(designer_tr(ui, "Sequence steps"));
         if ui.add_enabled(!active && !busy, egui::Button::new(format!("{} {}", crate::ui::icons::PLUS, designer_tr(ui, "Add step")))).clicked() {
@@ -2447,12 +2478,12 @@ pub(crate) fn draw_effect_capture_controls(app: &mut PealayerApp, ui: &mut egui:
         ui.add_enabled_ui(!active && !busy, |ui| {
             crate::ui::dropdown::ComboBox::from_id_salt("effect_capture_clock").width(160.0)
                 .selected_text(match app.hardware_effect_authoring.capture_mode.as_str() {
-                    "device-clock" => "Device clock",
-                    "board-retained" => "Board capture",
-                    _ => "All live sources",
+                    "device-clock" => designer_tr(ui, "Device clock"),
+                    "board-retained" => designer_tr(ui, "Board capture"),
+                    _ => designer_tr(ui, "Automatic capture"),
                 }).show_ui(ui, |ui| {
-                    for (value, label) in [("automatic", "All live sources"), ("device-clock", "Device clock"), ("board-retained", "Board capture")] {
-                        ui.dropdown_value(&mut app.hardware_effect_authoring.capture_mode, value.into(), label);
+                    for (value, label) in [("automatic", "Automatic capture"), ("device-clock", "Device clock"), ("board-retained", "Board capture")] {
+                        ui.dropdown_value(&mut app.hardware_effect_authoring.capture_mode, value.into(), designer_tr(ui, label));
                     }
                 });
         });
@@ -2475,6 +2506,13 @@ pub(crate) fn draw_effect_capture_controls(app: &mut PealayerApp, ui: &mut egui:
         if !active { ui.weak(format!("{} · {}", app.effect_library_draft.steps.len(), crate::duration::format_effect_duration_for_language(app.language, sequence_duration_ms(&app.effect_library_draft.steps)))); }
         if !recording.last_error.is_empty() { ui.colored_label(ui.visuals().error_fg_color, &recording.last_error); }
     });
+    if old_capture_mode != app.hardware_effect_authoring.capture_mode {
+        let authoring = &mut app.hardware_effect_authoring;
+        authoring.capture_selection.opcodes.retain(|opcode| authoring.capture_capabilities.opcodes.iter()
+            .any(|option| option.opcode == *opcode && option.capture_modes.contains(&authoring.capture_mode)));
+        authoring.capture_selection.control_keys.retain(|key| authoring.capture_capabilities.controls.iter()
+            .any(|control| &control.key == key && (authoring.capture_mode != "board-retained" || control.kind != "pwm")));
+    }
     if refresh_melodies {
         // Events keep this catalog current in the background; opening the
         // picker is also an explicit freshness boundary for user choice.
@@ -2858,9 +2896,9 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                         ui.label(&labels.10);
                                         crate::ui::dropdown::ComboBox::from_id_salt("effect_sequence_engine")
                                             .selected_text(match draft.engine.as_str() {
-                                                "mcu" => "Device clock (forced)",
-                                                "host" => "Host clock (forced)",
-                                                _ => "Automatic (recommended)",
+                                                "mcu" => designer_tr(ui, "Device clock (forced)"),
+                                                "host" => designer_tr(ui, "Host clock (forced)"),
+                                                _ => designer_tr(ui, "Automatic (recommended)"),
                                             })
                                             .show_ui(ui, |ui| {
                                                 ui.dropdown_value(
@@ -3085,7 +3123,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             if saved && !published {
                                 ui.label(
                                     egui::RichText::new(
-                                        "This local draft is not currently published in PCController. Publish it to restore Run and Delete.",
+                                        designer_tr(ui, "Publish & Run saves this draft before playing it; Delete requires a published effect."),
                                     )
                                     .small()
                                     .weak(),

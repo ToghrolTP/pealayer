@@ -38,7 +38,12 @@ export const EffectRecorder: React.FC<EffectRecorderProps> = ({ state, sendCmd, 
   const canRecord = state.controller_connected && state.hardware_connected;
   const recordDot = <span className="record-dot" />;
   return <Space wrap size={8} className="effect-capture-controls">
-    <Select aria-label={tr(locale, 'Capture mode')} value={mode} disabled={active || pending} onChange={setMode} style={{ width: 160 }} options={[
+    <Select aria-label={tr(locale, 'Capture mode')} value={mode} disabled={active || pending} onChange={nextMode => {
+      setMode(nextMode); setSelection(current => ({ ...current,
+        opcodes: current.opcodes.filter(value => capabilities?.opcodes.some(opcode => opcode.opcode === value && opcode.capture_modes.includes(nextMode))),
+        control_keys: current.control_keys.filter(key => capabilities?.controls.some(control => control.key === key && (nextMode !== 'board-retained' || control.kind !== 'pwm'))),
+      }));
+    }} style={{ width: 160 }} options={[
       { value: 'automatic', label: tr(locale, 'Automatic capture') },
       { value: 'device-clock', label: tr(locale, 'Device clock') },
       { value: 'board-retained', label: tr(locale, 'Board capture') },

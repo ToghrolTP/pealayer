@@ -62,6 +62,22 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         return english.to_owned();
     }
     let translated = match english {
+        "Effect is no longer available" => "این جلوه دیگر در دسترس نیست",
+        "New effect" => "جلوهٔ جدید",
+        "Timed multi-peripheral sequence" => "توالی زمان‌بندی‌شدهٔ چند دستگاه",
+        "Stable ID" => "شناسهٔ ثابت",
+        "LED count" => "تعداد LED",
+        "Lighting program" => "برنامهٔ نورپردازی",
+        "Keep offline draft" => "نگه‌داشتن پیش‌نویس آفلاین",
+        "Rest" => "سکوت",
+        "All relays off" => "خاموش‌کردن همهٔ رله‌ها",
+        "All PWM outputs off" => "خاموش‌کردن همهٔ خروجی‌های PWM",
+        "Status RGB" => "RGB وضعیت",
+        "Raw opcode" => "opcode خام",
+        "Choose…" => "انتخاب…",
+        "Sequence step" => "گام توالی",
+        "Add a step, choose the peripheral command, then set its exact time and parameters." => "یک گام اضافه کنید، فرمان دستگاه را انتخاب کنید و سپس زمان دقیق و پارامترهای آن را تنظیم کنید.",
+        "Publish & Run saves this draft before playing it; Delete requires a published effect." => "انتشار و اجرا، این پیش‌نویس را پیش از اجرا ذخیره می‌کند؛ حذف به یک جلوهٔ منتشرشده نیاز دارد.",
         "Effects Designer" => "طراح جلوه‌ها",
         "Capture selection" => "انتخاب ورودی‌های ضبط",
         "Select channels or opcodes to record" => "کانال‌ها یا opcodeهای موردنظر برای ضبط را انتخاب کنید",

@@ -541,6 +541,22 @@ pub struct HardwareCaptureOpcode {
     pub capture_modes: Vec<String>,
 }
 
+pub fn parse_capture_capabilities(text: &str) -> Result<HardwareCaptureCapabilities, String> {
+    let value: Value = serde_json::from_str(text).map_err(|error| error.to_string())?;
+    if !value.get("controls").is_some_and(Value::is_array) || !value.get("opcodes").is_some_and(Value::is_array) {
+        return Err("Capture capabilities require controls and opcodes arrays".into());
+    }
+    let capabilities: HardwareCaptureCapabilities = serde_json::from_value(value).map_err(|error| error.to_string())?;
+    let mut keys = std::collections::BTreeSet::new();
+    let mut opcodes = std::collections::BTreeSet::new();
+    if capabilities.controls.iter().any(|control| control.key.is_empty() || control.kind.is_empty() || !keys.insert(&control.key))
+        || capabilities.opcodes.iter().any(|opcode| !opcodes.insert(opcode.opcode) || opcode.capture_modes.is_empty()
+            || opcode.capture_modes.iter().any(|mode| !matches!(mode.as_str(), "automatic" | "device-clock" | "board-retained"))) {
+        return Err("Invalid or duplicate capture capability".into());
+    }
+    Ok(capabilities)
+}
+
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct HardwareMacroStep {
@@ -1497,6 +1513,7 @@ impl ControllerClient {
         let snapshot = self.call("controller.snapshot", json!({}))?;
         let peripherals = self.call("controller.peripherals.get", json!({}))?;
         let folders = parse_channel_folders(&peripherals)?;
+        validate_effect_snapshot(&snapshot)?;
         // Named melodies are host configuration, not board capability data,
         // but they are part of the current coordinator contract. A malformed
         // or unavailable catalog fails this refresh so the engine retains the
@@ -1844,6 +1861,31 @@ fn parse_strip_control(snapshot: &Value, catalog: &Value) -> Option<HardwareStri
         running,
         active_name,
     })
+}
+
+fn validate_effect_snapshot(snapshot: &Value) -> Result<(), String> {
+    if let Some(library) = snapshot.pointer("/macros/library") {
+        let library = library.as_array().ok_or("Effect library must be an array")?;
+        for effect in library {
+            if effect.get("kind").and_then(Value::as_str).is_some_and(|kind| kind != "sequence") { continue; }
+            let steps = match effect.get("steps") {
+                None | Some(Value::Null) => Vec::new(),
+                Some(value) => serde_json::from_value::<Vec<HardwareMacroStep>>(value.clone())
+                    .map_err(|error| format!("Invalid current effect sequence: {error}"))?,
+            };
+            let count = effect.get("repeat_count").map(|value| value.as_u64()
+                .and_then(|value| u16::try_from(value).ok()).ok_or("Invalid effect repeat count"))
+                .transpose()?.unwrap_or(1);
+            let interval = effect.get("repeat_interval_ms").map(|value| value.as_u64()
+                .and_then(|value| u32::try_from(value).ok()).ok_or("Invalid effect repeat interval"))
+                .transpose()?.unwrap_or(0);
+            crate::ui::effects_library::repeated_sequence_duration_ms(&steps, count, interval)?;
+        }
+    }
+    if let Some(preview) = snapshot.pointer("/macros/recording/preview").filter(|value| !value.is_null()) {
+        serde_json::from_value::<Vec<HardwareMacroStep>>(preview.clone()).map_err(|error| format!("Invalid recording preview: {error}"))?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -2810,6 +2852,11 @@ mod tests {
             "opcodes":[{"opcode":16,"name":"relay","capture_modes":["automatic"]}]
         })).unwrap();
         assert_eq!(capabilities.controls[0].name, "Seat Left");
+        assert!(super::parse_capture_capabilities("{}").is_err());
+        assert!(super::parse_capture_capabilities(r#"{"controls":[],"opcodes":[]}"#).is_ok());
+        assert!(super::validate_effect_snapshot(&serde_json::json!({"macros":{"library":[{
+            "steps":[{"kind":"motion","repeat_count":2}]
+        }]}})).is_err());
     }
     use super::*;
 

@@ -416,7 +416,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
         start_time_ms: activeCueDrag.startTimeMs,
         duration_ms: activeCueDrag.durationMs,
       };
-      if (activeCueDrag.moved) {
+      if (activeCueDrag.moved || preview.start_time_ms !== activeCueDrag.startTimeMs || preview.duration_ms !== activeCueDrag.durationMs || preview.control_key && preview.control_key !== activeCueDrag.controlKey) {
         suppressCueClick.current = activeCueDrag.id;
         if (activeCueDrag.mode === 'move') {
           const copyId = activeCueDrag.duplicateId;
@@ -429,11 +429,18 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
       currentCuePlacement.current = null;
       setActiveCueDrag(null);
     };
+    const onPointerCancel = () => {
+      setCuePreviews(current => { const next = { ...current }; delete next[activeCueDrag.id]; return next; });
+      currentCuePlacement.current = null;
+      setActiveCueDrag(null);
+    };
     window.addEventListener('pointermove', onPointerMove);
     window.addEventListener('pointerup', onPointerUp, { once: true });
+    window.addEventListener('pointercancel', onPointerCancel, { once: true });
     return () => {
       window.removeEventListener('pointermove', onPointerMove);
       window.removeEventListener('pointerup', onPointerUp);
+      window.removeEventListener('pointercancel', onPointerCancel);
     };
   }, [activeCueDrag, cuePreviews, sendCmd, timelineDurationMs]);
 
@@ -608,7 +615,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
               Modal.confirm({ title: tr(locale, 'New group'), content: <Input maxLength={64} onChange={(event) => { name = event.target.value.trim(); }} />, onOk: () => { if (!name) return Promise.reject(); setEffectDraft({ ...effectDraft, category: name }); } });
             }} /></label>
             <label className="effect-editor-grid__wide"><span>{tr(locale, 'Description')}</span><Input value={effectDraft.description} onChange={(event) => setEffectDraft({ ...effectDraft, description: event.target.value })} /></label>
-            <label><span>{tr(locale, 'Duration (ms)')}</span>{effectDraft.kind === 'audio' ? <Typography.Text type="secondary">{controllerEffects.find((effect) => effect.id === effectDraft.id)?.duration_display || effectDraft.duration_ms}</Typography.Text> : <InputNumber min={1} value={effectDraft.duration_ms} onChange={(duration_ms) => setEffectDraft({ ...effectDraft, duration_ms: duration_ms ?? 1 })} />}</label>
+            <label><span>{tr(locale, 'Length')}</span>{effectDraft.kind === 'audio' ? <Typography.Text type="secondary">{formatTimeMs(effectDraft.duration_ms, state.human_readable_time_units !== false)}</Typography.Text> : effectDraft.kind === 'sequence' ? <Typography.Text type="secondary">{repeatedSequenceDurationMs(effectDraft.steps, effectDraft.repeat_count, effectDraft.repeat_interval_ms) === null ? '—' : formatTimeMs(repeatedSequenceDurationMs(effectDraft.steps, effectDraft.repeat_count, effectDraft.repeat_interval_ms)!, state.human_readable_time_units !== false)}</Typography.Text> : <TimeValueField min={1} value={effectDraft.duration_ms} human={state.human_readable_time_units !== false} onChange={duration_ms => setEffectDraft({ ...effectDraft, duration_ms: Math.round(duration_ms) })} />}</label>
             {effectDraft.kind === 'audio' && <SoundEffectFields program={JSON.parse(effectDraft.programText || '{}')} onChange={(patch) => setEffectDraft({ ...effectDraft, programText: JSON.stringify({ ...JSON.parse(effectDraft.programText || '{}'), ...patch }) })} state={state} reference={effectDraft.reference} apiBaseUrl={apiBaseUrl} locale={locale} sendCmd={sendCmd} />}
             {effectDraft.kind === 'strip-stream' && <label><span>{tr(locale, 'Frames per second')}</span><InputNumber min={1} max={120} value={effectDraft.default_fps} onChange={(default_fps) => setEffectDraft({ ...effectDraft, default_fps: default_fps ?? 20 })} /></label>}
             {effectDraft.kind === 'strip-stream' && <label><span>{tr(locale, 'Pixels')}</span><InputNumber min={1} value={effectDraft.default_pixels} onChange={(default_pixels) => setEffectDraft({ ...effectDraft, default_pixels: default_pixels ?? 100 })} /></label>}
@@ -676,10 +683,10 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                       {['relay', 'motion', 'pwm'].includes(step.kind) && <label><span>{tr(locale, 'Value')}</span><InputNumber min={0} max={step.kind === 'relay' ? 1 : step.kind === 'motion' ? 2 : 4095} value={step.value ?? 0} onChange={(value) => {
                         const steps = [...effectDraft.steps]; steps[index] = { ...step, value: Number(value ?? 0) }; setEffectDraft({ ...effectDraft, steps });
                       }} /></label>}
-                      <label><span>{tr(locale, 'Length')}</span><TimeValueField value={step.duration_ms ?? 0} human={state.human_readable_time_units !== false} onChange={(duration_ms) => {
+                      <label><span>{tr(locale, 'Length')}</span><TimeValueField max={65535} value={step.duration_ms ?? 0} human={state.human_readable_time_units !== false} onChange={(duration_ms) => {
                         const steps = [...effectDraft.steps]; steps[index] = { ...step, duration_ms: Number(duration_ms ?? 0) || undefined }; setEffectDraft({ ...effectDraft, steps });
                       }} /></label>
-                      <label><span>{tr(locale, 'Finish')}</span><TimeValueField min={Number(step.at_us ?? 0) / 1000} value={Number(step.at_us ?? 0) / 1000 + (step.duration_ms ?? 0)} human={state.human_readable_time_units !== false} onChange={(finish) => {
+                      <label><span>{tr(locale, 'Finish')}</span><TimeValueField min={Number(step.at_us ?? 0) / 1000} max={Number(step.at_us ?? 0) / 1000 + 65535} value={Number(step.at_us ?? 0) / 1000 + (step.duration_ms ?? 0)} human={state.human_readable_time_units !== false} onChange={(finish) => {
                         const steps = [...effectDraft.steps]; steps[index] = { ...step, duration_ms: Math.round(finish - Number(step.at_us ?? 0) / 1000) }; setEffectDraft({ ...effectDraft, steps });
                       }} /></label>
                       <Space.Compact className="sequence-step-row__actions">

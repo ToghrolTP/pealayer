@@ -3826,7 +3826,7 @@ impl PealayerApp {
                         .to_string();
                     match result.operation.as_str() {
                         "macro-start" => self.hardware_effect_authoring.active = true,
-                        "capture-capabilities" => match serde_json::from_str::<crate::four_d::controller::HardwareCaptureCapabilities>(&output) {
+                        "capture-capabilities" => match crate::four_d::controller::parse_capture_capabilities(&output) {
                             Ok(capabilities) => self.hardware_effect_authoring.capture_capabilities = capabilities,
                             Err(error) => self.set_osd(format!("Invalid capture capabilities: {error}")),
                         },
@@ -4557,6 +4557,9 @@ impl PealayerApp {
                         .unwrap_or_default()
                         .to_string()
                 };
+                // A remote editor must not replace an unrelated native working draft.
+                // Publication owns its own immutable snapshot until acknowledgment.
+                let working_draft = self.effect_library_draft.clone();
                 self.effect_library_draft = ControllerEffectDraft {
                     reference: effect.reference,
                     id: effect.id,
@@ -4597,7 +4600,11 @@ impl PealayerApp {
                     board_profile_mode: property_string("board_profile_mode"),
                     is_new: effect.is_new,
                 };
-                if let Err(error) = self.save_controller_effect() {
+                let save_result = self.save_controller_effect();
+                if working_draft.id != self.effect_library_draft.id {
+                    self.effect_library_draft = working_draft;
+                }
+                if let Err(error) = save_result {
                     self.set_osd(error);
                     return;
                 }
@@ -4623,7 +4630,8 @@ impl PealayerApp {
                     self.hardware_effect_authoring.capture_mode = mode.clone();
                     self.apply_interop_command(ctx, InteropCommand::SaveControllerEffect { effect }, source);
                     if self.hardware_effect_authoring.pending_operation.as_deref() == Some("effect-save") {
-                        let target = format!("effect:{}", self.effect_library_draft.id);
+                        let target = format!("effect:{}", self.hardware_effect_authoring.pending_published_draft.as_ref()
+                            .expect("queued publication owns a draft").id);
                         self.hardware_effect_authoring.record_after_publish = Some((target, mode, capture_selection));
                     }
                     return;
@@ -4647,6 +4655,9 @@ impl PealayerApp {
                 }
             }
             InteropCommand::PublishAndRunControllerEffect { effect } => {
+                if self.hardware_effect_authoring.pending_operation.is_some() || self.hardware_effect_authoring.active {
+                    self.set_osd(self.tr("Finish the current hardware effect operation first")); return;
+                }
                 if effect.kind == "audio" {
                     self.set_osd(self.tr("Save the audio effect before previewing")); return;
                 }

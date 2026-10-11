@@ -14,7 +14,7 @@ export function TimeValueField({ value, onChange, min = 0, max = 3600000, human 
     editing.current = false;
     if (canceled.current) { canceled.current = false; setText(formatTimeMs(value, human)); setInvalid(false); return; }
     const parsed = parseTimeMs(text);
-    if (parsed === null || parsed < min || parsed > max) { setInvalid(true); return; }
+    if (parsed === null || parsed < min || parsed > max) { setText(formatTimeMs(value, human)); setInvalid(true); return; }
     onChange(parsed); setText(formatTimeMs(parsed, human)); setInvalid(false);
   };
   return <Input aria-label={label} value={text} status={invalid ? 'error' : undefined}

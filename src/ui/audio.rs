@@ -36,19 +36,19 @@ pub(crate) fn draw_sfx_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 egui::Grid::new("sfx-identity").num_columns(2).spacing([14.0, 10.0]).show(ui, |ui| {
                     ui.label(designer_tr(ui, "Name")); ui.add(dialog::singleline_text_edit(&mut draft.name).desired_width(ui.available_width())); ui.end_row();
                     ui.label(designer_tr(ui, "Group")); crate::ui::group_picker::group_picker(ui, "sfx-group", &mut draft.category, effects.iter().map(|effect| effect.group.as_str()), ui.available_width(), app.language); ui.end_row();
-                    ui.label(designer_tr(ui, "Icon")); crate::ui::icons::searchable_control_icon_picker(ui, "sfx-icon", &mut draft.icon, ui.available_width(), "Search icons...", "Presets", "No matching icons", app.language); ui.end_row();
+                    ui.label(designer_tr(ui, "Icon")); crate::ui::icons::searchable_control_icon_picker(ui, "sfx-icon", &mut draft.icon, ui.available_width(), &designer_tr(ui, "Search icons..."), &designer_tr(ui, "Presets"), &designer_tr(ui, "No matching icons"), app.language); ui.end_row();
                     ui.label(designer_tr(ui, "Audio file / URL")); ui.horizontal(|ui| {
                         ui.add(dialog::singleline_text_edit(&mut program.source).desired_width((ui.available_width()-86.0).max(100.0)));
                         if ui.button(format!("{} {}", icons::FOLDER_OPEN, designer_tr(ui, "Browse"))).clicked() {
                             if crate::peer::active() { crate::ui::peer_browser::open(ui.ctx(), crate::ui::peer_browser::Purpose::PreferenceFile { key: "sfx_source".into(), extensions: vec!["wav","mp3","ogg","flac","m4a","aac","opus"].into_iter().map(str::to_string).collect() }, None); }
-                            else if let Some(file) = rfd::FileDialog::new().set_title("Choose sound effect").add_filter("Audio", &["wav","mp3","ogg","flac","m4a","aac","opus"]).pick_file() { program.source = file.to_string_lossy().into(); }
+                            else if let Some(file) = rfd::FileDialog::new().set_title(designer_tr(ui, "Choose sound effect")).add_filter(designer_tr(ui, "Audio"), &["wav","mp3","ogg","flac","m4a","aac","opus"]).pick_file() { program.source = file.to_string_lossy().into(); }
                         }
                     }); ui.end_row();
                     ui.label(designer_tr(ui, "Volume")); ui.add(egui::Slider::new(&mut program.volume, 0..=100).suffix("%")); ui.end_row();
                     ui.label(designer_tr(ui, "Output device / backend"));
                     let selected = devices.iter().find(|d| d.name == program.output_device).map(|d| d.description.clone()).unwrap_or_else(|| designer_tr(ui, if program.output_device.is_empty() { "Preferences SFX output" } else { "Unavailable device" }));
                     let popup = crate::ui::dropdown::ComboBox::from_id_salt("sfx-output").width(ui.available_width()).selected_text(selected).show_ui(ui, |ui| {
-                        ui.dropdown_value(&mut program.output_device, String::new(), "Preferences SFX output");
+                        ui.dropdown_value(&mut program.output_device, String::new(), designer_tr(ui, "Preferences SFX output"));
                         for device in &devices { ui.dropdown_value(&mut program.output_device, device.name.clone(), &device.description).on_hover_text(&device.name); }
                     });
                     let key = ui.id().with("sfx-output-open"); let was_open = ui.data_mut(|d| d.get_temp::<bool>(key).unwrap_or(false));

@@ -31,4 +31,25 @@ for (const file of ['EffectsTab', 'StudioTab']) {
   assert.ok(source.includes('<SequenceTimeline') && source.includes("tr(locale, 'Effects Designer')"));
   assert.ok(!source.includes('step.repeat_count') && !source.includes('step.repeat_interval_ms'));
 }
+// Scope translation parity to the surfaces changed in this pass. Learned
+// peripheral names, media metadata and user-authored text remain untranslated.
+const nativeDictionary = readFileSync(new URL('../../src/ui/i18n.rs', import.meta.url), 'utf8');
+const nativeKeys = new Set([...nativeDictionary.matchAll(/"([^"\n]+)"\s*=>/g)].map(match => match[1]));
+const webDictionary = readFileSync(new URL('../src/i18n.ts', import.meta.url), 'utf8');
+const webKeys = new Set([...webDictionary.matchAll(/(?:'([^'\n]+)'|"([^"\n]+)")\s*:/g)].map(match => match[1] ?? match[2]));
+for (const file of ['effects_library', 'audio']) {
+  const source = readFileSync(new URL(`../../src/ui/${file}.rs`, import.meta.url), 'utf8');
+  for (const match of source.matchAll(/(?:designer_tr\(ui,|app\.tr\()\s*"([^"\n]+)"/g)) {
+    assert.ok(nativeKeys.has(match[1]), `Missing native designer Persian translation: ${match[1]}`);
+  }
+}
+for (const file of ['EffectsTab', 'StudioTab', 'EffectRecorder', 'SequenceTimeline', 'SoundEffectFields']) {
+  const source = readFileSync(new URL(`../src/components/${file}.tsx`, import.meta.url), 'utf8');
+  for (const match of source.matchAll(/tr\(locale, '([^'\n]+)'/g)) {
+    assert.ok(webKeys.has(match[1]), `Missing Web designer Persian translation: ${match[1]}`);
+  }
+}
+for (const key of ['Effects Designer', 'Sequence step', 'Repeat effect', 'Interval', 'Length', 'Finish', 'Capture selection', 'Publish & Run', 'Rest', 'All relays off', 'All PWM outputs off', 'Status RGB', 'Raw opcode', 'Choose…']) {
+  assert.ok(nativeKeys.has(key) && webKeys.has(key), `Designer translation parity missing: ${key}`);
+}
 console.log('Cue copy/retarget, exact repeated timing, units and shared authoring surface checks passed.');
