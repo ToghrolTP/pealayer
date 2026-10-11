@@ -62,11 +62,15 @@ statements are not the present product state.
 
 ## Remaining gates · do not silently mark complete
 
-- [ ] Finish coordinated Effects Designer/capture work in [PR #142](https://github.com/ToghrolTP/pealayer/pull/142)
-  and [PCController PR #634](https://github.com/atomicdeploy/PCController/pull/634).
-  Resolve CI and exact persisted per-step repetition semantics before deploying
-  the new rejecting contract. Cafe's recorded smoke-launch tool denial remains
-  a deployment blocker; its newer package is staged, not delivered.
+- [ ] Complete paired Effects Designer/capture deployment and installed acceptance.
+  [PR #142](https://github.com/ToghrolTP/pealayer/pull/142) has verified source
+  implementation and [PCController PR #634](https://github.com/atomicdeploy/PCController/pull/634)
+  is merged; see [source and delivery gates](effects-designer-gestures.md).
+  Final integrated-head CI remains the source merge gate. Preserve exact persisted
+  per-step repetition schedules before deploying the new rejecting contract.
+  Cafe's recorded smoke-launch tool denial remains a deployment blocker unless
+  explicitly cleared; its staged package is not delivery evidence. The controller
+  Web/TUI chooser and autonomous command-tail gates remain in its owning tracker.
 - [ ] Independently exercise elapsed-entry cancel/blur/Enter, Browse, toolbar
   drag/hide, Add cue backdrop and native Appearance/Audio/Subtitle visuals.
 - [ ] Verify phone/tablet/desktop Web gestures, dialogs and interactions against

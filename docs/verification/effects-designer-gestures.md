@@ -13,17 +13,51 @@ Tracks #141. Branch: `feat/effects-designer-gestures`.
 
 ## Verification and delivery
 
-Source implementation is checkpointed on PR #142. Do not treat the checkpoint as delivered UI. No Rust compilation/linking, clean builds or test runners on the production machine. A lightweight TypeScript `--noEmit` diagnostic passes. GitHub CI at checkpoint `815fac7f` passed the repository/Web gate and Linux native tests; follow-up changes require their own green checks. Windows/macOS results and installed visual acceptance must be verified separately.
+PR #142 is the source integration checkpoint, not installed UI acceptance. Its
+reviewed implementation passed both hosted platform matrices: Windows native
+tests/build/package, Linux and both macOS architectures, repository/Web guards
+and CodeQL. [Pull-request matrix](https://github.com/ToghrolTP/pealayer/actions/runs/38102463578)
+and [push matrix](https://github.com/ToghrolTP/pealayer/actions/runs/38102462080)
+cover the reviewed implementation. Current main was subsequently merged normally
+without conflicts; the integrated head must pass its own final checks before
+merge. Local cue-authoring, application-parity and responsive-layout guards and
+TypeScript `--noEmit` also pass. No Rust compile/link or test runner was invoked
+on the production machine.
 
 Gesture: hold Ctrl while starting a cue drag to duplicate. Ordinary seat-to-seat dragging retargets the copied/selected placement only, preserving other uses of a shared template. Explicit duplication advances by at least one second (or the cue length if longer), selects and reveals the new cue without seeking media or issuing hardware commands. Pointer cancellation in the Web UI discards the preview.
 
 For multiple selected cues, explicit Duplicate offsets the whole group by its complete start-to-finish span (at least one second), retaining every relative offset and selecting the resulting copies. Delete removes only selected draft steps and leaves unselected steps unchanged, including their timing. Web selections reset safely on an external draft replacement/reorder instead of applying stale indices to a destructive edit. This is local authoring, not a command to stop/delete published hardware effects.
 
-CI at previous head `2e0b836` passed Web/repository, Linux and macOS Intel. The Windows GNU test process terminated with `0xc0000005` (access violation), and other platform runs were pending; do not claim a green Windows package or hide the test failure. Subsequent bulk-selection changes require independent final-head validation.
+The earlier Windows GNU access violation remains historical diagnostic evidence,
+not a failed result hidden by this checkpoint. Both reviewed-head Windows jobs
+subsequently passed, but that does not establish a native lifecycle root-cause
+repair. Keep [the lifecycle investigation](https://github.com/ToghrolTP/pealayer/issues/116)
+open and installed/native acceptance distinct from harness verification.
 
 The native and Web sequence designers use whole-effect repetition, computed full span, Start/Length/Finish, exact `0s`, configured seat names and Publish & Run. Execution waits for the publish acknowledgment. Remote publishing retains an unrelated native working draft. Recording capabilities are fetched when choosing inputs; the explicit empty default selection cannot start recording. Invalid current-contract snapshots retain the last valid catalog rather than silently dropping invalid steps. Scoped English/Persian translation coverage and authoring regressions are maintained in CI, not asserted as a whole-application translation audit.
 
-Controller dependency: [PCController PR #634](https://github.com/atomicdeploy/PCController/pull/634), tracking [#633](https://github.com/atomicdeploy/PCController/issues/633). Its source/tests are independently checkpointed. PCController's own unwired Web/TUI recording start actions are guarded until its full chooser is implemented; this is not a claim that those interfaces are finished.
+Controller dependency: [PCController PR #634](https://github.com/atomicdeploy/PCController/pull/634), tracking [#633](https://github.com/atomicdeploy/PCController/issues/633), is merged after its full hosted matrix passed. PCController's own unwired Web/TUI recording start actions are guarded until its full chooser is implemented; this is not a claim that those interfaces are finished. The paired source contract is ready for integration independently of those remaining controller front-end gates.
+
+## Source acceptance versus delivery
+
+- [x] Compatible seat moves isolate a shared placement; Ctrl-drag and explicit
+  duplication select the new authoring cue without seeking or live actuation.
+- [x] Native/Web bulk selection and text-focus isolation have regression coverage.
+- [x] Whole-effect repeat span, interval and invalid-value guards match the merged
+  controller contract; retired per-step fields are rejected, not silently dropped.
+- [x] Capture starts with no selected channels/opcodes, refreshes advertised
+  choices, and sends explicit selections to the controller-owned recorder.
+- [x] Publish & Run waits for the definition ACK; rename reconciliation preserves
+  unrelated unsaved drafts. Changed labels have scoped English/Persian checks.
+- [ ] Paired installed native/Web walkthrough and destination runtime validation.
+- [ ] Exact persisted-definition preservation, controller Web/TUI chooser and
+  autonomous command-tail acceptance in the controller tracker.
+- [ ] Human/physical recording, output and sustained timing acceptance.
+
+The PR owner also reported Linux native tests and interactive Web duplication,
+selection and seat-lane moves in
+[the review checkpoint](https://github.com/ToghrolTP/pealayer/pull/142#issuecomment-6106409596).
+That report is not Windows installed-window or physical-output proof.
 
 Deployment remains blocked by the recorded command-tool rejection of runtime smoke validation. Do not bypass that rejection with a different launch route. The existing production player, controller and physical outputs are unchanged during this source pass. Previous physical seat-motion acceptance is separately pending and is not covered by editor tests.
 
