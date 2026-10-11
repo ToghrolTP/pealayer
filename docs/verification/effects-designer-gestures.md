@@ -54,6 +54,13 @@ configuration path instead of mutating process environment under native threads.
 Fresh final-head CI is required; the general native lifecycle investigation stays
 open in #116.
 
+The superseded Intel PR run separately stalled in the app unit suite before its
+fullscreen-startup fixture reported completion. It was canceled by normal new-head
+concurrency. To avoid interpreting repeated blind reruns as a repair, macOS CI now
+samples running native test stacks after five and ten minutes; the non-Windows test
+step has a fifteen-minute limit. Diagnostics do not skip tests or change exit
+status. Both canceled Intel runs remain non-passing evidence in #116.
+
 The native and Web sequence designers use whole-effect repetition, computed full span, Start/Length/Finish, exact `0s`, configured seat names and Publish & Run. Execution waits for the publish acknowledgment. Remote publishing retains an unrelated native working draft. Recording capabilities are fetched when choosing inputs; the explicit empty default selection cannot start recording. Invalid current-contract snapshots retain the last valid catalog rather than silently dropping invalid steps. Scoped English/Persian translation coverage and authoring regressions are maintained in CI, not asserted as a whole-application translation audit.
 
 Controller dependency: [PCController PR #634](https://github.com/atomicdeploy/PCController/pull/634), tracking [#633](https://github.com/atomicdeploy/PCController/issues/633), is merged after its full hosted matrix passed. PCController's own unwired Web/TUI recording start actions are guarded until its full chooser is implemented; this is not a claim that those interfaces are finished. The paired source contract is ready for integration independently of those remaining controller front-end gates.
