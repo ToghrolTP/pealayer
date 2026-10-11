@@ -1,14 +1,14 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button, Dropdown, Space, Tooltip } from 'antd';
 import { CopyOutlined, DeleteOutlined, SelectOutlined } from '@ant-design/icons';
-import { deleteSequenceCues, duplicateSequenceCues, formatTimeMs, moveSequenceStep, selectCueIndices, sequenceKindLabels, SequenceStep } from '../cueAuthoring';
+import { deleteSequenceCues, duplicateSequenceCues, formatTimeMs, moveSequenceStep, selectCueIndices, sequenceKindLabels, sequenceLaneName, SequenceStep } from '../cueAuthoring';
 import { sequenceDurationMs } from '../melodyCatalog';
 import { tr, UiLocale } from '../i18n';
 
 /** Pure authoring gestures: never seek, preview or send hardware commands. */
 export function SequenceTimeline<T extends SequenceStep>({ steps, onChange, locale, controls = [], disabled = false, onSelect, human = true }: {
   steps: T[]; onChange: (steps: T[]) => void; locale: UiLocale;
-  controls?: Array<{ key: string; name: string; kind: string; locked?: boolean }>;
+  controls?: Array<{ key: string; name: string; default_name?: string; kind: string; locked?: boolean }>;
   disabled?: boolean; onSelect?: (index: number) => void; human?: boolean;
 }) {
   const [selected, setSelected] = useState(() => new Set(steps.length ? [0] : []));
@@ -82,7 +82,7 @@ export function SequenceTimeline<T extends SequenceStep>({ steps, onChange, loca
     <div className="sequence-authoring__scroll" ref={container}>
       <div style={{ minWidth: width + 140 }}>
         {lanes.map(lane => <div className="sequence-authoring__row" key={lane}>
-          <div className="sequence-authoring__label">{controls.find(c => c.key === lane)?.name ?? (lane === 'seat.a' ? tr(locale, 'Seat A') : lane === 'seat.b' ? tr(locale, 'Seat B') : lane)}</div>
+          <div className="sequence-authoring__label">{sequenceLaneName(lane, controls)}</div>
           <div className="sequence-authoring__lane" data-sequence-lane={lane} style={{ width }} onPointerDown={event => {
             if (event.target === event.currentTarget) section.current?.focus({ preventScroll: true });
           }}>

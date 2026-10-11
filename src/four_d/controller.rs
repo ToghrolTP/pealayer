@@ -2040,11 +2040,17 @@ fn parse_hardware_capabilities_with_front_panel(
                 .get("index")?
                 .as_u64()
                 .and_then(|id| u8::try_from(id).ok())?;
-            let name = custom_names
-                .and_then(|names| names.get(&key))
+            // The profile-resolved name is authoritative. peripheral_names is
+            // a host-wide fallback, not a board-profile rename override.
+            let name = entry
+                .get("name")
                 .and_then(Value::as_str)
                 .filter(|name| !name.trim().is_empty())
-                .or_else(|| entry.get("default_name").and_then(Value::as_str))?
+                .or_else(|| peripheral_names.get(&key).map(String::as_str))
+                .or_else(|| {
+                    entry.get("default_name").and_then(Value::as_str)
+                        .filter(|name| !name.trim().is_empty())
+                })?
                 .to_string();
             Some((
                 entry.get("kind")?.as_str()?.to_string(),
@@ -2193,8 +2199,21 @@ fn parse_hardware_capabilities_with_front_panel(
                 name: entry
                     .get("name")
                     .and_then(Value::as_str)
+                    .filter(|name| !name.trim().is_empty())
+                    .or_else(|| {
+                        outputs.iter()
+                            .find(|(_, output)| output.key == key)
+                            .map(|(_, output)| output.name.as_str())
+                    })
                     .or_else(|| peripheral_names.get(&key).map(String::as_str))
-                    .or_else(|| default_names.get(&key).map(String::as_str))
+                    .or_else(|| {
+                        entry.get("default_name").and_then(Value::as_str)
+                            .filter(|name| !name.trim().is_empty())
+                    })
+                    .or_else(|| {
+                        default_names.get(&key).map(String::as_str)
+                            .filter(|name| !name.trim().is_empty())
+                    })
                     .unwrap_or(&key)
                     .to_string(),
                 default_name: entry
@@ -2280,12 +2299,21 @@ fn parse_hardware_capabilities_with_front_panel(
             ("b", 3_u8, 4_u8, 2_u16, "Seat B"),
         ] {
             if has_raw_pair(direction, enable) {
+                let key = format!("seat.{side}");
+                let default_name = default_names.get(&key).map(String::as_str)
+                    .filter(|name| !name.trim().is_empty())
+                    .unwrap_or(name);
+                let name = outputs.iter()
+                    .find(|(_, output)| output.key == key)
+                    .map(|(_, output)| output.name.as_str())
+                    .or_else(|| peripheral_names.get(&key).map(String::as_str))
+                    .unwrap_or(default_name);
                 controls.push(HardwareControl {
-                    key: format!("seat.{side}"),
+                    key,
                     kind: "motion".to_string(),
                     order,
                     name: name.to_string(),
-                    default_name: name.to_string(),
+                    default_name: default_name.to_string(),
                     control: "raw-motion".to_string(),
                     icon: "seat".to_string(),
                     color: String::new(),
@@ -3629,6 +3657,67 @@ mod tests {
             ["seat.b.up", "seat.b.down", "seat.b.stop"]
         );
         assert!(!parsed.board_profile.as_ref().unwrap().expose_raw_relays);
+
+        let mut renamed_catalog = catalog.clone();
+        renamed_catalog["peripheral_names"] = json!({
+            "seat.a": "Seat Left", "seat.b": "Seat Right"
+        });
+        let renamed = parse_hardware_capabilities(&snapshot, &renamed_catalog);
+        for (index, name) in ["Seat Left", "Seat Right"].iter().enumerate() {
+            let control = &renamed.controls[index];
+            assert_eq!(&control.name, name);
+            assert_eq!(control.default_name, seats[index].default_name);
+            assert_eq!(control.key, seats[index].key);
+            assert_eq!(control.actions, seats[index].actions);
+        }
+        renamed_catalog["peripherals"].as_array_mut().unwrap().push(json!({
+            "key":"seat.a","kind":"seat","index":1,
+            "name":"VIP Left","default_name":"Seat A"
+        }));
+        let resolved = parse_hardware_capabilities(&snapshot, &renamed_catalog);
+        assert_eq!(resolved.controls[0].name, "VIP Left");
+        assert_eq!(resolved.controls[0].key, "seat.a");
+        assert_eq!(resolved.controls[0].actions, seats[0].actions);
+    }
+
+    #[test]
+    fn seat_titles_use_resolved_profile_before_host_names_and_defaults() {
+        let snapshot = json!({"connected":true,"hello":{"capabilities":CAPABILITY_RELAY_MOTION}});
+        let catalog = json!({
+            "peripheral_names":{"seat.a":"Old left","seat.b":"Old right"},
+            "peripherals":[
+                {"key":"seat.a","kind":"seat","index":1,"name":"Seat Left","default_name":"Seat A"},
+                {"key":"seat.b","kind":"seat","index":2,"name":"Seat Right","default_name":"Seat B"}
+            ],
+            "controls":[
+                {"key":"seat.a","kind":"seat","order":1,"name":"Seat Left","control":"seat","actions":["seat.a.up"]},
+                {"key":"seat.b","kind":"seat","order":2,"name":"  ","control":"seat","actions":["seat.b.down"]}
+            ]
+        });
+        let mut capabilities = parse_hardware_capabilities(&snapshot, &catalog);
+        assert_eq!(capabilities.controls[0].name, "Seat Left");
+        assert_eq!(capabilities.controls[1].name, "Seat Right");
+        assert_eq!(capabilities.peripherals[0].name, "Seat Left");
+        assert_eq!(capabilities.peripherals[1].name, "Seat Right");
+        for (key, default_name) in [("seat.a", "Seat A"), ("seat.b", "Seat B")] {
+            let original = capabilities.controls.iter().find(|control| control.key == key).unwrap().clone();
+            let name = format!("VIP {key}");
+            let mut response = json!({
+                "folders":[],"peripheral":{"key":key,"name":name,"default_name":default_name},
+                "control":{"key":key,"name":name}
+            });
+            capabilities.apply_presentation_update(&response).unwrap();
+            let control = capabilities.controls.iter().find(|control| control.key == key).unwrap();
+            assert_eq!(control.name, name);
+            assert_eq!(control.actions, original.actions);
+            assert_eq!(capabilities.peripheral_names[key], name);
+            assert_eq!(capabilities.peripherals.iter().find(|output| output.key == key).unwrap().name, name);
+            response["peripheral"]["name"] = json!(default_name);
+            response["control"]["name"] = json!(default_name);
+            capabilities.apply_presentation_update(&response).unwrap();
+            assert_eq!(capabilities.controls.iter().find(|control| control.key == key).unwrap().name, default_name);
+            assert!(!capabilities.peripheral_names.contains_key(key));
+        }
     }
 
     #[test]
