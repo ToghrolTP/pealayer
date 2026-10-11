@@ -33,6 +33,7 @@ const fa: Record<string, string> = {
   "Channels": "کانال‌ها",
   "Automatic capture": "ضبط خودکار",
   "Repeat effect": "تکرار جلوه",
+  "Repeat step": "تکرار گام",
   "Repeat the entire effect": "تکرار تمام جلوه",
   "Interval": "فاصلهٔ تکرار",
   "0s uses the full effect length; interval is start-to-start": "۰ یعنی طول کامل جلوه؛ فاصله از شروع تا شروع محاسبه می‌شود",

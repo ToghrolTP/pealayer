@@ -53,6 +53,7 @@ import { appendMelodySteps, sequenceDurationMs } from '../melodyCatalog';
 import { MelodySelect } from './MelodySelect';
 import { SoundEffectFields } from './SoundEffectFields';
 import { SequenceTimeline } from './SequenceTimeline';
+import { StepRepeatFields } from './StepRepeatFields';
 import { TimeValueField } from './TimeValueField';
 import { formatTimeMs, repeatedSequenceDurationMs, sequenceKindLabels } from '../cueAuthoring';
 
@@ -69,6 +70,8 @@ type EffectStep = {
   target?: number;
   value?: number;
   duration_ms?: number;
+  repeat_count?: number;
+  repeat_interval_ms?: number;
   frequency_hz?: number;
   text?: string;
   destination?: string;
@@ -525,6 +528,7 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale, 
               <Popconfirm title={tr(locale, 'Delete step?')} onConfirm={() => setDraft({ ...draft, steps: draft.steps.filter((_, stepIndex) => stepIndex !== index) })}><Button size="small" danger icon={<DeleteOutlined />} /></Popconfirm>
             </Space.Compact>,
             children: <div className="effect-step-grid">
+              <StepRepeatFields step={step} locale={locale} human={state.human_readable_time_units !== false} onChange={patch => updateStep(index, patch)} />
               <label><span>{tr(locale, 'Start')}</span><TimeValueField value={step.at_us / 1000} human={state.human_readable_time_units !== false} onChange={value => updateStep(index, { at_us: Math.round(value * 1000) })} /></label>
               <label><span>{tr(locale, 'Command')}</span><Select value={step.kind} options={Object.entries(sequenceKindLabels).map(([kind, label]) => ({ value: kind, label: tr(locale, label) }))} onChange={(kind) => updateStep(index, { kind })} /></label>
               <label><span>{tr(locale, 'Target')}</span><InputNumber min={0} value={step.target} onChange={(target) => updateStep(index, { target: target ?? undefined })} /></label>

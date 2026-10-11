@@ -16,6 +16,10 @@ statements are not the present product state.
   replacement is needed for this build-policy change.
   [Low-write workflow](LOCAL-WORKSPACE-HYGIENE.md) retains diagnostic opt-ins and
   measured RAM-disk sizing constraints.
+- Individual step repeats coexist with whole-effect repeats. Native/Web designer
+  ghosts select their source and expose interval/length manipulation without
+  creating persisted duplicate cues: [step repeat contract](step-repeat-ghosts.md).
+  Installed delivery and physical acceptance are distinct from source coverage.
 - Erfan's current-source package is installed and reopened in its signed-in NLE
   workspace with Cafe's real board connected while paused; original cues and
   private work are preserved. Publishing ownership changed after a repeated clean
@@ -71,7 +75,8 @@ statements are not the present product state.
   implementation and [PCController PR #634](https://github.com/atomicdeploy/PCController/pull/634)
   is merged; see [source and delivery gates](effects-designer-gestures.md).
   PR #142 and its integrated main have passed platform CI. Preserve exact persisted
-  per-step repetition schedules before deploying the new rejecting contract.
+  per-step repetition schedules across paired contract deployment; the restored
+  step-repeat feature must not automatically decompile explicitly reauthored work.
   Cafe's recorded smoke-launch tool denial remains a deployment blocker unless
   explicitly cleared; its staged package is not delivery evidence. The controller
   Web/TUI chooser and autonomous command-tail gates remain in its owning tracker.

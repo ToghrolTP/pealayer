@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button, Dropdown, Space, Tooltip } from 'antd';
 import { CopyOutlined, DeleteOutlined, SelectOutlined } from '@ant-design/icons';
-import { deleteSequenceCues, duplicateSequenceCues, formatTimeMs, moveSequenceStep, selectCueIndices, sequenceKindLabels, sequenceLaneName, SequenceStep } from '../cueAuthoring';
+import { deleteSequenceCues, duplicateSequenceCues, editStepInstance, formatTimeMs, moveSequenceStep, selectCueIndices, sequenceKindLabels, sequenceLaneName, stepInstances, SequenceStep } from '../cueAuthoring';
 import { sequenceDurationMs } from '../melodyCatalog';
 import { tr, UiLocale } from '../i18n';
 
@@ -17,21 +17,30 @@ export function SequenceTimeline<T extends SequenceStep>({ steps, onChange, loca
   const previousSteps = useRef(steps);
   const ownUpdate = useRef<T[] | null>(null);
   const [preview, setPreview] = useState<{ index: number; step: T; copy: boolean } | null>(null);
-  const drag = useRef<null | { index: number; origin: number; at: number; scale: number; step: T; copy: boolean; moved: boolean }>(null);
+  const drag = useRef<null | { index: number; iteration: number; mode: 'move' | 'length'; origin: number; at: number; scale: number; step: T; copy: boolean; moved: boolean }>(null);
   const container = useRef<HTMLDivElement>(null);
   const section = useRef<HTMLElement>(null);
   const suppressClick = useRef<number | null>(null);
+  const [viewport, setViewport] = useState({ left: 0, width: 1000 });
+  useEffect(() => {
+    const element = container.current; if (!element) return;
+    const refresh = () => setViewport({ left: element.scrollLeft, width: element.clientWidth });
+    const observer = new ResizeObserver(refresh); observer.observe(element); refresh();
+    return () => observer.disconnect();
+  }, []);
   useEffect(() => {
     if (steps === previousSteps.current) return;
     // External draft replacement/reorder must not retain stale destructive
     // selections. Our own atomic edits keep their selected result.
     if (steps !== ownUpdate.current) {
+      drag.current = null; setPreview(null);
       primary.current = Math.min(primary.current, Math.max(0, steps.length - 1));
       anchor.current = primary.current;
       setSelected(new Set(steps.length ? [primary.current] : []));
     }
     previousSteps.current = steps; ownUpdate.current = null;
   }, [steps]);
+  useEffect(() => { if (disabled) { drag.current = null; setPreview(null); } }, [disabled]);
   const commit = (next: T[]) => { ownUpdate.current = next; onChange(next); };
   const laneFor = (step: T) => step.kind === 'motion' ? (step.target === 1 ? 'seat.b' : 'seat.a') : `${step.kind}.${step.target ?? 0}`;
   const lanes = [...new Set([...controls.filter(c => c.kind === 'motion' && !c.locked).map(c => c.key), ...steps.map(laneFor)])];
@@ -79,41 +88,48 @@ export function SequenceTimeline<T extends SequenceStep>({ steps, onChange, loca
       <Tooltip title={tr(locale, 'Delete')}><Button danger icon={<DeleteOutlined />} disabled={disabled || !selected.size} onClick={() => remove()}>{tr(locale, 'Delete selected cues')}</Button></Tooltip>
       <span aria-live="polite">{tr(locale, 'Selected cues')}: {selected.size}</span>
     </Space>
-    <div className="sequence-authoring__scroll" ref={container}>
+    <div className="sequence-authoring__scroll" ref={container} onScroll={event => setViewport({ left: event.currentTarget.scrollLeft, width: event.currentTarget.clientWidth })}>
       <div style={{ minWidth: width + 140 }}>
         {lanes.map(lane => <div className="sequence-authoring__row" key={lane}>
           <div className="sequence-authoring__label">{sequenceLaneName(lane, controls)}</div>
           <div className="sequence-authoring__lane" data-sequence-lane={lane} style={{ width }} onPointerDown={event => {
             if (event.target === event.currentTarget) section.current?.focus({ preventScroll: true });
           }}>
-            {steps.map((step, index) => {
+            {steps.flatMap((step, index) => stepInstances(preview?.index === index && !preview.copy ? preview.step : step, index,
+              Math.max(0, (viewport.left - 140 - 40) / scale * 1000), (viewport.left + viewport.width) / scale * 1000, drag.current?.index === index ? drag.current.iteration : undefined))
+              .sort((a, b) => Number(a.iteration === 0) - Number(b.iteration === 0)).map(({ source: index, iteration, at_us }) => {
+              const step = steps[index], ghost = iteration > 0;
               // Keep the captured DOM node in its original lane until release.
-              const shown = preview?.index === index && !preview.copy ? { ...step, at_us: preview.step.at_us } : step;
+              const shown = { ...step, at_us, duration_ms: preview?.index === index && !preview.copy ? preview.step.duration_ms : step.duration_ms };
               if (laneFor(shown) !== lane) return null;
               const length = Math.max(38, Number(shown.duration_ms ?? 0) * scale);
               const label = step.kind === 'motion' ? tr(locale, step.value === 1 ? 'Up' : step.value === 2 ? 'Down' : 'Stop') : tr(locale, sequenceKindLabels[step.kind] ?? step.kind);
-              return <Dropdown key={index} trigger={['contextMenu']} menu={{ items: [
+              return <Dropdown key={`${index}:${iteration}`} trigger={['contextMenu']} menu={{ items: [
                 { key: 'duplicate', label: tr(locale, 'Duplicate selected cues'), icon: <CopyOutlined />, disabled },
                 { key: 'delete', label: tr(locale, 'Delete selected cues'), icon: <DeleteOutlined />, disabled, danger: true },
               ], onClick: ({ key }) => { if (key === 'duplicate') duplicate(contextSelection(index)); else remove(contextSelection(index)); } }}>
-                <button type="button" className={`sequence-authoring__cue ${selected.has(index) ? 'is-selected' : ''}`} aria-pressed={selected.has(index)}
-                  data-step-index={index} style={{ left: shown.at_us / 1000 * scale, width: length }} disabled={disabled}
+                <button type="button" className={`sequence-authoring__cue ${ghost ? 'is-repeat' : ''} ${selected.has(index) ? 'is-selected' : ''}`} aria-pressed={selected.has(index)}
+                  data-step-index={index} data-repeat-index={iteration} aria-label={`${label}${ghost ? ` · ${tr(locale, 'Repeat step')} ${iteration + 1}` : ''}`} style={{ left: shown.at_us / 1000 * scale, width: length }} disabled={disabled}
                   title={`${label} · ${formatTimeMs(shown.at_us / 1000, human)} · ${formatTimeMs(Number(shown.duration_ms ?? 0), human)}\n${tr(locale, 'Ctrl-click to toggle; Shift-click to select a range')}`}
                   onContextMenu={() => { if (!selected.has(index)) choose(index); }}
                   onClick={event => { if (suppressClick.current === index) { suppressClick.current = null; return; } choose(index, event.ctrlKey || event.metaKey, event.shiftKey); }} onPointerDown={event => {
                     if (event.button !== 0 || disabled) return;
                     event.preventDefault(); event.currentTarget.focus({ preventScroll: true }); event.currentTarget.setPointerCapture(event.pointerId);
-                    drag.current = { index, origin: event.clientX, at: step.at_us, scale, step: structuredClone(step), copy: event.ctrlKey || event.metaKey, moved: false };
+                    const rect = event.currentTarget.getBoundingClientRect();
+                    const mode = step.duration_ms != null && event.clientX >= rect.right - 8 ? 'length' : 'move';
+                    drag.current = { index, iteration, mode, origin: event.clientX, at: step.at_us, scale, step: structuredClone(step), copy: !ghost && mode === 'move' && (event.ctrlKey || event.metaKey), moved: false };
+                    if (!selected.has(index) && !event.ctrlKey && !event.metaKey && !event.shiftKey) choose(index);
                   }} onPointerMove={event => {
-                    const active = drag.current; if (!active || active.index !== index) return;
+                    const active = drag.current; if (!active || active.index !== index || active.iteration !== iteration) return;
                     const target = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('[data-sequence-lane]')?.dataset.sequenceLane;
                     const at = active.at + (event.clientX - active.origin) / active.scale * 1000;
-                    active.moved ||= Math.abs(event.clientX - active.origin) > 2 || (target != null && target !== laneFor(active.step));
-                    setPreview({ index, step: moveSequenceStep(active.step, at, target) as T, copy: active.copy });
+                    active.moved ||= Math.abs(event.clientX - active.origin) > 2 || (!ghost && active.mode === 'move' && target != null && target !== laneFor(active.step));
+                    const edited = ghost || active.mode === 'length' ? editStepInstance(active.step, iteration, (event.clientX - active.origin) / active.scale, active.mode) : moveSequenceStep(active.step, at, target) as T;
+                    setPreview({ index, step: edited, copy: active.copy });
                   }} onPointerUp={event => {
-                    const active = drag.current; if (!active || active.index !== index) return;
+                    const active = drag.current; if (!active || active.index !== index || active.iteration !== iteration) return;
                     const target = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('[data-sequence-lane]')?.dataset.sequenceLane;
-                    const moved = moveSequenceStep(active.step, active.at + (event.clientX - active.origin) / active.scale * 1000, target) as T;
+                    const moved = ghost || active.mode === 'length' ? editStepInstance(active.step, iteration, (event.clientX - active.origin) / active.scale, active.mode) : moveSequenceStep(active.step, active.at + (event.clientX - active.origin) / active.scale * 1000, target) as T;
                     if (active.moved) {
                       suppressClick.current = index;
                       window.setTimeout(() => { suppressClick.current = null; }, 0);
@@ -122,7 +138,8 @@ export function SequenceTimeline<T extends SequenceStep>({ steps, onChange, loca
                       commit(next); choose(destination); if (active.copy) reveal(destination);
                     }
                     drag.current = null; setPreview(null);
-                  }} onPointerCancel={() => { drag.current = null; setPreview(null); }}><span aria-hidden>⋮</span> {label}</button>
+                  }} onPointerCancel={() => { drag.current = null; setPreview(null); }} onLostPointerCapture={() => { drag.current = null; setPreview(null); }}><span aria-hidden>{ghost ? `↻${iteration + 1}` : '⋮'}</span> {label}
+                  {step.duration_ms != null && <span className="sequence-authoring__resize" aria-hidden>⋮</span>}</button>
               </Dropdown>;
             })}
             {preview && laneFor(preview.step) === lane && <span className="sequence-authoring__ghost" style={{ left: preview.step.at_us / 1000 * scale, width: Math.max(38, Number(preview.step.duration_ms ?? 0) * scale) }}>{preview.copy ? tr(locale, 'Copy') : ''}</span>}

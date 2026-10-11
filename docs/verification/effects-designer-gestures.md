@@ -2,6 +2,11 @@
 
 Tracks #141. Branch: `feat/effects-designer-gestures`.
 
+Historical source checkpoint: its decision to replace step repeats is superseded
+by [independent step repeats and ghost instances](step-repeat-ghosts.md). Both
+repeat levels now belong to the current paired contract, without a migration or
+version-specific compatibility path. Earlier acceptance below remains dated.
+
 ## Scope
 
 - Move seat cues across compatible motion tracks without changing other placements of a shared template.

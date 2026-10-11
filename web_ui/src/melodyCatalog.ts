@@ -1,3 +1,5 @@
+import { stepRepetition } from './cueAuthoring';
+
 export type HardwareMelody = {
   name: string;
   duration_ms: number;
@@ -7,7 +9,8 @@ export type HardwareMelody = {
 export const sequenceDurationMs = (steps: Array<Record<string, any>>): number => steps.reduce(
   (maximum, step) => Math.max(
     maximum,
-    Math.ceil(Number(step.at_us ?? 0) / 1000) + Math.max(0, Number(step.duration_ms ?? 0)),
+    Math.ceil((stepRepetition({ ...step, at_us: Number(step.at_us ?? 0), kind: String(step.kind ?? '') })?.endUs
+      ?? (Number(step.at_us ?? 0) + Math.max(0, Number(step.duration_ms ?? 0)) * 1000)) / 1000),
   ),
   1,
 );

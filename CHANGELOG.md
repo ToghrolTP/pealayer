@@ -30,6 +30,9 @@ retroactively attributed to an older download.
   from the library without treating selection as seeking.
 - Use Effects Designer's Ctrl-drag copies, compatible seat-lane moves and scoped
   bulk selection/duplicate/delete actions without changing other shared placements.
+- Repeat individual steps alongside whole-effect loops. Dimmed timeline copies
+  select the original step; drag them to adjust spacing or resize their shared
+  length without adding duplicate saved cues.
 - Author finite whole-effect repetition and Start/Length/Finish timing; select
   advertised capture channels/opcodes explicitly and Publish & Run after the
   controller acknowledges the definition. Paired installed acceptance remains
