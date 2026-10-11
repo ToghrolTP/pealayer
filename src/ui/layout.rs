@@ -1245,7 +1245,7 @@ fn effects_library_toolbar(app: &mut PealayerApp, ui: &mut egui::Ui, width: f32)
     // beyond the same outer width used by search, groups and effect cards.
     ui.allocate_ui_with_layout(egui::vec2(width, 0.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
         let compact = width < 330.0;
-        let manage = app.tr("Manage effects");
+        let manage = app.tr("Effects Designer");
         let new = app.tr("New effect");
         let manage_response = ui.button(if compact { crate::ui::icons::PENCIL_SIMPLE.to_string() } else {
             format!("{} {manage}", crate::ui::icons::PENCIL_SIMPLE)
@@ -4245,7 +4245,7 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
                     .iter()
                     .find(|template| template.id == instance.effect_id)
                     .map(|template| template.duration_ms)
-                    .unwrap_or(0).max(100);
+                    .unwrap_or(0).max(1_000);
                 app.undo_stack.push(app.snapshot_timeline());
                 let duplicate = crate::four_d::models::EffectInstance::new(
                     instance.effect_id,
@@ -12845,7 +12845,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 .button(format!(
                                                     "{} {}",
                                                     crate::ui::icons::PENCIL_SIMPLE,
-                                                    self.app.tr("Manage effects")
+                                                    self.app.tr("Effects Designer")
                                                 ))
                                                 .clicked()
                                             {

@@ -1,0 +1,45 @@
+export type SequenceStep = { at_us: number; kind: string; target?: number; value?: number; duration_ms?: number; action_ids?: string[]; [key: string]: unknown };
+
+export const newCueId = () => {
+  const bytes = crypto.getRandomValues(new Uint8Array(16));
+  bytes[6] = (bytes[6] & 15) | 64; bytes[8] = (bytes[8] & 63) | 128;
+  const hex = Array.from(bytes, value => value.toString(16).padStart(2, '0')).join('');
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+};
+
+export const duplicateStep = (step: SequenceStep, offsetMs = Math.max(1000, step.duration_ms ?? 0)): SequenceStep => ({
+  ...structuredClone(step), at_us: step.at_us + offsetMs * 1000,
+});
+
+export function moveSequenceStep(step: SequenceStep, atUs: number, lane?: string): SequenceStep {
+  const moved = { ...step, at_us: Math.max(0, Math.round(atUs)) };
+  if (step.kind === 'motion' && (lane === 'seat.a' || lane === 'seat.b')) {
+    moved.target = lane === 'seat.a' ? 0 : 1;
+    const action = step.value === 1 ? 'up' : step.value === 2 ? 'down' : 'stop';
+    moved.action_ids = [`${lane}.${action}`];
+  }
+  return moved;
+}
+
+export function parseTimeMs(text: string): number | null {
+  const match = /^\s*(\d+(?:[.,]\d+)?)\s*(ms|s|sec|min|m|h|us|µs|μs)?\s*$/i.exec(text);
+  if (!match) return null;
+  const multiplier: Record<string, number> = { ms: 1, s: 1000, sec: 1000, min: 60000, m: 60000, h: 3600000, us: .001, 'µs': .001, 'μs': .001 };
+  const value = Number(match[1].replace(',', '.')) * (multiplier[(match[2] ?? 'ms').toLowerCase()] ?? 1);
+  return Number.isSafeInteger(Math.round(value * 1000)) ? value : null;
+}
+
+export function formatTimeMs(value: number, human = true): string {
+  if (value === 0) return '0s';
+  if (!human) return `${value}ms`;
+  const unit = value >= 3600000 ? ['h', 3600000] as const : value >= 60000 ? ['min', 60000] as const : value >= 1000 ? ['s', 1000] as const : ['ms', 1] as const;
+  return `${Number((value / unit[1]).toFixed(6))}${unit[0]}`;
+}
+
+export function repeatedDurationMs(base: number, count = 1, interval = 0): number | null {
+  if (!Number.isInteger(count) || count < 1 || count > 1000 || interval < 0 || !Number.isInteger(interval)) return null;
+  const period = interval || base;
+  if (count > 1 && period < base) return null;
+  const total = base + (count - 1) * period;
+  return Number.isSafeInteger(total) ? total : null;
+}

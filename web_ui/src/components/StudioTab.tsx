@@ -51,6 +51,9 @@ import type { TimelineWheelPreferences } from '../timelineWheel';
 import { appendMelodySteps, sequenceDurationMs } from '../melodyCatalog';
 import { MediaTrackSelectors } from './MediaTrackSelectors';
 import { PlaybackButton } from './PlaybackButton';
+import { SequenceTimeline } from './SequenceTimeline';
+import { TimeValueField } from './TimeValueField';
+import { newCueId, repeatedDurationMs, formatTimeMs } from '../cueAuthoring';
 
 interface StudioTabProps {
   state: PlayerState;
@@ -249,6 +252,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
   const effectPayload = (draft: Record<string, any>) => {
     const { programText, steps, engine, ...payload } = draft;
     return { ...payload, program: draft.kind === 'sequence' ? {
+      repeat_count: draft.repeat_count ?? 1, repeat_interval_ms: draft.repeat_interval_ms ?? 0,
       steps: steps ?? [], properties: { ...(draft.program?.properties ?? {}), mode: engine ?? 'auto', ...(draft.color ? { color: draft.color } : {}) },
     } : JSON.parse(programText || '{}') };
   };
@@ -286,11 +290,23 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
     startTimeMs: number;
     durationMs: number;
     moved: boolean;
+    originY: number;
+    duplicateId?: string;
+    controlKey?: string;
   }>(null);
+  const [selectedCue, setSelectedCue] = useState<string | null>(null);
+  const focusCue = useRef<string | null>(null);
+  const currentCuePlacement = useRef<{ start_time_ms: number; duration_ms: number; control_key?: string } | null>(null);
   const suppressCueClick = useRef<string | null>(null);
   const effects = state.effects ?? [];
   const controllerEffects = state.controller_effects ?? [];
   const cues = state.cues ?? [];
+  useEffect(() => {
+    if (!focusCue.current || !cues.some(cue => cue.id === focusCue.current)) return;
+    const element = document.querySelector<HTMLElement>(`[data-cue-id="${focusCue.current}"]`);
+    element?.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' }); element?.focus({ preventScroll: true });
+    focusCue.current = null;
+  }, [cues]);
   const chapters = state.chapters ?? [];
   const currentSeconds = state.playback_time ?? 0;
   const durationSeconds = state.duration ?? 0;
@@ -373,23 +389,29 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
         durationMs = Math.max(1, activeCueDrag.durationMs + deltaMs);
       }
       setCuePreviews((current) => ({ ...current, [activeCueDrag.id]: { start_time_ms: startTimeMs, duration_ms: durationMs } }));
-      if (Math.abs(event.clientX - activeCueDrag.originX) > 2 && !activeCueDrag.moved) {
+      const target = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('[data-motion-track]')?.dataset.motionTrack;
+      const targetKey = activeCueDrag.controlKey?.startsWith('seat.') && (target === 'seat.a' || target === 'seat.b') ? target : undefined;
+      currentCuePlacement.current = { start_time_ms: startTimeMs, duration_ms: durationMs, control_key: targetKey };
+      if ((Math.abs(event.clientX - activeCueDrag.originX) > 2 || Math.abs(event.clientY - activeCueDrag.originY) > 2) && !activeCueDrag.moved) {
         setActiveCueDrag((current) => current ? { ...current, moved: true } : current);
       }
     };
     const onPointerUp = () => {
-      const preview = cuePreviews[activeCueDrag.id] ?? {
+      const preview = currentCuePlacement.current ?? {
         start_time_ms: activeCueDrag.startTimeMs,
         duration_ms: activeCueDrag.durationMs,
       };
       if (activeCueDrag.moved) {
         suppressCueClick.current = activeCueDrag.id;
-        sendCmd('effect_cue.update', {
-          instance_id: activeCueDrag.id,
-          start_time_ms: preview.start_time_ms,
-          duration_ms: preview.duration_ms,
-        });
+        if (activeCueDrag.mode === 'move') {
+          const copyId = activeCueDrag.duplicateId;
+          void sendCmd('timeline.cue.place', { instance_id: activeCueDrag.id, start_time_ms: preview.start_time_ms,
+            ...(preview.control_key ? { control_key: preview.control_key } : {}), ...(copyId ? { duplicate_id: copyId } : {}) });
+          setSelectedCue(copyId ?? activeCueDrag.id); focusCue.current = copyId ?? activeCueDrag.id;
+        } else void sendCmd('effect_cue.update', { instance_id: activeCueDrag.id, start_time_ms: preview.start_time_ms, duration_ms: preview.duration_ms });
       }
+      setCuePreviews(current => { const next = { ...current }; delete next[activeCueDrag.id]; return next; });
+      currentCuePlacement.current = null;
       setActiveCueDrag(null);
     };
     window.addEventListener('pointermove', onPointerMove);
@@ -415,6 +437,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
       ...effect,
       programText: JSON.stringify(program, null, 2),
       steps: Array.isArray(program.steps) ? program.steps : [],
+      repeat_count: program.repeat_count ?? 1, repeat_interval_ms: program.repeat_interval_ms ?? 0,
       color: program.properties?.color,
       engine: program.properties?.mode ?? 'auto',
       default_fps: effect.default_fps ?? 20,
@@ -422,7 +445,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
       is_new: false,
     } : {
       reference: '', id: String(Array.from({ length: 256 }, (_, id) => id).find((id) => !controllerEffects.some((effect) => effect.id === String(id))) ?? ''), name: '', icon: 'sparkle', category: 'Effects', description: '',
-      kind: 'sequence', programText: '{}', steps: [], engine: 'auto',
+      kind: 'sequence', programText: '{}', steps: [], engine: 'auto', repeat_count: 1, repeat_interval_ms: 0,
       color: 'violet', default_fps: 20, duration_ms: 1, default_pixels: 100,
       is_new: true,
     });
@@ -536,7 +559,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
       </section>
 
       <Modal
-        title={effectDraft?.is_new ? tr(locale, 'New effect') : tr(locale, 'Effect properties')}
+        title={tr(locale, 'Effects Designer')}
         open={effectEditorOpen}
         onCancel={() => { if (!captureBusy && !savingEffect) setEffectEditorOpen(false); }}
         closable={!captureBusy && !savingEffect}
@@ -583,6 +606,15 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
             {effectDraft.kind === 'strip-stream' && <label className="effect-editor-grid__wide"><span>{tr(locale, 'Program')}</span><Input.TextArea autoSize={{ minRows: 7, maxRows: 16 }} value={effectDraft.programText} onChange={(event) => setEffectDraft({ ...effectDraft, programText: event.target.value })} /></label>}
             {effectDraft.kind === 'sequence' && (
               <div className="effect-editor-grid__wide sequence-editor-web">
+                <Space wrap>
+                  <label>{tr(locale, 'Repeat effect')} <InputNumber min={1} max={1000} value={effectDraft.repeat_count ?? 1} onChange={value => setEffectDraft({ ...effectDraft, repeat_count: value ?? 1 })} /></label>
+                  <label>{tr(locale, 'Interval')} <TimeValueField value={effectDraft.repeat_interval_ms ?? 0} human={state.human_readable_time_units !== false} onChange={value => setEffectDraft({ ...effectDraft, repeat_interval_ms: Math.round(value) })} /></label>
+                  <span className="muted">{tr(locale, '0s uses the full effect length; interval is start-to-start')}</span>
+                  <span>{repeatedDurationMs(sequenceDurationMs(effectDraft.steps), effectDraft.repeat_count ?? 1, effectDraft.repeat_interval_ms ?? 0) === null ? tr(locale, 'Effect repeat interval cannot be shorter than its length') : formatTimeMs(repeatedDurationMs(sequenceDurationMs(effectDraft.steps), effectDraft.repeat_count ?? 1, effectDraft.repeat_interval_ms ?? 0)!, state.human_readable_time_units !== false)}</span>
+                  <Button disabled={captureBusy || savingEffect || !state.controller_connected || !effectDraft.name?.trim()} icon={<CaretRightFilled />} onClick={() => { void sendCmd('controller_effect.publish_and_run', effectPayload(effectDraft)); }}>{tr(locale, 'Publish & Run')}</Button>
+                </Space>
+                <SequenceTimeline steps={effectDraft.steps} locale={locale} controls={state.hardware_details?.controls} disabled={captureBusy}
+                  human={state.human_readable_time_units !== false} onChange={steps => setEffectDraft({ ...effectDraft, steps })} />
                 <Divider titlePlacement="start" plain>{tr(locale, 'Sequence steps')}</Divider>
                 <div className="sequence-editor-web__toolbar">
                   <ConfigProvider componentDisabled={false}><EffectRecorder state={state} sendCmd={sendCmd} locale={locale} effect={effectPayload(effectDraft)} onSequenceChange={(steps, id) => setEffectDraft((current) => current ? { ...current, steps, id: String(id), reference: `effect:${id}`, is_new: false } : current)} /></ConfigProvider>
@@ -608,7 +640,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                   ) : (effectDraft.steps ?? []).map((step: Record<string, any>, index: number) => (
                     <div className="sequence-step-row" key={`${index}:${step.at_us}:${step.kind}`}>
                       <span className="sequence-step-row__index">{index + 1}</span>
-                      <label><span>{tr(locale, 'Time')}</span><InputNumber min={0} step={10} addonAfter="ms" value={Math.round(Number(step.at_us ?? 0) / 1000)} onChange={(value) => {
+                      <label><span>{tr(locale, 'Start')}</span><TimeValueField value={Number(step.at_us ?? 0) / 1000} human={state.human_readable_time_units !== false} onChange={(value) => {
                         const steps = [...effectDraft.steps]; steps[index] = { ...step, at_us: Math.max(0, Number(value ?? 0)) * 1000 }; setEffectDraft({ ...effectDraft, steps });
                       }} /></label>
                       <label><span>{tr(locale, 'Action')}</span><Select value={step.kind} options={[
@@ -629,11 +661,11 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                       {['relay', 'motion', 'pwm'].includes(step.kind) && <label><span>{tr(locale, 'Value')}</span><InputNumber min={0} max={step.kind === 'relay' ? 1 : step.kind === 'motion' ? 2 : 4095} value={step.value ?? 0} onChange={(value) => {
                         const steps = [...effectDraft.steps]; steps[index] = { ...step, value: Number(value ?? 0) }; setEffectDraft({ ...effectDraft, steps });
                       }} /></label>}
-                      <label><span>{tr(locale, 'Duration')}</span><InputNumber min={0} step={50} addonAfter="ms" value={step.duration_ms ?? 0} onChange={(duration_ms) => {
+                      <label><span>{tr(locale, 'Length')}</span><TimeValueField value={step.duration_ms ?? 0} human={state.human_readable_time_units !== false} onChange={(duration_ms) => {
                         const steps = [...effectDraft.steps]; steps[index] = { ...step, duration_ms: Number(duration_ms ?? 0) || undefined }; setEffectDraft({ ...effectDraft, steps });
                       }} /></label>
-                      <label><span>{tr(locale, 'Repeat')}</span><InputNumber min={0} max={1000} value={step.repeat_count ?? 0} onChange={(repeat_count) => {
-                        const steps = [...effectDraft.steps]; steps[index] = { ...step, repeat_count: Number(repeat_count ?? 0) || undefined }; setEffectDraft({ ...effectDraft, steps });
+                      <label><span>{tr(locale, 'Finish')}</span><TimeValueField min={Number(step.at_us ?? 0) / 1000} value={Number(step.at_us ?? 0) / 1000 + (step.duration_ms ?? 0)} human={state.human_readable_time_units !== false} onChange={(finish) => {
+                        const steps = [...effectDraft.steps]; steps[index] = { ...step, duration_ms: Math.round(finish - Number(step.at_us ?? 0) / 1000) }; setEffectDraft({ ...effectDraft, steps });
                       }} /></label>
                       <Space.Compact className="sequence-step-row__actions">
                         <Button icon={<ArrowUpOutlined />} disabled={index === 0} onClick={() => {
@@ -1013,7 +1045,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                   </Dropdown>
                 </div>
                 </Dropdown>
-                <div className="timeline-lane">
+                <div className="timeline-lane" data-motion-track={track.control_key && !track.locked && isMotionControl(track.control_key) ? track.control_key : undefined}>
                   {effectCues.map((cue) => (
                     (() => {
                       const placement = cuePreviews[cue.id] ?? cue;
@@ -1021,10 +1053,15 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                     <Dropdown key={cue.id} trigger={['contextMenu']} menu={{ items: [
                       ...(cue.control_key ? [{ key: 'manage', label: tr(locale, 'Manage...'), icon: <EditOutlined /> }] : []),
                       { key: 'jump', label: tr(locale, 'Jump to cue start'), icon: <AimOutlined /> },
+                      { key: 'duplicate', label: tr(locale, 'Duplicate cue') },
                       { key: 'delete', label: tr(locale, 'Delete cue'), icon: <DeleteOutlined />, danger: true },
                     ], onClick: ({ key }) => {
                       if (key === 'manage' && cue.control_key) openDirectCue(cue.control_key, cue);
                       if (key === 'jump') sendCmd('seek_to', { seconds: placement.start_time_ms / 1000 });
+                      if (key === 'duplicate') {
+                        const id = newCueId(); setSelectedCue(id); focusCue.current = id;
+                        void sendCmd('timeline.cue.place', { instance_id: cue.id, start_time_ms: cue.start_time_ms + Math.max(1000, cue.duration_ms), duplicate_id: id });
+                      }
                       if (key === 'delete') sendCmd('pealayer.timeline.effect.remove', { instance_id: cue.id });
                     } }}>
                     <div
@@ -1032,7 +1069,8 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                       role="button"
                       tabIndex={0}
                       aria-label={cue.name}
-                      className={`timeline-cue ${cue.behavior === 'set-keep' ? 'timeline-cue--state' : ''} ${cue.behavior === 'ramp' ? 'timeline-cue--ramp' : ''}`}
+                      data-cue-id={cue.id}
+                      className={`timeline-cue ${selectedCue === cue.id ? 'is-selected' : ''} ${cue.behavior === 'set-keep' ? 'timeline-cue--state' : ''} ${cue.behavior === 'ramp' ? 'timeline-cue--ramp' : ''}`}
                       style={{
                         left: `${(placement.start_time_ms / timelineDurationMs) * 100}%`,
                         width: cue.behavior === 'set-keep' ? 88 : `${Math.max(1.2, (placement.duration_ms / timelineDurationMs) * 100)}%`,
@@ -1047,7 +1085,8 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                         const laneRect = event.currentTarget.parentElement?.getBoundingClientRect();
                         const edge = Math.min(12, cueRect.width * .3);
                         const localX = event.clientX - cueRect.left;
-                        const mode = cue.resizable && localX <= edge
+                        const copying = event.ctrlKey || event.metaKey;
+                        const mode = copying ? 'move' : cue.resizable && localX <= edge
                           ? 'resize-left'
                           : cue.resizable && localX >= cueRect.width - edge
                             ? 'resize-right'
@@ -1060,7 +1099,12 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                           startTimeMs: placement.start_time_ms,
                           durationMs: placement.duration_ms,
                           moved: false,
+                          originY: event.clientY,
+                          duplicateId: copying ? newCueId() : undefined,
+                          controlKey: cue.control_key ?? undefined,
                         });
+                        currentCuePlacement.current = { start_time_ms: placement.start_time_ms, duration_ms: placement.duration_ms };
+                        setSelectedCue(cue.id);
                       }}
                       onClick={() => {
                         if (suppressCueClick.current === cue.id) {
@@ -1068,6 +1112,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                           return;
                         }
                         // Selection/editing must not move the media playhead.
+                        setSelectedCue(cue.id);
                       }}
                       onKeyDown={(event) => {
                         if (event.target !== event.currentTarget || !['Enter', ' '].includes(event.key)) return;

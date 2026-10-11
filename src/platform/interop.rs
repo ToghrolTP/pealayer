@@ -260,6 +260,12 @@ pub enum InteropCommand {
         start_time_ms: u64,
         duration_ms: u64,
     },
+    PlaceTimelineCue {
+        instance_id: String,
+        start_time_ms: u64,
+        #[serde(default)] control_key: Option<String>,
+        #[serde(default)] duplicate_id: Option<String>,
+    },
     AddDirectControlCue {
         control_key: String,
         value_basis_points: u16,
@@ -299,15 +305,21 @@ pub enum InteropCommand {
     SaveControllerEffect {
         effect: WebControllerEffectDraft,
     },
+    PublishAndRunControllerEffect {
+        effect: WebControllerEffectDraft,
+    },
     StartControllerEffectRecording {
         name: String,
         category: String,
         color: String,
         mode: String,
         #[serde(default)]
+        capture_selection: crate::four_d::controller::HardwareCaptureSelection,
+        #[serde(default)]
         effect: Option<WebControllerEffectDraft>,
     },
     RefreshControllerEffectRecording,
+    RefreshCaptureCapabilities,
     SaveControllerEffectRecording,
     DiscardControllerEffectRecording,
     SetRecording {
@@ -709,6 +721,12 @@ impl InteropCommand {
             {
                 Err("direct cue requires a channel key, 0..100% value, and 100 ms..24 hour duration".to_string())
             }
+            Self::PlaceTimelineCue { instance_id, control_key, duplicate_id, .. }
+                if uuid::Uuid::parse_str(instance_id).is_err()
+                    || duplicate_id.as_ref().is_some_and(|id| uuid::Uuid::parse_str(id).is_err())
+                    || control_key.as_ref().is_some_and(|key| !matches!(key.as_str(), "seat.a" | "seat.b")) => {
+                Err("cue placement requires UUIDs and a compatible seat track".into())
+            }
             Self::UpdateDirectControlCueValue {
                 instance_id,
                 value_basis_points,
@@ -727,7 +745,7 @@ impl InteropCommand {
             {
                 Err("controller effect reference is invalid".to_string())
             }
-            Self::SaveControllerEffect { effect } => effect.validate(),
+            Self::SaveControllerEffect { effect } | Self::PublishAndRunControllerEffect { effect } => effect.validate(),
             Self::SaveControllerEffectGroup {
                 original_name,
                 name,
@@ -1210,6 +1228,8 @@ pub struct PlayerStatusResponse {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub timeline_wheel_preferences: Option<crate::config::TimelineWheelPreferences>,
     pub playing: bool,
+    #[serde(default = "default_human_time_units")]
+    pub human_readable_time_units: bool,
     pub volume: f64,
     #[serde(default)]
     pub muted: bool,
@@ -1439,6 +1459,8 @@ pub struct WebControllerEffect {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct WebEffectRecording {
+    pub capture_selection: crate::four_d::controller::HardwareCaptureSelection,
+    pub capabilities: crate::four_d::controller::HardwareCaptureCapabilities,
     pub active: bool,
     pub id: u8,
     pub name: String,
@@ -1519,8 +1541,15 @@ impl WebControllerEffectDraft {
                 // Reject malformed authored steps before acknowledging the RPC
                 // instead of discovering them later in the UI dispatch queue.
                 let steps = self.program.get("steps").unwrap_or(&self.program);
-                serde_json::from_value::<Vec<crate::four_d::controller::HardwareMacroStep>>(steps.clone())
+                let steps = serde_json::from_value::<Vec<crate::four_d::controller::HardwareMacroStep>>(steps.clone())
                     .map_err(|error| format!("Invalid effect sequence: {error}"))?;
+                let count = self.program.get("repeat_count").map(|value| value.as_u64()
+                    .and_then(|value| u16::try_from(value).ok()).ok_or("Invalid effect repeat count"))
+                    .transpose()?.unwrap_or(1);
+                let interval = self.program.get("repeat_interval_ms").map(|value| value.as_u64()
+                    .and_then(|value| u32::try_from(value).ok()).ok_or("Invalid effect repeat interval"))
+                    .transpose()?.unwrap_or(0);
+                crate::ui::effects_library::repeated_sequence_duration_ms(&steps, count, interval)?;
                 Ok(())
             }
             "strip-stream" => {
@@ -1535,6 +1564,8 @@ impl WebControllerEffectDraft {
         }
     }
 }
+
+fn default_human_time_units() -> bool { true }
 
 fn default_playback_rate() -> f64 {
     1.0
@@ -1554,6 +1585,7 @@ impl Default for PlayerStatusResponse {
             app_icon_revision: 0,
             timeline_wheel_preferences: None,
             playing: false,
+            human_readable_time_units: true,
             volume: 0.0,
             muted: false,
             playback_rate: default_playback_rate(),
@@ -2024,6 +2056,8 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         }
         "controller_effect.record.start" | "pealayer.controller_effect.record.start" => {
             Some(InteropCommand::StartControllerEffectRecording {
+                capture_selection: request.params.get("capture_selection").cloned()
+                    .map(serde_json::from_value).transpose().map_err(|error| format!("invalid capture selection: {error}"))?.unwrap_or_default(),
                 effect: request.params.get("effect").cloned().map(serde_json::from_value).transpose().map_err(|error|format!("invalid capture effect: {error}"))?,
                 name: string(&["name"])?,
                 category: request
@@ -2049,6 +2083,19 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         "controller_effect.record.status" | "pealayer.controller_effect.record.status" => {
             Some(InteropCommand::RefreshControllerEffectRecording)
         }
+        "controller_effect.publish_and_run" => Some(InteropCommand::PublishAndRunControllerEffect {
+            effect: serde_json::from_value(request.params.clone()).map_err(|error| format!("invalid controller effect: {error}"))?,
+        }),
+        "timeline.cue.place" => Some(InteropCommand::PlaceTimelineCue {
+            instance_id: string(&["instance_id"])?,
+            start_time_ms: request.params.get("start_time_ms").and_then(Value::as_u64)
+                .ok_or_else(|| "missing cue start_time_ms".to_string())?,
+            control_key: request.params.get("control_key").map(|value| value.as_str().map(str::to_owned)
+                .ok_or_else(|| "control_key must be a string".to_string())).transpose()?,
+            duplicate_id: request.params.get("duplicate_id").map(|value| value.as_str().map(str::to_owned)
+                .ok_or_else(|| "duplicate_id must be a UUID string".to_string())).transpose()?,
+        }),
+        "controller_effect.record.capabilities" => Some(InteropCommand::RefreshCaptureCapabilities),
         "controller_effect.record.save" | "pealayer.controller_effect.record.save" => {
             Some(InteropCommand::SaveControllerEffectRecording)
         }
