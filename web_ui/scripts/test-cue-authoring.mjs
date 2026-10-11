@@ -61,6 +61,9 @@ for (const file of ['EffectsTab', 'StudioTab']) {
   assert.ok(source.includes('<SequenceTimeline') && source.includes("tr(locale, 'Effects Designer')"));
   assert.ok(source.includes('<StepRepeatFields'), 'both designers must expose the same step-repeat controls');
 }
+const repeatFields = readFileSync(new URL('../src/components/StepRepeatFields.tsx', import.meta.url), 'utf8');
+assert.ok(repeatFields.includes('className="step-repeat-controls"'), 'repeat toggle and count share one compact row');
+assert.ok(repeatFields.includes('<div className="step-repeat-field">'), 'the checkbox must not be nested inside another label');
 // Scope translation parity to the surfaces changed in this pass. Learned
 // peripheral names, media metadata and user-authored text remain untranslated.
 const nativeDictionary = readFileSync(new URL('../../src/ui/i18n.rs', import.meta.url), 'utf8');
