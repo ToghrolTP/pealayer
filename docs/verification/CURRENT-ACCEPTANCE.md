@@ -16,10 +16,13 @@ statements are not the present product state.
   replacement is needed for this build-policy change.
   [Low-write workflow](LOCAL-WORKSPACE-HYGIENE.md) retains diagnostic opt-ins and
   measured RAM-disk sizing constraints.
-- Erfan is installed and opened in its signed-in NLE workspace with Cafe's real
-  board connected and publishing handed off while paused; original cues and
-  private work are preserved. [Authoring readiness](ERFAN-AUTHORING-READINESS.md)
-  records runtime/ACK evidence and the unavailable visual verification gate.
+- Erfan's current-source package is installed and reopened in its signed-in NLE
+  workspace with Cafe's real board connected while paused; original cues and
+  private work are preserved. Publishing ownership changed after a repeated clean
+  exit, and a metadata timeout needs resolution before hardware preview readiness.
+  [Authoring readiness](ERFAN-AUTHORING-READINESS.md)
+  records the current-source runtime/ACK evidence and a genuine native-window
+  capture. This is editing readiness, not full interactive or physical acceptance.
 - PRs #77 and #79 and CPU fixes #78/#81/#82 are merged. Subsequent feature and
   recovery PRs through #108 are integrated; none should be fetched as a stale
   replacement for current main.
@@ -59,6 +62,11 @@ statements are not the present product state.
 
 ## Remaining gates · do not silently mark complete
 
+- [ ] Finish coordinated Effects Designer/capture work in [PR #142](https://github.com/ToghrolTP/pealayer/pull/142)
+  and [PCController PR #634](https://github.com/atomicdeploy/PCController/pull/634).
+  Resolve CI and exact persisted per-step repetition semantics before deploying
+  the new rejecting contract. Cafe's recorded smoke-launch tool denial remains
+  a deployment blocker; its newer package is staged, not delivered.
 - [ ] Independently exercise elapsed-entry cancel/blur/Enter, Browse, toolbar
   drag/hide, Add cue backdrop and native Appearance/Audio/Subtitle visuals.
 - [ ] Verify phone/tablet/desktop Web gestures, dialogs and interactions against
