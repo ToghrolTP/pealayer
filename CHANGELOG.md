@@ -28,6 +28,12 @@ retroactively attributed to an older download.
   when dropping another effect or refreshing the controller catalog.
 - Record app/board activity into sequences, edit channel lanes, and place effects
   from the library without treating selection as seeking.
+- Use Effects Designer's Ctrl-drag copies, compatible seat-lane moves and scoped
+  bulk selection/duplicate/delete actions without changing other shared placements.
+- Author finite whole-effect repetition and Start/Length/Finish timing; select
+  advertised capture channels/opcodes explicitly and Publish & Run after the
+  controller acknowledges the definition. Paired installed acceptance remains
+  required before deploying the new recording contract over existing definitions.
 - Use magnetic keyframes, cursor-anchored zoom, two-axis panning, configurable
   wheel actions, smooth playhead reveal/follow and reorderable toolbar controls.
 - Manage track visibility, linking, mute, solo, lock, ordering and metadata

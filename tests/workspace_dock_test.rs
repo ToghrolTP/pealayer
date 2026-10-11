@@ -1,5 +1,5 @@
 use egui_dock::DockState;
-use pealayer::config::AppConfig;
+use pealayer::config::{AppConfig, AppLanguage};
 use pealayer::ui::layout::{PealayerTab, create_initial_layout};
 
 #[test]
@@ -56,17 +56,36 @@ fn test_dock_state_serde_roundtrip() {
 
 #[test]
 fn test_pealayer_tab_titles_and_icons() {
-    let app = pealayer::app::PealayerApp::default();
+    let language = AppLanguage::English;
     for tab in PealayerTab::ALL {
-        assert!(!tab.title(&app).is_empty());
+        assert!(!tab.title_for_language(language).is_empty());
+        assert!(!tab.title_for_language(AppLanguage::Persian).is_empty());
         assert!(!tab.icon().is_empty());
     }
-    assert_eq!(PealayerTab::ProgramMonitor.title(&app), "Program Monitor");
-    assert_eq!(PealayerTab::MediaInspector.title(&app), "Media Inspector");
-    assert_eq!(PealayerTab::Timeline.title(&app), "Timeline");
-    assert_eq!(PealayerTab::EffectControls.title(&app), "Effect Controls");
-    assert_eq!(PealayerTab::EffectsLibrary.title(&app), "Effects Library");
-    assert_eq!(PealayerTab::HardwareMonitor.title(&app), "Hardware Monitor");
+    assert_eq!(
+        PealayerTab::ProgramMonitor.title_for_language(language),
+        "Program Monitor"
+    );
+    assert_eq!(
+        PealayerTab::MediaInspector.title_for_language(language),
+        "Media Inspector"
+    );
+    assert_eq!(
+        PealayerTab::Timeline.title_for_language(language),
+        "Timeline"
+    );
+    assert_eq!(
+        PealayerTab::EffectControls.title_for_language(language),
+        "Effect Controls"
+    );
+    assert_eq!(
+        PealayerTab::EffectsLibrary.title_for_language(language),
+        "Effects Library"
+    );
+    assert_eq!(
+        PealayerTab::HardwareMonitor.title_for_language(language),
+        "Hardware Monitor"
+    );
 }
 
 use pealayer::ui::layout::restore_tab_to_canonical_slot;
@@ -123,19 +142,24 @@ fn test_restore_into_empty_dock() {
 
 static CONFIG_TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+fn require_parent_isolated_config() {
+    let path = std::env::var_os("PEALAYER_CONFIG_FILE")
+        .expect("Set an isolated PEALAYER_CONFIG_FILE before starting workspace persistence tests");
+    assert!(std::path::Path::new(&path).is_absolute());
+    // Never mutate process environment underneath libmpv/native threads.
+}
+
 #[test]
 fn test_pealayer_app_tab_toggle_and_focus() {
     let _guard = CONFIG_TEST_MUTEX.lock().unwrap();
-    let temp_dir =
-        std::env::temp_dir().join(format!("pealayer_dock_toggle_{}", uuid::Uuid::new_v4()));
-    let _ = std::fs::create_dir_all(&temp_dir);
-    let config_path = temp_dir.join("config.json");
-    unsafe {
-        std::env::set_var("PEALAYER_CONFIG_FILE", &config_path);
-    }
+    require_parent_isolated_config();
 
     let mut app = pealayer::app::PealayerApp::default();
     assert!(app.is_tab_open(PealayerTab::Timeline));
+    assert_eq!(
+        PealayerTab::Timeline.title(&app),
+        app.tr("Timeline")
+    );
 
     // Toggle Timeline off
     app.toggle_tab(PealayerTab::Timeline);
@@ -148,11 +172,6 @@ fn test_pealayer_app_tab_toggle_and_focus() {
     // Calling open_or_focus_tab on already open tab keeps it open
     app.open_or_focus_tab(PealayerTab::Timeline);
     assert!(app.is_tab_open(PealayerTab::Timeline));
-
-    unsafe {
-        std::env::remove_var("PEALAYER_CONFIG_FILE");
-    }
-    let _ = std::fs::remove_dir_all(&temp_dir);
 }
 
 #[test]
@@ -173,13 +192,7 @@ fn test_corrupt_dock_json_fallback() {
 #[test]
 fn test_app_save_dock_layout_persists_to_config() {
     let _guard = CONFIG_TEST_MUTEX.lock().unwrap();
-    let temp_dir =
-        std::env::temp_dir().join(format!("pealayer_dock_persist_{}", uuid::Uuid::new_v4()));
-    let _ = std::fs::create_dir_all(&temp_dir);
-    let config_path = temp_dir.join("config.json");
-    unsafe {
-        std::env::set_var("PEALAYER_CONFIG_FILE", &config_path);
-    }
+    require_parent_isolated_config();
 
     let mut app = pealayer::app::PealayerApp::default();
     app.save_dock_layout();
@@ -194,11 +207,6 @@ fn test_app_save_dock_layout_persists_to_config() {
             .find_tab(&PealayerTab::ProgramMonitor)
             .is_some()
     );
-
-    unsafe {
-        std::env::remove_var("PEALAYER_CONFIG_FILE");
-    }
-    let _ = std::fs::remove_dir_all(&temp_dir);
 }
 
 #[test]
@@ -210,12 +218,12 @@ fn test_pealayer_tab_icons_not_empty() {
 
 #[test]
 fn test_workspace_window_menu_translations() {
-    let app = pealayer::app::PealayerApp::default();
-    assert_eq!(app.tr("Workspace"), "Workspace");
-    assert_eq!(app.tr("Window"), "Window");
-    assert_eq!(app.tr("Panels"), "Panels");
+    let en = AppLanguage::English;
+    assert_eq!(pealayer::ui::i18n::tr(en, "Workspace"), "Workspace");
+    assert_eq!(pealayer::ui::i18n::tr(en, "Window"), "Window");
+    assert_eq!(pealayer::ui::i18n::tr(en, "Panels"), "Panels");
     assert_eq!(
-        app.tr("Reset Workspace to Default"),
+        pealayer::ui::i18n::tr(en, "Reset Workspace to Default"),
         "Reset Workspace to Default"
     );
 

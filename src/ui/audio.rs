@@ -1,6 +1,7 @@
 use crate::ui::dropdown::DropdownUiExt;
 use crate::app::{MediaTrackKey, MediaTrackType, PealayerApp};
 use crate::ui::{dialog, icons};
+use crate::ui::effects_library::designer_tr;
 use eframe::egui;
 
 const AUDIO_DIALOG_WIDTH: f32 = 520.0;
@@ -15,7 +16,7 @@ pub(crate) fn draw_sfx_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let geometry = dialog::bounded_geometry(ui.ctx().content_rect(), 20.0, egui::vec2(650.0, 470.0), egui::vec2(440.0, 340.0), egui::vec2(850.0, 680.0));
     let effects = app.audio_effects();
     let devices = crate::peer::client().and_then(|c| c.snapshot()).and_then(|s| serde_json::from_value::<Vec<crate::mpv::audio_output::AudioDevice>>(s.session.status.get("audio_devices")?.clone()).ok()).unwrap_or_else(crate::mpv::audio_output::available_audio_devices);
-    egui::Window::new(format!("{} {}", icons::SPEAKER_HIGH, app.tr("Audio effect")))
+    egui::Window::new(format!("{} {}", icons::SPEAKER_HIGH, app.tr("Effects Designer")))
         .id(egui::Id::new("controller_effect_library_dialog")).open(&mut open)
         .default_rect(geometry.default_rect).min_size(geometry.min_size).max_size(geometry.max_size)
         .constrain_to(geometry.bounds).frame(dialog::opaque_window_frame(ui)).order(egui::Order::Foreground)
@@ -23,31 +24,31 @@ pub(crate) fn draw_sfx_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
             egui::ScrollArea::vertical().id_salt("sfx-editor").show(ui, |ui| {
                 ui.horizontal(|ui| {
                     let selected = app.effect_library_draft.name.clone();
-                    crate::ui::dropdown::ComboBox::from_id_salt("sfx-library-selection").selected_text(if selected.is_empty() { "New audio effect" } else { &selected }).show_ui(ui, |ui| {
+                    crate::ui::dropdown::ComboBox::from_id_salt("sfx-library-selection").selected_text(if selected.is_empty() { designer_tr(ui, "New audio effect") } else { selected }).show_ui(ui, |ui| {
                         for effect in &effects { if ui.dropdown_choice(app.effect_library_draft.id == effect.id.to_string(), &effect.name).clicked() { app.select_audio_effect(effect.id); } }
                     });
-                    if ui.button(format!("{} New", icons::PLUS)).clicked() { app.begin_audio_effect(); }
+                    if ui.button(format!("{} {}", icons::PLUS, designer_tr(ui, "New"))).clicked() { app.begin_audio_effect(); }
                 });
                 ui.separator();
                 let draft = &mut app.effect_library_draft;
                 let mut program: crate::mpv::sfx::AudioProgram = serde_json::from_str(&draft.program_json).unwrap_or_default();
                 if let Some(file) = crate::ui::peer_browser::take_preference_file(ui.ctx(), "sfx_source") { program.source = file; }
                 egui::Grid::new("sfx-identity").num_columns(2).spacing([14.0, 10.0]).show(ui, |ui| {
-                    ui.label("Name"); ui.add(dialog::singleline_text_edit(&mut draft.name).desired_width(ui.available_width())); ui.end_row();
-                    ui.label("Group"); crate::ui::group_picker::group_picker(ui, "sfx-group", &mut draft.category, effects.iter().map(|effect| effect.group.as_str()), ui.available_width(), app.language); ui.end_row();
-                    ui.label("Icon"); crate::ui::icons::searchable_control_icon_picker(ui, "sfx-icon", &mut draft.icon, ui.available_width(), "Search icons...", "Presets", "No matching icons", app.language); ui.end_row();
-                    ui.label("Audio file / URL"); ui.horizontal(|ui| {
+                    ui.label(designer_tr(ui, "Name")); ui.add(dialog::singleline_text_edit(&mut draft.name).desired_width(ui.available_width())); ui.end_row();
+                    ui.label(designer_tr(ui, "Group")); crate::ui::group_picker::group_picker(ui, "sfx-group", &mut draft.category, effects.iter().map(|effect| effect.group.as_str()), ui.available_width(), app.language); ui.end_row();
+                    ui.label(designer_tr(ui, "Icon")); crate::ui::icons::searchable_control_icon_picker(ui, "sfx-icon", &mut draft.icon, ui.available_width(), &designer_tr(ui, "Search icons..."), &designer_tr(ui, "Presets"), &designer_tr(ui, "No matching icons"), app.language); ui.end_row();
+                    ui.label(designer_tr(ui, "Audio file / URL")); ui.horizontal(|ui| {
                         ui.add(dialog::singleline_text_edit(&mut program.source).desired_width((ui.available_width()-86.0).max(100.0)));
-                        if ui.button(format!("{} Browse", icons::FOLDER_OPEN)).clicked() {
+                        if ui.button(format!("{} {}", icons::FOLDER_OPEN, designer_tr(ui, "Browse"))).clicked() {
                             if crate::peer::active() { crate::ui::peer_browser::open(ui.ctx(), crate::ui::peer_browser::Purpose::PreferenceFile { key: "sfx_source".into(), extensions: vec!["wav","mp3","ogg","flac","m4a","aac","opus"].into_iter().map(str::to_string).collect() }, None); }
-                            else if let Some(file) = rfd::FileDialog::new().set_title("Choose sound effect").add_filter("Audio", &["wav","mp3","ogg","flac","m4a","aac","opus"]).pick_file() { program.source = file.to_string_lossy().into(); }
+                            else if let Some(file) = rfd::FileDialog::new().set_title(designer_tr(ui, "Choose sound effect")).add_filter(designer_tr(ui, "Audio"), &["wav","mp3","ogg","flac","m4a","aac","opus"]).pick_file() { program.source = file.to_string_lossy().into(); }
                         }
                     }); ui.end_row();
-                    ui.label("Volume"); ui.add(egui::Slider::new(&mut program.volume, 0..=100).suffix("%")); ui.end_row();
-                    ui.label("Output device / backend");
-                    let selected = devices.iter().find(|d| d.name == program.output_device).map(|d| d.description.as_str()).unwrap_or(if program.output_device.is_empty() { "Preferences SFX output" } else { "Unavailable device" });
+                    ui.label(designer_tr(ui, "Volume")); ui.add(egui::Slider::new(&mut program.volume, 0..=100).suffix("%")); ui.end_row();
+                    ui.label(designer_tr(ui, "Output device / backend"));
+                    let selected = devices.iter().find(|d| d.name == program.output_device).map(|d| d.description.clone()).unwrap_or_else(|| designer_tr(ui, if program.output_device.is_empty() { "Preferences SFX output" } else { "Unavailable device" }));
                     let popup = crate::ui::dropdown::ComboBox::from_id_salt("sfx-output").width(ui.available_width()).selected_text(selected).show_ui(ui, |ui| {
-                        ui.dropdown_value(&mut program.output_device, String::new(), "Preferences SFX output");
+                        ui.dropdown_value(&mut program.output_device, String::new(), designer_tr(ui, "Preferences SFX output"));
                         for device in &devices { ui.dropdown_value(&mut program.output_device, device.name.clone(), &device.description).on_hover_text(&device.name); }
                     });
                     let key = ui.id().with("sfx-output-open"); let was_open = ui.data_mut(|d| d.get_temp::<bool>(key).unwrap_or(false));
@@ -60,18 +61,18 @@ pub(crate) fn draw_sfx_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         }
                     }
                     ui.data_mut(|d| d.insert_temp(key, popup.inner.is_some())); ui.end_row();
-                    ui.label("Duration"); ui.weak(if draft.duration_ms == 0 { "Read from audio on Save".into() } else { crate::duration::format_effect_duration_for_language(app.language, draft.duration_ms) }); ui.end_row();
+                    ui.label(designer_tr(ui, "Length")); ui.weak(if draft.duration_ms == 0 { designer_tr(ui, "Read from audio on Save") } else { crate::duration::format_effect_duration_for_language(app.language, draft.duration_ms) }); ui.end_row();
                 });
                 draft.program_json = serde_json::to_string(&program).unwrap();
                 ui.add_space(8.0); ui.separator();
                 let reference = app.effect_library_draft.reference.clone();
                 let pending = crate::mpv::sfx::importing();
                 ui.horizontal_wrapped(|ui| {
-                    if ui.add_enabled(!pending && !app.effect_library_draft.name.trim().is_empty() && program.validate().is_ok(), egui::Button::new(format!("{} Save", icons::FLOPPY_DISK))).clicked() { if let Err(error) = app.save_controller_effect() { app.set_osd(error); } }
-                    if ui.add_enabled(!pending && !reference.is_empty() && !app.estop_active, egui::Button::new(format!("{} Preview", icons::PLAY))).clicked() { if let Err(error) = app.play_controller_effect(&reference) { app.set_osd(error); } }
-                    if ui.button(format!("{} Stop", icons::STOP_CIRCLE)).clicked() { let _ = app.stop_controller_effect(&reference); }
-                    if ui.add_enabled(!reference.is_empty() && !pending, egui::Button::new(format!("{} Delete", icons::TRASH))).clicked() { if let Err(error) = app.delete_controller_effect() { app.set_osd(error); } }
-                    if pending { ui.spinner(); ui.weak("Reading audio…"); }
+                    if ui.add_enabled(!pending && !app.effect_library_draft.name.trim().is_empty() && program.validate().is_ok(), egui::Button::new(format!("{} {}", icons::FLOPPY_DISK, designer_tr(ui, "Save")))).clicked() { if let Err(error) = app.save_controller_effect() { app.set_osd(error); } }
+                    if ui.add_enabled(!pending && !reference.is_empty() && !app.estop_active, egui::Button::new(format!("{} {}", icons::PLAY, designer_tr(ui, "Preview")))).clicked() { if let Err(error) = app.play_controller_effect(&reference) { app.set_osd(error); } }
+                    if ui.button(format!("{} {}", icons::STOP_CIRCLE, designer_tr(ui, "Stop"))).clicked() { let _ = app.stop_controller_effect(&reference); }
+                    if ui.add_enabled(!reference.is_empty() && !pending, egui::Button::new(format!("{} {}", icons::TRASH, designer_tr(ui, "Delete")))).clicked() { if let Err(error) = app.delete_controller_effect() { app.set_osd(error); } }
+                    if pending { ui.spinner(); ui.weak(designer_tr(ui, "Reading audio…")); }
                 });
                 if !app.hardware_effect_authoring.status.is_empty() { ui.weak(&app.hardware_effect_authoring.status); }
             });

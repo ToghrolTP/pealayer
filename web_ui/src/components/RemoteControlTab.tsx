@@ -161,6 +161,8 @@ export interface PlayerState {
   audio_import_pending?: boolean;
   audio_preview_ids?: string[];
   effect_recording?: {
+    capture_selection?: { all: boolean; control_keys: string[]; opcodes: number[] };
+    capabilities?: { controls: Array<{ key: string; kind: string; name: string }>; opcodes: Array<{ opcode: number; name: string; capture_modes: string[] }> };
     active: boolean;
     id: number;
     name: string;
@@ -182,6 +184,7 @@ export interface PlayerState {
     last_error: string;
     pending: boolean;
   };
+  human_readable_time_units?: boolean;
   cues?: Array<{
     id: string;
     effect_id: string;

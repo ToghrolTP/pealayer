@@ -488,6 +488,7 @@ pub struct HardwareWarning {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct HardwareEffectRecording {
     pub active: bool,
     pub id: u8,
@@ -502,9 +503,62 @@ pub struct HardwareEffectRecording {
     pub overwritten: usize,
     pub started_at: String,
     pub last_error: String,
+    #[serde(default)]
+    pub capture_selection: HardwareCaptureSelection,
+    #[serde(default)]
+    pub capabilities: HardwareCaptureCapabilities,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HardwareCaptureSelection {
+    #[serde(default)] pub all: bool,
+    #[serde(default)] pub control_keys: Vec<String>,
+    #[serde(default)] pub opcodes: Vec<u8>,
+}
+
+impl HardwareCaptureSelection {
+    pub fn is_empty(&self) -> bool { !self.all && self.control_keys.is_empty() && self.opcodes.is_empty() }
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct HardwareCaptureCapabilities {
+    #[serde(default)] pub controls: Vec<HardwareCaptureControl>,
+    #[serde(default)] pub opcodes: Vec<HardwareCaptureOpcode>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct HardwareCaptureControl {
+    pub key: String,
+    pub kind: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct HardwareCaptureOpcode {
+    pub opcode: u8,
+    pub name: String,
+    pub capture_modes: Vec<String>,
+}
+
+pub fn parse_capture_capabilities(text: &str) -> Result<HardwareCaptureCapabilities, String> {
+    let value: Value = serde_json::from_str(text).map_err(|error| error.to_string())?;
+    if !value.get("controls").is_some_and(Value::is_array) || !value.get("opcodes").is_some_and(Value::is_array) {
+        return Err("Capture capabilities require controls and opcodes arrays".into());
+    }
+    let capabilities: HardwareCaptureCapabilities = serde_json::from_value(value).map_err(|error| error.to_string())?;
+    let mut keys = std::collections::BTreeSet::new();
+    let mut opcodes = std::collections::BTreeSet::new();
+    if capabilities.controls.iter().any(|control| control.key.is_empty() || control.kind.is_empty() || !keys.insert(&control.key))
+        || capabilities.opcodes.iter().any(|opcode| !opcodes.insert(opcode.opcode) || opcode.capture_modes.is_empty()
+            || opcode.capture_modes.iter().any(|mode| !matches!(mode.as_str(), "automatic" | "device-clock" | "board-retained"))) {
+        return Err("Invalid or duplicate capture capability".into());
+    }
+    Ok(capabilities)
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct HardwareMacroStep {
     #[serde(default)]
     pub at_us: u64,
@@ -521,10 +575,6 @@ pub struct HardwareMacroStep {
     pub easing: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sample_rate_hz: Option<u8>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub repeat_count: Option<u16>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub repeat_interval_ms: Option<u32>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub frequency_hz: Option<u16>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
@@ -573,6 +623,10 @@ pub struct HardwareMacro {
     pub mode: String,
     pub duration_ms: u64,
     pub steps: Vec<HardwareMacroStep>,
+    #[serde(default)]
+    pub repeat_count: Option<u16>,
+    #[serde(default)]
+    pub repeat_interval_ms: u32,
     pub color: String,
     pub label: String,
     pub lcd_message: String,
@@ -1459,6 +1513,7 @@ impl ControllerClient {
         let snapshot = self.call("controller.snapshot", json!({}))?;
         let peripherals = self.call("controller.peripherals.get", json!({}))?;
         let folders = parse_channel_folders(&peripherals)?;
+        validate_effect_snapshot(&snapshot)?;
         // Named melodies are host configuration, not board capability data,
         // but they are part of the current coordinator contract. A malformed
         // or unavailable catalog fails this refresh so the engine retains the
@@ -1806,6 +1861,39 @@ fn parse_strip_control(snapshot: &Value, catalog: &Value) -> Option<HardwareStri
         running,
         active_name,
     })
+}
+
+pub(crate) fn parse_effect_repeat(effect: &Value) -> Result<(u16, u32), String> {
+    let count = effect.get("repeat_count").map(|value| value.as_u64()
+        .and_then(|value| u16::try_from(value).ok()).ok_or("Invalid effect repeat count"))
+        .transpose()?.unwrap_or(1);
+    let interval = effect.get("repeat_interval_ms").map(|value| value.as_u64()
+        .and_then(|value| u32::try_from(value).ok()).ok_or("Invalid effect repeat interval"))
+        .transpose()?.unwrap_or(0);
+    if !(1..=1_000).contains(&count) || interval > 3_600_000 {
+        return Err("Invalid effect repeat count or interval".into());
+    }
+    Ok((count, interval))
+}
+
+fn validate_effect_snapshot(snapshot: &Value) -> Result<(), String> {
+    if let Some(library) = snapshot.pointer("/macros/library") {
+        let library = library.as_array().ok_or("Effect library must be an array")?;
+        for effect in library {
+            if effect.get("kind").and_then(Value::as_str).is_some_and(|kind| kind != "sequence") { continue; }
+            let steps = match effect.get("steps") {
+                None | Some(Value::Null) => Vec::new(),
+                Some(value) => serde_json::from_value::<Vec<HardwareMacroStep>>(value.clone())
+                    .map_err(|error| format!("Invalid current effect sequence: {error}"))?,
+            };
+            let (count, interval) = parse_effect_repeat(effect)?;
+            crate::ui::effects_library::repeated_sequence_duration_ms(&steps, count, interval)?;
+        }
+    }
+    if let Some(preview) = snapshot.pointer("/macros/recording/preview").filter(|value| !value.is_null()) {
+        serde_json::from_value::<Vec<HardwareMacroStep>>(preview.clone()).map_err(|error| format!("Invalid recording preview: {error}"))?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]
@@ -2546,6 +2634,10 @@ fn parse_hardware_capabilities_with_front_panel(
                 mode,
                 duration_ms,
                 steps,
+                repeat_count: entry.get("repeat_count").and_then(Value::as_u64)
+                    .and_then(|value| u16::try_from(value).ok()),
+                repeat_interval_ms: entry.get("repeat_interval_ms").and_then(Value::as_u64)
+                    .and_then(|value| u32::try_from(value).ok()).unwrap_or(0),
                 color: entry
                     .pointer("/properties/color")
                     .and_then(Value::as_str)
@@ -2585,6 +2677,10 @@ fn parse_hardware_capabilities_with_front_panel(
         .collect();
     let recording = snapshot.pointer("/macros/recording");
     let effect_recording = HardwareEffectRecording {
+        capture_selection: recording.and_then(|value| value.get("capture_selection"))
+            .and_then(|value| serde_json::from_value(value.clone()).ok()).unwrap_or_default(),
+        capabilities: recording.and_then(|value| value.get("capabilities"))
+            .and_then(|value| serde_json::from_value(value.clone()).ok()).unwrap_or_default(),
         active: recording
             .and_then(|value| value.get("active"))
             .and_then(Value::as_bool)
@@ -2749,6 +2845,32 @@ pub fn direct_serial_name(endpoint: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn current_capture_contract_is_numeric_explicit_and_rejects_step_repetition() {
+        let selection: super::HardwareCaptureSelection = serde_json::from_value(serde_json::json!({
+            "all":false,"control_keys":["seat.a"],"opcodes":[16,17]
+        })).unwrap();
+        assert!(!selection.is_empty());
+        assert!(super::HardwareCaptureSelection::default().is_empty());
+        assert_eq!(serde_json::to_value(&selection).unwrap()["opcodes"], serde_json::json!([16,17]));
+        assert!(serde_json::from_value::<super::HardwareCaptureSelection>(serde_json::json!({"opcodes":"EBE="})).is_err());
+        assert!(serde_json::from_value::<super::HardwareMacroStep>(serde_json::json!({"kind":"motion","repeat_count":2})).is_err());
+        let capabilities: super::HardwareCaptureCapabilities = serde_json::from_value(serde_json::json!({
+            "controls":[{"key":"seat.a","name":"Seat Left","kind":"motion","actions":[]}],
+            "opcodes":[{"opcode":16,"name":"relay","capture_modes":["automatic"]}]
+        })).unwrap();
+        assert_eq!(capabilities.controls[0].name, "Seat Left");
+        assert!(super::parse_capture_capabilities("{}").is_err());
+        assert!(super::parse_capture_capabilities(r#"{"controls":[],"opcodes":[]}"#).is_ok());
+        assert_eq!(super::parse_effect_repeat(&serde_json::json!({})).unwrap(), (1, 0));
+        for invalid in [serde_json::json!({"repeat_count":65536}), serde_json::json!({"repeat_count":0}),
+            serde_json::json!({"repeat_interval_ms":4294967296_u64}), serde_json::json!({"repeat_count":"2"})] {
+            assert!(super::parse_effect_repeat(&invalid).is_err());
+        }
+        assert!(super::validate_effect_snapshot(&serde_json::json!({"macros":{"library":[{
+            "steps":[{"kind":"motion","repeat_count":2}]
+        }]}})).is_err());
+    }
     use super::*;
 
     #[test]
@@ -3346,6 +3468,8 @@ mod tests {
                 "id": 3,
                 "name": "Thunder",
                 "mode": "mcu",
+                "repeat_count": 3,
+                "repeat_interval_ms": 500,
                 "steps": [{
                     "at_us": 250000,
                     "kind": "display",
@@ -3355,8 +3479,6 @@ mod tests {
                     "to_value": 2048,
                     "easing": "ease-in-out",
                     "sample_rate_hz": 30,
-                    "repeat_count": 3,
-                    "repeat_interval_ms": 500,
                     "action_ids": ["seat.a.up"]
                 }],
                 "properties": {
@@ -3401,8 +3523,8 @@ mod tests {
         assert_eq!(parsed.macros[0].steps[0].to_value, Some(2048));
         assert_eq!(parsed.macros[0].steps[0].easing, "ease-in-out");
         assert_eq!(parsed.macros[0].steps[0].sample_rate_hz, Some(30));
-        assert_eq!(parsed.macros[0].steps[0].repeat_count, Some(3));
-        assert_eq!(parsed.macros[0].steps[0].repeat_interval_ms, Some(500));
+        assert_eq!(parsed.macros[0].repeat_count, Some(3));
+        assert_eq!(parsed.macros[0].repeat_interval_ms, 500);
         assert_eq!(parsed.macros[0].steps[0].action_ids, ["seat.a.up"]);
         assert_eq!(parsed.macros[0].color, "amber");
         assert_eq!(parsed.macros[0].label, "Seat rise");
