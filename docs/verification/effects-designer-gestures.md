@@ -43,6 +43,17 @@ without constructing an unrelated mpv-backed app. Windows lifecycle assertions
 remain intact, and media/native-client coverage remains in the other suites.
 This is test-boundary stabilization, not a diagnosed native root-cause fix.
 
+The subsequent Intel macOS push run passed those direct shell assertions, then
+stalled in `workspace_dock_test` before its title assertions reported completion.
+That redundant run was explicitly canceled to retrieve diagnostics, not counted
+as passed. Dock titles now use a language-only accessor shared by production
+rendering and pure English/Persian label tests; menu translation tests also avoid
+constructing a native player just to check strings. Actual app-owned dock toggle
+and persistence integration assertions remain. They require the parent's isolated
+configuration path instead of mutating process environment under native threads.
+Fresh final-head CI is required; the general native lifecycle investigation stays
+open in #116.
+
 The native and Web sequence designers use whole-effect repetition, computed full span, Start/Length/Finish, exact `0s`, configured seat names and Publish & Run. Execution waits for the publish acknowledgment. Remote publishing retains an unrelated native working draft. Recording capabilities are fetched when choosing inputs; the explicit empty default selection cannot start recording. Invalid current-contract snapshots retain the last valid catalog rather than silently dropping invalid steps. Scoped English/Persian translation coverage and authoring regressions are maintained in CI, not asserted as a whole-application translation audit.
 
 Controller dependency: [PCController PR #634](https://github.com/atomicdeploy/PCController/pull/634), tracking [#633](https://github.com/atomicdeploy/PCController/issues/633), is merged after its full hosted matrix passed. PCController's own unwired Web/TUI recording start actions are guarded until its full chooser is implemented; this is not a claim that those interfaces are finished. The paired source contract is ready for integration independently of those remaining controller front-end gates.

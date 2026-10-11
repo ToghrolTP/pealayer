@@ -12481,14 +12481,20 @@ impl PealayerTab {
     ];
 
     pub fn title(self, app: &crate::app::PealayerApp) -> String {
-        match self {
-            PealayerTab::ProgramMonitor => app.tr("Program Monitor"),
-            PealayerTab::MediaInspector => app.tr("Media Inspector"),
-            PealayerTab::Timeline => app.tr("Timeline"),
-            PealayerTab::EffectControls => app.tr("Effect Controls"),
-            PealayerTab::EffectsLibrary => app.tr("Effects Library"),
-            PealayerTab::HardwareMonitor => app.tr("Hardware Monitor"),
-        }
+        self.title_for_language(app.language)
+    }
+
+    /// Localized dock labels do not depend on a native media-player lifecycle.
+    pub fn title_for_language(self, language: crate::config::AppLanguage) -> String {
+        let key = match self {
+            PealayerTab::ProgramMonitor => "Program Monitor",
+            PealayerTab::MediaInspector => "Media Inspector",
+            PealayerTab::Timeline => "Timeline",
+            PealayerTab::EffectControls => "Effect Controls",
+            PealayerTab::EffectsLibrary => "Effects Library",
+            PealayerTab::HardwareMonitor => "Hardware Monitor",
+        };
+        crate::ui::i18n::tr(language, key)
     }
 
     pub fn icon(self) -> &'static str {
