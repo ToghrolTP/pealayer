@@ -132,6 +132,10 @@ pub struct ControllerEffectDraft {
     pub default_pixels: u16,
     pub engine: String,
     pub steps: Vec<crate::four_d::controller::HardwareMacroStep>,
+    #[serde(default = "default_effect_repeat_count")]
+    pub repeat_count: u16,
+    #[serde(default)]
+    pub repeat_interval_ms: u32,
     pub label: String,
     pub lcd_message: String,
     pub timing_tolerance_us: u32,
@@ -147,6 +151,8 @@ pub struct ControllerEffectGroupDraft {
     pub name: String,
     pub icon: String,
 }
+
+fn default_effect_repeat_count() -> u16 { 1 }
 
 impl Default for ControllerEffectDraft {
     fn default() -> Self {
@@ -165,6 +171,8 @@ impl Default for ControllerEffectDraft {
             default_pixels: 100,
             engine: "auto".to_string(),
             steps: Vec::new(),
+            repeat_count: 1,
+            repeat_interval_ms: 0,
             label: String::new(),
             lcd_message: String::new(),
             timing_tolerance_us: 0,
@@ -292,10 +300,13 @@ pub struct HardwareEffectAuthoringState {
     pub name: String,
     pub category: String,
     pub color: String,
-    /// `automatic` records every acknowledged app/board action, `device-clock`
+    /// `automatic` records selected acknowledged app/board actions, `device-clock`
     /// uses the stricter device timestamp, and `board-retained` leaves the
     /// bounded relay take in board RAM until Pealayer imports it.
     pub capture_mode: String,
+    pub capture_selection: crate::four_d::controller::HardwareCaptureSelection,
+    pub capture_capabilities: crate::four_d::controller::HardwareCaptureCapabilities,
+    pub show_capture_selection: bool,
     pub active: bool,
     pub preview_active: bool,
     pub preview_reference: Option<String>,
@@ -304,7 +315,10 @@ pub struct HardwareEffectAuthoringState {
     pub anchor_ms: u64,
     pub pending_operation: Option<String>,
     pub pending_saved_macro_id: Option<u64>,
-    pub record_after_publish: Option<(String, String)>,
+    pub record_after_publish: Option<(String, String, crate::four_d::controller::HardwareCaptureSelection)>,
+    pub run_after_publish: bool,
+    pub pending_published_draft: Option<ControllerEffectDraft>,
+    pub acknowledged_draft: Option<ControllerEffectDraft>,
     pub append_target: Option<u64>,
     pub append_discarded: bool,
     /// The most recent effect whose upsert was acknowledged by PCController.
@@ -325,6 +339,9 @@ impl Default for HardwareEffectAuthoringState {
             category: "Recorded".to_string(),
             color: "violet".to_string(),
             capture_mode: "automatic".to_string(),
+            capture_selection: Default::default(),
+            capture_capabilities: Default::default(),
+            show_capture_selection: false,
             active: false,
             preview_active: false,
             preview_reference: None,
@@ -334,6 +351,9 @@ impl Default for HardwareEffectAuthoringState {
             pending_operation: None,
             pending_saved_macro_id: None,
             record_after_publish: None,
+            run_after_publish: false,
+            pending_published_draft: None,
+            acknowledged_draft: None,
             append_target: None,
             append_discarded: false,
             acknowledged_effect_reference: None,
@@ -1377,6 +1397,8 @@ impl eframe::App for PealayerApp {
                             editable: true,
                             program: serde_json::json!({
                                 "steps": effect.steps,
+                                "repeat_count": effect.repeat_count.unwrap_or(1),
+                                "repeat_interval_ms": effect.repeat_interval_ms,
                                 "properties": {
                                     "mode": effect.mode,
                                     "color": effect.color,
@@ -1434,6 +1456,7 @@ impl eframe::App for PealayerApp {
             let chapters = self.media_chapters();
             let current_chapter_index = self.active_media_chapter().map(|chapter| chapter.index);
             let status_resp = crate::platform::interop::PlayerStatusResponse {
+                human_readable_time_units: self.human_readable_time_units,
                 external_mpv: crate::mpv::external::status(),
                 application: crate::platform::interop::ApplicationIdentity::current(&self.app_name),
                 runtime: crate::platform::interop::runtime_identity(),
@@ -1590,6 +1613,8 @@ impl eframe::App for PealayerApp {
                             started_at: recording.started_at.clone(),
                             last_error: recording.last_error.clone(),
                             pending: self.hardware_effect_authoring.pending_operation.is_some() || self.hardware_effect_authoring.pending_saved_macro_id.is_some(),
+                            capture_selection: recording.capture_selection.clone(),
+                            capabilities: self.hardware_effect_authoring.capture_capabilities.clone(),
                         }
                     })
                     .unwrap_or_else(|| crate::platform::interop::WebEffectRecording {
@@ -1599,6 +1624,8 @@ impl eframe::App for PealayerApp {
                         category: self.hardware_effect_authoring.category.clone(),
                         color: self.hardware_effect_authoring.color.clone(),
                         pending: self.hardware_effect_authoring.pending_operation.is_some() || self.hardware_effect_authoring.pending_saved_macro_id.is_some(),
+                        capture_selection: self.hardware_effect_authoring.capture_selection.clone(),
+                        capabilities: self.hardware_effect_authoring.capture_capabilities.clone(),
                         ..Default::default()
                     }),
                 effects: self
@@ -2973,8 +3000,48 @@ impl PealayerApp {
         if catalog == self.hardware_effect_authoring.timeline_catalog {
             return false;
         }
+        if !self.effect_library_draft.is_new {
+            let key = if self.effect_library_draft.kind == "sequence" {
+                self.effect_library_draft.id.parse().ok().map(ControllerEffectCatalogKey::Macro)
+            } else { Some(ControllerEffectCatalogKey::Strip(self.effect_library_draft.id.clone())) };
+            if let Some(key) = key {
+                if let (Some(previous), Some(next)) = (
+                    self.hardware_effect_authoring.timeline_catalog.iter().find(|entry| entry.key == key),
+                    catalog.iter().find(|entry| entry.key == key),
+                ) {
+                    // Preserve intentional unsaved edits, but follow an
+                    // externally acknowledged rename in a clean open editor.
+                    if self.effect_library_draft.name == previous.name { self.effect_library_draft.name = next.name.clone(); }
+                    if self.effect_library_draft.icon == previous.icon { self.effect_library_draft.icon = next.icon.clone(); }
+                }
+            }
+        }
         self.hardware_effect_authoring.timeline_catalog = catalog.clone();
         reconcile_controller_effect_templates(&mut self.timeline, &catalog)
+    }
+
+    /// The successful upsert ACK owns this exact definition. Refresh visible
+    /// identities immediately; the event-driven catalog then verifies it.
+    fn acknowledge_controller_effect_definition(&mut self, draft: &ControllerEffectDraft) {
+        let Some(mut capabilities) = self.advertised_hardware() else { return; };
+        if draft.kind == "sequence" {
+            let Ok(id) = draft.id.parse::<u64>() else { return; };
+            let mut effect = capabilities.macros.iter().find(|effect| effect.id == id).cloned().unwrap_or_default();
+            effect.id = id; effect.name = draft.name.trim().to_string();
+            effect.category = draft.category.trim().to_string(); effect.icon = draft.icon.trim().to_string();
+            effect.mode = draft.engine.clone(); effect.steps = draft.steps.clone();
+            effect.repeat_count = Some(draft.repeat_count); effect.repeat_interval_ms = draft.repeat_interval_ms;
+            effect.duration_ms = crate::ui::effects_library::repeated_sequence_duration_ms(&draft.steps, draft.repeat_count, draft.repeat_interval_ms).unwrap_or(draft.duration_ms);
+            effect.color = draft.color.clone(); effect.label = draft.label.clone(); effect.lcd_message = draft.lcd_message.clone();
+            effect.timing_tolerance_us = draft.timing_tolerance_us; effect.keep_outputs_on_cancel = draft.keep_outputs_on_cancel;
+            effect.board_profile_key = draft.board_profile_key.clone(); effect.board_profile_mode = draft.board_profile_mode.clone();
+            capabilities.macros.retain(|entry| entry.id != id); capabilities.macros.push(effect);
+        } else if let Some(effect) = capabilities.strip_effects.iter_mut().find(|effect| effect.id == draft.id) {
+            effect.name = draft.name.trim().to_string(); effect.category = draft.category.trim().to_string(); effect.icon = draft.icon.trim().to_string();
+            effect.description = draft.description.clone(); effect.default_duration_ms = Some(draft.duration_ms);
+        } else { return; }
+        self.update_hardware_capabilities(Some(capabilities));
+        if self.refresh_controller_effect_timeline_metadata() { self.sync_timeline_engine(); }
     }
 
     fn controller_command_argument(value: &str) -> Option<String> {
@@ -3041,16 +3108,20 @@ impl PealayerApp {
         if self.hardware_effect_authoring.active {
             return Err("Finish or discard the current capture first".into());
         }
+        if self.hardware_effect_authoring.capture_selection.is_empty() {
+            return Err(self.tr("Select channels or opcodes to record"));
+        }
         self.save_controller_effect()?;
         self.hardware_effect_authoring.record_after_publish = Some((
             format!("effect:{}", self.effect_library_draft.id),
             self.hardware_effect_authoring.capture_mode.clone(),
+            self.hardware_effect_authoring.capture_selection.clone(),
         ));
         Ok(())
     }
 
     pub(crate) fn refresh_hardware_effect_recording(&mut self) -> Result<(), String> {
-        self.request_hardware_effect_command("macro-status", "effect record status".to_string())
+        self.request_hardware_effect_command("macro-status", "effect record status-json".to_string())
     }
 
     pub(crate) fn save_hardware_effect_recording(&mut self) -> Result<(), String> {
@@ -3257,6 +3328,7 @@ impl PealayerApp {
         let mut draft = self.effect_library_draft.clone();
         if draft.kind == "sequence" {
             draft.steps.sort_by_key(|step| step.at_us);
+            crate::ui::effects_library::repeated_sequence_duration_ms(&draft.steps, draft.repeat_count, draft.repeat_interval_ms)?;
             draft.duration_ms = crate::ui::effects_library::sequence_duration_ms(&draft.steps);
         }
         let checked_text = |value: &str, field: &str, required: bool| -> Result<String, String> {
@@ -3293,6 +3365,8 @@ impl PealayerApp {
                 "editable": true,
                 "duration_ms": draft.duration_ms,
                 "steps": draft.steps,
+                "repeat_count": draft.repeat_count,
+                "repeat_interval_ms": draft.repeat_interval_ms,
                 "properties": {
                     "color": draft.color,
                     "label": draft.label,
@@ -3332,7 +3406,9 @@ impl PealayerApp {
             .map(|byte| format!("{byte:02x}"))
             .collect::<String>();
         let command = format!("effect upsert-json {encoded}");
-        self.request_hardware_effect_command("effect-save", command)
+        self.request_hardware_effect_command("effect-save", command)?;
+        self.hardware_effect_authoring.pending_published_draft = Some(self.effect_library_draft.clone());
+        Ok(())
     }
 
     pub(crate) fn delete_controller_effect(&mut self) -> Result<(), String> {
@@ -3750,9 +3826,23 @@ impl PealayerApp {
                         .to_string();
                     match result.operation.as_str() {
                         "macro-start" => self.hardware_effect_authoring.active = true,
-                        "macro-status" => {
-                            self.hardware_effect_authoring.active = output.contains("active=true");
-                        }
+                        "capture-capabilities" => match crate::four_d::controller::parse_capture_capabilities(&output) {
+                            Ok(capabilities) => self.hardware_effect_authoring.capture_capabilities = capabilities,
+                            Err(error) => self.set_osd(format!("Invalid capture capabilities: {error}")),
+                        },
+                        "macro-status" => match serde_json::from_str::<serde_json::Value>(&output)
+                            .map_err(|error| error.to_string()).and_then(|value| {
+                                if value.get("active").and_then(serde_json::Value::as_bool).is_none() {
+                                    return Err("recording status requires active".into());
+                                }
+                                serde_json::from_value::<crate::four_d::controller::HardwareEffectRecording>(value).map_err(|error| error.to_string())
+                            }) {
+                            Ok(recording) => {
+                                self.hardware_effect_authoring.active = recording.active;
+                                self.hardware_effect_authoring.capture_capabilities = recording.capabilities;
+                            },
+                            Err(error) => self.set_osd(format!("Invalid recording status: {error}")),
+                        },
                         "macro-save" => {
                             self.hardware_effect_authoring.active = false;
                             self.hardware_effect_authoring.append_discarded = false;
@@ -3801,21 +3891,36 @@ impl PealayerApp {
                         }
                         "effect-save" => {
                             let reference = self.hardware_effect_authoring.record_after_publish.as_ref()
-                                .map(|(target, _)| target.clone())
-                                .unwrap_or_else(|| format!("effect:{}", self.effect_library_draft.id.trim()));
-                            self.effect_library_draft.reference = reference.clone();
-                            self.effect_library_draft.is_new = false;
+                                .map(|(target, _, _)| target.clone())
+                                .unwrap_or_else(|| format!("effect:{}", self.hardware_effect_authoring.pending_published_draft.as_ref()
+                                    .unwrap_or(&self.effect_library_draft).id.trim()));
+                            if self.effect_library_draft.id == reference.trim_start_matches("effect:") {
+                                self.effect_library_draft.reference = reference.clone();
+                                self.effect_library_draft.is_new = false;
+                            }
+                            if let Some(mut draft) = self.hardware_effect_authoring.pending_published_draft.take() {
+                                draft.reference = reference.clone();
+                                draft.is_new = false;
+                                self.acknowledge_controller_effect_definition(&draft);
+                                self.hardware_effect_authoring.acknowledged_draft = Some(draft);
+                            }
                             self.hardware_effect_authoring
                                 .acknowledge_effect_publish(&reference);
                             self.save_config();
                             self.engine_handle.request_catalog_refresh();
-                            if let Some((target, mode)) = self.hardware_effect_authoring.record_after_publish.take() {
+                            if let Some((target, mode, selection)) = self.hardware_effect_authoring.record_after_publish.take() {
                                 self.hardware_effect_authoring.append_discarded = false;
                                 self.hardware_effect_authoring.append_target = target.strip_prefix("effect:").and_then(|id|id.parse().ok());
-                                if let Err(error) = self.request_hardware_effect_command("macro-start", format!("effect record append {target} {mode}")) {
+                                let request = serde_json::json!({"reference":target,"capture_mode":mode,"capture_selection":selection});
+                                let json = serde_json::to_vec(&request).expect("capture request serializes");
+                                let encoded = json.into_iter().map(|byte| format!("{byte:02x}")).collect::<String>();
+                                if let Err(error) = self.request_hardware_effect_command("macro-start", format!("effect record append-json {encoded}")) {
                                     self.hardware_effect_authoring.append_target = None;
                                     self.set_osd(error);
                                 }
+                            }
+                            if std::mem::take(&mut self.hardware_effect_authoring.run_after_publish) {
+                                if let Err(error) = self.play_controller_effect(&reference) { self.set_osd(error); }
                             }
                         }
                         "effect-delete" => {
@@ -3859,7 +3964,11 @@ impl PealayerApp {
                         self.channel_folder_result = Some(Err(error.clone()));
                         self.channel_folder_error = Some(error.clone());
                     }
-                    if result.operation == "effect-save" { self.hardware_effect_authoring.record_after_publish = None; }
+                    if result.operation == "effect-save" {
+                        self.hardware_effect_authoring.record_after_publish = None;
+                        self.hardware_effect_authoring.pending_published_draft = None;
+                        self.hardware_effect_authoring.run_after_publish = false;
+                    }
                     if result.operation == "macro-start" { self.hardware_effect_authoring.append_target = None; }
                     if matches!(result.operation.as_str(), "effect-play" | "effect-preview") {
                         self.hardware_effect_authoring.finish_effect_preview();
@@ -4441,6 +4550,12 @@ impl PealayerApp {
                     Vec::new()
                 };
                 let properties = effect.program.get("properties");
+                let (repeat_count, repeat_interval_ms) = if effect.kind == "sequence" {
+                    match crate::four_d::controller::parse_effect_repeat(&effect.program) {
+                        Ok(value) => value,
+                        Err(error) => { self.set_osd(error); return; }
+                    }
+                } else { (1, 0) };
                 let property_string = |name: &str| {
                     properties
                         .and_then(|value| value.get(name))
@@ -4448,6 +4563,9 @@ impl PealayerApp {
                         .unwrap_or_default()
                         .to_string()
                 };
+                // A remote editor must not replace an unrelated native working draft.
+                // Publication owns its own immutable snapshot until acknowledgment.
+                let working_draft = self.effect_library_draft.clone();
                 self.effect_library_draft = ControllerEffectDraft {
                     reference: effect.reference,
                     id: effect.id,
@@ -4469,6 +4587,8 @@ impl PealayerApp {
                         .unwrap_or("auto")
                         .to_string(),
                     steps,
+                    repeat_count,
+                    repeat_interval_ms,
                     label: property_string("label"),
                     lcd_message: property_string("lcd_message"),
                     timing_tolerance_us: properties
@@ -4484,7 +4604,11 @@ impl PealayerApp {
                     board_profile_mode: property_string("board_profile_mode"),
                     is_new: effect.is_new,
                 };
-                if let Err(error) = self.save_controller_effect() {
+                let save_result = self.save_controller_effect();
+                if working_draft.id != self.effect_library_draft.id {
+                    self.effect_library_draft = working_draft;
+                }
+                if let Err(error) = save_result {
                     self.set_osd(error);
                     return;
                 }
@@ -4494,8 +4618,14 @@ impl PealayerApp {
                 category,
                 color,
                 mode,
+                capture_selection,
                 effect,
             } => {
+                if capture_selection.is_empty() {
+                    self.set_osd(self.tr("Select channels or opcodes to record"));
+                    return;
+                }
+                self.hardware_effect_authoring.capture_selection = capture_selection.clone();
                 if let Some(effect) = effect {
                     if self.hardware_effect_authoring.active || self.hardware_effect_authoring.pending_operation.is_some() {
                         self.set_osd("Finish the current hardware effect operation first".into());
@@ -4504,8 +4634,9 @@ impl PealayerApp {
                     self.hardware_effect_authoring.capture_mode = mode.clone();
                     self.apply_interop_command(ctx, InteropCommand::SaveControllerEffect { effect }, source);
                     if self.hardware_effect_authoring.pending_operation.as_deref() == Some("effect-save") {
-                        let target = format!("effect:{}", self.effect_library_draft.id);
-                        self.hardware_effect_authoring.record_after_publish = Some((target, mode));
+                        let target = format!("effect:{}", self.hardware_effect_authoring.pending_published_draft.as_ref()
+                            .expect("queued publication owns a draft").id);
+                        self.hardware_effect_authoring.record_after_publish = Some((target, mode, capture_selection));
                     }
                     return;
                 }
@@ -4525,6 +4656,54 @@ impl PealayerApp {
                 if let Err(error) = self.refresh_hardware_effect_recording() {
                     self.set_osd(error);
                     return;
+                }
+            }
+            InteropCommand::PublishAndRunControllerEffect { effect } => {
+                if self.hardware_effect_authoring.pending_operation.is_some() || self.hardware_effect_authoring.active {
+                    self.set_osd(self.tr("Finish the current hardware effect operation first")); return;
+                }
+                if effect.kind == "audio" {
+                    self.set_osd(self.tr("Save the audio effect before previewing")); return;
+                }
+                self.apply_interop_command(ctx, InteropCommand::SaveControllerEffect { effect }, source);
+                if self.hardware_effect_authoring.pending_operation.as_deref() == Some("effect-save") {
+                    self.hardware_effect_authoring.run_after_publish = true;
+                }
+            }
+            InteropCommand::PlaceTimelineCue { instance_id, start_time_ms, control_key, duplicate_id } => {
+                let Ok(source_id) = uuid::Uuid::parse_str(&instance_id) else { return; };
+                let Some(source) = self.timeline.instances.iter().find(|cue| cue.id == source_id).cloned() else {
+                    self.set_osd(self.tr("Cue is no longer available")); return;
+                };
+                let destination = if let Some(key) = control_key.as_deref() {
+                    let Some(control) = self.advertised_hardware().and_then(|hardware| hardware.controls.into_iter()
+                        .find(|control| control.key == key && control.kind == "motion" && !control.locked)) else {
+                        self.set_osd(self.tr("Choose a compatible unlocked seat track")); return;
+                    };
+                    if !self.timeline.templates.iter().any(|template| template.id == source.effect_id
+                        && template.direct_control.as_ref().is_some_and(|direct| direct.motion.is_some())) {
+                        self.set_osd(self.tr("Choose a compatible unlocked seat track")); return;
+                    }
+                    Some(control)
+                } else { None };
+                let new_id = duplicate_id.as_deref().and_then(|id| uuid::Uuid::parse_str(id).ok());
+                if duplicate_id.is_some() && new_id.is_none()
+                    || new_id.is_some_and(|id| self.timeline.instances.iter().any(|cue| cue.id == id)) { return; }
+                self.undo_stack.push(self.snapshot_timeline());
+                let cue_id = if let Some(new_id) = new_id {
+                    let mut copy = source; copy.id = new_id; copy.start_time_ms = start_time_ms;
+                    self.timeline.instances.push(copy); new_id
+                } else {
+                    if let Some(cue) = self.timeline.instances.iter_mut().find(|cue| cue.id == source_id) { cue.start_time_ms = start_time_ms; }
+                    source_id
+                };
+                if let Some(control) = destination { self.retarget_seat_timeline_cue(cue_id, &control.key, &control.name); }
+                self.selected_instance_ids.clear(); self.selected_instance_ids.insert(cue_id);
+                self.sync_timeline_engine();
+            }
+            InteropCommand::RefreshCaptureCapabilities => {
+                if let Err(error) = self.request_hardware_effect_command("capture-capabilities", "effect record capabilities".into()) {
+                    self.set_osd(error);
                 }
             }
             InteropCommand::SaveControllerEffectRecording => {
@@ -7884,6 +8063,50 @@ impl PealayerApp {
     }
 
     /// Persist and publish a timeline edit that has already mutated the model.
+    /// Model-only duplication. The caller owns the single undo transaction and
+    /// commit; drag duplication uses zero offset until the pointer moves.
+    pub(crate) fn duplicate_timeline_instances(
+        &mut self,
+        ids: &[uuid::Uuid],
+        offset_ms: u64,
+    ) -> std::collections::BTreeMap<uuid::Uuid, uuid::Uuid> {
+        let originals = self.timeline.instances.iter()
+            .filter(|instance| ids.contains(&instance.id)).cloned().collect::<Vec<_>>();
+        let mut copies = std::collections::BTreeMap::new();
+        for original in originals {
+            let copy = crate::four_d::models::EffectInstance::new(
+                original.effect_id, original.start_time_ms.saturating_add(offset_ms));
+            copies.insert(original.id, copy.id);
+            self.timeline.instances.push(copy);
+        }
+        self.selected_instance_ids = copies.values().copied().collect();
+        copies
+    }
+
+    /// Retarget only this placement, never another cue sharing its template.
+    /// This is authoring data only: no seek, preview, or live command is sent.
+    pub(crate) fn retarget_seat_timeline_cue(
+        &mut self,
+        instance_id: uuid::Uuid,
+        control_key: &str,
+        seat_name: &str,
+    ) -> bool {
+        let side = match control_key { "seat.a" => 0, "seat.b" => 1, _ => return false };
+        let Some(direct) = self.timeline.instances.iter().find(|i| i.id == instance_id)
+            .and_then(|i| self.timeline.templates.iter().find(|t| t.id == i.effect_id))
+            .and_then(|t| t.direct_control.as_ref()) else { return false; };
+        let Some(motion) = direct.motion.as_ref() else { return false; };
+        if direct.control_key == control_key && motion.side == side { return false; }
+        let label = self.tr(motion.direction.label());
+        let Some(template_id) = self.isolate_template_for_instance(instance_id) else { return false; };
+        let Some(template) = self.timeline.templates.iter_mut().find(|t| t.id == template_id) else { return false; };
+        let direct = template.direct_control.as_mut().expect("validated motion cue");
+        direct.control_key = control_key.to_string();
+        direct.motion.as_mut().expect("validated motion cue").side = side;
+        template.name = format!("{seat_name} · {label}");
+        true
+    }
+
     pub(crate) fn commit_timeline_edit(&mut self) {
         self.persist_timeline_track_preferences();
         self.sync_timeline_engine();
@@ -9587,6 +9810,35 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn duplicate_and_seat_retarget_preserve_the_original_shared_placement() {
+        use crate::four_d::models::{Effect, EffectInstance, DirectMotionCue, DirectMotionDirection};
+        let mut app = PealayerApp::default();
+        let mut effect = Effect::direct_control("Seat Left · Down".into(), "armchair".into(), 500, "seat.a".into(), 0, None);
+        effect.direct_control.as_mut().unwrap().motion = Some(DirectMotionCue { side: 0, direction: DirectMotionDirection::Down });
+        let original_effect = effect.clone();
+        let instance = EffectInstance::new(effect.id, 404);
+        let original_id = instance.id;
+        app.timeline.templates.push(effect);
+        app.timeline.instances.push(instance);
+        let duplicates = app.duplicate_timeline_instances(&[original_id], 500);
+        let copy = duplicates[&original_id];
+        assert_eq!(app.selected_instance_ids.len(), 1);
+        assert!(app.selected_instance_ids.contains(&copy));
+        assert!(app.retarget_seat_timeline_cue(copy, "seat.b", "Seat Right"));
+        assert!(!app.retarget_seat_timeline_cue(copy, "pwm.1", "Not a seat"));
+        let original = app.timeline.instances.iter().find(|i| i.id == original_id).unwrap();
+        let duplicate = app.timeline.instances.iter().find(|i| i.id == copy).unwrap();
+        assert_eq!(original.start_time_ms, 404);
+        assert_eq!(duplicate.start_time_ms, 904);
+        assert_eq!(app.timeline.templates.iter().find(|t| t.id == original.effect_id).unwrap(), &original_effect);
+        let edited = app.timeline.templates.iter().find(|t| t.id == duplicate.effect_id).unwrap();
+        assert_eq!(edited.direct_control.as_ref().unwrap().control_key, "seat.b");
+        assert_eq!(edited.direct_control.as_ref().unwrap().motion.as_ref().unwrap().side, 1);
+        assert_eq!(edited.duration_ms, 500);
+        assert_eq!(edited.name, "Seat Right · Down");
+    }
+
+    #[test]
     fn controller_owned_cues_can_be_resized_without_rewriting_their_program() {
         let mut effect = crate::four_d::models::Effect::controller_macro(
             "Seat motion".to_string(),
@@ -9689,6 +9941,33 @@ pub(crate) mod tests {
             let isolated = app.timeline.templates.iter().find(|item| item.id == isolated_id).unwrap();
             assert_eq!(isolated.duration_resizable(), is_strip);
         }
+    }
+
+    #[test]
+    fn externally_renamed_effect_updates_clean_designer_without_erasing_unsaved_identity() {
+        let mut app = PealayerApp::default();
+        let mut effect = crate::four_d::controller::HardwareMacro {
+            id: 7, name: "Original".into(), icon: "seat".into(), duration_ms: 500,
+            ..Default::default()
+        };
+        app.update_hardware_capabilities(Some(crate::four_d::controller::HardwareCapabilities {
+            macros: vec![effect.clone()], ..Default::default()
+        }));
+        crate::ui::effects_library::select_sequence(&mut app, &effect);
+        app.refresh_controller_effect_timeline_metadata();
+        effect.name = "Renamed".into();
+        app.update_hardware_capabilities(Some(crate::four_d::controller::HardwareCapabilities {
+            macros: vec![effect.clone()], ..Default::default()
+        }));
+        app.refresh_controller_effect_timeline_metadata();
+        assert_eq!(app.effect_library_draft.name, "Renamed");
+        app.effect_library_draft.name = "Unsaved identity".into();
+        effect.name = "Renamed elsewhere".into();
+        app.update_hardware_capabilities(Some(crate::four_d::controller::HardwareCapabilities {
+            macros: vec![effect], ..Default::default()
+        }));
+        app.refresh_controller_effect_timeline_metadata();
+        assert_eq!(app.effect_library_draft.name, "Unsaved identity");
     }
 
     #[test]

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 
 // getRandomValues also works on LAN HTTP origins, unlike randomUUID.
 const newAudioId = () => {
@@ -52,6 +52,9 @@ import recordingColors from '../../../assets/themes/recording-colors.json';
 import { appendMelodySteps, sequenceDurationMs } from '../melodyCatalog';
 import { MelodySelect } from './MelodySelect';
 import { SoundEffectFields } from './SoundEffectFields';
+import { SequenceTimeline } from './SequenceTimeline';
+import { TimeValueField } from './TimeValueField';
+import { formatTimeMs, repeatedSequenceDurationMs, sequenceKindLabels } from '../cueAuthoring';
 
 interface EffectsTabProps {
   state: PlayerState;
@@ -95,6 +98,8 @@ type EffectDraft = {
   default_fps: number;
   default_pixels: number;
   steps: EffectStep[];
+  repeat_count: number;
+  repeat_interval_ms: number;
   properties: Record<string, unknown>;
   programText: string;
   is_new: boolean;
@@ -122,6 +127,8 @@ const draftPayload = (draft: EffectDraft): Record<string, unknown> => ({
   ...draft,
   program: draft.kind === 'sequence' ? {
     steps: draft.steps.map((step) => ({ ...step, at_us: Math.max(0, Math.round(step.at_us)) })),
+    repeat_count: draft.repeat_count,
+    repeat_interval_ms: draft.repeat_interval_ms,
     properties: { ...draft.properties, ...(draft.color ? { color: draft.color } : {}) },
   } : JSON.parse(draft.programText || '{}'),
 });
@@ -130,6 +137,22 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale, 
   const effects = state.controller_effects ?? [];
   const [draft, setDraft] = useState<EffectDraft | null>(null);
   const [saving, setSaving] = useState(false);
+  const [activeStep, setActiveStep] = useState('0');
+  const previousIdentities = useRef(new Map<string, { name: string; icon: string; category: string }>());
+  useEffect(() => {
+    const baseline = previousIdentities.current;
+    setDraft(current => {
+      if (!current || current.is_new) return current;
+      const next = effects.find(effect => effect.reference === current.reference);
+      const previous = baseline.get(current.reference);
+      if (!next || !previous) return current;
+      const name = current.name === previous.name ? next.name : current.name;
+      const icon = current.icon === previous.icon ? next.icon : current.icon;
+      const category = current.category === previous.category ? next.category : current.category;
+      return name === current.name && icon === current.icon && category === current.category ? current : { ...current, name, icon, category };
+    });
+    previousIdentities.current = new Map(effects.map(effect => [effect.reference, { name: effect.name, icon: effect.icon, category: effect.category }]));
+  }, [effects]);
   useEffect(() => {
     if (draft?.kind !== 'audio') return;
     const saved = effects.find((effect) => effect.kind === 'audio' && effect.id === draft.id);
@@ -177,13 +200,15 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale, 
       default_fps: effect.default_fps ?? 20,
       default_pixels: effect.default_pixels ?? 100,
       steps: parts.steps,
+      repeat_count: Number((effect.program as Record<string, unknown>)?.repeat_count ?? 1),
+      repeat_interval_ms: Number((effect.program as Record<string, unknown>)?.repeat_interval_ms ?? 0),
       properties: parts.properties,
       programText: effect.kind !== 'sequence' ? JSON.stringify(effect.program ?? {}, null, 2) : '{}',
       is_new: false,
     } : {
       reference: '', id: String(Array.from({ length: 256 }, (_, id) => id).find((id) => !effects.some((effect) => effect.id === String(id))) ?? ''), name: '', icon: 'plug', category: category ?? 'Motion', description: '', kind: 'sequence',
       duration_ms: 1000, color: 'green', default_fps: 20, default_pixels: 100,
-      steps: [], properties: { mode: 'auto', timing_tolerance_us: 0, keep_outputs_on_cancel: false },
+      steps: [], repeat_count: 1, repeat_interval_ms: 0, properties: { mode: 'auto', timing_tolerance_us: 0, keep_outputs_on_cancel: false },
       programText: '{}', is_new: true,
     });
   };
@@ -439,7 +464,7 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale, 
 
     <Modal
       className="effect-editor-modal"
-      title={draft?.is_new ? tr(locale, 'New effect') : tr(locale, 'Manage effect')}
+      title={tr(locale, 'Effects Designer')}
       open={Boolean(draft)}
       onCancel={() => { if (!captureBusy && !saving) setDraft(null); }}
       closable={!captureBusy && !saving}
@@ -460,7 +485,16 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale, 
           <label><span>{tr(locale, 'Icon')}</span><EffectIconPicker value={draft.icon} searchPlaceholder={tr(locale, 'Search icons...')} presetsLabel={tr(locale, 'Presets')} emptyLabel={tr(locale, 'No matching icons')} onChange={(icon) => setDraft({ ...draft, icon })} /></label>
           <label><span>{tr(locale, 'Group')}</span><GroupSelect value={draft.category} groups={[...new Set([...(state.controller_effect_groups ?? []).map((group) => group.name), ...effects.map((effect) => effect.category)])]} locale={locale} onChange={(category) => setDraft({ ...draft, category })} onCreate={() => openGroupEditor()} /></label>
           <label className="effect-editor__wide"><span>{tr(locale, 'Description')}</span><Input value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} /></label>
-          <label><span>{tr(locale, 'Duration')}</span>{draft.kind === 'audio' ? <Typography.Text type="secondary">{draft.is_new ? tr(locale, 'Read from audio on Save') : `${(draft.duration_ms / 1000).toFixed(3)} s`}</Typography.Text> : <InputNumber min={1} addonAfter="ms" value={draft.duration_ms} onChange={(duration_ms) => setDraft({ ...draft, duration_ms: duration_ms ?? 1 })} />}</label>
+          <label><span>{tr(locale, 'Length')}</span>{draft.kind === 'audio' ? <Typography.Text type="secondary">{draft.is_new ? tr(locale, 'Read from audio on Save') : formatTimeMs(draft.duration_ms, state.human_readable_time_units !== false)}</Typography.Text> : draft.kind === 'sequence' ? <Typography.Text type="secondary">{repeatedSequenceDurationMs(draft.steps, draft.repeat_count, draft.repeat_interval_ms) === null ? '—' : formatTimeMs(repeatedSequenceDurationMs(draft.steps, draft.repeat_count, draft.repeat_interval_ms)!, state.human_readable_time_units !== false)}</Typography.Text> : <TimeValueField min={1} value={draft.duration_ms} human={state.human_readable_time_units !== false} onChange={duration_ms => setDraft({ ...draft, duration_ms: Math.round(duration_ms) })} />}</label>
+          {draft.kind === 'sequence' && <>
+            <label><span>{tr(locale, 'Repeat effect')}</span><InputNumber min={1} max={1000} value={draft.repeat_count} onChange={value => setDraft({ ...draft, repeat_count: value ?? 1 })} /></label>
+            <label><span>{tr(locale, 'Interval')}</span><TimeValueField value={draft.repeat_interval_ms} human={state.human_readable_time_units !== false} onChange={value => setDraft({ ...draft, repeat_interval_ms: Math.round(value) })} />
+              <Typography.Text type="secondary">{tr(locale, '0s uses the full effect length; interval is start-to-start')}</Typography.Text></label>
+            <Typography.Text type={repeatedSequenceDurationMs(draft.steps, draft.repeat_count, draft.repeat_interval_ms) === null ? 'danger' : 'secondary'}>
+              {repeatedSequenceDurationMs(draft.steps, draft.repeat_count, draft.repeat_interval_ms) === null ? tr(locale, 'Effect repeat interval cannot be shorter than its length') : formatTimeMs(repeatedSequenceDurationMs(draft.steps, draft.repeat_count, draft.repeat_interval_ms)!, state.human_readable_time_units !== false)}
+            </Typography.Text>
+            <Button disabled={captureBusy || saving || !state.controller_connected || !draft.name.trim()} icon={<PlayCircleOutlined />} onClick={() => { void sendCmd('controller_effect.publish_and_run', draftPayload(draft)); }}>{tr(locale, 'Publish & Run')}</Button>
+          </>}
           {draft.kind !== 'audio' && <label><span>{tr(locale, 'Color')}</span>{draft.kind === 'sequence' ? <Select disabled={captureBusy} value={draft.color} onChange={(color) => setDraft({ ...draft, color })} options={recordingColors.map((color) => ({ value: color.id, label: <span className="recording-color-option"><span className="recording-color-swatch" style={{ backgroundColor: color.hex }} />{tr(locale, color.label)}</span> }))} /> : <ColorPicker value={draft.color} disabledAlpha onChangeComplete={(color) => setDraft({ ...draft, color: color.toHexString().toUpperCase() })} />}</label>}
         </div></ConfigProvider>
         {draft.kind === 'audio' ? <SoundEffectFields program={audioProgram} onChange={updateAudio} state={state} reference={draft.reference} apiBaseUrl={apiBaseUrl} locale={locale} sendCmd={sendCmd} /> : draft.kind === 'sequence' ? <>
@@ -480,26 +514,29 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale, 
             <Popconfirm title={tr(locale, 'Delete all sequence steps?')} onConfirm={() => setDraft({ ...draft, steps: [] })}><Button disabled={captureBusy || draft.steps.length === 0} icon={<DeleteOutlined />}>{tr(locale, 'Clear steps')}</Button></Popconfirm>
           </Space></div>
           <ConfigProvider componentDisabled={captureBusy}>
-          <Collapse className="effect-step-list" defaultActiveKey={draft.steps.map((_, index) => String(index))} items={draft.steps.map((step, index) => ({
+          <SequenceTimeline steps={draft.steps} locale={locale} controls={state.hardware_details?.controls} disabled={captureBusy}
+            human={state.human_readable_time_units !== false} onSelect={index => setActiveStep(String(index))} onChange={steps => setDraft({ ...draft, steps })} />
+          <Collapse className="effect-step-list" activeKey={[activeStep]} onChange={keys => setActiveStep(String(Array.isArray(keys) ? keys[0] ?? '' : keys))} items={draft.steps.map((step, index) => ({
             key: String(index),
-            label: <span className="effect-step-title"><Tag>{index + 1}</Tag><strong>{step.kind}</strong><span>{(step.at_us / 1000).toLocaleString()} ms</span></span>,
+            label: <span className="effect-step-title"><Tag>{index + 1}</Tag><strong>{tr(locale, sequenceKindLabels[step.kind] ?? step.kind)}</strong><span>{formatTimeMs(step.at_us / 1000, state.human_readable_time_units !== false)}</span></span>,
             extra: <Space.Compact onClick={(event) => event.stopPropagation()}>
               <Button size="small" icon={<ArrowUpOutlined />} disabled={index === 0} onClick={() => moveStep(index, -1)} />
               <Button size="small" icon={<ArrowDownOutlined />} disabled={index === draft.steps.length - 1} onClick={() => moveStep(index, 1)} />
               <Popconfirm title={tr(locale, 'Delete step?')} onConfirm={() => setDraft({ ...draft, steps: draft.steps.filter((_, stepIndex) => stepIndex !== index) })}><Button size="small" danger icon={<DeleteOutlined />} /></Popconfirm>
             </Space.Compact>,
             children: <div className="effect-step-grid">
-              <label><span>{tr(locale, 'Time')}</span><InputNumber min={0} addonAfter="ms" value={step.at_us / 1000} onChange={(value) => updateStep(index, { at_us: Math.round((value ?? 0) * 1000) })} /></label>
-              <label><span>{tr(locale, 'Command')}</span><Select value={step.kind} options={['relay','relay-mask','pwm','display','rf','beep','rgb','opcode'].map((kind) => ({ value: kind, label: kind }))} onChange={(kind) => updateStep(index, { kind })} /></label>
+              <label><span>{tr(locale, 'Start')}</span><TimeValueField value={step.at_us / 1000} human={state.human_readable_time_units !== false} onChange={value => updateStep(index, { at_us: Math.round(value * 1000) })} /></label>
+              <label><span>{tr(locale, 'Command')}</span><Select value={step.kind} options={Object.entries(sequenceKindLabels).map(([kind, label]) => ({ value: kind, label: tr(locale, label) }))} onChange={(kind) => updateStep(index, { kind })} /></label>
               <label><span>{tr(locale, 'Target')}</span><InputNumber min={0} value={step.target} onChange={(target) => updateStep(index, { target: target ?? undefined })} /></label>
               <label><span>{tr(locale, 'Value')}</span><InputNumber min={0} value={step.value} onChange={(value) => updateStep(index, { value: value ?? undefined })} /></label>
-              <label><span>{tr(locale, 'Duration')}</span><InputNumber min={0} addonAfter="ms" value={step.duration_ms} onChange={(duration_ms) => updateStep(index, { duration_ms: duration_ms ?? undefined })} /></label>
+              <label><span>{tr(locale, 'Length')}</span><TimeValueField max={65535} value={step.duration_ms ?? 0} human={state.human_readable_time_units !== false} onChange={value => updateStep(index, { duration_ms: Math.round(value) })} /></label>
+              <label><span>{tr(locale, 'Finish')}</span><TimeValueField min={step.at_us / 1000} max={step.at_us / 1000 + 65535} value={step.at_us / 1000 + (step.duration_ms ?? 0)} human={state.human_readable_time_units !== false} onChange={value => updateStep(index, { duration_ms: Math.round(value - step.at_us / 1000) })} /></label>
               <label><span>{tr(locale, 'Frequency')}</span><InputNumber min={0} addonAfter="Hz" value={step.frequency_hz} onChange={(frequency_hz) => updateStep(index, { frequency_hz: frequency_hz ?? undefined })} /></label>
               <label className="effect-editor__wide"><span>{tr(locale, 'Text')}</span><Input value={step.text} onChange={(event) => updateStep(index, { text: event.target.value })} /></label>
               <label><span>{tr(locale, 'Destination')}</span><Input value={step.destination} onChange={(event) => updateStep(index, { destination: event.target.value })} /></label>
               <label><span>{tr(locale, 'Action IDs')}</span><Input value={(step.action_ids ?? []).join(', ')} onChange={(event) => updateStep(index, { action_ids: event.target.value.split(',').map((value) => value.trim()).filter(Boolean) })} /></label>
-              <label><span>RF code</span><InputNumber min={0} value={step.code} onChange={(code) => updateStep(index, { code: code ?? undefined })} /></label>
-              <label><span>RF bits</span><InputNumber min={0} max={64} value={step.bits} onChange={(bits) => updateStep(index, { bits: bits ?? undefined })} /></label>
+              <label><span>{tr(locale, 'RF code')}</span><InputNumber min={0} value={step.code} onChange={(code) => updateStep(index, { code: code ?? undefined })} /></label>
+              <label><span>{tr(locale, 'RF bits')}</span><InputNumber min={0} max={64} value={step.bits} onChange={(bits) => updateStep(index, { bits: bits ?? undefined })} /></label>
               <label><span>RGB</span><ColorPicker disabledAlpha value={`#${[step.red ?? 0, step.green ?? 0, step.blue ?? 0].map((value) => value.toString(16).padStart(2, '0')).join('')}`} onChangeComplete={(color) => { const [red, green, blue] = color.toRgbString().match(/\d+/g)?.map(Number) ?? [0,0,0]; updateStep(index, { red, green, blue }); }} /></label>
               <label><span>{tr(locale, 'Brightness')}</span><InputNumber min={0} max={255} value={step.brightness} onChange={(brightness) => updateStep(index, { brightness: brightness ?? undefined })} /></label>
               <label><span>{tr(locale, 'Payload')}</span><Input value={step.payload_hex} onChange={(event) => updateStep(index, { payload_hex: event.target.value })} /></label>

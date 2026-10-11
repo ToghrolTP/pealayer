@@ -1245,7 +1245,7 @@ fn effects_library_toolbar(app: &mut PealayerApp, ui: &mut egui::Ui, width: f32)
     // beyond the same outer width used by search, groups and effect cards.
     ui.allocate_ui_with_layout(egui::vec2(width, 0.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
         let compact = width < 330.0;
-        let manage = app.tr("Manage effects");
+        let manage = app.tr("Effects Designer");
         let new = app.tr("New effect");
         let manage_response = ui.button(if compact { crate::ui::icons::PENCIL_SIMPLE.to_string() } else {
             format!("{} {manage}", crate::ui::icons::PENCIL_SIMPLE)
@@ -4245,7 +4245,7 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
                     .iter()
                     .find(|template| template.id == instance.effect_id)
                     .map(|template| template.duration_ms)
-                    .unwrap_or(0);
+                    .unwrap_or(0).max(1_000);
                 app.undo_stack.push(app.snapshot_timeline());
                 let duplicate = crate::four_d::models::EffectInstance::new(
                     instance.effect_id,
@@ -4255,6 +4255,7 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
                 app.timeline.instances.push(duplicate);
                 app.selected_instance_ids.clear();
                 app.selected_instance_ids.insert(duplicate_id);
+                request_timeline_cue_into_view(app, ui.ctx(), duplicate_id);
                 timeline_dirty = true;
             }
         }
@@ -12844,7 +12845,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 .button(format!(
                                                     "{} {}",
                                                     crate::ui::icons::PENCIL_SIMPLE,
-                                                    self.app.tr("Manage effects")
+                                                    self.app.tr("Effects Designer")
                                                 ))
                                                 .clicked()
                                             {
@@ -15935,12 +15936,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                             .map(|p| p.x)
                                                             .unwrap_or(mouse_pos.x);
 
-                                                        let drag_mode = if duration_resizable {
+                                                        let drag_mode = if is_ctrl {
+                                                            crate::app::DragMode::Move
+                                                        } else if duration_resizable {
                                                             crate::app::classify_clip_drag_mode(clip_rect.left(), clip_rect.right(), press_x)
                                                         } else {
                                                             crate::app::DragMode::Move
                                                         };
-                                                        started_drag = Some((instance.id, drag_mode, instance.start_time_ms, effect.duration_ms, press_x, initial_positions));
+                                                        started_drag = Some((instance.id, drag_mode, instance.start_time_ms, effect.duration_ms, press_x, initial_positions, is_ctrl));
                                                     }
                                                 }
 
@@ -16119,9 +16122,16 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         }
 
                                         // Apply selection or drag start outside the borrow loop
-                                        if let Some((drag_id, mode, init_start, init_dur, start_x, init_positions)) = started_drag {
+                                        if let Some((mut drag_id, mode, init_start, init_dur, start_x, mut init_positions, duplicate)) = started_drag {
                                             // Push undo snapshot before mutating timeline
                                             self.app.undo_stack.push(self.app.snapshot_timeline());
+
+                                            if duplicate {
+                                                let ids = init_positions.iter().map(|(id, _)| *id).collect::<Vec<_>>();
+                                                let copies = self.app.duplicate_timeline_instances(&ids, 0);
+                                                drag_id = copies.get(&drag_id).copied().unwrap_or(drag_id);
+                                                init_positions = init_positions.into_iter().filter_map(|(id, at)| copies.get(&id).map(|copy| (*copy, at))).collect();
+                                            }
 
                                             // If resizing, isolate template if shared by multiple instances
                                             if mode == crate::app::DragMode::ResizeLeft || mode == crate::app::DragMode::ResizeRight {
@@ -16142,7 +16152,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         let mut drag_ended = false;
                                         let mut snap_line_x = None;
 
-                                        if let Some(drag_state) = &self.app.active_drag {
+                                        if let Some(drag_state) = self.app.active_drag.clone() {
                                             match drag_state.mode {
                                                 crate::app::DragMode::Move => {
                                                     ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
@@ -16173,12 +16183,29 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     crate::app::DragMode::Move => {
                                                         // Vertical track switching
                                                         let mut target_relay = None;
+                                                        let moving_seat = self.app.timeline.instances.iter()
+                                                            .find(|i| i.id == drag_state.instance_id)
+                                                            .and_then(|i| self.app.timeline.templates.iter().find(|t| t.id == i.effect_id))
+                                                            .and_then(|t| t.direct_control.as_ref())
+                                                            .is_some_and(|cue| cue.motion.is_some());
+                                                        if moving_seat && let Some(pointer) = ui.ctx().pointer_latest_pos() {
+                                                            let row_index = ((pointer.y - tracks_top) / timeline_track_height).floor() as i32;
+                                                            if let Ok(index) = usize::try_from(row_index)
+                                                                && let Some(row) = timeline_rows.get(index)
+                                                                && let TimelineTrackKind::Hardware(key) = &row.kind
+                                                                && matches!(key.as_str(), "seat.a" | "seat.b")
+                                                                && row.relay_ids.iter().all(|id| !self.app.track_locked.contains(id))
+                                                            {
+                                                                self.app.retarget_seat_timeline_cue(drag_state.instance_id, key, &row.name);
+                                                                self.app.selected_timeline_track = Some(row.key.clone());
+                                                            }
+                                                        }
                                                         let moving_direct_pwm = self.app.timeline.instances.iter()
                                                             .find(|instance| instance.id == drag_state.instance_id)
                                                             .and_then(|instance| self.app.timeline.templates.iter().find(|template| template.id == instance.effect_id))
                                                             .and_then(|template| template.direct_control.as_ref())
                                                             .is_some_and(|cue| cue.control_key.starts_with("pwm."));
-                                                        if !moving_direct_pwm && let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
+                                                        if !moving_seat && !moving_direct_pwm && let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
                                                     let relative_y = mouse_pos.y - tracks_top;
                                                     let track_index = (relative_y
                                                                 / timeline_track_height)
@@ -16228,6 +16255,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         }
 
                                                         let actual_delta_ms = primary_new_start as i64 - drag_state.initial_start_time_ms as i64;
+
+                                                        if target_relay.is_some() {
+                                                            self.app.isolate_template_for_instance(drag_state.instance_id);
+                                                        }
 
                                                         for &(inst_id, init_start) in &drag_state.initial_positions {
                                                             if let Some(inst) = self.app.timeline.instances.iter_mut().find(|i| i.id == inst_id) {
