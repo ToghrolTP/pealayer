@@ -158,7 +158,7 @@ fn test_pealayer_app_tab_toggle_and_focus() {
     assert!(app.is_tab_open(PealayerTab::Timeline));
     assert_eq!(
         PealayerTab::Timeline.title(&app),
-        PealayerTab::Timeline.title_for_language(app.language)
+        app.tr("Timeline")
     );
 
     // Toggle Timeline off
