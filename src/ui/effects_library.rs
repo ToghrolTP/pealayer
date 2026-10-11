@@ -603,6 +603,7 @@ fn append_melody_steps(
 #[derive(Clone, Copy, Debug)]
 struct SequenceCueDragState {
     index: usize,
+    duplicate_index: Option<usize>,
     mode: crate::app::DragMode,
     pointer_x: f32,
     start_ms: u64,
@@ -1334,23 +1335,29 @@ fn draw_sequence_timeline(
                             if response.drag_started_by(egui::PointerButton::Primary) {
                                 *selected_index = index;
                                 if let Some(pointer) = response.interact_pointer_pos() {
+                                    let duplicate = ui.input(|input| input.modifiers.command || input.modifiers.ctrl);
+                                    let mode = if duplicate { crate::app::DragMode::Move } else {
+                                        sequence_cue_drag_mode(duration_resizable, cue.left(), cue.right(), pointer.x)
+                                    };
+                                    let duration_ms = u64::from(step.duration_ms.unwrap_or(60)).max(1);
+                                    let copy = duplicate.then(|| step.clone());
+                                    let duplicate_index = copy.map(|copy| {
+                                        let index = draft.steps.len();
+                                        draft.steps.push(copy);
+                                        *selected_index = index;
+                                        index
+                                    });
+                                    let pointer_x = ui.input(|input| input.pointer.press_origin()).map_or(pointer.x, |p| p.x);
                                     ui.data_mut(|data| {
                                         data.insert_temp(
                                             drag_id,
                                             SequenceCueDragState {
                                                 index,
-                                                mode: sequence_cue_drag_mode(
-                                                    duration_resizable,
-                                                    cue.left(),
-                                                    cue.right(),
-                                                    pointer.x,
-                                                ),
-                                                pointer_x: pointer.x,
+                                                duplicate_index,
+                                                mode,
+                                                pointer_x,
                                                 start_ms,
-                                                duration_ms: u64::from(
-                                                    step.duration_ms.unwrap_or(60),
-                                                )
-                                                .max(1),
+                                                duration_ms,
                                             },
                                         );
                                     });
@@ -1364,7 +1371,7 @@ fn draw_sequence_timeline(
                             {
                                 let delta_ms =
                                     ((pointer.x - drag.pointer_x) / px_per_ms).round() as i64;
-                                let step = &mut draft.steps[index];
+                                let step = &mut draft.steps[drag.duplicate_index.unwrap_or(index)];
                                 match drag.mode {
                                     crate::app::DragMode::Move => {
                                         let moved = drag.start_ms as i64 + delta_ms;
@@ -1416,6 +1423,13 @@ fn draw_sequence_timeline(
                             }
                             if response.drag_stopped() {
                                 ui.data_mut(|data| data.remove::<SequenceCueDragState>(drag_id));
+                            }
+                            if selected {
+                                let reveal_id = egui::Id::new((state_prefix.clone(), "reveal-cue"));
+                                if ui.data_mut(|data| data.remove_temp::<bool>(reveal_id).unwrap_or(false)) {
+                                    ui.scroll_to_rect(cue, Some(egui::Align::Center));
+                                    response.request_focus();
+                                }
                             }
                             response.context_menu(|ui| {
                                 *selected_index = index;
@@ -1483,6 +1497,8 @@ fn draw_sequence_timeline(
                     .saturating_add(u64::from(duplicate.duration_ms.unwrap_or(100)).max(1) * 1_000);
                 draft.steps.insert(index + 1, duplicate);
                 *selected_index = index + 1;
+                ui.data_mut(|data| data.insert_temp(egui::Id::new((state_prefix.clone(), "reveal-cue")), true));
+                ui.ctx().request_repaint();
             }
             SequenceCueMenuAction::Delete => {
                 draft.steps.remove(index);
@@ -1548,7 +1564,7 @@ fn draw_timeline_authoring_fields(
     let supports_curve = matches!(step.kind.as_str(), "pwm" | "rgb" | "addressable");
 
     if supports_duration {
-        ui.label("Cue length");
+        ui.label("Length");
         let mut duration = u64::from(step.duration_ms.unwrap_or(100).max(1));
         if ui
             .add(crate::duration::time_value_drag(
@@ -1560,6 +1576,20 @@ fn draw_timeline_authoring_fields(
             .changed()
         {
             step.duration_ms = Some(duration.min(u64::from(u16::MAX)) as u16);
+        }
+        ui.end_row();
+    }
+
+    if let Some(duration_ms) = step.duration_ms {
+        ui.label("Finish");
+        let mut finish_us = step.at_us.saturating_add(u64::from(duration_ms) * 1_000);
+        if ui.add(crate::duration::time_value_us_drag(
+            &mut finish_us,
+            step.at_us.saturating_add(1_000)..=step.at_us.saturating_add(u64::from(u16::MAX) * 1_000),
+            1_000.0,
+            human_readable_time_units,
+        )).changed() {
+            step.duration_ms = Some(finish_us.saturating_sub(step.at_us).div_ceil(1_000).clamp(1, u64::from(u16::MAX)) as u16);
         }
         ui.end_row();
     }
@@ -1769,7 +1799,7 @@ fn draw_sequence_step_editor(
                         }
                         ui.end_row();
 
-                        ui.label("Time");
+                        ui.label("Start");
                         let mut at_us = step.at_us;
                         if ui
                             .add(crate::duration::time_value_us_drag(
@@ -2466,7 +2496,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
     egui::Window::new(format!(
         "{} {}",
         crate::ui::icons::SPARKLE,
-        app.tr("Effect properties")
+        app.tr("Effects Designer")
     ))
     .id(egui::Id::new("controller_effect_library_dialog"))
     .open(&mut open)
@@ -2623,7 +2653,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             ui.heading(if app.effect_library_draft.is_new {
                                 app.tr("New effect")
                             } else {
-                                app.tr("Effect properties")
+                                app.tr("Effects Designer")
                             });
                             let labels = (
                                 app.tr("Type"),

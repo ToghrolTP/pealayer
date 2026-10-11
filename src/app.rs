@@ -7884,6 +7884,50 @@ impl PealayerApp {
     }
 
     /// Persist and publish a timeline edit that has already mutated the model.
+    /// Model-only duplication. The caller owns the single undo transaction and
+    /// commit; drag duplication uses zero offset until the pointer moves.
+    pub(crate) fn duplicate_timeline_instances(
+        &mut self,
+        ids: &[uuid::Uuid],
+        offset_ms: u64,
+    ) -> std::collections::BTreeMap<uuid::Uuid, uuid::Uuid> {
+        let originals = self.timeline.instances.iter()
+            .filter(|instance| ids.contains(&instance.id)).cloned().collect::<Vec<_>>();
+        let mut copies = std::collections::BTreeMap::new();
+        for original in originals {
+            let copy = crate::four_d::models::EffectInstance::new(
+                original.effect_id, original.start_time_ms.saturating_add(offset_ms));
+            copies.insert(original.id, copy.id);
+            self.timeline.instances.push(copy);
+        }
+        self.selected_instance_ids = copies.values().copied().collect();
+        copies
+    }
+
+    /// Retarget only this placement, never another cue sharing its template.
+    /// This is authoring data only: no seek, preview, or live command is sent.
+    pub(crate) fn retarget_seat_timeline_cue(
+        &mut self,
+        instance_id: uuid::Uuid,
+        control_key: &str,
+        seat_name: &str,
+    ) -> bool {
+        let side = match control_key { "seat.a" => 0, "seat.b" => 1, _ => return false };
+        let Some(direct) = self.timeline.instances.iter().find(|i| i.id == instance_id)
+            .and_then(|i| self.timeline.templates.iter().find(|t| t.id == i.effect_id))
+            .and_then(|t| t.direct_control.as_ref()) else { return false; };
+        let Some(motion) = direct.motion.as_ref() else { return false; };
+        if direct.control_key == control_key && motion.side == side { return false; }
+        let label = self.tr(motion.direction.label());
+        let Some(template_id) = self.isolate_template_for_instance(instance_id) else { return false; };
+        let Some(template) = self.timeline.templates.iter_mut().find(|t| t.id == template_id) else { return false; };
+        let direct = template.direct_control.as_mut().expect("validated motion cue");
+        direct.control_key = control_key.to_string();
+        direct.motion.as_mut().expect("validated motion cue").side = side;
+        template.name = format!("{seat_name} · {label}");
+        true
+    }
+
     pub(crate) fn commit_timeline_edit(&mut self) {
         self.persist_timeline_track_preferences();
         self.sync_timeline_engine();
@@ -9584,6 +9628,35 @@ pub(crate) mod tests {
 
         // Even an eight-pixel minimum-width cue keeps a center move target.
         assert_eq!(classify_clip_drag_mode(10.0, 18.0, 14.0), DragMode::Move);
+    }
+
+    #[test]
+    fn duplicate_and_seat_retarget_preserve_the_original_shared_placement() {
+        use crate::four_d::models::{Effect, EffectInstance, DirectMotionCue, DirectMotionDirection};
+        let mut app = PealayerApp::default();
+        let mut effect = Effect::direct_control("Seat Left · Down".into(), "armchair".into(), 500, "seat.a".into(), 0, None);
+        effect.direct_control.as_mut().unwrap().motion = Some(DirectMotionCue { side: 0, direction: DirectMotionDirection::Down });
+        let original_effect = effect.clone();
+        let instance = EffectInstance::new(effect.id, 404);
+        let original_id = instance.id;
+        app.timeline.templates.push(effect);
+        app.timeline.instances.push(instance);
+        let duplicates = app.duplicate_timeline_instances(&[original_id], 500);
+        let copy = duplicates[&original_id];
+        assert_eq!(app.selected_instance_ids.len(), 1);
+        assert!(app.selected_instance_ids.contains(&copy));
+        assert!(app.retarget_seat_timeline_cue(copy, "seat.b", "Seat Right"));
+        assert!(!app.retarget_seat_timeline_cue(copy, "pwm.1", "Not a seat"));
+        let original = app.timeline.instances.iter().find(|i| i.id == original_id).unwrap();
+        let duplicate = app.timeline.instances.iter().find(|i| i.id == copy).unwrap();
+        assert_eq!(original.start_time_ms, 404);
+        assert_eq!(duplicate.start_time_ms, 904);
+        assert_eq!(app.timeline.templates.iter().find(|t| t.id == original.effect_id).unwrap(), &original_effect);
+        let edited = app.timeline.templates.iter().find(|t| t.id == duplicate.effect_id).unwrap();
+        assert_eq!(edited.direct_control.as_ref().unwrap().control_key, "seat.b");
+        assert_eq!(edited.direct_control.as_ref().unwrap().motion.as_ref().unwrap().side, 1);
+        assert_eq!(edited.duration_ms, 500);
+        assert_eq!(edited.name, "Seat Right · Down");
     }
 
     #[test]

@@ -21,7 +21,7 @@ pub fn format_effect_duration(duration_ms: u64) -> String {
 }
 
 /// Formats an editable millisecond value using the shortest lossless operator
-/// notation. Unlike [`format_effect_duration`], zero stays `0ms` because this
+/// notation. Unlike [`format_effect_duration`], zero stays `0s` because this
 /// helper is also used by ordinary time fields where zero does not mean an
 /// unbounded effect.
 pub fn format_time_value_ms(duration_ms: u64) -> String {
@@ -34,6 +34,9 @@ pub fn format_time_value_ms_with_preference(
     duration_ms: u64,
     human_readable_units: bool,
 ) -> String {
+    if duration_ms == 0 {
+        return "0s".to_string();
+    }
     if !human_readable_units {
         return format!("{duration_ms}ms");
     }
@@ -59,6 +62,9 @@ pub fn format_time_value_us_with_preference(
     duration_us: u64,
     human_readable_units: bool,
 ) -> String {
+    if duration_us == 0 {
+        return "0s".to_string();
+    }
     if !human_readable_units {
         return format!("{}ms", decimal_units(duration_us, 1_000));
     }
@@ -327,7 +333,7 @@ mod tests {
 
     #[test]
     fn editable_time_values_use_compact_human_units() {
-        assert_eq!(format_time_value_ms(0), "0ms");
+        assert_eq!(format_time_value_ms(0), "0s");
         assert_eq!(format_time_value_ms(250), "250ms");
         assert_eq!(format_time_value_ms(5_000), "5s");
         assert_eq!(format_time_value_ms(61_250), "1m 1.25s");
