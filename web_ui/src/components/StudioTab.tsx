@@ -52,6 +52,7 @@ import { appendMelodySteps, sequenceDurationMs } from '../melodyCatalog';
 import { MediaTrackSelectors } from './MediaTrackSelectors';
 import { PlaybackButton } from './PlaybackButton';
 import { SequenceTimeline } from './SequenceTimeline';
+import { StepRepeatFields } from './StepRepeatFields';
 import { TimeValueField } from './TimeValueField';
 import { newCueId, repeatedSequenceDurationMs, formatTimeMs } from '../cueAuthoring';
 
@@ -636,7 +637,9 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                   <Button disabled={captureBusy || savingEffect || !state.controller_connected || !effectDraft.name?.trim()} icon={<CaretRightFilled />} onClick={() => { void sendCmd('controller_effect.publish_and_run', effectPayload(effectDraft)); }}>{tr(locale, 'Publish & Run')}</Button>
                 </Space>
                 <SequenceTimeline key={effectDraft.id} steps={effectDraft.steps} locale={locale} controls={state.hardware_details?.controls} disabled={captureBusy}
-                  human={state.human_readable_time_units !== false} onChange={steps => setEffectDraft({ ...effectDraft, steps })} />
+                  human={state.human_readable_time_units !== false} onSelect={index => {
+                    document.querySelector<HTMLElement>(`[data-step-properties="${index}"]`)?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+                  }} onChange={steps => setEffectDraft({ ...effectDraft, steps })} />
                 <Divider titlePlacement="start" plain>{tr(locale, 'Sequence steps')}</Divider>
                 <div className="sequence-editor-web__toolbar">
                   <ConfigProvider componentDisabled={false}><EffectRecorder state={state} sendCmd={sendCmd} locale={locale} effect={effectPayload(effectDraft)} onSequenceChange={(steps, id) => setEffectDraft((current) => current ? { ...current, steps, id: String(id), reference: `effect:${id}`, is_new: false } : current)} /></ConfigProvider>
@@ -660,7 +663,10 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                   {(effectDraft.steps ?? []).length === 0 ? (
                     <Empty image={Empty.PRESENTED_IMAGE_SIMPLE} description={tr(locale, 'No actions yet')} />
                   ) : (effectDraft.steps ?? []).map((step: Record<string, any>, index: number) => (
-                    <div className="sequence-step-row" key={`${index}:${step.at_us}:${step.kind}`}>
+                    <div className="sequence-step-row" data-step-properties={index} key={`${index}:${step.at_us}:${step.kind}`}>
+                      <StepRepeatFields step={step} locale={locale} human={state.human_readable_time_units !== false} onChange={patch => {
+                        const steps = [...effectDraft.steps]; steps[index] = { ...step, ...patch }; setEffectDraft({ ...effectDraft, steps });
+                      }} />
                       <span className="sequence-step-row__index">{index + 1}</span>
                       <label><span>{tr(locale, 'Start')}</span><TimeValueField value={Number(step.at_us ?? 0) / 1000} human={state.human_readable_time_units !== false} onChange={(value) => {
                         const steps = [...effectDraft.steps]; steps[index] = { ...step, at_us: Math.max(0, Number(value ?? 0)) * 1000 }; setEffectDraft({ ...effectDraft, steps });
@@ -675,7 +681,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                         { value: 'rf', label: tr(locale, 'RF code') },
                         { value: 'beep', label: tr(locale, 'Buzzer') },
                       ]} onChange={(kind) => {
-                        const steps = [...effectDraft.steps]; steps[index] = { at_us: step.at_us ?? 0, kind, target: 0, value: kind === 'motion' ? 1 : 0 }; setEffectDraft({ ...effectDraft, steps });
+                        const steps = [...effectDraft.steps]; steps[index] = { at_us: step.at_us ?? 0, kind, repeat_count: step.repeat_count, repeat_interval_ms: step.repeat_interval_ms, target: 0, value: kind === 'motion' ? 1 : 0 }; setEffectDraft({ ...effectDraft, steps });
                       }} /></label>
                       {['relay', 'motion', 'pwm', 'addressable'].includes(step.kind) && <label><span>{tr(locale, step.kind === 'motion' ? 'Side' : 'Channel')}</span><InputNumber min={0} max={step.kind === 'relay' ? 7 : step.kind === 'motion' ? 1 : 15} value={step.target ?? 0} onChange={(target) => {
                         const steps = [...effectDraft.steps]; steps[index] = { ...step, target: Number(target ?? 0) }; setEffectDraft({ ...effectDraft, steps });

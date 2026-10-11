@@ -570,6 +570,10 @@ pub struct HardwareMacroStep {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repeat_count: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub repeat_interval_ms: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub to_value: Option<u16>,
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub easing: String,
@@ -2874,7 +2878,7 @@ pub fn direct_serial_name(endpoint: &str) -> &str {
 #[cfg(test)]
 mod tests {
     #[test]
-    fn current_capture_contract_is_numeric_explicit_and_rejects_step_repetition() {
+    fn current_capture_contract_is_numeric_explicit_and_preserves_step_repetition() {
         let selection: super::HardwareCaptureSelection = serde_json::from_value(serde_json::json!({
             "all":false,"control_keys":["seat.a"],"opcodes":[16,17]
         })).unwrap();
@@ -2882,7 +2886,10 @@ mod tests {
         assert!(super::HardwareCaptureSelection::default().is_empty());
         assert_eq!(serde_json::to_value(&selection).unwrap()["opcodes"], serde_json::json!([16,17]));
         assert!(serde_json::from_value::<super::HardwareCaptureSelection>(serde_json::json!({"opcodes":"EBE="})).is_err());
-        assert!(serde_json::from_value::<super::HardwareMacroStep>(serde_json::json!({"kind":"motion","repeat_count":2})).is_err());
+        let step = serde_json::from_value::<super::HardwareMacroStep>(serde_json::json!({"kind":"motion","repeat_count":2,"repeat_interval_ms":250})).unwrap();
+        assert_eq!(step.repeat_count, Some(2));
+        assert_eq!(step.repeat_interval_ms, Some(250));
+        assert!(serde_json::from_value::<super::HardwareMacroStep>(serde_json::json!({"kind":"motion","repeat_typo":2})).is_err());
         let capabilities: super::HardwareCaptureCapabilities = serde_json::from_value(serde_json::json!({
             "controls":[{"key":"seat.a","name":"Seat Left","kind":"motion","actions":[]}],
             "opcodes":[{"opcode":16,"name":"relay","capture_modes":["automatic"]}]
@@ -2896,7 +2903,7 @@ mod tests {
             assert!(super::parse_effect_repeat(&invalid).is_err());
         }
         assert!(super::validate_effect_snapshot(&serde_json::json!({"macros":{"library":[{
-            "steps":[{"kind":"motion","repeat_count":2}]
+            "steps":[{"kind":"motion","repeat_count":0}]
         }]}})).is_err());
     }
     use super::*;

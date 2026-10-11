@@ -1,4 +1,38 @@
-export type SequenceStep = { at_us: number; kind: string; target?: number; value?: number; duration_ms?: number; action_ids?: string[]; [key: string]: unknown };
+export type SequenceStep = { at_us: number; kind: string; target?: number; value?: number; duration_ms?: number; repeat_count?: number; repeat_interval_ms?: number; action_ids?: string[]; [key: string]: unknown };
+
+export function stepRepetition(step: SequenceStep): { count: number; intervalUs: number; endUs: number } | null {
+  const count = step.repeat_count ?? 1, interval = step.repeat_interval_ms ?? 0, duration = step.duration_ms ?? 0;
+  if (!Number.isInteger(count) || count < 1 || count > 1000 || !Number.isInteger(interval) || interval < 0 || interval > 3600000 || !Number.isInteger(duration) || duration < 0 || duration > 65535 || !Number.isInteger(step.at_us) || step.at_us < 0) return null;
+  const intervalUs = (interval === 0 ? Math.max(duration, 1) : interval) * 1000;
+  const endUs = step.at_us + duration * 1000 + (count - 1) * intervalUs;
+  return Number.isSafeInteger(endUs) && endUs <= 2147483647 && intervalUs <= 2147483647 ? { count, intervalUs, endUs } : null;
+}
+
+/** Repeated instances always bind to the one persisted source index. */
+export function stepInstances(step: SequenceStep, source: number, fromUs = 0, toUs = 2147483647, pinnedIteration?: number) {
+  const repeat = stepRepetition(step);
+  if (!repeat) return [{ source, iteration: 0, at_us: step.at_us }];
+  const first = Math.max(1, Math.ceil((fromUs - step.at_us - (step.duration_ms ?? 0) * 1000) / repeat.intervalUs));
+  const last = Math.min(repeat.count - 1, Math.floor((toUs - step.at_us) / repeat.intervalUs));
+  const ghosts = [];
+  for (let iteration = last; iteration >= first; iteration--) ghosts.push({ source, iteration, at_us: step.at_us + iteration * repeat.intervalUs });
+  if (pinnedIteration != null && pinnedIteration > 0 && pinnedIteration < repeat.count && !ghosts.some(instance => instance.iteration === pinnedIteration)) {
+    ghosts.push({ source, iteration: pinnedIteration, at_us: step.at_us + pinnedIteration * repeat.intervalUs });
+  }
+  return [...ghosts, { source, iteration: 0, at_us: step.at_us }];
+}
+
+export function editStepInstance<T extends SequenceStep>(step: T, iteration: number, deltaMs: number, mode: 'move' | 'length'): T {
+  const next = structuredClone(step);
+  if (mode === 'length') next.duration_ms = Math.max(1, Math.min(65535, Math.round((step.duration_ms ?? 0) + deltaMs)));
+  else if (iteration > 0) {
+    const period = stepRepetition(step)?.intervalUs ?? 1000;
+    const repeats = Math.max(1, (step.repeat_count ?? 1) - 1);
+    const roomMs = Math.floor((2147483647 - step.at_us - (step.duration_ms ?? 0) * 1000) / repeats / 1000);
+    next.repeat_interval_ms = Math.max(1, Math.min(roomMs, 3600000, Math.round(period / 1000 + deltaMs / iteration)));
+  } else next.at_us = Math.max(0, Math.round(step.at_us + deltaMs * 1000));
+  return next;
+}
 
 export const sequenceKindLabels: Record<string, string> = {
   motion: 'Seat motion', relay: 'Relay', 'relay-mask': 'Relay mask', 'relays-off': 'All relays off',
@@ -34,7 +68,7 @@ export function duplicateSequenceCues<T extends SequenceStep>(steps: T[], indice
   const selected = [...new Set(indices)].filter(index => Number.isInteger(index) && index >= 0 && index < steps.length).sort((a, b) => a - b);
   if (!selected.length) return { steps, indices: [] };
   const start = selected.reduce((min, index) => Math.min(min, steps[index].at_us), Infinity);
-  const end = selected.reduce((max, index) => Math.max(max, steps[index].at_us + (steps[index].duration_ms ?? 0) * 1000), 0);
+  const end = selected.reduce((max, index) => Math.max(max, stepRepetition(steps[index])?.endUs ?? steps[index].at_us), 0);
   const offsetUs = Math.max(1_000_000, end - start);
   const copies = selected.map(index => { const copy = structuredClone(steps[index]); copy.at_us += offsetUs; return copy; });
   return { steps: [...steps, ...copies], indices: copies.map((_, index) => steps.length + index) };
@@ -75,7 +109,9 @@ export function formatTimeMs(value: number, human = true): string {
 /** Keep microsecond cue placement until the final display rounding. */
 export function repeatedSequenceDurationMs(steps: SequenceStep[], count = 1, interval = 0): number | null {
   if (!Number.isInteger(count) || count < 1 || count > 1000 || !Number.isInteger(interval) || interval < 0 || interval > 3600000) return null;
-  const baseUs = steps.reduce((end, step) => Math.max(end, step.at_us + (step.duration_ms ?? 0) * 1000), 0);
+  const plans = steps.map(stepRepetition);
+  if (plans.some(plan => plan === null)) return null;
+  const baseUs = plans.reduce((end, plan) => Math.max(end, plan!.endUs), 0);
   const periodUs = interval === 0 ? baseUs : interval * 1000;
   if (periodUs < baseUs || (count > 1 && periodUs === 0)) return null;
   const totalUs = baseUs + (count - 1) * periodUs;

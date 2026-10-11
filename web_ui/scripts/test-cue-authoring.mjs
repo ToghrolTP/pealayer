@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { duplicateStep, moveSequenceStep, parseTimeMs, formatTimeMs, repeatedSequenceDurationMs, sequenceKindLabels, sequenceLaneName, selectCueIndices, duplicateSequenceCues, deleteSequenceCues } from '../src/cueAuthoring.ts';
+import { duplicateStep, moveSequenceStep, parseTimeMs, formatTimeMs, repeatedSequenceDurationMs, sequenceKindLabels, sequenceLaneName, selectCueIndices, duplicateSequenceCues, deleteSequenceCues, stepRepetition, stepInstances, editStepInstance } from '../src/cueAuthoring.ts';
 const controls = [
   { key: 'seat.a', name: 'Seat Left', default_name: 'Seat A' },
   { key: 'seat.b', name: 'صندلی راست', default_name: 'Seat B' },
@@ -59,8 +59,11 @@ assert.ok(!timeline.includes('sendCmd') && !timeline.includes('seek_to'), 'desig
 for (const file of ['EffectsTab', 'StudioTab']) {
   const source = readFileSync(new URL(`../src/components/${file}.tsx`, import.meta.url), 'utf8');
   assert.ok(source.includes('<SequenceTimeline') && source.includes("tr(locale, 'Effects Designer')"));
-  assert.ok(!source.includes('step.repeat_count') && !source.includes('step.repeat_interval_ms'));
+  assert.ok(source.includes('<StepRepeatFields'), 'both designers must expose the same step-repeat controls');
 }
+const repeatFields = readFileSync(new URL('../src/components/StepRepeatFields.tsx', import.meta.url), 'utf8');
+assert.ok(repeatFields.includes('className="step-repeat-controls"'), 'repeat toggle and count share one compact row');
+assert.ok(repeatFields.includes('<div className="step-repeat-field">'), 'the checkbox must not be nested inside another label');
 // Scope translation parity to the surfaces changed in this pass. Learned
 // peripheral names, media metadata and user-authored text remain untranslated.
 const nativeDictionary = readFileSync(new URL('../../src/ui/i18n.rs', import.meta.url), 'utf8');
@@ -79,8 +82,32 @@ for (const file of ['EffectsTab', 'StudioTab', 'EffectRecorder', 'SequenceTimeli
     assert.ok(webKeys.has(match[1]), `Missing Web designer Persian translation: ${match[1]}`);
   }
 }
-for (const key of ['Effects Designer', 'Sequence step', 'Repeat effect', 'Interval', 'Length', 'Finish', 'Capture selection', 'Publish & Run', 'Rest', 'All relays off', 'All PWM outputs off', 'Status RGB', 'Raw opcode', 'Choose…']) {
+for (const key of ['Effects Designer', 'Sequence step', 'Repeat effect', 'Repeat step', 'Interval', 'Length', 'Finish', 'Capture selection', 'Publish & Run', 'Rest', 'All relays off', 'All PWM outputs off', 'Status RGB', 'Raw opcode', 'Choose…']) {
   assert.ok(nativeKeys.has(key) && webKeys.has(key), `Designer translation parity missing: ${key}`);
 }
 for (const label of Object.values(sequenceKindLabels)) assert.ok(webKeys.has(label), `Missing command caption: ${label}`);
 console.log('Cue copy/retarget, exact repeated timing, units and shared authoring surface checks passed.');
+
+const repeating = { ...original, repeat_count: 3, repeat_interval_ms: 750 };
+assert.deepEqual(stepRepetition(repeating), { count: 3, intervalUs: 750000, endUs: 2404000 });
+assert.deepEqual(stepInstances(repeating, 7), [
+  { source: 7, iteration: 2, at_us: 1904000 },
+  { source: 7, iteration: 1, at_us: 1154000 },
+  { source: 7, iteration: 0, at_us: 404000 },
+]);
+const spacing = editStepInstance(repeating, 2, 200, 'move');
+assert.equal(spacing.repeat_interval_ms, 850);
+assert.equal(spacing.at_us, original.at_us);
+assert.equal(spacing.target, original.target);
+assert.equal(spacing.duration_ms, original.duration_ms);
+assert.equal(repeating.repeat_interval_ms, 750, 'a cancelled preview cannot change the saved draft');
+const sized = editStepInstance(repeating, 1, 100, 'length');
+assert.equal(sized.duration_ms, 600);
+assert.equal(sized.repeat_interval_ms, 750);
+assert.equal(stepRepetition({ at_us: 500, kind: 'opcode', repeat_count: 3 })?.endUs, 2500);
+assert.equal(repeatedSequenceDurationMs([repeating], 2, 2500), 4904);
+assert.equal(repeatedSequenceDurationMs([repeating], 2, 2400), null);
+for (const patch of [{ repeat_count: 0 }, { repeat_count: 1001 }, { repeat_interval_ms: -1 }, { repeat_interval_ms: 3600001 }, { repeat_interval_ms: 3600000 }]) assert.equal(stepRepetition({ ...repeating, ...patch }), null);
+assert.equal(stepInstances({ ...repeating, repeat_count: 1000, repeat_interval_ms: 1000 }, 0, 900000000, 901500000).length, 3, 'only visible repeated instances plus source are materialized');
+assert.ok(timeline.includes('data-repeat-index={iteration}') && timeline.includes('editStepInstance(active.step, iteration'));
+console.log('Step repeat ghost binding, interval/length gestures, cancellation, bounds and nested timing passed.');

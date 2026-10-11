@@ -477,9 +477,13 @@ fn sequence_step_kinds(
 
 fn reset_step_kind(step: &mut crate::four_d::controller::HardwareMacroStep, kind: String) {
     let at_us = step.at_us;
+    let repeat_count = step.repeat_count;
+    let repeat_interval_ms = step.repeat_interval_ms;
     *step = crate::four_d::controller::HardwareMacroStep {
         at_us,
         kind,
+        repeat_count,
+        repeat_interval_ms,
         ..Default::default()
     };
     match step.kind.as_str() {
@@ -575,13 +579,63 @@ pub(crate) fn sequence_duration_ms(steps: &[crate::four_d::controller::HardwareM
     steps
         .iter()
         .map(|step| {
-            let duration = u64::from(step.duration_ms.unwrap_or_default());
-            step.at_us.div_ceil(1_000)
-                + duration
+            step_repetition(step).map(|(_, _, end)| end.div_ceil(1_000))
+                .unwrap_or_else(|_| step.at_us.div_ceil(1_000) + u64::from(step.duration_ms.unwrap_or_default()))
         })
         .max()
         .unwrap_or(1)
         .max(1)
+}
+
+pub(crate) fn step_repetition(step: &crate::four_d::controller::HardwareMacroStep) -> Result<(u16, u64, u64), String> {
+    let count = step.repeat_count.unwrap_or(1);
+    let interval = step.repeat_interval_ms.unwrap_or(0);
+    if !(1..=1_000).contains(&count) || interval > 3_600_000 {
+        return Err("Step repeat count must be 1–1000 and interval 0–3600000ms".into());
+    }
+    let duration = u64::from(step.duration_ms.unwrap_or(0));
+    let period_us = if interval == 0 { duration.max(1) * 1_000 } else { u64::from(interval) * 1_000 };
+    let end = step.at_us.checked_add(duration * 1_000)
+        .and_then(|end| end.checked_add(u64::from(count - 1) * period_us))
+        .ok_or("Step repetition overflows")?;
+    if end > i32::MAX as u64 || period_us > i32::MAX as u64 {
+        return Err("Step repetition exceeds the controller timestamp range".into());
+    }
+    Ok((count, period_us, end))
+}
+
+// A repeat is a view of its source, never a separately persisted cue. Its
+// leading edge/body changes start-to-start spacing; the trailing edge changes
+// the source length. Keep source placement and channel unchanged.
+fn move_step_repeat(step: &mut crate::four_d::controller::HardwareMacroStep, iteration: u16, original_start_ms: u64, delta_ms: i64, quantum_ms: Option<u64>) {
+    if iteration == 0 { return; }
+    let offset = (original_start_ms as i64 + delta_ms - step.at_us.div_ceil(1_000) as i64).max(i64::from(iteration));
+    let interval = (offset as f64 / f64::from(iteration)).round() as u64;
+    let interval = quantum_ms.map_or(interval, |quantum| quantize_time(interval as i64, quantum)).max(1);
+    // Bound the complete schedule, not just a single interval field.
+    let repeats = u64::from(step.repeat_count.unwrap_or(1).saturating_sub(1)).max(1);
+    let room = (i32::MAX as u64).saturating_sub(step.at_us + u64::from(step.duration_ms.unwrap_or(0)) * 1_000);
+    step.repeat_interval_ms = Some(interval.min(3_600_000).min(room / repeats / 1_000).max(1) as u32);
+}
+
+fn visible_step_instances(steps: &[crate::four_d::controller::HardwareMacroStep], indexes: &[usize], from_us: u64, to_us: u64, active: Option<SequenceCueDragState>) -> Vec<(usize, u16)> {
+    let mut instances = Vec::new();
+    for &index in indexes {
+        let step = &steps[index];
+        if let Ok((count, period, _)) = step_repetition(step) {
+            let visual_length = (u64::from(step.duration_ms.unwrap_or(0)) * 1_000).max(1_000_000);
+            let first = from_us.saturating_sub(step.at_us + visual_length).div_ceil(period).max(1);
+            let last = to_us.saturating_sub(step.at_us) / period;
+            for iteration in (first..=last.min(u64::from(count - 1))).rev() {
+                instances.push((index, iteration as u16));
+            }
+        }
+    }
+    if let Some(drag) = active.filter(|drag| drag.iteration > 0 && indexes.contains(&drag.index)) {
+        if !instances.contains(&(drag.index, drag.iteration)) { instances.push((drag.index, drag.iteration)); }
+    }
+    instances.extend(indexes.iter().map(|&index| (index, 0)));
+    instances
 }
 
 pub(crate) fn repeated_sequence_duration_ms(
@@ -593,7 +647,8 @@ pub(crate) fn repeated_sequence_duration_ms(
         return Err("Effect repeat count must be 1–1000".into());
     }
     if interval_ms > 3_600_000 { return Err("Effect repeat interval must be 0–3600000ms".into()); }
-    let base = steps.iter().map(|step| step.at_us.saturating_add(u64::from(step.duration_ms.unwrap_or(0)) * 1_000)).max().unwrap_or(0);
+    let base = steps.iter().map(|step| step_repetition(step).map(|(_, _, end)| end))
+        .collect::<Result<Vec<_>, _>>()?.into_iter().max().unwrap_or(0);
     let interval = if interval_ms == 0 { base } else { u64::from(interval_ms) * 1_000 };
     if interval < base {
         return Err("Effect repeat interval cannot be shorter than its length".into());
@@ -654,6 +709,7 @@ struct SequenceCueDragState {
     pointer_x: f32,
     start_ms: u64,
     duration_ms: u64,
+    iteration: u16,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -697,7 +753,7 @@ fn duplicate_sequence_cues(
 ) -> std::collections::BTreeSet<usize> {
     let selected = selected.iter().filter_map(|index| steps.get(*index)).collect::<Vec<_>>();
     let Some(start) = selected.iter().map(|step| step.at_us).min() else { return Default::default(); };
-    let end = selected.iter().map(|step| step.at_us.saturating_add(u64::from(step.duration_ms.unwrap_or(0)) * 1_000)).max().unwrap_or(start);
+    let end = selected.iter().map(|step| step_repetition(step).map_or(step.at_us, |p| p.2)).max().unwrap_or(start);
     let offset = end.saturating_sub(start).max(1_000_000);
     let copies = selected.into_iter().map(|step| {
         let mut copy = (*step).clone(); copy.at_us = copy.at_us.saturating_add(offset); copy
@@ -1380,8 +1436,19 @@ fn draw_sequence_timeline(
                             egui::Stroke::new(1.0, visuals.widgets.noninteractive.bg_stroke.color),
                         );
 
-                        for &index in indexes {
-                            let step = &draft.steps[index];
+                        // Originals are painted last, keeping them reachable
+                        // when an authored interval intentionally overlaps.
+                        let from_us = ((ui.clip_rect().left() - timeline_left).max(0.0) / px_per_ms * 1_000.0) as u64;
+                        let to_us = ((ui.clip_rect().right() - timeline_left).max(0.0) / px_per_ms * 1_000.0) as u64;
+                        let active_drag = ui.data_mut(|data| data.get_temp::<SequenceCueDragState>(drag_id));
+                        let instances = visible_step_instances(&draft.steps, indexes, from_us, to_us, active_drag);
+                        for (index, iteration) in instances {
+                            let source = draft.steps[index].clone();
+                            let mut shown = source.clone();
+                            let period = step_repetition(&source).map_or(0, |p| p.1);
+                            shown.at_us += u64::from(iteration) * period;
+                            let step = &shown;
+                            let ghost = iteration > 0;
                             let duration_resizable = step.duration_ms.is_some();
                             let start_ms = step.at_us.div_ceil(1_000);
                             let display_duration =
@@ -1397,10 +1464,11 @@ fn draw_sequence_timeline(
                             );
                             let mut response = ui.interact(
                                 cue,
-                                egui::Id::new((state_prefix.clone(), "cue", index)),
+                                egui::Id::new((state_prefix.clone(), "cue", index, iteration)),
                                 egui::Sense::click_and_drag(),
                             );
                             let cue_label = displayed_sequence_cue_label(ui, step);
+                            let cue_label = if ghost { format!("↻{} {cue_label}", iteration + 1) } else { cue_label };
                             let duration_label = step.duration_ms.map_or_else(
                                 || designer_tr(ui, "Instant cue (drag to move)"),
                                 |duration| crate::duration::format_time_value_ms_with_preference(u64::from(duration), human_readable_time_units),
@@ -1445,7 +1513,7 @@ fn draw_sequence_timeline(
                             painter.rect(
                                 cue,
                                 5.0,
-                                fill,
+                                if ghost { fill.gamma_multiply(0.4) } else { fill },
                                 egui::Stroke::new(
                                     if selected { 1.5 } else { 1.0 },
                                     if selected {
@@ -1461,7 +1529,7 @@ fn draw_sequence_timeline(
                                 cue,
                                 &cue_label,
                                 egui::FontId::proportional(11.5),
-                                if selected {
+                                if ghost { interaction.fg_stroke.color.gamma_multiply(0.5) } else if selected {
                                     visuals.selection.stroke.color
                                 } else {
                                     interaction.fg_stroke.color
@@ -1495,10 +1563,12 @@ fn draw_sequence_timeline(
                                 if !selection.indices.contains(&index) { selection = SequenceCueSelection::single(index); }
                                 selection.primary = index;
                                 if let Some(pointer) = response.interact_pointer_pos() {
-                                    let duplicate = ui.input(|input| input.modifiers.command || input.modifiers.ctrl);
+                                    let press = ui.input(|input| input.pointer.press_origin()).unwrap_or(pointer);
+                                    let duplicate = !ghost && ui.input(|input| input.modifiers.command || input.modifiers.ctrl);
                                     let mode = if duplicate { crate::app::DragMode::Move } else {
-                                        sequence_cue_drag_mode(duration_resizable, cue.left(), cue.right(), pointer.x)
+                                        sequence_cue_drag_mode(duration_resizable, cue.left(), cue.right(), press.x)
                                     };
+                                    let mode = if ghost && matches!(mode, crate::app::DragMode::ResizeLeft) { crate::app::DragMode::Move } else { mode };
                                     let duration_ms = u64::from(step.duration_ms.unwrap_or(60)).max(1);
                                     let copy = duplicate.then(|| step.clone());
                                     let duplicate_index = copy.map(|copy| {
@@ -1519,6 +1589,7 @@ fn draw_sequence_timeline(
                                                 pointer_x,
                                                 start_ms,
                                                 duration_ms,
+                                                iteration,
                                             },
                                         );
                                     });
@@ -1528,13 +1599,16 @@ fn draw_sequence_timeline(
                                 && let Some(pointer) = response.interact_pointer_pos()
                                 && let Some(drag) = ui
                                     .data_mut(|data| data.get_temp::<SequenceCueDragState>(drag_id))
-                                && drag.index == index
+                                && drag.index == index && drag.iteration == iteration
                             {
                                 let delta_ms =
                                     ((pointer.x - drag.pointer_x) / px_per_ms).round() as i64;
                                 let step = &mut draft.steps[drag.duplicate_index.unwrap_or(index)];
                                 match drag.mode {
                                     crate::app::DragMode::Move => {
+                                        if ghost {
+                                            move_step_repeat(step, iteration, drag.start_ms, delta_ms, snap.then_some(quantum_ms));
+                                        } else {
                                         let moved = drag.start_ms as i64 + delta_ms;
                                         let moved = if snap {
                                             quantize_time(moved, quantum_ms)
@@ -1550,6 +1624,7 @@ fn draw_sequence_timeline(
                                         ) && let Some(lane_key) = lane_keys.get(lane_index)
                                         {
                                             retarget_sequence_cue_to_lane(step, lane_key);
+                                        }
                                         }
                                     }
                                     crate::app::DragMode::ResizeRight => {
@@ -1585,7 +1660,7 @@ fn draw_sequence_timeline(
                             if response.drag_stopped() {
                                 ui.data_mut(|data| data.remove::<SequenceCueDragState>(drag_id));
                             }
-                            if selected {
+                            if selected && !ghost {
                                 let reveal_id = egui::Id::new((state_prefix.clone(), "reveal-cue"));
                                 if ui.data_mut(|data| data.remove_temp::<bool>(reveal_id).unwrap_or(false)) {
                                     ui.scroll_to_rect(cue, Some(egui::Align::Center));
@@ -2008,6 +2083,27 @@ fn draw_sequence_step_editor(
                             step.at_us = at_us;
                         }
                         ui.end_row();
+
+                        ui.label(designer_tr(ui, "Repeat step"));
+                        ui.horizontal(|ui| {
+                            let mut enabled = step.repeat_count.unwrap_or(1) > 1;
+                            if ui.checkbox(&mut enabled, designer_tr(ui, "Enabled")).changed() {
+                                step.repeat_count = enabled.then_some(2);
+                                step.repeat_interval_ms = None;
+                            }
+                            if enabled {
+                                ui.add(egui::DragValue::new(step.repeat_count.get_or_insert(2)).range(2..=1_000));
+                            }
+                        });
+                        ui.end_row();
+                        if step.repeat_count.unwrap_or(1) > 1 {
+                            ui.label(designer_tr(ui, "Interval"));
+                            let mut interval = u64::from(step.repeat_interval_ms.unwrap_or(0));
+                            if ui.add(crate::duration::time_value_drag(&mut interval, 0..=3_600_000, 1.0, human_readable_time_units)).changed() {
+                                step.repeat_interval_ms = Some(interval as u32);
+                            }
+                            ui.end_row();
+                        }
 
                         match step.kind.as_str() {
                             "motion" => {
@@ -3784,6 +3880,80 @@ mod tests {
         ];
 
         assert_eq!(sequence_duration_ms(&steps), 1_001);
+    }
+
+    #[test]
+    fn step_repeat_spacing_edits_source_and_composes_with_effect_repeat() {
+        let mut step = crate::four_d::controller::HardwareMacroStep {
+            at_us: 100_500, kind: "motion".into(), target: Some(1), value: Some(2),
+            duration_ms: Some(200), repeat_count: Some(3), repeat_interval_ms: Some(300),
+            action_ids: vec!["seat.b.down".into()], ..Default::default()
+        };
+        assert_eq!(step_repetition(&step), Ok((3, 300_000, 900_500)));
+        assert_eq!(sequence_duration_ms(&[step.clone()]), 901);
+        assert_eq!(repeated_sequence_duration_ms(&[step.clone()], 2, 1_000), Ok(1_901));
+        assert!(repeated_sequence_duration_ms(&[step.clone()], 2, 900).is_err());
+        move_step_repeat(&mut step, 2, 701, 200, None);
+        assert_eq!(step.repeat_interval_ms, Some(400));
+        assert_eq!(step.at_us, 100_500);
+        assert_eq!(step.duration_ms, Some(200));
+        assert_eq!(step.target, Some(1));
+        assert_eq!(step.action_ids, ["seat.b.down"]);
+        move_step_repeat(&mut step, 1, 501, -250, Some(100));
+        assert_eq!(step.repeat_interval_ms, Some(200));
+        let instant = crate::four_d::controller::HardwareMacroStep { kind: "opcode".into(), repeat_count: Some(3), ..Default::default() };
+        assert_eq!(step_repetition(&instant), Ok((3, 1000, 2000)));
+        for count in [0, 1001] {
+            step.repeat_count = Some(count);
+            assert!(step_repetition(&step).is_err());
+        }
+        step.repeat_count = Some(3);
+        step.repeat_interval_ms = Some(3_600_000);
+        assert!(step_repetition(&step).is_err());
+    }
+
+    #[test]
+    fn repeat_ghosts_are_visible_views_of_source_and_select_it_in_both_themes() {
+        for dark in [false, true] {
+            let context = egui::Context::default();
+            context.set_visuals(if dark { egui::Visuals::dark() } else { egui::Visuals::light() });
+            context.all_styles_mut(|style| style.animation_time = 0.0);
+            let mut draft = ControllerEffectDraft::default();
+            draft.steps = vec![
+                crate::four_d::controller::HardwareMacroStep { kind: "relay".into(), target: Some(0), value: Some(0), ..Default::default() },
+                crate::four_d::controller::HardwareMacroStep { kind: "relay".into(), target: Some(0), value: Some(1), at_us: 1_000_000, duration_ms: Some(700), repeat_count: Some(3), repeat_interval_ms: Some(1_000), ..Default::default() },
+            ];
+            let original = draft.steps.clone();
+            assert_eq!(visible_step_instances(&draft.steps, &[0, 1], 0, 10_000_000, None), [(1, 2), (1, 1), (0, 0), (1, 0)]);
+            let mut selected = 0;
+            let render = |events, draft: &mut ControllerEffectDraft, selected: &mut usize| {
+                let mut output = context.run_ui(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 700.0))), events, ..Default::default()
+                }, |ui| draw_sequence_timeline(ui, draft, selected, true, true, None));
+                output.textures_delta.clear();
+                output
+            };
+            let output = render(vec![], &mut draft, &mut selected);
+            fn locate(shape: &egui::epaint::Shape) -> Option<egui::Pos2> {
+                match shape {
+                    egui::epaint::Shape::Text(text) if text.galley.job.text.starts_with("↻2") => Some(text.pos + text.galley.rect.center().to_vec2()),
+                    egui::epaint::Shape::Vec(shapes) => shapes.iter().find_map(locate),
+                    _ => None,
+                }
+            }
+            let ghost = output.shapes.iter().find_map(|shape| locate(&shape.shape)).expect("dimmed repeat must render");
+            render(vec![egui::Event::PointerMoved(ghost), egui::Event::PointerButton { pos: ghost, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }], &mut draft, &mut selected);
+            render(vec![egui::Event::PointerButton { pos: ghost, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }], &mut draft, &mut selected);
+            assert_eq!(selected, 1);
+            assert_eq!(context.data_mut(|data| data.get_temp::<SequenceCueSelection>(sequence_selection_id(&draft)).unwrap().indices), std::collections::BTreeSet::from([1]));
+            assert_eq!(draft.steps, original, "selecting ghosts cannot materialize or mutate cues");
+            render(vec![egui::Event::PointerButton { pos: ghost, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }], &mut draft, &mut selected);
+            let moved = ghost + egui::vec2(18.0, 0.0);
+            render(vec![egui::Event::PointerMoved(moved)], &mut draft, &mut selected);
+            render(vec![egui::Event::PointerButton { pos: moved, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }], &mut draft, &mut selected);
+            let mut expected = original.clone(); expected[1].repeat_interval_ms = Some(1_200);
+            assert_eq!(draft.steps, expected, "dragging the repeat must only edit source spacing");
+        }
     }
 
     #[test]
