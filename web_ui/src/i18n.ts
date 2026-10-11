@@ -1,6 +1,14 @@
 export type UiLocale = 'en' | 'fa';
 
 const fa: Record<string, string> = {
+  "Select all cues": "انتخاب همهٔ نشانه‌ها",
+  "Clear cue selection": "پاک‌کردن انتخاب نشانه‌ها",
+  "Duplicate selected cues": "کپی نشانه‌های انتخاب‌شده",
+  "Delete selected cues": "حذف نشانه‌های انتخاب‌شده",
+  "Selected cues": "نشانه‌های انتخاب‌شده",
+  "Ctrl-click to toggle; Shift-click to select a range": "Ctrl و کلیک برای تغییر انتخاب؛ Shift و کلیک برای انتخاب محدوده",
+  "Instant cue (drag to move)": "نشانهٔ لحظه‌ای (برای جابه‌جایی بکشید)",
+  "Lane": "مسیر",
   "RF": "فرمان رادیویی",
   "RF bits": "تعداد بیت RF",
   "Pixels": "پیکسل‌ها",

@@ -62,6 +62,14 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         return english.to_owned();
     }
     let translated = match english {
+        "Select all cues" => "انتخاب همهٔ نشانه‌ها",
+        "Clear cue selection" => "پاک‌کردن انتخاب نشانه‌ها",
+        "Duplicate selected cues" => "کپی نشانه‌های انتخاب‌شده",
+        "Delete selected cues" => "حذف نشانه‌های انتخاب‌شده",
+        "Selected cues" => "نشانه‌های انتخاب‌شده",
+        "Ctrl-click to toggle; Shift-click to select a range" => "Ctrl و کلیک برای تغییر انتخاب؛ Shift و کلیک برای انتخاب محدوده",
+        "Instant cue (drag to move)" => "نشانهٔ لحظه‌ای (برای جابه‌جایی بکشید)",
+        "Lane" => "مسیر",
         "RF" => "فرمان رادیویی",
         "Effect is no longer available" => "این جلوه دیگر در دسترس نیست",
         "New effect" => "جلوهٔ جدید",
@@ -215,6 +223,7 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Intensity" => "شدت",
         "LCD" => "LCD",
         "Quantize" => "هم‌تراز با شبکه",
+        "Quantize all cues" => "هم‌تراز کردن همهٔ نشانه‌ها با شبکه",
         "Remove delay" => "حذف تأخیر",
         "Snap" => "چسبیدن به شبکه",
         "Snap to grid" => "چسبیدن به شبکه",

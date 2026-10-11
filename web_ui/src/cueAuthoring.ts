@@ -17,6 +17,30 @@ export const duplicateStep = (step: SequenceStep, offsetMs = Math.max(1000, step
   ...structuredClone(step), at_us: step.at_us + offsetMs * 1000,
 });
 
+export function selectCueIndices(selected: Iterable<number>, index: number, anchor: number, toggle = false, range = false): number[] {
+  const next = new Set(toggle ? selected : []);
+  if (range) for (let cue = Math.min(anchor, index); cue <= Math.max(anchor, index); cue++) next.add(cue);
+  else if (!toggle || !next.delete(index)) next.add(index);
+  return [...next].sort((a, b) => a - b);
+}
+
+export function duplicateSequenceCues<T extends SequenceStep>(steps: T[], indices: Iterable<number>): { steps: T[]; indices: number[] } {
+  const selected = [...new Set(indices)].filter(index => Number.isInteger(index) && index >= 0 && index < steps.length).sort((a, b) => a - b);
+  if (!selected.length) return { steps, indices: [] };
+  const start = selected.reduce((min, index) => Math.min(min, steps[index].at_us), Infinity);
+  const end = selected.reduce((max, index) => Math.max(max, steps[index].at_us + (steps[index].duration_ms ?? 0) * 1000), 0);
+  const offsetUs = Math.max(1_000_000, end - start);
+  const copies = selected.map(index => { const copy = structuredClone(steps[index]); copy.at_us += offsetUs; return copy; });
+  return { steps: [...steps, ...copies], indices: copies.map((_, index) => steps.length + index) };
+}
+
+export function deleteSequenceCues<T extends SequenceStep>(steps: T[], indices: Iterable<number>): { steps: T[]; primary: number } {
+  const selected = new Set([...indices].filter(index => Number.isInteger(index) && index >= 0 && index < steps.length));
+  const remaining = steps.filter((_, index) => !selected.has(index));
+  const first = selected.size ? [...selected].reduce((min, index) => Math.min(min, index), Infinity) : 0;
+  return { steps: remaining, primary: Math.max(0, Math.min(first, remaining.length - 1)) };
+}
+
 export function moveSequenceStep(step: SequenceStep, atUs: number, lane?: string): SequenceStep {
   const moved = { ...step, at_us: Math.max(0, Math.round(atUs)) };
   if (step.kind === 'motion' && (lane === 'seat.a' || lane === 'seat.b')) {

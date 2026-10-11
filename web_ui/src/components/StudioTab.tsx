@@ -635,7 +635,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                   <span>{repeatedSequenceDurationMs(effectDraft.steps, effectDraft.repeat_count ?? 1, effectDraft.repeat_interval_ms ?? 0) === null ? tr(locale, 'Effect repeat interval cannot be shorter than its length') : formatTimeMs(repeatedSequenceDurationMs(effectDraft.steps, effectDraft.repeat_count ?? 1, effectDraft.repeat_interval_ms ?? 0)!, state.human_readable_time_units !== false)}</span>
                   <Button disabled={captureBusy || savingEffect || !state.controller_connected || !effectDraft.name?.trim()} icon={<CaretRightFilled />} onClick={() => { void sendCmd('controller_effect.publish_and_run', effectPayload(effectDraft)); }}>{tr(locale, 'Publish & Run')}</Button>
                 </Space>
-                <SequenceTimeline steps={effectDraft.steps} locale={locale} controls={state.hardware_details?.controls} disabled={captureBusy}
+                <SequenceTimeline key={effectDraft.id} steps={effectDraft.steps} locale={locale} controls={state.hardware_details?.controls} disabled={captureBusy}
                   human={state.human_readable_time_units !== false} onChange={steps => setEffectDraft({ ...effectDraft, steps })} />
                 <Divider titlePlacement="start" plain>{tr(locale, 'Sequence steps')}</Divider>
                 <div className="sequence-editor-web__toolbar">

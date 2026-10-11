@@ -656,6 +656,70 @@ struct SequenceCueDragState {
     duration_ms: u64,
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct SequenceCueSelection {
+    indices: std::collections::BTreeSet<usize>,
+    primary: usize,
+    anchor: usize,
+}
+
+impl SequenceCueSelection {
+    fn single(index: usize) -> Self {
+        Self { indices: std::collections::BTreeSet::from([index]), primary: index, anchor: index }
+    }
+    fn normalize(&mut self, count: usize, primary: usize) {
+        if count == 0 { *self = Self::default(); return; }
+        let primary = primary.min(count - 1);
+        if self.primary != primary { *self = Self::single(primary); }
+        self.indices.retain(|index| *index < count);
+        self.primary = primary;
+        self.anchor = self.anchor.min(count - 1);
+    }
+    fn choose(&mut self, index: usize, toggle: bool, range: bool) {
+        if range {
+            if !toggle { self.indices.clear(); }
+            self.indices.extend(self.anchor.min(index)..=self.anchor.max(index));
+        } else if toggle {
+            if !self.indices.remove(&index) { self.indices.insert(index); }
+            self.anchor = index;
+        } else { *self = Self::single(index); }
+        self.primary = index;
+    }
+}
+
+fn sequence_selection_id(draft: &ControllerEffectDraft) -> egui::Id {
+    egui::Id::new(("effect-sequence-multi-selection", draft.reference.clone(), draft.id.clone()))
+}
+
+fn duplicate_sequence_cues(
+    steps: &mut Vec<crate::four_d::controller::HardwareMacroStep>,
+    selected: &std::collections::BTreeSet<usize>,
+) -> std::collections::BTreeSet<usize> {
+    let selected = selected.iter().filter_map(|index| steps.get(*index)).collect::<Vec<_>>();
+    let Some(start) = selected.iter().map(|step| step.at_us).min() else { return Default::default(); };
+    let end = selected.iter().map(|step| step.at_us.saturating_add(u64::from(step.duration_ms.unwrap_or(0)) * 1_000)).max().unwrap_or(start);
+    let offset = end.saturating_sub(start).max(1_000_000);
+    let copies = selected.into_iter().map(|step| {
+        let mut copy = (*step).clone(); copy.at_us = copy.at_us.saturating_add(offset); copy
+    }).collect::<Vec<_>>();
+    let first = steps.len();
+    steps.extend(copies);
+    (first..steps.len()).collect()
+}
+
+fn delete_sequence_cues(
+    steps: &mut Vec<crate::four_d::controller::HardwareMacroStep>,
+    selected: &std::collections::BTreeSet<usize>,
+) -> usize {
+    let next = selected.first().copied().unwrap_or(0);
+    let mut index = 0;
+    steps.retain(|_| { let retain = !selected.contains(&index); index += 1; retain });
+    next.min(steps.len().saturating_sub(1))
+}
+
+#[derive(Clone, Copy)]
+enum SequenceBulkAction { Duplicate, Delete }
+
 fn sequence_lane(
     step: &crate::four_d::controller::HardwareMacroStep,
     capabilities: Option<&crate::four_d::controller::HardwareCapabilities>,
@@ -964,7 +1028,8 @@ fn sequence_cue_context_menu(
         }
         if ui
             .button(format!(
-                "Quantize to {}",
+                "{} {}",
+                designer_tr(ui, "Quantize"),
                 crate::duration::format_time_value_ms_with_preference(
                     quantum_ms,
                     human_readable_time_units,
@@ -978,14 +1043,14 @@ fn sequence_cue_context_menu(
     });
     ui.separator();
     if ui
-        .button(format!("{} {}", crate::ui::icons::COPY, designer_tr(ui, "Duplicate")))
+        .button(format!("{} {}", crate::ui::icons::COPY, designer_tr(ui, "Duplicate selected cues")))
         .clicked()
     {
         action = Some(SequenceCueMenuAction::Duplicate);
         ui.close();
     }
     if ui
-        .button(format!("{} {}", crate::ui::icons::TRASH, designer_tr(ui, "Delete")))
+        .button(format!("{} {}", crate::ui::icons::TRASH, designer_tr(ui, "Delete selected cues")))
         .clicked()
     {
         action = Some(SequenceCueMenuAction::Delete);
@@ -1112,6 +1177,12 @@ fn draw_sequence_timeline(
     let quantize_id = egui::Id::new((state_prefix.clone(), "quantize"));
     let snap_id = egui::Id::new((state_prefix.clone(), "snap"));
     let drag_id = egui::Id::new((state_prefix.clone(), "drag"));
+    let selection_id = sequence_selection_id(draft);
+    let mut selection = ui.data_mut(|data| data.get_temp::<SequenceCueSelection>(selection_id))
+        .unwrap_or_else(|| SequenceCueSelection::single(*selected_index));
+    selection.normalize(draft.steps.len(), *selected_index);
+    let mut bulk_action = None;
+    let mut cue_has_focus = false;
     let mut zoom = ui
         .data_mut(|data| data.get_persisted::<f32>(zoom_id).unwrap_or(90.0))
         .clamp(30.0, 320.0);
@@ -1127,6 +1198,26 @@ fn draw_sequence_timeline(
         .show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.strong(format!("{} {}", crate::ui::icons::WAVEFORM, designer_tr(ui, "Effect timeline")));
+                let all_button = ui.add_enabled(!draft.steps.is_empty(), egui::Button::new(designer_tr(ui, "Select all cues")))
+                    .on_hover_text("Ctrl+A");
+                cue_has_focus |= all_button.has_focus();
+                if all_button.clicked() {
+                    selection.indices = (0..draft.steps.len()).collect();
+                }
+                let clear_button = ui.add_enabled(!selection.indices.is_empty(), egui::Button::new(designer_tr(ui, "Clear cue selection")));
+                cue_has_focus |= clear_button.has_focus();
+                if clear_button.clicked() {
+                    selection.indices.clear();
+                }
+                let duplicate_button = ui.add_enabled(!selection.indices.is_empty(), egui::Button::new(format!("{} {}", crate::ui::icons::COPY, designer_tr(ui, "Duplicate selected cues"))))
+                    .on_hover_text("Ctrl+D");
+                cue_has_focus |= duplicate_button.has_focus();
+                if duplicate_button.clicked() { bulk_action = Some(SequenceBulkAction::Duplicate); }
+                let delete_button = ui.add_enabled(!selection.indices.is_empty(), egui::Button::new(format!("{} {}", crate::ui::icons::TRASH, designer_tr(ui, "Delete selected cues"))))
+                    .on_hover_text(designer_tr(ui, "Delete"));
+                cue_has_focus |= delete_button.has_focus();
+                if delete_button.clicked() { bulk_action = Some(SequenceBulkAction::Delete); }
+                ui.weak(format!("{}: {}", designer_tr(ui, "Selected cues"), selection.indices.len()));
                 ui.separator();
                 ui.label(designer_tr(ui, "Zoom"));
                 ui.add(egui::Slider::new(&mut zoom, 30.0..=320.0).show_value(false));
@@ -1311,14 +1402,17 @@ fn draw_sequence_timeline(
                             );
                             let cue_label = displayed_sequence_cue_label(ui, step);
                             let duration_label = step.duration_ms.map_or_else(
-                                || "Instant cue (drag to move)".to_string(),
-                                |duration| crate::duration::format_time_value_ms(u64::from(duration)),
+                                || designer_tr(ui, "Instant cue (drag to move)"),
+                                |duration| crate::duration::format_time_value_ms_with_preference(u64::from(duration), human_readable_time_units),
                             );
                             response = response.on_hover_text(format!(
-                                "{}\nLane: {}\nStarts: {}\nDuration: {}",
+                                "{}\n{}: {}\n{}: {}\n{}: {}",
                                 cue_label,
+                                designer_tr(ui, "Lane"),
                                 label,
-                                crate::duration::format_time_value_ms(start_ms),
+                                designer_tr(ui, "Starts"),
+                                crate::duration::format_time_value_us_with_preference(step.at_us, human_readable_time_units),
+                                designer_tr(ui, "Length"),
                                 duration_label,
                             ));
                             if response.hovered()
@@ -1338,7 +1432,8 @@ fn draw_sequence_timeline(
                                     }
                                 });
                             }
-                            let selected = *selected_index == index;
+                            let selected = selection.indices.contains(&index);
+                            cue_has_focus |= response.has_focus();
                             let interaction = ui.style().interact_selectable(&response, selected);
                             let fill = if selected {
                                 visuals.selection.bg_fill
@@ -1390,10 +1485,15 @@ fn draw_sequence_timeline(
                                 );
                             }
                             if response.clicked() || response.double_clicked() {
+                                let modifiers = ui.input(|input| input.modifiers);
+                                selection.choose(index, modifiers.command || modifiers.ctrl, modifiers.shift);
                                 *selected_index = index;
+                                response.request_focus();
                             }
                             if response.drag_started_by(egui::PointerButton::Primary) {
                                 *selected_index = index;
+                                if !selection.indices.contains(&index) { selection = SequenceCueSelection::single(index); }
+                                selection.primary = index;
                                 if let Some(pointer) = response.interact_pointer_pos() {
                                     let duplicate = ui.input(|input| input.modifiers.command || input.modifiers.ctrl);
                                     let mode = if duplicate { crate::app::DragMode::Move } else {
@@ -1405,6 +1505,7 @@ fn draw_sequence_timeline(
                                         let index = draft.steps.len();
                                         draft.steps.push(copy);
                                         *selected_index = index;
+                                        selection = SequenceCueSelection::single(index);
                                         index
                                     });
                                     let pointer_x = ui.input(|input| input.pointer.press_origin()).map_or(pointer.x, |p| p.x);
@@ -1493,6 +1594,8 @@ fn draw_sequence_timeline(
                             }
                             response.context_menu(|ui| {
                                 *selected_index = index;
+                                if !selection.indices.contains(&index) { selection = SequenceCueSelection::single(index); }
+                                selection.primary = index;
                                 if let Some(action) = sequence_cue_context_menu(
                                     ui,
                                     &mut draft.steps[index],
@@ -1510,8 +1613,9 @@ fn draw_sequence_timeline(
                         ui.checkbox(&mut snap, designer_tr(ui, "Snap to grid"));
                         if ui
                             .button(format!(
-                                "{} Quantize all cues",
-                                crate::ui::icons::SELECTION_ALL
+                                "{} {}",
+                                crate::ui::icons::SELECTION_ALL,
+                                designer_tr(ui, "Quantize all cues")
                             ))
                             .clicked()
                         {
@@ -1520,8 +1624,9 @@ fn draw_sequence_timeline(
                         }
                         if ui
                             .button(format!(
-                                "{} Remove leading delay",
-                                crate::ui::icons::SCISSORS
+                                "{} {}",
+                                crate::ui::icons::SCISSORS,
+                                designer_tr(ui, "Remove delay")
                             ))
                             .clicked()
                         {
@@ -1533,6 +1638,18 @@ fn draw_sequence_timeline(
 
             let nudge_enabled =
                 !ui.ctx().egui_wants_keyboard_input() && !egui::Popup::is_any_open(ui.ctx());
+            let shortcut_enabled = ui.is_enabled() && !egui::Popup::is_any_open(ui.ctx())
+                && (cue_has_focus || (!ui.ctx().egui_wants_keyboard_input() && ui.rect_contains_pointer(ui.max_rect())));
+            if shortcut_enabled {
+                let select_all = ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::A));
+                if select_all { selection.indices = (0..draft.steps.len()).collect(); }
+                if ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Delete)) && !selection.indices.is_empty() {
+                    bulk_action = Some(SequenceBulkAction::Delete);
+                }
+                if ui.input_mut(|input| input.consume_key(egui::Modifiers::COMMAND, egui::Key::D)) && !selection.indices.is_empty() {
+                    bulk_action = Some(SequenceBulkAction::Duplicate);
+                }
+            }
             if nudge_enabled && ui.input(|input| input.key_pressed(egui::Key::ArrowLeft)) {
                 let step = &mut draft.steps[*selected_index];
                 step.at_us = step.at_us.saturating_sub(quantum_ms.saturating_mul(1_000));
@@ -1551,21 +1668,29 @@ fn draw_sequence_timeline(
                 ui.data_mut(|data| data.insert_temp(edit_request_id, true));
             }
             SequenceCueMenuAction::Duplicate => {
-                let mut duplicate = draft.steps[index].clone();
-                duplicate.at_us = duplicate
-                    .at_us
-                    .saturating_add(u64::from(duplicate.duration_ms.unwrap_or(0)).max(1_000) * 1_000);
-                draft.steps.insert(index + 1, duplicate);
-                *selected_index = index + 1;
-                ui.data_mut(|data| data.insert_temp(egui::Id::new((state_prefix.clone(), "reveal-cue")), true));
-                ui.ctx().request_repaint();
+                bulk_action = Some(SequenceBulkAction::Duplicate);
             }
             SequenceCueMenuAction::Delete => {
-                draft.steps.remove(index);
-                *selected_index = (*selected_index).min(draft.steps.len().saturating_sub(1));
+                bulk_action = Some(SequenceBulkAction::Delete);
             }
         }
     }
+    match bulk_action {
+        Some(SequenceBulkAction::Duplicate) => {
+            selection.indices = duplicate_sequence_cues(&mut draft.steps, &selection.indices);
+            if let Some(index) = selection.indices.first().copied() {
+                selection.primary = index; selection.anchor = index; *selected_index = index;
+                ui.data_mut(|data| data.insert_temp(egui::Id::new((state_prefix, "reveal-cue")), true));
+            }
+        }
+        Some(SequenceBulkAction::Delete) => {
+            *selected_index = delete_sequence_cues(&mut draft.steps, &selection.indices);
+            selection = if draft.steps.is_empty() { Default::default() } else { SequenceCueSelection::single(*selected_index) };
+        }
+        None => {}
+    }
+    selection.primary = *selected_index;
+    ui.data_mut(|data| data.insert_temp(selection_id, selection));
 }
 
 fn draw_effect_repeat_controls(
@@ -1777,6 +1902,12 @@ fn draw_sequence_step_editor(
     }
 
     selected_index = selected_index.min(draft.steps.len() - 1);
+    let current_selection = ui.data_mut(|data| data.get_temp::<SequenceCueSelection>(sequence_selection_id(draft)))
+        .unwrap_or_else(|| SequenceCueSelection::single(selected_index));
+    if current_selection.indices.is_empty() {
+        ui.weak(designer_tr(ui, "Select a cue to inspect and edit"));
+        return;
+    }
     let cue_heading = ui.heading(designer_tr(ui, "Selected cue"));
     let edit_request_id = egui::Id::new((
         (
@@ -1802,7 +1933,7 @@ fn draw_sequence_step_editor(
                     ui.strong(format!("{} {}", designer_tr(ui, "Sequence step"), index + 1));
                     ui.label(egui::RichText::new(&step.kind).monospace().weak());
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.button(crate::ui::icons::COPY).on_hover_text(designer_tr(ui, "Duplicate cue")).clicked() {
+                        if ui.button(crate::ui::icons::COPY).on_hover_text(designer_tr(ui, "Duplicate selected cues")).clicked() {
                             duplicate_step = Some(index);
                         }
                         if ui
@@ -2247,16 +2378,25 @@ fn draw_sequence_step_editor(
     if let Some((from, to)) = move_step {
         draft.steps.swap(from, to);
         selected_index = to;
+        let mut selection = current_selection.clone();
+        selection.indices = selection.indices.iter().map(|index| if *index == from { to } else if *index == to { from } else { *index }).collect();
+        selection.primary = to;
+        ui.data_mut(|data| data.insert_temp(sequence_selection_id(draft), selection));
     }
     if let Some(index) = remove_step {
-        draft.steps.remove(index);
-        selected_index = selected_index.min(draft.steps.len().saturating_sub(1));
+        let targets = if current_selection.indices.contains(&index) { current_selection.indices.clone() }
+            else { std::collections::BTreeSet::from([index]) };
+        selected_index = delete_sequence_cues(&mut draft.steps, &targets);
+        let selection = if draft.steps.is_empty() { Default::default() } else { SequenceCueSelection::single(selected_index) };
+        ui.data_mut(|data| data.insert_temp(sequence_selection_id(draft), selection));
     }
     if let Some(index) = duplicate_step {
-        let mut copy = draft.steps[index].clone();
-        copy.at_us = copy.at_us.saturating_add(u64::from(copy.duration_ms.unwrap_or(0)).max(1_000) * 1_000);
-        draft.steps.insert(index + 1, copy);
-        selected_index = index + 1;
+        let targets = if current_selection.indices.contains(&index) { current_selection.indices.clone() }
+            else { std::collections::BTreeSet::from([index]) };
+        let copies = duplicate_sequence_cues(&mut draft.steps, &targets);
+        selected_index = copies.first().copied().unwrap_or(index);
+        let selection = SequenceCueSelection { indices: copies, primary: selected_index, anchor: selected_index };
+        ui.data_mut(|data| data.insert_temp(sequence_selection_id(draft), selection));
         let prefix = ("effect-sequence-timeline", draft.reference.clone(), draft.id.clone());
         ui.data_mut(|data| data.insert_temp(egui::Id::new((prefix, "reveal-cue")), true));
     }
@@ -3161,6 +3301,47 @@ mod tests {
     use super::*;
 
     #[test]
+    fn sequence_multi_selection_toggles_ranges_and_prunes_removed_indices() {
+        let mut selection = SequenceCueSelection::single(1);
+        selection.choose(3, true, false);
+        assert_eq!(selection.indices, std::collections::BTreeSet::from([1, 3]));
+        selection.choose(1, true, false);
+        assert_eq!(selection.indices, std::collections::BTreeSet::from([3]));
+        selection.choose(4, false, true);
+        assert_eq!(selection.indices, std::collections::BTreeSet::from([1, 2, 3, 4]));
+        selection.normalize(3, 2);
+        assert_eq!(selection, SequenceCueSelection::single(2));
+        selection.normalize(0, 0);
+        assert!(selection.indices.is_empty());
+    }
+
+    #[test]
+    fn sequence_bulk_copy_preserves_relative_timing_and_deletion_keeps_unselected() {
+        let first = crate::four_d::controller::HardwareMacroStep {
+            at_us: 404_500, kind: "motion".into(), duration_ms: Some(500),
+            action_ids: vec!["seat.a.down".into()], ..Default::default()
+        };
+        let second = crate::four_d::controller::HardwareMacroStep {
+            at_us: 2_404_500, kind: "motion".into(), duration_ms: Some(200), ..Default::default()
+        };
+        let untouched = crate::four_d::controller::HardwareMacroStep { at_us: 10_000_000, kind: "beep".into(), ..Default::default() };
+        let originals = vec![first, second, untouched.clone()];
+        let mut steps = originals.clone();
+        let copies = duplicate_sequence_cues(&mut steps, &std::collections::BTreeSet::from([0, 1, 100]));
+        assert_eq!(copies, std::collections::BTreeSet::from([3, 4]));
+        assert_eq!(&steps[..3], originals.as_slice());
+        assert_eq!(steps[3].at_us, 2_604_500);
+        assert_eq!(steps[4].at_us - steps[3].at_us, 2_000_000);
+        steps[3].action_ids.push("custom".into());
+        assert_eq!(steps[0].action_ids, ["seat.a.down"]);
+        let primary = delete_sequence_cues(&mut steps, &std::collections::BTreeSet::from([0, 1, 3, 4]));
+        assert_eq!(primary, 0);
+        assert_eq!(steps, [untouched]);
+        assert_eq!(delete_sequence_cues(&mut steps, &std::collections::BTreeSet::from([0])), 0);
+        assert!(steps.is_empty());
+    }
+
+    #[test]
     fn instantaneous_sequence_cues_are_move_only() {
         assert_eq!(
             sequence_cue_drag_mode(false, 10.0, 110.0, 10.0),
@@ -3323,7 +3504,9 @@ mod tests {
             for s in &output.shapes {
                 text_positions(&s.shape, "Duplicate", &mut positions);
             }
-            let duplicate = *positions.first().expect("cue context menu did not open");
+            // The wrapped authoring toolbar also contains a duplicate button;
+            // target the context menu's final occurrence, not that toolbar.
+            let duplicate = *positions.last().expect("cue context menu did not open");
             render(
                 vec![
                     egui::Event::PointerMoved(duplicate),
