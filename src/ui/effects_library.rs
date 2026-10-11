@@ -1,7 +1,7 @@
 use crate::ui::dropdown::DropdownUiExt;
 use crate::app::{ControllerEffectDraft, PealayerApp};
 
-fn designer_tr(ui: &egui::Ui, key: &'static str) -> String {
+pub(crate) fn designer_tr(ui: &egui::Ui, key: &'static str) -> String {
     let language = ui.data(|data| data.get_temp::<crate::config::AppLanguage>(egui::Id::new("effects-designer-language")))
         .unwrap_or(crate::config::AppLanguage::English);
     crate::ui::i18n::tr(language, key)
@@ -868,7 +868,7 @@ fn sequence_cue_context_menu(
         ui.menu_button(format!("{} {}", crate::ui::icons::LIGHTNING, designer_tr(ui, "Action")), |ui| {
             for &(value, caption) in options {
                 if ui
-                    .dropdown_choice(step.value.unwrap_or_default() == value, caption)
+                    .dropdown_choice(step.value.unwrap_or_default() == value, designer_tr(ui, caption))
                     .clicked()
                 {
                     step.value = Some(value);
@@ -1699,7 +1699,7 @@ fn draw_timeline_authoring_fields(
                     ("ease-out", "Ease out"),
                     ("ease-in-out", "Ease in/out"),
                 ] {
-                    ui.dropdown_value(&mut step.easing, value.to_string(), label);
+                    ui.dropdown_value(&mut step.easing, value.to_string(), designer_tr(ui, label));
                 }
             });
         ui.end_row();
@@ -1883,9 +1883,9 @@ fn draw_sequence_step_editor(
                                         _ => "Stop",
                                     })
                                     .show_ui(ui, |ui| {
-                                        ui.dropdown_value(value, 0, "Stop");
-                                        ui.dropdown_value(value, 1, "Up");
-                                        ui.dropdown_value(value, 2, "Down");
+                                        ui.dropdown_value(value, 0, designer_tr(ui, "Stop"));
+                                        ui.dropdown_value(value, 1, designer_tr(ui, "Up"));
+                                        ui.dropdown_value(value, 2, designer_tr(ui, "Down"));
                                     });
                                 refresh_semantic_action(step);
                                 ui.end_row();
@@ -1921,8 +1921,8 @@ fn draw_sequence_step_editor(
                                 crate::ui::dropdown::ComboBox::from_id_salt(("relay-state", index))
                                     .selected_text(if *value == 0 { "Off" } else { "On" })
                                     .show_ui(ui, |ui| {
-                                        ui.dropdown_value(value, 0, "Off");
-                                        ui.dropdown_value(value, 1, "On");
+                                        ui.dropdown_value(value, 0, designer_tr(ui, "Off"));
+                                        ui.dropdown_value(value, 1, designer_tr(ui, "On"));
                                     });
                                 refresh_semantic_action(step);
                                 ui.end_row();
@@ -1989,12 +1989,12 @@ fn draw_sequence_step_editor(
                                         ui.dropdown_value(
                                             &mut step.destination,
                                             "segments".to_string(),
-                                            "Segments",
+                                            designer_tr(ui, "Segments"),
                                         );
                                         ui.dropdown_value(
                                             &mut step.destination,
                                             "lcd".to_string(),
-                                            "LCD",
+                                            designer_tr(ui, "LCD"),
                                         );
                                     });
                                 ui.end_row();
@@ -2158,10 +2158,10 @@ fn draw_sequence_step_editor(
                                         _ => "Increase",
                                     })
                                     .show_ui(ui, |ui| {
-                                        ui.dropdown_value(target, 0, "Back");
-                                        ui.dropdown_value(target, 1, "Enter");
-                                        ui.dropdown_value(target, 2, "Decrease");
-                                        ui.dropdown_value(target, 3, "Increase");
+                                        ui.dropdown_value(target, 0, designer_tr(ui, "Back"));
+                                        ui.dropdown_value(target, 1, designer_tr(ui, "Enter"));
+                                        ui.dropdown_value(target, 2, designer_tr(ui, "Decrease"));
+                                        ui.dropdown_value(target, 3, designer_tr(ui, "Increase"));
                                     });
                                 ui.end_row();
                             }
@@ -2866,17 +2866,17 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                                 ui.dropdown_value(
                                                     &mut draft.engine,
                                                     "auto".to_string(),
-                                                    "Automatic (recommended)",
+                                                    designer_tr(ui, "Automatic (recommended)"),
                                                 );
                                                 ui.dropdown_value(
                                                     &mut draft.engine,
                                                     "host".to_string(),
-                                                    "Host clock (forced)",
+                                                    designer_tr(ui, "Host clock (forced)"),
                                                 );
                                                 ui.dropdown_value(
                                                     &mut draft.engine,
                                                     "mcu".to_string(),
-                                                    "Device clock (forced)",
+                                                    designer_tr(ui, "Device clock (forced)"),
                                                 );
                                             });
                                         ui.end_row();
@@ -3003,6 +3003,8 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 .engine_handle
                                 .is_connected
                                 .load(std::sync::atomic::Ordering::Relaxed);
+                            let phase = app.controller_effect_preview_phase(&reference);
+                            let stop_preview = matches!(phase, crate::app::ControllerEffectPreviewPhase::Stop);
                             ui.add_enabled_ui(!capture_locked, |ui| { ui.horizontal_wrapped(|ui| {
                                 if ui
                                     .button(if controller_reachable {
@@ -3035,13 +3037,15 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                         controller_reachable && app.hardware_effect_authoring.pending_operation.is_none(),
                                         egui::Button::new(format!(
                                             "{} {}",
-                                            crate::ui::icons::PLAY,
-                                            app.tr("Publish & Run")
+                                            if stop_preview { crate::ui::icons::STOP_CIRCLE } else { crate::ui::icons::PLAY },
+                                            app.tr(if stop_preview { "Stop" } else { "Publish & Run" })
                                         )),
                                     )
                                     .clicked()
                                 {
-                                    if let Err(error) = app.save_controller_effect() {
+                                    if stop_preview {
+                                        if let Err(error) = app.stop_controller_effect(&reference) { app.set_osd(error); }
+                                    } else if let Err(error) = app.save_controller_effect() {
                                         app.set_osd(error);
                                     } else {
                                         // Play only after the exact edited definition is acknowledged.

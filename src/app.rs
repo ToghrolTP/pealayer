@@ -3004,6 +3004,30 @@ impl PealayerApp {
         reconcile_controller_effect_templates(&mut self.timeline, &catalog)
     }
 
+    /// The successful upsert ACK owns this exact definition. Refresh visible
+    /// identities immediately; the event-driven catalog then verifies it.
+    fn acknowledge_controller_effect_definition(&mut self, draft: &ControllerEffectDraft) {
+        let Some(mut capabilities) = self.advertised_hardware() else { return; };
+        if draft.kind == "sequence" {
+            let Ok(id) = draft.id.parse::<u64>() else { return; };
+            let mut effect = capabilities.macros.iter().find(|effect| effect.id == id).cloned().unwrap_or_default();
+            effect.id = id; effect.name = draft.name.trim().to_string();
+            effect.category = draft.category.trim().to_string(); effect.icon = draft.icon.trim().to_string();
+            effect.mode = draft.engine.clone(); effect.steps = draft.steps.clone();
+            effect.repeat_count = Some(draft.repeat_count); effect.repeat_interval_ms = draft.repeat_interval_ms;
+            effect.duration_ms = crate::ui::effects_library::repeated_sequence_duration_ms(&draft.steps, draft.repeat_count, draft.repeat_interval_ms).unwrap_or(draft.duration_ms);
+            effect.color = draft.color.clone(); effect.label = draft.label.clone(); effect.lcd_message = draft.lcd_message.clone();
+            effect.timing_tolerance_us = draft.timing_tolerance_us; effect.keep_outputs_on_cancel = draft.keep_outputs_on_cancel;
+            effect.board_profile_key = draft.board_profile_key.clone(); effect.board_profile_mode = draft.board_profile_mode.clone();
+            capabilities.macros.retain(|entry| entry.id != id); capabilities.macros.push(effect);
+        } else if let Some(effect) = capabilities.strip_effects.iter_mut().find(|effect| effect.id == draft.id) {
+            effect.name = draft.name.trim().to_string(); effect.category = draft.category.trim().to_string(); effect.icon = draft.icon.trim().to_string();
+            effect.description = draft.description.clone(); effect.default_duration_ms = Some(draft.duration_ms);
+        } else { return; }
+        self.update_hardware_capabilities(Some(capabilities));
+        if self.refresh_controller_effect_timeline_metadata() { self.sync_timeline_engine(); }
+    }
+
     fn controller_command_argument(value: &str) -> Option<String> {
         let value = value.trim();
         (!value.is_empty()
@@ -3852,6 +3876,7 @@ impl PealayerApp {
                             if let Some(mut draft) = self.hardware_effect_authoring.pending_published_draft.take() {
                                 draft.reference = reference.clone();
                                 draft.is_new = false;
+                                self.acknowledge_controller_effect_definition(&draft);
                                 self.hardware_effect_authoring.acknowledged_draft = Some(draft);
                             }
                             self.hardware_effect_authoring

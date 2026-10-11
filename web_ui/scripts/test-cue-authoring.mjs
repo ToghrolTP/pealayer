@@ -1,0 +1,34 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { duplicateStep, moveSequenceStep, parseTimeMs, formatTimeMs, repeatedSequenceDurationMs } from '../src/cueAuthoring.ts';
+const original = { at_us: 404000, kind: 'motion', target: 0, value: 2, duration_ms: 500, action_ids: ['seat.a.down'] };
+const copy = duplicateStep(original);
+assert.equal(copy.at_us, 1404000);
+copy.action_ids.push('custom');
+assert.deepEqual(original.action_ids, ['seat.a.down']);
+const moved = moveSequenceStep(original, 154000, 'seat.b');
+assert.equal(moved.target, 1);
+assert.deepEqual(moved.action_ids, ['seat.b.down']);
+assert.equal(moved.duration_ms, 500);
+assert.equal(original.target, 0);
+assert.equal(moveSequenceStep(original, -1, 'pwm.1').target, 0);
+for (const [input, expected] of [['1s', 1000], ['500ms', 500], ['1.5min', 90000], ['250us', .25], ['0s', 0]]) assert.equal(parseTimeMs(input), expected);
+for (const invalid of ['-1s', 'abc', 'Infinity', '1s junk']) assert.equal(parseTimeMs(invalid), null);
+assert.equal(formatTimeMs(0), '0s'); assert.equal(formatTimeMs(0, false), '0s');
+assert.equal(formatTimeMs(1000), '1s'); assert.equal(formatTimeMs(1000, false), '1000ms');
+const fractional = [{ at_us: 100500, kind: 'relay', duration_ms: 100 }];
+assert.equal(repeatedSequenceDurationMs(fractional, 3, 0), 602);
+assert.equal(repeatedSequenceDurationMs(fractional, 3, 200), null);
+assert.equal(repeatedSequenceDurationMs(fractional, 0, 0), null);
+assert.equal(repeatedSequenceDurationMs([], 2, 0), null);
+assert.equal(repeatedSequenceDurationMs(fractional, 1000, 3600000), null);
+const timeline = readFileSync(new URL('../src/components/SequenceTimeline.tsx', import.meta.url), 'utf8');
+assert.ok(timeline.includes('setPointerCapture') && timeline.includes('onPointerCancel'));
+assert.ok(timeline.includes('active.copy') && timeline.includes('reveal(index + 1)'));
+assert.ok(!timeline.includes('sendCmd') && !timeline.includes('seek_to'), 'designer gestures must not actuate or seek');
+for (const file of ['EffectsTab', 'StudioTab']) {
+  const source = readFileSync(new URL(`../src/components/${file}.tsx`, import.meta.url), 'utf8');
+  assert.ok(source.includes('<SequenceTimeline') && source.includes("tr(locale, 'Effects Designer')"));
+  assert.ok(!source.includes('step.repeat_count') && !source.includes('step.repeat_interval_ms'));
+}
+console.log('Cue copy/retarget, exact repeated timing, units and shared authoring surface checks passed.');

@@ -785,6 +785,11 @@ impl InteropCommand {
                         .to_string(),
                 )
             }
+            Self::StartControllerEffectRecording { capture_selection, .. } if capture_selection.is_empty()
+                || capture_selection.control_keys.len() > 64 || capture_selection.opcodes.len() > 256
+                || capture_selection.control_keys.iter().any(|key| key.is_empty() || key.len() > 128) => {
+                Err("Select valid channels or opcodes to record".into())
+            }
             Self::StartControllerEffectRecording { effect: Some(effect), .. } => {
                 if effect.kind != "sequence" {
                     return Err("Capture requires a sequence effect".into());
@@ -853,6 +858,7 @@ pub fn command_catalog() -> Value {
             "get_status", "publish_toast", "dismiss_toast", "quit", "controller_effect_cue.add", "controller_effect.play",
             "controller_effect.stop", "controller_effect.save", "controller_effect.delete", "audio_effect.stop", "audio.outputs.refresh",
             "controller_effect.group.save",
+            "timeline.cue.place", "controller_effect.publish_and_run", "controller_effect.record.capabilities",
             "controller_effect.record.start", "controller_effect.record.status",
             "controller_effect.record.save", "controller_effect.record.discard",
             "set_emergency_stop", "invoke_hardware_action", "set_hardware_pwm", "refresh_hardware_catalog",
