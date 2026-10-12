@@ -10,6 +10,11 @@ statements are not the present product state.
 
 ## Delivered source and deployment
 
+- Program Monitor reserves the automatic video/footer spacing and behaves as a
+  fitted viewport rather than a scrollable document. [Viewport contract and
+  regression](program-monitor-viewport.md) covers panel sizes and display scales;
+  Cafe runtime delivery remains separately blocked.
+
 - Status widgets share independent context menus and drag ordering, three FPS
   sources, compact telemetry, an optional bounded RAM chart, real operation
   progress and authoritative HOT alerts. The Effects Library heading is start
