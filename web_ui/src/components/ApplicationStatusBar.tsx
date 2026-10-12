@@ -72,7 +72,7 @@ export const ApplicationStatusBar: React.FC<ApplicationStatusBarProps> = ({ stat
     switch (widget) {
       case 'fps': return <button type="button" className="app-statusbar__fps" onClick={() => changeMode(nextFpsMode(config.fps_mode))}
         title={`${tr(locale, MODE_LABELS[config.fps_mode])} · ${tr(locale, screenRate ? 'Screen render rate' : 'Media frame rate')} · ${tr(locale, 'Click to switch frame rate source')}`}>
-        {screenRate ? <DashboardOutlined /> : <VideoCameraOutlined />}{rate != null && Number.isFinite(rate) && rate > 0 && (screenRate || state.current_video) ? `${rate.toFixed(2)} fps` : '— fps'}</button>;
+        {screenRate ? <DashboardOutlined /> : <VideoCameraOutlined />}<span className="status-fps-value">{rate != null && Number.isFinite(rate) && rate > 0 && (screenRate || state.current_video) ? `${rate.toFixed(2)} fps` : '— fps'}</span></button>;
       case 'connection': return <><i className={`status-connection-dot ${hardwareLive ? 'is-online' : ''}`} />{hardwareLive ? `${state.hardware?.board_name || state.hardware_details?.board_name || 'PCController'} · ${state.hardware_transport || connectionMode.toUpperCase()}` : connected && state.controller_connected ? tr(locale, 'PCController connected; board not connected') : tr(locale, 'Hardware: Disconnected')}</>;
       case 'hot': return hardwareLive && telemetry?.hot === true ? <><WarningOutlined /> HOT · {tr(locale, 'Temperature alert')}</> : null;
       case 'estop': return state.estop_active ? <><WarningOutlined />{tr(locale, 'E-STOP ACTIVE')}</> : null;

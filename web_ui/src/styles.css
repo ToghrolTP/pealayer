@@ -956,6 +956,8 @@ html[data-motion="disabled"] *, html[data-motion="disabled"] *::before, html[dat
 .app-statusbar > span { min-width: 0; display: inline-flex; align-items: center; gap: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .app-statusbar__fps { flex: 0 0 98px; width: 98px; min-width: 98px; height: 22px; padding: 0 4px; display: inline-flex; align-items: center; gap: 5px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: inherit; font: 600 11px ui-monospace, SFMono-Regular, Consolas, monospace; font-variant-numeric: tabular-nums; box-shadow: none; cursor: pointer; }
 .app-statusbar__fps:hover, .app-statusbar__fps:focus-visible { border-color: var(--line); background: var(--surface-1); box-shadow: none; outline: none; }
+.app-statusbar__fps > .anticon { flex: 0 0 12px; }
+.status-fps-value { flex: 1; min-width: 0; text-align: end; }
 .app-statusbar__rgb i, .app-statusbar__connection i { transition: background-color 80ms linear; }
 .app-statusbar { font-variant-numeric: tabular-nums; }
 @media (prefers-reduced-motion: reduce) { .app-statusbar__rgb i, .app-statusbar__connection i { transition: none; } }

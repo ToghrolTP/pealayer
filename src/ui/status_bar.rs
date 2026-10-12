@@ -269,15 +269,7 @@ fn metric_text(hardware: Option<&HardwareCapabilities>, item: Widget) -> Option<
     }
 }
 
-fn text_widget(
-    ui: &mut egui::Ui,
-    text: &str,
-    width: f32,
-    monospace: bool,
-    color: egui::Color32,
-    strong: bool,
-    align: egui::Align,
-) -> egui::Response {
+fn status_font(ui: &egui::Ui, monospace: bool, strong: bool) -> egui::FontId {
     let mut font = if monospace {
         egui::FontId::monospace(12.0)
     } else {
@@ -296,6 +288,19 @@ fn text_widget(
             font.family = family;
         }
     }
+    font
+}
+
+fn text_widget(
+    ui: &mut egui::Ui,
+    text: &str,
+    width: f32,
+    monospace: bool,
+    color: egui::Color32,
+    strong: bool,
+    align: egui::Align,
+) -> egui::Response {
+    let font = status_font(ui, monospace, strong);
     let mut caption = egui::RichText::new(text).font(font).color(color);
     if strong {
         caption = caption.strong();
@@ -337,9 +342,41 @@ fn render_widget(
                 },
                 fps.formatted
             );
+            let (rect, response) = ui.allocate_exact_size(
+                egui::vec2(104.0, ITEM_HEIGHT),
+                egui::Sense::click_and_drag(),
+            );
+            let icon = if fps.is_ui_rate {
+                crate::ui::icons::GAUGE
+            } else {
+                crate::ui::icons::FILE_VIDEO
+            };
+            let icon_x = if app.rtl {
+                rect.right() - 7.0
+            } else {
+                rect.left() + 7.0
+            };
+            ui.painter().text(
+                egui::pos2(icon_x, rect.center().y),
+                egui::Align2::CENTER_CENTER,
+                icon,
+                egui::FontId::proportional(12.0),
+                color,
+            );
+            let number_rect = if app.rtl {
+                egui::Rect::from_min_max(rect.min, rect.max - egui::vec2(19.0, 0.0))
+            } else {
+                egui::Rect::from_min_max(rect.min + egui::vec2(19.0, 0.0), rect.max)
+            };
+            ui.painter().with_clip_rect(number_rect).text(
+                number_rect.right_center() - egui::vec2(3.0, 0.0),
+                egui::Align2::RIGHT_CENTER,
+                &fps.formatted,
+                status_font(ui, true, true),
+                color,
+            );
             return Some((
-                text_widget(ui, &text, 104.0, true, color, true, egui::Align::Min)
-                    .on_hover_text(format!("{mode}\n{}", fps.tooltip)),
+                response.on_hover_text(format!("{mode}\n{}", fps.tooltip)),
                 text,
             ));
         }
@@ -1075,6 +1112,7 @@ mod tests {
             app.status_bar
                 .reorder(Widget::Workspace, Widget::Fps, false);
             let mut previous: Option<Vec<(Widget, egui::Rect)>> = None;
+            let mut previous_fps_end: Option<f32> = None;
             for index in 0..5 {
                 app.media_fps = if index % 2 == 0 { 9.99 } else { 144.12 };
                 let mut hardware = HardwareCapabilities::default();
@@ -1095,6 +1133,23 @@ mod tests {
                     },
                     |ui| draw(&mut app, ui),
                 );
+                let fps_end = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::epaint::Shape::Text(text) if text.galley.text().ends_with("fps") => {
+                            Some(text.pos.x + text.galley.size().x)
+                        }
+                        _ => None,
+                    })
+                    .expect("numeric FPS caption");
+                if let Some(previous) = previous_fps_end {
+                    assert!(
+                        (previous - fps_end).abs() < 1.0,
+                        "FPS unit shifted with digit count"
+                    );
+                }
+                previous_fps_end = Some(fps_end);
                 let texts: Vec<_> = output
                     .shapes
                     .iter()
