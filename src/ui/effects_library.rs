@@ -52,6 +52,17 @@ pub(crate) fn designer_status(ui: &mut egui::Ui, status: &str) {
     } else { ui.label(egui::RichText::new(status).weak().small()); }
 }
 
+fn draft_can_publish(draft: &ControllerEffectDraft) -> bool {
+    let name = draft.name.trim();
+    !name.is_empty() && name.chars().count() <= 64 && !name.chars().any(char::is_control)
+        && if draft.kind == "sequence" { repeated_sequence_duration_ms(&draft.steps,draft.repeat_count,draft.repeat_interval_ms).is_ok() }
+        else { serde_json::from_str::<serde_json::Value>(&draft.program_json).is_ok_and(|program| program.is_object()) }
+}
+
+fn draft_can_run(draft: &ControllerEffectDraft) -> bool {
+    draft_can_publish(draft) && (draft.kind != "sequence" || !draft.steps.is_empty())
+}
+
 pub(crate) fn designer_label(ui: &egui::Ui, key: &'static str) -> String {
     let icon = match key {
         "Name" | "Description" | "Text" | "Label" | "LCD message" => crate::ui::icons::PENCIL_SIMPLE,
@@ -3481,11 +3492,8 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 .load(std::sync::atomic::Ordering::Relaxed);
                             let phase = app.controller_effect_preview_phase(&reference);
                             let stop_preview = matches!(phase, crate::app::ControllerEffectPreviewPhase::Stop);
-                            let draft = &app.effect_library_draft;
-                            let publishable = !draft.name.trim().is_empty() && draft.name.chars().count() <= 64
-                                && !draft.name.chars().any(char::is_control)
-                                && if draft.kind == "sequence" { !draft.steps.is_empty() && repeated_sequence_duration_ms(&draft.steps,draft.repeat_count,draft.repeat_interval_ms).is_ok() }
-                                else { serde_json::from_str::<serde_json::Value>(&draft.program_json).is_ok_and(|program| program.is_object()) };
+                            let publishable = draft_can_publish(&app.effect_library_draft);
+                            let runnable = draft_can_run(&app.effect_library_draft);
                             ui.add_enabled_ui(!capture_locked, |ui| { ui.horizontal_wrapped(|ui| {
                                 if ui.button(format!("{} {}", crate::ui::icons::X, app.tr("Discard"))).clicked() {
                                     discard_designer_draft(app, ui.ctx()); discard_requested = true;
@@ -3520,7 +3528,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 if ui
                                     .add_enabled(
                                         controller_reachable && app.hardware_effect_authoring.pending_operation.is_none()
-                                            && (stop_preview || (publishable && !app.estop_active && capabilities.as_ref().is_some_and(|hardware| hardware.board_connected))),
+                                            && (stop_preview || (runnable && !app.estop_active && capabilities.as_ref().is_some_and(|hardware| hardware.board_connected))),
                                         egui::Button::new(format!(
                                             "{} {}",
                                             if stop_preview { crate::ui::icons::STOP_CIRCLE } else { crate::ui::icons::PLAY },
@@ -3609,6 +3617,17 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn empty_recording_placeholders_can_be_published_but_never_run() {
+        let mut draft = ControllerEffectDraft { name:"Capture placeholder".into(),kind:"sequence".into(), ..Default::default() };
+        assert!(draft_can_publish(&draft)); assert!(!draft_can_run(&draft));
+        let mut step = crate::four_d::controller::HardwareMacroStep::default(); reset_step_kind(&mut step,"motion".into());
+        draft.steps.push(step); assert!(draft_can_publish(&draft)); assert!(draft_can_run(&draft));
+        draft.repeat_count=2; draft.repeat_interval_ms=1;
+        assert!(!draft_can_publish(&draft)); assert!(!draft_can_run(&draft));
+        draft.name.clear(); assert!(!draft_can_publish(&draft));
+    }
 
     #[test]
     fn designer_preview_and_discard_never_mutate_the_saved_identity() {
