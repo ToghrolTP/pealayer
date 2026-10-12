@@ -1927,7 +1927,21 @@ fn effect_controls_card_with_ping<R>(
         .inner_margin(egui::Margin::symmetric(EFFECT_CONTROLS_CARD_MARGIN, 9))
         .show(ui, |ui| {
             ui.set_width(effect_controls_frame_content_width(outer_width));
-            ui.horizontal(|ui| {
+            let text_height = ui.fonts_mut(|fonts| {
+                fonts.row_height(&egui::FontId::proportional(14.0))
+                    + if subtitle.is_some_and(|text| !text.trim().is_empty()) {
+                        fonts.row_height(&egui::TextStyle::Small.resolve(ui.style()))
+                            + ui.spacing().item_spacing.y
+                    } else { 0.0 }
+            });
+            // Reserve the full caption height before allocating the square.
+            // A horizontal row cannot retroactively center an earlier widget
+            // when its following two-line caption grows for accessibility fonts.
+            let header_layout = if ui.layout().prefer_right_to_left() {
+                egui::Layout::right_to_left(egui::Align::Center)
+            } else { egui::Layout::left_to_right(egui::Align::Center) };
+            ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), text_height.max(32.0)),
+                header_layout, |ui| {
                 let icon_color = if ping_strength > 0.0 || emphasized {
                     ui.visuals().selection.bg_fill
                 } else {
@@ -1938,13 +1952,6 @@ fn effect_controls_card_with_ping<R>(
                     icon_color.gamma_multiply(if emphasized { 0.18 } else { 0.10 }));
                 ui.painter().text(icon_rect.center(), egui::Align2::CENTER_CENTER,
                     icon, egui::FontId::proportional(17.0), icon_color);
-                let text_height = ui.fonts_mut(|fonts| {
-                    fonts.row_height(&egui::FontId::proportional(14.0))
-                        + if subtitle.is_some_and(|text| !text.trim().is_empty()) {
-                            fonts.row_height(&egui::TextStyle::Small.resolve(ui.style()))
-                                + ui.spacing().item_spacing.y
-                        } else { 0.0 }
-                });
                 ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), text_height),
                     egui::Layout::top_down(egui::Align::Min), |ui| {
                     ui.add(egui::Label::new(egui::RichText::new(title).strong().size(14.0))
@@ -1964,6 +1971,19 @@ fn effect_controls_card_with_ping<R>(
 fn effect_controls_badge(ui: &mut egui::Ui, icon: &str, text: impl Into<String>) {
     crate::ui::sync_elegance_theme(ui.ctx());
     ui.add(elegance::Badge::new(format!("{icon}  {}", text.into()), elegance::BadgeTone::Neutral).preserve_case());
+}
+
+/// Pure empty-state chrome: inspecting its geometry needs no media player,
+/// controller engine, selected cue or mutable authoring state.
+fn effect_controls_empty_card(ui: &mut egui::Ui, width: f32, title: &str,
+    subtitle: &str, insertion_hint: &str) -> egui::InnerResponse<()> {
+    effect_controls_card(ui, width, crate::ui::icons::SELECTION_ALL, title,
+        Some(subtitle), false, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                effect_controls_badge(ui, crate::ui::icons::KEYBOARD, "A");
+                ui.label(egui::RichText::new(insertion_hint).small().weak());
+            });
+        })
 }
 
 fn effect_controls_kind(
@@ -4605,29 +4625,12 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
             app.commit_timeline_edit();
         }
     } else {
-        effect_controls_card(
+        effect_controls_empty_card(
             ui,
             panel_width,
-            crate::ui::icons::SELECTION_ALL,
             &app.tr("No cue selected"),
-            Some(&app.tr("Select a cue on the timeline to manage it")),
-            false,
-            |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    effect_controls_badge(
-                        ui,
-                        crate::ui::icons::KEYBOARD,
-                        "A",
-                    );
-                    ui.label(
-                        egui::RichText::new(app.tr(
-                            "Select a hardware track and press A, or double-click its lane, to add a cue.",
-                        ))
-                        .small()
-                        .weak(),
-                    );
-                });
-            },
+            &app.tr("Select a cue on the timeline to manage it"),
+            &app.tr("Select a hardware track and press A, or double-click its lane, to add a cue."),
         );
     }
     if let Some(id) = manage_audio { app.select_audio_effect(id); app.show_effect_library_editor = true; }
@@ -11794,6 +11797,65 @@ mod timeline_row_tests {
         discard_ui_output(output);
         let (header, card) = widths.get();
         assert_eq!(header, card);
+    }
+
+    #[test]
+    fn no_cue_selected_icon_tile_is_square_beside_two_line_caption() {
+        for density in [crate::config::UiControlDensity::Compact,
+            crate::config::UiControlDensity::Comfortable] {
+            for dark in [false, true] {
+                for scale in [1.0, 1.25, 1.5, 2.0] {
+                    for font_size in [12.0, 20.0] {
+                        for (width, rtl) in [(180.0, false), (360.0, false), (560.0, false), (360.0, true)] {
+                            let context = egui::Context::default();
+                            context.set_pixels_per_point(scale);
+                            context.set_visuals(if dark { egui::Visuals::dark() }
+                                else { egui::Visuals::light() });
+                            context.all_styles_mut(|style| {
+                                crate::ui::control_density::configure(style, density);
+                                style.text_styles.insert(egui::TextStyle::Small,
+                                    egui::FontId::proportional(font_size));
+                            });
+                            let mut output = context.run_ui(egui::RawInput {
+                                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO,
+                                    egui::vec2(width, 360.0))), ..Default::default()
+                            }, |ui| {
+                                ui.with_layout(egui::Layout::top_down(if rtl { egui::Align::Max }
+                                    else { egui::Align::Min }), |ui| {
+                                    effect_controls_empty_card(ui, effect_controls_content_width(ui.available_width()),
+                                        "No cue selected", "Select a cue on the timeline to manage it",
+                                        "Select a hardware track and press A, or double-click its lane, to add a cue.");
+                                });
+                            });
+                            // Release textures before asserting to avoid a second
+                            // panic from egui's texture teardown on a failed fixture.
+                            output.textures_delta.clear();
+                            let text_rect = |label: &str| output.shapes.iter().find_map(|shape|
+                                match &shape.shape {
+                                    egui::epaint::Shape::Text(text) if text.galley.job.text == label =>
+                                        Some(egui::Rect::from_min_size(text.pos, text.galley.size())),
+                                    _ => None,
+                                }).unwrap_or_else(|| panic!("Missing empty-state text: {label}"));
+                            let icon = text_rect(crate::ui::icons::SELECTION_ALL);
+                            let title = text_rect("No cue selected");
+                            let subtitle = text_rect("Select a cue on the timeline to manage it");
+                            let tile = output.shapes.iter().find_map(|shape| match &shape.shape {
+                                egui::epaint::Shape::Rect(rect) if rect.rect.contains(icon.center())
+                                    && rect.stroke.width == 0.0 => Some(rect.rect),
+                                _ => None,
+                            }).expect("Empty-state icon must have a painted tile");
+                            assert_eq!(tile.size(), egui::Vec2::splat(32.0),
+                                "Tile stretched: {density:?}, dark={dark}, scale={scale}, font={font_size}, width={width}");
+                            assert!(tile.contains_rect(icon), "Icon must fit inside its square");
+                            assert!((tile.center().y - title.union(subtitle).center().y).abs() < 1.0,
+                                "Square must center beside the complete caption group: tile={tile:?}, title={title:?}, subtitle={subtitle:?}, font={font_size}, width={width}");
+                            assert!(if rtl { tile.left() >= title.right() }
+                                else { tile.right() <= title.left() });
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]
