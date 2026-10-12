@@ -24,6 +24,8 @@ import { ElapsedTimeInput } from './ElapsedTimeInput';
 
 export interface PlayerState {
   control_bars?: ControlBarsConfig;
+  media_keys_enabled?: boolean;
+  media_keys_background_enabled?: boolean;
   external_mpv?: {mode: 'internal' | 'external' | 'dual' | 'remote'; connected: boolean; endpoint: string; error?: string | null};
   app_icon_revision?: number;
   rf?: RfSnapshot;

@@ -848,6 +848,7 @@ pub fn run() -> eframe::Result {
                 hardware_control_pwm_percent: 0.0,
                 keyboard_shortcuts_enabled: loaded_config.keyboard_shortcuts_enabled,
                 media_keys_enabled: loaded_config.media_keys_enabled,
+                media_keys_background_enabled: loaded_config.media_keys_background_enabled,
                 application_shortcuts: loaded_config.application_shortcuts.clone(),
                 global_hardware_hotkeys_enabled: loaded_config.global_hardware_hotkeys_enabled,
                 hardware_key_bindings: loaded_config.hardware_key_bindings.clone(),

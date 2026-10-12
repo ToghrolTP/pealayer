@@ -12,6 +12,12 @@ use std::sync::{
 };
 use std::time::Duration;
 
+/// Scope OS transport independently of local/hardware shortcuts.
+/// Focus changes never create additional native registrations.
+pub fn media_controls_allowed(enabled:bool,background:bool,foreground:bool)->bool {
+    enabled && (background || foreground)
+}
+
 pub fn map_media_control_event(
     event: MediaControlEvent,
     seek_seconds: f64,
@@ -95,6 +101,12 @@ pub struct MediaControlsManager {
 }
 
 impl MediaControlsManager {
+    #[cfg(test)]
+    pub(crate) fn memory_only_test_manager(app_name:&str)->Self {
+        Self {controls:None,active:Arc::new(AtomicBool::new(true)),title:None,duration:None,last_playback:None,app_name:app_name.into(),
+            #[cfg(all(unix,not(any(target_os="macos",target_os="ios",target_os="android"))))]
+            last_volume:None}
+    }
     pub fn new(
         hwnd_raw: isize,
         event_tx: Sender<MediaControlEvent>,
@@ -220,6 +232,15 @@ impl Drop for MediaControlsManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn master_and_background_permission_cover_every_focus_state() {
+        for enabled in [false,true] {for background in [false,true] {for foreground in [false,true] {
+            assert_eq!(media_controls_allowed(enabled,background,foreground),enabled&&(background||foreground));
+        }}}
+        assert!(media_controls_allowed(true,true,false),"minimized/unfocused must remain usable");
+        assert!(!media_controls_allowed(true,false,false),"foreground-only must deny background");
+        assert!(media_controls_allowed(true,false,true),"foreground-only must accept foreground");
+    }
     #[cfg(target_os = "windows")]
     #[test]
     fn missing_windows_window_does_not_panic_or_register() {
