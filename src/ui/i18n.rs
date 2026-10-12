@@ -52,6 +52,29 @@ pub(crate) fn configure_ui_fonts(context: &egui::Context, prefer_vazirmatn: bool
         proportional.insert(0, "pealayer-vazirmatn".to_owned());
     }
 
+    // Named emphasis faces preserve normal UI sizes and icon/fallback coverage.
+    // Load once, not from status painting; systems without these faces retain
+    // the existing family rather than provisioning/downloading a second font.
+    for (name, fallback, paths) in [
+        ("pealayer-status-strong", egui::FontFamily::Proportional, &[
+            #[cfg(target_os = "windows")] r"C:\Windows\Fonts\segoeuib.ttf",
+            #[cfg(target_os = "macos")] "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
+            #[cfg(target_os = "linux")] "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
+            #[cfg(target_os = "linux")] "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        ][..]),
+        ("pealayer-status-mono-strong", egui::FontFamily::Monospace, &[
+            #[cfg(target_os = "windows")] r"C:\Windows\Fonts\consolab.ttf",
+            #[cfg(target_os = "macos")] "/System/Library/Fonts/Supplemental/Courier New Bold.ttf",
+            #[cfg(target_os = "linux")] "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf",
+        ][..]),
+    ] {
+        let mut faces = fonts.families.get(&fallback).cloned().unwrap_or_default();
+        if let Some(bytes) = paths.iter().find_map(|path| std::fs::read(path).ok()) {
+            fonts.font_data.insert(name.into(), Arc::new(egui::FontData::from_owned(bytes)));
+            faces.insert(0, name.into());
+        }
+        fonts.families.insert(egui::FontFamily::Name(name.into()), faces);
+    }
     context.set_fonts(fonts);
 }
 

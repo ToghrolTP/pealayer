@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
-import { DEFAULT_VISIBILITY, WIDGETS, orderedWidgets, reorderWidgets, widgetVisible, setWidgetVisible, nextFpsMode, screenRateSelected, numericTelemetry, appendSample, chartPaths } from '../src/statusWidgets.ts';
+import { DEFAULT_VISIBILITY, WIDGETS, orderedWidgets, displayedWidgets, reorderWidgets, widgetVisible, setWidgetVisible, nextFpsMode, screenRateSelected, numericTelemetry, appendSample, chartPaths } from '../src/statusWidgets.ts';
 assert.equal(DEFAULT_VISIBILITY.chart, false);
+assert.equal(displayedWidgets(['workspace', 'temperature', 'fps']).at(-1), 'workspace');
+assert.deepEqual(reorderWidgets([...WIDGETS], 'workspace', 'fps', false), [...WIDGETS]);
 assert.equal(DEFAULT_VISIBILITY.fps_mode, 'auto');
 assert.deepEqual(['media', 'ui', 'auto'].map(nextFpsMode), ['ui', 'auto', 'media']);
 assert.equal(screenRateSelected('auto', true, true), false);
