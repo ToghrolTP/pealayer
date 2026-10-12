@@ -36,12 +36,17 @@ export function useClipboardUrls(enabled: boolean, connected: boolean, browse: (
       if (!active || reading || document.visibilityState !== 'visible' || !document.hasFocus() || !navigator.clipboard?.readText) return;
       reading = true;
       try {
-        if (navigator.permissions?.query) {
-          try {
-            const permission = await navigator.permissions.query({ name: 'clipboard-read' as PermissionName });
-            if (permission.state !== 'granted') { baseline.current = true; return; }
-          } catch { /* Firefox/Safari may not expose this permission name. */ }
+        if (!navigator.permissions?.query) { baseline.current = true; return; }
+        let permission: PermissionStatus | undefined;
+        try {
+          permission = await navigator.permissions.query({ name: 'clipboard-read' as PermissionName });
+        } catch {
+          // Firefox and Safari reject 'clipboard-read' in permissions.query.
+          // Unprompted readText() triggers Firefox's floating Paste popup; return early.
+          baseline.current = true;
+          return;
         }
+        if (!permission || permission.state !== 'granted') { baseline.current = true; return; }
         observe(await navigator.clipboard.readText());
       } catch { baseline.current = true; /* Permission/secure-context boundary; no prompts or retry storms. */ }
       finally { reading = false; }
