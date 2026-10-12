@@ -10,6 +10,11 @@ statements are not the present product state.
 
 ## Delivered source and deployment
 
+- Hardware preparation recovery handles acknowledged empty plans, preserves new
+  errors against old clock ACKs and pauses the coordinator before replacement.
+  [Transition contract and regressions](hardware-preparation-recovery.md) retain
+  real timing faults, strict deadlines and the physical/Cafe acceptance gates.
+
 - Windows tray menus expose a capability-driven PCController board submenu,
   with monitor reveal, guarded E-STOP release and tracked stop/clear/automatic
   LED actions. [Tray contract and verification](windows-tray-board-actions.md)

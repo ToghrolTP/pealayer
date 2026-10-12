@@ -489,18 +489,10 @@ fn render_widget(
                 return None;
             }
             let plan = app.engine_handle.prepared_timeline.try_lock().ok()?;
-            if !plan.has_items() {
+            if !plan.has_items() && !plan.play_requested && plan.error.is_none() && plan.deferred_reason.is_none() {
                 return None;
             }
-            let state = if plan.error.is_some() {
-                "Hardware timing fault"
-            } else if plan.deferred_reason.is_some() {
-                "Hardware waiting"
-            } else if plan.acknowledged_revision != plan.revision {
-                "Preparing hardware"
-            } else {
-                "Hardware timeline"
-            };
+            let state = plan.presentation_label();
             let text = format!("{} {}", crate::ui::icons::CLOCK, app.tr(state));
             let tooltip = plan
                 .error

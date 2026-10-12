@@ -81,7 +81,7 @@ export const ApplicationStatusBar: React.FC<ApplicationStatusBarProps> = ({ stat
       case 'temperature': return temperature === undefined ? null : `${(temperature / 100).toFixed(1)} °C`;
       case 'status_rgb': { const led = hardwareLive ? state.hardware_details?.status_led : null; return led ? <i className="status-rgb-dot" style={{ backgroundColor: `rgb(${led.red},${led.green},${led.blue})` }} title={`RGB ${led.red}, ${led.green}, ${led.blue}`} /> : null; }
       case 'warnings': return warnings.length ? <><WarningOutlined />{warnings[0].message}</> : null;
-      case 'timeline': return connected && state.controller_connected && state.hardware_sync?.timeline?.state ? <><ClockCircleOutlined />{state.hardware_sync.timeline.state}</> : null;
+      case 'timeline': return connected && state.controller_connected && state.hardware_sync && (state.hardware_sync.revision !== state.hardware_sync.prepared_revision || state.hardware_sync.play_requested || (state.hardware_sync.timeline?.step_count ?? 0) > 0 || state.hardware_sync.error) ? <span title={state.hardware_sync.error ?? state.hardware_sync.label}><ClockCircleOutlined />{tr(locale, state.hardware_sync.label)}</span> : null;
       case 'progress': { const op = operations[0]; if (!op) return null;
         const fraction = typeof op.fraction === 'number' && Number.isFinite(op.fraction) ? Math.max(0, Math.min(1, op.fraction)) : undefined;
         return <span className="status-progress" role="progressbar" aria-label={`${op.label} · ${op.phase}`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={fraction === undefined ? undefined : Math.round(fraction * 100)}

@@ -199,6 +199,45 @@ fn reconcile_controller_revision(
     Ok(())
 }
 
+/// Stop our previously advertised clock before replacing a plan. In particular,
+/// a fresh connection cannot assume the coordinator has observed libmpv pause.
+/// Preserve the old epoch/position/revision while stopping: this is not a seek,
+/// an authority release, or permission to resume a failed executor.
+fn acknowledge_pause_before_prepare(
+    id: &str,
+    sequence: &mut u64,
+    mut call: impl FnMut(&str, serde_json::Value) -> Result<serde_json::Value, String>,
+) -> Result<(), String> {
+    let clock = call("controller.media.playback.get", json!({}))?;
+    let owner = clock["client_id"].as_str().ok_or("Invalid hardware clock owner")?;
+    let playing = clock["playing"].as_bool().ok_or("Invalid hardware clock state")?;
+    if owner != id || !playing { return Ok(()); }
+    let epoch = clock["epoch"].as_u64().ok_or("Invalid hardware clock epoch")?;
+    let revision = clock["plan_revision"].as_u64().ok_or("Invalid hardware clock revision")?;
+    let remote_sequence = clock["sequence"].as_u64().ok_or("Invalid hardware clock sequence")?;
+    *sequence = (*sequence).max(remote_sequence).checked_add(1).ok_or("Hardware clock sequence exhausted")?;
+    let pause = json!({"client_id":id,"sequence":*sequence,"playing":false,
+        "position_ms":clock["position_ms"],"duration_ms":clock["duration_ms"],
+        "loaded":clock["loaded"],"rate":clock["rate"],"epoch":epoch,"plan_revision":revision});
+    let echo_matches = |echo: &serde_json::Value| {
+        echo["client_id"] == id && echo["playing"] == false
+            && echo["sequence"].as_u64() == Some(*sequence)
+            && echo["epoch"].as_u64() == Some(epoch)
+            && echo["plan_revision"].as_u64() == Some(revision)
+    };
+    match call("controller.media.playback.update", pause) {
+        Ok(echo) if echo_matches(&echo) => Ok(()),
+        Ok(_) => Err("Hardware pause acknowledgement mismatch".into()),
+        Err(error) => {
+            // The coordinator can accept pause then report the OLD executor's
+            // terminal fault. Only an exact read-back proves it is safe to
+            // replace that executor; never ignore an unconfirmed failure.
+            let echo = call("controller.media.playback.get", json!({}))?;
+            if echo_matches(&echo) { Ok(()) } else { Err(error) }
+        }
+    }
+}
+
 // Wake idle UI/Web consumers for semantic transitions, not for every clock echo
 // or changing ACK age. The executor/observer never waits for a repaint.
 #[derive(PartialEq)]
@@ -580,6 +619,20 @@ pub fn spawn(
                     std::thread::sleep(Duration::from_millis(10));
                     continue;
                 }
+                if let Err(error) = acknowledge_pause_before_prepare(&id, &mut sequence,
+                    |method, params| rpc.call(method, params)) {
+                    preparation_retry_revision = revision;
+                    preparation_retry_at = Instant::now() + Duration::from_secs(5);
+                    if let Ok(mut plan) = timeline.lock() {
+                        plan.error = Some(format!("Hardware pause not acknowledged: {error}"));
+                        plan.play_requested = false;
+                    }
+                    let _ = take_coordinator_session(&mut client, &timeline);
+                    authority_ready = false;
+                    previous = None;
+                    retry_at = Instant::now() + Duration::from_secs(2);
+                    continue;
+                }
                 payload["client_id"] = json!(id);
                 payload["revision"] = json!(revision);
                 match rpc.call_detailed("controller.media.timeline.prepare", payload) {
@@ -616,7 +669,9 @@ pub fn spawn(
                             plan.error = None;
                             plan.deferred_reason = None;
                             if let Ok(ref arm_feedback) = arm_result {
-                                if arm_feedback["epoch"].as_u64() == Some(current.epoch)
+                                if arm_feedback["client_id"] == id
+                                    && arm_feedback["sequence"].as_u64() == Some(sequence)
+                                    && arm_feedback["epoch"].as_u64() == Some(current.epoch)
                                     && arm_feedback["plan_revision"].as_u64() == Some(revision)
                                 {
                                     plan.clock_ack_revision = revision;
@@ -626,6 +681,8 @@ pub fn spawn(
                                 } else {
                                     plan.feedback = feedback;
                                     plan.last_ack = None;
+                                    plan.error = Some("Hardware arm acknowledgement mismatch; playback paused".into());
+                                    plan.play_requested = false;
                                 }
                             } else {
                                 plan.feedback = feedback;
@@ -715,25 +772,7 @@ pub fn spawn(
                                     Some("Hardware clock echo mismatch; playback paused".into());
                                 plan.play_requested = false;
                             } else {
-                                plan.last_ack = Some(Instant::now());
-                                plan.clock_ack_revision = revision;
-                                plan.clock_ack_epoch = current.epoch;
-                                plan.feedback = feedback["timeline"].clone();
-                                // A transient transport failure can clear on a fresh
-                                // acknowledgement. A discontinuity fault is different:
-                                // keep it latched until explicit Play requests re-arming.
-                                if !plan.requires_reprepare {
-                                    plan.error = None;
-                                }
-                                if plan.feedback["state"] == "faulted" {
-                                    plan.error = Some(
-                                        plan.feedback["error"]
-                                            .as_str()
-                                            .unwrap_or("Hardware deadline failure")
-                                            .to_owned(),
-                                    );
-                                    plan.play_requested = false;
-                                }
+                                plan.observe_clock_ack(revision, current.epoch, feedback["timeline"].clone());
                             }
                         }
                         previous = Some(current.clone());
@@ -805,6 +844,95 @@ fn identity(id: &str, name: &str) -> serde_json::Value {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn tcp_pause_handshake_precedes_plan_prepare_on_the_real_rpc_client() {
+        use std::io::{BufRead, BufReader, Write};
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream.set_read_timeout(Some(Duration::from_secs(2))).unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut paused = false;
+            for expected in ["controller.ping","controller.app.instance.report","controller.media.playback.get",
+                "controller.media.playback.update","controller.media.timeline.prepare"] {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                let request: serde_json::Value = serde_json::from_str(&line).unwrap();
+                assert_eq!(request["method"],expected);
+                let result = match expected {
+                    "controller.media.playback.get" => json!({"client_id":"owner","playing":true,
+                        "loaded":true,"sequence":7,"epoch":3,"plan_revision":4,
+                        "position_ms":1200,"duration_ms":5000,"rate":1.0}),
+                    "controller.media.playback.update" => {
+                        assert_eq!(request["params"]["playing"],false);
+                        paused = true;
+                        request["params"].clone()
+                    },
+                    "controller.media.timeline.prepare" => {
+                        assert!(paused,"Coordinator rejects replacement while its clock is playing");
+                        json!({"state":"ready","revision":5,"step_count":0})
+                    },
+                    _ => json!({"ok":true}),
+                };
+                writeln!(stream,"{}",json!({"jsonrpc":"2.0","id":request["id"],"result":result})).unwrap();
+            }
+        });
+        let mut rpc = ControllerClient::connect_playback_events(&format!("pccontroller://{address}")).unwrap();
+        rpc.call("controller.app.instance.report",json!({"id":"owner"})).unwrap();
+        let mut sequence = 0;
+        super::acknowledge_pause_before_prepare("owner",&mut sequence,|method,params|rpc.call(method,params)).unwrap();
+        let prepared = rpc.call("controller.media.timeline.prepare",json!({"client_id":"owner","revision":5})).unwrap();
+        assert_eq!(prepared["state"],"ready");
+        server.join().unwrap();
+    }
+    #[test]
+    fn prepare_pause_handshake_preserves_old_epoch_plan_position_and_loaded_authority() {
+        let clock = serde_json::json!({"client_id":"owner","playing":true,"loaded":true,
+            "sequence":9,"epoch":2,"plan_revision":7,"position_ms":123,"duration_ms":999,"rate":1.0});
+        let mut calls = Vec::new();
+        let mut sequence = 3;
+        super::acknowledge_pause_before_prepare("owner", &mut sequence, |method, params| {
+            calls.push(method.to_owned());
+            if method.ends_with(".get") { Ok(clock.clone()) } else {
+                assert_eq!(params["loaded"], true);
+                assert_eq!(params["position_ms"],123);
+                assert_eq!(params["epoch"],2);
+                assert_eq!(params["plan_revision"],7);
+                assert_eq!(params["playing"],false);
+                Ok(params)
+            }
+        }).unwrap();
+        assert_eq!(sequence, 10);
+        assert_eq!(calls, ["controller.media.playback.get", "controller.media.playback.update"]);
+    }
+    #[test]
+    fn prepare_never_pauses_another_owner_or_already_paused_clock() {
+        for (owner, playing) in [("other",true),("owner",false)] {
+            let mut sequence = 1;
+            super::acknowledge_pause_before_prepare("owner", &mut sequence, |method,_| {
+                assert_eq!(method,"controller.media.playback.get");
+                Ok(serde_json::json!({"client_id":owner,"playing":playing}))
+            }).unwrap();
+            assert_eq!(sequence,1);
+        }
+    }
+    #[test]
+    fn failed_pause_requires_exact_readback_before_replacing_old_faulted_executor() {
+        for accepted in [true,false] {
+            let mut calls = 0;
+            let mut sequence = 0;
+            let result = super::acknowledge_pause_before_prepare("owner", &mut sequence, |method,_| {
+                calls += 1;
+                if method.ends_with(".update") { return Err("old executor fault".into()); }
+                Ok(serde_json::json!({"client_id":"owner","playing":calls == 1 || !accepted,
+                    "loaded":true,"sequence":if calls == 1 {4}else{5},"epoch":2,"plan_revision":7,
+                    "position_ms":123,"rate":1.0}))
+            });
+            assert_eq!(result.is_ok(),accepted);
+            assert_eq!(calls,3);
+        }
+    }
     use super::*;
 
     #[test]
@@ -920,6 +1048,7 @@ mod tests {
     #[test]
     fn failed_authority_query_invalidates_arm_and_requires_a_new_plan_revision() {
         let mut plan = super::super::media_timeline::PreparedTimeline::default();
+        plan.payload = json!({"cues":[],"actions":[{"id":"cue"}]});
         plan.revision = 7;
         plan.acknowledged_revision = 7;
         plan.clock_ack_revision = 7;

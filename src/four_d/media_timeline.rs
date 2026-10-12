@@ -70,11 +70,44 @@ impl PreparedTimeline {
     pub fn has_items(&self) -> bool {
         self.revision != self.acknowledged_revision
             || self.compilation_error.is_some()
-            || ["cues", "actions"].iter().any(|key| {
+            || self.has_outputs()
+    }
+    pub fn has_outputs(&self) -> bool {
+        ["cues", "actions"].iter().any(|key| {
                 self.payload[key]
                     .as_array()
                     .is_some_and(|items| !items.is_empty())
             })
+    }
+    pub fn presentation_label(&self) -> &'static str {
+        if self.compilation_error.is_some() { "Hardware plan invalid" }
+        else if self.error.is_some() && (self.requires_reprepare || (self.clock_ack_revision == self.revision && self.feedback["state"] == "faulted")) { "Hardware timing fault" }
+        else if self.error.is_some() { "Hardware preparation blocked" }
+        else if !self.may_publish() { "Hardware authority required" }
+        else if self.deferred_reason.is_some() { "Hardware waiting" }
+        else if self.revision != self.acknowledged_revision { "Preparing hardware" }
+        else if self.play_requested { "Arming hardware" }
+        else { "Hardware timeline" }
+    }
+    /// A heartbeat for an old plan cannot repair compilation or preparation of
+    /// the desired plan. Timing faults also require explicit re-arming.
+    pub fn observe_clock_ack(&mut self, revision: u64, epoch: u64, feedback: Value) {
+        self.last_ack = Some(Instant::now());
+        self.clock_ack_revision = revision;
+        self.clock_ack_epoch = epoch;
+        self.feedback = feedback;
+        if revision == self.revision && self.compilation_error.is_none()
+            && self.deferred_reason.is_none() && !self.requires_reprepare {
+            self.error = None;
+        }
+        if revision == self.revision && self.feedback["state"] == "faulted" {
+            if self.error.is_none() {
+                self.error = Some(self.feedback["error"].as_str()
+                    .unwrap_or("Hardware deadline failure").to_owned());
+            }
+            self.requires_reprepare = true;
+            self.play_requested = false;
+        }
     }
     pub fn replace(&mut self, compiled: Result<Value, String>) {
         match compiled {
@@ -107,8 +140,22 @@ impl PreparedTimeline {
             && self.error.is_none()
             && self.deferred_reason.is_none()
             && self.compilation_error.is_none()
-            && self.feedback["armed_epoch"].as_u64() == Some(epoch)
-            && matches!(self.feedback["state"].as_str(), Some("paused" | "playing"))
+            && if self.has_outputs() {
+                self.feedback["armed_epoch"].as_u64() == Some(epoch)
+                    && matches!(self.feedback["state"].as_str(), Some("paused" | "playing"))
+            } else {
+                // Empty plans clear old outputs but have no executor to arm.
+                self.revision != 0 && self.feedback["revision"].as_u64() == Some(self.revision)
+                    && self.feedback["step_count"].as_u64() == Some(0)
+                    && self.feedback["state"].as_str() == Some("ready")
+            }
+    }
+    pub fn consume_ready_play(&mut self, epoch: u64, loaded: bool, eof: bool, buffering: bool) -> bool {
+        if self.play_requested && loaded && !eof && !buffering && self.ready_for(epoch)
+            && self.last_ack.is_some_and(|ack| ack.elapsed() < Duration::from_millis(250)) {
+            self.play_requested = false;
+            true
+        } else { false }
     }
 
     /// Explicit Play may retry a cancelled/faulted controller executor, but
@@ -134,6 +181,13 @@ impl PreparedTimeline {
         }
         self.play_requested = true;
         reprepare
+    }
+}
+
+fn update_observer_error(shared: &mut Option<String>, reported: &mut Option<String>, next: Option<String>) {
+    if next != *reported {
+        if next.is_some() || *shared == *reported { *shared = next.clone(); }
+        *reported = next;
     }
 }
 
@@ -271,6 +325,7 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
         let mut seeking = false;
         let source = crate::mpv::player::Player(mpv);
         let mut external_seek_revision = 0;
+        let mut reported_error = None;
         while lifecycle.strong_count() > 0 {
             let unattended = crate::platform::interop::allow_unattended_hardware_takeover();
             let mut restarted = false;
@@ -371,7 +426,7 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
                 clock.observed_at = Instant::now();
                 if coordinator
                     && let Ok(mut prepared) = plan.lock()
-                    && prepared.has_items()
+                    && (prepared.has_items() || prepared.play_requested)
                 {
                     let fresh = prepared
                         .last_ack
@@ -382,22 +437,16 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
                             prepared.play_requested = true;
                         }
                         if ready && !fresh {
-                            prepared.error = Some("Hardware clock acknowledgement expired; playback paused. Seek and reprepare before retrying.".into());
+                            prepared.error = Some("Hardware clock acknowledgement expired; playback paused. Press Play to prepare and acknowledge a new plan before retrying.".into());
                             prepared.requires_reprepare = true;
                             prepared.play_requested = false;
                         }
                         set_pause = Some(true);
                         playing = false;
                     }
-                    if prepared.play_requested && ready && fresh && !eof && !buffering {
+                    if prepared.consume_ready_play(clock.epoch, loaded, eof, buffering) {
                         set_pause = Some(false);
                         playing = true;
-                        prepared.play_requested = false;
-                    }
-                    if let Some(message) = prepared.error.clone()
-                        && let Ok(mut value) = error.lock()
-                    {
-                        *value = Some(message)
                     }
                 }
                 clock.playing = playing;
@@ -406,6 +455,15 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
                     // The publisher accepts only after observing and ACKing it.
                     set_pause = Some(true);
                     if let Ok(mut prepared) = plan.lock() { prepared.play_requested = false; }
+                }
+                // Clear only the diagnostic this observer previously installed,
+                // never an independent connection error. Empty-plan completion
+                // also passes here after leaving the hardware gating block.
+                if let Ok(prepared) = plan.lock() {
+                    let next = prepared.error.clone();
+                    if next != reported_error && let Ok(mut value) = error.lock() {
+                        update_observer_error(&mut value, &mut reported_error, next);
+                    }
                 }
             }
             // Never hold shared state while waiting for an mpv command.
@@ -421,6 +479,100 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
 mod tests {
     use super::*;
     use crate::four_d::models::{Effect, EffectInstance, Timeline};
+    #[test]
+    fn recovered_observer_diagnostic_clears_only_its_own_connection_error() {
+        let mut shared = None;
+        let mut reported = None;
+        update_observer_error(&mut shared,&mut reported,Some("prepare failed".into()));
+        assert_eq!(shared.as_deref(),Some("prepare failed"));
+        update_observer_error(&mut shared,&mut reported,None);
+        assert!(shared.is_none());
+        update_observer_error(&mut shared,&mut reported,Some("prepare failed".into()));
+        shared = Some("board disconnected".into());
+        update_observer_error(&mut shared,&mut reported,None);
+        assert_eq!(shared.as_deref(),Some("board disconnected"));
+    }
+    fn acknowledged_empty_plan() -> PreparedTimeline {
+        let mut plan = PreparedTimeline::default();
+        plan.revision = 2;
+        plan.acknowledged_revision = 2;
+        plan.observe_clock_ack(2, 3, json!({"revision":2,"state":"ready","step_count":0,"armed_epoch":0}));
+        plan
+    }
+    #[test]
+    fn empty_clear_ack_releases_pending_play_without_an_executor() {
+        let mut plan = acknowledged_empty_plan();
+        plan.play_requested = true;
+        assert!(!plan.has_items());
+        assert!(plan.consume_ready_play(3, true, false, false));
+        assert!(!plan.consume_ready_play(3, true, false, false));
+    }
+    #[test]
+    fn empty_clear_still_requires_matching_revision_epoch_and_zero_steps() {
+        let mut plan = acknowledged_empty_plan();
+        plan.play_requested = true;
+        plan.acknowledged_revision = 1;
+        assert!(plan.has_items());
+        assert!(!plan.consume_ready_play(3, true, false, false));
+        plan.acknowledged_revision = 2;
+        assert!(!plan.consume_ready_play(4, true, false, false));
+        plan.feedback["revision"] = json!(1);
+        assert!(!plan.ready_for(3));
+        plan.feedback["revision"] = json!(2);
+        plan.feedback["step_count"] = json!(1);
+        assert!(!plan.ready_for(3));
+        plan.feedback["step_count"] = Value::Null;
+        assert!(!plan.ready_for(3));
+    }
+    #[test]
+    fn pending_empty_play_never_resumes_unloaded_buffered_ended_or_stale_media() {
+        let mut plan = acknowledged_empty_plan();
+        plan.play_requested = true;
+        for (loaded, eof, buffering) in [(false,false,false),(true,true,false),(true,false,true)] {
+            assert!(!plan.consume_ready_play(3, loaded, eof, buffering));
+        }
+        plan.last_ack = Some(Instant::now() - Duration::from_millis(251));
+        assert!(!plan.consume_ready_play(3, true, false, false));
+        assert!(plan.play_requested);
+    }
+    #[test]
+    fn old_plan_heartbeat_cannot_erase_new_preparation_or_compilation_failure() {
+        let mut plan = acknowledged_empty_plan();
+        plan.revision = 3;
+        plan.error = Some("new plan rejected".into());
+        plan.observe_clock_ack(2,3,json!({"state":"paused"}));
+        assert_eq!(plan.error.as_deref(), Some("new plan rejected"));
+        assert_eq!(plan.presentation_label(), "Hardware preparation blocked");
+        plan.replace(Err("invalid cue".into()));
+        plan.observe_clock_ack(2,3,json!({"state":"paused"}));
+        assert_eq!(plan.error.as_deref(), Some("invalid cue"));
+        assert_eq!(plan.presentation_label(), "Hardware plan invalid");
+    }
+    #[test]
+    fn old_executor_fault_does_not_cancel_explicit_new_plan_retry() {
+        let mut plan = acknowledged_empty_plan();
+        plan.revision = 3;
+        plan.play_requested = true;
+        plan.observe_clock_ack(2,3,json!({"state":"faulted","error":"old executor"}));
+        assert!(plan.play_requested);
+        assert!(!plan.requires_reprepare);
+        assert!(!plan.ready_for(3));
+    }
+    #[test]
+    fn genuine_fault_stays_latched_until_explicit_retry_not_a_healthy_heartbeat() {
+        let mut plan = acknowledged_empty_plan();
+        plan.play_requested = true;
+        plan.observe_clock_ack(2,3,json!({"state":"faulted","error":"late ACK"}));
+        assert!(plan.requires_reprepare);
+        assert!(!plan.play_requested);
+        plan.observe_clock_ack(2,3,json!({"revision":2,"state":"ready","step_count":0}));
+        assert_eq!(plan.error.as_deref(), Some("late ACK"));
+        assert!(!plan.ready_for(3));
+        assert!(plan.request_play());
+        assert_eq!(plan.revision, 3);
+        assert!(plan.play_requested);
+        assert!(!plan.ready_for(3));
+    }
     #[test]
     fn prepared_strip_window_retains_its_reference_and_authored_duration() {
         use super::super::models::{Effect, EffectInstance};
