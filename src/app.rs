@@ -1731,6 +1731,7 @@ impl eframe::App for PealayerApp {
                     })
                 }),
                 update: crate::update::manager().status(),
+                status_operations: crate::ui::status_bar::active_operations(hardware.as_ref()),
             };
             let media_rev = self.media_view_revision.load(Ordering::Relaxed);
             if media_rev != self.last_published_media_view_revision.load(Ordering::Relaxed) {
@@ -5430,10 +5431,14 @@ impl PealayerApp {
     /// Source media rate and measured native UI cadence are distinct metrics.
     /// Interaction and playback speed never silently change the selected metric.
     pub fn current_fps_display(&self, _now: std::time::Instant) -> Option<FpsDisplayInfo> {
-        let is_ui_rate = self.status_bar.fps_mode == crate::config::StatusBarFpsMode::Ui;
+        let is_ui_rate = match self.status_bar.fps_mode {
+            crate::config::StatusBarFpsMode::Ui => true,
+            crate::config::StatusBarFpsMode::Media => false,
+            crate::config::StatusBarFpsMode::Auto => self.is_paused || self.current_video_path.is_none(),
+        };
         let rate = if is_ui_rate { self.frame_rate_tracker.live_fps() }
             else { (self.current_video_path.is_some() && self.media_fps.is_finite() && self.media_fps > 0.0).then_some(self.media_fps) };
-        let active_mode_label = self.tr(if is_ui_rate { "UI render rate" } else { "Media frame rate" });
+        let active_mode_label = self.tr(if is_ui_rate { "Screen render rate" } else { "Media frame rate" });
         let formatted = rate.map(|rate| format!("{rate:.2} fps")).unwrap_or_else(|| "— fps".into());
         let ui_rate = self.frame_rate_tracker.live_fps().map(|rate| format!("{rate:.2} fps")).unwrap_or_else(|| "—".into());
         let media_rate = if self.current_video_path.is_some() && self.media_fps > 0.0 { format!("{:.2} fps", self.media_fps) } else { "—".into() };
@@ -5445,7 +5450,7 @@ impl PealayerApp {
             String::new()
         };
         let tooltip = format!("{}: {}\n{}: {}\n{}: {}{}\n{}", self.tr("Media frame rate"), media_rate,
-            self.tr("UI render rate"), ui_rate, self.tr("Active mode"), active_mode_label, render_stat,
+            self.tr("Screen render rate"), ui_rate, self.tr("Active mode"), active_mode_label, render_stat,
             self.tr("Click to switch frame rate source"));
         Some(FpsDisplayInfo { value: rate.unwrap_or(0.0), formatted, active_mode_label, tooltip, is_ui_rate })
     }
@@ -8863,6 +8868,7 @@ fn web_hardware_details(
         "folders": capabilities.channel_folders,
         "active_relays": capabilities.active_relays,
         "telemetry": {
+            "hot": capabilities.telemetry.hot,
             "supply_mv": capabilities.telemetry.supply_mv,
             "bus_mv": capabilities.telemetry.bus_mv,
             "current_ma": capabilities.telemetry.current_ma,
@@ -10811,7 +10817,7 @@ pub(crate) mod tests {
         let info_active = display_active.unwrap();
         assert_eq!(info_active.is_ui_rate, true, "Explicit UI mode displays measured render cadence");
         assert!(info_active.formatted.contains("60"), "Expected UI rate ~60 fps, got {}", info_active.formatted);
-        assert!(info_active.tooltip.contains("UI render rate"));
+        assert!(info_active.tooltip.contains("Screen render rate"));
         assert!(info_active.tooltip.contains("23.98"));
     }
 

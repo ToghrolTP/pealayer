@@ -595,10 +595,35 @@ impl Default for HardwareKeyBinding {
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum StatusBarFpsMode {
-    #[default]
     Media,
     Ui,
+    #[default]
+    Auto,
 }
+
+impl StatusBarFpsMode {
+    pub fn next(self) -> Self {
+        match self { Self::Media => Self::Ui, Self::Ui => Self::Auto, Self::Auto => Self::Media }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum StatusBarWidget {
+    Fps, Hot, Estop, Connection, StatusRgb, Voltage, Current, Temperature,
+    Warnings, Timeline, Progress, Chart, Message, Workspace,
+}
+
+impl StatusBarWidget {
+    pub const COUNT: usize = 14;
+    pub const ALL: [Self; Self::COUNT] = [Self::Fps, Self::Hot, Self::Estop, Self::Connection, Self::StatusRgb,
+        Self::Voltage, Self::Current, Self::Temperature, Self::Warnings, Self::Timeline,
+        Self::Progress, Self::Chart, Self::Message, Self::Workspace];
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StatusChartMetric { #[default] Voltage, Current, Temperature }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
@@ -610,19 +635,76 @@ pub struct StatusBarConfig {
     pub status_rgb: bool,
     pub warnings: bool,
     pub workspace: bool,
+    pub voltage: bool,
+    pub current: bool,
+    pub temperature: bool,
+    pub hot: bool,
+    pub estop: bool,
+    pub timeline: bool,
+    pub message: bool,
+    pub progress: bool,
+    pub chart: bool,
+    pub chart_metric: StatusChartMetric,
+    pub order: [StatusBarWidget; StatusBarWidget::COUNT],
 }
 
 impl Default for StatusBarConfig {
     fn default() -> Self {
         Self {
             media_rate: true,
-            fps_mode: StatusBarFpsMode::Media,
+            fps_mode: StatusBarFpsMode::Auto,
             hardware: true,
             telemetry: true,
             status_rgb: true,
             warnings: true,
             workspace: true,
+            voltage: true, current: true, temperature: true, hot: true, estop: true,
+            timeline: true, message: true, progress: true, chart: false,
+            chart_metric: StatusChartMetric::Voltage, order: StatusBarWidget::ALL,
         }
+    }
+}
+
+impl StatusBarConfig {
+    pub fn ordered(&self) -> Vec<StatusBarWidget> {
+        let mut result = Vec::with_capacity(StatusBarWidget::COUNT);
+        for item in self.order.into_iter().chain(StatusBarWidget::ALL) {
+            if !result.contains(&item) { result.push(item); }
+        }
+        result
+    }
+
+    pub fn visible(&self, item: StatusBarWidget) -> bool {
+        use StatusBarWidget::*;
+        match item {
+            Fps => self.media_rate, Connection => self.hardware, StatusRgb => self.status_rgb,
+            Voltage => self.telemetry && self.voltage, Current => self.telemetry && self.current,
+            Temperature => self.telemetry && self.temperature, Hot => self.hot, Estop => self.estop,
+            Warnings => self.warnings, Timeline => self.timeline, Progress => self.progress,
+            Chart => self.chart, Message => self.message, Workspace => self.workspace,
+        }
+    }
+
+    pub fn set_visible(&mut self, item: StatusBarWidget, visible: bool) {
+        use StatusBarWidget::*;
+        if visible && matches!(item, Voltage | Current | Temperature) { self.telemetry = true; }
+        *match item {
+            Fps => &mut self.media_rate, Connection => &mut self.hardware, StatusRgb => &mut self.status_rgb,
+            Voltage => &mut self.voltage, Current => &mut self.current, Temperature => &mut self.temperature,
+            Hot => &mut self.hot, Estop => &mut self.estop, Warnings => &mut self.warnings, Timeline => &mut self.timeline,
+            Progress => &mut self.progress, Chart => &mut self.chart, Message => &mut self.message,
+            Workspace => &mut self.workspace,
+        } = visible;
+    }
+
+    pub fn reorder(&mut self, moved: StatusBarWidget, target: StatusBarWidget, after: bool) -> bool {
+        if moved == target { return false; }
+        let mut order = self.ordered();
+        order.retain(|item| *item != moved);
+        let index = order.iter().position(|item| *item == target).expect("known widget") + usize::from(after);
+        order.insert(index, moved);
+        let next: [StatusBarWidget; StatusBarWidget::COUNT] = order.try_into().expect("complete widget set");
+        if next == self.order { false } else { self.order = next; true }
     }
 }
 

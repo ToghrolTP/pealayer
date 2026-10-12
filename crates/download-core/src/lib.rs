@@ -141,6 +141,17 @@ pub struct Snapshot {
     pub aria2_endpoint: Option<String>,
 }
 
+/// Narrow RAM-only activity projection. Unlike the full Downloads view it does
+/// not probe engines, copy completed jobs, URLs, or sample/history buffers.
+#[derive(Clone, Debug, Serialize)]
+pub struct JobProgress {
+    pub id: String,
+    pub state: State,
+    pub downloaded: u64,
+    pub total: Option<u64>,
+    pub speed: u64,
+}
+
 struct Inner {
     jobs: Vec<Job>,
     root: PathBuf,
@@ -328,6 +339,13 @@ impl Manager {
             });
         }
         Ok(manager)
+    }
+
+    pub fn active_progress(&self) -> Vec<JobProgress> {
+        let inner = self.0.lock().unwrap_or_else(|error| error.into_inner());
+        inner.jobs.iter().filter(|job| matches!(job.state, State::Connecting | State::Downloading))
+            .take(16).map(|job| JobProgress { id: job.id.clone(), state: job.state,
+                downloaded: job.downloaded, total: job.total, speed: job.speed }).collect()
     }
 
     pub fn snapshot(&self) -> Snapshot {
@@ -1226,6 +1244,16 @@ mod tests {
         assert!(!json.contains("proxy-secret"));
         assert!(!json.contains("proxy-user"));
         assert!(json.contains("example.test"));
+        assert!(manager.active_progress().is_empty(), "paused jobs are not active transfers");
+        {
+            let mut inner = manager.0.lock().unwrap();
+            inner.jobs[0].state = State::Downloading;
+            inner.jobs[0].downloaded = 12;
+            inner.jobs[0].total = Some(24);
+        }
+        let progress = manager.active_progress();
+        assert_eq!(progress.len(), 1);
+        assert_eq!((progress[0].downloaded, progress[0].total), (12, Some(24)));
     }
 
     #[test]

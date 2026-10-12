@@ -37,6 +37,7 @@ export interface PlayerState {
   duration?: number;
   media_fps?: number;
   ui_fps?: number | null;
+  status_operations?: Array<{ id: string; source: string; label: string; phase: string; fraction: number | null; detail: string }>;
   current_video?: string | null;
   media_tracks?: Array<{
     id: number;

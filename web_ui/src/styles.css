@@ -923,7 +923,23 @@ html[data-motion="disabled"] *, html[data-motion="disabled"] *::before, html[dat
 .app-content .ant-table, .app-content .ant-table-container, .app-content .ant-table-cell { background: transparent !important; border-color: var(--line) !important; }
 .app-content .ant-input, .app-content .ant-input-affix-wrapper { background: var(--surface-0) !important; border-color: var(--line) !important; color: var(--text) !important; }
 .app-content .ant-btn-default { background: var(--surface-2); border-color: var(--line); color: var(--text); }
-.app-statusbar { flex: 0 0 27px; min-width: 0; height: 27px; padding: 0 12px; display: flex; align-items: center; gap: 14px; overflow: hidden; border-top: 1px solid var(--line); background: color-mix(in srgb, var(--surface-0) 96%, transparent); color: var(--subtle); font-size: 10px; user-select: none; }
+.app-statusbar { flex: 0 0 27px; min-width: 0; height: 27px; padding: 0 12px; display: flex; align-items: center; gap: 5px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; border-top: 1px solid var(--line); background: color-mix(in srgb, var(--surface-0) 96%, transparent); color: var(--subtle); font-size: 11px; user-select: none; }
+.app-statusbar::-webkit-scrollbar { display: none; }
+.app-statusbar > .status-widget { flex: 0 0 auto; position: relative; height: 22px; padding-inline: 3px; cursor: grab; }
+.status-widget--voltage, .status-widget--current, .status-widget--temperature { font: 11px ui-monospace, SFMono-Regular, Consolas, monospace; }
+.status-widget--hot, .status-widget--estop { color: var(--red); }
+.status-widget--warnings { color: var(--amber); max-width: 180px; }
+.status-widget--message { max-width: 230px; }
+.status-widget.is-dragging { opacity: .45; }
+.status-widget.is-drop-before::before, .status-widget.is-drop-after::after { content: ''; position: absolute; inset-block: 1px; width: 2px; background: var(--accent); }
+.status-widget.is-drop-before::before { inset-inline-start: 0; }
+.status-widget.is-drop-after::after { inset-inline-end: 0; }
+.status-connection-dot, .status-rgb-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--red); flex: 0 0 8px; }
+.status-connection-dot.is-online { background: var(--green); }
+.status-chart { color: var(--accent); }
+.status-progress { position: relative; display: inline-flex; align-items: center; height: 22px; width: 168px; overflow: hidden; white-space: nowrap; }
+.status-progress > i { position: absolute; inset-inline-start: 0; bottom: 0; height: 3px; background: var(--accent); }
+.status-progress > i.is-indeterminate { background: repeating-linear-gradient(90deg, var(--accent) 0 8px, transparent 8px 12px); opacity: .6; }
 .app-statusbar > span { min-width: 0; display: inline-flex; align-items: center; gap: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .app-statusbar__fps { flex: 0 0 100px; min-width: 100px; height: 23px; padding: 0 4px; display: inline-flex; align-items: center; gap: 5px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: inherit; font: inherit; font-variant-numeric: tabular-nums; box-shadow: none; cursor: pointer; }
 .app-statusbar__fps:hover, .app-statusbar__fps:focus-visible { border-color: var(--line); background: var(--surface-1); box-shadow: none; outline: none; }
@@ -936,7 +952,7 @@ html[data-motion="disabled"] *, html[data-motion="disabled"] *::before, html[dat
 .app-statusbar__rgb i { width: 9px; height: 9px; flex: 0 0 9px; border: 1px solid color-mix(in srgb, white 28%, var(--line)); border-radius: 50%; box-shadow: 0 0 8px currentColor; }
 .app-statusbar__warning, .app-statusbar__estop { color: var(--red); }
 .app-statusbar__message { color: var(--amber); }
-.app-statusbar__workspace { margin-inline-start: auto; color: var(--muted); }
+.app-statusbar__workspace { color: var(--muted); }
 
 @media (max-width: 1100px) {
   .studio-suite { grid-template-columns: 300px minmax(430px, 1fr); }
@@ -1044,9 +1060,7 @@ html[data-motion="disabled"] *, html[data-motion="disabled"] *::before, html[dat
   .surface-page__header { align-items: flex-start; flex-direction: column; }
   .effect-editor__identity, .effect-editor__program, .effect-step-grid { grid-template-columns: 1fr; }
   .effect-editor__wide { grid-column: auto; }
-  .app-statusbar { flex-basis: 24px; height: 24px; gap: 10px; padding-inline: 8px; }
-  .app-statusbar { gap: 10px; }
-  .app-statusbar__rgb, .app-statusbar__message, .app-statusbar__warning { display: none !important; }
+  .app-statusbar { flex-basis: 24px; height: 24px; gap: 5px; padding-inline: 8px; }
   .media-osd { max-width: 88%; font-size: 15px; }
 }
 
