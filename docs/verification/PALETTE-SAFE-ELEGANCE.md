@@ -16,9 +16,10 @@ Based on merged external-mpv and UI-smoothness work, not an older UI branch.
   paused, playing, buffering, waiting or connection-error state. It no longer
   claims a connected player is necessarily playing. Errors retain their actual
   details; there is no synthetic connection progress.
-- Preferences' unsaved-change dialog retains its existing Elegance Modal, with
-  consistently sized icon-labelled actions. Save follows the user's accent;
-  Discard remains semantic red and Cancel neutral.
+- Preferences' unsaved-change dialog uses Pealayer's shared confirmation chrome
+  and fixed-square close control, with its existing Elegance footer actions.
+  Save follows the user's accent; Discard remains semantic red and Cancel neutral.
+  [Close-control contract](square-modal-close.md) explains the text-metric fix.
 
 ## Palette and live theme contract
 

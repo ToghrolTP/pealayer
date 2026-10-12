@@ -4765,9 +4765,7 @@ fn draw_timeline_cue_dialog(app: &mut PealayerApp, context: &egui::Context) {
                     ui.visuals().selection.bg_fill);
                 ui.add(egui::Label::new(egui::RichText::new(&heading).strong().size(16.0)).truncate());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    dismiss |= ui.add_sized([32.0, 32.0], egui::Button::new(
-                        egui::RichText::new("×").size(22.0)).frame(false))
-                        .on_hover_text(&close_help).clicked();
+                    dismiss |= crate::ui::dialog::close_button(ui, &close_help).clicked();
                 });
             });
             ui.add_space(6.0);
@@ -4789,22 +4787,20 @@ fn draw_timeline_cue_dialog(app: &mut PealayerApp, context: &egui::Context) {
         }
     }
     if session.confirm_dismiss && !accept && !discard {
-        let mut confirm_open = true;
         let keep_editing = app.tr("Keep editing");
         let save_close = app.tr("Save and close");
         let confirmation = app.tr("Discard changes?");
         let message = app.tr("This cue has unsaved changes. Save them or discard them before closing.");
-        elegance::Modal::new("cue-confirm-dismiss", &mut confirm_open)
-            .heading(confirmation).alert(true).max_width(440.0)
-            .close_on_backdrop(false)
-            .footer(|ui| {
+        let confirm = crate::ui::dialog::confirmation_modal(context, egui::Id::new("cue-confirm-dismiss"),
+            &confirmation, crate::ui::icons::WARNING, &message, &close_help, |ui| {
                 accept = ui.add(elegance::Button::new(save_close)).clicked();
                 discard = ui.add(elegance::Button::new(&discard_label).outline()).clicked();
                 if ui.add(elegance::Button::new(keep_editing).outline()).clicked() {
                     session.confirm_dismiss = false;
                 }
-            }).show(context, |ui| { ui.label(message); });
-        if !confirm_open { session.confirm_dismiss = false; }
+                accept || discard || !session.confirm_dismiss
+            });
+        if confirm.dismissed { session.confirm_dismiss = false; }
     }
     if state.discard_on_cancel
         && !app.timeline.instances.iter().any(|instance| instance.id == instance_id)

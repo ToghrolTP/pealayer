@@ -190,9 +190,7 @@ pub fn draw_warning(app: &mut crate::app::PealayerApp, ctx: &eframe::egui::Conte
             ui.add(egui::Label::new(egui::RichText::new(format!("{} {heading}",
                 crate::ui::icons::WARNING)).heading()).truncate());
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                dismiss |= ui.add_sized([32.0, 32.0], egui::Button::new(
-                    egui::RichText::new("×").size(22.0)).frame(false))
-                    .on_hover_text(&close_label).clicked();
+                dismiss |= crate::ui::dialog::close_button(ui, &close_label).clicked();
             });
         });
         if owner {
