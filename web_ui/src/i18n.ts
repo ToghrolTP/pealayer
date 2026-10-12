@@ -3,6 +3,12 @@ export type UiLocale = 'en' | 'fa';
 const fa: Record<string, string> = {
   'Dismiss': 'بستن پیام',
   'Publishing authority': 'اختیار انتشار',
+  'Browse remote folder': 'مرور پوشهٔ راه دور',
+  'Connect to another Pealayer': 'اتصال به Pealayer دیگر',
+  'Live connection': 'اتصال زنده',
+  'Polling connection': 'اتصال دوره‌ای',
+  'WebSocket endpoint': 'نقطهٔ پایانی وب‌سوکت',
+  'Use this instance': 'استفاده از این نمونه',
   'Close this prompt without changing publishing authority or pending requests.': 'این پیام را بدون تغییر اختیار انتشار یا درخواست‌های در انتظار ببندید.',
   'Frame rate': 'نرخ فریم',
   'Media': 'رسانه',
