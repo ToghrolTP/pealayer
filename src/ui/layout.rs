@@ -98,12 +98,13 @@ fn hardware_monitor_scroll<R>(
     output
 }
 
-pub(crate) fn left_aligned_click_label(
+pub(crate) fn aligned_click_label(
     ui: &mut egui::Ui,
     text: &str,
     width: f32,
     height: f32,
     size: f32,
+    align: egui::Align,
 ) -> egui::Response {
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(width.max(1.0), height), egui::Sense::click());
@@ -112,8 +113,14 @@ pub(crate) fn left_aligned_click_label(
         egui::FontId::proportional(size),
         ui.visuals().strong_text_color(),
     );
-    let rtl = crate::ui::i18n::input_alignment(ui.layout().main_dir == egui::Direction::RightToLeft, text) == egui::Align::Max;
-    let x = if rtl { rect.right() - 4.0 - galley.size().x } else { rect.left() + 4.0 };
+    // Trailing actions use a reverse layout even in an English/LTR UI. Text
+    // alignment must come from the application/logical caption, never that
+    // local button-allocation direction. Match the inline editor's 4px inset.
+    let x = match align {
+        egui::Align::Min => rect.left() + 4.0,
+        egui::Align::Center => rect.center().x - galley.size().x * 0.5,
+        egui::Align::Max => rect.right() - 4.0 - galley.size().x,
+    };
     ui.painter()
         .with_clip_rect(rect.intersect(ui.clip_rect()))
         .galley(
@@ -1257,8 +1264,9 @@ fn effects_library_toolbar(app: &mut PealayerApp, ui: &mut egui::Ui, width: f32)
         if ui.button(crate::ui::icons::SPEAKER_HIGH).on_hover_text(app.tr("New audio effect")).clicked() { app.begin_audio_effect(); }
         let title = app.tr("Effects Library");
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            left_aligned_click_label(ui, &title, ui.available_width().max(1.0),
-                ui.spacing().interact_size.y, egui::TextStyle::Body.resolve(ui.style()).size)
+            aligned_click_label(ui, &title, ui.available_width().max(1.0),
+                ui.spacing().interact_size.y, egui::TextStyle::Body.resolve(ui.style()).size,
+                crate::ui::i18n::input_alignment(app.rtl, &title))
                 .on_hover_text(title);
         });
     });
@@ -7369,7 +7377,8 @@ fn draw_compact_control_card(
                         8.0
                     };
                     let response = hardware_header_widget(ui, &control.key, "caption", |ui| {
-                        left_aligned_click_label(ui, &title, (ui.available_width() - reserved).max(48.0), 24.0, 13.0)
+                        aligned_click_label(ui, &title, (ui.available_width() - reserved).max(48.0), 24.0, 13.0,
+                            crate::ui::i18n::input_alignment(app.rtl, &control.name))
                     });
                     if response.clicked() {
                         ui.data_mut(|data| {
@@ -7698,12 +7707,13 @@ fn draw_control_card(
                                     }
                                     let title =
                                         hardware_header_widget(ui, &control.key, "caption", |ui| {
-                                            left_aligned_click_label(
+                                            aligned_click_label(
                                                 ui,
                                                 &title_text,
                                                 ui.available_width().max(52.0),
                                                 24.0,
                                                 13.0,
+                                                crate::ui::i18n::input_alignment(app.rtl, &control.name),
                                             )
                                         });
                                     if title.clicked() {
@@ -8880,6 +8890,66 @@ mod timeline_row_tests {
 
     fn discard_ui_output(mut output: egui::FullOutput) {
         output.textures_delta.clear();
+    }
+
+    #[test]
+    fn caption_text_alignment_is_independent_of_trailing_action_layout() {
+        for reverse_actions in [false, true] {
+            for (logical, rtl_ui) in [("Seat Left",false),("Seat Right",true),("صندلی چپ",false),("Seat · صندلی",false)] {
+                let context = egui::Context::default();
+                let rect = std::cell::Cell::new(egui::Rect::NOTHING);
+                let align = crate::ui::i18n::input_alignment(rtl_ui,logical);
+                let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+                    ui.set_width(420.0);
+                    ui.with_layout(if reverse_actions {egui::Layout::right_to_left(egui::Align::Center)}
+                        else {egui::Layout::left_to_right(egui::Align::Center)}, |ui| {
+                        let _ = ui.button("Rename");
+                        rect.set(aligned_click_label(ui,logical,250.0,24.0,13.0,align).rect);
+                    });
+                });
+                let text = output.shapes.iter().find_map(|shape| match &shape.shape {
+                    egui::epaint::Shape::Text(text) if text.galley.job.text == logical => Some(text),
+                    _ => None,
+                }).expect("Caption must be painted");
+                let expected_x = if align == egui::Align::Max {
+                    rect.get().right()-4.0-text.galley.size().x
+                } else {rect.get().left()+4.0};
+                assert!((text.pos.x-expected_x).abs()<0.1,"reverse_actions={reverse_actions}, rtl_ui={rtl_ui}, text={logical}");
+                assert!((text.pos.y+text.galley.size().y*0.5-rect.get().center().y).abs()<0.1);
+                output.textures_delta.clear();
+            }
+        }
+    }
+
+    #[test]
+    fn actual_hardware_seat_captions_stay_at_start_in_both_card_modes() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.engine_handle = crate::four_d::engine::memory_only_test_engine();
+        app.rtl = false;
+        app.language = crate::config::AppLanguage::English;
+        let capabilities = crate::four_d::controller::HardwareCapabilities::default();
+        for compact in [false,true] {
+            app.compact_hardware_controls = compact;
+            for width in [260.0,480.0] {
+                for (key,name) in [("seat.a","Seat Left"),("seat.b","Seat Right")] {
+                    let context = egui::Context::default();
+                    let control = crate::four_d::controller::HardwareControl {
+                        key:key.into(),kind:"seat".into(),name:name.into(),..Default::default()
+                    };
+                    let mut output = context.run_ui(egui::RawInput {
+                        screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(width,300.0))),
+                        ..Default::default()
+                    }, |ui| {draw_control_card(&mut app,ui,&capabilities,&control);});
+                    let text = output.shapes.iter().find_map(|shape| match &shape.shape {
+                        egui::epaint::Shape::Text(text) if text.galley.job.text == name => Some(text),
+                        _ => None,
+                    }).expect("Real seat card must paint its caption");
+                    assert!(text.pos.x<width*0.5,"{name} moved to trailing edge: compact={compact}, width={width}, x={}",text.pos.x);
+                    output.textures_delta.clear();
+                }
+            }
+        }
     }
 
     #[test]
@@ -10936,7 +11006,7 @@ mod timeline_row_tests {
                         ui.set_width(280.0);
                         let caption = |ui: &mut egui::Ui, width| {
                             let response = hardware_header_widget(ui, "seat.a", "caption", |ui| {
-                                left_aligned_click_label(ui, "Seat A", width, 24.0, 13.0)
+                                aligned_click_label(ui, "Seat A", width, 24.0, 13.0, egui::Align::Min)
                             });
                             caption_rect.set(response.rect);
                             if response.clicked() {
