@@ -813,7 +813,13 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
                 "media_keys_enabled", "input", "Keyboard shortcuts",
                 "Respond to keyboard media controls",
             );
-            control.description = Some("Play, pause, stop, next/previous and seek through the OS media session, even in the background. Independent of in-app shortcuts and hardware hotkeys.");
+            control.description = Some("Play, pause, stop, next/previous and seek through the OS media session. Independent of in-app shortcuts and hardware hotkeys.");
+            control
+        },
+        {
+            let mut control=PreferenceControl::boolean("media_keys_background_enabled","input","Keyboard shortcuts",
+                "Allow media controls while Pealayer is in the background");
+            control.description=Some("Keep keyboard media buttons and OS transport controls working when another window has focus, including when Pealayer is minimized. Requires Respond to keyboard media controls; does not override the OS choice of media player.");
             control
         },
         PreferenceControl::text("application_shortcuts.fullscreen", "input", "Application shortcuts", "Toggle fullscreen", "F11 (empty disables)"),
@@ -1228,7 +1234,7 @@ fn semantic_preference_icon(control: &PreferenceControl) -> &'static str {
         key if key.starts_with("subtitle_") => "subtitles",
         key if key.starts_with("timeline_") => "waveform",
         key if key.starts_with("web_") => "globe",
-        key if key.starts_with("keyboard_") || key.starts_with("shortcut_") => "keyboard",
+        key if key.starts_with("keyboard_") || key.starts_with("shortcut_") || key.starts_with("media_keys_") => "keyboard",
         _ => match control.kind {
             PreferenceControlKind::Accent | PreferenceControlKind::Color => "palette",
             PreferenceControlKind::Boolean => "check-square",
@@ -1799,12 +1805,14 @@ mod tests {
         let config = crate::config::AppConfig::default();
         assert!(config.keyboard_shortcuts_enabled);
         assert!(config.media_keys_enabled);
+        assert!(config.media_keys_background_enabled);
         assert!(config.global_hardware_hotkeys_enabled);
 
         let controls = preference_controls(&config);
         for key in [
             "keyboard_shortcuts_enabled",
             "media_keys_enabled",
+            "media_keys_background_enabled",
             "global_hardware_hotkeys_enabled",
         ] {
             let control = controls
@@ -1835,6 +1843,20 @@ mod tests {
         assert_eq!(contract.values["media_keys_enabled"], false);
         assert!(old.apply_patch(&serde_json::json!({"media_keys_enabled": "off"})).is_err());
         assert!(disabled.apply_patch(&serde_json::json!({"media_keys_enabled": true})).unwrap().media_keys_enabled);
+    }
+
+    #[test]
+    fn background_media_control_scope_is_persistent_shared_and_independent() {
+        let original=crate::config::AppConfig::default();
+        let edited=original.apply_patch(&serde_json::json!({"media_keys_background_enabled":false})).unwrap();
+        assert!(edited.media_keys_enabled && edited.keyboard_shortcuts_enabled && edited.global_hardware_hotkeys_enabled);
+        assert!(!edited.media_keys_background_enabled);
+        let restored:crate::config::AppConfig=serde_json::from_value(serde_json::to_value(&edited).unwrap()).unwrap();
+        assert_eq!(restored,edited);
+        let contract=preferences_contract(&edited);
+        assert_eq!(contract.defaults["media_keys_background_enabled"],true);
+        assert_eq!(contract.values["media_keys_background_enabled"],false);
+        assert!(original.apply_patch(&serde_json::json!({"media_keys_background_enabled":"yes"})).is_err());
     }
 
     #[test]

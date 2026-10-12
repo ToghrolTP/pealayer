@@ -817,6 +817,10 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
             "نمایش خودکار زمان با واحدهای خوانا مانند ثانیه، دقیقه و ساعت؛ برای نمایش همیشگی میلی‌ثانیه غیرفعال کنید."
         }
         "Keyboard shortcuts" => "میان‌برهای صفحه‌کلید",
+        "Respond to keyboard media controls" => "پاسخ به دکمه‌های رسانه‌ای صفحه‌کلید",
+        "Allow media controls while Pealayer is in the background" => "فعال‌سازی دکمه‌های رسانه‌ای هنگامی که پی‌لیر در پس‌زمینه است",
+        "Play, pause, stop, next/previous and seek through the OS media session. Independent of in-app shortcuts and hardware hotkeys." => "پخش، مکث، توقف، بعدی/قبلی و جابه‌جایی از طریق کنترل رسانه‌ای سیستم‌عامل؛ مستقل از میان‌برهای داخل برنامه و کلیدهای سخت‌افزاری.",
+        "Keep keyboard media buttons and OS transport controls working when another window has focus, including when Pealayer is minimized. Requires Respond to keyboard media controls; does not override the OS choice of media player." => "دکمه‌های رسانه‌ای صفحه‌کلید و سیستم‌عامل هنگام فعال‌بودن پنجره‌ای دیگر یا کوچک‌شدن پی‌لیر کار کنند. گزینهٔ پاسخ به دکمه‌های رسانه‌ای باید فعال باشد؛ انتخاب پخش‌کننده توسط سیستم‌عامل تغییر نمی‌کند.",
         "Enable in-app keyboard shortcuts and hardware bindings" => {
             "فعال‌سازی میان‌برها و کلیدهای سخت‌افزاری داخل برنامه"
         }

@@ -1075,6 +1075,7 @@ pub struct AppConfig {
     pub keyboard_shortcuts_enabled: bool,
     /// Accept OS media-key/session commands, including while in the background.
     pub media_keys_enabled: bool,
+    pub media_keys_background_enabled: bool,
     pub application_shortcuts: crate::application_shortcuts::ApplicationShortcuts,
     /// Allows bindings explicitly marked global to be registered with the OS
     /// and invoked while another application has focus.
@@ -1261,6 +1262,7 @@ impl Default for AppConfig {
             hardware_actions_on_press: true,
             keyboard_shortcuts_enabled: true,
             media_keys_enabled: true,
+            media_keys_background_enabled: true,
             application_shortcuts: crate::application_shortcuts::ApplicationShortcuts::default(),
             global_hardware_hotkeys_enabled: true,
             hardware_key_bindings: Vec::new(),

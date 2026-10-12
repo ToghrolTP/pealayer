@@ -199,14 +199,34 @@ static THUMBNAIL_TOOLBAR_LAST_ERROR: Mutex<Option<String>> = Mutex::new(None);
 static THUMBNAIL_TOOLBAR_ICONS: Mutex<Vec<isize>> = Mutex::new(Vec::new());
 
 fn queue_shell_command(command: u32) {
-    queue_shell_selection(ShellCommand { id: command, board_target: None });
+    queue_shell_selection(ShellCommand { id: command, board_target: None, media_key: false });
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShellCommand {
     pub id: u32,
     pub board_target: Option<super::tray_board::TrayBoardTarget>,
+    /// WM_APPCOMMAND, not an explicitly targeted tray/taskbar action.
+    pub media_key: bool,
 }
+impl ShellCommand {
+    pub(crate) fn allowed_under_media_scope(&self,allowed:bool)->bool {!self.media_key || allowed}
+}
+
+#[cfg(target_os="windows")]
+pub fn is_application_foreground()->bool {
+    use windows::Win32::System::Threading::GetCurrentProcessId;
+    use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow,GetWindowThreadProcessId};
+    unsafe {
+        let hwnd=GetForegroundWindow();
+        if hwnd.0.is_null(){return false;}
+        let mut pid=0;
+        GetWindowThreadProcessId(hwnd,Some(&mut pid));
+        pid!=0 && pid==GetCurrentProcessId()
+    }
+}
+#[cfg(not(target_os="windows"))]
+pub fn is_application_foreground()->bool {false}
 
 fn queue_shell_selection(command: ShellCommand) {
     if let Ok(mut commands) = SHELL_COMMANDS.lock() {
@@ -2237,7 +2257,7 @@ unsafe extern "system" fn shell_window_proc(
             SHELL_MEDIA_KEYS_ENABLED.load(Ordering::Relaxed),
             SHELL_HAS_MEDIA.load(Ordering::Relaxed),
         ) {
-            queue_shell_command(command);
+            queue_shell_selection(ShellCommand {id:command,board_target:None,media_key:true});
             return LRESULT(1);
         }
     }
@@ -2348,6 +2368,7 @@ pub fn shell_command_diagnostics() -> serde_json::Value {
                 serde_json::json!({"command":item.action as u32,"label":item.label,"enabled":item.enabled})
             ).collect::<Vec<_>>()}))),
         "has_media": SHELL_HAS_MEDIA.load(Ordering::Relaxed),
+        "media_keys_allowed": SHELL_MEDIA_KEYS_ENABLED.load(Ordering::Relaxed),
         "paused": SHELL_PAUSED.load(Ordering::Relaxed),
         "muted": SHELL_MUTED.load(Ordering::Relaxed),
         "thumbnail_toolbar": {
@@ -2886,7 +2907,7 @@ pub fn show_tray_popup_menu(
         let id = cmd.0 as u32;
         let board_target = super::tray_board::BoardTrayAction::from_command(id)
             .and_then(|_| board_menu.map(|menu| menu.target));
-        Some(ShellCommand { id, board_target })
+        Some(ShellCommand { id, board_target, media_key: false })
     }
 }
 
@@ -2930,6 +2951,14 @@ pub fn sync_windows_jump_list_with_options(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn media_scope_does_not_disable_explicit_tray_or_taskbar_buttons() {
+        let key=super::ShellCommand {id:super::THUMB_BUTTON_PLAYPAUSE,board_target:None,media_key:true};
+        let click=super::ShellCommand {id:super::THUMB_BUTTON_PLAYPAUSE,board_target:None,media_key:false};
+        assert!(!key.allowed_under_media_scope(false));
+        assert!(key.allowed_under_media_scope(true));
+        assert!(click.allowed_under_media_scope(false));
+    }
     use super::*;
 
     #[test]

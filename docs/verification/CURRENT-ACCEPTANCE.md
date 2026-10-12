@@ -10,6 +10,11 @@ statements are not the present product state.
 
 ## Delivered source and deployment
 
+- Native/Web Preferences expose an independent background media-button scope,
+  preserving the one OS session and rechecking queued transport commands.
+  [Policy and regression coverage](background-media-controls.md) retain live
+  keyboard/minimize, OS-routing and local/Cafe installation acceptance gates.
+
 - Simple and Program Monitor action buttons share context menus, saved order,
   start/end placement and hide/restore, with safe primary drag, Escape and
   contextual transport. [Customization contract and regression coverage](control-bar-customization.md)

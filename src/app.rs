@@ -787,6 +787,7 @@ pub struct PealayerApp {
     pub(crate) hardware_control_pwm_percent: f64,
     pub(crate) keyboard_shortcuts_enabled: bool,
     pub(crate) media_keys_enabled: bool,
+    pub(crate) media_keys_background_enabled: bool,
     pub(crate) application_shortcuts: crate::application_shortcuts::ApplicationShortcuts,
     pub(crate) global_hardware_hotkeys_enabled: bool,
     pub(crate) hardware_key_bindings: Vec<crate::config::HardwareKeyBinding>,
@@ -1147,11 +1148,11 @@ impl eframe::App for PealayerApp {
             inbound_commands.push(("Web UI", command));
         }
         while let Ok(event) = self.media_cmd_rx.try_recv() {
-            if self.media_keys_enabled
-                && let Some(command) = crate::platform::media_controls::map_media_control_event(
+            if let Some(command) = crate::platform::media_controls::map_media_control_event(
                     event,
                     self.quick_seek_seconds,
                 )
+                && self.media_control_command_allowed(ctx,&command)
             {
                 inbound_commands.push(("Media controls", command));
             }
@@ -1161,9 +1162,9 @@ impl eframe::App for PealayerApp {
             delivery.acknowledge_applied();
         }
         for (source, command) in inbound_commands {
-            // A preceding IPC/config command can disable media keys during
-            // this same frame. Do not apply already-queued OS actions then.
-            if source == "Media controls" && !self.media_keys_enabled {
+            // A preceding IPC/config command can change either media permission
+            // during this frame. Revalidate scope before queued OS actions.
+            if source == "Media controls" && !self.media_control_command_allowed(ctx,&command) {
                 continue;
             }
             self.apply_interop_command(ctx, command, source);
@@ -1565,6 +1566,8 @@ impl eframe::App for PealayerApp {
                 current_chapter_index,
                 seekbar_markers: self.seekbar_markers.clone(),
                 control_bars: self.control_bars,
+                media_keys_enabled: self.media_keys_enabled,
+                media_keys_background_enabled: self.media_keys_background_enabled,
                 timeline_keyframes: self.timeline.keyframes.clone(),
                 seek_pending: self.is_scrubbing || self.pending_scrub_commit.is_some(),
                 settled_seek_revision: self.settled_seek_revision,
@@ -2304,6 +2307,21 @@ fn board_settings_command(
 }
 
 impl PealayerApp {
+    fn media_controls_allowed(&self,ctx:&egui::Context)->bool {
+        if !self.media_keys_enabled {return false;}
+        if self.media_keys_background_enabled {return true;}
+        let foreground=if self.web_only {false}
+            else if cfg!(target_os="windows") && self.window_handle.unwrap_or_else(crate::platform::windows::get_registered_hwnd)!=0 {
+                crate::platform::windows::is_application_foreground()
+            }else{ctx.input(|input|input.raw.viewports.values().any(|viewport|viewport.focused==Some(true)))};
+        crate::platform::media_controls::media_controls_allowed(self.media_keys_enabled,self.media_keys_background_enabled,foreground)
+    }
+    fn media_control_command_allowed(&self,ctx:&egui::Context,command:&InteropCommand)->bool {
+        // Explicit OS-session window/file requests must still be able to raise
+        // a foreground-only player. They are not keyboard transport buttons.
+        if matches!(command,InteropCommand::Activate|InteropCommand::Quit|InteropCommand::Open{..}) {self.media_keys_enabled}
+        else{self.media_controls_allowed(ctx)}
+    }
     pub(crate) fn process_keyboard_shortcuts(&mut self, ctx: &egui::Context) {
         if !self.keyboard_shortcuts_enabled {
             return;
@@ -2850,9 +2868,10 @@ impl PealayerApp {
             self.is_muted,
             self.was_fullscreen,
             self.current_video_path.is_some(),
-            self.media_keys_enabled,
+            self.media_controls_allowed(ctx),
         );
         while let Some(command) = crate::platform::windows::take_shell_command() {
+            if !command.allowed_under_media_scope(self.media_controls_allowed(ctx)) {continue;}
             if let Some(action) = crate::platform::tray_board::BoardTrayAction::from_command(command.id) {
                 if let Err(error) = self.process_board_tray_action(ctx, action, command.board_target.as_ref()) {
                     self.set_osd(error.clone());
@@ -6991,6 +7010,7 @@ impl PealayerApp {
         cfg.hardware_actions_on_press = self.hardware_actions_on_press;
         cfg.keyboard_shortcuts_enabled = self.keyboard_shortcuts_enabled;
         cfg.media_keys_enabled = self.media_keys_enabled;
+        cfg.media_keys_background_enabled = self.media_keys_background_enabled;
         cfg.application_shortcuts = self.application_shortcuts.clone();
         cfg.global_hardware_hotkeys_enabled = self.global_hardware_hotkeys_enabled;
         cfg.hardware_key_bindings = self.hardware_key_bindings.clone();
@@ -7368,6 +7388,7 @@ impl PealayerApp {
         }
         self.keyboard_shortcuts_enabled = config.keyboard_shortcuts_enabled;
         self.media_keys_enabled = config.media_keys_enabled;
+        self.media_keys_background_enabled = config.media_keys_background_enabled;
         if !self.media_keys_enabled {
             self.media_controls = None;
         }
@@ -9392,6 +9413,7 @@ impl Default for PealayerApp {
             hardware_control_pwm_percent: 0.0,
             keyboard_shortcuts_enabled: true,
             media_keys_enabled: true,
+            media_keys_background_enabled: true,
             application_shortcuts: crate::application_shortcuts::ApplicationShortcuts::default(),
             global_hardware_hotkeys_enabled: true,
             hardware_key_bindings: Vec::new(),
@@ -9569,6 +9591,58 @@ pub(crate) mod tests {
         app.request_control_bar_save(&egui::Context::default());
         assert!(app.pending_control_bar_save.as_ref().unwrap().flight.is_none());
         assert_eq!(app.pending_control_bar_save.as_ref().unwrap().desired,app.control_bars);
+    }
+
+    #[test]
+    fn background_media_commands_obey_scope_without_native_registrations_or_focus() {
+        let _lock=lock_app_tests();
+        let original=crate::platform::interop::get_live_config();
+        for (enabled,background,accept) in [(true,true,true),(true,false,false),(false,true,false)] {
+            let mut app=PealayerApp::default();
+            app.web_only=true;app.auto_reload_config=false;app.keyboard_shortcuts_enabled=false;
+            app.media_keys_enabled=enabled;app.media_keys_background_enabled=background;
+            app.media_controls=Some(crate::platform::media_controls::MediaControlsManager::memory_only_test_manager(&app.app_name));
+            let old_volume=app.volume;
+            app.media_cmd_tx.send(souvlaki::MediaControlEvent::SetVolume(0.17)).unwrap();
+            let ctx=egui::Context::default();
+            let mut frame=eframe::Frame::_new_kittest();
+            let _=ctx.run_logic(&egui::RawInput::default(),|ctx|eframe::App::logic(&mut app,ctx,&mut frame));
+            assert_eq!(app.volume,if accept{17.0}else{old_volume},"enabled={enabled}, background={background}");
+            assert_eq!(app.media_keys_background_enabled,background);
+        }
+        crate::platform::interop::set_live_config(original);
+    }
+
+    #[test]
+    fn queued_media_action_rechecks_background_permission_after_same_frame_config_change() {
+        let _lock=lock_app_tests();
+        let original=crate::platform::interop::get_live_config();
+        let mut app=PealayerApp::default();
+        app.web_only=true;app.auto_reload_config=false;app.keyboard_shortcuts_enabled=false;
+        app.media_controls=Some(crate::platform::media_controls::MediaControlsManager::memory_only_test_manager(&app.app_name));
+        crate::platform::interop::set_live_config(app.runtime_config_snapshot());
+        let old_volume=app.volume;
+        let (tx,rx)=std::sync::mpsc::channel();app.interop_rx=rx;
+        tx.send(InteropCommand::UpdateConfig {values:serde_json::json!({"media_keys_background_enabled":false})}).unwrap();
+        app.media_cmd_tx.send(souvlaki::MediaControlEvent::SetVolume(0.17)).unwrap();
+        let ctx=egui::Context::default();let mut frame=eframe::Frame::_new_kittest();
+        let _=ctx.run_logic(&egui::RawInput::default(),|ctx|eframe::App::logic(&mut app,ctx,&mut frame));
+        assert!(!app.media_keys_background_enabled);
+        assert_eq!(app.volume,old_volume,"already queued media action must not run under the new scope");
+        crate::platform::interop::set_live_config(original);
+    }
+
+    #[test]
+    fn explicit_media_session_window_requests_can_raise_a_foreground_only_player() {
+        let _lock=lock_app_tests();
+        let mut app=PealayerApp::default();app.web_only=true;app.media_keys_background_enabled=false;
+        let ctx=egui::Context::default();
+        for command in [InteropCommand::Activate,InteropCommand::Quit,InteropCommand::Open{target:"fixture.mkv".into()}] {
+            assert!(app.media_control_command_allowed(&ctx,&command));
+        }
+        assert!(!app.media_control_command_allowed(&ctx,&InteropCommand::TogglePause));
+        app.media_keys_enabled=false;
+        assert!(!app.media_control_command_allowed(&ctx,&InteropCommand::Activate));
     }
 
     #[test]
