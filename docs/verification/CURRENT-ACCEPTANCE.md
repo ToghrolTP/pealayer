@@ -10,6 +10,11 @@ statements are not the present product state.
 
 ## Delivered source and deployment
 
+- Native cue properties now has guarded ×/Escape dismissal, square icon controls,
+  centered caption groups and a viewport-bounded two-column layout on wider
+  screens. [Dialog contract and checks](cue-dialog-responsive-dismissal.md)
+  separates rendered tests from the human-assisted live-dialog screenshot gate.
+
 - Designer UI consistency is implemented across native/Web authoring: caption
   metrics, preference-governed fades, acknowledged draft identities, a shared
   Custom color popup, contextual actions, Technical disclosure and lane-targeted

@@ -255,6 +255,11 @@ pub enum InteropCommand {
     RemoveEffectCue {
         instance_id: String,
     },
+    OpenTimelineCueEditor {
+        instance_id: String,
+        #[serde(default)]
+        presentation: Option<crate::config::TimelineCueEditorPresentation>,
+    },
     UpdateEffectCue {
         instance_id: String,
         start_time_ms: u64,
@@ -688,7 +693,7 @@ impl InteropCommand {
             {
                 Err("effect_id must be a valid effect UUID".to_string())
             }
-            Self::RemoveEffectCue { instance_id }
+            Self::RemoveEffectCue { instance_id } | Self::OpenTimelineCueEditor { instance_id, .. }
                 if uuid::Uuid::parse_str(instance_id.trim()).is_err() =>
             {
                 Err("instance_id must be a valid cue UUID".to_string())
@@ -858,7 +863,7 @@ pub fn command_catalog() -> Value {
             "get_status", "publish_toast", "dismiss_toast", "quit", "controller_effect_cue.add", "controller_effect.play",
             "controller_effect.stop", "controller_effect.save", "controller_effect.delete", "audio_effect.stop", "audio.outputs.refresh",
             "controller_effect.group.save",
-            "timeline.cue.place", "controller_effect.publish_and_run", "controller_effect.record.capabilities",
+            "timeline.cue.place", "timeline.cue.edit", "controller_effect.publish_and_run", "controller_effect.record.capabilities",
             "controller_effect.record.start", "controller_effect.record.status",
             "controller_effect.record.save", "controller_effect.record.discard",
             "set_emergency_stop", "invoke_hardware_action", "set_hardware_pwm", "refresh_hardware_catalog",
@@ -2093,6 +2098,12 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         }
         "controller_effect.publish_and_run" => Some(InteropCommand::PublishAndRunControllerEffect {
             effect: serde_json::from_value(request.params.clone()).map_err(|error| format!("invalid controller effect: {error}"))?,
+        }),
+        "timeline.cue.edit" => Some(InteropCommand::OpenTimelineCueEditor {
+            instance_id: string(&["instance_id"])?,
+            presentation: request.params.get("presentation")
+                .map(|value| serde_json::from_value(value.clone())
+                    .map_err(|_| "presentation must be dialog or panel".to_string())).transpose()?,
         }),
         "timeline.cue.place" => Some(InteropCommand::PlaceTimelineCue {
             instance_id: string(&["instance_id"])?,
@@ -3690,6 +3701,22 @@ mod tests {
         ));
 
         let cue_id = uuid::Uuid::new_v4().to_string();
+        let editor = JsonRpcRequest {
+            jsonrpc: Some("2.0".into()), id: serde_json::json!("editor"), method: "timeline.cue.edit".into(),
+            params: serde_json::json!({"instance_id": cue_id, "presentation": "dialog"}),
+        };
+        let command = command_from_json_rpc(&editor).unwrap().unwrap();
+        command.validate().unwrap();
+        assert!(matches!(command, InteropCommand::OpenTimelineCueEditor {
+            presentation: Some(crate::config::TimelineCueEditorPresentation::Dialog), ..
+        }));
+        assert!(command_from_json_rpc(&JsonRpcRequest {
+            params: serde_json::json!({"instance_id": cue_id, "presentation": "unsupported"}),
+            ..editor.clone()
+        }).is_err());
+        assert!(command_from_json_rpc(&JsonRpcRequest {
+            params: serde_json::json!({"instance_id": "not-a-uuid"}), ..editor
+        }).is_err());
         let update = JsonRpcRequest {
             jsonrpc: Some("2.0".to_string()),
             id: serde_json::json!(2),

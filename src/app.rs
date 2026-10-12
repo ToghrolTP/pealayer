@@ -4670,6 +4670,12 @@ impl PealayerApp {
                     self.hardware_effect_authoring.run_after_publish = true;
                 }
             }
+            InteropCommand::OpenTimelineCueEditor { instance_id, presentation } => {
+                let Ok(id) = uuid::Uuid::parse_str(instance_id.trim()) else { return; };
+                if let Err(error) = crate::ui::layout::request_existing_timeline_cue_editor(self, ctx, id, presentation) {
+                    self.set_osd(error);
+                }
+            }
             InteropCommand::PlaceTimelineCue { instance_id, start_time_ms, control_key, duplicate_id } => {
                 let Ok(source_id) = uuid::Uuid::parse_str(&instance_id) else { return; };
                 let Some(source) = self.timeline.instances.iter().find(|cue| cue.id == source_id).cloned() else {
