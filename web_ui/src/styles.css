@@ -464,15 +464,14 @@ body {
 .seekbar-markers__chapter::after { content: ''; position: absolute; left: 5.5px; top: 6px; height: 4px; width: 1px; border-radius: 1px; background: currentColor; }
 .seekbar-markers__chapter:focus-visible { outline: 1px solid currentColor; outline-offset: 1px; border-radius: 4px; }
 .seekbar-markers__keyframe { position: absolute; z-index: 2; top: 50%; width: 2px; height: 14px; border-radius: 1px; transform: translate(-50%, -50%); pointer-events: none; }
-.seek-thumbnail-popover__caption { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .seek-thumbnail-popover {
   position: fixed;
   z-index: 1000;
-  width: 174px;
-  height: 125px;
+  width: 254px;
+  max-width: calc(100vw - 16px);
   overflow: hidden;
   display: grid;
-  grid-template-rows: 90px 18px;
+  justify-items: center;
   row-gap: 3px;
   padding: 6px;
   border: 1px solid var(--line-strong);
@@ -480,13 +479,13 @@ body {
   background: color-mix(in srgb, var(--surface-1) 96%, transparent);
   color: var(--text);
   box-shadow: 0 14px 34px rgba(0, 0, 0, .34);
-  transform: translateX(-50%);
   pointer-events: none;
   backdrop-filter: blur(14px);
 }
 .seek-thumbnail-popover__image {
   position: relative;
   width: 160px;
+  max-width: 100%;
   height: 90px;
   overflow: hidden;
   display: grid;
@@ -507,7 +506,7 @@ body {
 }
 .seek-thumbnail-popover__unavailable { position: absolute; color: var(--muted); font: 600 11px var(--font-sans); }
 .seek-thumbnail-popover__caption {
-  width: 160px;
+  width: 100%;
   height: 18px;
   min-height: 18px;
   display: flex;
@@ -518,6 +517,12 @@ body {
   text-align: center;
   font: 650 11px var(--font-mono);
   line-height: 18px;
+}
+.seek-thumbnail-popover__detail {
+  width: 100%;
+  text-align: center;
+  overflow-wrap: anywhere;
+  font: 12px/18px var(--font-sans);
 }
 @keyframes seek-thumbnail-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) {

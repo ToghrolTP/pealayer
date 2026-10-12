@@ -261,6 +261,7 @@ interface RemoteControlTabProps {
   quickSeekSeconds: number;
   apiBaseUrl: string;
   seekbarHoverThumbnails: boolean;
+  showSubseconds: boolean;
   mediaGestures: MediaGesturePreferences;
 }
 
@@ -280,6 +281,7 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
   quickSeekSeconds,
   apiBaseUrl,
   seekbarHoverThumbnails,
+  showSubseconds,
   mediaGestures,
   controlBar,
 }) => {
@@ -318,7 +320,8 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
           disabled={!state.current_video || !state.seekable || !state.duration}
           mediaIdentity={state.current_video} onCommit={seek.commitSeconds} />
         <SeekThumbnailPreview
-          enabled={seekbarHoverThumbnails && Boolean(state.seekable) && Boolean(state.duration)}
+          enabled={seekbarHoverThumbnails}
+          seekable={Boolean(state.seekable)} live={state.live} locale={locale} showSubseconds={showSubseconds}
           duration={state.duration || 0}
           mediaIdentity={state.current_video}
           apiBaseUrl={apiBaseUrl}
@@ -333,7 +336,7 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
             disabled={!state.current_video || !state.seekable || !state.duration}
             onChange={seek.change}
             onChangeComplete={seek.commit}
-            tooltip={seekbarHoverThumbnails ? { open: false } : { formatter: (value) => formatTime(((value || 0) / 100) * (state.duration || 0)) }}
+            tooltip={{ open: false }}
           />
           <SeekbarMarkers state={state} seconds={seek.value / 100 * (state.duration ?? 0)} onChapter={seek.commitSeconds} />
         </SeekThumbnailPreview>

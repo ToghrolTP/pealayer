@@ -296,19 +296,7 @@ pub(crate) fn paint_seekbar_markers(
         let height = (ui.spacing().slider_rail_height * 0.5 + 3.0).min(rect.height() * 0.5);
         ui.painter().line_segment([egui::pos2(x,rect.center().y-height),egui::pos2(x,rect.center().y+height)], egui::Stroke::new(1.5,keyframe_color));
     }
-    if let Some(point) = pointer {
-        let nearest_keyframe = app.timeline.keyframes.iter().filter(|marker| marker.time_ms as f64 / 1000.0 <= duration)
-            .filter(|marker| (x_for(marker.time_ms as f64/1000.0)-point.x).abs() <= 6.0)
-            .min_by_key(|marker| ((x_for(marker.time_ms as f64/1000.0)-point.x).abs()*100.0) as u64);
-        let label = if let Some(marker) = nearest_keyframe {
-            format!("Keyframe{}\n{}", if marker.label.is_empty() { String::new() } else { format!(" · {}", marker.label) },
-                crate::duration::format_time_value_ms(marker.time_ms))
-        } else {
-            let time = nearest_chapter.map_or_else(|| duration * ((point.x-range.start()) / (range.end()-range.start())).clamp(0.0,1.0) as f64, |chapter| chapter.time_seconds);
-            chapter_hover_label(&chapters,time).unwrap_or_default()
-        };
-        if !label.is_empty() && !response.dragged() { response.clone().on_hover_text(label); }
-    }
+    // Hover metadata belongs to the shared preview card, never a second tooltip.
     let operating = response.changed() || response.clicked() || response.drag_stopped();
     nearest_chapter.filter(|_| operating).map(|chapter| chapter.time_seconds)
 }
@@ -1038,22 +1026,6 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         true,
                     ),
                 };
-                let seek_tooltip = match timeline_state {
-                    crate::media::MediaTimelineState::NoMedia => app.tr("Open media to seek."),
-                    crate::media::MediaTimelineState::Determining => app.tr(
-                        "Duration is still being determined; seeking will become available when MPV reports a timeline.",
-                    ),
-                    crate::media::MediaTimelineState::Live => app.tr(
-                        "This live or duration-less source has no fixed seek range.",
-                    ),
-                    crate::media::MediaTimelineState::Finite {
-                        seekable: false, ..
-                    } => app.tr("This media reports a duration but does not support seeking."),
-                    crate::media::MediaTimelineState::Finite { .. } => {
-                        app.tr("Seek through the media timeline.")
-                    }
-                };
-
                 let mut volume = app.volume;
                 let mut toggle_total_mode = false;
                 let mut volume_update = None;
@@ -1086,15 +1058,6 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             .show_value(false)
                             .trailing_fill(true);
                         let response = add_fill_width_slider(ui, can_seek, slider);
-                        let response = if can_seek {
-                            if app.seekbar_hover_thumbnails {
-                                response
-                            } else {
-                                response.on_hover_text(&seek_tooltip)
-                            }
-                        } else {
-                            response.on_disabled_hover_text(&seek_tooltip)
-                        };
                         response.context_menu(|ui| transport_context_menu(app, ui));
 
                         if let Some(buffered_until) = app.buffered_until() {

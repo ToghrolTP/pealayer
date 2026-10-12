@@ -10,6 +10,11 @@ statements are not the present product state.
 
 ## Delivered source and deployment
 
+- Native/Web Simple and Program Monitor seekbars share exactly one pointer-time
+  hover card containing chapter/keyframe metadata and optional thumbnails.
+  [Hover ownership and regression coverage](seek-hover-card.md) preserve saved
+  thumbnail preferences, ordered scrubbing and explicit installed/live gates.
+
 - Native/Web Preferences expose an independent background media-button scope,
   preserving the one OS session and rechecking queued transport commands.
   [Policy and regression coverage](background-media-controls.md) retain live
