@@ -18,6 +18,8 @@ const CAPABILITY_LCD: u32 = 1 << 6;
 const CAPABILITY_ADDRESSABLE_LED: u32 = 1 << 7;
 const CAPABILITY_PERSISTENT_SETTINGS: u32 = 1 << 8;
 const CAPABILITY_MOTION_BREAK: u32 = 1 << 21;
+const CAPABILITY_BUZZER_BUSY: u32 = 1 << 20;
+const CAPABILITY_BUZZER_PUSH: u32 = 1 << 27;
 const CAPABILITY_STATUS_EFFECTS: u32 = 1 << 28;
 const CAPABILITY_STATUS_LED_PUSH: u32 = 1 << 29;
 
@@ -235,6 +237,11 @@ pub struct HardwareEffectGroup {
 }
 
 impl HardwareCapabilities {
+    pub(crate) fn supports_buzzer_controls(&self) -> bool {
+        self.board_connected && (self.capability_bits & (CAPABILITY_BUZZER_BUSY | CAPABILITY_BUZZER_PUSH) != 0
+            || !self.melodies.is_empty())
+    }
+
     pub(crate) fn apply_folder_update(&mut self, result: &Value) -> Result<(), String> {
         #[derive(serde::Deserialize)]
         struct Member { key: String, #[serde(default)] group: String }

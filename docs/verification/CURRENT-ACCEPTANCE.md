@@ -10,6 +10,11 @@ statements are not the present product state.
 
 ## Delivered source and deployment
 
+- Windows tray menus expose a capability-driven PCController board submenu,
+  with monitor reveal, guarded E-STOP release and tracked stop/clear/automatic
+  LED actions. [Tray contract and verification](windows-tray-board-actions.md)
+  retain source-switch, physical-click and Cafe runtime boundaries.
+
 - Modal corner-close controls share a fixed square with a larger, ink-centered ×.
   Unsaved Preferences/cue confirmations retain non-destructive dismissal.
   [Geometry contract and native fixture](square-modal-close.md) prevent regressions

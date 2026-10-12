@@ -2752,7 +2752,64 @@ impl PealayerApp {
         }
     }
 
+    fn tray_board_menu(&self) -> Option<crate::platform::tray_board::BoardTrayMenu> {
+        // Direct UART diagnostics must not create a PCController tray surface.
+        let coordinator = crate::peer::active() || self.engine_handle.serial_port.lock()
+            .is_ok_and(|endpoint| crate::four_d::controller::is_controller_endpoint(&endpoint));
+        crate::platform::tray_board::BoardTrayMenu::build(
+            self.advertised_hardware().as_ref(),
+            coordinator && self.engine_handle.is_connected.load(Ordering::Acquire),
+            self.engine_handle.estop_active.load(Ordering::SeqCst),
+            self.board_operation.is_some(),
+            self.hardware_effect_authoring.pending_operation.is_some()
+                || self.hardware_effect_authoring.pending_saved_macro_id.is_some(),
+            self.language,
+        )
+    }
+
+    fn process_board_tray_action(
+        &mut self,
+        ctx: &egui::Context,
+        action: crate::platform::tray_board::BoardTrayAction,
+        target: Option<&crate::platform::tray_board::TrayBoardTarget>,
+    ) -> Result<(), String> {
+        use crate::platform::tray_board::BoardTrayAction;
+        // A popup runs a nested Windows message loop. Revalidate its frozen
+        // target/capabilities on selection, never on a later reconnect replay.
+        let menu = self.tray_board_menu().ok_or_else(|| self.tr("No live PCController board is connected"))?;
+        if !target.is_some_and(|target| menu.allows(action, target)) {
+            return Err(self.tr("Board tray action is no longer available; reopen the menu"));
+        }
+        match action {
+            BoardTrayAction::Monitor => {
+                let fullscreen = ctx.input(|input| input.viewport().fullscreen.unwrap_or(self.was_fullscreen));
+                self.apply_workspace_request(true, fullscreen);
+                self.request_fullscreen(ctx, false, fullscreen);
+                crate::ui::layout::reveal_and_focus_tab(&mut self.dock_state, crate::ui::layout::PealayerTab::HardwareMonitor);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                self.save_config();
+            }
+            BoardTrayAction::EngageEmergencyStop | BoardTrayAction::ReleaseEmergencyStop => {
+                self.estop_active = self.engine_handle.estop_active.load(Ordering::SeqCst);
+                self.request_emergency_stop_change(action == BoardTrayAction::EngageEmergencyStop);
+                if self.show_estop_release_dialog {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                }
+            }
+            BoardTrayAction::StopBuzzer => self.stop_buzzer()?,
+            BoardTrayAction::StopEffects => self.stop_strip_preview()?,
+            BoardTrayAction::StopStrip => self.stop_addressable_strip()?,
+            BoardTrayAction::ClearStrip => self.clear_addressable_strip()?,
+            BoardTrayAction::AutomaticStatusLed => self.release_status_led_override()?,
+        }
+        ctx.request_repaint();
+        Ok(())
+    }
+
     fn process_shell_commands(&mut self, ctx: &egui::Context) {
+        crate::platform::windows::update_tray_board_menu(self.tray_board_menu());
         crate::platform::windows::update_shell_command_state(
             self.is_paused,
             self.is_muted,
@@ -2761,7 +2818,20 @@ impl PealayerApp {
             self.media_keys_enabled,
         );
         while let Some(command) = crate::platform::windows::take_shell_command() {
-            match command {
+            if let Some(action) = crate::platform::tray_board::BoardTrayAction::from_command(command.id) {
+                if let Err(error) = self.process_board_tray_action(ctx, action, command.board_target.as_ref()) {
+                    self.set_osd(error.clone());
+                    if let Some(hwnd) = self.window_handle {
+                        let _ = crate::platform::windows::show_system_notification(hwnd, &self.app_name, &error);
+                    }
+                    let _ = crate::messaging::publish(crate::messaging::ToastRequest {
+                        id: Some("hardware.tray".into()), title: self.tr("PCController tray action"),
+                        message: error, severity: crate::messaging::Severity::Warning, timeout_ms: 8000,
+                    }, "hardware");
+                }
+                continue;
+            }
+            match command.id {
                 crate::platform::windows::THUMB_BUTTON_PREV => self.seek_relative(-10.0),
                 crate::platform::windows::THUMB_BUTTON_PLAYPAUSE
                 | crate::platform::windows::TRAY_CMD_PLAYPAUSE => self.toggle_playback(),
@@ -2798,6 +2868,7 @@ impl PealayerApp {
                 _ => {}
             }
         }
+        crate::platform::windows::update_tray_board_menu(self.tray_board_menu());
     }
 
     /// Change the native stacking level only on policy or playback transitions.
@@ -11088,6 +11159,76 @@ pub(crate) mod tests {
         let m_rev = app.media_view_revision.load(Ordering::Relaxed);
         app.bump_media_view_revision();
         assert_eq!(app.media_view_revision.load(Ordering::Relaxed), m_rev + 1);
+    }
+
+    #[test]
+    fn board_tray_release_preserves_gui_confirmation_and_authoritative_latch() {
+        let _guard = lock_app_tests();
+        let mut app = PealayerApp::default();
+        *app.engine_handle.serial_port.lock().unwrap() = crate::four_d::controller::DEFAULT_ENDPOINT.into();
+        app.engine_handle.is_connected.store(true, Ordering::Release);
+        app.engine_handle.estop_active.store(true, Ordering::SeqCst);
+        app.estop_active = true;
+        app.confirm_estop_release = true;
+        app.update_hardware_capabilities(Some(crate::four_d::controller::HardwareCapabilities {
+            board_connected: true, host_instance_id: "fixture-host".into(), ..Default::default()
+        }));
+        let menu = app.tray_board_menu().unwrap();
+        app.process_board_tray_action(&egui::Context::default(),
+            crate::platform::tray_board::BoardTrayAction::ReleaseEmergencyStop, Some(&menu.target)).unwrap();
+        assert!(app.show_estop_release_dialog);
+        assert!(app.estop_active);
+        assert!(app.engine_handle.estop_active.load(Ordering::SeqCst));
+        assert!(app.board_operation.is_none());
+    }
+
+    #[test]
+    fn board_tray_rejects_stale_target_disconnection_and_busy_commands() {
+        use crate::platform::tray_board::BoardTrayAction;
+        let _guard = lock_app_tests();
+        let mut app = PealayerApp::default();
+        *app.engine_handle.serial_port.lock().unwrap() = crate::four_d::controller::DEFAULT_ENDPOINT.into();
+        app.engine_handle.is_connected.store(true, Ordering::Release);
+        let mut hardware = crate::four_d::controller::HardwareCapabilities {
+            board_connected: true, host_instance_id: "first-host".into(),
+            supports_status_led_settings: true, ..Default::default()
+        };
+        app.update_hardware_capabilities(Some(hardware.clone()));
+        let target = app.tray_board_menu().unwrap().target;
+        hardware.host_instance_id = "another-host".into();
+        app.update_hardware_capabilities(Some(hardware));
+        let context = egui::Context::default();
+        assert!(app.process_board_tray_action(&context, BoardTrayAction::AutomaticStatusLed, Some(&target)).is_err());
+        assert!(app.board_operation.is_none());
+        let target = app.tray_board_menu().unwrap().target;
+        app.board_operation = Some("fixture-pending".into());
+        assert!(app.process_board_tray_action(&context, BoardTrayAction::AutomaticStatusLed, Some(&target)).is_err());
+        assert_eq!(app.board_operation.as_deref(), Some("fixture-pending"));
+        app.engine_handle.is_connected.store(false, Ordering::Release);
+        assert!(app.tray_board_menu().is_none());
+        assert!(app.process_board_tray_action(&context, BoardTrayAction::Monitor, Some(&target)).is_err());
+        app.engine_handle.is_connected.store(true, Ordering::Release);
+        *app.engine_handle.serial_port.lock().unwrap() = "COM-fixture-direct".into();
+        assert!(app.tray_board_menu().is_none());
+    }
+
+    #[test]
+    fn board_tray_monitor_restores_and_focuses_its_closed_tab() {
+        let _guard = lock_app_tests();
+        let mut app = PealayerApp::default();
+        *app.engine_handle.serial_port.lock().unwrap() = crate::four_d::controller::DEFAULT_ENDPOINT.into();
+        app.engine_handle.is_connected.store(true, Ordering::Release);
+        app.update_hardware_capabilities(Some(crate::four_d::controller::HardwareCapabilities {
+            board_connected: true, host_instance_id: "fixture-host".into(), ..Default::default()
+        }));
+        app.show_four_d_editor = false;
+        app.dock_state = egui_dock::DockState::new(vec![crate::ui::layout::PealayerTab::ProgramMonitor]);
+        let target = app.tray_board_menu().unwrap().target;
+        app.process_board_tray_action(&egui::Context::default(),
+            crate::platform::tray_board::BoardTrayAction::Monitor, Some(&target)).unwrap();
+        assert!(app.show_four_d_editor);
+        let path = app.dock_state.find_tab(&crate::ui::layout::PealayerTab::HardwareMonitor).unwrap();
+        assert_eq!(app.dock_state.leaf(path.node_path()).unwrap().active, path.tab);
     }
 
     #[test]
