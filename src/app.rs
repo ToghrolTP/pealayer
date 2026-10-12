@@ -1574,6 +1574,7 @@ impl eframe::App for PealayerApp {
                     .filter(|plan|plan.has_items() || plan.authority.is_some()).map(|plan|serde_json::json!({
                         "authority":plan.authority,"authority_client_id":plan.authority_client_id,
                         "revision":plan.revision,"prepared_revision":plan.acknowledged_revision,
+                        "label":plan.presentation_label(),"play_requested":plan.play_requested,
                         "clock_ack_revision":plan.clock_ack_revision,"clock_ack_epoch":plan.clock_ack_epoch,
                         "ack_age_ms":plan.last_ack.map(|ack|ack.elapsed().as_millis() as u64),
                         "error":plan.error,"deferred_reason":plan.deferred_reason,

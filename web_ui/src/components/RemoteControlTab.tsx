@@ -77,6 +77,7 @@ export interface PlayerState {
   hardware_transport?: string | null;
   hardware_error?: string | null;
   hardware_sync?: { revision: number; prepared_revision: number; error?: string | null; ack_age_ms?: number | null;
+    label: string; play_requested: boolean;
     authority_client_id?: string;
     authority?: { owner_id: string; owner_label: string; exclusive: boolean; revision: number;
       owner_endpoint?: string | null;
