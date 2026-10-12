@@ -538,6 +538,28 @@ pub(super) fn publish(value: &Value) {
         ep.publish(value);
     }
 }
+// Presentation-only discovery. The autoconnect selector must not treat an
+// unprovisioned announcement as permission to choose a controller.
+pub(crate) fn discovered_controllers() -> Vec<String> {
+    let Some(endpoint) = runtime().lock().ok().and_then(|r| r.endpoint.clone()) else {
+        return vec![];
+    };
+    let Ok(data) = endpoint.data.lock() else {
+        return vec![];
+    };
+    let mut endpoints = data
+        .peers
+        .values()
+        .filter(|p| {
+            p.at.elapsed() < Duration::from_secs(45)
+                && p.value.pointer("/identity/app").and_then(Value::as_str) == Some("pccontroller")
+        })
+        .filter_map(|p| p.value["address"].as_str().map(|a| format!("udp://{a}")))
+        .collect::<Vec<_>>();
+    endpoints.sort();
+    endpoints.dedup();
+    endpoints
+}
 fn dispatch(state: &ControlState, value: &Value, from: SocketAddr) -> Value {
     if serde_json::from_value::<crate::platform::interop::JsonRpcRequest>(value.clone()).is_err() {
         return json!({"jsonrpc":"2.0","id":null,"error":{"code":-32600,"message":"A binary RPC request with a method is required"}});

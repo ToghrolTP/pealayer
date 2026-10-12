@@ -666,6 +666,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 .height(240.0)
                                 .show_ui(ui, |ui| {
                                     for endpoint in crate::four_d::controller::available_endpoints()
+                                        .into_iter().chain(crate::server::binary_udp::discovered_controllers())
                                     {
                                         endpoint_changed |= ui
                                             .dropdown_value(

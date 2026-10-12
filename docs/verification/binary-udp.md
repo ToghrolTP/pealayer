@@ -42,7 +42,7 @@ hardware-revision invalidation and acknowledged action-delivery path.
   received its fragmented 13,536-byte binary catalog and a pushed `udp_probe`
   event. No GUI, player, engine or physical board was started by the probe.
 - The standalone fixture is `tools/udp-probe`; it imports the production codec,
-  client and firmware framing functions rather than implementing a second wire.
+client and firmware framing functions rather than implementing a second wire.
 - Both encoders produce the identical 109-byte golden fixture for exact signed/
   unsigned 64-bit values, float, Unicode, null, boolean and collection values.
 - Full tests/CI waits were skipped as requested. Source, loopback and compile
@@ -51,3 +51,7 @@ hardware-revision invalidation and acknowledged action-delivery path.
 - Cafe/Erfan UDP activation has not occurred. Preserve host-specific libmpv,
   authoring drafts and the approved updater path; the Erfan updater denial in
   [paired deployment](paired-peer-deployment.md) remains unresolved.
+
+Discovered UDP controllers appear in the native hardware endpoint menu for
+explicit selection. They are not injected into the autoconnect candidate list;
+an announcement never silently changes the board owner or selected coordinator.
