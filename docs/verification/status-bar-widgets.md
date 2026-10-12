@@ -8,16 +8,62 @@ before/after insertion marker; context menus also offer Move earlier/later.
 An individual widget owns its menu, with a separated Hide action containing its
 icon and name. Hiding hardware connection does not hide voltage/current/temperature.
 Hiding the footer E-STOP indicator does not remove the main emergency control.
-The workspace is pinned at the logical trailing edge, outside the native primary
-widget scroller; it is not draggable into the telemetry group. Other widgets keep
-their saved order. Updating labels have fixed-width, truncated slots with full
+Widgets have persistent logical start/end membership and independent scrollers.
+Workspace defaults to the end and is last within its chosen group; moving another
+widget cannot regress that default anchor. Dragging or the context menu can move
+widgets between either group. Both side backgrounds can add, move or hide widgets;
+native dragging outside the footer shows a Hide hint and removes that widget.
+Updating labels have compact fixed-width, truncated slots with full
 hover text. FPS and hardware numbers use fixed slots and monospaced digits, so
-digit-count changes cannot move neighboring widgets. FPS, connection, hardware
-readings and alerts use emphasis faces without increasing their font size.
+digit-count changes cannot move neighboring widgets. Connection, workspace and
+alerts retain emphasis without increasing font size. Unflagged hardware readings
+are regular and muted, including values inside configured limits.
+
+## Styling, fonts and contextual actions
+
+Show dividers is a shared optional setting. Dividers consume predictable space
+only between rendered widgets. Every widget uses the same grey hover fade and the
+existing System/Enabled/Disabled animation preference, without a hover border
+that changes geometry. Number galleys are positioned by their actual height at
+the slot's vertical center, rather than relying on Label's baseline allocation.
+
+Appearance / Typography selects System, Bundled Ubuntu or Vazirmatn for normal
+UI and System or Bundled Hack for monospace. Native faces load on selection
+changes, not each paint. Web bundles the same regular fonts for offline use;
+font licences are retained. System faces retain safe bundled/glyph fallbacks.
+FPS and metric context menus can independently disable monospace.
+
+Semantic colors is opt-in. Metric menus expose optional minimum/maximum bounds
+in V, mA and degrees C; persisted bounds use mV, mA and centi-C. There are no
+invented universal electrical safety limits. Configured out-of-range values
+use warning color; authoritative HOT makes temperature red. Missing readings
+remain absent. Ordinary or unclassified values stay muted rather than green/bold.
+
+Primary actions use the widget's meaning: FPS changes source; hardware values,
+RGB and warnings reveal Hardware Monitor; timing reveals Timeline; E-STOP follows
+the existing release/confirmation path; download progress opens Downloads; other
+native progress, messages and chart settings disclose their relevant details.
+Workspace retains its selection dropdown. Merely opening these menus does not
+actuate hardware. Alerts/progress exist only when their current context exists.
+
+Native dragging renders the widget once on a translated tooltip layer, using
+the original grab offset, font and appearance. The old separately painted framed
+copy is gone; the source slot remains empty so neighbors do not shift. Browser
+dragging uses its native drag image and hides the original while moving.
+
+### Earlier connection-caption changes
+
+Commit a242919 replaced the combined connection caption and dot with independent
+widgets. Its predecessor appended the internal active transport to the board
+title (for example `via external:tcp`). That detail is diagnostic, not a board
+name or operator action, so it is not restored in the compact caption. The generic
+connection dot was redundant with the labelled connection state and ambiguous
+beside physical RGB. The plug/connection icon is retained; physical RGB remains
+a separate authoritative widget, not an invented connection-status LED.
 
 ## Unified workspace selector
 
-The trailing workspace widget is now a real dropdown instead of a label with
+The default trailing workspace widget is a real dropdown instead of a label with
 only a context menu. It reserves its existing 130-point slot and separately
 paints the profile icon, renamed caption and open chevron. The icon uses the
 normal icon-capable family; caption emphasis/truncation cannot consume its slot.
@@ -59,7 +105,7 @@ Reactive idle frames use their actual measured interval (for example 2 FPS at
 resets. This does not force a continuous rendering loop or assume monitor Hz.
 
 Hardware monospace values use compact 12-point native / 11-pixel Web text and
-five-point inter-widget spacing. Missing/disconnected readings are absent, not
+three-point inter-widget spacing. Missing/disconnected readings are absent, not
 zero. The Effects Library heading starts at its content edge, vertically centered.
 
 ## Logging and progress contract
@@ -101,6 +147,12 @@ render the paused status dot with no input, and verify native/Web projections.
 They also cover unchanged snapshots, missing hardware, a restarted source and
 the existing direct-controller RGB push path. These fixtures do not command a
 physical LED or claim live animation acceptance when the board reports steady RGB.
+
+The layout/typography refinement passed 842 native library tests (one ignored),
+including vertical galley centering, regular/muted metric state, persisted side/
+monospace preferences, and one-render dragging across both anchored groups.
+Web type checking, status guards and PWA build passed. Existing runtime captures
+and dated counts below are historical, not a new installed-build acceptance claim.
 
 Focused tests cover real native FPS clicks, menu ownership/hiding and drag/drop,
 title placement, unavailable telemetry, bounded charts, source switching, typed

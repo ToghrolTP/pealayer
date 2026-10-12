@@ -1,6 +1,12 @@
 export type UiLocale = 'en' | 'fa';
 
 const fa: Record<string, string> = {
+  'UI font': 'قلم رابط کاربری', 'Monospace font': 'قلم هم‌عرض',
+  'Typography': 'تایپوگرافی',
+  'System font': 'قلم سیستم', 'Bundled font': 'قلم همراه برنامه', 'Vazirmatn': 'وزیرمتن',
+  'Place at start': 'قرار دادن در ابتدا', 'Place at end': 'قرار دادن در انتها',
+  'Use monospace': 'استفاده از قلم هم‌عرض', 'Semantic colors': 'رنگ‌های معنایی',
+  'Show dividers': 'نمایش جداکننده‌ها', 'Value range': 'محدوده مقدار', 'Fonts…': 'قلم‌ها…',
   'Dismiss': 'بستن پیام',
   'Publishing authority': 'اختیار انتشار',
   'Close this prompt without changing publishing authority or pending requests.': 'این پیام را بدون تغییر اختیار انتشار یا درخواست‌های در انتظار ببندید.',

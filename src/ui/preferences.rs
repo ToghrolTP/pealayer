@@ -241,7 +241,8 @@ struct StandalonePreferencesApp {
     owner_hwnd: isize,
     native_window_initialized: bool,
     applied_appearance: Option<(AppTheme, bool, bool, [u8; 3], crate::config::ColorPalette,
-        crate::config::UiControlDensity, crate::config::UiAnimationMode)>,
+        crate::config::UiControlDensity, crate::config::UiAnimationMode,
+        crate::config::UiFontFamily, crate::config::UiFontFamily)>,
     config_watcher: Option<crate::config::ConfigFileWatcher>,
     config_reload_due: Option<std::time::Instant>,
     branding_config: Option<AppConfig>,
@@ -308,6 +309,8 @@ impl StandalonePreferencesApp {
             self.draft.config.color_palette,
             self.draft.config.ui_control_density,
             self.draft.config.ui_animation_mode,
+            self.draft.config.ui_font_family,
+            self.draft.config.monospace_font_family,
         );
         if self.applied_appearance != Some(appearance) {
             crate::ui::configure_native_appearance(ctx, &self.draft.config);
@@ -1713,6 +1716,7 @@ fn preference_control_icon(name: &str) -> &'static str {
         "check-square" => CHECK_SQUARE,
         "sliders-horizontal" => SLIDERS_HORIZONTAL,
         "text-align-left" => TEXT_ALIGN_LEFT,
+        "text-t" => TEXT_T,
         "list-checks" => LIST_CHECKS,
         "pencil-simple" => PENCIL_SIMPLE,
         _ => GEAR,
@@ -1811,6 +1815,7 @@ fn group_icon(group: &str) -> &'static str {
         "Video surface" => crate::ui::icons::SELECTION_ALL,
         "Window movement" => crate::ui::icons::APP_WINDOW,
         "Status bar" => crate::ui::icons::GAUGE,
+        "Typography" => crate::ui::icons::TEXT_T,
         "Windows graphics and composition" | "Dialog windows" => crate::ui::icons::APP_WINDOW,
         _ => crate::ui::icons::GEAR,
     }

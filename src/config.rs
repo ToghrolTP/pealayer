@@ -644,6 +644,12 @@ pub enum StatusChartMetric { #[default] Voltage, Current, Temperature }
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct StatusBarConfig {
+    pub dividers: bool,
+    pub semantic_colors: bool,
+    pub monospace: [bool; StatusBarWidget::COUNT],
+    pub trailing: [bool; StatusBarWidget::COUNT],
+    /// Optional user-defined bounds in mV, mA and centi-C. No guessed safe ranges.
+    pub metric_limits: [[Option<i32>; 2]; 3],
     pub media_rate: bool,
     pub fps_mode: StatusBarFpsMode,
     pub hardware: bool,
@@ -667,6 +673,10 @@ pub struct StatusBarConfig {
 impl Default for StatusBarConfig {
     fn default() -> Self {
         Self {
+            dividers: true, semantic_colors: false,
+            monospace: [true, false, false, false, false, true, true, true, false, false, false, false, false, false],
+            trailing: [false, false, false, false, false, false, false, false, false, false, false, false, false, true],
+            metric_limits: [[None; 2]; 3],
             media_rate: true,
             fps_mode: StatusBarFpsMode::Auto,
             hardware: true,
@@ -682,6 +692,9 @@ impl Default for StatusBarConfig {
 }
 
 impl StatusBarConfig {
+    pub fn at_end(&self, item: StatusBarWidget) -> bool { self.trailing[item as usize] }
+    pub fn uses_monospace(&self, item: StatusBarWidget) -> bool { self.monospace[item as usize] }
+    pub fn place_at_end(&mut self, item: StatusBarWidget, end: bool) { self.trailing[item as usize] = end; }
     pub fn ordered(&self) -> Vec<StatusBarWidget> {
         let mut result = Vec::with_capacity(StatusBarWidget::COUNT);
         for item in self.order.into_iter().chain(StatusBarWidget::ALL) {
@@ -813,6 +826,10 @@ pub enum UiAnimationMode { #[default] System, Enabled, Disabled }
 #[serde(rename_all = "snake_case")]
 pub enum UiControlDensity { #[default] Compact, Comfortable }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UiFontFamily { #[default] System, Bundled, Vazirmatn }
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct SeekbarMarkersConfig {
@@ -890,6 +907,8 @@ pub struct AppConfig {
     pub custom_accent_color: Option<String>,
     pub ui_animation_mode: UiAnimationMode,
     pub ui_control_density: UiControlDensity,
+    pub ui_font_family: UiFontFamily,
+    pub monospace_font_family: UiFontFamily,
     pub language: AppLanguage,
     pub direction: AppDirection,
     pub hardware_endpoint: Option<String>,
@@ -1083,6 +1102,8 @@ impl Default for AppConfig {
             custom_accent_color: None,
             ui_animation_mode: UiAnimationMode::System,
             ui_control_density: UiControlDensity::Compact,
+            ui_font_family: UiFontFamily::System,
+            monospace_font_family: UiFontFamily::Bundled,
             language: AppLanguage::System,
             direction: AppDirection::Auto,
             hardware_endpoint: None,
@@ -1594,6 +1615,8 @@ impl AppConfig {
         self.custom_accent_color = source.custom_accent_color.clone();
         self.ui_animation_mode = source.ui_animation_mode;
         self.ui_control_density = source.ui_control_density;
+        self.ui_font_family = source.ui_font_family;
+        self.monospace_font_family = source.monospace_font_family;
         self.app_icon_preset = source.app_icon_preset;
     }
 
@@ -1921,6 +1944,10 @@ impl AppConfig {
         }
         if !self.volume.is_finite() || !(0.0..=130.0).contains(&self.volume) {
             return Err("volume must be between 0 and 130".to_string());
+        }
+        if self.monospace_font_family == UiFontFamily::Vazirmatn { return Err("Vazirmatn is not a monospace font".into()); }
+        if self.status_bar.metric_limits.iter().any(|range| matches!(range, [Some(low), Some(high)] if low > high)) {
+            return Err("Status widget minimum must not exceed maximum".into());
         }
         if !self.playback_speed.is_finite() || !(0.25..=4.0).contains(&self.playback_speed) {
             return Err("playback_speed must be between 0.25 and 4".to_string());
@@ -2630,14 +2657,19 @@ mod tests {
 
     #[test]
     fn control_density_is_persisted_and_reconciled_with_shared_appearance() {
-        let source = AppConfig { ui_control_density: UiControlDensity::Comfortable, ..Default::default() };
+        let source = AppConfig { ui_control_density: UiControlDensity::Comfortable,
+            ui_font_family: UiFontFamily::Vazirmatn, monospace_font_family: UiFontFamily::System, ..Default::default() };
         let values = serde_json::to_value(&source).unwrap();
         assert_eq!(values["ui_control_density"], "comfortable");
         let restored: AppConfig = serde_json::from_value(values).unwrap();
         assert_eq!(restored.ui_control_density, UiControlDensity::Comfortable);
+        assert_eq!(restored.ui_font_family, UiFontFamily::Vazirmatn);
+        assert_eq!(restored.monospace_font_family, UiFontFamily::System);
         let mut target = AppConfig::default();
         target.copy_appearance_from(&source);
         assert_eq!(target.ui_control_density, UiControlDensity::Comfortable);
+        assert_eq!(target.ui_font_family, UiFontFamily::Vazirmatn);
+        assert_eq!(target.monospace_font_family, UiFontFamily::System);
         assert_eq!(AppConfig::default().ui_control_density, UiControlDensity::Compact);
     }
 

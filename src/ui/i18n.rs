@@ -5,6 +5,21 @@ use std::sync::Arc;
 /// Also used by isolated native UI fixtures so their font metrics match the app.
 #[doc(hidden)]
 pub fn configure_ui_fonts(context: &egui::Context, prefer_vazirmatn: bool) {
+    context.data_mut(|data| data.remove::<(crate::config::UiFontFamily, crate::config::UiFontFamily, bool)>(egui::Id::new("preferred-ui-fonts")));
+    install_ui_fonts(context, prefer_vazirmatn, crate::config::UiFontFamily::System, crate::config::UiFontFamily::Bundled);
+}
+
+pub fn configure_preferred_fonts(context: &egui::Context, config: &crate::config::AppConfig) {
+    let key = egui::Id::new("preferred-ui-fonts");
+    let desired = (config.ui_font_family, config.monospace_font_family,
+        crate::config::resolve_language(crate::config::resolved_language_preference(config)) == AppLanguage::Persian);
+    if context.data(|data| data.get_temp::<(crate::config::UiFontFamily, crate::config::UiFontFamily, bool)>(key)) == Some(desired) { return; }
+    install_ui_fonts(context, desired.2, desired.0, desired.1);
+    context.data_mut(|data| data.insert_temp(key, desired));
+}
+
+fn install_ui_fonts(context: &egui::Context, prefer_vazirmatn: bool,
+    normal: crate::config::UiFontFamily, mono: crate::config::UiFontFamily) {
     let mut fonts = egui::FontDefinitions::default();
     egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
 
@@ -42,16 +57,28 @@ pub fn configure_ui_fonts(context: &egui::Context, prefer_vazirmatn: bool) {
         .families
         .get_mut(&egui::FontFamily::Proportional)
         .expect("egui provides a proportional font family");
-    if prefer_vazirmatn {
+    if normal == crate::config::UiFontFamily::Vazirmatn || prefer_vazirmatn && normal == crate::config::UiFontFamily::System {
         proportional.insert(0, "pealayer-vazirmatn".to_owned());
         if has_system_font {
             proportional.insert(1, "pealayer-system-ui".to_owned());
         }
-    } else if has_system_font {
+    } else if has_system_font && normal == crate::config::UiFontFamily::System {
         proportional.insert(0, "pealayer-system-ui".to_owned());
         proportional.insert(1, "pealayer-vazirmatn".to_owned());
     } else {
-        proportional.insert(0, "pealayer-vazirmatn".to_owned());
+        proportional.push("pealayer-vazirmatn".to_owned());
+    }
+
+    if mono == crate::config::UiFontFamily::System {
+        let paths = [
+            #[cfg(windows)] r"C:\Windows\Fonts\consola.ttf",
+            #[cfg(target_os = "macos")] "/System/Library/Fonts/Menlo.ttc",
+            #[cfg(target_os = "linux")] "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+        ];
+        if let Some(bytes) = paths.iter().find_map(|path| std::fs::read(path).ok()) {
+            fonts.font_data.insert("pealayer-system-mono".into(), Arc::new(egui::FontData::from_owned(bytes)));
+            fonts.families.get_mut(&egui::FontFamily::Monospace).unwrap().insert(0, "pealayer-system-mono".into());
+        }
     }
 
     // Named emphasis faces preserve normal UI sizes and icon/fallback coverage.
@@ -71,7 +98,9 @@ pub fn configure_ui_fonts(context: &egui::Context, prefer_vazirmatn: bool) {
         ][..]),
     ] {
         let mut faces = fonts.families.get(&fallback).cloned().unwrap_or_default();
-        if let Some(bytes) = paths.iter().find_map(|path| std::fs::read(path).ok()) {
+        if (fallback == egui::FontFamily::Proportional && normal == crate::config::UiFontFamily::System
+            || fallback == egui::FontFamily::Monospace && mono == crate::config::UiFontFamily::System)
+            && let Some(bytes) = paths.iter().find_map(|path| std::fs::read(path).ok()) {
             fonts.font_data.insert(name.into(), Arc::new(egui::FontData::from_owned(bytes)));
             faces.insert(0, name.into());
         }
@@ -109,6 +138,21 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Monitor" => "نمایشگر",
         "Tabs" => "زبانه‌ها",
         "Hardware" => "سخت‌افزار",
+        "UI font" => "قلم رابط کاربری",
+        "Typography" => "تایپوگرافی",
+        "Monospace font" => "قلم هم‌عرض",
+        "System font" => "قلم سیستم",
+        "Bundled font" => "قلم همراه برنامه",
+        "Vazirmatn" => "وزیرمتن",
+        "Place at start" => "قرار دادن در ابتدا",
+        "Place at end" => "قرار دادن در انتها",
+        "Use monospace" => "استفاده از قلم هم‌عرض",
+        "Semantic colors" => "رنگ‌های معنایی",
+        "Value range" => "محدوده مقدار",
+        "Minimum" => "کمینه",
+        "Maximum" => "بیشینه",
+        "Show dividers" => "نمایش جداکننده‌ها",
+        "Fonts…" => "قلم‌ها…",
         "Effects" => "جلوه‌ها",
         "Layout" => "چیدمان",
         "Select all cues" => "انتخاب همهٔ نشانه‌ها",

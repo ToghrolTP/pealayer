@@ -385,6 +385,10 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
         PreferenceControl::accent(config),
         PreferenceControl::select("ui_control_density", "appearance", "Interface", "Control density",
             &[("compact", "Compact"), ("comfortable", "Comfortable")]),
+        PreferenceControl::select("ui_font_family", "appearance", "Typography", "UI font",
+            &[("system", "System font"), ("bundled", "Bundled font"), ("vazirmatn", "Vazirmatn")]),
+        PreferenceControl::select("monospace_font_family", "appearance", "Typography", "Monospace font",
+            &[("system", "System font"), ("bundled", "Bundled font")]),
         PreferenceControl::select("ui_animation_mode", "appearance", "Interface", "Animations and transitions",
             &[("system", "System default"), ("enabled", "Enabled"), ("disabled", "Disabled")]),
         PreferenceControl::select(
@@ -1172,6 +1176,8 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
         PreferenceControl::boolean("status_bar.chart", "advanced", "Status bar", "Telemetry log chart"),
         PreferenceControl::boolean("status_bar.progress", "advanced", "Status bar", "Operation progress"),
         PreferenceControl::boolean("status_bar.hot", "advanced", "Status bar", "HOT alerts"),
+        PreferenceControl::boolean("status_bar.dividers", "advanced", "Status bar", "Show dividers"),
+        PreferenceControl::boolean("status_bar.semantic_colors", "advanced", "Status bar", "Semantic colors"),
     ];
     for key in ["quick_seek_seconds", "mouse_seek_seconds_per_notch"] {
         if let Some(control) = controls.iter_mut().find(|control| control.key == key) {
@@ -1206,6 +1212,7 @@ fn semantic_preference_icon(control: &PreferenceControl) -> &'static str {
         "color_palette" => "swatches",
         "ui_animation_mode" => "waveform",
         "ui_control_density" => "sliders-horizontal",
+        "ui_font_family" | "monospace_font_family" => "text-t",
         "language" => "translate",
         "fullscreen_video_background" => "frame-corners",
         "always_on_top" => "push-pin",
