@@ -213,6 +213,7 @@ pub struct FrameRateTracker {
     max_gap: std::time::Duration,
     last_interaction: Option<std::time::Instant>,
     last_computed_fps: Option<f64>,
+    last_interval_fps: Option<f64>,
 }
 
 impl Default for FrameRateTracker {
@@ -223,6 +224,7 @@ impl Default for FrameRateTracker {
             max_gap: std::time::Duration::from_millis(250),
             last_interaction: None,
             last_computed_fps: None,
+            last_interval_fps: None,
         }
     }
 }
@@ -230,6 +232,8 @@ impl Default for FrameRateTracker {
 impl FrameRateTracker {
     pub fn record_frame(&mut self, now: std::time::Instant) {
         if let Some(&last) = self.samples.back() {
+            let interval = now.saturating_duration_since(last).as_secs_f64();
+            self.last_interval_fps = (interval > 0.001).then(|| 1.0 / interval);
             if now.saturating_duration_since(last) > self.max_gap {
                 // Gap was too long (reactive UI was idle); reset window so the long pause
                 // doesn't artificially drag down the measured active FPS.
@@ -260,7 +264,10 @@ impl FrameRateTracker {
     }
 
     pub fn live_fps(&self) -> Option<f64> {
-        self.last_computed_fps
+        // Reactive idle frames legitimately run below the active-window gap
+        // cutoff. Report their measured interval instead of becoming unavailable
+        // every 500 ms, without folding a long idle gap into resumed active FPS.
+        self.last_computed_fps.or(self.last_interval_fps)
     }
 
     pub fn record_interaction(&mut self, now: std::time::Instant) {

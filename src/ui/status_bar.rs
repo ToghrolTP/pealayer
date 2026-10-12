@@ -917,6 +917,17 @@ mod tests {
         );
     }
     #[test]
+    fn reactive_idle_screen_rate_uses_real_intervals_without_continuous_repaint() {
+        let mut tracker = crate::app::FrameRateTracker::default();
+        let start = Instant::now();
+        tracker.record_frame(start);
+        assert_eq!(tracker.live_fps(), None);
+        tracker.record_frame(start + Duration::from_millis(500));
+        assert_eq!(tracker.live_fps(), Some(2.0));
+        tracker.record_frame(start + Duration::from_millis(1000));
+        assert_eq!(tracker.live_fps(), Some(2.0));
+    }
+    #[test]
     fn real_status_bar_click_menu_and_drag_do_not_lose_widget_ownership() {
         let _guard = crate::app::tests::lock_app_tests();
         let mut app = PealayerApp::default();

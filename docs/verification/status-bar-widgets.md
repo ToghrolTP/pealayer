@@ -15,6 +15,9 @@ monitor's advertised refresh rate. Auto uses media FPS while loaded and playing,
 and screen rendering cadence when paused or unloaded; playback speed and pointer
 interaction do not change source media FPS. Existing explicit source selections
 and widget visibility remain user preferences.
+Reactive idle frames use their actual measured interval (for example 2 FPS at
+500 ms) rather than losing the number whenever the active rendering window
+resets. This does not force a continuous rendering loop or assume monitor Hz.
 
 Hardware monospace values use compact 12-point native / 11-pixel Web text and
 five-point inter-widget spacing. Missing/disconnected readings are absent, not
@@ -48,7 +51,7 @@ title placement, unavailable telemetry, bounded charts, source switching, typed
 HOT activation/clear, and ordered operation recovery. Web model tests cover the
 same order/visibility/FPS/logging rules; TypeScript/PWA builds verify integration.
 
-Local verification: 784 native library tests passed, one existing test ignored;
+Local verification: 785 native library tests passed, one existing test ignored;
 14 download unit/integration tests passed, three external-engine acceptance
 tests remain explicitly ignored. The Web model, parity, TypeScript and packaged
 PWA checks passed. Installed runtime captures are recorded in the delivery receipt.
