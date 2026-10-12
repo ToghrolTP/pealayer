@@ -1307,6 +1307,7 @@ pub fn available_endpoints() -> Vec<String> {
 
 enum ControllerBackend {
     Embedded(EmbeddedHost),
+    Udp(crate::server::udp_client::Client),
     Tcp {
         writer: TcpStream,
         reader: BufReader<TcpStream>,
@@ -1441,6 +1442,11 @@ impl ControllerClient {
         io_timeout: Duration,
     ) -> Result<Self, String> {
         let address = normalize_endpoint(endpoint)?;
+        if endpoint.starts_with("udp://") {
+            let mut backend=crate::server::udp_client::Client::connect(address,connect_timeout)?;backend.set_timeout(io_timeout);
+            let mut client=Self{endpoint:endpoint.into(),backend:ControllerBackend::Udp(backend),registered_id:None};
+            client.call("controller.ping",json!({}))?; return Ok(client);
+        }
         let socket = address
             .to_socket_addrs()
             .map_err(|error| format!("resolve PCController endpoint {address}: {error}"))?
@@ -1522,6 +1528,13 @@ impl ControllerClient {
             .then(|| params.get("id").and_then(Value::as_str).map(str::to_owned))
             .flatten();
         let (writer, reader, next_id) = match &mut self.backend {
+            ControllerBackend::Udp(client) => {
+                let response=client.call(&json!({"jsonrpc":"2.0","id":1,"method":method,"params":params,"client_id":self.registered_id.as_deref()}),
+                    (method=="controller.media.timeline.prepare").then_some(Duration::from_secs(15))).map_err(ControllerRpcError::transport)?;
+                if let Some(error)=response.get("error").filter(|v|!v.is_null()){return Err(controller_json_rpc_error(error));}
+                if let Some(id)=reported_id {self.registered_id=Some(id);}
+                return Ok(response["result"].clone());
+            }
             ControllerBackend::Embedded(host) => {
                 let result = host.call_detailed(method, params);
                 if result.is_ok() && let Some(id) = reported_id { self.registered_id = Some(id); }
@@ -1583,6 +1596,7 @@ impl ControllerClient {
     pub fn transport_description(&self) -> String {
         match &self.backend {
             ControllerBackend::Embedded(_) => "embedded".to_string(),
+            ControllerBackend::Udp(_) => "external:udp".to_string(),
             ControllerBackend::Tcp { .. } => "external:tcp".to_string(),
         }
     }
@@ -3003,6 +3017,7 @@ fn parse_hardware_capabilities_with_front_panel(
 pub fn normalize_endpoint(endpoint: &str) -> Result<&str, String> {
     let address = endpoint
         .strip_prefix("pccontroller://")
+        .or_else(|| endpoint.strip_prefix("udp://"))
         .or_else(|| endpoint.strip_prefix("tcp://"))
         .unwrap_or(endpoint)
         .trim();
@@ -3015,6 +3030,7 @@ pub fn normalize_endpoint(endpoint: &str) -> Result<&str, String> {
 pub fn is_controller_endpoint(endpoint: &str) -> bool {
     let endpoint = endpoint.trim();
     endpoint.starts_with("pccontroller://")
+        || endpoint.starts_with("udp://")
         || endpoint.starts_with("tcp://")
         // Accept the natural host:port form entered into the custom endpoint
         // field while keeping explicit direct paths and OS filesystem paths on
@@ -3026,6 +3042,7 @@ pub fn is_controller_endpoint(endpoint: &str) -> bool {
 }
 
 fn is_default_controller_endpoint(endpoint: &str) -> bool {
+    if endpoint.starts_with("udp://") {return false;}
     normalize_endpoint(endpoint).ok() == normalize_endpoint(DEFAULT_ENDPOINT).ok()
 }
 

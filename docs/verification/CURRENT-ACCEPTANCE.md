@@ -10,6 +10,11 @@ statements are not the present product state.
 
 ## Delivered source and deployment
 
+- Binary UDP now has paired host RPC, source-target identity, automatic mutual
+  discovery, leased pushes and shared native/Web configuration. The native
+  controller endpoint accepts `udp://IP:port`. [Source and loopback evidence](binary-udp.md)
+  retain installed-host, LAN, packet-loss, physical and Android acceptance gates.
+
 - Cafe's current native package and both PCController hosts are now updated;
   Cafe is the paused authority and Erfan is a connected cache-only consumer.
   Erfan's new Pealayer package is staged but its updater invocation was blocked.

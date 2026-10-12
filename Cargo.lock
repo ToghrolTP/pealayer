@@ -3510,6 +3510,7 @@ dependencies = [
  "serde_json",
  "serialport",
  "sha2",
+ "socket2 0.6.5",
  "souvlaki",
  "tar",
  "ttf-parser",

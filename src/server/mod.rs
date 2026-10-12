@@ -3,6 +3,9 @@ mod media_stream;
 mod download_media;
 pub mod thumbnails;
 pub mod web_assets;
+pub mod binary_udp;
+mod udp_codec;
+pub(crate) mod udp_client;
 
 use std::collections::VecDeque;
 use std::io::{Read, Write};
@@ -230,19 +233,13 @@ pub fn spawn_control_server_for_config(
     application_identity: String,
 ) -> Sender<String> {
     let (state_tx, state_rx) = channel::<String>();
-    if !crate::config::resolved_web_enabled(config) {
-        // Keep a receiver alive so the application's status publisher remains
-        // non-blocking even when every network surface is disabled.
-        thread::spawn(move || while state_rx.recv().is_ok() {});
-        return state_tx;
-    }
-    let addresses = match crate::config::resolved_web_bind_addresses(config) {
+    let addresses = if !crate::config::resolved_web_enabled(config) { vec![] } else { match crate::config::resolved_web_bind_addresses(config) {
         Ok(addresses) => addresses,
         Err(error) => {
             log::error!("Could not resolve Pealayer Web listener addresses: {error}");
             vec![std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST)]
         }
-    };
+    }};
     let port = crate::peer::client().map(|client|client.local_port).unwrap_or_else(||crate::config::runtime_port("PEALAYER_PORT", config.web_port));
     spawn_control_server_on_addresses_with_channel(
         addresses,
@@ -329,6 +326,9 @@ fn spawn_control_server_on_listeners_with_channel(
     let websocket_updates = websocket_clients.clone();
     thread::spawn(move || {
         while let Ok(state_json) = state_rx.recv() {
+            if let Ok(value) = serde_json::from_str::<serde_json::Value>(&state_json) {
+                binary_udp::publish(&serde_json::json!({"method":"pealayer.state","params":value}));
+            }
             if let Ok(mut status_guard) = latest_status_updates.lock() {
                 *status_guard = Some(state_json.clone());
             }
@@ -355,7 +355,8 @@ fn spawn_control_server_on_listeners_with_channel(
         application_identity: Arc::from(application_identity),
         expected_session_id,
     };
-    if listeners.is_empty() {
+    if !cfg!(test) { binary_udp::start(state.clone()); }
+    if listeners.is_empty() && crate::config::resolved_web_enabled(&crate::platform::interop::get_live_config()) {
         log::error!("Pealayer Web UI could not start any configured listener");
     }
     for listener in listeners {
@@ -451,6 +452,15 @@ fn handle_connection(mut stream: TcpStream, state: ControlState) {
             Ok(request) if !browser_origin_allowed(&request.headers, stream.local_addr().ok()) => {
                 HttpResponse::text(403, "Forbidden", "Browser origin is not permitted")
             }
+            Ok(request) if request.method == "POST" && (request.target == "/api/udp" ||
+                (request.target == "/api/rpc" && serde_json::from_slice::<serde_json::Value>(&request.body).ok()
+                    .is_some_and(|v| v["method"].as_str().is_some_and(|m|m.starts_with("pealayer.udp."))))) => {
+                match serde_json::from_slice::<serde_json::Value>(&request.body) {
+                    Ok(value) => HttpResponse::json(200,"OK", binary_udp::rpc(&value, stream.peer_addr().is_ok_and(|a|a.ip().is_loopback()))
+                        .unwrap_or_else(||serde_json::json!({"error":"A pealayer.udp method is required"})).to_string()),
+                    Err(error) => HttpResponse::text(400,"Bad Request",error.to_string()),
+                }
+            }
             Ok(request) if crate::peer::active() && peer_relay_route(&request.target) && !local_process_payload(&request.body) => {
                 let _ = proxy_http(&request, &mut stream);
                 return;
@@ -487,6 +497,7 @@ fn peer_relay_route(target: &str) -> bool {
     path.starts_with("/api/") && path != "/api/client/status"
         && !path.starts_with("/api/update/")
         && !path.starts_with("/api/process/")
+        && path != "/api/udp"
 }
 
 fn local_process_payload(body: &[u8]) -> bool {
@@ -501,6 +512,7 @@ fn local_process_payload(body: &[u8]) -> bool {
 }
 
 fn handle_websocket(stream: TcpStream, state: ControlState) {
+    let local_caller = stream.peer_addr().is_ok_and(|a|a.ip().is_loopback());
     let local = stream.local_addr().ok();
     let mut websocket = match tungstenite::accept_hdr(stream, |request: &tungstenite::handshake::server::Request, response: tungstenite::handshake::server::Response| {
         let headers = request.headers().iter().filter_map(|(key, value)| value.to_str().ok().map(|value| (key.to_string(), value.to_string()))).collect::<Vec<_>>();
@@ -557,6 +569,10 @@ fn handle_websocket(stream: TcpStream, state: ControlState) {
         }
         match websocket.read() {
             Ok(tungstenite::Message::Text(text)) => {
+                if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text)
+                    && let Some(response) = binary_udp::rpc(&value,local_caller) {
+                    let _ = websocket.send(tungstenite::Message::Text(response.to_string().into())); continue;
+                }
                 if let Ok(request) = serde_json::from_str::<serde_json::Value>(&text)
                     && request.get("method").and_then(serde_json::Value::as_str) == Some("peer.hardware.subscribe") {
                     let config = crate::platform::interop::get_live_config();

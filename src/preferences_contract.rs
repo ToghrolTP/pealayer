@@ -954,6 +954,10 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             );
             control
         },
+        PreferenceControl::boolean("binary_udp.enabled", "web", "Binary UDP", "Enable binary UDP"),
+        PreferenceControl::text("binary_udp.listen", "web", "Binary UDP", "UDP listening address", "127.0.0.1:8080"),
+        PreferenceControl::boolean("binary_udp.discovery", "web", "Binary UDP", "Discover and announce peers"),
+        PreferenceControl::boolean("binary_udp.broadcast_events", "web", "Binary UDP", "Broadcast state events"),
         {
             let options = crate::network::discover_bind_targets()
                 .into_iter()
