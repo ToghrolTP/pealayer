@@ -8,7 +8,6 @@ import {
   CaretRightFilled,
   ClockCircleOutlined,
   DeleteOutlined,
-  DesktopOutlined,
   DisconnectOutlined,
   EditOutlined,
   FastBackwardOutlined,
@@ -57,6 +56,7 @@ import { DesignerFieldLabel } from './DesignerFieldLabel';
 import { sequenceExtraKinds, sequenceLaneChoices } from '../cueAuthoring';
 import { StepRepeatFields } from './StepRepeatFields';
 import { TimeValueField } from './TimeValueField';
+import { workspaceGlyph } from '../workspacePresentation';
 import { newCueId, repeatedSequenceDurationMs, formatTimeMs, sequenceStepTemplate, moveSequenceStep, sequenceLaneKey } from '../cueAuthoring';
 
 interface StudioTabProps {
@@ -99,15 +99,6 @@ const workspaceIconOptions = [
   { value: 'layout', label: 'Layout' },
 ];
 
-const workspaceGlyph = (icon?: string) => {
-  switch (icon) {
-    case 'timeline': return <EditOutlined />;
-    case 'hardware': return <RadarChartOutlined />;
-    case 'effects': return <AppstoreOutlined />;
-    case 'tabs': return <AppstoreOutlined />;
-    default: return <DesktopOutlined />;
-  }
-};
 
 export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, appName, quickSeekSeconds, apiBaseUrl, seekbarHoverThumbnails, surface = 'studio', timelineWheelPreferences = defaultTimelineWheelPreferences, mediaGestures }) => {
   const timelineGridRef = useRef<HTMLDivElement | null>(null);

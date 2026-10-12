@@ -15,6 +15,37 @@ hover text. FPS and hardware numbers use fixed slots and monospaced digits, so
 digit-count changes cannot move neighboring widgets. FPS, connection, hardware
 readings and alerts use emphasis faces without increasing their font size.
 
+## Unified workspace selector
+
+The trailing workspace widget is now a real dropdown instead of a label with
+only a context menu. It reserves its existing 130-point slot and separately
+paints the profile icon, renamed caption and open chevron. The icon uses the
+normal icon-capable family; caption emphasis/truncation cannot consume its slot.
+The shared font definitions already include Phosphor fallback; this change is
+not a claim that the bold family lacks all icon coverage or that a screenshot
+alone identifies the installed-build cause.
+
+Primary click, Enter and focused Up/Down open the profile choices above the
+footer. Native menu and status selector share the same ordered stable-ID
+choices, icons and active marking. Choosing one uses the existing workspace
+restore path, including fullscreen handling and persistence; opening the menu
+does not select/cycle a workspace. Native Manage workspaces opens the existing
+manager. Right-click retains the independent widget visibility menu.
+
+Simple transport no longer duplicates the workspace cycling button. The main
+Workspace menu remains available when the footer/widget is hidden. Web footer
+uses the advertised profile names/icons and existing `set_workspace` command,
+not profile IDs as titles, hard-coded modes or the active browser tab. Missing
+or disconnected profile data cannot produce selectable invented workspaces.
+
+Pure native fixtures verify real pointer/keyboard selection by ID, upward popup
+placement, separate icon font, fixed geometry with long renamed captions and
+RTL placement across themes/display scales. Existing status end-anchor/value
+stability and workspace/fullscreen contract tests passed. Isolated native suite:
+834 passed, one existing ignored (835 total). Web/PWA build and 51 parity
+contracts passed. Runtime restart readiness and Cafe's existing GUI/smoke-launch
+denial remain independent delivery gates; these are not live visual acceptance.
+
 Frame rate stays visible when unavailable (`— fps`). Clicking cycles Media,
 Screen and Auto. Screen means measured native rendering cadence, not the
 monitor's advertised refresh rate. Auto uses media FPS while loaded and playing,

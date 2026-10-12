@@ -1,5 +1,20 @@
 use crate::app::PealayerApp;
 use eframe::egui;
+use crate::ui::dropdown::DropdownUiExt;
+
+/// Shared stable-ID choices for the main menu and status-bar selector.
+pub(crate) fn profile_choices(ui: &mut egui::Ui,
+    profiles: &[(String, crate::config::WorkspaceProfile)], active: Option<&str>) -> Option<String> {
+    let mut selected = None;
+    for (id, profile) in profiles {
+        let label = format!("{}  {}", crate::ui::icons::workspace_icon(&profile.icon), profile.name);
+        if ui.dropdown_choice(active == Some(id.as_str()), label).on_hover_text(&profile.name).clicked() {
+            selected = Some(id.clone());
+            ui.close();
+        }
+    }
+    selected
+}
 
 /// One manager for every workspace, including the two editable profiles that
 /// seed a first installation. The same stable IDs, names, icons, and ordering

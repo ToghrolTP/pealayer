@@ -714,7 +714,7 @@ const App: React.FC = () => {
           state={state}
           connected={connected}
           connectionMode={connectionMode}
-          activeSurface={activeTab === 'timeline' ? tr(runtime?.locale || 'en', 'Timeline') : tr(runtime?.locale || 'en', menuItems.find(item => item?.key === activeTab)?.label as string || activeTab)}
+          sendCmd={sendCmd}
           locale={runtime?.locale || 'en'}
           visibility={appConfig?.status_bar}
           onVisibilityChange={updateStatusBarVisibility}

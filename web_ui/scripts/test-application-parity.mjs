@@ -73,6 +73,7 @@ const contracts = [
   [library.includes("trigger={['contextMenu']}") && library.includes('Copy full path'), 'media entries expose application-style context actions'],
   [media.includes('state.osd') && css.includes('.media-osd--custom'), 'Web video surfaces render the native configurable OSD contract'],
   [app.includes('<ApplicationStatusBar') && statusBar.includes("trigger={['contextMenu']}") && statusBar.includes('status_rgb'), 'application footer renders live shared state and persisted context-menu visibility'],
+  [statusBar.includes("sendCmd('set_workspace', { profile: key })") && statusBar.includes('workspaceGlyph(activeWorkspace?.icon)') && statusBar.includes("trigger={['click']}") && !statusBar.includes('state.active_workspace_profile || state.workspace'), 'status workspace selector uses authoritative icons, renamed captions and stable-ID switching'],
   [css.includes('.studio-transport__play.ant-btn {') && css.includes('border-radius: 50%'), 'timeline play control keeps a circular hit target'],
   [css.includes('color-mix(in srgb, var(--accent) 74%') && !css.includes('.effect-profile__icon { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 8px; color: var(--green)'), 'decorative Web UI surfaces use the shared accent rather than Pealayer green'],
   [!rfManager.includes('setInterval'), 'RF manager uses push events and explicit refresh instead of polling'],

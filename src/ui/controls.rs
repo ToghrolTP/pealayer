@@ -1038,7 +1038,6 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     app.tr("Pin Controls")
                 };
                 let audio_tooltip = app.tr("Audio Settings...");
-                let workspace_tooltip = app.tr("Switch workspace");
                 let subtitles_tooltip = app.tr("Subtitle Settings...");
                 let mute_tooltip = format!(
                     "{} (M)",
@@ -1064,7 +1063,6 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 let mut toggle_fullscreen = false;
                 let mut toggle_pin = false;
                 let mut toggle_audio = false;
-                let mut toggle_workspace = false;
                 let mut toggle_subtitles = false;
                 let mut toggle_mute = false;
                 let mut toggle_total_mode = false;
@@ -1190,10 +1188,6 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             .button(crate::ui::icons::MUSIC_NOTE)
                             .on_hover_text(audio_tooltip)
                             .clicked();
-                        toggle_workspace = ui
-                            .button(crate::ui::icons::TABS)
-                            .on_hover_text(workspace_tooltip)
-                            .clicked();
                         toggle_subtitles = ui
                             .button(crate::ui::icons::SUBTITLES)
                             .on_hover_text(subtitles_tooltip)
@@ -1265,9 +1259,6 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 }
                 if toggle_audio {
                     app.show_audio_settings = !app.show_audio_settings;
-                }
-                if toggle_workspace {
-                    app.cycle_workspace_profile(&ctx);
                 }
                 if toggle_subtitles {
                     app.show_sub_settings = !app.show_sub_settings;
