@@ -2,8 +2,6 @@ import React from 'react';
 import type { RfSnapshot } from './RfManager';
 import { Button, Select, Slider, Tooltip } from 'antd';
 import {
-  FastBackwardOutlined,
-  FastForwardOutlined,
   StepBackwardOutlined,
   StepForwardOutlined,
   VideoCameraOutlined,
@@ -17,12 +15,15 @@ import { SeekbarMarkers, useSeekbar } from './seekbar';
 import type { AppearanceState } from '../appearance';
 import type { TimelineWheelPreferences } from '../timelineWheel';
 import type { HardwareMelody } from '../melodyCatalog';
+
+import { ControlBar } from './ControlBar';
 import { MediaTrackSelectors } from './MediaTrackSelectors';
-import { PlaybackButton } from './PlaybackButton';
-import { VolumeControl } from './VolumeControl';
+import type { ControlBarProps } from './ControlBar';
+import type { ControlBarsConfig } from '../controlBars';
 import { ElapsedTimeInput } from './ElapsedTimeInput';
 
 export interface PlayerState {
+  control_bars?: ControlBarsConfig;
   external_mpv?: {mode: 'internal' | 'external' | 'dual' | 'remote'; connected: boolean; endpoint: string; error?: string | null};
   app_icon_revision?: number;
   rf?: RfSnapshot;
@@ -250,6 +251,7 @@ export interface PlayerState {
 }
 
 interface RemoteControlTabProps {
+  controlBar: Pick<ControlBarProps, 'onLayoutChange' | 'onPreferences' | 'onFullscreen'>;
   state: PlayerState;
   sendCmd: (command: string, payload?: Record<string, any>) => Promise<boolean>;
   onOpenLibraryTab?: () => void;
@@ -277,6 +279,7 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
   apiBaseUrl,
   seekbarHoverThumbnails,
   mediaGestures,
+  controlBar,
 }) => {
   const seek = useSeekbar(state, sendCmd);
 
@@ -337,19 +340,7 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
 
       <div className="remote-player__controls">
         {(state.remote_browser?.previous_file || state.remote_browser?.next_file) && <Tooltip title="Previous file"><Button shape="circle" icon={<StepBackwardOutlined />} disabled={!state.remote_browser.previous_file} onClick={() => sendCmd('previous')} /></Tooltip>}
-        <Tooltip title={`${tr(locale, 'Seek backward')} ${quickSeekSeconds}s`}>
-          <Button shape="circle" icon={<FastBackwardOutlined />} disabled={!state.current_video || !state.seekable} onClick={() => sendCmd('seek', { seconds: -quickSeekSeconds })} />
-        </Tooltip>
-          <PlaybackButton
-            className="remote-player__play"
-            playing={state.playing}
-            loaded={Boolean(state.current_video)}
-            locale={locale}
-            onClick={() => sendCmd('toggle_pause')}
-          />
-        <Tooltip title={`${tr(locale, 'Seek forward')} ${quickSeekSeconds}s`}>
-          <Button shape="circle" icon={<FastForwardOutlined />} disabled={!state.current_video || !state.seekable} onClick={() => sendCmd('seek', { seconds: quickSeekSeconds })} />
-        </Tooltip>
+        <ControlBar state={state} sendCmd={sendCmd} locale={locale} surface="simple" quickSeekSeconds={quickSeekSeconds} {...controlBar} />
         {(state.remote_browser?.previous_file || state.remote_browser?.next_file) && <Tooltip title="Next file"><Button shape="circle" icon={<StepForwardOutlined />} disabled={!state.remote_browser.next_file} onClick={() => sendCmd('next')} /></Tooltip>}
       </div>
 
@@ -374,8 +365,6 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
       )}
 
       <MediaTrackSelectors state={state} sendCmd={sendCmd} locale={locale} />
-
-      <VolumeControl className="remote-player__volume" state={state} sendCmd={sendCmd} locale={locale} />
     </section>
   );
 };

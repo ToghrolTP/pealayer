@@ -1,6 +1,6 @@
 //! Intrinsic-width NLE transport: one row when it fits, with track/volume
 //! controls at the trailing end of the last row when the monitor narrows.
-use crate::app::{MediaTrackType, PealayerApp};
+use crate::app::PealayerApp;
 use eframe::egui;
 
 const VOLUME_WIDTH: f32 = 210.0;
@@ -68,15 +68,7 @@ fn button_height(ui: &egui::Ui) -> f32 {
 impl Metrics {
     pub(super) fn measure(app: &PealayerApp, ui: &egui::Ui) -> Self {
         let gap = ui.spacing().item_spacing.x;
-        let tracks = [
-            MediaTrackType::Video,
-            MediaTrackType::Audio,
-            MediaTrackType::Subtitle,
-        ]
-        .map(|kind| button_width(ui, &super::media_tracks::menu_button_label(kind)))
-        .iter()
-        .sum::<f32>()
-            + 2.0 * gap;
+        let tracks = super::control_bar::group_width(app, ui, crate::config::ControlBarSurface::Monitor, true);
         let total = match app.media_timeline_state() {
             crate::media::MediaTimelineState::Determining => format!(
                 "{} {}",
@@ -113,16 +105,15 @@ impl Metrics {
                 .x
         });
         Self {
-            transport: 2.0 * 30.0 + 2.0 * 44.0 + 3.0 * gap,
+            transport: super::control_bar::group_width(app, ui, crate::config::ControlBarSurface::Monitor, false),
             timeline_min: 104.0
                 + MIN_SEEK_WIDTH
                 + total_width
-                + button_width(ui, super::icons::ARROWS_OUT)
-                + 3.0 * gap,
+                + 2.0 * gap,
             tracks,
-            volume_min: 30.0 + 44.0 + 24.0 + 2.0 * gap,
+            volume_min: 44.0 + 24.0 + gap,
             gap,
-            row_height: button_height(ui),
+            row_height: button_height(ui).max(super::control_density::height(ui)),
             gap_y: ui.spacing().item_spacing.y,
         }
     }
@@ -248,83 +239,15 @@ fn draw_layout(ui: &mut egui::Ui, metrics: Metrics, mut draw: impl FnMut(Group, 
 }
 
 pub(super) fn draw(app: &mut PealayerApp, ui: &mut egui::Ui, metrics: Metrics) {
+    let control_owner=ui.make_persistent_id(("control-bar",crate::config::ControlBarSurface::Monitor));
     draw_layout(ui, metrics, |group, ui| match group {
-        Group::Transport => draw_transport(app, ui),
+        Group::Transport => super::control_bar::draw_group(app, ui, crate::config::ControlBarSurface::Monitor, false,control_owner),
         Group::Timeline => draw_timeline(app, ui),
-        Group::Tracks => {
-            ui.add_enabled_ui(app.current_video_path.is_some(), |ui| {
-                for (kind, id) in [
-                    (MediaTrackType::Video, "nle-video-track-menu"),
-                    (MediaTrackType::Audio, "nle-audio-track-menu"),
-                    (MediaTrackType::Subtitle, "nle-subtitle-track-menu"),
-                ] {
-                    super::media_tracks::menu_button(app, ui, kind, id);
-                }
-            });
-        }
+        Group::Tracks => super::control_bar::draw_group(app, ui, crate::config::ControlBarSurface::Monitor, true,control_owner),
         Group::Volume => {
             ui.add_enabled_ui(app.current_video_path.is_some(), |ui| {
-                super::controls::draw_volume_strip(app, ui);
+                super::controls::draw_volume_slider(app, ui);
             });
-        }
-    });
-}
-
-fn draw_transport(app: &mut PealayerApp, ui: &mut egui::Ui) {
-    ui.add_enabled_ui(app.current_video_path.is_some(), |ui| {
-        let finished = app.is_playback_finished();
-        let active = app.is_active_playback();
-        let (play_icon, play_tooltip) = if finished {
-            (super::icons::ARROW_COUNTER_CLOCKWISE, app.tr("Replay"))
-        } else if app.is_paused {
-            (super::icons::PLAY, app.tr("Play"))
-        } else {
-            (super::icons::PAUSE, app.tr("Pause"))
-        };
-        let play = super::controls::draw_contextual_transport_button(
-            app.color_palette,
-            ui,
-            play_icon,
-            super::controls::playback_button_role(app),
-            active,
-        )
-        .on_hover_text(play_tooltip)
-        .on_disabled_hover_text(app.tr("Open media to play."));
-        play.context_menu(|ui| super::controls::transport_context_menu(app, ui));
-        let stop = super::controls::draw_contextual_transport_button(
-            app.color_palette,
-            ui,
-            super::icons::STOP,
-            "red",
-            false,
-        )
-        .on_hover_text(app.tr("Stop"))
-        .on_disabled_hover_text(app.tr("Open media to play."));
-        stop.context_menu(|ui| super::controls::transport_context_menu(app, ui));
-        super::controls::draw_contextual_transport_nudge(
-            app,
-            ui,
-            ui.make_persistent_id("nle-transport-back"),
-            -1,
-            super::controls::TransportNudgeDensity::Compact,
-        );
-        super::controls::draw_contextual_transport_nudge(
-            app,
-            ui,
-            ui.make_persistent_id("nle-transport-forward"),
-            1,
-            super::controls::TransportNudgeDensity::Compact,
-        );
-        // Apply after rendering so one frame cannot mix old and new states.
-        if play.clicked() {
-            app.toggle_playback();
-        }
-        if stop.clicked() {
-            app.apply_interop_command(
-                &ui.ctx().clone(),
-                crate::platform::interop::InteropCommand::Stop,
-                "Program monitor",
-            );
         }
     });
 }
@@ -398,15 +321,6 @@ fn draw_timeline(app: &mut PealayerApp, ui: &mut egui::Ui) {
     // controls and left a visible, useless tail after fullscreen.
     let response = ui
         .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let fullscreen_response = ui
-                .button(crate::ui::icons::ARROWS_OUT)
-                .on_hover_text(format!("{} (F)", app.tr("Fullscreen")));
-            fullscreen_response
-                .context_menu(|ui| crate::ui::controls::transport_context_menu(app, ui));
-            if fullscreen_response.clicked() {
-                app.set_fullscreen(ui.ctx(), true);
-            }
-
             let total_response = ui
                 .add(egui::Label::new(total_text).sense(if finite_timeline {
                     egui::Sense::click()
@@ -459,6 +373,7 @@ fn draw_timeline(app: &mut PealayerApp, ui: &mut egui::Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::app::MediaTrackType;
 
     fn metrics() -> Metrics {
         Metrics {
@@ -598,5 +513,29 @@ mod tests {
     fn stop_uses_a_square_not_the_record_like_circled_glyph() {
         assert_ne!(super::super::icons::STOP, super::super::icons::STOP_CIRCLE);
         assert_eq!(super::super::icons::STOP, egui_phosphor::regular::STOP);
+    }
+
+    #[test]
+    fn customized_real_controls_fit_the_reserved_monitor_rows() {
+        let _lock=crate::app::tests::lock_app_tests();
+        for hidden in [true,false] {
+            for width in [240.0,400.0,700.0,1400.0] {
+                let ctx=egui::Context::default();
+                let mut app=PealayerApp::default();
+                app.control_bars.monitor.hidden=[hidden;crate::config::ControlBarAction::COUNT];
+                for _ in 0..3 {
+                    let mut output=ctx.run_ui(egui::RawInput {
+                        screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(width,600.0))),..Default::default()
+                    },|ui|{
+                        let available=ui.available_rect_before_wrap();
+                        let metrics=Metrics::measure(&app,ui);
+                        draw(&mut app,ui,metrics);
+                        let actual=ui.min_rect();
+                        assert!(actual.right()<=available.right()+1.0,"width {width}, hidden={hidden}: {actual:?} vs {available:?}");
+                        assert!(actual.height()<=metrics.height(available.width())+1.0,"reserved height at {width}, hidden={hidden}: {actual:?}");
+                    });output.textures_delta.clear();
+                }
+            }
+        }
     }
 }

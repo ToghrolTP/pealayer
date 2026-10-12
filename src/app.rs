@@ -14,9 +14,39 @@ pub(crate) struct PendingTimelineToolbarSave {
     flight: Option<TimelineToolbarSaveFlight>,
 }
 
-pub(crate) struct PendingStatusBarSave {
-    desired: crate::config::StatusBarConfig,
-    flight: Option<(crate::config::StatusBarConfig, std::sync::mpsc::Receiver<Result<serde_json::Value, String>>, std::time::Instant, bool)>,
+pub(crate) struct PendingBarSave<T> {
+    desired: T,
+    flight: Option<(T, std::sync::mpsc::Receiver<Result<serde_json::Value, String>>, std::time::Instant, bool)>,
+}
+type PendingStatusBarSave=PendingBarSave<crate::config::StatusBarConfig>;
+type PendingControlBarSave=PendingBarSave<crate::config::ControlBarsConfig>;
+
+/// Same narrow compare-and-set/coalescing path for both user-owned bars.
+/// It never snapshots dock/workspace state while a panel borrows that state.
+fn poll_bar_save<T:Copy+PartialEq+serde::Serialize>(pending:&mut PendingBarSave<T>,key:&str,
+    read:impl Fn(&crate::config::AppConfig)->T,apply:impl Fn(&mut crate::config::AppConfig,T))->Result<bool,String> {
+    let Some(client)=crate::peer::client() else {
+        let mut config=crate::platform::interop::get_live_config();
+        if read(&config)==pending.desired {return Ok(true);}
+        apply(&mut config,pending.desired);
+        config.save()?; crate::platform::interop::set_live_config(config); return Ok(true);
+    };
+    let current=read(&client.snapshot().ok_or("Remote preferences are unavailable")?.session.config);
+    if let Some((sent,reply,started,accepted))=&mut pending.flight {
+        if !*accepted {match reply.try_recv() {
+            Ok(result)=>{result?; *accepted=true;},
+            Err(std::sync::mpsc::TryRecvError::Disconnected)=>return Err("Preference save dispatcher stopped".into()),
+            Err(std::sync::mpsc::TryRecvError::Empty)=>{},
+        }}
+        if *accepted && current==*sent {pending.flight=None;}
+        else if started.elapsed()>std::time::Duration::from_secs(20) {return Err("Preference save was not confirmed by the authority".into());}
+        else {return Ok(false);}
+    }
+    if current==pending.desired {return Ok(true);}
+    let mut expected=serde_json::Map::new(); expected.insert(key.into(),serde_json::to_value(current).map_err(|e|e.to_string())?);
+    let mut values=serde_json::Map::new(); values.insert(key.into(),serde_json::to_value(pending.desired).map_err(|e|e.to_string())?);
+    let reply=client.queue_with_reply("/api/peer/config",serde_json::json!({"operation":"save","expected":expected,"values":values}))?;
+    pending.flight=Some((pending.desired,reply,std::time::Instant::now(),false)); Ok(false)
 }
 
 struct TimelineToolbarSaveFlight {
@@ -815,6 +845,7 @@ pub struct PealayerApp {
     pub(crate) timeline_toolbar_hidden: Vec<crate::config::TimelineToolbarAction>,
     pub(crate) pending_timeline_toolbar_save: Option<PendingTimelineToolbarSave>,
     pub(crate) pending_status_bar_save: Option<PendingStatusBarSave>,
+    pub(crate) pending_control_bar_save: Option<PendingControlBarSave>,
     pub(crate) workspace_rendering: bool,
     pub(crate) deferred_config_save: bool,
     pub(crate) non_user_control_visibility: crate::config::NonUserControlVisibility,
@@ -835,6 +866,7 @@ pub struct PealayerApp {
     pub(crate) native_dialog_windows: bool,
     pub(crate) native_preferences: Option<crate::ui::preferences::NativePreferencesController>,
     pub(crate) status_bar: crate::config::StatusBarConfig,
+    pub(crate) control_bars: crate::config::ControlBarsConfig,
     pub(crate) config_fingerprint: Option<u64>,
     pub(crate) config_watcher: Option<crate::config::ConfigFileWatcher>,
     pub(crate) config_reload_due: Option<std::time::Instant>,
@@ -985,6 +1017,7 @@ impl eframe::App for PealayerApp {
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.flush_timeline_toolbar_save(ctx);
         self.flush_status_bar_save(ctx);
+        self.flush_control_bar_save(ctx);
         if std::mem::take(&mut self.deferred_config_save) {
             self.save_config();
         }
@@ -1531,6 +1564,7 @@ impl eframe::App for PealayerApp {
                     .collect(),
                 current_chapter_index,
                 seekbar_markers: self.seekbar_markers.clone(),
+                control_bars: self.control_bars,
                 timeline_keyframes: self.timeline.keyframes.clone(),
                 seek_pending: self.is_scrubbing || self.pending_scrub_commit.is_some(),
                 settled_seek_revision: self.settled_seek_revision,
@@ -4210,6 +4244,12 @@ impl PealayerApp {
             InteropCommand::NextChapter => self.next_media_chapter(),
             InteropCommand::SetChapter { index } => self.jump_to_media_chapter(index),
             InteropCommand::Seek { seconds } => self.seek_relative(seconds),
+            InteropCommand::TransportNudge { direction } => {
+                if self.current_video_path.is_some() {
+                    if self.is_paused { self.step_frames(direction); }
+                    else if self.is_seekable { self.seek_relative(f64::from(direction)*self.quick_seek_seconds); }
+                }
+            },
             InteropCommand::SeekTo { seconds } => {
                 if self.is_seekable {
                     let target = seconds.max(0.0).min(self.duration);
@@ -6970,6 +7010,7 @@ impl PealayerApp {
         cfg.native_dialog_windows = self.native_dialog_windows;
         cfg.auto_reload_config = self.auto_reload_config;
         cfg.status_bar = self.status_bar;
+        cfg.control_bars = self.control_bars;
         cfg.window_geometry = self.window_geometry;
         let mut dock_state = self.dock_state.clone();
         crate::ui::layout::sanitize_dock_rects(&mut dock_state);
@@ -7056,34 +7097,10 @@ impl PealayerApp {
     /// or synchronously wait for the remote authority from a footer click.
     fn flush_status_bar_save(&mut self, ctx: &egui::Context) {
         let Some(mut pending) = self.pending_status_bar_save.take() else { return };
-        let result = (|| -> Result<bool, String> {
-            let Some(client) = crate::peer::client() else {
-                let mut config = crate::platform::interop::get_live_config();
-                config.status_bar = pending.desired;
-                config.save()?;
-                crate::platform::interop::set_live_config(config);
-                self.config_fingerprint = crate::config::AppConfig::fingerprint(&crate::config::AppConfig::get_config_path()).ok();
-                return Ok(true);
-            };
-            let current = client.snapshot().ok_or("Remote status bar state is unavailable")?.session.config.status_bar;
-            if let Some((sent, reply, started, accepted)) = &mut pending.flight {
-                if !*accepted {
-                    match reply.try_recv() {
-                        Ok(result) => { result?; *accepted = true; },
-                        Err(std::sync::mpsc::TryRecvError::Disconnected) => return Err("Status bar save dispatcher stopped".into()),
-                        Err(std::sync::mpsc::TryRecvError::Empty) => {},
-                    }
-                }
-                if *accepted && current == *sent { pending.flight = None; }
-                else if started.elapsed() > std::time::Duration::from_secs(20) { return Err("Status bar save was not confirmed by the authority".into()); }
-                else { return Ok(false); }
-            }
-            if current == pending.desired { return Ok(true); }
-            let reply = client.queue_with_reply("/api/peer/config", serde_json::json!({"operation":"save",
-                "expected":{"status_bar":current}, "values":{"status_bar":pending.desired}}))?;
-            pending.flight = Some((pending.desired, reply, std::time::Instant::now(), false));
-            Ok(false)
-        })();
+        let result = poll_bar_save(&mut pending,"status_bar",|config|config.status_bar,|config,value|config.status_bar=value);
+        if matches!(result,Ok(true)) {
+            self.config_fingerprint=crate::config::AppConfig::fingerprint(&crate::config::AppConfig::get_config_path()).ok();
+        }
         match result {
             Ok(true) => self.config_status = "Status bar saved".into(),
             Ok(false) => { self.pending_status_bar_save = Some(pending); ctx.request_repaint_after(std::time::Duration::from_millis(100)); },
@@ -7102,6 +7119,28 @@ impl PealayerApp {
         self.timeline_follow_playhead = preferences.follow;
         self.timeline_toolbar_order = crate::config::normalize_timeline_toolbar_order(&preferences.order);
         self.timeline_toolbar_hidden = preferences.hidden.clone();
+    }
+
+    pub(crate) fn request_control_bar_save(&mut self,ctx:&egui::Context) {
+        if let Some(pending)=&mut self.pending_control_bar_save {pending.desired=self.control_bars;}
+        else {self.pending_control_bar_save=Some(PendingBarSave {desired:self.control_bars,flight:None});}
+        ctx.request_repaint();
+    }
+    fn flush_control_bar_save(&mut self,ctx:&egui::Context) {
+        if self.show_preferences_dialog || self.preference_preview_original.is_some() {return;}
+        let Some(mut pending)=self.pending_control_bar_save.take() else {return};
+        match poll_bar_save(&mut pending,"control_bars",|c|c.control_bars,|c,v|c.control_bars=v) {
+            Ok(true)=>{self.config_status="Control bar saved".into();
+                self.config_fingerprint=crate::config::AppConfig::fingerprint(&crate::config::AppConfig::get_config_path()).ok();},
+            Ok(false)=>{self.pending_control_bar_save=Some(pending);ctx.request_repaint_after(std::time::Duration::from_millis(100));},
+            Err(error)=>{
+                self.control_bars=crate::peer::client().and_then(|c|c.snapshot()).map(|s|s.session.config.control_bars)
+                    .unwrap_or_else(||crate::platform::interop::get_live_config().control_bars);
+                self.config_status=error.clone();
+                let _=crate::messaging::publish(crate::messaging::ToastRequest {id:Some("control_bars.save".into()),
+                    title:"Control bar change could not be saved".into(),message:error,severity:crate::messaging::Severity::Warning,timeout_ms:8000},"control_bar");
+            }
+        }
     }
 
     /// Runs outside panel drawing. Only toolbar keys are persisted or sent;
@@ -7353,6 +7392,7 @@ impl PealayerApp {
         self.native_dialog_windows = config.native_dialog_windows;
         self.auto_reload_config = config.auto_reload_config;
         self.status_bar = config.status_bar;
+        self.control_bars = config.control_bars;
         self.workspace_profiles = config.workspace_profiles.clone();
         self.active_workspace_profile = config.active_workspace_profile.clone();
         self.effect_library_draft = config.effect_working_draft.clone().unwrap_or_default();
@@ -7515,6 +7555,12 @@ impl PealayerApp {
                 }
                 match operation {
                     "save"=>{
+                        if owner.is_some() && value.get("values").and_then(serde_json::Value::as_object)
+                            .is_some_and(|values|!values.is_empty()&&values.keys().all(|key|
+                                crate::config::TimelineToolbarPreferences::owns_key(key)
+                                || matches!(key.as_str(),"control_bars"|"status_bar"))) {
+                            return Err("Finish the Preferences preview before customizing toolbars".into());
+                        }
                         crate::peer::validate_config_expectations(&crate::platform::interop::get_live_config(), value.get("expected"))?;
                         let config=crate::platform::interop::get_live_config().apply_patch(value.get("values").ok_or("Configuration values are required")?)?;
                         config.save()?;
@@ -7522,9 +7568,15 @@ impl PealayerApp {
                         // reset media properties or replace the working effect.
                         if value.get("values").and_then(serde_json::Value::as_object)
                             .is_some_and(|values| !values.is_empty() && values.keys().all(|key|
-                                crate::config::TimelineToolbarPreferences::owns_key(key)))
+                                crate::config::TimelineToolbarPreferences::owns_key(key)
+                                || matches!(key.as_str(), "control_bars" | "status_bar")))
                         {
-                            self.apply_timeline_toolbar_preferences(&crate::config::TimelineToolbarPreferences::from_config(&config));
+                            let values=value["values"].as_object().unwrap();
+                            if values.keys().any(|key|crate::config::TimelineToolbarPreferences::owns_key(key)) {
+                                self.apply_timeline_toolbar_preferences(&crate::config::TimelineToolbarPreferences::from_config(&config));
+                            }
+                            if values.contains_key("control_bars") {self.control_bars = config.control_bars;}
+                            if values.contains_key("status_bar") {self.status_bar = config.status_bar;}
                             crate::platform::interop::set_live_config(config);
                             self.config_fingerprint = crate::config::AppConfig::fingerprint(
                                 &crate::config::AppConfig::get_config_path()).ok();
@@ -7590,17 +7642,18 @@ impl PealayerApp {
                 pending.desired.apply(&mut config);
             }
             if let Some(pending) = &self.pending_status_bar_save { config.status_bar = pending.desired; }
+            if let Some(pending) = &self.pending_control_bar_save { config.control_bars = pending.desired; }
             let workspace_changed=state.config.as_ref().is_none_or(|old|old.active_workspace_profile!=config.active_workspace_profile || old.workspace_session.nle!=config.workspace_session.nle || old.workspace_dock_layout!=config.workspace_dock_layout);
-            let status_bar_only = state.config.as_ref().is_some_and(|old| {
-                let mut comparison = old.clone(); comparison.status_bar = config.status_bar; comparison == config
+            let bar_preferences_only = state.config.as_ref().is_some_and(|old| {
+                let mut comparison = old.clone(); comparison.status_bar = config.status_bar;
+                comparison.control_bars=config.control_bars;
+                crate::config::TimelineToolbarPreferences::from_config(&config).apply(&mut comparison);
+                comparison == config
             });
-            if status_bar_only {
-                self.status_bar = config.status_bar;
-                crate::platform::interop::set_live_config(snapshot.session.config.clone());
-            } else if state.config.as_ref().is_some_and(|old|
-                crate::config::TimelineToolbarPreferences::only_changed(old, &config))
-            {
+            if bar_preferences_only {
                 self.apply_timeline_toolbar_preferences(&crate::config::TimelineToolbarPreferences::from_config(&config));
+                self.status_bar = config.status_bar;
+                self.control_bars=config.control_bars;
                 crate::platform::interop::set_live_config(snapshot.session.config.clone());
             } else if let Err(error)=crate::peer::mirror(||self.apply_runtime_config(ctx,config.clone())){self.config_status=error;}
             if workspace_changed{
@@ -9398,6 +9451,7 @@ impl Default for PealayerApp {
             timeline_toolbar_hidden: crate::config::default_timeline_toolbar_hidden(),
             pending_timeline_toolbar_save: None,
             pending_status_bar_save: None,
+            pending_control_bar_save: None,
             workspace_rendering: false,
             deferred_config_save: false,
             non_user_control_visibility: crate::config::NonUserControlVisibility::Dimmed,
@@ -9418,6 +9472,7 @@ impl Default for PealayerApp {
             native_dialog_windows: true,
             native_preferences: None,
             status_bar: crate::config::StatusBarConfig::default(),
+            control_bars: crate::config::ControlBarsConfig::default(),
             config_fingerprint: crate::config::AppConfig::fingerprint(
                 &crate::config::AppConfig::get_config_path(),
             )
@@ -9510,6 +9565,46 @@ pub(crate) mod tests {
         assert!(values.get("workspace_dock_layout").is_none());
         assert!(values.get("workspace_session").is_none());
         assert!(app.pending_timeline_toolbar_save.as_ref().unwrap().flight.is_none());
+        app.control_bars.monitor.hidden[crate::config::ControlBarAction::Stop as usize]=true;
+        app.request_control_bar_save(&egui::Context::default());
+        assert!(app.pending_control_bar_save.as_ref().unwrap().flight.is_none());
+        assert_eq!(app.pending_control_bar_save.as_ref().unwrap().desired,app.control_bars);
+    }
+
+    #[test]
+    fn narrow_bar_saves_and_peer_edits_preserve_live_workspace_and_authoring() {
+        let _lock=lock_app_tests();
+        let original=crate::platform::interop::get_live_config();
+        let mut live=crate::config::AppConfig::default();
+        live.active_workspace_profile=Some("authoring".into());
+        live.workspace_session.name="Preserve this layout".into();
+        crate::platform::interop::set_live_config(live.clone());
+        let ctx=egui::Context::default();
+        let mut app=PealayerApp::default();
+        app.workspace_rendering=true;
+        app.dock_state=egui_dock::DockState::new(vec![]);
+        app.control_bars.simple.hidden[crate::config::ControlBarAction::Mute as usize]=true;
+        app.request_control_bar_save(&ctx);
+        app.control_bars.monitor.end[crate::config::ControlBarAction::Stop as usize]=true;
+        app.request_control_bar_save(&ctx);
+        app.flush_control_bar_save(&ctx);
+        assert!(app.pending_control_bar_save.is_none());
+        let saved=crate::platform::interop::get_live_config();
+        assert_eq!(saved.workspace_session,live.workspace_session);
+        assert_eq!(saved.active_workspace_profile,live.active_workspace_profile);
+        assert_eq!(saved.control_bars,app.control_bars);
+        let desired=crate::config::ControlBarsConfig::default();
+        app.timeline.keyframes.push(crate::four_d::models::TimelineKeyframe {id:uuid::Uuid::new_v4(),time_ms:123,label:"Uncommitted timeline".into()});
+        let dock_before=serde_json::to_value(&app.dock_state).unwrap();
+        app.apply_peer_request(&ctx,"/api/peer/config",serde_json::json!({
+            "operation":"save","expected":{"control_bars":saved.control_bars},
+            "values":{"control_bars":desired}
+        })).unwrap();
+        assert_eq!(app.control_bars,desired);
+        assert_eq!(app.timeline.keyframes[0].label,"Uncommitted timeline");
+        assert_eq!(serde_json::to_value(&app.dock_state).unwrap(),dock_before);
+        assert_eq!(crate::platform::interop::get_live_config().workspace_session,live.workspace_session);
+        crate::platform::interop::set_live_config(original);
     }
 
     #[test]

@@ -87,11 +87,23 @@ pub(crate) fn draw_volume_strip(app: &mut PealayerApp, ui: &mut egui::Ui) {
     }
 }
 
+/// The customizable bar owns Mute; keep its slider and percentage independent.
+pub(crate) fn draw_volume_slider(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    if let Some(value) = volume_slider_widgets(ui, app.volume, &app.tr("Volume")) {
+        app.apply_interop_command(ui.ctx(), crate::platform::interop::InteropCommand::SetVolume { value },
+            "Volume control");
+    }
+}
+
 pub(super) fn draw_volume_widgets(ui: &mut egui::Ui, palette: crate::config::ColorPalette,
-    muted: bool, mut volume: f64, mute_tooltip: &str, volume_label: &str) -> (bool, Option<f64>) {
+    muted: bool, volume: f64, mute_tooltip: &str, volume_label: &str) -> (bool, Option<f64>) {
     let icon = if muted { crate::ui::icons::SPEAKER_SLASH } else { crate::ui::icons::SPEAKER_HIGH };
     let toggle_mute = ui.add_sized([30.0, 22.0], transport_button(palette, ui, icon,
         if muted { "amber" } else { "muted" })).on_hover_text(mute_tooltip).clicked();
+    (toggle_mute, volume_slider_widgets(ui, volume, volume_label))
+}
+
+fn volume_slider_widgets(ui: &mut egui::Ui, mut volume: f64, volume_label: &str) -> Option<f64> {
     let old_width = ui.spacing().slider_width;
     // Reserve a stable percentage column, even when the value has fewer digits.
     ui.spacing_mut().slider_width = (ui.available_width() - 44.0 - 2.0 * ui.spacing().item_spacing.x).max(1.0);
@@ -107,7 +119,7 @@ pub(super) fn draw_volume_widgets(ui: &mut egui::Ui, palette: crate::config::Col
     }
     ui.add_sized([44.0, 22.0], egui::Label::new(timecode_text(format!("{:.0}%", volume))))
         .on_hover_text(volume_label);
-    (toggle_mute, (response.changed() || wheel != 0.0).then_some(volume))
+    (response.changed() || wheel != 0.0).then_some(volume)
 }
 
 pub fn timecode_text(value: impl Into<String>) -> egui::RichText {
@@ -301,7 +313,7 @@ pub(crate) fn paint_seekbar_markers(
     nearest_chapter.filter(|_| operating).map(|chapter| chapter.time_seconds)
 }
 
-fn compact_number(value: f64) -> String {
+pub(crate) fn compact_number(value: f64) -> String {
     let mut rendered = format!("{value:.3}");
     while rendered.contains('.') && rendered.ends_with('0') {
         rendered.pop();
@@ -310,6 +322,17 @@ fn compact_number(value: f64) -> String {
         rendered.pop();
     }
     rendered
+}
+
+/// Preserve the mode crossfade while the shared control owns input and dragging.
+pub(crate) fn paint_transport_nudge(app:&PealayerApp, ui:&egui::Ui, rect:egui::Rect, id:egui::Id, direction:i32, enabled:bool) {
+    let alpha=super::motion::hover_alpha(ui,id.with("paused-mode"),app.is_paused);
+    let seek=format!("{} {}",if direction<0{super::icons::REWIND}else{super::icons::FAST_FORWARD},compact_number(app.quick_seek_seconds));
+    let frames=format!("{} {}",if direction<0{super::icons::SKIP_BACK}else{super::icons::SKIP_FORWARD},app.frame_step_count);
+    let color=if enabled{ui.visuals().text_color()}else{ui.visuals().weak_text_color()};
+    let font=egui::TextStyle::Button.resolve(ui.style());
+    ui.painter().text(rect.center()-egui::vec2(0.0,4.0*alpha),egui::Align2::CENTER_CENTER,seek,font.clone(),color.gamma_multiply(1.0-alpha));
+    ui.painter().text(rect.center()+egui::vec2(0.0,4.0*(1.0-alpha)),egui::Align2::CENTER_CENTER,frames,font,color.gamma_multiply(alpha));
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -1031,91 +1054,20 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     }
                 };
 
-                let fullscreen_tooltip = format!("{} (F)", app.tr("Fullscreen"));
-                let pin_tooltip = if app.pin_controls {
-                    app.tr("Unpin Controls")
-                } else {
-                    app.tr("Pin Controls")
-                };
-                let audio_tooltip = app.tr("Audio Settings...");
-                let subtitles_tooltip = app.tr("Subtitle Settings...");
-                let mute_tooltip = format!(
-                    "{} (M)",
-                    if app.is_muted {
-                        app.tr("Unmute")
-                    } else {
-                        app.tr("Mute")
-                    }
-                );
-                let pin_icon = if app.pin_controls {
-                    crate::ui::icons::PUSH_PIN_SLASH
-                } else {
-                    crate::ui::icons::PUSH_PIN
-                };
-                let mute_icon = if app.is_muted {
-                    crate::ui::icons::SPEAKER_SLASH
-                } else {
-                    crate::ui::icons::SPEAKER_HIGH
-                };
-                let transport_palette = app.color_palette;
-                let mute_role = if app.is_muted { "amber" } else { "muted" };
                 let mut volume = app.volume;
-                let mut toggle_fullscreen = false;
-                let mut toggle_pin = false;
-                let mut toggle_audio = false;
-                let mut toggle_subtitles = false;
-                let mut toggle_mute = false;
                 let mut toggle_total_mode = false;
                 let mut volume_update = None;
 
+                // Sides borrows both callbacks together, but invokes them
+                // sequentially. Each callback owns a short exclusive app borrow.
+                let app_cell = std::cell::RefCell::new(&mut *app);
+                let control_owner=ui.make_persistent_id(("control-bar",crate::config::ControlBarSurface::Simple));
                 egui::containers::Sides::new().shrink_left().show(
                     ui,
                     |ui| {
-                        ui.add_enabled_ui(has_video, |ui| {
-                            let mut toggle_playback_requested = false;
-                            draw_contextual_transport_nudge(
-                                app,
-                                ui,
-                                ui.make_persistent_id("simple-transport-back"),
-                                -1,
-                                TransportNudgeDensity::Labeled,
-                            );
-
-                            let play_icon = if app.is_playback_finished() {
-                                crate::ui::icons::ARROW_COUNTER_CLOCKWISE
-                            } else if app.is_paused {
-                                crate::ui::icons::PLAY
-                            } else {
-                                crate::ui::icons::PAUSE
-                            };
-                            let play_tooltip = if app.is_playback_finished() {
-                                app.tr("Replay")
-                            } else if app.is_paused {
-                                app.tr("Play")
-                            } else {
-                                app.tr("Pause")
-                            };
-                            let play_response = ui
-                                .add_sized([30.0, 22.0], transport_button(transport_palette, ui, play_icon, playback_button_role(app)))
-                                .on_hover_text(play_tooltip);
-                            play_response.context_menu(|ui| transport_context_menu(app, ui));
-                            if play_response.clicked() {
-                                // Apply after both contextual buttons are drawn
-                                // so one frame cannot render mismatched modes.
-                                toggle_playback_requested = true;
-                            }
-
-                            draw_contextual_transport_nudge(
-                                app,
-                                ui,
-                                ui.make_persistent_id("simple-transport-forward"),
-                                1,
-                                TransportNudgeDensity::Labeled,
-                            );
-                            if toggle_playback_requested {
-                                app.toggle_playback();
-                            }
-                        });
+                        let mut borrowed = app_cell.borrow_mut();
+                        let app = &mut **borrowed;
+                        super::control_bar::draw_group(app, ui, crate::config::ControlBarSurface::Simple, false, control_owner);
 
                         draw_elapsed_editor(
                             app,
@@ -1179,19 +1131,9 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         }
                     },
                     |ui| {
-                        toggle_fullscreen = ui
-                            .button(crate::ui::icons::ARROWS_OUT)
-                            .on_hover_text(fullscreen_tooltip)
-                            .clicked();
-                        toggle_pin = ui.button(pin_icon).on_hover_text(pin_tooltip).clicked();
-                        toggle_audio = ui
-                            .button(crate::ui::icons::MUSIC_NOTE)
-                            .on_hover_text(audio_tooltip)
-                            .clicked();
-                        toggle_subtitles = ui
-                            .button(crate::ui::icons::SUBTITLES)
-                            .on_hover_text(subtitles_tooltip)
-                            .clicked();
+                        let mut borrowed = app_cell.borrow_mut();
+                        let app = &mut **borrowed;
+                        super::control_bar::draw_group(app, ui, crate::config::ControlBarSurface::Simple, true, control_owner);
 
                         ui.add_enabled_ui(has_video, |ui| {
                             let volume_slider =
@@ -1223,10 +1165,6 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     );
                                 }
                             }
-                            toggle_mute = ui
-                                .add(transport_button(transport_palette, ui, mute_icon, mute_role))
-                                .on_hover_text(mute_tooltip)
-                                .clicked();
                         });
 
                         let total_label = if total_is_toggle {
@@ -1244,33 +1182,13 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         toggle_total_mode = total_is_toggle && total_response.clicked();
                     },
                 );
+                drop(app_cell);
 
-                if toggle_fullscreen {
-                    app.toggle_fullscreen(&ctx);
-                }
-                if toggle_pin {
-                    app.pin_controls = !app.pin_controls;
-                    app.set_osd(if app.pin_controls {
-                        app.tr("Controls Pinned")
-                    } else {
-                        app.tr("Controls Unpinned")
-                    });
-                    app.save_config();
-                }
-                if toggle_audio {
-                    app.show_audio_settings = !app.show_audio_settings;
-                }
-                if toggle_subtitles {
-                    app.show_sub_settings = !app.show_sub_settings;
-                }
                 if let Some(new_volume) = volume_update {
                     let _ = app.mpv.set_property("volume", new_volume);
                     app.volume = new_volume;
                     app.set_osd(format!("{}: {:.0}%", app.tr("Volume"), new_volume));
                     app.save_config();
-                }
-                if toggle_mute {
-                    app.toggle_audio_muted();
                 }
                 if toggle_total_mode {
                     app.show_remaining_time = !app.show_remaining_time;

@@ -21,6 +21,7 @@ import { useClipboardUrls } from './clipboardUrls';
 import './remote-location.css';
 import type { PlayerState } from './components/RemoteControlTab';
 import type { MediaGesturePreferences } from './components/MediaSurface';
+import type { ControlLayout, ControlSurface } from './controlBars';
 import { tr } from './i18n';
 import { useWebPlatform } from './webPlatform';
 import './styles.css';
@@ -326,6 +327,27 @@ const App: React.FC = () => {
     if (state.remote_browser?.visible && state.remote_browser.target === target) return;
     void sendCmd('pealayer.remote.browse', { target, clipboard: true });
   }, [sendCmd, state.remote_browser?.target, state.remote_browser?.visible]);
+
+  const updateControlBar = useCallback(async (surface: ControlSurface, layout: ControlLayout) => {
+    try {
+      // Read the latest authority before a narrow CAS; never overwrite a peer's
+      // other bar or the working dock/session with a cached full config.
+      const currentResponse = await fetch(apiEndpoint('/api/config'), {signal:AbortSignal.timeout(10000)});
+      if (!currentResponse.ok) throw new Error('Remote preferences are unavailable');
+      const current = await currentResponse.json();
+      if (!current.control_bars) throw new Error('Control bar preferences are unavailable');
+      const next = { ...current.control_bars, [surface]: layout };
+      const response = await fetch(apiEndpoint('/api/peer/config'), {
+        method: 'POST', headers: {'Content-Type':'application/json'},signal:AbortSignal.timeout(10000),
+        body: JSON.stringify({operation:'save', expected:{control_bars:current.control_bars}, values:{control_bars:next}}),
+      });
+      const reply = await response.json();
+      if (!response.ok || reply.error) throw new Error(reply.error || 'Control bar update failed');
+      return true;
+    } catch(error) { void message.error(String(error));return false; }
+  },[apiEndpoint]);
+  const controlBar = {onLayoutChange:updateControlBar, onPreferences:()=>setActiveTab('preferences'),
+    onFullscreen:()=>{void platform.toggleFullscreen();}};
   useClipboardUrls(appConfig?.clipboard_url_detection === true, connected, browseClipboard);
 
   const resolveWebSocketUrl = useCallback(() => {
@@ -657,6 +679,7 @@ const App: React.FC = () => {
             <React.Suspense fallback={<FujiLoader locale={runtime?.locale || 'en'} />}>
             {activeTab === 'timeline' && (
               <StudioTab
+                controlBar={controlBar}
                 state={state}
                 sendCmd={sendCmd}
                 locale={runtime?.locale || 'en'}
@@ -676,6 +699,7 @@ const App: React.FC = () => {
             )}
             {activeTab === 'player' && (
               <RemoteControlTab
+                controlBar={controlBar}
                 state={state}
                 sendCmd={sendCmd}
                 onOpenLibraryTab={() => setActiveTab('library')}

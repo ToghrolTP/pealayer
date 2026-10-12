@@ -10,6 +10,11 @@ statements are not the present product state.
 
 ## Delivered source and deployment
 
+- Simple and Program Monitor action buttons share context menus, saved order,
+  start/end placement and hide/restore, with safe primary drag, Escape and
+  contextual transport. [Customization contract and regression coverage](control-bar-customization.md)
+  retain dock/authoring-safe persistence and local/Cafe runtime acceptance gates.
+
 - The status workspace item is an icon-labelled profile dropdown; Simple's
   duplicate transport cycling button is removed. [Shared selection and checks](status-bar-widgets.md)
   preserve renamed titles, stable IDs, trailing anchoring and deployment gates.

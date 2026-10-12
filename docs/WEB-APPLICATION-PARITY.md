@@ -97,6 +97,13 @@ uses the shared Rust preference contract, so Web preferences can configure the
 native authority too. This is **not** a claim that React already has equivalent
 draggable ruler controls; that counterpart remains part of timeline parity.
 
+Control-bar follow-up (12 October): [shared customization](verification/control-bar-customization.md)
+covers native Simple/Program Monitor and Web player/Monitor action menus,
+saved ordering, logical start/end placement and hide/restore. Native gesture
+helpers are shared with the ruler; React action bars share one component and
+the same semantic preference schema. This does not complete React ruler-toolbar
+parity or establish installed/native/mobile gesture acceptance.
+
 | Area | Current state | Completion evidence | Remaining work |
 | --- | --- | --- | --- |
 | Application shell | In progress | Installable SPA/PWA, responsive navigation, shared appearance and connection state; footer now consumes the native persisted visibility contract and exposes right-click hide/show actions | Finish application-style command header and compact/mobile command access |
