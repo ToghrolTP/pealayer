@@ -180,9 +180,21 @@ pub fn draw_warning(app: &mut crate::app::PealayerApp, ctx: &eframe::egui::Conte
         return;
     }
     let mut dismiss = false;
-    egui::Modal::new(popup_id).show(ctx,|ui| {
-        ui.set_max_width(460.0);
-        ui.heading(format!("{} Publishing authority",crate::ui::icons::WARNING));
+    let close_label = app.tr("Close");
+    let dismiss_label = app.tr("Dismiss");
+    let dismiss_help = app.tr("Close this prompt without changing publishing authority or pending requests.");
+    let heading = app.tr("Publishing authority");
+    let response = egui::Modal::new(popup_id).show(ctx,|ui| {
+        ui.set_width((ctx.content_rect().width() - 64.0).clamp(180.0, 460.0));
+        ui.horizontal(|ui| {
+            ui.add(egui::Label::new(egui::RichText::new(format!("{} {heading}",
+                crate::ui::icons::WARNING)).heading()).truncate());
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                dismiss |= ui.add_sized([32.0, 32.0], egui::Button::new(
+                    egui::RichText::new("×").size(22.0)).frame(false))
+                    .on_hover_text(&close_label).clicked();
+            });
+        });
         if owner {
             let claim=pending.as_ref().unwrap();
             ui.label(format!("{} requests control of the media clock and hardware timeline.",claim.label));
@@ -190,7 +202,7 @@ pub fn draw_warning(app: &mut crate::app::PealayerApp, ctx: &eframe::egui::Conte
             if crate::platform::interop::allow_unattended_hardware_takeover() && !state.exclusive {
                 ui.label("Unattended handoff is enabled. Playback pauses before control is transferred.");
             }
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 if crate::ui::dialog::action_button(ui,crate::ui::icons::X,"Decline").clicked(){request(app,"reject",&claim.client_id);dismiss=true;}
                 ui.add_enabled_ui(app.is_paused && !state.exclusive,|ui|{
                     if crate::ui::dialog::primary_action_button(ui,crate::ui::icons::CHECK,"Accept handoff").clicked(){request(app,"accept",&claim.client_id);dismiss=true;}
@@ -199,15 +211,21 @@ pub fn draw_warning(app: &mut crate::app::PealayerApp, ctx: &eframe::egui::Conte
         } else {
             ui.label(format!("{} owns hardware playback. This instance is not publishing a competing timeline.",state.owner_label));
             if state.exclusive {ui.label("Production is locked. Hardware controls are read-only; E-STOP remains available.");}
-            ui.horizontal(|ui| {
-                if crate::ui::dialog::action_button(ui,crate::ui::icons::EYE,"Monitor").clicked(){dismiss=true;}
+            ui.horizontal_wrapped(|ui| {
                 if connect_button(ui, &state) { dismiss = true; }
                 ui.add_enabled_ui(!state.exclusive && !state.request_pending(&id),|ui|{
                     if crate::ui::dialog::primary_action_button(ui,crate::ui::icons::BROADCAST,"Request handoff").clicked(){request(app,"request","");dismiss=true;}
                 });
             });
         }
+        ui.separator();
+        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            dismiss |= crate::ui::dialog::action_button(ui, crate::ui::icons::X, &dismiss_label)
+                .on_hover_text(&dismiss_help)
+                .clicked();
+        });
     });
+    dismiss |= response.should_close();
     if dismiss {
         ctx.data_mut(|data| data.insert_temp(popup_id, state.revision));
     }
@@ -216,6 +234,90 @@ pub fn draw_warning(app: &mut crate::app::PealayerApp, ctx: &eframe::egui::Conte
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_authority_prompt_dismisses_without_sending_a_handoff_command() {
+        use eframe::egui;
+        let _guard = crate::app::tests::lock_app_tests();
+        for owner in [false, true] {
+            for exclusive in [false, true] {
+                for action in ["Dismiss", "×", "Escape", "backdrop"] {
+                    let mut app = crate::app::PealayerApp::default();
+                    app.is_paused = false; // Dismiss must work even when Accept is disabled.
+                    let (sender, commands) = std::sync::mpsc::channel();
+                    app.engine_handle.sender = sender;
+                    let state = Status {
+                        owner_id: if owner { "this" } else { "other" }.into(),
+                        owner_label: "Production".into(), exclusive, revision: 9,
+                        pending: vec![Claim { client_id: if owner { "other" } else { "this" }.into(),
+                            label: "Observer".into(), requested_at: "now".into() }],
+                        owner_endpoint: None,
+                    };
+                    {
+                        let mut plan = app.engine_handle.prepared_timeline.lock().unwrap();
+                        plan.authority_client_id = "this".into();
+                        plan.authority = Some(state.clone());
+                    }
+                    let context = egui::Context::default();
+                    crate::ui::i18n::configure_ui_fonts(&context, false);
+                    let render = |app: &mut crate::app::PealayerApp, events, time| {
+                        context.run_ui(egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 600.0))),
+                            events, time: Some(time), ..Default::default()
+                        }, |_| draw_warning(app, &context))
+                    };
+                    for time in [0.0, 0.05, 0.1] {
+                        let mut output = render(&mut app, vec![], time);
+                        output.textures_delta.clear();
+                    }
+                    let mut output = render(&mut app, vec![], 0.15);
+                    let text_rect = |label: &str| output.shapes.iter().find_map(|shape| match &shape.shape {
+                        egui::epaint::Shape::Text(text) if text.galley.job.text.ends_with(label) =>
+                            Some(egui::Rect::from_min_size(text.pos, text.galley.size())),
+                        _ => None,
+                    }).unwrap_or_else(|| panic!("Missing {label} in owner={owner}, locked={exclusive}"));
+                    let close = text_rect("×");
+                    assert!(close.left() > text_rect("Publishing authority").right());
+                    let dismiss = text_rect("Dismiss");
+                    let point = match action { "Dismiss" => dismiss.center(), "×" => close.center(),
+                        _ => egui::pos2(4.0, 4.0) };
+                    output.textures_delta.clear();
+                    if action == "Escape" {
+                        let mut output = render(&mut app, vec![egui::Event::Key {
+                            key: egui::Key::Escape, physical_key: None, pressed: true,
+                            repeat: false, modifiers: egui::Modifiers::NONE,
+                        }], 0.2);
+                        output.textures_delta.clear();
+                    } else {
+                        for (time, pressed) in [(0.2, true), (0.25, false)] {
+                            let mut output = render(&mut app, vec![egui::Event::PointerMoved(point),
+                                egui::Event::PointerButton { pos: point, button: egui::PointerButton::Primary,
+                                    pressed, modifiers: egui::Modifiers::NONE }], time);
+                            output.textures_delta.clear();
+                        }
+                    }
+                    assert_eq!(context.data(|data| data.get_temp::<u64>(egui::Id::new("media_authority_conflict"))),
+                        Some(9), "{action}, owner={owner}, locked={exclusive}");
+                    assert_eq!(app.engine_handle.prepared_timeline.lock().unwrap().authority.as_ref(), Some(&state));
+                    assert!(matches!(commands.try_recv(), Err(std::sync::mpsc::TryRecvError::Empty)),
+                        "Dismissal must not request, reject, accept or release authority");
+                    let mut output = render(&mut app, vec![], 0.3);
+                    assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape,
+                        egui::epaint::Shape::Text(text) if text.galley.job.text.contains("Publishing authority"))));
+                    output.textures_delta.clear();
+                    app.engine_handle.prepared_timeline.lock().unwrap().authority.as_mut().unwrap().revision = 10;
+                    for time in [0.35, 0.4, 0.45] {
+                        let mut output = render(&mut app, vec![], time);
+                        if time == 0.45 {
+                            assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                                egui::epaint::Shape::Text(text) if text.galley.job.text.contains("Publishing authority"))));
+                        }
+                        output.textures_delta.clear();
+                    }
+                }
+            }
+        }
+    }
     #[test]
     fn ownership_is_not_connection_state() {
         let state = Status {
