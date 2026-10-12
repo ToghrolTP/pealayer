@@ -10,6 +10,10 @@ statements are not the present product state.
 
 ## Delivered source and deployment
 
+- Effects Library's panel heading starts at the Search/folder/card outer edge
+  without borrowing editable captions' inset. [Cause and geometry coverage](effects-library-hover-spacing.md)
+  preserve rename alignment, scrollbar spacing and explicit installation gates.
+
 - Programming latch/handoff state is separate from coordinator/board loss in
   native/Web presentation and typed output rejection handling.
   [Paired contract and verification](programming-latch-state.md) retain safety
