@@ -316,6 +316,79 @@ fn text_widget(
     .on_hover_text(text)
 }
 
+fn workspace_trigger(ui: &mut egui::Ui, name: &str, icon: &str, rtl: bool,
+    tooltip: &str) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(130.0, ITEM_HEIGHT), egui::Sense::click());
+    let visuals = ui.style().interact(&response);
+    if response.hovered() || response.has_focus() || response.is_pointer_button_down_on() {
+        ui.painter().rect(rect, visuals.corner_radius, visuals.weak_bg_fill,
+            visuals.bg_stroke, egui::StrokeKind::Inside);
+    }
+    // Private-use icon glyphs must use the normal icon-capable font family,
+    // not the custom bold status-caption family.
+    let icon_center = egui::pos2(if rtl { rect.right() - 9.0 } else { rect.left() + 9.0 }, rect.center().y);
+    let chevron_center = egui::pos2(if rtl { rect.left() + 9.0 } else { rect.right() - 9.0 }, rect.center().y);
+    ui.painter().text(icon_center, egui::Align2::CENTER_CENTER, icon,
+        egui::FontId::proportional(12.0), visuals.text_color());
+    let name_rect = rect.shrink2(egui::vec2(20.0, 0.0));
+    let galley = egui::WidgetText::from(egui::RichText::new(name).font(status_font(ui, false, true)))
+        .into_galley(ui, Some(egui::TextWrapMode::Truncate), name_rect.width(), egui::TextStyle::Small);
+    ui.painter().with_clip_rect(name_rect).galley(egui::pos2(
+        if rtl { name_rect.left() } else { name_rect.right() - galley.size().x },
+        rect.center().y - galley.size().y * 0.5), galley, visuals.text_color());
+    crate::ui::control_density::paint_chevron(ui,
+        egui::Rect::from_center_size(chevron_center, egui::vec2(14.0, 14.0)), visuals.text_color());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, ui.is_enabled(), name));
+    response.on_hover_text(format!("{tooltip} · {name}"))
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum WorkspaceChoice { Restore(String), Manage }
+
+fn workspace_dropdown(ui: &mut egui::Ui, profiles: &[(String, crate::config::WorkspaceProfile)],
+    active: Option<&str>, name: &str, icon: &str, rtl: bool, tooltip: &str,
+    manage_label: &str) -> (egui::Response, Option<WorkspaceChoice>) {
+    let response = workspace_trigger(ui, name, icon, rtl, tooltip);
+    let mut selected = None;
+    let popup_id = response.id.with("workspace-menu");
+    if response.has_focus() && ui.input_mut(|input|
+        input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)
+            || input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp)) {
+        egui::Popup::open_id(ui.ctx(), popup_id);
+    }
+    let popup = egui::Popup::menu(&response).id(popup_id)
+        .align(if rtl { egui::RectAlign::TOP_END } else { egui::RectAlign::TOP_START })
+        .width(200.0).show(|ui| {
+            crate::ui::dropdown::menu_ui(ui, response.id, |ui| {
+                if let Some(id) = crate::ui::workspace_profiles::profile_choices(ui, profiles, active) {
+                    selected = Some(WorkspaceChoice::Restore(id));
+                }
+                ui.separator();
+                if ui.dropdown_choice(false, format!("{}  {}", crate::ui::icons::TABS,
+                    manage_label)).clicked() {
+                    selected = Some(WorkspaceChoice::Manage);
+                    ui.close();
+                }
+            });
+        });
+    if popup.is_none() { crate::ui::dropdown::clear_menu(ui.ctx(), response.id); }
+    (response, selected)
+}
+
+fn workspace_selector(app: &mut PealayerApp, ui: &mut egui::Ui) -> egui::Response {
+    let profiles = app.ordered_workspace_profiles();
+    let icon = app.active_workspace_profile.as_ref().and_then(|id| app.workspace_profiles.get(id))
+        .map(|profile| crate::ui::icons::workspace_icon(&profile.icon)).unwrap_or(crate::ui::icons::APP_WINDOW);
+    let (response, choice) = workspace_dropdown(ui, &profiles, app.active_workspace_profile.as_deref(),
+        &app.active_workspace_name(), icon, app.rtl, &app.tr("Switch workspace"), &app.tr("Manage workspaces..."));
+    match choice {
+        Some(WorkspaceChoice::Restore(id)) => app.restore_workspace_profile(ui.ctx(), &id),
+        Some(WorkspaceChoice::Manage) => app.show_workspace_profiles_dialog = true,
+        None => {},
+    }
+    response
+}
+
 fn render_widget(
     app: &PealayerApp,
     ui: &mut egui::Ui,
@@ -517,16 +590,8 @@ fn render_widget(
             ));
         }
         Widget::Message => (current_status_message(app)?, 230.0, false, color),
-        Widget::Workspace => (
-            format!(
-                "{} {}",
-                crate::ui::icons::APP_WINDOW,
-                app.active_workspace_name()
-            ),
-            130.0,
-            false,
-            color,
-        ),
+        // The workspace has one dedicated, interactive trailing selector.
+        Widget::Workspace => return None,
         Widget::Progress => {
             let operation = progress.first()?;
             let text = format!(
@@ -606,15 +671,8 @@ fn render_widget(
             | Widget::Temperature
             | Widget::Hot
             | Widget::Estop
-            | Widget::Workspace
     );
-    let align = if item == Widget::Workspace {
-        if app.rtl {
-            egui::Align::Min
-        } else {
-            egui::Align::Max
-        }
-    } else if mono {
+    let align = if mono {
         egui::Align::Max
     } else {
         egui::Align::Min
@@ -935,24 +993,15 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     },
                 );
                 if app.status_bar.workspace {
-                    if let Some((response, _)) = ui
+                    let response = ui
                         .push_id(Widget::Workspace, |ui| {
-                            render_widget(
-                                app,
-                                ui,
-                                Widget::Workspace,
-                                hardware.as_ref(),
-                                &log,
-                                &progress,
-                            )
+                            workspace_selector(app, ui)
                         })
-                        .inner
-                    {
-                        item_rects.push(response.rect);
-                        #[cfg(test)]
-                        widget_rects.push((Widget::Workspace, response.rect));
-                        response.context_menu(|ui| item_menu(app, ui, Widget::Workspace, log_id));
-                    }
+                        .inner;
+                    item_rects.push(response.rect);
+                    #[cfg(test)]
+                    widget_rects.push((Widget::Workspace, response.rect));
+                    response.context_menu(|ui| item_menu(app, ui, Widget::Workspace, log_id));
                 }
             },
         );
@@ -1009,6 +1058,100 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workspace_selector_keeps_icon_name_and_chevron_in_a_fixed_slot() {
+        for rtl in [false, true] {
+            for dark in [false, true] {
+                for scale in [1.0, 1.25, 1.5, 2.0] {
+                    let context = egui::Context::default();
+                    context.set_pixels_per_point(scale);
+                    context.set_visuals(if dark { egui::Visuals::dark() } else { egui::Visuals::light() });
+                    crate::ui::i18n::configure_ui_fonts(&context, false);
+                    for name in ["Watch films", "My very long renamed authoring workspace"] {
+                        let mut slot = egui::Rect::NOTHING;
+                        let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+                            slot = workspace_trigger(ui, name, crate::ui::icons::FILE_VIDEO, rtl, "Switch workspace").rect;
+                        });
+                        output.textures_delta.clear();
+                        assert_eq!(slot.size(), egui::vec2(130.0, ITEM_HEIGHT));
+                        let icon = output.shapes.iter().find_map(|shape| match &shape.shape {
+                            egui::epaint::Shape::Text(text) if text.galley.job.text == crate::ui::icons::FILE_VIDEO => Some(text),
+                            _ => None,
+                        }).expect("Icon must be painted separately from the bold caption");
+                        assert_eq!(icon.galley.job.sections[0].format.font_id.family, egui::FontFamily::Proportional);
+                        let icon_rect = egui::Rect::from_min_size(icon.pos, icon.galley.size());
+                        assert!(slot.contains_rect(icon_rect));
+                        assert!(if rtl { icon_rect.center().x > slot.center().x }
+                            else { icon_rect.center().x < slot.center().x });
+                        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                            egui::epaint::Shape::Path(path) if path.points.len() == 3)), "Open chevron must be painted");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn workspace_dropdown_click_and_keyboard_return_stable_profile_ids() {
+        let profiles = vec![
+            ("simple-id".into(), crate::config::WorkspaceProfile { name: "Watch films".into(), icon: "video".into(), ..Default::default() }),
+            ("author-id".into(), crate::config::WorkspaceProfile { name: "My authoring desk".into(), icon: "effects".into(), ..Default::default() }),
+        ];
+        for opening_key in [None, Some(egui::Key::ArrowDown), Some(egui::Key::Enter)] {
+            let context = egui::Context::default();
+            let mut time = 0.0;
+            let mut render = |events| {
+                let mut result = None;
+                let mut output = context.run_ui(egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 360.0))),
+                    events, time: Some(time), ..Default::default()
+                }, |ui| {
+                    ui.add_space(260.0);
+                    result = Some(workspace_dropdown(ui, &profiles, Some("simple-id"), "Watch films",
+                        crate::ui::icons::FILE_VIDEO, false, "Switch workspace", "Manage workspaces..."));
+                });
+                time += 0.1;
+                output.textures_delta.clear();
+                (result.unwrap(), output)
+            };
+            let ((trigger, choice), _) = render(vec![]);
+            assert_eq!(choice, None);
+            let popup_id = trigger.id.with("workspace-menu");
+            let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary,
+                pressed, modifiers: egui::Modifiers::NONE };
+            let key = |key, pressed| egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false,
+                modifiers: egui::Modifiers::NONE };
+            if let Some(opening_key) = opening_key {
+                context.memory_mut(|memory| memory.request_focus(trigger.id));
+                render(vec![key(opening_key, true)]);
+                render(vec![key(opening_key, false)]);
+            } else {
+                render(vec![egui::Event::PointerMoved(trigger.rect.center()), button(trigger.rect.center(), true)]);
+                render(vec![button(trigger.rect.center(), false)]);
+            }
+            assert!(egui::Popup::is_id_open(&context, popup_id), "Primary click/arrows must open the selector");
+            let (_, output) = render(vec![]);
+            let row_text = format!("{}  My authoring desk", crate::ui::icons::SPARKLE);
+            let row = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text) if text.galley.job.text == row_text =>
+                    Some(egui::Rect::from_min_size(text.pos, text.galley.size())),
+                _ => None,
+            }).expect("Renamed workspace must be present in the open menu");
+            assert!(row.bottom() < trigger.rect.top(), "Status menu must fit above its trigger");
+            let choice = if opening_key.is_some() {
+                render(vec![key(egui::Key::ArrowDown, true)]);
+                render(vec![key(egui::Key::ArrowDown, false)]);
+                render(vec![key(egui::Key::Enter, true)]).0.1
+            } else {
+                render(vec![egui::Event::PointerMoved(row.center()), button(row.center(), true)]);
+                render(vec![button(row.center(), false)]).0.1
+            };
+            assert_eq!(choice, Some(WorkspaceChoice::Restore("author-id".into())));
+            assert!(!egui::Popup::is_id_open(&context, popup_id));
+            assert_eq!(profiles[0].1.name, "Watch films", "Menu drawing cannot mutate profiles");
+        }
+    }
     #[test]
     fn physical_status_led_uses_authoritative_rgb_without_double_dimming() {
         assert_eq!(

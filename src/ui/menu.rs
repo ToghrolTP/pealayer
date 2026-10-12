@@ -471,17 +471,9 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         ui.close();
                     }
                     ui.separator();
-                    for (id, profile) in app.ordered_workspace_profiles() {
-                        let active = app.active_workspace_profile.as_deref() == Some(id.as_str());
-                        let label = format!(
-                            "{}  {}",
-                            crate::ui::icons::workspace_icon(&profile.icon),
-                            profile.name
-                        );
-                        if ui.dropdown_choice(active, label).clicked() {
-                            app.restore_workspace_profile(ui.ctx(), &id);
-                            ui.close();
-                        }
+                    if let Some(id) = crate::ui::workspace_profiles::profile_choices(ui,
+                        &app.ordered_workspace_profiles(), app.active_workspace_profile.as_deref()) {
+                        app.restore_workspace_profile(ui.ctx(), &id);
                     }
                     ui.separator();
                     crate::ui::icons::submenu(

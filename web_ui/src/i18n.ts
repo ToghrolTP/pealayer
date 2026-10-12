@@ -359,6 +359,8 @@ const fa: Record<string, string> = {
   'Workspace name': 'نام فضای کاری',
   'Add workspace': 'افزودن فضای کاری',
   'Manage workspaces': 'مدیریت فضاهای کاری',
+  'Workspace': 'فضای کاری',
+  'Switch workspace': 'تغییر فضای کاری',
   'Replace with current workspace': 'جایگزینی با فضای کاری کنونی',
   'Delete workspace?': 'فضای کاری حذف شود؟',
   'Restore': 'بازیابی',

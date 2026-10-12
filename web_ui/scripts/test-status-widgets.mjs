@@ -1,6 +1,16 @@
 import assert from 'node:assert/strict';
+import { selectedWorkspace } from '../src/workspaces.ts';
+import { tr } from '../src/i18n.ts';
 import { DEFAULT_VISIBILITY, WIDGETS, orderedWidgets, displayedWidgets, reorderWidgets, widgetVisible, setWidgetVisible, nextFpsMode, screenRateSelected, numericTelemetry, appendSample, chartPaths } from '../src/statusWidgets.ts';
 assert.equal(DEFAULT_VISIBILITY.chart, false);
+assert.equal(tr('fa', 'Switch workspace'), 'تغییر فضای کاری');
+assert.equal(tr('fa', 'Workspace'), 'فضای کاری');
+const workspaceProfiles = [{ id: 'simple', name: 'Watch films', icon: 'video', order: 0, mode: 'simple' },
+  { id: 'authoring', name: 'My authoring desk', icon: 'effects', order: 1, mode: 'nle' }];
+assert.equal(selectedWorkspace(workspaceProfiles, 'simple')?.name, 'Watch films');
+assert.equal(selectedWorkspace(workspaceProfiles, 'authoring')?.icon, 'effects');
+assert.equal(selectedWorkspace(workspaceProfiles, 'Watch films'), undefined, 'captions never become stable IDs');
+assert.equal(selectedWorkspace(undefined, 'simple'), undefined, 'no invented disconnected profile');
 assert.equal(displayedWidgets(['workspace', 'temperature', 'fps']).at(-1), 'workspace');
 assert.deepEqual(reorderWidgets([...WIDGETS], 'workspace', 'fps', false), [...WIDGETS]);
 assert.equal(DEFAULT_VISIBILITY.fps_mode, 'auto');

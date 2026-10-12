@@ -10,6 +10,10 @@ statements are not the present product state.
 
 ## Delivered source and deployment
 
+- The status workspace item is an icon-labelled profile dropdown; Simple's
+  duplicate transport cycling button is removed. [Shared selection and checks](status-bar-widgets.md)
+  preserve renamed titles, stable IDs, trailing anchoring and deployment gates.
+
 - Effects Designer navigation groups actual effects by folder with expandable
   dividers, counts and stable selection. [Grouping and verification](designer-effect-groups.md)
   retain safe-restart and Cafe live-acceptance gates.

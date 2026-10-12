@@ -1,15 +1,18 @@
 import React, { useEffect, useState } from 'react';
 import { Dropdown } from 'antd';
 import type { MenuProps } from 'antd';
-import { ApiOutlined, BgColorsOutlined, ClockCircleOutlined, DashboardOutlined, EyeInvisibleOutlined, LineChartOutlined, VideoCameraOutlined, WarningOutlined, ThunderboltOutlined, SyncOutlined } from '@ant-design/icons';
+import { ApiOutlined, BgColorsOutlined, ClockCircleOutlined, DashboardOutlined, DownOutlined, EyeInvisibleOutlined, LineChartOutlined, VideoCameraOutlined, WarningOutlined, ThunderboltOutlined, SyncOutlined } from '@ant-design/icons';
 import type { PlayerState } from './RemoteControlTab';
 import { tr, UiLocale } from '../i18n';
 import { DEFAULT_VISIBILITY, WIDGETS, orderedWidgets, displayedWidgets, widgetVisible, setWidgetVisible, reorderWidgets, nextFpsMode, screenRateSelected, numericTelemetry, appendSample, chartPaths } from '../statusWidgets';
 import type { StatusWidget, StatusBarVisibility, FpsMode, ChartMetric, ChartSample } from '../statusWidgets';
+import { workspaceGlyph } from '../workspacePresentation';
+import { selectedWorkspace } from '../workspaces';
 export type { StatusBarVisibility } from '../statusWidgets';
 
 interface ApplicationStatusBarProps {
-  state: PlayerState; connected: boolean; connectionMode: 'ws' | 'http'; activeSurface: string; locale: UiLocale;
+  state: PlayerState; connected: boolean; connectionMode: 'ws' | 'http'; locale: UiLocale;
+  sendCmd: (command: string, payload?: Record<string, unknown>) => void;
   visibility?: Partial<StatusBarVisibility>; onVisibilityChange: (visibility: StatusBarVisibility) => void;
 }
 const LABELS: Record<StatusWidget, string> = {
@@ -25,11 +28,14 @@ const ICONS: Record<StatusWidget, React.ReactNode> = {
 const METRICS: ChartMetric[] = ['voltage', 'current', 'temperature'];
 const MODE_LABELS: Record<FpsMode, string> = { media: 'Media', ui: 'Screen', auto: 'Auto' };
 
-export const ApplicationStatusBar: React.FC<ApplicationStatusBarProps> = ({ state, connected, connectionMode, activeSurface, locale, visibility: configuredVisibility, onVisibilityChange }) => {
+export const ApplicationStatusBar: React.FC<ApplicationStatusBarProps> = ({ state, connected, connectionMode, locale, sendCmd, visibility: configuredVisibility, onVisibilityChange }) => {
   const config = { ...DEFAULT_VISIBILITY, ...configuredVisibility, order: orderedWidgets(configuredVisibility?.order) };
   const [samples, setSamples] = useState<ChartSample[]>([]);
   const [dragged, setDragged] = useState<StatusWidget | null>(null);
   const [dropTarget, setDropTarget] = useState<{ widget: StatusWidget; after: boolean } | null>(null);
+  const [workspaceMenuOpen, setWorkspaceMenuOpen] = useState(false);
+  const workspaceProfiles = state.workspace_profiles ?? [];
+  const activeWorkspace = selectedWorkspace(workspaceProfiles, state.active_workspace_profile);
   const hardwareLive = connected && state.hardware_connected === true;
   const telemetry = hardwareLive ? state.hardware_details?.telemetry : undefined;
   const voltage = numericTelemetry(telemetry?.bus_mv), current = numericTelemetry(telemetry?.current_ma), temperature = numericTelemetry(telemetry?.led_temperature_centi_c);
@@ -91,7 +97,18 @@ export const ApplicationStatusBar: React.FC<ApplicationStatusBarProps> = ({ stat
       case 'chart': return <svg className="status-chart" width="100" height="20" viewBox="0 0 100 20" role="img" aria-label={chartTitle}><title>{chartTitle}</title>
         {metricValues.length ? chartPaths(samples, metricIndex, 100, 20).map((path, index) => <path key={index} d={path} fill="none" stroke="currentColor" strokeWidth="1.5" />) : <text x="50" y="14" textAnchor="middle">—</text>}</svg>;
       case 'message': return state.osd && state.osd.remaining_ms > 0 ? <><ApiOutlined />{state.osd.message}</> : null;
-      case 'workspace': return <>{tr(locale, 'Workspace')}: {state.active_workspace_profile || state.workspace || activeSurface}</>;
+      case 'workspace': return <Dropdown trigger={['click']} placement="topRight" autoFocus open={workspaceMenuOpen}
+        onOpenChange={setWorkspaceMenuOpen} disabled={!connected || workspaceProfiles.length === 0}
+        menu={{ selectedKeys: activeWorkspace ? [activeWorkspace.id] : [], items: workspaceProfiles.map((profile) => ({
+          key: profile.id, label: profile.name, icon: workspaceGlyph(profile.icon),
+        })), onClick: ({ key }) => { sendCmd('set_workspace', { profile: key }); setWorkspaceMenuOpen(false); } }}>
+        <button type="button" className="status-workspace-selector" aria-label={tr(locale, 'Switch workspace')}
+          aria-haspopup="menu" aria-expanded={workspaceMenuOpen} disabled={!connected || workspaceProfiles.length === 0}
+          title={`${tr(locale, 'Switch workspace')} · ${activeWorkspace?.name ?? tr(locale, 'Workspace')}`}
+          onKeyDown={(event) => { if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); setWorkspaceMenuOpen(true); } }}>
+          {workspaceGlyph(activeWorkspace?.icon)}<span>{activeWorkspace?.name ?? tr(locale, 'Workspace')}</span><DownOutlined />
+        </button>
+      </Dropdown>;
     }
   };
   const contextItems: MenuProps['items'] = WIDGETS.map((widget) => ({ key: widget, label: label(widget), icon: widgetVisible(config, widget) ? '✓' : ICONS[widget] }));

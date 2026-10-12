@@ -937,7 +937,12 @@ html[data-motion="disabled"] *, html[data-motion="disabled"] *::before, html[dat
 .app-statusbar .status-widget--warnings { width: 180px; }
 .app-statusbar .status-widget--hot { width: 195px; }
 .app-statusbar .status-widget--estop { width: 160px; }
-.app-statusbar > .status-widget--workspace { margin-inline-start: auto; width: 130px; justify-content: flex-end; cursor: default; font-weight: 600; }
+.app-statusbar > .status-widget--workspace { margin-inline-start: auto; width: 130px; justify-content: flex-end; font-weight: 600; }
+.status-workspace-selector { display: flex; align-items: center; gap: 5px; width: 100%; min-width: 0; height: 22px; padding: 0 3px; border: 0; border-radius: 4px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.status-workspace-selector > .anticon { flex: 0 0 12px; }
+.status-workspace-selector > span:not(.anticon) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: end; }
+.status-workspace-selector:enabled:hover, .status-workspace-selector:focus-visible { background: var(--surface-raised); outline: 1px solid var(--accent); outline-offset: -1px; }
+.status-workspace-selector:disabled { cursor: default; opacity: .55; }
 .status-widget--fps, .status-widget--hot, .status-widget--estop, .status-widget--warnings { font-weight: 600; }
 .status-widget--voltage, .status-widget--current, .status-widget--temperature { font: 600 11px ui-monospace, SFMono-Regular, Consolas, monospace; }
 .status-widget--hot, .status-widget--estop { color: var(--red); }
