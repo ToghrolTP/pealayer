@@ -67,6 +67,7 @@ interface StudioTabProps {
   quickSeekSeconds: number;
   apiBaseUrl: string;
   seekbarHoverThumbnails: boolean;
+  showSubseconds: boolean;
   surface?: 'studio' | 'timeline';
   timelineWheelPreferences?: TimelineWheelPreferences;
   mediaGestures: MediaGesturePreferences;
@@ -100,7 +101,7 @@ const workspaceIconOptions = [
 ];
 
 
-export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, appName, quickSeekSeconds, apiBaseUrl, seekbarHoverThumbnails, surface = 'studio', timelineWheelPreferences = defaultTimelineWheelPreferences, mediaGestures, controlBar }) => {
+export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, appName, quickSeekSeconds, apiBaseUrl, seekbarHoverThumbnails, showSubseconds, surface = 'studio', timelineWheelPreferences = defaultTimelineWheelPreferences, mediaGestures, controlBar }) => {
   const timelineGridRef = useRef<HTMLDivElement | null>(null);
   const timelinePointersRef = useRef(new Map<number, { x: number; y: number; pointerType: string }>());
   const timelineGestureRef = useRef<null | {
@@ -828,7 +829,8 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
             disabled={!state.current_video || !state.seekable || durationSeconds <= 0}
             mediaIdentity={state.current_video} locale={locale} onCommit={seek.commitSeconds} />
           <SeekThumbnailPreview
-            enabled={seekbarHoverThumbnails && Boolean(state.seekable) && durationSeconds > 0}
+            enabled={seekbarHoverThumbnails}
+            seekable={Boolean(state.seekable)} live={state.live} locale={locale} showSubseconds={showSubseconds}
             duration={durationSeconds}
             mediaIdentity={state.current_video}
             apiBaseUrl={apiBaseUrl}
@@ -844,7 +846,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
               disabled={!state.seekable || durationSeconds <= 0}
               onChange={seek.change}
               onChangeComplete={seek.commit}
-              tooltip={seekbarHoverThumbnails ? { open: false } : { formatter: (value) => formatTime(((value ?? 0) / 100) * durationSeconds) }}
+              tooltip={{ open: false }}
             />
             <SeekbarMarkers state={state} seconds={activeSeek / 100 * durationSeconds} onChapter={seek.commitSeconds} />
           </SeekThumbnailPreview>

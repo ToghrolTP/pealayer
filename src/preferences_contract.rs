@@ -515,10 +515,10 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
                 "seekbar_hover_thumbnails",
                 "playback",
                 "Seek preview",
-                "Show preview card in Simple workspace",
+                "Show thumbnails in Simple seek preview",
             );
             control.description =
-                Some("Shows a compact decoded-frame card above the Simple player seekbar");
+                Some("Adds a decoded frame to the shared cursor-position and chapter hover card");
             control
         },
         {
@@ -526,10 +526,10 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
                 "nle_seekbar_hover_thumbnails",
                 "playback",
                 "Seek preview",
-                "Show preview card in NLE workspace",
+                "Show thumbnails in NLE seek preview",
             );
             control.description =
-                Some("Disabled by default so the NLE transport and timeline remain unobstructed");
+                Some("Adds a decoded frame to the shared cursor-position and chapter hover card");
             control
         },
         seekbar_color_control("seekbar_markers.chapter_color", "Chapter markers"),

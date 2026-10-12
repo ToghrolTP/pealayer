@@ -1,6 +1,14 @@
 export type UiLocale = 'en' | 'fa';
 
 const fa: Record<string, string> = {
+  'Keyframe': 'فریم کلیدی',
+  'Show thumbnails in Simple seek preview': 'نمایش تصویر در پیش‌نمایش جابه‌جایی فضای ساده',
+  'Show thumbnails in NLE seek preview': 'نمایش تصویر در پیش‌نمایش جابه‌جایی فضای تدوین',
+  'Adds a decoded frame to the shared cursor-position and chapter hover card': 'افزودن تصویر به کارت مشترک موقعیت نشانگر و فصل',
+  'Open media to seek.': 'برای جابه‌جایی، رسانه‌ای باز کنید.',
+  'Duration is still being determined; seeking will become available when MPV reports a timeline.': 'مدت رسانه هنوز مشخص نشده است؛ با دریافت خط زمانی، جابه‌جایی فعال می‌شود.',
+  'This live or duration-less source has no fixed seek range.': 'این منبع زنده یا بدون مدت، محدودهٔ جابه‌جایی ثابتی ندارد.',
+  'This media reports a duration but does not support seeking.': 'این رسانه مدت مشخص دارد اما از جابه‌جایی پشتیبانی نمی‌کند.',
   'UI font': 'قلم رابط کاربری', 'Monospace font': 'قلم هم‌عرض',
   'Typography': 'تایپوگرافی',
   'System font': 'قلم سیستم', 'Bundled font': 'قلم همراه برنامه', 'Vazirmatn': 'وزیرمتن',

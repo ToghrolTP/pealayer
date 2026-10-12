@@ -687,6 +687,7 @@ const App: React.FC = () => {
                 quickSeekSeconds={quickSeekSeconds}
                 apiBaseUrl={apiBaseUrl}
                 seekbarHoverThumbnails={Boolean(appConfig?.nle_seekbar_hover_thumbnails)}
+                showSubseconds={appConfig?.show_subseconds !== false}
                 surface="timeline"
                 timelineWheelPreferences={state.timeline_wheel_preferences ?? {
                   plain: appConfig?.timeline_plain_wheel_action ?? 'vertical_scroll',
@@ -707,6 +708,7 @@ const App: React.FC = () => {
                 quickSeekSeconds={quickSeekSeconds}
                 apiBaseUrl={apiBaseUrl}
                 seekbarHoverThumbnails={Boolean(appConfig?.seekbar_hover_thumbnails)}
+                showSubseconds={appConfig?.show_subseconds !== false}
                 mediaGestures={mediaGestures}
               />
             )}
