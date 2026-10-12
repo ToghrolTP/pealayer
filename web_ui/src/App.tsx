@@ -57,13 +57,48 @@ function readStoredJson<T>(key: string, fallback: T): T {
   }
 }
 
-function persistJson(key: string, value: unknown): void {
+const pendingStorageWrites = new Map<string, unknown>();
+let storageWriteTimer: number | null = null;
+
+function flushStorageWrites(): void {
+  if (storageWriteTimer !== null) {
+    window.clearTimeout(storageWriteTimer);
+    storageWriteTimer = null;
+  }
+  for (const [key, value] of pendingStorageWrites.entries()) {
+    try {
+      window.localStorage.setItem(key, JSON.stringify(value));
+    } catch {
+      /* Storage can be disabled or full. */
+    }
+  }
+  pendingStorageWrites.clear();
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeunload', flushStorageWrites);
+  window.addEventListener('pagehide', flushStorageWrites);
+}
+
+function persistJson(key: string, value: unknown, immediate = false): void {
   // Never resurrect transient notifications from offline storage.
   if (key === STORAGE.state && value && typeof value === 'object') {
     const { messages: _messages, remote_browser: _remoteBrowser, ...snapshot } = value as PlayerState;
     value = snapshot;
   }
-  try { window.localStorage.setItem(key, JSON.stringify(value)); } catch { /* Storage can be disabled or full. */ }
+  if (immediate) {
+    pendingStorageWrites.delete(key);
+    try {
+      window.localStorage.setItem(key, JSON.stringify(value));
+    } catch {
+      /* Storage can be disabled or full. */
+    }
+    return;
+  }
+  pendingStorageWrites.set(key, value);
+  if (storageWriteTimer === null) {
+    storageWriteTimer = window.setTimeout(flushStorageWrites, 1000);
+  }
 }
 
 function surfaceFromLocation(): SurfaceId {
@@ -125,6 +160,27 @@ const App: React.FC = () => {
     window.localStorage.setItem('pealayer.sidebarCollapsed', String(collapsed));
   }, [collapsed]);
 
+  const siderScrollTimer = useRef<number | null>(null);
+  const handleSiderScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
+    const top = event.currentTarget.scrollTop;
+    if (siderScrollTimer.current !== null) window.clearTimeout(siderScrollTimer.current);
+    siderScrollTimer.current = window.setTimeout(() => {
+      window.localStorage.setItem('pealayer.scroll.sider', String(top));
+    }, 200);
+  }, []);
+
+  const contentScrollTimer = useRef<number | null>(null);
+  const handleContentScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
+    const top = event.currentTarget.scrollTop;
+    const left = event.currentTarget.scrollLeft;
+    const tab = activeTab;
+    if (contentScrollTimer.current !== null) window.clearTimeout(contentScrollTimer.current);
+    contentScrollTimer.current = window.setTimeout(() => {
+      window.localStorage.setItem(`pealayer.scroll.${tab}.top`, String(top));
+      window.localStorage.setItem(`pealayer.scroll.${tab}.left`, String(left));
+    }, 200);
+  }, [activeTab]);
+
   useEffect(() => {
     const restoreScroll = () => {
       const sider = siderRef.current;
@@ -144,6 +200,11 @@ const App: React.FC = () => {
       window.clearTimeout(afterLazySurface);
     };
   }, [activeTab]);
+
+  useEffect(() => () => {
+    if (siderScrollTimer.current !== null) window.clearTimeout(siderScrollTimer.current);
+    if (contentScrollTimer.current !== null) window.clearTimeout(contentScrollTimer.current);
+  }, []);
 
   const setActiveTab = useCallback((requested: string) => {
     const tab = SURFACE_IDS.includes(requested as SurfaceId) ? requested as SurfaceId : 'player';
@@ -656,7 +717,7 @@ const App: React.FC = () => {
             onBreakpoint={(broken) => setCollapsed(broken)}
             className="app-sider"
             width={220}
-            onScroll={(event) => window.localStorage.setItem('pealayer.scroll.sider', String(event.currentTarget.scrollTop))}
+            onScroll={handleSiderScroll}
           >
             <Menu
               mode="inline"
@@ -670,10 +731,7 @@ const App: React.FC = () => {
           <Content
             ref={contentRef}
             className={`app-content ${activeTab === 'timeline' ? 'app-content--studio' : ''}`}
-            onScroll={(event) => {
-              window.localStorage.setItem(`pealayer.scroll.${activeTab}.top`, String(event.currentTarget.scrollTop));
-              window.localStorage.setItem(`pealayer.scroll.${activeTab}.left`, String(event.currentTarget.scrollLeft));
-            }}
+            onScroll={handleContentScroll}
           >
             <WebViewBoundary key={activeTab} locale={runtime?.locale || 'en'}>
             <React.Suspense fallback={<FujiLoader locale={runtime?.locale || 'en'} />}>

@@ -23,13 +23,27 @@ export default defineConfig({
     cssCodeSplit: false,
     // Readable filenames; finalize-pwa stamps references with the build
     // revision so browser/offline caches still distinguish deployments.
+    rollupOptions: {
+      output: {
+        entryFileNames: 'assets/app.js',
+        chunkFileNames: 'assets/[name].js',
+        assetFileNames: (assetInfo) => {
+          const names = (assetInfo as any).names ?? ((assetInfo as any).name ? [(assetInfo as any).name] : []);
+          return names.some((name: string) => name === 'index.css' || name === 'style.css')
+            ? 'assets/app.css' : 'assets/[name][extname]';
+        },
+      },
+    },
     rolldownOptions: {
       output: {
         entryFileNames: 'assets/app.js',
         chunkFileNames: 'assets/[name].js',
-        assetFileNames: ({ names }) => names?.some(name => name === 'index.css' || name === 'style.css')
-          ? 'assets/app.css' : 'assets/[name][extname]',
+        assetFileNames: (assetInfo: any) => {
+          const names = assetInfo.names ?? (assetInfo.name ? [assetInfo.name] : []);
+          return names.some((name: string) => name === 'index.css' || name === 'style.css')
+            ? 'assets/app.css' : 'assets/[name][extname]';
+        },
       },
-    },
+    } as any,
   },
 });

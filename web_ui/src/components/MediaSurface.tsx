@@ -96,6 +96,19 @@ const OsdOverlay: React.FC<{ state: PlayerState }> = ({ state }) => {
   </div>;
 };
 
+const isDirectPlayable = (target: string, tracks?: PlayerState['media_tracks']) => {
+  if (!target) return false;
+  if (/\.(mkv|avi|flv|wmv|ts|m2ts|vob|iso|rmvb)$/i.test(target)) return false;
+  const videoTrack = tracks?.find((t) => t.kind === 'video' && t.selected);
+  if (videoTrack?.codec) {
+    const codec = videoTrack.codec.toLowerCase();
+    if (codec.includes('hevc') || codec.includes('h265') || codec.includes('prores')) {
+      return false;
+    }
+  }
+  return true;
+};
+
 /**
  * Browser-native playback is the primary Web surface. It consumes the same
  * byte-range endpoint used by remote Pealayer peers and follows the Rust/mpv
@@ -106,9 +119,31 @@ export const MediaSurface: React.FC<MediaSurfaceProps> = ({ state, apiBaseUrl, e
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const pointerGesture = useRef<PointerGesture | null>(null);
   const [fallback, setFallback] = useState(false);
-  const [gestureActive, setGestureActive] = useState(false);
   const target = state.current_video ?? '';
+  const playable = useMemo(() => isDirectPlayable(target, state.media_tracks), [target, state.media_tracks]);
+  const useFallback = fallback || !playable;
+  const [fallbackStamp, setFallbackStamp] = useState(() => Math.max(0, Math.round(state.playback_time ?? 0)));
+  const lastFallbackRef = useRef(0);
+  const [gestureActive, setGestureActive] = useState(false);
   const source = useMemo(() => target ? mediaSource(target, apiBaseUrl) : '', [target, apiBaseUrl]);
+
+  useEffect(() => {
+    if (!useFallback) return;
+    const now = Date.now();
+    const time = state.playback_time ?? 0;
+    const interval = state.playing ? 1000 : 250;
+    if (now - lastFallbackRef.current >= interval) {
+      lastFallbackRef.current = now;
+      setFallbackStamp(Math.max(0, Math.round(time)));
+    } else {
+      const remaining = interval - (now - lastFallbackRef.current);
+      const timer = window.setTimeout(() => {
+        lastFallbackRef.current = Date.now();
+        setFallbackStamp(Math.max(0, Math.round(state.playback_time ?? 0)));
+      }, remaining);
+      return () => window.clearTimeout(timer);
+    }
+  }, [useFallback, state.playback_time, state.playing]);
 
   const invokeClickAction = useCallback((action: MediaClickAction) => {
     if (!target || action === 'none' || action === 'context_menu') return;
@@ -232,7 +267,7 @@ export const MediaSurface: React.FC<MediaSurfaceProps> = ({ state, apiBaseUrl, e
     }
     if (state.playing) void video.play().catch(() => undefined);
     else video.pause();
-  }, [fallback, state.playback_time, state.playing]);
+  }, [useFallback, state.playback_time, state.playing]);
 
   if (!target) {
     return <div className={`media-surface media-surface--empty ${className ?? ''}`}>
@@ -242,10 +277,9 @@ export const MediaSurface: React.FC<MediaSurfaceProps> = ({ state, apiBaseUrl, e
   }
 
   let surface: React.ReactElement;
-  if (fallback) {
-    const stamp = Math.max(0, Math.round((state.playback_time ?? 0) * 1000));
+  if (useFallback) {
     surface = <div className={`media-surface media-surface--fallback media-surface--interactive ${gestureActive ? 'is-gesture-active' : ''} ${className ?? ''}`} {...pointerHandlers}>
-      <img src={`${apiBaseUrl}/api/player/frame?t=${stamp}`} alt={emptyLabel} />
+      <img src={`${apiBaseUrl}/api/player/frame?t=${fallbackStamp}`} alt={emptyLabel} />
       <OsdOverlay state={state} />
     </div>;
   } else surface = <div className={`media-surface media-surface--interactive ${gestureActive ? 'is-gesture-active' : ''} ${className ?? ''}`} {...pointerHandlers}>

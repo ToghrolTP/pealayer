@@ -115,23 +115,53 @@ export const SeekThumbnailPreview: React.FC<SeekThumbnailPreviewProps> = ({
     </div>, document.body,
   ) : null;
 
+  const moveRaf = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (moveRaf.current !== null) {
+      window.cancelAnimationFrame(moveRaf.current);
+      moveRaf.current = null;
+    }
+  }, []);
+
   return <div className={`seek-thumbnail-host${className ? ` ${className}` : ''}`}
-    onPointerDown={(event) => { if (event.button === 0) { setSeeking(true); setHover(null); } }}
+    onPointerDown={(event) => {
+      if (event.button === 0) {
+        if (moveRaf.current !== null) {
+          window.cancelAnimationFrame(moveRaf.current);
+          moveRaf.current = null;
+        }
+        setSeeking(true);
+        setHover(null);
+      }
+    }}
     onPointerMove={(event) => {
       if (seeking || event.buttons !== 0 || event.pointerType === 'touch') return;
-      const bounds = event.currentTarget.getBoundingClientRect();
-      const rail = event.currentTarget.querySelector('.ant-slider-rail')?.getBoundingClientRect() ?? bounds;
-      const rtl = window.getComputedStyle(event.currentTarget).direction === 'rtl';
-      const seconds = hoveredSeekTime(rail.left, rail.width, event.clientX, duration, rtl);
-      const chapter = seconds === null ? null : chapterAt(chapters, seconds);
-      const nearest = seconds === null ? null : keyframes.filter((marker) => marker.time_ms >= 0 && marker.time_ms / 1000 <= duration)
-        .map((marker) => ({ marker, distance: Math.abs((rtl ? 1 - marker.time_ms / 1000 / duration : marker.time_ms / 1000 / duration) * rail.width - (event.clientX - rail.left)) }))
-        .filter((entry) => entry.distance <= 6).sort((a, b) => a.distance - b.distance)[0]?.marker;
-      setHover({ x: event.clientX, barTop: bounds.top, barBottom: bounds.bottom, seconds,
-        chapter: chapter ? `${tr(locale, 'Chapter')} ${chapter.index + 1}${chapter.title.trim() ? ` · ${chapter.title}` : ''}` : '',
-        keyframe: nearest ? `${tr(locale, 'Keyframe')}${nearest.label ? ` · ${nearest.label}` : ''}` : '' });
+      const clientX = event.clientX;
+      const currentTarget = event.currentTarget;
+      if (moveRaf.current !== null) return;
+      moveRaf.current = window.requestAnimationFrame(() => {
+        moveRaf.current = null;
+        const bounds = currentTarget.getBoundingClientRect();
+        const rail = currentTarget.querySelector('.ant-slider-rail')?.getBoundingClientRect() ?? bounds;
+        const rtl = window.getComputedStyle(currentTarget).direction === 'rtl';
+        const seconds = hoveredSeekTime(rail.left, rail.width, clientX, duration, rtl);
+        const chapter = seconds === null ? null : chapterAt(chapters, seconds);
+        const nearest = seconds === null ? null : keyframes.filter((marker) => marker.time_ms >= 0 && marker.time_ms / 1000 <= duration)
+          .map((marker) => ({ marker, distance: Math.abs((rtl ? 1 - marker.time_ms / 1000 / duration : marker.time_ms / 1000 / duration) * rail.width - (clientX - rail.left)) }))
+          .filter((entry) => entry.distance <= 6).sort((a, b) => a.distance - b.distance)[0]?.marker;
+        setHover({ x: clientX, barTop: bounds.top, barBottom: bounds.bottom, seconds,
+          chapter: chapter ? `${tr(locale, 'Chapter')} ${chapter.index + 1}${chapter.title.trim() ? ` · ${chapter.title}` : ''}` : '',
+          keyframe: nearest ? `${tr(locale, 'Keyframe')}${nearest.label ? ` · ${nearest.label}` : ''}` : '' });
+      });
     }}
-    onPointerLeave={() => setHover(null)}>
+    onPointerLeave={() => {
+      if (moveRaf.current !== null) {
+        window.cancelAnimationFrame(moveRaf.current);
+        moveRaf.current = null;
+      }
+      setHover(null);
+    }}>
     {children}{preview}
   </div>;
 };
