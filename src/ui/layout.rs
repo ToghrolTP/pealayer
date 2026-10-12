@@ -1973,6 +1973,19 @@ fn effect_controls_badge(ui: &mut egui::Ui, icon: &str, text: impl Into<String>)
     ui.add(elegance::Badge::new(format!("{icon}  {}", text.into()), elegance::BadgeTone::Neutral).preserve_case());
 }
 
+/// Pure empty-state chrome: inspecting its geometry needs no media player,
+/// controller engine, selected cue or mutable authoring state.
+fn effect_controls_empty_card(ui: &mut egui::Ui, width: f32, title: &str,
+    subtitle: &str, insertion_hint: &str) -> egui::InnerResponse<()> {
+    effect_controls_card(ui, width, crate::ui::icons::SELECTION_ALL, title,
+        Some(subtitle), false, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                effect_controls_badge(ui, crate::ui::icons::KEYBOARD, "A");
+                ui.label(egui::RichText::new(insertion_hint).small().weak());
+            });
+        })
+}
+
 fn effect_controls_kind(
     effect: &crate::four_d::models::Effect,
 ) -> (&'static str, &'static str, &'static str) {
@@ -4612,29 +4625,12 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
             app.commit_timeline_edit();
         }
     } else {
-        effect_controls_card(
+        effect_controls_empty_card(
             ui,
             panel_width,
-            crate::ui::icons::SELECTION_ALL,
             &app.tr("No cue selected"),
-            Some(&app.tr("Select a cue on the timeline to manage it")),
-            false,
-            |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    effect_controls_badge(
-                        ui,
-                        crate::ui::icons::KEYBOARD,
-                        "A",
-                    );
-                    ui.label(
-                        egui::RichText::new(app.tr(
-                            "Select a hardware track and press A, or double-click its lane, to add a cue.",
-                        ))
-                        .small()
-                        .weak(),
-                    );
-                });
-            },
+            &app.tr("Select a cue on the timeline to manage it"),
+            &app.tr("Select a hardware track and press A, or double-click its lane, to add a cue."),
         );
     }
     if let Some(id) = manage_audio { app.select_audio_effect(id); app.show_effect_library_editor = true; }
@@ -11805,12 +11801,6 @@ mod timeline_row_tests {
 
     #[test]
     fn no_cue_selected_icon_tile_is_square_beside_two_line_caption() {
-        let _guard = crate::app::tests::lock_app_tests();
-        let mut app = PealayerApp::default();
-        app.engine_handle = crate::four_d::engine::memory_only_test_engine();
-        app.language = crate::config::AppLanguage::English;
-        app.selected_instance_ids.clear();
-        let before = app.snapshot_timeline();
         for density in [crate::config::UiControlDensity::Compact,
             crate::config::UiControlDensity::Comfortable] {
             for dark in [false, true] {
@@ -11831,7 +11821,11 @@ mod timeline_row_tests {
                                     egui::vec2(width, 360.0))), ..Default::default()
                             }, |ui| {
                                 ui.with_layout(egui::Layout::top_down(if rtl { egui::Align::Max }
-                                    else { egui::Align::Min }), |ui| draw_effect_controls(&mut app, ui, false));
+                                    else { egui::Align::Min }), |ui| {
+                                    effect_controls_empty_card(ui, effect_controls_content_width(ui.available_width()),
+                                        "No cue selected", "Select a cue on the timeline to manage it",
+                                        "Select a hardware track and press A, or double-click its lane, to add a cue.");
+                                });
                             });
                             // Release textures before asserting to avoid a second
                             // panic from egui's texture teardown on a failed fixture.
@@ -11857,8 +11851,6 @@ mod timeline_row_tests {
                                 "Square must center beside the complete caption group: tile={tile:?}, title={title:?}, subtitle={subtitle:?}, font={font_size}, width={width}");
                             assert!(if rtl { tile.left() >= title.right() }
                                 else { tile.right() <= title.left() });
-                            assert!(app.selected_instance_ids.is_empty());
-                            assert_eq!(app.snapshot_timeline(), before);
                         }
                     }
                 }
