@@ -35,6 +35,7 @@ export const EffectGroupDialog: React.FC<{
       <label>
         <span>{tr(locale, 'Icon')}</span>
         <EffectIconPicker
+          locale={locale}
           value={draft.icon || 'folder'}
           searchPlaceholder={tr(locale, 'Search icons...')}
           presetsLabel={tr(locale, 'Presets')}

@@ -18,6 +18,20 @@ pub fn singleline_text_edit(text: &mut dyn egui::TextBuffer) -> egui::TextEdit<'
     egui::TextEdit::singleline(text).vertical_align(egui::Align::Center)
 }
 
+/// Inline captions and editors share one fixed slot. Paint the outline inside
+/// that slot instead of letting a TextEdit frame move its baseline by a pixel.
+pub fn inline_caption_edit(ui: &mut egui::Ui, id: egui::Id, text: &mut String,
+    size: egui::Vec2, font: egui::FontId, alignment: egui::Align) -> egui::Response {
+    let response = ui.add_sized(size, singleline_text_edit(text).id(id).font(font)
+        .text_color(ui.visuals().strong_text_color()).horizontal_align(alignment)
+        .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 0))).char_limit(64));
+    let visuals = ui.style().interact(&response);
+    let stroke = if visuals.bg_stroke.width > 0.0 { visuals.bg_stroke }
+        else { egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.fg_stroke.color) };
+    ui.painter().rect_stroke(response.rect, 3.0, stroke, egui::StrokeKind::Inside);
+    response
+}
+
 /// Workspace overlays paint immediately above their panel, never above dialogs.
 /// Raising individual controls to Foreground lets them escape modal backdrops.
 pub fn workspace_overlay_layer(
@@ -331,6 +345,29 @@ pub fn escape_pressed(ctx: &egui::Context) -> bool {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn inline_caption_fonts_and_baselines_are_stable_with_an_inside_outline() {
+        use super::*;
+        for dark in [false,true] {
+            for scale in [1.0,1.25,1.5,2.0] {
+                let ctx = egui::Context::default(); ctx.set_pixels_per_point(scale);
+                ctx.set_visuals(if dark {egui::Visuals::dark()} else {egui::Visuals::light()});
+                let mut text = "Front accent lights".to_string();
+                let mut rect = egui::Rect::NOTHING;
+                let mut output = ctx.run_ui(egui::RawInput::default(),|ui| {
+                    rect = inline_caption_edit(ui,egui::Id::new("inline-baseline"),&mut text,egui::vec2(220.0,24.0),egui::FontId::proportional(13.0),egui::Align::Min).rect;
+                });
+                output.textures_delta.clear();
+                let shape = output.shapes.iter().find_map(|shape| match &shape.shape {
+                    egui::epaint::Shape::Text(shape) if shape.galley.job.text == text => Some(shape), _=>None,
+                }).expect("inline caption");
+                assert_eq!(shape.galley.job.sections[0].format.font_id,egui::FontId::proportional(13.0));
+                assert!((shape.pos.x - rect.left() - 4.0).abs() < 1.0);
+                assert!((shape.pos.y + shape.galley.size().y/2.0 - rect.center().y).abs() < 1.0);
+                assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,egui::epaint::Shape::Rect(shape) if shape.rect == rect && shape.stroke.width > 0.0)));
+            }
+        }
+    }
+    #[test]
     fn single_line_text_is_centered_in_a_tall_input() {
         let ctx = egui::Context::default();
         let mut text = "Center me".to_owned();
@@ -435,7 +472,8 @@ mod tests {
         assert!(include_str!("effects_library.rs").contains("dialog::navigation_detail_button"));
         let shared_dialog = include_str!("dialog.rs");
         assert!(shared_dialog.contains("ui.visuals().text_color()"));
-        assert!(!shared_dialog.contains(concat!("strong_", "text_color()")));
+        let navigation = shared_dialog.split("pub fn navigation_button").nth(1).unwrap().split("#[cfg(test)]").next().unwrap();
+        assert!(!navigation.contains(concat!("strong_", "text_color()")));
     }
 
     #[test]

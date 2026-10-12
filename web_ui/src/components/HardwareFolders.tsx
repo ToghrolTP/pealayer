@@ -107,7 +107,7 @@ export function useHardwareFolders(details: Details | null | undefined, locale: 
       okText={tr(locale, 'Save')} cancelText={tr(locale, 'Cancel')} okButtonProps={{ disabled: !enabled || !draft?.name.trim() }}>
       {draft && <div className="effect-group-editor">
         <label><span>{tr(locale, 'Name')}</span><Input autoFocus maxLength={64} disabled={draft.saving} value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} onPressEnter={() => void save()} /></label>
-        <label><span>{tr(locale, 'Icon')}</span><EffectIconPicker value={draft.icon || 'folder'} searchPlaceholder={tr(locale, 'Search icons...')} presetsLabel={tr(locale, 'Presets')} emptyLabel={tr(locale, 'No matching icons')} onChange={(icon) => !draft.saving && setDraft({ ...draft, icon })} /></label>
+        <label><span>{tr(locale, 'Icon')}</span><EffectIconPicker locale={locale} value={draft.icon || 'folder'} searchPlaceholder={tr(locale, 'Search icons...')} presetsLabel={tr(locale, 'Presets')} emptyLabel={tr(locale, 'No matching icons')} onChange={(icon) => !draft.saving && setDraft({ ...draft, icon })} /></label>
         {draft.error && <Alert type="error" message={draft.error} />}
         {draft.original && <Popconfirm title={tr(locale, 'Delete folder?')} description={tr(locale, 'Channels will be moved to Ungrouped.')} onConfirm={() => void save(true)}><Button danger disabled={!enabled || draft.saving}>{tr(locale, 'Delete folder')}</Button></Popconfirm>}
       </div>}

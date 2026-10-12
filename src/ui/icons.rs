@@ -88,6 +88,12 @@ fn icon_preset_matches(key: &str, label: &str, query: &str) -> bool {
         || !icon_match_ranges(label, query).is_empty()
 }
 
+fn translated_icon_name(language: crate::config::AppLanguage, label: &str) -> String {
+    CONTROL_ICON_PRESETS.iter().chain(WORKSPACE_ICON_PRESETS.iter())
+        .find(|(_, title, _)| *title == label)
+        .map(|(_, title, _)| crate::ui::i18n::tr(language, title)).unwrap_or_else(|| label.to_owned())
+}
+
 /// Presentation and catalog data for the shared icon picker. Keeping this in
 /// one component prevents workspace, effect, and hardware-channel selectors
 /// from drifting back to unrelated text boxes and preset menus.
@@ -351,7 +357,8 @@ pub fn searchable_icon_picker_contents(
     let matching: Vec<_> = config
         .presets
         .iter()
-        .filter(|(key, label, _)| icon_preset_matches(key, label, search))
+        .filter(|(key, label, _)| icon_preset_matches(key, label, search)
+            || icon_preset_matches(key, &translated_icon_name(config.language, label), search))
         .collect();
     let mut selected = None;
     egui::ScrollArea::vertical()
@@ -369,14 +376,15 @@ pub fn searchable_icon_picker_contents(
                     .spacing([6.0, 6.0])
                     .show(ui, |ui| {
                         for (index, (key, label, glyph)) in matching.iter().enumerate() {
-                            let text = icon_result_text(ui, glyph, label, search, true);
+                            let label = translated_icon_name(config.language, label);
+                            let text = icon_result_text(ui, glyph, &label, search, true);
                             let selected_state = value.eq_ignore_ascii_case(key);
                             let response = icon_grid_tile(
                                 ui,
                                 egui::vec2(cell_width, 54.0),
                                 text,
                                 selected_state,
-                                label,
+                                &label,
                             );
                             let response = crate::ui::dropdown::register_choice(ui, response, selected_state);
                             if response.clicked() {
@@ -389,7 +397,8 @@ pub fn searchable_icon_picker_contents(
                     });
             } else {
                 for (key, label, glyph) in &matching {
-                    let text = icon_result_text(ui, glyph, label, search, false);
+                    let label = translated_icon_name(config.language, label);
+                    let text = icon_result_text(ui, glyph, &label, search, false);
                     if ui
                         .dropdown_choice(value.eq_ignore_ascii_case(key), text)
                         .clicked()
@@ -446,6 +455,7 @@ pub fn searchable_icon_picker(
         }
     });
     let selected_text = if config.show_selected_name && !selected_name.is_empty() {
+        let selected_name = translated_icon_name(config.language, selected_name);
         format!("{selected_glyph}  {selected_name}")
     } else {
         selected_glyph.to_string()
@@ -464,7 +474,7 @@ pub fn searchable_icon_picker(
                 visuals.text_color(),
             );
         })
-        .selected_text(selected_text)
+        .selected_text(egui::RichText::new(selected_text).size(if config.show_selected_name { egui::TextStyle::Button.resolve(ui.style()).size } else { 16.0 }))
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
         .show_ui(ui, |ui| {
             ui.set_width(icon_combobox_popup_width(
@@ -662,6 +672,12 @@ pub fn submenu(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn preset_icon_titles_are_translated_without_changing_semantic_keys() {
+        for (_, label, _) in CONTROL_ICON_PRESETS.iter().chain(WORKSPACE_ICON_PRESETS.iter()) {
+            assert_ne!(translated_icon_name(crate::config::AppLanguage::Persian, label), *label, "missing {label}");
+        }
+    }
     use super::*;
 
     #[test]

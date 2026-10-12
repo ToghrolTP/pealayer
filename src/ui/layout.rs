@@ -112,10 +112,12 @@ pub(crate) fn left_aligned_click_label(
         egui::FontId::proportional(size),
         ui.visuals().strong_text_color(),
     );
+    let rtl = crate::ui::i18n::input_alignment(ui.layout().main_dir == egui::Direction::RightToLeft, text) == egui::Align::Max;
+    let x = if rtl { rect.right() - 4.0 - galley.size().x } else { rect.left() + 4.0 };
     ui.painter()
         .with_clip_rect(rect.intersect(ui.clip_rect()))
         .galley(
-            egui::pos2(rect.left(), rect.center().y - galley.size().y * 0.5),
+            egui::pos2(x, rect.center().y - galley.size().y * 0.5),
             galley,
             ui.visuals().strong_text_color(),
         );
@@ -336,10 +338,9 @@ fn timeline_track_drag_handle(
     // row's background `Response`. Use geometric containment instead so the
     // handle cannot make itself fade out when the pointer reaches it.
     let hovered = timeline_track_handle_hovered(ui.ctx().pointer_hover_pos(), row_rect, active);
-    let alpha = ui.ctx().animate_bool_with_time(
+    let alpha = crate::ui::motion::hover_alpha(ui,
         egui::Id::new(("timeline-track-order-handle", control.key.as_str())),
         hovered,
-        0.12,
     );
     let response = ui
         .add(
@@ -477,10 +478,9 @@ pub(crate) fn hardware_channel_drag_handle(
     let source_rect = ui.data_mut(|data| data.get_temp::<egui::Rect>(source_rect_id));
     let pointer = ui.ctx().pointer_hover_pos();
     let hovered = hardware_channel_handle_hovered(pointer, source_rect, ui.max_rect(), active);
-    let alpha = ui.ctx().animate_bool_with_time(
+    let alpha = crate::ui::motion::hover_alpha(ui,
         source_rect_id.with("handle-visible"),
         hovered,
-        0.12,
     );
     let color = ui.visuals().weak_text_color().gamma_multiply(alpha);
     let response = ui
@@ -1223,9 +1223,8 @@ fn hover_icon_action(
     let response = ui.scope_builder(egui::UiBuilder::new().id(id), |ui| {
         // Keep stable geometry and keyboard traversal. Pointer actions reveal
         // anywhere on the card; keyboard focus reveals its action immediately.
-        if !visible && !focused {
-            ui.multiply_opacity(0.0);
-        }
+        let alpha = crate::ui::motion::hover_alpha(ui, id.with("visible"), visible || focused);
+        ui.multiply_opacity(if focused { 1.0 } else { alpha });
         ui.add_enabled_ui(enabled, |ui| {
             ui.add_sized(size, egui::Button::new(icon).frame(false))
                 .on_hover_text(tooltip)
@@ -1326,9 +1325,7 @@ fn effect_library_card_header(
             primary_effect_drag_active(ui.ctx(), id),
         ) && ui.rect_contains_pointer(source_rect.unwrap_or(ui.max_rect()).intersect(ui.clip_rect()));
         let actions_visible = hovered || egui::Popup::is_id_open(ui.ctx(), id.with("context-menu"));
-        let hover = ui
-            .ctx()
-            .animate_bool_with_time(id.with("grip-hover"), hovered, 0.12);
+        let hover = crate::ui::motion::hover_alpha(ui, id.with("grip-hover"), hovered);
         // Match the Hardware Monitor grip without changing row geometry.
         let grip = ui
             .add_sized(
@@ -1365,11 +1362,13 @@ fn effect_library_card_header(
                     // allocate_ui_with_layout is content-sized unless we hold this
                     // slot open. A short caption otherwise pulls all actions left.
                     ui.set_min_width(title_width);
-                    ui.add(
-                        egui::Label::new(egui::RichText::new(title).strong())
-                            .truncate()
-                            .sense(egui::Sense::click()),
-                    )
+                    let (rect, response) = ui.allocate_exact_size(egui::vec2(title_width, 24.0), egui::Sense::click());
+                    let galley = egui::WidgetText::from(egui::RichText::new(title).font(egui::TextStyle::Button.resolve(ui.style()))).into_galley(
+                        ui,Some(egui::TextWrapMode::Truncate),(title_width-8.0).max(1.0),egui::TextStyle::Button);
+                    let rtl = crate::ui::i18n::input_alignment(ui.layout().main_dir == egui::Direction::RightToLeft,title) == egui::Align::Max;
+                    let x = if rtl {rect.right()-4.0-galley.size().x} else {rect.left()+4.0};
+                    ui.painter().with_clip_rect(rect).galley(egui::pos2(x, rect.center().y - galley.size().y / 2.0), galley, ui.visuals().strong_text_color());
+                    response
                 },
             )
             .inner
@@ -7174,13 +7173,8 @@ fn draw_compact_control_card(
                     });
                     let edit_align = crate::ui::i18n::input_alignment(app.rtl, &draft);
                     let edit_width = (ui.available_width() * 0.42).clamp(64.0, 190.0);
-                    let edit = ui.add_sized(
-                        [edit_width, 24.0],
-                        crate::ui::dialog::singleline_text_edit(&mut draft)
-                            .id(text_edit_id)
-                            .horizontal_align(edit_align)
-                            .hint_text(&control.default_name),
-                    );
+                    let edit = crate::ui::dialog::inline_caption_edit(ui, text_edit_id, &mut draft,
+                        egui::vec2(edit_width, 24.0), egui::FontId::proportional(13.0), edit_align);
                     if ui.data_mut(|data| data.remove_temp::<bool>(focus_pending_id))
                         == Some(true)
                     {
@@ -7498,15 +7492,8 @@ fn draw_control_card(
                                         .on_hover_text(app.tr("Save name"))
                                         .clicked();
                                     let width = ui.available_width().max(56.0);
-                                    edit_response = Some(
-                                        ui.add_sized(
-                                            [width, 24.0],
-                                            crate::ui::dialog::singleline_text_edit(&mut draft)
-                                                .id(text_edit_id)
-                                                .horizontal_align(edit_align)
-                                                .hint_text(&control.default_name),
-                                        ),
-                                    );
+                                    edit_response = Some(crate::ui::dialog::inline_caption_edit(ui,
+                                        text_edit_id, &mut draft, egui::vec2(width, 24.0), egui::FontId::proportional(13.0), edit_align));
                                 },
                             );
                             let edit = edit_response.expect("rename editor is always rendered");
@@ -12947,10 +12934,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 } else {
                                                     self.app.tr("Effect")
                                                 };
+                                                let (presented_name, presented_icon) = crate::ui::effects_library::presented_identity(self.app,
+                                                    &reference, &preset.effect.name, &preset.effect.icon);
+                                                let presented_glyph = crate::ui::icons::named_control_icon(&presented_icon).unwrap_or(&preset.effect.icon);
                                                 let displayed_effect_name =
                                                     crate::ui::i18n::visual_text(
                                                         display_language,
-                                                        &preset.effect.name,
+                                                        &presented_name,
                                                     );
                                                 let source = preset.source;
                                                 let (_, primary_action_icon, primary_action_label, primary_action_enabled) =
@@ -12991,6 +12981,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                     if ui.available_width() < 180.0 {
                                                                         ui.spacing_mut().item_spacing.x = ui.spacing().item_spacing.x.min(2.0);
                                                                     }
+                                                                    ui.add_sized([14.0,24.0], egui::Label::new(egui::RichText::new(crate::ui::icons::DOTS_SIX_VERTICAL).size(14.0).weak()));
                                                                     let search_hint = self.app.tr("Search icons...");
                                                                     let presets_label = self.app.tr("Presets");
                                                                     let no_matches_label = self.app.tr("No matching icons");
@@ -13003,7 +12994,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                             presets: crate::ui::icons::CONTROL_ICON_PRESETS,
                                                                             fallback_glyph: crate::ui::icons::SPARKLE,
                                                                             fallback_name: "Sparkle",
-                                                                            width: 38.0,
+                                                                            width: 32.0,
                                                                             show_selected_name: false,
                                                                             search_hint: &search_hint,
                                                                             presets_label: &presets_label,
@@ -13017,13 +13008,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                         self.app.rtl,
                                                                         &edit.name,
                                                                     );
-                                                                    let name_response = ui.add_sized(
-                                                                        [name_width, 24.0],
-                                                                        crate::ui::dialog::singleline_text_edit(&mut edit.name)
-                                                                            .id(item_id.with("inline-name"))
-                                                                            .horizontal_align(name_align)
-                                                                            .char_limit(64),
-                                                                    );
+                                                                    let name_response = crate::ui::dialog::inline_caption_edit(ui,
+                                                                        item_id.with("inline-name"), &mut edit.name, egui::vec2(name_width, 24.0),
+                                                                        egui::TextStyle::Button.resolve(ui.style()), name_align);
                                                                     if ui.data_mut(|data| data.remove_temp::<bool>(item_id.with("rename-focus")).unwrap_or(false)) {
                                                                         name_response.request_focus();
                                                                     }
@@ -13068,7 +13055,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                 let header = effect_library_card_header(
                                                                     ui,
                                                                     item_id,
-                                                                    &preset.effect.icon,
+                                                                    presented_glyph,
                                                                     &displayed_effect_name,
                                                                     primary_action_icon,
                                                                     primary_action_enabled,

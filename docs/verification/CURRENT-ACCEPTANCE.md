@@ -10,6 +10,12 @@ statements are not the present product state.
 
 ## Delivered source and deployment
 
+- Designer UI consistency is implemented across native/Web authoring: caption
+  metrics, preference-governed fades, acknowledged draft identities, a shared
+  Custom color popup, contextual actions, Technical disclosure and lane-targeted
+  step insertion. [Contract and verification](designer-interaction-consistency.md)
+  keeps live UI/source proof separate from Cafe runtime and physical acceptance.
+
 - Routine dev/test builds suppress symbols and incremental snapshots while
   retaining the shared dependency cache. Debug-only cleanup verifies cache,
   path/link and active-writer safety before deletion; no runtime rebuild or

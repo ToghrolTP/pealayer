@@ -381,10 +381,9 @@ pub(super) fn draw(
     }
 
     let drag = egui::DragAndDrop::payload::<ToolbarDrag>(ui.ctx());
-    let drag_fade = ui.ctx().animate_bool_with_time(
+    let drag_fade = crate::ui::motion::hover_alpha(ui,
         Id::new("timeline-toolbar-hide-fade"),
         drag.is_some(),
-        0.15,
     );
     let menu_rect = Rect::from_min_max(
         egui::pos2(output.rect.right() - CELL, output.rect.top()),
@@ -402,10 +401,9 @@ pub(super) fn draw(
     // Hover is a prospective removal only. Persist nothing until an actual
     // primary-button drop; leaving Trash reverses the preview transition.
     let hide_hovered = response.dnd_hover_payload::<ToolbarDrag>().is_some();
-    let hide_progress = ui.ctx().animate_bool_with_time(
+    let hide_progress = crate::ui::motion::hover_alpha(ui,
         Id::new("timeline-toolbar-removal-preview"),
         hide_hovered,
-        0.15,
     );
     if drag_fade > 0.0 {
         toolbar.painter().rect_filled(

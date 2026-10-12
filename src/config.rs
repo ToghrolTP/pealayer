@@ -707,6 +707,10 @@ impl Default for WorkspaceProfile {
     }
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UiAnimationMode { #[default] System, Enabled, Disabled }
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct SeekbarMarkersConfig {
@@ -782,6 +786,7 @@ pub struct AppConfig {
     pub color_palette: ColorPalette,
     pub accent_color: AccentColor,
     pub custom_accent_color: Option<String>,
+    pub ui_animation_mode: UiAnimationMode,
     pub language: AppLanguage,
     pub direction: AppDirection,
     pub hardware_endpoint: Option<String>,
@@ -973,6 +978,7 @@ impl Default for AppConfig {
             color_palette: ColorPalette::Native,
             accent_color: AccentColor::System,
             custom_accent_color: None,
+            ui_animation_mode: UiAnimationMode::System,
             language: AppLanguage::System,
             direction: AppDirection::Auto,
             hardware_endpoint: None,
@@ -1482,6 +1488,7 @@ impl AppConfig {
         self.color_palette = source.color_palette;
         self.accent_color = source.accent_color;
         self.custom_accent_color = source.custom_accent_color.clone();
+        self.ui_animation_mode = source.ui_animation_mode;
         self.app_icon_preset = source.app_icon_preset;
     }
 

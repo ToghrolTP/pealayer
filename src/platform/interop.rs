@@ -1012,6 +1012,7 @@ pub fn parse_text_command(input: &str) -> Result<InteropCommand, String> {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AppearanceState {
+    pub ui_animation_mode: crate::config::UiAnimationMode,
     pub theme: crate::config::AppTheme,
     pub color_palette: crate::config::ColorPalette,
     pub accent_color: crate::config::AccentColor,
@@ -1026,6 +1027,7 @@ impl AppearanceState {
         let [red, green, blue] = crate::ui::platform_accent_rgb(config);
         Self {
             theme: crate::config::resolved_theme(config),
+            ui_animation_mode: config.ui_animation_mode,
             color_palette: config.color_palette,
             accent_color: config.accent_color,
             custom_accent_color: config.custom_accent_color.clone(),

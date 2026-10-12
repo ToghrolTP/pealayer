@@ -125,7 +125,10 @@ pub fn menu_ui<R>(ui: &mut egui::Ui, button: egui::Id, body: impl FnOnce(&mut eg
         .unwrap_or_default();
     let mut target = None;
     let mut activate = None;
-    if owns_focus && !entries.is_empty() {
+    let navigating = focused.is_none() || focused == Some(button)
+        || entries.iter().any(|entry| Some(entry.id) == focused)
+        || previous.as_ref().and_then(|frame| frame.search).is_some_and(|search| Some(search) == focused);
+    if owns_focus && navigating && !entries.is_empty() {
         let focused_choice = entries.iter().position(|entry| Some(entry.id) == focused);
         let current = focused_choice
             .or_else(|| entries.iter().position(|entry| entry.selected))
@@ -306,6 +309,12 @@ pub fn choice(
     text: impl Into<egui::WidgetText>,
     color: Option<egui::Color32>,
 ) -> egui::Response {
+    choice_with_close(ui, selected, text, color, true)
+}
+
+/// Expansion rows own content inside the current popup, rather than closing it.
+pub fn choice_with_close(ui: &mut egui::Ui, selected: bool, text: impl Into<egui::WidgetText>,
+    color: Option<egui::Color32>, close_on_click: bool) -> egui::Response {
     let text = text.into();
     let width = ui.available_width();
     let (rect, response) =
@@ -319,7 +328,7 @@ pub fn choice(
             text.text(),
         )
     });
-    if response.clicked() {
+    if response.clicked() && close_on_click {
         ui.close();
     }
     if ui.is_rect_visible(rect) {
@@ -514,6 +523,7 @@ mod tests {
                             .selected_text("Search")
                             .show_ui(ui, |ui| {
                                 let edit = ui.text_edit_singleline(&mut search);
+                                register_search(ui,&edit);
                                 if search.is_empty() {
                                     edit.request_focus();
                                 }

@@ -549,6 +549,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
                     ><MenuOutlined /></span>
                     <span className="channel-manager__identity" title={control.key}>{controlIdentity(control)}</span>
                     {renamingKey === control.key ? <Input
+                        className="channel-manager__name-input"
                       autoFocus
                       size="small"
                       value={renameDraft}

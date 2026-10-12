@@ -4,6 +4,7 @@ pub mod board_info;
 pub mod controls;
 mod monitor_controls;
 pub mod color_picker;
+pub mod motion;
 pub mod dialog;
 pub mod dropdown;
 pub mod effects_library;
@@ -97,6 +98,7 @@ fn dark_accent_fill(
 /// eframe/winit supplies native ThemeChanged events to egui's system_theme;
 /// selecting an explicit theme here would stop following those events.
 pub fn configure_native_appearance(ctx: &eframe::egui::Context, config: &crate::config::AppConfig) {
+    motion::configure(ctx, config.ui_animation_mode);
     ctx.set_theme(match crate::config::resolved_theme(config) {
         crate::config::AppTheme::System => eframe::egui::ThemePreference::System,
         crate::config::AppTheme::Light => eframe::egui::ThemePreference::Light,
@@ -134,6 +136,7 @@ pub fn configure_main_window_style(ctx: &eframe::egui::Context) {
 /// theme can change later without reconstructing widget styling, and both the
 /// main window and independently hosted dialogs use this same function.
 pub fn configure_native_visuals(ctx: &eframe::egui::Context, config: &crate::config::AppConfig) {
+    color_picker::configure_language(ctx, config.language);
     use eframe::egui::{Color32, CornerRadius, Stroke, Theme, Visuals};
 
     let [red, green, blue] = platform_accent_rgb(config);
@@ -201,6 +204,7 @@ pub fn configure_native_visuals(ctx: &eframe::egui::Context, config: &crate::con
     ctx.set_visuals_of(Theme::Light, light);
     ctx.all_styles_mut(configure_interaction_style);
     elegance_theme::set_source_palette(ctx, config.color_palette);
+    motion::configure(ctx, config.ui_animation_mode);
 }
 
 #[cfg(test)]

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ColorPicker } from './ColorPicker';
+import { ColorDropdown } from './ColorDropdown';
 import {
   Alert,
   Button,
@@ -330,77 +331,16 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
     if (control.kind === 'accent') {
       const customKey = control.custom_key ?? 'custom_accent_color';
       const customHex = String(valueAtPath(contract?.values ?? {}, customKey) ?? '#0078d4');
-      const accentOptions = (control.options ?? []).map((option) => ({
-        value: option.value,
-        label: tr(locale, option.label),
-        color: option.value === 'custom' ? customHex : option.color,
+      const options = (control.options ?? []).filter(option => option.value !== 'custom').map(option => ({
+        value: String(option.value), label: tr(locale, option.label), color: String(option.color ?? '#0078d4'),
       }));
-      return (
-        <label className="preference-control" key={control.key}>
-          {commonLabel}
-          <div className="preference-control__accent">
-            <Select
-              value={value}
-              options={accentOptions}
-              onChange={(next) => void update(control, next)}
-              labelRender={({ label }) => <span>{label}</span>}
-              optionRender={(option) => {
-                const isCustom = option.value === 'custom';
-                return (
-                  <span className={`accent-option${isCustom ? ' accent-option--custom' : ''}`}>
-                    {!isCustom && (
-                      <span
-                        className="accent-option__swatch"
-                        style={{ backgroundColor: String(option.data.color || 'transparent') }}
-                      />
-                    )}
-                    <span className="accent-option__label">{option.label}</span>
-                    {isCustom && (
-                      <span
-                        className="accent-option__editor"
-                        onMouseDown={(event) => event.stopPropagation()}
-                        onClick={(event) => event.stopPropagation()}
-                      >
-                        <ColorPicker
-                          value={customHex}
-                          disabledAlpha
-                          onChangeComplete={(color) => {
-                            void updatePaths([
-                              { key: control.key, value: 'custom' },
-                              { key: customKey, value: color.toHexString().toUpperCase() },
-                            ]);
-                          }}
-                        />
-                        <Input
-                          key={customHex}
-                          className="preference-control__hex"
-                          defaultValue={customHex.toUpperCase()}
-                          maxLength={7}
-                          aria-label={tr(locale, 'Custom accent')}
-                          onPressEnter={(event) => {
-                            void updatePaths([
-                              { key: control.key, value: 'custom' },
-                              { key: customKey, value: event.currentTarget.value.trim() },
-                            ]);
-                          }}
-                          onBlur={(event) => {
-                            if (event.currentTarget.value !== customHex) {
-                              void updatePaths([
-                                { key: control.key, value: 'custom' },
-                                { key: customKey, value: event.currentTarget.value.trim() },
-                              ]);
-                            }
-                          }}
-                        />
-                      </span>
-                    )}
-                  </span>
-                );
-              }}
-            />
-          </div>
-        </label>
-      );
+      return <label className="preference-control" key={control.key}>{commonLabel}
+        <ColorDropdown value={String(value)} customHex={customHex} options={options} locale={locale}
+          disabled={saving === control.key} onChange={(next, hex) => {
+            if (next === 'custom') void updatePaths([{ key: control.key, value: next }, { key: customKey, value: hex ?? customHex }]);
+            else void update(control, next);
+          }} />
+      </label>;
     }
     if (control.kind === 'color') {
       return <label className="preference-control" key={control.key}><span>{commonLabel}</span>
