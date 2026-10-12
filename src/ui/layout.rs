@@ -108,6 +108,19 @@ pub(crate) fn aligned_click_label(
 ) -> egui::Response {
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(width.max(1.0), height), egui::Sense::click());
+    // Editable captions match TextEdit's four-point inset. Panel headings do not.
+    paint_aligned_caption(ui, text, rect, size, align, 4.0);
+    response
+}
+
+fn paint_aligned_caption(
+    ui: &egui::Ui,
+    text: &str,
+    rect: egui::Rect,
+    size: f32,
+    align: egui::Align,
+    inset: f32,
+) {
     let galley = ui.painter().layout_no_wrap(
         text.to_string(),
         egui::FontId::proportional(size),
@@ -115,11 +128,11 @@ pub(crate) fn aligned_click_label(
     );
     // Trailing actions use a reverse layout even in an English/LTR UI. Text
     // alignment must come from the application/logical caption, never that
-    // local button-allocation direction. Match the inline editor's 4px inset.
+    // local button-allocation direction. The caller owns its semantic inset.
     let x = match align {
-        egui::Align::Min => rect.left() + 4.0,
+        egui::Align::Min => rect.left() + inset,
         egui::Align::Center => rect.center().x - galley.size().x * 0.5,
-        egui::Align::Max => rect.right() - 4.0 - galley.size().x,
+        egui::Align::Max => rect.right() - inset - galley.size().x,
     };
     ui.painter()
         .with_clip_rect(rect.intersect(ui.clip_rect()))
@@ -128,7 +141,6 @@ pub(crate) fn aligned_click_label(
             galley,
             ui.visuals().strong_text_color(),
         );
-    response
 }
 
 // Exercise the most constrained supported action row in the geometry tests.
@@ -1260,10 +1272,15 @@ fn effects_library_toolbar(app: &mut PealayerApp, ui: &mut egui::Ui, width: f32)
         if ui.button(crate::ui::icons::SPEAKER_HIGH).on_hover_text(app.tr("New audio effect")).clicked() { app.begin_audio_effect(); }
         let title = app.tr("Effects Library");
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            aligned_click_label(ui, &title, ui.available_width().max(1.0),
-                ui.spacing().interact_size.y, egui::TextStyle::Body.resolve(ui.style()).size,
-                crate::ui::i18n::input_alignment(app.rtl, &title))
-                .on_hover_text(title);
+            let (rect, response) = ui.allocate_exact_size(
+                egui::vec2(ui.available_width().max(1.0), ui.spacing().interact_size.y),
+                egui::Sense::hover(),
+            );
+            // Start at the shared card/Search edge, not an inline editor inset.
+            paint_aligned_caption(ui, &title, rect,
+                egui::TextStyle::Body.resolve(ui.style()).size,
+                crate::ui::i18n::input_alignment(app.rtl, &title), 0.0);
+            response.on_hover_text(title);
         });
     });
     ui.add_space(4.0);
@@ -11530,17 +11547,71 @@ mod timeline_row_tests {
     #[test]
     fn effects_library_heading_starts_at_the_content_edge() {
         let _guard = crate::app::tests::lock_app_tests();
-        for width in [220.0, 360.0, 540.0] {
-            let mut app = PealayerApp::default();
-            let context = egui::Context::default(); let mut left = 0.0;
-            let mut output = context.run_ui(egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 300.0))), ..Default::default()
-            }, |ui| { left = ui.cursor().left(); effects_library_toolbar(&mut app, ui, width); });
-            let title_x = output.shapes.iter().find_map(|shape| match &shape.shape {
-                egui::epaint::Shape::Text(text) if text.galley.text() == "Effects Library" => Some(text.pos.x), _ => None
-            }).expect("visible library heading");
+        for dark in [false, true] {
+            for scale in [1.0, 1.25, 1.5, 2.0] {
+                for density in [crate::config::UiControlDensity::Compact,
+                    crate::config::UiControlDensity::Comfortable] {
+                    for width in [220.0, 360.0, 540.0] {
+                        let mut app = PealayerApp::default();
+                        let context = egui::Context::default();
+                        context.set_pixels_per_point(scale);
+                        context.set_visuals(if dark { egui::Visuals::dark() }
+                            else { egui::Visuals::light() });
+                        context.all_styles_mut(|style| {
+                            crate::ui::control_density::configure(style, density);
+                            style.text_styles.insert(egui::TextStyle::Body,
+                                egui::FontId::proportional(16.0));
+                        });
+                        for scrolling in [false, true] {
+                            let mut edges = (0.0, 0.0);
+                            let mut output = context.run_ui(egui::RawInput {
+                                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO,
+                                    egui::vec2(width, 300.0))), ..Default::default()
+                            }, |ui| {
+                                let content_width = sidebar_content_width(ui.available_width());
+                                effects_library_toolbar(&mut app, ui, content_width);
+                                sidebar_scroll(ui, "heading-edge-fixture", |ui| {
+                                    let group = effect_group_header(ui, content_width, |ui| { ui.label("Effects"); });
+                                    let card = effect_card(ui, content_width, |ui| { ui.label("Seat rise"); });
+                                    edges = (group.response.rect.left(), card.response.rect.left());
+                                    if scrolling { ui.add_space(600.0); }
+                                });
+                            });
+                            output.textures_delta.clear();
+                            let painted_x = |label: &str| output.shapes.iter().find_map(|shape| match &shape.shape {
+                                egui::epaint::Shape::Text(text) if text.galley.text() == label => Some(text.pos.x),
+                                _ => None,
+                            }).expect("visible toolbar caption");
+                            let title = painted_x("Effects Library");
+                            let search = painted_x("Search");
+                            for edge in [search, edges.0, edges.1] {
+                                assert!((title - edge).abs() <= 1.0 / scale,
+                                    "heading/Search/card start drift: width={width}, scale={scale}, dark={dark}, density={density:?}, scrolling={scrolling}: {title} vs {edge}");
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn panel_caption_has_no_edit_inset_in_either_text_direction() {
+        for (text, align) in [("Effects Library", egui::Align::Min),
+            ("کتابخانه افکت‌ها", egui::Align::Max)] {
+            let context = egui::Context::default();
+            let rect = egui::Rect::from_min_size(egui::pos2(10.0, 10.0), egui::vec2(280.0, 32.0));
+            let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+                paint_aligned_caption(ui, text, rect, 16.0, align, 0.0);
+            });
             output.textures_delta.clear();
-            assert!((title_x - left - 4.0).abs() < 1.0, "heading centered or offset at width {width}: {title_x} vs {left}");
+            let shape = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text) => Some(text), _ => None,
+            }).unwrap();
+            let edge = if align == egui::Align::Min { shape.pos.x }
+                else { shape.pos.x + shape.galley.size().x };
+            let expected = if align == egui::Align::Min { rect.left() } else { rect.right() };
+            assert!((edge - expected).abs() < 0.01);
         }
     }
 

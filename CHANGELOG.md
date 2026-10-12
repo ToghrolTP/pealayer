@@ -52,6 +52,8 @@ retroactively attributed to an older download.
 - Keep Effects Library and Hardware Monitor cards clear of their scrollbars;
   reveal library card actions and folder-add icons on hover or keyboard focus
   without shifting buttons or card edges.
+- Align the Effects Library heading with Search and folder/card edges without
+  changing editable-name alignment.
 
 ### 🔌 Hardware and remote control
 

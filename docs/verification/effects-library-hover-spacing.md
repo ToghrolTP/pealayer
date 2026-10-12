@@ -1,5 +1,28 @@
 # Effects Library spacing and hover actions
 
+## Panel heading alignment (12 October 2026)
+
+The earlier center-to-start heading repair reused the clickable inline-caption
+helper. That helper deliberately reserves four points to align display names
+with rename inputs, so the panel heading remained inset from Search and the
+outer folder/card edges. Its previous test even accepted that four-point drift.
+
+The heading now paints with zero inset and hover-only semantics. Editable card
+captions retain their four-point inset; text direction is still explicit rather
+than inferred from the reversed trailing-action layout. Toolbar widths, trailing
+actions and the shared scrollbar lane are unchanged. Web uses a separate
+zero-padding page header and does not share the faulty native caption helper.
+
+The native regression compares painted heading and Search positions with actual
+folder/card edges at three widths, four display scales, both themes and control
+densities, with fitting and overflowing sidebar contents. A separate regression
+checks zero-inset LTR/RTL placement; existing display/rename geometry tests remain
+in the suite. The full isolated local native suite passed 865 tests, with zero
+failures and one pre-existing ignored test. These are renderer checks, not an
+installed GUI screenshot.
+The existing package-cleanliness and local/Cafe launch blockers remain in force;
+source alignment does not constitute runtime delivery.
+
 ## Cause and repair
 
 The native library deducted the theme's scrollbar allocation and a separate
