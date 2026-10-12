@@ -567,11 +567,17 @@ fn dispatch(state: &ControlState, value: &Value, from: SocketAddr) -> Value {
     if value["jsonrpc"] != "2.0" {
         return json!({"jsonrpc":"2.0","id":value["id"],"error":{"code":-32600,"message":"Binary host RPC requires jsonrpc 2.0"}});
     }
+    if matches!(
+        value["method"].as_str(),
+        Some("pealayer.process.connect" | "config.reload" | "pealayer.config.reload")
+    ) {
+        return json!({"jsonrpc":"2.0","id":value["id"],"error":{"code":-32003,"message":"UDP ingress may not change peer routing"}});
+    }
     if value["method"]
         .as_str()
         .is_some_and(|m| m.starts_with("pealayer.udp."))
     {
-        return rpc(value, from.ip().is_loopback())
+        return rpc_origin(value, from.ip().is_loopback(), false)
             .unwrap_or_else(|| json!({"error":"Unknown UDP method"}));
     }
     if let Ok(request) =
@@ -587,9 +593,14 @@ fn dispatch(state: &ControlState, value: &Value, from: SocketAddr) -> Value {
         if matches!(
             request.method.as_str(),
             "config.update" | "pealayer.config.update"
-        ) && request.params.get("binary_udp").is_some()
-            && !from.ip().is_loopback()
-        {
+        ) && request.params.as_object().is_some_and(|params| {
+            params.keys().any(|key| {
+                matches!(
+                    key.as_str(),
+                    "binary_udp" | "hardware_endpoint" | "web_listen_addresses" | "web_port"
+                )
+            })
+        }) {
             return json!({"jsonrpc":"2.0","id":value["id"],"error":{"code":-32003,"message":"UDP provisioning requires local IPC"}});
         }
         if let Ok(Some(command)) = crate::platform::interop::command_from_json_rpc(&request) {
@@ -610,6 +621,9 @@ fn dispatch(state: &ControlState, value: &Value, from: SocketAddr) -> Value {
     )
 }
 pub(crate) fn rpc(value: &Value, local: bool) -> Option<Value> {
+    rpc_origin(value, local, true)
+}
+fn rpc_origin(value: &Value, local: bool, routing: bool) -> Option<Value> {
     let method = value["method"].as_str()?;
     if !method.starts_with("pealayer.udp.") {
         return None;
@@ -643,12 +657,10 @@ pub(crate) fn rpc(value: &Value, local: bool) -> Option<Value> {
             }
             return Ok(json!(events));
         }
-        if !local {
-            return Err(
-                "UDP provisioning/routing requires local IPC; remote pivots are not allowed".into(),
-            );
-        }
         if method == "pealayer.udp.config.set" {
+            if !local || !routing {
+                return Err("UDP provisioning requires local IPC".into());
+            }
             if !crate::platform::interop::get_live_config().web_allow_configuration {
                 return Err("Configuration permission disabled".into());
             }
@@ -670,6 +682,9 @@ pub(crate) fn rpc(value: &Value, local: bool) -> Option<Value> {
             state.egui_ctx.request_repaint();
             return Ok(json!({"accepted":true}));
         }
+        if !routing {
+            return Err("UDP ingress may not pivot to another peer".into());
+        }
         if !crate::platform::interop::get_live_config().web_allow_control {
             return Err("Control permission disabled".into());
         }
@@ -688,6 +703,51 @@ pub(crate) fn rpc(value: &Value, local: bool) -> Option<Value> {
             "pealayer.udp.unsubscribe" => UNSUBSCRIBE,
             _ => return Err("Unknown UDP method".into()),
         };
+        if kind == REQUEST
+            && params["request"]["method"].as_str().is_some_and(|method| {
+                method.starts_with("controller.udp.")
+                    || method.starts_with("pealayer.udp.")
+                    || matches!(
+                        method,
+                        "controller.bridge.call"
+                            | "controller.peer.update.host"
+                            | "controller.app.action"
+                            | "config.update"
+                            | "pealayer.config.update"
+                            | "config.reload"
+                            | "pealayer.config.reload"
+                            | "pealayer.process.connect"
+                    )
+            })
+        {
+            return Err(
+                "Recursive/persisted peer pivots are not permitted through UDP routing".into(),
+            );
+        }
+        if kind == REQUEST && params["request"]["method"] == "controller.command.execute" {
+            let command = params["request"]["params"]["command"]
+                .as_str()
+                .ok_or("A controller command is required")?;
+            if !matches!(
+                command.split_whitespace().next(),
+                Some(
+                    "relay"
+                        | "pwm"
+                        | "menu"
+                        | "buzzer"
+                        | "status"
+                        | "hello"
+                        | "settings"
+                        | "rf"
+                        | "lcd"
+                        | "segments"
+                        | "strip"
+                        | "estop"
+                )
+            ) {
+                return Err("Only direct board command verbs may be routed over UDP".into());
+            }
+        }
         ep.call(
             peer,
             kind,

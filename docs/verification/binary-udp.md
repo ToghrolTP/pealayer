@@ -25,8 +25,10 @@ UDP is disabled by default. Configure named peers through local IPC:
 These operations are process-local even when this player is a consumer; they
 must not configure/update the authority instead. Outbound calls name a
 provisioned peer, carry its current process identity and are never automatically
-retried after an uncertain acknowledgement. Remote callers cannot chain a new
-UDP route. Discovery/event broadcasts contain no actuating request.
+retried after an uncertain acknowledgement. Existing authorized API clients can
+route to configured peers; UDP ingress cannot chain a further route or persist
+peer changes. Provisioning remains local. Discovery/event broadcasts contain no
+actuating request.
 
 Configuration acceptance is queued to the normal application dispatcher;
 confirm its actual result through config/status. Bind failures are exposed and
