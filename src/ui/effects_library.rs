@@ -506,6 +506,85 @@ fn effect_navigation_button(
     )
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct DesignerNavigationGroup {
+    name: String,
+    icon: String,
+    references: Vec<String>,
+}
+
+/// Folder identity is the stored name, never its translated caption or effect type.
+fn designer_navigation_groups(
+    declared: &[crate::four_d::controller::HardwareEffectGroup],
+    entries: impl IntoIterator<Item = (String, String, String)>,
+) -> Vec<DesignerNavigationGroup> {
+    let mut groups = Vec::<DesignerNavigationGroup>::new();
+    for group in declared {
+        if !groups.iter().any(|item| item.name == group.name.trim()) {
+            groups.push(DesignerNavigationGroup { name: group.name.trim().to_string(),
+                icon: group.icon.clone(), references: Vec::new() });
+        }
+    }
+    for (reference, name, icon) in entries {
+        let name = name.trim();
+        let index = groups.iter().position(|group| group.name == name).unwrap_or_else(|| {
+            groups.push(DesignerNavigationGroup { name: name.to_string(), icon: icon.clone(), references: Vec::new() });
+            groups.len() - 1
+        });
+        if groups[index].icon.trim().is_empty() { groups[index].icon = icon; }
+        groups[index].references.push(reference);
+    }
+    // This is effect navigation, not folder management: no empty destinations.
+    groups.retain(|group| !group.references.is_empty());
+    groups
+}
+
+fn presented_group(app: &PealayerApp, reference: &str, saved: &str) -> String {
+    if app.show_effect_library_editor && !app.effect_library_draft.is_new && app.effect_library_draft.reference == reference {
+        app.effect_library_draft.category.clone()
+    } else { saved.to_string() }
+}
+
+fn designer_navigation_group_id(name: &str) -> egui::Id {
+    egui::Id::new(("effects-designer-navigation-group", name))
+}
+
+/// Reveal on selection/group changes, not every frame: users can still collapse
+/// the selected folder without losing its draft or immediately reopening it.
+fn newly_selected_navigation_group(ui: &egui::Ui, groups: &[DesignerNavigationGroup], selection: Option<&str>) -> Option<String> {
+    let next = selection.and_then(|reference| groups.iter().find(|group|
+        group.references.iter().any(|item| item == reference)).map(|group| (reference.to_string(), group.name.clone())));
+    let id = egui::Id::new("effects-designer-navigation-selection");
+    let changed = ui.data(|data| data.get_temp::<Option<(String, String)>>(id)).as_ref() != Some(&next);
+    ui.data_mut(|data| data.insert_temp(id, next.clone()));
+    changed.then(|| next.map(|(_, name)| name)).flatten()
+}
+
+fn designer_navigation_group<R>(
+    ui: &mut egui::Ui, group: &DesignerNavigationGroup, language: crate::config::AppLanguage,
+    reveal: bool, contents: impl FnOnce(&mut egui::Ui) -> R,
+) -> (egui::Response, Option<egui::InnerResponse<R>>) {
+    ui.push_id(designer_navigation_group_id(&group.name), |ui| {
+    let mut state = egui::collapsing_header::CollapsingState::load_with_default_open(
+        ui.ctx(), designer_navigation_group_id(&group.name), true);
+    if reveal { state.set_open(true); }
+    let caret = if state.is_open() { crate::ui::icons::CARET_DOWN } else { crate::ui::icons::CARET_RIGHT };
+    let icon = crate::ui::icons::named_control_icon(&group.icon).unwrap_or(crate::ui::icons::FOLDER_OPEN);
+    let name = if group.name.is_empty() { crate::ui::i18n::tr(language, "Ungrouped") }
+        else { crate::ui::i18n::visual_text(language, &group.name) };
+    let response = ui.add_sized([ui.available_width(), crate::ui::control_density::height(ui)],
+        egui::Button::new("").left_text(egui::RichText::new(format!("{caret}  {icon}  {name}")).strong())
+            .right_text(egui::RichText::new(group.references.len().to_string()).small().strong()).frame(false)
+            .wrap_mode(egui::TextWrapMode::Truncate));
+    if response.clicked() { state.toggle(ui); }
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader,
+        ui.is_enabled(), state.is_open(), format!("{name} ({})", group.references.len())));
+    ui.painter().hline(response.rect.x_range(), response.rect.bottom(), ui.visuals().widgets.noninteractive.bg_stroke);
+    let body = state.show_body_unindented(ui, contents);
+    (response, body)
+    }).inner
+}
+
 fn sequence_step_kinds(
     capabilities: Option<&crate::four_d::controller::HardwareCapabilities>,
 ) -> Vec<&'static str> {
@@ -3077,6 +3156,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
     ui.data_mut(|data| data.insert_temp(egui::Id::new("effects-designer-language"), app.language));
     if !app.show_effect_library_editor {
         ui.data_mut(|data| data.remove::<ControllerEffectDraft>(original_draft_id()));
+        ui.data_mut(|data| data.remove_temp::<Option<(String, String)>>(egui::Id::new("effects-designer-navigation-selection")));
         return;
     }
     retain_original_draft(app, ui.ctx());
@@ -3107,6 +3187,17 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
         .as_ref()
         .map(|hardware| hardware.effect_groups.clone())
         .unwrap_or_default();
+    let navigation_groups = designer_navigation_groups(&groups,
+        audio_effects.iter().map(|effect| (effect.reference(), presented_group(app, &effect.reference(), &effect.group), String::new()))
+        .chain(sequences.iter().map(|effect| {
+            let reference = format!("effect:{}", effect.id);
+            (reference.clone(), presented_group(app, &reference, &effect.category), effect.group_icon.clone())
+        }))
+        .chain(strips.iter().map(|effect| {
+            let reference = format!("effect:{}", effect.id);
+            (reference.clone(), presented_group(app, &reference, &effect.category), effect.group_icon.clone())
+        })));
+    let reveal_group = newly_selected_navigation_group(ui, &navigation_groups, app.effect_library_selection.as_deref());
     let mut new_group_requested = false;
     let geometry = crate::ui::dialog::bounded_geometry(
         ui.ctx().content_rect(),
@@ -3155,113 +3246,116 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         }
                     });
                     ui.add_space(8.0);
-                    egui::ScrollArea::vertical()
-                        .id_salt("controller_effect_editor_list")
-                        .auto_shrink([false, false])
-                        .show(ui, |ui| {
+                    super::layout::sidebar_scroll(ui, "controller_effect_editor_list", |ui| {
                             if capture_locked { ui.disable(); }
-                            for effect in &audio_effects {
-                                let response = effect_navigation_button(ui, app.effect_library_selection.as_deref() == Some(effect.reference().as_str()), crate::ui::icons::SPEAKER_HIGH, &effect.name, &format!("{} · {}", effect.group, crate::duration::format_effect_duration_for_language(display_language, effect.duration_ms)));
-                                if response.clicked() { app.select_audio_effect(effect.id); }
-                            }
-                            for effect in &sequences {
-                                let reference = format!("effect:{}", effect.id);
-                                let payload = crate::app::EffectDragPayload {
-                                    name: effect.name.clone(),
-                                    icon: String::new(),
-                                    duration_ms: effect.duration_ms,
-                                    target: crate::four_d::models::HardwareTarget::ControllerMacro,
-                                    actions: Vec::new(),
-                                    controller_macro: Some(
-                                        crate::four_d::models::ControllerMacroCue {
-                                            id: effect.id,
-                                            mode: effect.mode.clone(),
-                                        },
-                                    ),
-                                    controller_strip_effect: None,
-                                    controller_lane: Some(crate::app::controller_macro_lane(effect)),
-                                    audio_effect: None,
-                                };
-                                let selected = app.effect_library_selection.as_deref()
-                                    == Some(reference.as_str());
-                                let (name, icon) = presented_identity(app, &reference, &effect.name, &effect.icon);
-                                let response = effect_navigation_button(
-                                    ui,
-                                    selected,
-                                    crate::ui::icons::named_control_icon(&icon).unwrap_or(crate::ui::icons::WAVEFORM),
-                                    &crate::ui::i18n::visual_text(app.language, &name),
-                                    &format!(
-                                        "{} · {} · {}",
-                                        effect.category,
-                                        effect.mode,
-                                        crate::duration::format_effect_duration_for_language(
-                                            display_language,
-                                            effect.duration_ms
-                                        )
-                                    ),
-                                );
-                                if response.clicked() {
-                                    select_sequence(app, effect);
-                                }
-                                show_saved_effect_context_menu(
-                                    app,
-                                    &response,
-                                    egui::Id::new(("effect-manager-sequence-menu", effect.id)),
-                                    &effect.name,
-                                    &reference,
-                                    &payload,
-                                    |app| select_sequence(app, effect),
-                                );
-                            }
-                            for effect in &strips {
-                                let reference = format!("effect:{}", effect.id);
-                                let payload = crate::app::EffectDragPayload {
-                                    name: effect.name.clone(),
-                                    icon: String::new(),
-                                    duration_ms: effect.default_duration_ms.unwrap_or(5_000),
-                                    target: crate::four_d::models::HardwareTarget::ControllerMacro,
-                                    actions: Vec::new(),
-                                    controller_macro: None,
-                                    controller_strip_effect: Some(
-                                        crate::four_d::models::ControllerStripEffectCue {
-                                            id: effect.id.clone(),
-                                        },
-                                    ),
-                                    controller_lane: Some(
-                                        crate::four_d::models::ControllerEffectLane::Lighting,
-                                    ),
-                                    audio_effect: None,
-                                };
-                                let selected = app.effect_library_selection.as_deref()
-                                    == Some(reference.as_str());
-                                let (name, icon) = presented_identity(app, &reference, &effect.name, &effect.icon);
-                                let response = effect_navigation_button(
-                                    ui,
-                                    selected,
-                                    crate::ui::icons::named_control_icon(&icon).unwrap_or(crate::ui::icons::SPARKLE),
-                                    &crate::ui::i18n::visual_text(app.language, &name),
-                                    &format!(
-                                        "{} · {} · {}",
-                                        effect.category,
-                                        effect.engine,
-                                        crate::duration::format_effect_duration_for_language(
-                                            display_language,
-                                            effect.default_duration_ms.unwrap_or_default()
-                                        )
-                                    ),
-                                );
-                                if response.clicked() {
-                                    select_strip(app, effect);
-                                }
-                                show_saved_effect_context_menu(
-                                    app,
-                                    &response,
-                                    egui::Id::new(("effect-manager-strip-menu", &effect.id)),
-                                    &effect.name,
-                                    &reference,
-                                    &payload,
-                                    |app| select_strip(app, effect),
-                                );
+                            for group in &navigation_groups {
+                                let _ = designer_navigation_group(ui, group, display_language,
+                                    reveal_group.as_deref() == Some(group.name.as_str()), |ui| {
+                                    for effect in &audio_effects {
+                                        if !group.references.contains(&effect.reference()) { continue; }
+                                        let response = effect_navigation_button(ui, app.effect_library_selection.as_deref() == Some(effect.reference().as_str()), crate::ui::icons::SPEAKER_HIGH, &effect.name, &crate::duration::format_effect_duration_for_language(display_language, effect.duration_ms));
+                                        if response.clicked() { app.select_audio_effect(effect.id); }
+                                    }
+                                    for effect in &sequences {
+                                        let reference = format!("effect:{}", effect.id);
+                                        if !group.references.contains(&reference) { continue; }
+                                        let payload = crate::app::EffectDragPayload {
+                                            name: effect.name.clone(),
+                                            icon: String::new(),
+                                            duration_ms: effect.duration_ms,
+                                            target: crate::four_d::models::HardwareTarget::ControllerMacro,
+                                            actions: Vec::new(),
+                                            controller_macro: Some(
+                                                crate::four_d::models::ControllerMacroCue {
+                                                    id: effect.id,
+                                                    mode: effect.mode.clone(),
+                                                },
+                                            ),
+                                            controller_strip_effect: None,
+                                            controller_lane: Some(crate::app::controller_macro_lane(effect)),
+                                            audio_effect: None,
+                                        };
+                                        let selected = app.effect_library_selection.as_deref()
+                                            == Some(reference.as_str());
+                                        let (name, icon) = presented_identity(app, &reference, &effect.name, &effect.icon);
+                                        let response = effect_navigation_button(
+                                            ui,
+                                            selected,
+                                            crate::ui::icons::named_control_icon(&icon).unwrap_or(crate::ui::icons::WAVEFORM),
+                                            &crate::ui::i18n::visual_text(app.language, &name),
+                                            &format!(
+                                                "{} · {}",
+                                                effect.mode,
+                                                crate::duration::format_effect_duration_for_language(
+                                                    display_language,
+                                                    effect.duration_ms
+                                                )
+                                            ),
+                                        );
+                                        if response.clicked() {
+                                            select_sequence(app, effect);
+                                        }
+                                        show_saved_effect_context_menu(
+                                            app,
+                                            &response,
+                                            egui::Id::new(("effect-manager-sequence-menu", effect.id)),
+                                            &effect.name,
+                                            &reference,
+                                            &payload,
+                                            |app| select_sequence(app, effect),
+                                        );
+                                    }
+                                    for effect in &strips {
+                                        let reference = format!("effect:{}", effect.id);
+                                        if !group.references.contains(&reference) { continue; }
+                                        let payload = crate::app::EffectDragPayload {
+                                            name: effect.name.clone(),
+                                            icon: String::new(),
+                                            duration_ms: effect.default_duration_ms.unwrap_or(5_000),
+                                            target: crate::four_d::models::HardwareTarget::ControllerMacro,
+                                            actions: Vec::new(),
+                                            controller_macro: None,
+                                            controller_strip_effect: Some(
+                                                crate::four_d::models::ControllerStripEffectCue {
+                                                    id: effect.id.clone(),
+                                                },
+                                            ),
+                                            controller_lane: Some(
+                                                crate::four_d::models::ControllerEffectLane::Lighting,
+                                            ),
+                                            audio_effect: None,
+                                        };
+                                        let selected = app.effect_library_selection.as_deref()
+                                            == Some(reference.as_str());
+                                        let (name, icon) = presented_identity(app, &reference, &effect.name, &effect.icon);
+                                        let response = effect_navigation_button(
+                                            ui,
+                                            selected,
+                                            crate::ui::icons::named_control_icon(&icon).unwrap_or(crate::ui::icons::SPARKLE),
+                                            &crate::ui::i18n::visual_text(app.language, &name),
+                                            &format!(
+                                                "{} · {}",
+                                                effect.engine,
+                                                crate::duration::format_effect_duration_for_language(
+                                                    display_language,
+                                                    effect.default_duration_ms.unwrap_or_default()
+                                                )
+                                            ),
+                                        );
+                                        if response.clicked() {
+                                            select_strip(app, effect);
+                                        }
+                                        show_saved_effect_context_menu(
+                                            app,
+                                            &response,
+                                            egui::Id::new(("effect-manager-strip-menu", &effect.id)),
+                                            &effect.name,
+                                            &reference,
+                                            &payload,
+                                            |app| select_strip(app, effect),
+                                        );
+                                    }
+                                });
                             }
                         });
                 },
@@ -3675,6 +3769,133 @@ mod tests {
     use super::*;
 
     #[test]
+    fn designer_groups_use_actual_folders_across_effect_kinds_and_count_only_members() {
+        use crate::four_d::controller::HardwareEffectGroup as Group;
+        let groups = designer_navigation_groups(&[
+            Group { name: "Lighting".into(), icon: "lamp".into() },
+            Group { name: "Effects".into(), icon: "folder".into() },
+            Group { name: "Empty".into(), icon: "star".into() },
+        ], [
+            ("effect:1".into(), "Effects".into(), "waveform".into()),
+            ("sfx:2".into(), "Effects".into(), String::new()),
+            ("effect:3".into(), "Verification".into(), "check".into()),
+            ("effect:4".into(), "Lighting".into(), "sparkle".into()),
+            ("effect:5".into(), "Effects".into(), String::new()),
+            ("effect:6".into(), String::new(), String::new()),
+            ("effect:7".into(), "Ungrouped".into(), String::new()),
+            ("effect:8".into(), "effects".into(), String::new()),
+        ]);
+        assert_eq!(groups.iter().map(|group| (group.name.as_str(), group.references.len())).collect::<Vec<_>>(),
+            [("Lighting", 1), ("Effects", 3), ("Verification", 1), ("", 1), ("Ungrouped", 1), ("effects", 1)]);
+        assert_eq!(groups[0].icon, "lamp");
+        assert_eq!(groups[1].icon, "folder");
+        assert_eq!(groups[1].references, ["effect:1", "sfx:2", "effect:5"]);
+        assert_ne!(designer_navigation_group_id(""), designer_navigation_group_id("Ungrouped"));
+    }
+
+    #[test]
+    fn designer_group_selection_reveals_only_when_selection_or_membership_changes() {
+        let ctx = egui::Context::default();
+        let mut groups = designer_navigation_groups(&[], [("effect:1".into(), "Effects".into(), String::new())]);
+        let mut selected = Some("effect:1");
+        let render = |groups: &[DesignerNavigationGroup], selected| {
+            let mut reveal = None;
+            let mut output = ctx.run_ui(Default::default(), |ui| {
+                reveal = newly_selected_navigation_group(ui, groups, selected);
+            });
+            output.textures_delta.clear();
+            reveal
+        };
+        assert_eq!(render(&groups, selected), Some("Effects".into()));
+        assert_eq!(render(&groups, selected), None);
+        groups[0].references.push("effect:2".into());
+        assert_eq!(render(&groups, selected), None, "count changes must not reopen a manually collapsed group");
+        groups[0].name = "Renamed lighting".into();
+        assert_eq!(render(&groups, selected), Some("Renamed lighting".into()));
+        selected = Some("effect:2");
+        assert_eq!(render(&groups, selected), Some("Renamed lighting".into()));
+        assert_eq!(render(&groups, None), None);
+    }
+
+    #[test]
+    fn designer_group_divider_click_and_keyboard_toggle_without_touching_selection() {
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(|style| style.animation_time = 0.0);
+        let group = designer_navigation_groups(&[], [("effect:1".into(), "Effects".into(), String::new())]).remove(0);
+        let selected = "effect:1";
+        let mut header = egui::Rect::NOTHING;
+        let mut body_visible = false;
+        let render = |events, header: &mut egui::Rect, body_visible: &mut bool, focus: bool| {
+            let mut output = ctx.run_ui(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(230.0, 300.0))),
+                events, ..Default::default()
+            }, |ui| {
+                let (response, body) = designer_navigation_group(ui, &group, crate::config::AppLanguage::English, false,
+                    |ui| effect_navigation_button(ui, true, crate::ui::icons::WAVEFORM, "Selected effect", "host · 1 sec"));
+                *header = response.rect;
+                *body_visible = body.is_some();
+                if focus { response.request_focus(); }
+            });
+            output.textures_delta.clear();
+        };
+        render(vec![], &mut header, &mut body_visible, false);
+        assert!(body_visible);
+        let point = header.center();
+        let click = |pressed| egui::Event::PointerButton { pos: point, button: egui::PointerButton::Primary,
+            pressed, modifiers: egui::Modifiers::NONE };
+        render(vec![egui::Event::PointerMoved(point), click(true)], &mut header, &mut body_visible, false);
+        render(vec![click(false)], &mut header, &mut body_visible, false);
+        assert!(!body_visible);
+        render(vec![], &mut header, &mut body_visible, true);
+        render(vec![egui::Event::Key { key: egui::Key::Enter, physical_key: None, pressed: true,
+            repeat: false, modifiers: egui::Modifiers::NONE }], &mut header, &mut body_visible, false);
+        assert!(body_visible);
+        assert_eq!(selected, "effect:1");
+    }
+
+    #[test]
+    fn designer_group_dividers_keep_start_caption_end_count_and_card_width() {
+        for dark in [false, true] {
+            for density in [crate::config::UiControlDensity::Compact, crate::config::UiControlDensity::Comfortable] {
+                for scale in [1.0, 1.25, 1.5, 2.0] {
+                    for width in [160.0, 220.0, 340.0] {
+                        let ctx = egui::Context::default();
+                        ctx.set_pixels_per_point(scale);
+                        crate::ui::i18n::configure_ui_fonts(&ctx, false);
+                        let mut config = crate::config::AppConfig::default();
+                        config.theme = if dark { crate::config::AppTheme::Dark } else { crate::config::AppTheme::Light };
+                        config.ui_control_density = density;
+                        crate::ui::configure_native_appearance(&ctx, &config);
+                        ctx.all_styles_mut(|style| style.animation_time = 0.0);
+                        for name in ["Effects", "Cinema lighting for the upper gallery", "روشنایی سالن"] {
+                        let group = DesignerNavigationGroup { name: name.into(), icon: "folder".into(), references: vec!["1".into(), "2".into(), "3".into()] };
+                        let mut header = egui::Rect::NOTHING;
+                        let mut card = egui::Rect::NOTHING;
+                        let mut output = ctx.run_ui(egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 400.0))),
+                            ..Default::default()
+                        }, |ui| {
+                            let (response, _) = designer_navigation_group(ui, &group, crate::config::AppLanguage::English, false,
+                                |ui| { card = effect_navigation_button(ui, true, crate::ui::icons::WAVEFORM, "Selected effect", "host · 1 sec").rect; });
+                            header = response.rect;
+                        });
+                        let texts = output.shapes.iter().filter_map(|shape| if let egui::Shape::Text(text) = &shape.shape { Some(text) } else { None }).collect::<Vec<_>>();
+                        let caption = texts.iter().find(|text| text.galley.text().contains(crate::ui::icons::CARET_DOWN)).map(|text| text.pos);
+                        let count = texts.iter().find(|text| text.galley.text() == "3").map(|text| text.pos);
+                        output.textures_delta.clear();
+                        let caption = caption.expect("visible folder caption");
+                        let count = count.expect("visible group count");
+                        assert!(caption.x - header.left() <= 6.0, "caption is centered: {caption:?} {header:?}");
+                        assert!(count.x > header.right() - 30.0, "count is not trailing: {count:?} {header:?}");
+                        assert!((header.width() - card.width()).abs() <= 1.0 / scale, "header/card drift at {width}, {scale}: {header:?} {card:?}");
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn empty_recording_placeholders_can_be_published_but_never_run() {
         let mut draft = ControllerEffectDraft { name:"Capture placeholder".into(),kind:"sequence".into(), ..Default::default() };
         assert!(draft_can_publish(&draft)); assert!(!draft_can_run(&draft));
@@ -3692,19 +3913,24 @@ mod tests {
         app.effect_library_draft.reference = "effect:8".into();
         app.effect_library_draft.name = "Original".into();
         app.effect_library_draft.icon = "seat".into();
+        app.effect_library_draft.category = "Original group".into();
         app.effect_library_draft.is_new = false;
         app.show_effect_library_editor = true;
         let ctx = egui::Context::default();
         retain_original_draft(&app, &ctx);
         app.effect_library_draft.name = "Preview".into();
         app.effect_library_draft.icon = "lamp".into();
+        app.effect_library_draft.category = "Lighting".into();
         app.hardware_effect_authoring.pending_operation = Some("effect-save".into());
         mark_designer_saved(&app,&ctx);
         app.hardware_effect_authoring.pending_operation = None;
         assert_eq!(presented_identity(&app,"effect:8","Original","seat"), ("Preview".into(),"lamp".into()));
         assert_eq!(presented_identity(&app,"effect:9","Other","plug"), ("Other".into(),"plug".into()));
+        assert_eq!(presented_group(&app,"effect:8","Original group"), "Lighting");
+        assert_eq!(presented_group(&app,"effect:9","Other group"), "Other group");
         discard_designer_draft(&mut app, &ctx);
         assert_eq!(app.effect_library_draft.name,"Original");
+        assert_eq!(app.effect_library_draft.category,"Original group");
         app.effect_library_draft.name = "Saved".into(); mark_designer_saved(&app,&ctx);
         app.effect_library_draft.name = "Unsaved".into(); discard_designer_draft(&mut app,&ctx);
         assert_eq!(app.effect_library_draft.name,"Saved");
@@ -3715,6 +3941,7 @@ mod tests {
         assert_eq!(app.effect_library_draft.name,"Acknowledged");
         app.show_effect_library_editor = false;
         assert_eq!(presented_identity(&app,"effect:8","Catalog","seat").0,"Catalog");
+        assert_eq!(presented_group(&app,"effect:8","Catalog group"), "Catalog group");
     }
 
     #[test]

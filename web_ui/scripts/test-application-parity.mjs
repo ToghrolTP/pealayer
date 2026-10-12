@@ -27,6 +27,8 @@ const authority = read('src/components/PublishingAuthority.tsx');
 const webPlatform = read('src/webPlatform.ts');
 
 const contracts = [
+  [effects.includes('category: draft.category') && effects.includes('draft?.category') && effects.includes('effectGroupName(effect)'),
+    'Effect folder preview follows the edited draft without changing the saved catalog'],
   [app.includes('appearance?.ui_control_density') && app.includes('controlHeightSM: controlHeight') && app.includes('controlHeightLG: controlHeight')
     && css.includes('height: var(--control-height, 24px)') && read('src/appearance.ts').includes('ui_control_density: appearance.ui_control_density'),
     'Inputs, selectors and color menu rows follow one shared appearance density'],

@@ -10,6 +10,10 @@ statements are not the present product state.
 
 ## Delivered source and deployment
 
+- Effects Designer navigation groups actual effects by folder with expandable
+  dividers, counts and stable selection. [Grouping and verification](designer-effect-groups.md)
+  retain safe-restart and Cafe live-acceptance gates.
+
 - Effect Designer wheel routing, same-kind direct relay/PWM retargeting, renamed
   drag captions, native alpha/titlebar/tray icon ownership and live Preferences
   density preview have focused native regressions.
