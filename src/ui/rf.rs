@@ -102,7 +102,7 @@ fn request(app: &mut PealayerApp, operation: &str, params: Value) {
 fn text(ui: &mut egui::Ui, label: &str, value: &mut Value, field: &str) {
     ui.label(label);
     let mut current = value[field].as_str().unwrap_or_default().to_string();
-    if ui.add(crate::ui::dialog::singleline_text_edit(&mut current).desired_width(ui.available_width())).changed() { value[field] = json!(current); }
+    if ui.add(crate::ui::dialog::singleline_text_edit(ui, &mut current).desired_width(ui.available_width())).changed() { value[field] = json!(current); }
     ui.end_row();
 }
 

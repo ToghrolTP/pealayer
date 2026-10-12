@@ -1139,8 +1139,8 @@ fn render_contract_control(
                                 let to_align = crate::ui::i18n::input_alignment(rtl_ui, &item.to);
                                 changed |= ui
                                     .add_sized(
-                                        [field_width, PREFERENCE_ROW_HEIGHT],
-                                        crate::ui::dialog::singleline_text_edit(&mut item.from)
+                                        [field_width, crate::ui::control_density::height(ui)],
+                                        crate::ui::dialog::singleline_text_edit(ui, &mut item.from)
                                             .horizontal_align(from_align)
                                             .hint_text(tr("Source text")),
                                     )
@@ -1148,8 +1148,8 @@ fn render_contract_control(
                                 ui.label(crate::ui::icons::ARROW_RIGHT);
                                 changed |= ui
                                     .add_sized(
-                                        [field_width, PREFERENCE_ROW_HEIGHT],
-                                        crate::ui::dialog::singleline_text_edit(&mut item.to)
+                                        [field_width, crate::ui::control_density::height(ui)],
+                                        crate::ui::dialog::singleline_text_edit(ui, &mut item.to)
                                             .horizontal_align(to_align)
                                             .hint_text(tr("Replacement")),
                                     )
@@ -1204,8 +1204,8 @@ fn render_contract_control(
                 let browse_width = 85.0;
                 let clear_width = 24.0;
                 edited |= ui.add_sized(
-                    [(width - browse_width - clear_width - PREFERENCE_COLUMN_GAP * 2.0).max(55.0), PREFERENCE_ROW_HEIGHT],
-                    crate::ui::dialog::singleline_text_edit(&mut text).hint_text(tr(control.placeholder.unwrap_or_default())),
+                    [(width - browse_width - clear_width - PREFERENCE_COLUMN_GAP * 2.0).max(55.0), crate::ui::control_density::height(ui)],
+                    crate::ui::dialog::singleline_text_edit(ui, &mut text).hint_text(tr(control.placeholder.unwrap_or_default())),
                 ).on_hover_text(&text).changed();
                 if ui.add_sized([browse_width, 26.0], egui::Button::new(format!(
                     "{} {}", crate::ui::icons::FOLDER_OPEN, tr("Browse..."),
@@ -1251,7 +1251,7 @@ fn render_contract_control(
             preference_row(ui, control_icon, &tr(control.label), label_width, |ui| {
                 let control_width = ui.available_width().min(PREFERENCE_CONTROL_MAX_WIDTH);
                 let response = ui.add(
-                    crate::ui::dialog::singleline_text_edit(&mut text)
+                    crate::ui::dialog::singleline_text_edit(ui, &mut text)
                         .horizontal_align(text_align)
                         .desired_width(control_width)
                         .hint_text(control.placeholder.unwrap_or_default()),
@@ -1877,14 +1877,18 @@ mod tests {
                     accent_frame(&ctx,&control,&mut values,vec![]);
                     let open = accent_frame(&ctx,&control,&mut values,vec![]);
                     let blue = accent_text_position(&open,"macOS blue");
+                    let row_height = open.shapes.iter().filter_map(|shape| match &shape.shape {
+                        egui::epaint::Shape::Rect(rect) if rect.rect.contains(blue) && rect.rect.width() > 50.0 => Some(rect.rect.height()),
+                        _ => None,
+                    }).min_by(f32::total_cmp).expect("preset geometry");
                     let menu_width = open.shapes.iter().find_map(|shape| match &shape.shape {
-                        egui::epaint::Shape::Rect(rect) if rect.rect.height() == crate::ui::dropdown::ROW_HEIGHT && rect.rect.contains(blue) => Some(rect.rect.width()), _=>None,
+                        egui::epaint::Shape::Rect(rect) if rect.rect.height() == row_height && rect.rect.contains(blue) => Some(rect.rect.width()), _=>None,
                     }).expect("preset row");
                     let rows: Vec<_> = open.shapes.iter().filter_map(|shape| match &shape.shape {
-                        egui::epaint::Shape::Rect(rect) if rect.rect.height() == crate::ui::dropdown::ROW_HEIGHT
+                        egui::epaint::Shape::Rect(rect) if rect.rect.height() == row_height
                             && rect.rect.width() == menu_width
-                            && rect.rect.center().y >= blue.y - 2.0 * (crate::ui::dropdown::ROW_HEIGHT + 2.0) - 0.5
-                            && rect.rect.center().y <= blue.y + crate::ui::dropdown::ROW_HEIGHT + 2.5 => Some(rect.rect), _ => None,
+                            && rect.rect.center().y >= blue.y - 2.0 * (row_height + 2.0) - 0.5
+                            && rect.rect.center().y <= blue.y + row_height + 2.5 => Some(rect.rect), _ => None,
                     }).collect();
                     assert_eq!(rows.len(),4,"four full-width rows at scale {scale}");
                     assert!(rows.iter().all(|row| row.width() == rows[0].width()));

@@ -793,6 +793,10 @@ impl Default for WorkspaceProfile {
 #[serde(rename_all = "snake_case")]
 pub enum UiAnimationMode { #[default] System, Enabled, Disabled }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UiControlDensity { #[default] Compact, Comfortable }
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct SeekbarMarkersConfig {
@@ -869,6 +873,7 @@ pub struct AppConfig {
     pub accent_color: AccentColor,
     pub custom_accent_color: Option<String>,
     pub ui_animation_mode: UiAnimationMode,
+    pub ui_control_density: UiControlDensity,
     pub language: AppLanguage,
     pub direction: AppDirection,
     pub hardware_endpoint: Option<String>,
@@ -1061,6 +1066,7 @@ impl Default for AppConfig {
             accent_color: AccentColor::System,
             custom_accent_color: None,
             ui_animation_mode: UiAnimationMode::System,
+            ui_control_density: UiControlDensity::Compact,
             language: AppLanguage::System,
             direction: AppDirection::Auto,
             hardware_endpoint: None,
@@ -1571,6 +1577,7 @@ impl AppConfig {
         self.accent_color = source.accent_color;
         self.custom_accent_color = source.custom_accent_color.clone();
         self.ui_animation_mode = source.ui_animation_mode;
+        self.ui_control_density = source.ui_control_density;
         self.app_icon_preset = source.app_icon_preset;
     }
 
@@ -2603,6 +2610,19 @@ mod tests {
         assert!(config.validate().is_ok());
         config.custom_accent_color = Some("blue".to_string());
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn control_density_is_persisted_and_reconciled_with_shared_appearance() {
+        let source = AppConfig { ui_control_density: UiControlDensity::Comfortable, ..Default::default() };
+        let values = serde_json::to_value(&source).unwrap();
+        assert_eq!(values["ui_control_density"], "comfortable");
+        let restored: AppConfig = serde_json::from_value(values).unwrap();
+        assert_eq!(restored.ui_control_density, UiControlDensity::Comfortable);
+        let mut target = AppConfig::default();
+        target.copy_appearance_from(&source);
+        assert_eq!(target.ui_control_density, UiControlDensity::Comfortable);
+        assert_eq!(AppConfig::default().ui_control_density, UiControlDensity::Compact);
     }
 
     #[test]

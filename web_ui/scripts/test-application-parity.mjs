@@ -27,6 +27,10 @@ const authority = read('src/components/PublishingAuthority.tsx');
 const webPlatform = read('src/webPlatform.ts');
 
 const contracts = [
+  [app.includes('appearance?.ui_control_density') && app.includes('controlHeightSM: controlHeight') && app.includes('controlHeightLG: controlHeight')
+    && css.includes('height: var(--control-height, 24px)') && read('src/appearance.ts').includes('ui_control_density: appearance.ui_control_density'),
+    'Inputs, selectors and color menu rows follow one shared appearance density'],
+  [hardware.includes('disabled={!state.hardware_connected || !details.buzzer?.playing}'), 'Buzzer stop follows authoritative activity, not connection alone'],
   [studio.includes('<VolumeControl') && remote.includes('<VolumeControl') && volumeControl.includes("sendCmd('set_volume'") && volumeControl.includes("sendCmd('set_mute'") && volumeControl.includes('aria-label={tr(locale, \'Volume\')}'), 'Simple and NLE share accessible horizontal volume and mute controls using session commands'],
   [css.includes('grid-template-rows: auto minmax(0, 1fr) auto auto') && css.includes('.studio-volume { grid-column: 1 / -1; grid-row: 4; width: 100%; }'), 'the monitor reserves its selectors and gives narrow panels a full-width volume row'],
   [studio.includes('<ElapsedTimeInput') && remote.includes('<ElapsedTimeInput') && elapsedInput.includes('setSelectionRange') && elapsedInput.includes('onPaste=') && elapsedInput.includes("event.key === 'Escape'"), 'both playback surfaces share an immutable segmented elapsed-time editor with paste and cancellation'],

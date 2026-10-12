@@ -2466,7 +2466,7 @@ fn draw_sequence_step_editor(
                                 let text_align =
                                     crate::ui::i18n::input_alignment(rtl_ui, &step.text);
                                 ui.add(
-                                    crate::ui::dialog::singleline_text_edit(&mut step.text)
+                                    crate::ui::dialog::singleline_text_edit(ui, &mut step.text)
                                         .horizontal_align(text_align),
                                 );
                                 ui.end_row();
@@ -2638,7 +2638,7 @@ fn draw_sequence_step_editor(
                                 ui.end_row();
                                 ui.label(crate::ui::effects_library::designer_label(ui, "Payload (hex)"));
                                 ui.add(
-                                    crate::ui::dialog::singleline_text_edit(&mut step.payload_hex)
+                                    crate::ui::dialog::singleline_text_edit(ui, &mut step.payload_hex)
                                         .desired_width(280.0)
                                         .font(egui::TextStyle::Monospace),
                                 );
@@ -2647,7 +2647,7 @@ fn draw_sequence_step_editor(
                                 let text_align =
                                     crate::ui::i18n::input_alignment(rtl_ui, &step.text);
                                 ui.add(
-                                    crate::ui::dialog::singleline_text_edit(&mut step.text)
+                                    crate::ui::dialog::singleline_text_edit(ui, &mut step.text)
                                         .horizontal_align(text_align),
                                 );
                                 ui.end_row();
@@ -2669,7 +2669,7 @@ fn draw_sequence_step_editor(
                 for (action_index, action) in step.action_ids.iter_mut().enumerate() {
                     ui.horizontal(|ui| {
                         ui.add(
-                            crate::ui::dialog::singleline_text_edit(action)
+                            crate::ui::dialog::singleline_text_edit(ui, action)
                                 .desired_width(240.0)
                                 .hint_text("seat.a.up"),
                         );
@@ -3263,7 +3263,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     ui.label(&labels.3);
                                     ui.add_enabled(
                                         draft.is_new,
-                                        crate::ui::dialog::singleline_text_edit(&mut draft.id)
+                                        crate::ui::dialog::singleline_text_edit(ui, &mut draft.id)
                                             .desired_width(260.0),
                                     );
                                     ui.end_row();
@@ -3273,7 +3273,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                         &draft.name,
                                     );
                                     ui.add(
-                                        crate::ui::dialog::singleline_text_edit(&mut draft.name)
+                                        crate::ui::dialog::singleline_text_edit(ui, &mut draft.name)
                                             .horizontal_align(name_align)
                                             .desired_width(320.0),
                                     );
@@ -3433,7 +3433,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                                     &app.effect_library_draft.label,
                                                 );
                                                 ui.add(
-                                                    crate::ui::dialog::singleline_text_edit(
+                                                    crate::ui::dialog::singleline_text_edit(ui,
                                                         &mut app.effect_library_draft.label,
                                                     )
                                                     .horizontal_align(label_align),
@@ -3445,7 +3445,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                                     &app.effect_library_draft.lcd_message,
                                                 );
                                                 ui.add(
-                                                    crate::ui::dialog::singleline_text_edit(
+                                                    crate::ui::dialog::singleline_text_edit(ui,
                                                         &mut app.effect_library_draft.lcd_message,
                                                     )
                                                     .horizontal_align(lcd_align),

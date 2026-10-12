@@ -10,6 +10,12 @@ statements are not the present product state.
 
 ## Delivered source and deployment
 
+- Inputs, selector triggers and single-line choices share one Control density
+  preference and a consistent chevron. Buzzer loop hover geometry is stable;
+  Stop follows owned melody/tone activity across native, Web and tray.
+  [Contract, cause and delivery boundaries](control-density-and-buzzer.md)
+  retain paired PCController and restart/Cafe acceptance gates.
+
 - Effects Library rename uses matching display/edit header slots and glyph
   baselines without resizing the card or moving metadata.
   [Geometry contract and popup regressions](effect-card-rename-geometry.md)
