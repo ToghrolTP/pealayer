@@ -31,7 +31,8 @@ export function sequenceWheelNavigation(scale: number, action: TimelineWheelBeha
   contentHeight: number, durationMs: number) {
   const nextScale = action === 'zoom' ? Math.max(.03, Math.min(.32, scale * Math.exp(-delta * .002))) : scale;
   const pointer = Math.max(0, Math.min(viewportWidth, pointerX));
-  const anchored = nextScale !== scale ? Math.max(0, left + pointer - 140) * nextScale / scale + 140 - pointer : left;
+  const timeX = Math.max(0, left + pointer - 140);
+  const anchored = nextScale !== scale && timeX > 0 ? timeX * nextScale / scale + 140 - pointer : left;
   const horizontal = action === 'horizontal_scroll' || (action === 'vertical_scroll' && contentHeight <= viewportHeight);
   const width = Math.max(600, durationMs * nextScale + 160);
   return { scale: nextScale, width,

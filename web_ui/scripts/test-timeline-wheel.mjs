@@ -23,4 +23,5 @@ assert.ok(Math.abs((sequenceZoom.left + 200 - 140) / sequenceZoom.scale - (300 +
 assert.equal(sequenceWheelNavigation(.08, 'vertical_scroll', 60, 0, 0, 200, 700, 240, 100, 60000).left, 60);
 assert.equal(sequenceWheelNavigation(.08, 'vertical_scroll', 60, 0, 0, 200, 700, 240, 800, 60000).top, 60);
 assert.equal(sequenceWheelNavigation(.08, 'none', 60, 0, 0, 200, 700, 240, 800, 60000).left, 0);
+assert.equal(sequenceWheelNavigation(.08, 'zoom', -120, 0, 0, 60, 700, 240, 800, 60000).left, 0);
 console.log('Timeline wheel routing, modifier swap, horizontal priority, and cursor-anchored zoom checks passed.');

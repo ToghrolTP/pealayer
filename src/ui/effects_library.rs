@@ -1377,7 +1377,7 @@ fn sequence_wheel_navigation(
     };
     let pointer = (pointer_x - viewport.left()).clamp(0.0, viewport.width());
     let time_x = (offset.x + pointer - label_width).max(0.0);
-    let anchored_x = if next_zoom != zoom { time_x * next_zoom / zoom + label_width - pointer } else { offset.x };
+    let anchored_x = if next_zoom != zoom && time_x > 0.0 { time_x * next_zoom / zoom + label_width - pointer } else { offset.x };
     let next_width = label_width + (duration_ms as f32 * next_zoom / 1_000.0 + 80.0)
         .max((viewport.width() - label_width).max(360.0));
     (next_zoom, egui::vec2(
@@ -1532,7 +1532,11 @@ fn draw_sequence_timeline(
                         ui.allocate_exact_size(canvas_size, egui::Sense::click());
                     // Only claim the canvas, not toolbar/fields or popup menus.
                     let surface = viewport.translate(canvas.min.to_vec2()).intersect(ui.clip_rect());
-                    if ui.is_enabled() && !egui::Popup::is_any_open(ui.ctx()) {
+                    let add_track_heading = egui::Rect::from_min_size(
+                        egui::pos2(canvas.left(), canvas.top() + ruler_height + lanes.len() as f32 * row_height),
+                        egui::vec2(label_width, row_height));
+                    if ui.is_enabled() && !egui::Popup::is_any_open(ui.ctx())
+                        && !ui.ctx().pointer_hover_pos().is_some_and(|pointer| add_track_heading.contains(pointer)) {
                         let modifiers = ui.input(super::layout::timeline_wheel_modifiers);
                         pending_wheel = super::layout::timeline_wheel_over_surface(ui, surface,
                             wheel_preferences.behavior(modifiers));
