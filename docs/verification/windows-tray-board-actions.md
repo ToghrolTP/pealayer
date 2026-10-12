@@ -46,6 +46,9 @@ Pure model tests cover connection/identity gates, omitted capabilities,
 contextual busy/latch/animation state, semantic IDs, source switching and
 translations. App tests cover stale/busy/disconnected/direct-UART rejection,
 non-destructive release confirmation and restoration of a closed monitor tab.
+These app fixtures use a memory-only engine handle with no transport worker and
+a closed command channel. Manually setting connection flags on a live engine is
+a race: its worker can overwrite them before the UI assertion, as Mac CI caught.
 A Windows-only test constructs the actual Win32 submenu and checks its command
 IDs, child ownership and enabled/disabled flags without opening a popup or
 commanding a board. The runtime shell diagnostics expose the projected labels

@@ -11165,6 +11165,7 @@ pub(crate) mod tests {
     fn board_tray_release_preserves_gui_confirmation_and_authoritative_latch() {
         let _guard = lock_app_tests();
         let mut app = PealayerApp::default();
+        app.engine_handle = crate::four_d::engine::memory_only_test_engine();
         *app.engine_handle.serial_port.lock().unwrap() = crate::four_d::controller::DEFAULT_ENDPOINT.into();
         app.engine_handle.is_connected.store(true, Ordering::Release);
         app.engine_handle.estop_active.store(true, Ordering::SeqCst);
@@ -11187,6 +11188,7 @@ pub(crate) mod tests {
         use crate::platform::tray_board::BoardTrayAction;
         let _guard = lock_app_tests();
         let mut app = PealayerApp::default();
+        app.engine_handle = crate::four_d::engine::memory_only_test_engine();
         *app.engine_handle.serial_port.lock().unwrap() = crate::four_d::controller::DEFAULT_ENDPOINT.into();
         app.engine_handle.is_connected.store(true, Ordering::Release);
         let mut hardware = crate::four_d::controller::HardwareCapabilities {
@@ -11216,6 +11218,7 @@ pub(crate) mod tests {
     fn board_tray_monitor_restores_and_focuses_its_closed_tab() {
         let _guard = lock_app_tests();
         let mut app = PealayerApp::default();
+        app.engine_handle = crate::four_d::engine::memory_only_test_engine();
         *app.engine_handle.serial_port.lock().unwrap() = crate::four_d::controller::DEFAULT_ENDPOINT.into();
         app.engine_handle.is_connected.store(true, Ordering::Release);
         app.update_hardware_capabilities(Some(crate::four_d::controller::HardwareCapabilities {
