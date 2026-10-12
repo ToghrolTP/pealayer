@@ -52,6 +52,19 @@ fn button_width(ui: &egui::Ui, label: &str) -> f32 {
         .max(30.0)
 }
 
+fn button_height(ui: &egui::Ui) -> f32 {
+    let style = ui.style().button_style(
+        &egui::widget_style::Classes::default(),
+        egui::widget_style::WidgetState::Inactive,
+    );
+    let text_height = ui.fonts_mut(|fonts| {
+        fonts.row_height(&style.text_style.font_id)
+    });
+    (text_height + f32::from(style.frame.inner_margin.top + style.frame.inner_margin.bottom))
+        .max(ui.spacing().interact_size.y)
+        .max(25.0)
+}
+
 impl Metrics {
     pub(super) fn measure(app: &PealayerApp, ui: &egui::Ui) -> Self {
         let gap = ui.spacing().item_spacing.x;
@@ -109,7 +122,7 @@ impl Metrics {
             tracks,
             volume_min: 30.0 + 44.0 + 24.0 + 2.0 * gap,
             gap,
-            row_height: ui.spacing().interact_size.y.max(24.0),
+            row_height: button_height(ui),
             gap_y: ui.spacing().item_spacing.y,
         }
     }

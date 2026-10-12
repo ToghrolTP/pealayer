@@ -836,7 +836,6 @@ fn should_yield_direct_transport(
 
 /// UI projection/confirmation fixtures must not race a live transport worker.
 /// The disconnected command channel also makes accidental dispatch fail closed.
-#[cfg(test)]
 pub(crate) fn memory_only_test_engine() -> EngineHandle {
     let (sender, _) = mpsc::channel();
     EngineHandle {
