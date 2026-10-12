@@ -86,6 +86,7 @@ export function useWebPlatform(
   const [audioFeedbackEnabled, setAudioFeedbackEnabledState] = useState(() => storedBoolean('audioFeedback', false));
   const [keepAwakeEnabled, setKeepAwakeEnabledState] = useState(() => storedBoolean('keepAwake', true));
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
+  const wakeLockDisabledRef = useRef(false);
   const audioContextRef = useRef<AudioContext | null>(null);
 
   const capabilities = useMemo<WebPlatformCapabilities>(() => {
@@ -217,12 +218,15 @@ export function useWebPlatform(
         wakeLockRef.current = null;
         return;
       }
-      if (!wakeLockRef.current) {
+      if (!wakeLockRef.current && !wakeLockDisabledRef.current) {
         try {
           const sentinel = await navigator.wakeLock.request('screen');
           if (cancelled) await sentinel.release();
           else wakeLockRef.current = sentinel;
-        } catch { /* Permission, battery, or visibility can deny the request. */ }
+        } catch {
+          // If system service (like D-Bus ScreenSaver) is missing or denies permission, avoid spamming on every event.
+          wakeLockDisabledRef.current = true;
+        }
       }
     };
     void updateWakeLock();
