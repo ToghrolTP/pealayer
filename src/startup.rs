@@ -911,6 +911,7 @@ pub fn run() -> eframe::Result {
                 timeline_toolbar_hidden: loaded_config.timeline_toolbar_hidden.clone(),
                 pending_timeline_toolbar_save: None,
                 pending_status_bar_save: None,
+                pending_control_bar_save: None,
                 workspace_rendering: false,
                 deferred_config_save: false,
                 non_user_control_visibility: loaded_config.non_user_control_visibility,
@@ -931,6 +932,7 @@ pub fn run() -> eframe::Result {
                 native_dialog_windows: loaded_config.native_dialog_windows,
                 native_preferences: None,
                 status_bar: loaded_config.status_bar,
+                control_bars: loaded_config.control_bars,
                 config_fingerprint: crate::config::AppConfig::fingerprint(
                     &crate::config::AppConfig::get_config_path(),
                 )

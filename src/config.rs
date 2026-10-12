@@ -830,6 +830,102 @@ pub enum UiControlDensity { #[default] Compact, Comfortable }
 #[serde(rename_all = "snake_case")]
 pub enum UiFontFamily { #[default] System, Bundled, Vazirmatn }
 
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum ControlBarAction { PlayPause, Stop, Back, Forward, PreviousChapter, NextChapter,
+    VideoTrack, AudioTrack, SubtitleTrack, Fullscreen, Pin, AudioSettings, SubtitleSettings, Mute, Preferences }
+impl ControlBarAction {
+    pub const COUNT: usize = 15;
+    pub const ALL: [Self; Self::COUNT] = [Self::PlayPause,Self::Stop,Self::Back,Self::Forward,
+        Self::PreviousChapter,Self::NextChapter,Self::VideoTrack,Self::AudioTrack,Self::SubtitleTrack,
+        Self::Fullscreen,Self::Pin,Self::AudioSettings,Self::SubtitleSettings,Self::Mute,Self::Preferences];
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ControlBarSurface { Simple, Monitor }
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ControlBarLayout {
+    pub order: [ControlBarAction; ControlBarAction::COUNT],
+    pub hidden: [bool; ControlBarAction::COUNT],
+    pub end: [bool; ControlBarAction::COUNT],
+}
+impl ControlBarLayout {
+    pub fn defaults(surface: ControlBarSurface) -> Self {
+        use ControlBarAction::*;
+        let mut result = Self {order:ControlBarAction::ALL,hidden:[true;ControlBarAction::COUNT],end:[false;ControlBarAction::COUNT]};
+        let visible: &[ControlBarAction] = match surface {
+            ControlBarSurface::Simple => &[Back,PlayPause,Forward,Fullscreen,Pin,AudioSettings,SubtitleSettings,Mute],
+            ControlBarSurface::Monitor => &[PlayPause,Stop,Back,Forward,Fullscreen,VideoTrack,AudioTrack,SubtitleTrack,Mute],
+        };
+        for action in visible { result.hidden[*action as usize]=false; }
+        for action in [Fullscreen,Pin,VideoTrack,AudioTrack,SubtitleTrack,AudioSettings,SubtitleSettings,Mute,Preferences] { result.end[action as usize]=true; }
+        if surface==ControlBarSurface::Simple {
+            let order:Vec<_>=[Back,PlayPause,Forward].into_iter().chain(ControlBarAction::ALL).fold(Vec::new(),|mut list,a|{if !list.contains(&a){list.push(a)} list});
+            result.order=order.try_into().unwrap();
+        }
+        result
+    }
+    pub fn ordered(&self) -> Vec<ControlBarAction> {
+        self.order.into_iter().chain(ControlBarAction::ALL).fold(Vec::new(),|mut order,a|{if !order.contains(&a){order.push(a)} order})
+    }
+    pub fn move_to(&mut self, action:ControlBarAction,target:ControlBarAction,after:bool) -> bool {
+        let mut order=self.ordered();
+        let changed=move_ordered_action(&mut order,action,target,after);
+        let side_changed=self.end[action as usize]!=self.end[target as usize];
+        self.end[action as usize]=self.end[target as usize];
+        self.order=order.try_into().unwrap(); changed||side_changed
+    }
+}
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct ControlBarsConfig { pub simple:ControlBarLayout, pub monitor:ControlBarLayout }
+impl Default for ControlBarsConfig { fn default()->Self {Self {
+    simple:ControlBarLayout::defaults(ControlBarSurface::Simple),monitor:ControlBarLayout::defaults(ControlBarSurface::Monitor),
+}} }
+impl ControlBarsConfig {
+    pub fn layout(&self,surface:ControlBarSurface)->ControlBarLayout {match surface {ControlBarSurface::Simple=>self.simple,ControlBarSurface::Monitor=>self.monitor}}
+    pub fn layout_mut(&mut self,surface:ControlBarSurface)->&mut ControlBarLayout {match surface {ControlBarSurface::Simple=>&mut self.simple,ControlBarSurface::Monitor=>&mut self.monitor}}
+}
+pub(crate) fn move_ordered_action<T:Copy+PartialEq>(order:&mut Vec<T>,action:T,target:T,after:bool)->bool {
+    if action==target || !order.contains(&target) || !order.contains(&action) {return false;}
+    let before=order.clone(); order.retain(|candidate|*candidate!=action);
+    let index=order.iter().position(|candidate|*candidate==target).unwrap();
+    order.insert(index+usize::from(after),action); *order!=before
+}
+
+#[cfg(test)]
+mod control_bar_tests {
+    use super::*;
+    #[test]
+    fn layouts_preserve_hidden_identity_and_sides_across_reorder_and_roundtrip() {
+        use ControlBarAction::*;
+        let mut bars=ControlBarsConfig::default();
+        assert_eq!(bars.simple.ordered()[..3], [Back,PlayPause,Forward]);
+        assert!(!bars.monitor.hidden[Stop as usize]);
+        assert!(bars.simple.hidden[Stop as usize]);
+        bars.simple.hidden[Back as usize]=true;
+        assert!(bars.simple.move_to(Back,Mute,true));
+        assert!(bars.simple.end[Back as usize]);
+        assert!(bars.simple.hidden[Back as usize]);
+        assert_eq!(bars.monitor,ControlBarLayout::defaults(ControlBarSurface::Monitor));
+        let restored:ControlBarsConfig=serde_json::from_value(serde_json::to_value(bars).unwrap()).unwrap();
+        assert_eq!(restored,bars);
+        assert_eq!(restored.simple.ordered().len(),ControlBarAction::COUNT);
+        assert!(!bars.simple.move_to(Mute,Mute,true));
+    }
+    #[test]
+    fn repeated_order_entries_cannot_lose_other_actions_and_malformed_ids_fail() {
+        let mut layout=ControlBarLayout::defaults(ControlBarSurface::Monitor);
+        layout.order=[ControlBarAction::Mute;ControlBarAction::COUNT];
+        assert_eq!(layout.ordered().len(),ControlBarAction::COUNT);
+        let mut json=serde_json::to_value(ControlBarsConfig::default()).unwrap();
+        json["monitor"]["order"][0]=serde_json::json!("not_an_action");
+        assert!(serde_json::from_value::<ControlBarsConfig>(json.clone()).is_err());
+        json["monitor"]["order"]=serde_json::json!([]);
+        assert!(serde_json::from_value::<ControlBarsConfig>(json).is_err());
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct SeekbarMarkersConfig {
@@ -1030,6 +1126,7 @@ pub struct AppConfig {
     pub native_dialog_windows: bool,
     pub auto_reload_config: bool,
     pub status_bar: StatusBarConfig,
+    pub control_bars: ControlBarsConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window_geometry: Option<WindowGeometry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1204,6 +1301,7 @@ impl Default for AppConfig {
             native_dialog_windows: true,
             auto_reload_config: true,
             status_bar: StatusBarConfig::default(),
+            control_bars: ControlBarsConfig::default(),
             window_geometry: None,
             workspace_dock_layout: None,
             workspace_session: WorkspaceProfile::default(),
