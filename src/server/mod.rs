@@ -4,6 +4,7 @@ mod download_media;
 pub mod thumbnails;
 pub mod web_assets;
 pub mod binary_udp;
+pub(crate) mod discovery;
 mod udp_codec;
 pub(crate) mod udp_client;
 
@@ -356,6 +357,7 @@ fn spawn_control_server_on_listeners_with_channel(
         expected_session_id,
     };
     if !cfg!(test) { binary_udp::start(state.clone()); }
+    if !cfg!(test) { discovery::start(&listeners, &state.application_identity); }
     if listeners.is_empty() && crate::config::resolved_web_enabled(&crate::platform::interop::get_live_config()) {
         log::error!("Pealayer Web UI could not start any configured listener");
     }
@@ -461,6 +463,9 @@ fn handle_connection(mut stream: TcpStream, state: ControlState) {
                     Err(error) => HttpResponse::text(400,"Bad Request",error.to_string()),
                 }
             }
+            Ok(request) if request.method == "POST" && matches!(request.target.split('?').next(), Some("/api/ipc" | "/api/rpc")) && discovery::rpc_payload(&String::from_utf8_lossy(&request.body)).is_some() => {
+                HttpResponse::json(200,"OK",discovery::rpc_payload(&String::from_utf8_lossy(&request.body)).unwrap())
+            }
             Ok(request) if crate::peer::active() && peer_relay_route(&request.target) && !local_process_payload(&request.body) => {
                 let _ = proxy_http(&request, &mut stream);
                 return;
@@ -498,6 +503,7 @@ fn peer_relay_route(target: &str) -> bool {
         && !path.starts_with("/api/update/")
         && !path.starts_with("/api/process/")
         && path != "/api/udp"
+        && !path.starts_with("/api/discovery")
 }
 
 fn local_process_payload(body: &[u8]) -> bool {
@@ -569,6 +575,9 @@ fn handle_websocket(stream: TcpStream, state: ControlState) {
         }
         match websocket.read() {
             Ok(tungstenite::Message::Text(text)) => {
+                if let Some(response) = discovery::rpc_payload(&text) {
+                    let _ = websocket.send(tungstenite::Message::Text(response.into())); continue;
+                }
                 if let Ok(value) = serde_json::from_str::<serde_json::Value>(&text)
                     && let Some(response) = binary_udp::rpc(&value,local_caller) {
                     let _ = websocket.send(tungstenite::Message::Text(response.to_string().into())); continue;
@@ -883,6 +892,10 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
             "OK",
             r#"{"status":"ok","service":"pealayer","rpc":"2.0"}"#,
         ),
+        ("GET", "/api/discovery") => HttpResponse::json(200, "OK",
+            serde_json::json!({"product":"pealayer","version":env!("CARGO_PKG_VERSION"),
+                "rpc":"/api/ipc","events":"/ws","health":"/healthz"}).to_string()),
+        ("GET", "/api/discovery/peers") => HttpResponse::json(200, "OK", discovery::snapshot().to_string()),
         ("GET", "/api/runtime/config") => {
             HttpResponse::json(200, "OK", serde_json::to_string(&live_runtime_config())
                 .expect("web runtime configuration must serialize")).with_cache_control("no-cache")
@@ -1516,6 +1529,7 @@ fn parse_player_command(body: &[u8]) -> Result<crate::platform::interop::Interop
 }
 
 fn dispatch_ipc_payload(state: &ControlState, payload: &str) -> String {
+    if let Some(response) = discovery::rpc_payload(payload) { return response; }
     if let Some(response) = crate::downloads::rpc_payload(payload, true) { return response; }
     use crate::platform::interop::InteropCommand;
 

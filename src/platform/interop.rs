@@ -2771,6 +2771,7 @@ fn dispatch_local_payload(
     expected_session_id: Option<u32>,
 ) -> String {
     if let Some(response) = crate::downloads::rpc_payload(payload, false) { return response; }
+    if let Some(response) = crate::server::discovery::rpc_payload(payload) { return response; }
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(payload)
         && let Some(response) = crate::server::binary_udp::rpc(&value, true) { return response.to_string(); }
     let (id, command) = match parse_interop_request(payload) {

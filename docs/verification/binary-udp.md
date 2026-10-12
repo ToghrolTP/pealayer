@@ -57,3 +57,32 @@ client and firmware framing functions rather than implementing a second wire.
 Discovered UDP controllers appear in the native hardware endpoint menu for
 explicit selection. They are not injected into the autoconnect candidate list;
 an announcement never silently changes the board owner or selected coordinator.
+
+## Standard LAN discovery alongside binary UDP
+
+The shared Flutter design rejection is recorded in root `AGENTS.md`. Native
+Pealayer now advertises its actual LAN HTTP listeners using `_pealayer._tcp.local.`
+DNS-SD/mDNS, SSDP and MNDP, and browses both desktop apps and controller-mobile.
+Loopback-only development/tests do not start discovery. Source-pinned bounded
+health verification, a four-worker queue, throttled probes/replies and 120-second
+peer expiry keep advertisements separate from verified peers. Own endpoints are
+excluded; no discovery callback claims hardware authority or actuates it.
+
+Read-only `/api/discovery`, `/api/discovery/peers` and
+`pealayer.discovery.peers` (native IPC, HTTP and WS) describe this process, never
+the consumer's authority proxy. Configured protocols, active local adapters and
+real adapter errors are distinct. mDNS activity follows actual daemon announce
+events. This is not proof of LAN round trips or physical hardware.
+
+MNDP's Digitalogic extensions are `0xff01` product and `0xff02` a big-endian API
+port. Its virtual MAC is application-scoped, not a fake board/NIC identity.
+Generic RouterOS neighbours without an API contract are not assumed to expose
+HTTP port80. Standard discovery currently uses LAN IPv4 (mDNS browsers can
+resolve other families separately); routed MNDP and every-NIC/IPv6 acceptance
+are not claimed. Firewall/multicast filtering can still prevent discovery.
+
+`cargo check --offline -q` passed with existing deprecation/dead-code warnings.
+The new mdns-sd 0.21.5 adapter requires six lockfile changes, including libc
+0.2.190 through socket-pktinfo's minimum version. No SDK or parallel source
+checkout was created. Installed Cafe/Erfan packages have not been replaced by
+this source-only discovery change, and the Erfan updater denial remains binding.

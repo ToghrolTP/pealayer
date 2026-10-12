@@ -1,5 +1,8 @@
 # Pealayer alpha contract
 
+- The shared Flutter controller's current basic design is rejected. Coordinate one compact, professional, activity-oriented PCController/Pealayer workspace rather than separate product tabs. Use contextual connection toggles, real capability-driven cards/charts, semantic icon actions/pills and responsive phone/tablet headers/dialogs. Omit unavailable-only cards, filler narration and dormant peer access-token fields; multi-step authentication/authorization is deferred, not simulated.
+- Keep appearance/branding, task/activity icon, palettes (including PakarController) and one/both launcher identities in shared app Preferences. DNS-SD/mDNS, SSDP and MNDP must agree across native hosts and Flutter. Auto-connect verified discoveries under saved intent without replacing a live selected peer, acquiring board authority or actuating outputs. Coordinate bounded, verified peer APK transfers/upgrades over IPC/RPC with Android consent and signature/package checks. Source/build/device captures never override David's rejection or establish physical acceptance.
+
 - Alpha has one current API and persisted-data contract. Do not add build-number checks, rolling-upgrade branches, old field or method aliases, legacy migrations, or speculative future-version handling.
 - Update Pealayer, PCController, firmware, the Web UI, tests, and documentation together when the contract changes. An obsolete build is replaced, not supported in parallel.
 - Be tolerant of runtime faults, not obsolete schemas: validate authoritative responses, normalize bounded current-contract values, retain the last known-good state when a refresh is incomplete, and request an authoritative refresh after dropped or reordered events.
