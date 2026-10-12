@@ -10,6 +10,12 @@ statements are not the present product state.
 
 ## Delivered source and deployment
 
+- OS media sessions use factual cached tags, contextual shared capabilities,
+  bounded timeline updates and explicit stale-state cleanup. Windows owns all
+  transport/position/rate callbacks and cached alpha artwork in one session.
+  [Contract, backend limits and acceptance](os-media-session.md) preserve the
+  background preference and local/Cafe installation/platform gates.
+
 - Effects Library's panel heading starts at the Search/folder/card outer edge
   without borrowing editable captions' inset. [Cause and geometry coverage](effects-library-hover-spacing.md)
   preserve rename alignment, scrollbar spacing and explicit installation gates.

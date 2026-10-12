@@ -1,5 +1,8 @@
 # Configurable native keyboard media controls
 
+Current continuation: [OS media-session completion](os-media-session.md).
+The deployment observations below remain historical, not current runtime evidence.
+
 ## Use
 
 In native or Web **Preferences → Input → Keyboard shortcuts**, use **Respond to keyboard media controls**. It defaults to enabled, including for existing config files without the new field. Changes apply immediately; Save confirms the usual preference preview and persistence workflow. This policy is independent of ordinary in-app shortcuts and global hardware hotkeys.
@@ -10,7 +13,7 @@ The authoritative JSON setting is `media_keys_enabled`. The existing config API,
 Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8080/api/config -ContentType application/json -Body '{"media_keys_enabled":true}'
 ```
 
-Native sessions use the existing [Souvlaki OS integration](https://github.com/Sinono3/souvlaki): Windows System Media Transport Controls, macOS Now Playing/remote commands, and Linux/BSD MPRIS. Windows needs a registered app HWND; macOS needs the app event loop; Linux needs the desktop session bus and its media-key routing. The OS chooses which media session receives keys: Pealayer does not globally hijack keys from another selected player or register duplicate media hotkeys.
+Native sessions use one Windows System Media Transport Controls adapter and the existing [Souvlaki OS integration](https://github.com/Sinono3/souvlaki) for macOS Now Playing/remote commands and Linux/BSD MPRIS. Windows needs a registered app HWND; macOS needs the app event loop; Linux needs the desktop session bus and its media-key routing. The OS chooses which media session receives keys: Pealayer does not globally hijack keys from another selected player or register duplicate media hotkeys.
 
 | Native command | Shared player action |
 | --- | --- |

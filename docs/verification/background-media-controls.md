@@ -16,7 +16,10 @@ the independent **Respond to keyboard media controls** master switch.
 - OS-session Raise/Quit/Open URI remain explicit window/file requests under the
   master switch. In particular, Raise can bring a foreground-only player back.
 
-Native media handling retains one Souvlaki SMTC/MPRIS/Now Playing registration.
+Native media handling retains one OS registration: an HWND-owned Windows SMTC
+adapter and Souvlaki MPRIS/Now Playing on other platforms. The
+[completed session contract](os-media-session.md) owns metadata, capabilities,
+rate requests and callback cleanup.
 Changing focus never registers a competing global hotkey or repeatedly
 recreates that listener. Dispatch checks current permission/focus, including
 queued commands following a same-frame configuration update. Disabling the

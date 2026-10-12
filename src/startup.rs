@@ -503,6 +503,10 @@ pub fn run() -> eframe::Result {
             mpv_client
                 .observe_property("video-out-params/aspect", libmpv2::Format::Double, 21)
                 .unwrap();
+            // Event-driven OS metadata/playlist capabilities, not per-frame probes.
+            mpv_client.observe_property("playlist/count", libmpv2::Format::Int64, 23).unwrap();
+            mpv_client.observe_property("playlist-pos", libmpv2::Format::Int64, 24).unwrap();
+            mpv_client.observe_property("metadata", libmpv2::Format::String, 25).unwrap();
 
             let egui_ctx2 = cc.egui_ctx.clone();
             mpv_client.set_wakeup_callback(move || {

@@ -250,7 +250,7 @@ pub(crate) fn apply_native_window_icon(ctx: &egui::Context, config: &AppConfig, 
     }
 }
 
-fn icon_source_signature(config: &AppConfig, state: PlaybackIconState) -> u64 {
+pub(crate) fn icon_source_signature(config: &AppConfig, state: PlaybackIconState) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hash = std::collections::hash_map::DefaultHasher::new();
     format!("{:?}", config.app_icon_preset).hash(&mut hash);

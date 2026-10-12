@@ -42,6 +42,9 @@ export interface PlayerState {
   ui_fps?: number | null;
   status_operations?: Array<{ id: string; source: string; label: string; phase: string; fraction: number | null; detail: string }>;
   current_video?: string | null;
+  media_session?: { title: string | null; artist: string | null; album: string | null; video: boolean };
+  media_session_capabilities?: import('../mediaSession').SessionCapabilities;
+  quick_seek_seconds?: number;
   media_tracks?: Array<{
     id: number;
     kind: 'video' | 'audio' | 'subtitle';
