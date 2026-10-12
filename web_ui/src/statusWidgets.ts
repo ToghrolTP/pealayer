@@ -15,6 +15,9 @@ export function orderedWidgets(order?: readonly string[]): StatusWidget[] {
 export function widgetKey(widget: StatusWidget): StatusBarKey {
   return widget === 'fps' ? 'media_rate' : widget === 'connection' ? 'hardware' : widget;
 }
+export function displayedWidgets(order?: readonly string[]): StatusWidget[] {
+  return [...orderedWidgets(order).filter((widget) => widget !== 'workspace'), 'workspace'];
+}
 export function widgetVisible(config: StatusBarVisibility, widget: StatusWidget): boolean {
   return config[widgetKey(widget)] && (!['voltage', 'current', 'temperature'].includes(widget) || config.telemetry);
 }
@@ -23,7 +26,7 @@ export function setWidgetVisible(config: StatusBarVisibility, widget: StatusWidg
 }
 export function reorderWidgets(order: readonly string[], source: StatusWidget, target: StatusWidget, after: boolean): StatusWidget[] {
   const complete = orderedWidgets(order);
-  if (source === target) return complete;
+  if (source === target || source === 'workspace') return complete;
   const result = complete.filter((widget) => widget !== source);
   result.splice(result.indexOf(target) + Number(after), 0, source);
   return result;

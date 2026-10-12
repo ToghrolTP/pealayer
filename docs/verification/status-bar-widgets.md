@@ -8,6 +8,12 @@ before/after insertion marker; context menus also offer Move earlier/later.
 An individual widget owns its menu, with a separated Hide action containing its
 icon and name. Hiding hardware connection does not hide voltage/current/temperature.
 Hiding the footer E-STOP indicator does not remove the main emergency control.
+The workspace is pinned at the logical trailing edge, outside the native primary
+widget scroller; it is not draggable into the telemetry group. Other widgets keep
+their saved order. Updating labels have fixed-width, truncated slots with full
+hover text. FPS and hardware numbers use fixed slots and monospaced digits, so
+digit-count changes cannot move neighboring widgets. FPS, connection, hardware
+readings and alerts use emphasis faces without increasing their font size.
 
 Frame rate stays visible when unavailable (`— fps`). Clicking cycles Media,
 Screen and Auto. Screen means measured native rendering cadence, not the
@@ -15,6 +21,8 @@ monitor's advertised refresh rate. Auto uses media FPS while loaded and playing,
 and screen rendering cadence when paused or unloaded; playback speed and pointer
 interaction do not change source media FPS. Existing explicit source selections
 and widget visibility remain user preferences.
+The visible FPS caption contains only its source icon and number/unit. Mode names
+(including Auto) remain in the tooltip/menu, not in the changing footer text.
 Reactive idle frames use their actual measured interval (for example 2 FPS at
 500 ms) rather than losing the number whenever the active rendering window
 resets. This does not force a continuous rendering loop or assume monitor Hz.
@@ -51,7 +59,7 @@ title placement, unavailable telemetry, bounded charts, source switching, typed
 HOT activation/clear, and ordered operation recovery. Web model tests cover the
 same order/visibility/FPS/logging rules; TypeScript/PWA builds verify integration.
 
-Local verification: 785 native library tests passed, one existing test ignored;
+Local verification: 786 native library tests passed, one existing test ignored;
 14 download unit/integration tests passed, three external-engine acceptance
 tests remain explicitly ignored. The Web model, parity, TypeScript and packaged
 PWA checks passed. Installed runtime captures are recorded in the delivery receipt.

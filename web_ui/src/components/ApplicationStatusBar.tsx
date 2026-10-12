@@ -4,7 +4,7 @@ import type { MenuProps } from 'antd';
 import { ApiOutlined, BgColorsOutlined, ClockCircleOutlined, DashboardOutlined, EyeInvisibleOutlined, LineChartOutlined, VideoCameraOutlined, WarningOutlined, ThunderboltOutlined, SyncOutlined } from '@ant-design/icons';
 import type { PlayerState } from './RemoteControlTab';
 import { tr, UiLocale } from '../i18n';
-import { DEFAULT_VISIBILITY, WIDGETS, orderedWidgets, widgetVisible, setWidgetVisible, reorderWidgets, nextFpsMode, screenRateSelected, numericTelemetry, appendSample, chartPaths } from '../statusWidgets';
+import { DEFAULT_VISIBILITY, WIDGETS, orderedWidgets, displayedWidgets, widgetVisible, setWidgetVisible, reorderWidgets, nextFpsMode, screenRateSelected, numericTelemetry, appendSample, chartPaths } from '../statusWidgets';
 import type { StatusWidget, StatusBarVisibility, FpsMode, ChartMetric, ChartSample } from '../statusWidgets';
 export type { StatusBarVisibility } from '../statusWidgets';
 
@@ -49,29 +49,30 @@ export const ApplicationStatusBar: React.FC<ApplicationStatusBarProps> = ({ stat
   const metricValues = samples.flatMap((sample) => sample.values[metricIndex] === undefined ? [] : [sample.values[metricIndex]!]);
   const chartTitle = `${label('chart')} · ${label(config.chart_metric)} (${metricUnit}) · ${samples.length}/240 ${tr(locale, 'samples')} · RAM${metricValues.length ? ` · ${Math.min(...metricValues).toFixed(2)}–${Math.max(...metricValues).toFixed(2)} ${metricUnit}` : ''}`;
   const menu = (widget: StatusWidget): MenuProps => {
-    const index = config.order.indexOf(widget);
+    const order: StatusWidget[] = displayedWidgets(config.order).filter((item) => item !== 'workspace');
+    const index = order.indexOf(widget);
     const items: MenuProps['items'] = [{ key: 'title', label: label(widget), icon: ICONS[widget], disabled: true }, { type: 'divider' }];
     if (widget === 'fps') for (const mode of ['media', 'ui', 'auto'] as FpsMode[]) items.push({ key: `mode:${mode}`, label: tr(locale, MODE_LABELS[mode]), icon: config.fps_mode === mode ? '✓' : undefined });
     if (widget === 'chart') {
       for (const metric of METRICS) items.push({ key: `metric:${metric}`, label: label(metric), icon: config.chart_metric === metric ? '✓' : undefined });
       items.push({ key: 'clear', label: tr(locale, 'Clear chart history') });
     }
-    items.push({ key: 'earlier', label: tr(locale, 'Move earlier'), disabled: index === 0 }, { key: 'later', label: tr(locale, 'Move later'), disabled: index === config.order.length - 1 },
+    items.push({ key: 'earlier', label: tr(locale, 'Move earlier'), disabled: index <= 0 }, { key: 'later', label: tr(locale, 'Move later'), disabled: index < 0 || index === order.length - 1 },
       { type: 'divider' }, { key: 'hide', icon: <EyeInvisibleOutlined />, label: <>{tr(locale, 'Hide')} {ICONS[widget]} {label(widget)}</> });
     return { items, onClick: ({ key }) => {
       if (key === 'hide') show(widget, false);
       else if (key.startsWith('mode:')) changeMode(key.slice(5) as FpsMode);
       else if (key.startsWith('metric:')) onVisibilityChange({ ...config, chart_metric: key.slice(7) as ChartMetric });
       else if (key === 'clear') setSamples([]);
-      else if (key === 'earlier' && index > 0) move(widget, config.order[index - 1], false);
-      else if (key === 'later' && index < config.order.length - 1) move(widget, config.order[index + 1], true);
+      else if (key === 'earlier' && index > 0) move(widget, order[index - 1], false);
+      else if (key === 'later' && index >= 0 && index < order.length - 1) move(widget, order[index + 1], true);
     } };
   };
   const content = (widget: StatusWidget): React.ReactNode => {
     switch (widget) {
       case 'fps': return <button type="button" className="app-statusbar__fps" onClick={() => changeMode(nextFpsMode(config.fps_mode))}
         title={`${tr(locale, MODE_LABELS[config.fps_mode])} · ${tr(locale, screenRate ? 'Screen render rate' : 'Media frame rate')} · ${tr(locale, 'Click to switch frame rate source')}`}>
-        {screenRate ? <DashboardOutlined /> : <VideoCameraOutlined />}{tr(locale, MODE_LABELS[config.fps_mode])} · {rate != null && Number.isFinite(rate) && rate > 0 && (screenRate || state.current_video) ? `${rate.toFixed(2)} fps` : '— fps'}</button>;
+        {screenRate ? <DashboardOutlined /> : <VideoCameraOutlined />}<span className="status-fps-value">{rate != null && Number.isFinite(rate) && rate > 0 && (screenRate || state.current_video) ? `${rate.toFixed(2)} fps` : '— fps'}</span></button>;
       case 'connection': return <><i className={`status-connection-dot ${hardwareLive ? 'is-online' : ''}`} />{hardwareLive ? `${state.hardware?.board_name || state.hardware_details?.board_name || 'PCController'} · ${state.hardware_transport || connectionMode.toUpperCase()}` : connected && state.controller_connected ? tr(locale, 'PCController connected; board not connected') : tr(locale, 'Hardware: Disconnected')}</>;
       case 'hot': return hardwareLive && telemetry?.hot === true ? <><WarningOutlined /> HOT · {tr(locale, 'Temperature alert')}</> : null;
       case 'estop': return state.estop_active ? <><WarningOutlined />{tr(locale, 'E-STOP ACTIVE')}</> : null;
@@ -95,18 +96,20 @@ export const ApplicationStatusBar: React.FC<ApplicationStatusBarProps> = ({ stat
   };
   const contextItems: MenuProps['items'] = WIDGETS.map((widget) => ({ key: widget, label: label(widget), icon: widgetVisible(config, widget) ? '✓' : ICONS[widget] }));
   contextItems.push({ type: 'divider' }, { key: 'reset', label: tr(locale, 'Reset widget order') });
-  return <Dropdown trigger={['contextMenu']} menu={{ items: contextItems, onClick: ({ key }) => key === 'reset' ? onVisibilityChange({ ...config, order: [...WIDGETS] }) : show(key as StatusWidget, !widgetVisible(config, key as StatusWidget)) }}>
-    <footer className="app-statusbar" aria-label={tr(locale, 'Application status')}>
-      {config.order.filter((widget) => widgetVisible(config, widget)).map((widget) => {
+  const widgetElement = (widget: StatusWidget) => {
         const child = content(widget); if (child == null) return null;
         return <Dropdown key={widget} trigger={['contextMenu']} menu={menu(widget)}><span
           className={`status-widget status-widget--${widget}${dropTarget?.widget === widget ? ` is-drop-${dropTarget.after ? 'after' : 'before'}` : ''}${dragged === widget ? ' is-dragging' : ''}`}
-          data-status-widget={widget} title={label(widget)} draggable onContextMenu={(event) => event.stopPropagation()}
+          data-status-widget={widget} title={label(widget)} draggable={widget !== 'workspace'} onContextMenu={(event) => event.stopPropagation()}
           onDragStart={(event) => { const rect = event.currentTarget.getBoundingClientRect(); event.dataTransfer.setData('application/x-pealayer-status-widget', widget); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setDragImage(event.currentTarget, event.clientX - rect.left, event.clientY - rect.top); setDragged(widget); }}
-          onDragOver={(event) => { if (!dragged || dragged === widget) return; event.preventDefault(); event.dataTransfer.dropEffect = 'move'; const rect = event.currentTarget.getBoundingClientRect(); setDropTarget({ widget, after: (event.clientX > rect.left + rect.width / 2) !== (getComputedStyle(event.currentTarget).direction === 'rtl') }); }}
+          onDragOver={(event) => { if (!dragged || dragged === widget || widget === 'workspace') return; event.preventDefault(); event.dataTransfer.dropEffect = 'move'; const rect = event.currentTarget.getBoundingClientRect(); setDropTarget({ widget, after: (event.clientX > rect.left + rect.width / 2) !== (getComputedStyle(event.currentTarget).direction === 'rtl') }); }}
           onDrop={(event) => { event.preventDefault(); const source = event.dataTransfer.getData('application/x-pealayer-status-widget'); if (WIDGETS.includes(source as StatusWidget) && dropTarget?.widget === widget) move(source as StatusWidget, widget, dropTarget.after); setDragged(null); setDropTarget(null); }}
           onDragLeave={() => setDropTarget(null)} onDragEnd={() => { setDragged(null); setDropTarget(null); }}>{child}</span></Dropdown>;
-      })}
+  };
+  return <Dropdown trigger={['contextMenu']} menu={{ items: contextItems, onClick: ({ key }) => key === 'reset' ? onVisibilityChange({ ...config, order: [...WIDGETS] }) : show(key as StatusWidget, !widgetVisible(config, key as StatusWidget)) }}>
+    <footer className="app-statusbar" aria-label={tr(locale, 'Application status')}>
+      <div className="statusbar-primary">{displayedWidgets(config.order).filter((widget) => widget !== 'workspace' && widgetVisible(config, widget)).map(widgetElement)}</div>
+      {config.workspace && widgetElement('workspace')}
     </footer>
   </Dropdown>;
 };

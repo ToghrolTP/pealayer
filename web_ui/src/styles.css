@@ -924,9 +924,22 @@ html[data-motion="disabled"] *, html[data-motion="disabled"] *::before, html[dat
 .app-content .ant-input, .app-content .ant-input-affix-wrapper { background: var(--surface-0) !important; border-color: var(--line) !important; color: var(--text) !important; }
 .app-content .ant-btn-default { background: var(--surface-2); border-color: var(--line); color: var(--text); }
 .app-statusbar { flex: 0 0 27px; min-width: 0; height: 27px; padding: 0 12px; display: flex; align-items: center; gap: 5px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; border-top: 1px solid var(--line); background: color-mix(in srgb, var(--surface-0) 96%, transparent); color: var(--subtle); font-size: 11px; user-select: none; }
-.app-statusbar::-webkit-scrollbar { display: none; }
-.app-statusbar > .status-widget { flex: 0 0 auto; position: relative; height: 22px; padding-inline: 3px; cursor: grab; }
-.status-widget--voltage, .status-widget--current, .status-widget--temperature { font: 11px ui-monospace, SFMono-Regular, Consolas, monospace; }
+.app-statusbar { overflow: hidden; }
+.statusbar-primary { display: flex; align-items: center; gap: 5px; flex: 1 1 0; min-width: 0; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
+.statusbar-primary::-webkit-scrollbar { display: none; }
+.app-statusbar .status-widget { flex: 0 0 auto; position: relative; height: 22px; padding-inline: 3px; cursor: grab; min-width: 0; display: inline-flex; align-items: center; gap: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.app-statusbar .status-widget--fps { width: 104px; }
+.app-statusbar .status-widget--connection { width: 200px; font-weight: 600; }
+.app-statusbar .status-widget--voltage, .app-statusbar .status-widget--current { width: 64px; justify-content: flex-end; }
+.app-statusbar .status-widget--temperature { width: 72px; justify-content: flex-end; }
+.app-statusbar .status-widget--timeline { width: 165px; }
+.app-statusbar .status-widget--message { width: 230px; }
+.app-statusbar .status-widget--warnings { width: 180px; }
+.app-statusbar .status-widget--hot { width: 195px; }
+.app-statusbar .status-widget--estop { width: 160px; }
+.app-statusbar > .status-widget--workspace { margin-inline-start: auto; width: 130px; justify-content: flex-end; cursor: default; font-weight: 600; }
+.status-widget--fps, .status-widget--hot, .status-widget--estop, .status-widget--warnings { font-weight: 600; }
+.status-widget--voltage, .status-widget--current, .status-widget--temperature { font: 600 11px ui-monospace, SFMono-Regular, Consolas, monospace; }
 .status-widget--hot, .status-widget--estop { color: var(--red); }
 .status-widget--warnings { color: var(--amber); max-width: 180px; }
 .status-widget--message { max-width: 230px; }
@@ -941,8 +954,10 @@ html[data-motion="disabled"] *, html[data-motion="disabled"] *::before, html[dat
 .status-progress > i { position: absolute; inset-inline-start: 0; bottom: 0; height: 3px; background: var(--accent); }
 .status-progress > i.is-indeterminate { background: repeating-linear-gradient(90deg, var(--accent) 0 8px, transparent 8px 12px); opacity: .6; }
 .app-statusbar > span { min-width: 0; display: inline-flex; align-items: center; gap: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.app-statusbar__fps { flex: 0 0 100px; min-width: 100px; height: 23px; padding: 0 4px; display: inline-flex; align-items: center; gap: 5px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: inherit; font: inherit; font-variant-numeric: tabular-nums; box-shadow: none; cursor: pointer; }
+.app-statusbar__fps { flex: 0 0 98px; width: 98px; min-width: 98px; height: 22px; padding: 0 4px; display: inline-flex; align-items: center; gap: 5px; border: 1px solid transparent; border-radius: 4px; background: transparent; color: inherit; font: 600 11px ui-monospace, SFMono-Regular, Consolas, monospace; font-variant-numeric: tabular-nums; box-shadow: none; cursor: pointer; }
 .app-statusbar__fps:hover, .app-statusbar__fps:focus-visible { border-color: var(--line); background: var(--surface-1); box-shadow: none; outline: none; }
+.app-statusbar__fps > .anticon { flex: 0 0 12px; }
+.status-fps-value { flex: 1; min-width: 0; text-align: end; }
 .app-statusbar__rgb i, .app-statusbar__connection i { transition: background-color 80ms linear; }
 .app-statusbar { font-variant-numeric: tabular-nums; }
 @media (prefers-reduced-motion: reduce) { .app-statusbar__rgb i, .app-statusbar__connection i { transition: none; } }
