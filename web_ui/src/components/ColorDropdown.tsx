@@ -36,7 +36,7 @@ export function ColorDropdown({ value, customHex, options, onChange, locale, dis
       }
     }} role="listbox" aria-label={tr(locale, 'Color')}
       onKeyDown={event => {
-        if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); setOpen(false); return; }
+        if (event.key === 'Escape') { event.preventDefault(); event.stopPropagation(); show(false); trigger.current?.focus(); return; }
         if ((event.target as HTMLElement).closest('input,textarea,select')) return;
         const choices = [...(list.current?.querySelectorAll<HTMLButtonElement>('button[role="option"]') ?? [])];
         const current = choices.indexOf(event.target as HTMLButtonElement);
@@ -48,7 +48,7 @@ export function ColorDropdown({ value, customHex, options, onChange, locale, dis
         }
       }}>
       {options.map(option => <button key={option.value} type="button" role="option" aria-selected={value === option.value}
-        className="color-dropdown-choice" onClick={() => { onChange(option.value); setOpen(false); }}>
+        className="color-dropdown-choice" onClick={() => { onChange(option.value); show(false); }}>
         <span className="recording-color-swatch" style={{ backgroundColor: option.color }} />{option.label}
       </button>)}
       <button type="button" role="option" aria-selected={value === 'custom'} aria-expanded={expanded}
