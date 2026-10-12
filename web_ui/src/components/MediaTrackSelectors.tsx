@@ -23,14 +23,15 @@ const kinds: Array<{ kind: TrackKind; icon: React.ReactNode; label: string }> = 
 const fallbackName = (kind: TrackKind, id: number) =>
   `${kind === 'subtitle' ? 'Subtitle' : kind[0].toUpperCase() + kind.slice(1)} ${id}`;
 
-export const MediaTrackSelectors: React.FC<MediaTrackSelectorsProps> = ({
+export const MediaTrackSelectors = React.memo(function MediaTrackSelectors({
   state,
   sendCmd,
   locale,
   compact = false,
   only,
-}) => (
-  <div className={`media-track-selectors${compact ? ' media-track-selectors--compact' : ''}`}>
+}: MediaTrackSelectorsProps) {
+  return (
+    <div className={`media-track-selectors${compact ? ' media-track-selectors--compact' : ''}`}>
     {kinds.filter(({kind}) => !only || kind === only).map(({ kind, icon, label }) => {
       const tracks = (state.media_tracks ?? []).filter((track) => track.kind === kind);
       const selected = tracks.find((track) => track.selected)?.id ?? 'none';
@@ -64,6 +65,7 @@ export const MediaTrackSelectors: React.FC<MediaTrackSelectorsProps> = ({
           options={options}
           optionLabelProp="label"
           popupMatchSelectWidth={compact ? 280 : true}
+          getPopupContainer={(triggerNode) => (triggerNode.closest('.app-content') as HTMLElement) || document.body}
           onChange={(value) => value === 'none'
             ? sendCmd('pealayer.media.track.disable', { kind })
             : sendCmd('pealayer.media.track.select', { kind, id: value })}
@@ -71,4 +73,11 @@ export const MediaTrackSelectors: React.FC<MediaTrackSelectorsProps> = ({
       </Tooltip>;
     })}
   </div>
-);
+  );
+}, (prev, next) => (
+  prev.locale === next.locale
+  && prev.compact === next.compact
+  && prev.sendCmd === next.sendCmd
+  && prev.state.current_video === next.state.current_video
+  && prev.state.media_tracks === next.state.media_tracks
+));

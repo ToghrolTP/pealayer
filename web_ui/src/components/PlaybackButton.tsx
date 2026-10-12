@@ -2,9 +2,11 @@ import { Button, Tooltip } from 'antd';
 import { CaretRightFilled, PauseOutlined } from '@ant-design/icons';
 import { tr, UiLocale } from '../i18n';
 
+import React from 'react';
+
 /** Render the next action from the authoritative player snapshot, not from
  * optimistic click state. Both Web workspaces share geometry and semantics. */
-export function PlaybackButton({ playing, loaded, locale, className, onClick }: {
+export const PlaybackButton = React.memo(function PlaybackButton({ playing, loaded, locale, className, onClick }: {
   playing?: boolean;
   loaded: boolean;
   locale: UiLocale;
@@ -21,4 +23,4 @@ export function PlaybackButton({ playing, loaded, locale, className, onClick }: 
       onClick={onClick}
     />
   </Tooltip>;
-}
+});

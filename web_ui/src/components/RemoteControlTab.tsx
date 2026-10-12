@@ -368,6 +368,7 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
               value: chapter.index,
               label: `${formatTime(chapter.time_seconds)} · ${chapter.title}`,
             }))}
+            getPopupContainer={(triggerNode) => (triggerNode.closest('.app-content') as HTMLElement) || document.body}
             onChange={(index) => sendCmd('set_chapter', { index })}
           />
           <Tooltip title={tr(locale, 'Next chapter')}>

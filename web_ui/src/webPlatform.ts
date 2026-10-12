@@ -87,6 +87,7 @@ export function useWebPlatform(
   const [audioFeedbackEnabled, setAudioFeedbackEnabledState] = useState(() => storedBoolean('audioFeedback', false));
   const [keepAwakeEnabled, setKeepAwakeEnabledState] = useState(() => storedBoolean('keepAwake', true));
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
+  const wakeLockDisabledRef = useRef(false);
   const audioContextRef = useRef<AudioContext | null>(null);
   const mediaPolicyRef = useRef({enabled:state.media_keys_enabled,background:state.media_keys_background_enabled});
   mediaPolicyRef.current = {enabled:state.media_keys_enabled,background:state.media_keys_background_enabled};
@@ -199,10 +200,20 @@ export function useWebPlatform(
         if(active && mediaControlsAllowed(policy.enabled,policy.background,document.visibilityState==='visible'&&document.hasFocus())) handler(details);
       } : null); } catch { /* Browser exposes only a subset. */ }
     }
-    if(state.media_keys_enabled!==true) {
-      navigator.mediaSession.metadata=null;
-      navigator.mediaSession.playbackState='none';
+    if (state.media_keys_enabled !== true) {
+      navigator.mediaSession.metadata = null;
+      navigator.mediaSession.playbackState = 'none';
     }
+    return () => {
+      active=false;
+      for (const [action] of actions) {
+        try { navigator.mediaSession.setActionHandler(action,null); } catch { /* Unsupported action. */ }
+      }
+    };
+  }, [appIconPath, appName, dispatchCommand, state.current_video, state.live, state.playing, state.app_icon_revision, state.media_keys_enabled]);
+
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
     if (Number.isFinite(state.duration) && Number.isFinite(state.playback_time) && (state.duration ?? 0) > 0) {
       try {
         navigator.mediaSession.setPositionState({
@@ -212,13 +223,7 @@ export function useWebPlatform(
         });
       } catch { /* Live streams and partially-known media may reject position data. */ }
     }
-    return () => {
-      active=false; // retained callbacks cannot revive after preference changes/unmount
-      for(const [action] of actions) {
-        try {navigator.mediaSession.setActionHandler(action,null);} catch { /* Unsupported action. */ }
-      }
-    };
-  }, [appIconPath, appName, dispatchCommand, state.current_video, state.duration, state.live, state.playback_rate, state.playback_time, state.playing, state.media_keys_enabled]);
+  }, [state.duration, state.playback_rate, state.playback_time]);
 
   useEffect(() => {
     const shouldHold = keepAwakeEnabled && state.playing && document.visibilityState === 'visible';
@@ -230,12 +235,15 @@ export function useWebPlatform(
         wakeLockRef.current = null;
         return;
       }
-      if (!wakeLockRef.current) {
+      if (!wakeLockRef.current && !wakeLockDisabledRef.current) {
         try {
           const sentinel = await navigator.wakeLock.request('screen');
           if (cancelled) await sentinel.release();
           else wakeLockRef.current = sentinel;
-        } catch { /* Permission, battery, or visibility can deny the request. */ }
+        } catch {
+          // If system service (like D-Bus ScreenSaver) is missing or denies permission, avoid spamming on every event.
+          wakeLockDisabledRef.current = true;
+        }
       }
     };
     void updateWakeLock();
