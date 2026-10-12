@@ -26,7 +26,7 @@ import { useWebPlatform } from './webPlatform';
 import './styles.css';
 import './shared-toasts.css';
 import palettes from '../../assets/themes/palettes.json';
-import { accentForeground, mergeAppearance, paletteName as resolvePaletteName, resolvedAccent, resolvedAppearanceTheme } from './appearance';
+import { accentForeground, mergeAppearance, paletteName as resolvePaletteName, resolvedAccent, resolvedAppearanceTheme, uiFontCss, monoFontCss } from './appearance';
 
 const { Sider, Content } = Layout;
 const RemoteControlTab = React.lazy(() => import('./components/RemoteControlTab').then((module) => ({ default: module.RemoteControlTab })));
@@ -111,6 +111,12 @@ const App: React.FC = () => {
   const animationsEnabled = motionMode === 'enabled' || (motionMode === 'system' && !systemReducedMotion);
   const controlDensity = appearance?.ui_control_density ?? appConfig?.ui_control_density ?? 'compact';
   const controlHeight = controlDensity === 'compact' ? 24 : 32;
+  const uiFont = uiFontCss(appearance?.ui_font_family ?? appConfig?.ui_font_family ?? 'system');
+  const monoFont = monoFontCss(appearance?.monospace_font_family ?? appConfig?.monospace_font_family ?? 'bundled');
+  useEffect(() => {
+    document.documentElement.style.setProperty('--ui-font', uiFont);
+    document.documentElement.style.setProperty('--mono-font', monoFont);
+  }, [uiFont, monoFont]);
   useEffect(() => { document.documentElement.style.setProperty('--control-height', `${controlHeight}px`); }, [controlHeight]);
   useEffect(() => { document.documentElement.dataset.motion = animationsEnabled ? 'enabled' : 'disabled'; }, [animationsEnabled]);
 
@@ -191,13 +197,15 @@ const App: React.FC = () => {
         && previous?.accent_color === appearance.accent_color
         && previous?.custom_accent_color === appearance.custom_accent_color
         && previous?.ui_animation_mode === appearance.ui_animation_mode
-        && previous?.ui_control_density === appearance.ui_control_density) return previous;
+        && previous?.ui_control_density === appearance.ui_control_density
+        && previous?.ui_font_family === appearance.ui_font_family
+        && previous?.monospace_font_family === appearance.monospace_font_family) return previous;
         // Motion is part of the shared appearance contract, not a browser-only toggle.
       const next = mergeAppearance(previous ?? {}, appearance);
       persistJson(STORAGE.config, next);
       return next;
     });
-  }, [appearance?.theme, appearance?.color_palette, appearance?.accent_color, appearance?.custom_accent_color, appearance?.ui_animation_mode, appearance?.ui_control_density]);
+  }, [appearance?.theme, appearance?.color_palette, appearance?.accent_color, appearance?.custom_accent_color, appearance?.ui_animation_mode, appearance?.ui_control_density, appearance?.ui_font_family, appearance?.monospace_font_family]);
 
   const accentColor = resolvedAccent(runtime, appConfig, appearance);
   const accentTextColor = accentForeground(accentColor);
@@ -570,7 +578,7 @@ const App: React.FC = () => {
           colorText: palette.text,
           colorTextSecondary: palette.muted,
           borderRadius: 9,
-          fontFamily: `-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif`,
+          fontFamily: uiFont,
         },
         components: {
           Select: { optionHeight: controlHeight, optionPadding: '0 8px' },
@@ -718,6 +726,7 @@ const App: React.FC = () => {
           locale={runtime?.locale || 'en'}
           visibility={appConfig?.status_bar}
           onVisibilityChange={updateStatusBarVisibility}
+          onNavigate={setActiveTab}
         />
       </Layout>
     </ConfigProvider>

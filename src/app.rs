@@ -7832,11 +7832,8 @@ impl PealayerApp {
         self.language_preference = preference;
         self.language = crate::config::resolve_language(preference);
         self.rtl = crate::config::resolve_rtl(self.direction_preference, self.language);
-        crate::ui::i18n::configure_ui_fonts(
-            ctx,
-            self.language == crate::config::AppLanguage::Persian,
-        );
         self.save_config();
+        crate::ui::i18n::configure_preferred_fonts(ctx, &crate::platform::interop::get_live_config());
     }
 
     pub(crate) fn set_direction(&mut self, preference: crate::config::AppDirection) {

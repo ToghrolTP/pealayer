@@ -152,6 +152,7 @@ const controlIcons: Record<string, React.ReactNode> = {
   'check-square': <CheckSquareOutlined />,
   'sliders-horizontal': <ControlOutlined />,
   'text-align-left': <SwapRightOutlined />,
+  'text-t': <FontSizeOutlined />,
   'list-checks': <MenuOutlined />,
   'pencil-simple': <EditOutlined />,
 };

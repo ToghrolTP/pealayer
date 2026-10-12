@@ -12,7 +12,11 @@ assert.equal(selectedWorkspace(workspaceProfiles, 'authoring')?.icon, 'effects')
 assert.equal(selectedWorkspace(workspaceProfiles, 'Watch films'), undefined, 'captions never become stable IDs');
 assert.equal(selectedWorkspace(undefined, 'simple'), undefined, 'no invented disconnected profile');
 assert.equal(displayedWidgets(['workspace', 'temperature', 'fps']).at(-1), 'workspace');
-assert.deepEqual(reorderWidgets([...WIDGETS], 'workspace', 'fps', false), [...WIDGETS]);
+assert.equal(reorderWidgets([...WIDGETS], 'workspace', 'fps', false)[0], 'workspace');
+assert.equal(DEFAULT_VISIBILITY.trailing[WIDGETS.indexOf('workspace')], true);
+assert.equal(DEFAULT_VISIBILITY.trailing[WIDGETS.indexOf('voltage')], false);
+assert.equal(DEFAULT_VISIBILITY.monospace[WIDGETS.indexOf('current')], true);
+assert.deepEqual(DEFAULT_VISIBILITY.metric_limits, [[null,null],[null,null],[null,null]]);
 assert.equal(DEFAULT_VISIBILITY.fps_mode, 'auto');
 assert.deepEqual(['media', 'ui', 'auto'].map(nextFpsMode), ['ui', 'auto', 'media']);
 assert.equal(screenRateSelected('auto', true, true), false);

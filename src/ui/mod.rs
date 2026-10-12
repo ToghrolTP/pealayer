@@ -137,6 +137,7 @@ pub fn configure_main_window_style(ctx: &eframe::egui::Context) {
 /// theme can change later without reconstructing widget styling, and both the
 /// main window and independently hosted dialogs use this same function.
 pub fn configure_native_visuals(ctx: &eframe::egui::Context, config: &crate::config::AppConfig) {
+    i18n::configure_preferred_fonts(ctx, config);
     color_picker::configure_language(ctx, config.language);
     use eframe::egui::{Color32, CornerRadius, Stroke, Theme, Visuals};
 

@@ -1019,6 +1019,8 @@ pub fn parse_text_command(input: &str) -> Result<InteropCommand, String> {
 pub struct AppearanceState {
     pub ui_animation_mode: crate::config::UiAnimationMode,
     pub ui_control_density: crate::config::UiControlDensity,
+    pub ui_font_family: crate::config::UiFontFamily,
+    pub monospace_font_family: crate::config::UiFontFamily,
     pub theme: crate::config::AppTheme,
     pub color_palette: crate::config::ColorPalette,
     pub accent_color: crate::config::AccentColor,
@@ -1035,6 +1037,8 @@ impl AppearanceState {
             theme: crate::config::resolved_theme(config),
             ui_animation_mode: config.ui_animation_mode,
             ui_control_density: config.ui_control_density,
+            ui_font_family: config.ui_font_family,
+            monospace_font_family: config.monospace_font_family,
             color_palette: config.color_palette,
             accent_color: config.accent_color,
             custom_accent_color: config.custom_accent_color.clone(),

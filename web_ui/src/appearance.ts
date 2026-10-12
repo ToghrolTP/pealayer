@@ -1,6 +1,8 @@
 export interface AppearanceState {
   ui_animation_mode: 'system' | 'enabled' | 'disabled';
   ui_control_density: 'compact' | 'comfortable';
+  ui_font_family: 'system' | 'bundled' | 'vazirmatn';
+  monospace_font_family: 'system' | 'bundled';
   theme: 'system' | 'light' | 'dark';
   color_palette: 'studio' | 'native';
   accent_color: string;
@@ -8,6 +10,9 @@ export interface AppearanceState {
   resolved_theme?: 'light' | 'dark';
   resolved_accent?: string;
 }
+export const uiFontCss = (choice: string) => choice === 'vazirmatn' ? 'Vazirmatn, sans-serif'
+  : choice === 'bundled' ? 'PealayerUbuntu, Vazirmatn, sans-serif' : "-apple-system, BlinkMacSystemFont, 'Segoe UI', Vazirmatn, sans-serif";
+export const monoFontCss = (choice: string) => choice === 'bundled' ? 'PealayerHack, monospace' : 'Consolas, Menlo, monospace';
 
 /** Only preference fields enter config patches; host resolution is live state. */
 export function mergeAppearance<T extends Record<string, any>>(
@@ -18,6 +23,8 @@ export function mergeAppearance<T extends Record<string, any>>(
     ...values,
     ui_animation_mode: appearance.ui_animation_mode,
     ui_control_density: appearance.ui_control_density,
+    ui_font_family: appearance.ui_font_family,
+    monospace_font_family: appearance.monospace_font_family,
     theme: appearance.theme,
     color_palette: appearance.color_palette,
     accent_color: appearance.accent_color,
