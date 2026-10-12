@@ -3474,11 +3474,43 @@ fn open_timeline_cue_editor(
     context: &egui::Context,
     state: TimelineCueDialogState,
 ) {
+    let presentation = app.timeline_cue_editor_presentation;
+    open_timeline_cue_editor_with_presentation(app, context, state, presentation);
+}
+
+pub(crate) fn request_existing_timeline_cue_editor(
+    app: &mut PealayerApp,
+    context: &egui::Context,
+    instance_id: uuid::Uuid,
+    presentation: Option<crate::config::TimelineCueEditorPresentation>,
+) -> Result<(), String> {
+    if let Some(current) = context.data(|data| data.get_temp::<TimelineCueDialogState>(timeline_cue_dialog_id())) {
+        if current.instance_id != instance_id { return Err(app.tr("Close the current cue editor first")); }
+        // Repeated RPC must never reset the baseline or hide a confirmation.
+        context.request_repaint();
+        return Ok(());
+    }
+    if !app.timeline.instances.iter().any(|cue| cue.id == instance_id) {
+        return Err(app.tr("Cue is no longer available"));
+    }
+    let presentation = presentation.unwrap_or(app.timeline_cue_editor_presentation);
+    open_timeline_cue_editor_with_presentation(app, context, TimelineCueDialogState {
+        instance_id, discard_on_cancel: false, timeline_before_insert: None, undo_before_insert: None,
+    }, presentation);
+    Ok(())
+}
+
+fn open_timeline_cue_editor_with_presentation(
+    app: &mut PealayerApp,
+    context: &egui::Context,
+    state: TimelineCueDialogState,
+    presentation: crate::config::TimelineCueEditorPresentation,
+) {
     app.selected_instance_ids.clear();
     app.selected_instance_ids.insert(state.instance_id);
     app.selected_keyframes.clear();
     app.selected_timeline_keyframe = None;
-    match app.timeline_cue_editor_presentation {
+    match presentation {
         crate::config::TimelineCueEditorPresentation::Dialog => {
             context.data_mut(|data| {
                 data.remove::<CueDialogSession>(timeline_cue_dialog_id().with(state.instance_id));
@@ -4180,13 +4212,7 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
                             }
                             let destructive = egui::Color32::from_rgb(220, 74, 74);
                             let delete_text = format!("{}  {delete_cue_label}", crate::ui::icons::TRASH);
-                            if columns.is_some() {
-                                let delete_width = ui.painter().layout_no_wrap(delete_text.clone(),
-                                    egui::TextStyle::Button.resolve(ui.style()), destructive).size().x
-                                    + ui.spacing().button_padding.x * 2.0;
-                                ui.add_space((ui.available_width() - delete_width - ui.spacing().item_spacing.x).max(0.0));
-                            }
-                            if ui
+                            let draw_delete = |ui: &mut egui::Ui| ui
                                 .add(
                                     egui::Button::new(
                                         egui::RichText::new(delete_text)
@@ -4199,10 +4225,10 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
                                         destructive.gamma_multiply(0.55),
                                     )),
                                 )
-                                .clicked()
-                            {
-                                delete_cue = true;
-                            }
+                                .clicked();
+                            delete_cue = if columns.is_some() {
+                                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), draw_delete).inner
+                            } else { draw_delete(ui) };
                         });
                     });
             }
@@ -4717,7 +4743,7 @@ fn draw_timeline_cue_dialog(app: &mut PealayerApp, context: &egui::Context) {
         dismiss = true;
     }
     crate::ui::sync_elegance_theme(context);
-    let width = (context.content_rect().width() - 64.0).clamp(180.0, 920.0);
+    let width = (context.content_rect().width() - 64.0).clamp(180.0, 800.0);
     let heading = if state.discard_on_cancel { app.tr("New cue properties") } else { app.tr("Cue properties") };
     let close_help = app.tr("Close");
     elegance::Modal::new("timeline-add-cue-dialog", &mut open)
@@ -11691,6 +11717,20 @@ mod timeline_row_tests {
             assert!(squares.len() >= 3, "All three card icon tiles must be square");
             let close = text_rect("×");
             assert!(close.left() > text_rect("Cue properties").right());
+            let outer = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Rect(rect) if rect.stroke.width > 0.0
+                    && rect.rect.contains_rect(close) && rect.rect.contains_rect(identity) => Some(rect.rect),
+                _ => None,
+            }).expect("modal outer frame");
+            assert!(outer.width() <= 802.0 && outer.width() <= width,
+                "Utility row must not inflate modal width: {outer:?}");
+            assert!(outer.right() - close.right() < 60.0, "Close must stay at actual upper-right edge");
+            if width >= 1100.0 {
+                let duplicate = text_rect(&format!("{}  Duplicate cue", crate::ui::icons::COPY));
+                let delete = text_rect(&format!("{}  Delete Cue", crate::ui::icons::TRASH));
+                assert!((duplicate.center().y - delete.center().y).abs() < 1.0,
+                    "Wide utility actions must share one row: {duplicate:?}, {delete:?}");
+            }
             assert!(text_rect("Done").bottom() < 800.0);
             let point = close.center();
             discard_ui_output(output);
@@ -11745,6 +11785,30 @@ mod timeline_row_tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn cue_editor_rpc_preserves_active_draft_and_presentation_preference() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let mut app = PealayerApp::default();
+        let context = egui::Context::default();
+        let (fixture, id) = cue_reveal_fixture();
+        app.timeline = fixture.timeline;
+        app.timeline_cue_editor_presentation = crate::config::TimelineCueEditorPresentation::Panel;
+        let before = app.snapshot_timeline();
+        assert!(request_existing_timeline_cue_editor(&mut app, &context, uuid::Uuid::new_v4(), None).is_err());
+        request_existing_timeline_cue_editor(&mut app, &context, id,
+            Some(crate::config::TimelineCueEditorPresentation::Dialog)).unwrap();
+        let session_id = timeline_cue_dialog_id().with(id);
+        context.data_mut(|data| data.insert_temp(session_id, CueDialogSession {
+            baseline: std::sync::Arc::new(before.clone()), undo: std::sync::Arc::new(app.undo_stack.clone()),
+            confirm_dismiss: true,
+        }));
+        request_existing_timeline_cue_editor(&mut app, &context, id, None).unwrap();
+        assert!(context.data(|data| data.get_temp::<CueDialogSession>(session_id)).unwrap().confirm_dismiss);
+        assert!(request_existing_timeline_cue_editor(&mut app, &context, uuid::Uuid::new_v4(), None).is_err());
+        assert_eq!(app.snapshot_timeline(), before);
+        assert_eq!(app.timeline_cue_editor_presentation, crate::config::TimelineCueEditorPresentation::Panel);
     }
 
     #[test]

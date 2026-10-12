@@ -3,7 +3,9 @@
 The cue dialog shares its editor/model with the docked Effect Controls panel.
 At 680 points of usable body width it uses a 40/60 two-column layout: identity
 and name on the left; timing and output/routing on the right. The docked panel
-and narrower dialog retain stacked cards. A bounded scrolling body leaves the
+and narrower dialog retain stacked cards. The outer width is capped at 800 points;
+utility actions use layout alignment, not cursor padding that expands the card.
+A bounded scrolling body leaves the
 header and completion actions visible on shorter viewports.
 
 The header has a centered title/icon and an upper-right 32-point square ×.
@@ -29,10 +31,18 @@ Focused egui tests exercise narrow/wide rendered geometry, icon/title alignment,
 square icon tiles, upper-right close hit-testing, unchanged close and changed
 Escape confirmation. Parent-provided isolated configuration protects user state.
 
-The maintained Win32 capture utility successfully captured the current real
-Pealayer window. Desktop automation capture failed with `0x8007041D`; opening
-the updated cue dialog for its specific live screenshot remains a human-assisted
-check. A renderer test is not a screenshot or human visual acceptance.
+`timeline.cue.edit` opens the real native editor for an existing `instance_id`.
+Optional `presentation: "dialog" | "panel"` overrides presentation for that
+request without modifying Preferences. Repeated requests for the open cue
+preserve its baseline/confirmation; requests for a different cue cannot replace
+an open draft. This edits/selects authored state, not physical output.
+
+The maintained Win32 capture utility captures the current real Pealayer window.
+Its optional `-CropRectangle x,y,width,height` crops in memory and saves only the
+requested window-relative pixels, with strict bounds validation. It does not
+focus, move or click the window. Desktop automation capture failed with
+`0x8007041D`; application RPC plus this capture route supports independent native
+dialog inspection. A renderer test is not a screenshot or human acceptance.
 
 Cafe player delivery remains blocked by the previously denied runtime smoke
 launch. Source synchronization and local package tests do not establish Cafe

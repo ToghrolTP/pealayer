@@ -862,6 +862,7 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Copy details" => "رونوشت جزئیات",
         "Close" => "بستن",
         "Discard changes" => "لغو تغییرات",
+        "Close the current cue editor first" => "ابتدا ویرایشگر نشانهٔ فعلی را ببندید",
         "Discard changes?" => "تغییرات لغو شوند؟",
         "Keep editing" => "ادامهٔ ویرایش",
         "Save and close" => "ذخیره و بستن",

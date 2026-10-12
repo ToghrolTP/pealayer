@@ -2,6 +2,8 @@
 param(
     [string]$ProcessName = 'pealayer',
     [Parameter(Mandatory = $true)][string]$OutputPath,
+    # Optional window-relative pixel rectangle: x, y, width, height.
+    [int[]]$CropRectangle,
     # Read-only best effort when a test window is behind another application.
     # PrintWindow does not activate it; GPU-backed windows may not support it.
     [switch]$RenderOccludedWindow
@@ -46,7 +48,22 @@ try {
     } else {
         $graphics.CopyFromScreen($rectangle.Left, $rectangle.Top, 0, 0, $bitmap.Size)
     }
-    $bitmap.Save([IO.Path]::GetFullPath($OutputPath), [System.Drawing.Imaging.ImageFormat]::Png)
+    if ($CropRectangle) {
+        if ($CropRectangle.Count -ne 4 -or $CropRectangle[0] -lt 0 -or $CropRectangle[1] -lt 0 -or
+            $CropRectangle[2] -le 0 -or $CropRectangle[3] -le 0 -or
+            ([long]$CropRectangle[0] + $CropRectangle[2]) -gt $width -or
+            ([long]$CropRectangle[1] + $CropRectangle[3]) -gt $height) {
+            throw 'CropRectangle must be x,y,width,height entirely inside the captured window.'
+        }
+        $crop = [System.Drawing.Rectangle]::new($CropRectangle[0], $CropRectangle[1], $CropRectangle[2], $CropRectangle[3])
+        $croppedBitmap = $bitmap.Clone($crop, $bitmap.PixelFormat)
+        try { $croppedBitmap.Save([IO.Path]::GetFullPath($OutputPath), [System.Drawing.Imaging.ImageFormat]::Png) }
+        finally { $croppedBitmap.Dispose() }
+        $width = $crop.Width
+        $height = $crop.Height
+    } else {
+        $bitmap.Save([IO.Path]::GetFullPath($OutputPath), [System.Drawing.Imaging.ImageFormat]::Png)
+    }
     [pscustomobject]@{ ProcessId = $windowProcess.Id; Width = $width; Height = $height; Path = [IO.Path]::GetFullPath($OutputPath) }
 } finally {
     $graphics.Dispose()
