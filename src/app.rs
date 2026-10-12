@@ -890,8 +890,8 @@ pub struct PealayerApp {
     pub(crate) last_web_hardware_revision: u64,
     pub(crate) cached_hardware_capabilities: Mutex<(u64, Option<crate::four_d::controller::HardwareCapabilities>)>,
     pub(crate) media_controls: Option<crate::platform::media_controls::MediaControlsManager>,
-    pub(crate) media_cmd_tx: std::sync::mpsc::Sender<souvlaki::MediaControlEvent>,
-    pub(crate) media_cmd_rx: std::sync::mpsc::Receiver<souvlaki::MediaControlEvent>,
+    pub(crate) media_cmd_tx: std::sync::mpsc::Sender<crate::platform::media_controls::NativeMediaEvent>,
+    pub(crate) media_cmd_rx: std::sync::mpsc::Receiver<crate::platform::media_controls::NativeMediaEvent>,
     pub window_handle: Option<isize>,
     pub shell_initialized: bool,
     pub(crate) last_taskbar_state: Option<crate::platform::windows::TaskbarState>,
@@ -1118,22 +1118,20 @@ impl eframe::App for PealayerApp {
         if !self.media_keys_enabled {
             // Drop unregisters the native session and invalidates old callbacks.
             self.media_controls = None;
-        } else if self.media_controls.is_none() {
+        } else if self.media_controls.as_ref().is_none_or(|controls| controls.needs_registration_retry()) {
             let hwnd = self
                 .window_handle
                 .unwrap_or_else(crate::platform::windows::get_registered_hwnd);
             // Windows requires a real HWND; initialization before registration
             // would panic inside the OS-media-controls library.
             if !cfg!(target_os = "windows") || hwnd != 0 {
-                let mut controls = crate::platform::media_controls::MediaControlsManager::new(
+                self.media_controls = None;
+                let controls = crate::platform::media_controls::MediaControlsManager::new(
                     hwnd,
                     self.media_cmd_tx.clone(),
                     ctx.clone(),
                     &self.app_name,
                 );
-                let title = self.current_video_path.as_deref()
-                    .map(|path| crate::media::media_target_label(&path.to_string_lossy()));
-                controls.update_metadata(title.as_deref());
                 self.media_controls = Some(controls);
             }
         }
@@ -1148,7 +1146,7 @@ impl eframe::App for PealayerApp {
             inbound_commands.push(("Web UI", command));
         }
         while let Ok(event) = self.media_cmd_rx.try_recv() {
-            if let Some(command) = crate::platform::media_controls::map_media_control_event(
+            if let Some(command) = crate::platform::media_controls::map_native_media_event(
                     event,
                     self.quick_seek_seconds,
                 )
@@ -1191,10 +1189,20 @@ impl eframe::App for PealayerApp {
                 self.is_eof,
             ),
         );
+        let session_metadata = self.media_session_metadata();
+        let session_capabilities = self.media_session_capabilities();
+        let icon_state = crate::branding::PlaybackIconState::from_player(
+            self.current_video_path.is_some(), self.is_paused, self.is_eof);
+        let icon_revision = crate::platform::interop::live_config_revision();
         if let Some(ref mut mc) = self.media_controls {
+            if mc.needs_artwork_update(icon_state, icon_revision) {
+                mc.update_artwork(&crate::platform::interop::get_live_config(), icon_state, icon_revision);
+            }
+            mc.update_metadata(session_metadata);
+            mc.update_capabilities(session_capabilities, self.playback_rate);
             mc.update_playback(
                 self.current_video_path.is_some(),
-                self.is_paused,
+                self.is_paused || self.is_eof,
                 self.playback_time,
                 self.duration,
             );
@@ -1528,6 +1536,9 @@ impl eframe::App for PealayerApp {
                     .current_video_path
                     .as_ref()
                     .map(|p| crate::media::redact_media_target(&p.to_string_lossy())),
+                media_session: self.media_session_metadata(),
+                media_session_capabilities: self.media_session_capabilities(),
+                quick_seek_seconds: self.quick_seek_seconds,
                 media_tracks: self
                     .media_tracks
                     .iter()
@@ -2316,7 +2327,34 @@ impl PealayerApp {
         // Explicit OS-session window/file requests must still be able to raise
         // a foreground-only player. They are not keyboard transport buttons.
         if matches!(command,InteropCommand::Activate|InteropCommand::Quit|InteropCommand::Open{..}) {self.media_keys_enabled}
-        else{self.media_controls_allowed(ctx)}
+        else {
+            if !self.media_controls_allowed(ctx) { return false; }
+            let caps = self.media_session_capabilities();
+            match command {
+                InteropCommand::Play | InteropCommand::Pause | InteropCommand::TogglePause |
+                    InteropCommand::Stop | InteropCommand::SetRate { .. } => self.current_video_path.is_some(),
+                InteropCommand::Seek { .. } | InteropCommand::SeekTo { .. } => caps.can_seek,
+                InteropCommand::Next => caps.can_next,
+                InteropCommand::Previous => caps.can_previous,
+                _ => true,
+            }
+        }
+    }
+
+    fn media_session_metadata(&self) -> crate::platform::media_controls::SessionMetadata {
+        crate::platform::media_controls::session_metadata(
+            self.current_video_path.as_ref().and_then(|path| path.to_str()), &self.media_file_info,
+            self.media_tracks.iter().any(|track| track.kind == MediaTrackType::Video && track.album_art != Some(true)))
+    }
+
+    fn media_session_capabilities(&self) -> crate::platform::media_controls::SessionCapabilities {
+        let (next, previous) = if self.has_remote_playlist() {
+            (self.remote_neighbor(1, false).is_some(), self.remote_neighbor(-1, false).is_some())
+        } else {
+            crate::platform::media_controls::playlist_neighbors(&self.media_file_info)
+        };
+        crate::platform::media_controls::SessionCapabilities::for_player(
+            self.current_video_path.is_some(), self.is_paused, self.is_eof, self.is_seekable, next, previous)
     }
     pub(crate) fn process_keyboard_shortcuts(&mut self, ctx: &egui::Context) {
         if !self.keyboard_shortcuts_enabled {
@@ -5330,6 +5368,11 @@ impl PealayerApp {
                             sample.buffering = v;
                         }
                     }
+                    (23..=25, _) => {
+                        if !crate::peer::active() {
+                            self.set_media_file_info(crate::media_info::capture(&self.mpv));
+                        }
+                    }
                     _ => {}
                 },
                 Some(Ok(Event::EndFile(reason))) => {
@@ -6669,13 +6712,11 @@ impl PealayerApp {
             self.cache_duration = None;
             self.cache_buffering_percent = None;
             self.add_recent_media(path.clone());
+            self.set_media_file_info(crate::media_info::MediaFileInfo::default());
             let title = path
                 .file_name()
                 .and_then(|n| n.to_str())
                 .unwrap_or(path_str);
-            if let Some(ref mut mc) = self.media_controls {
-                mc.update_metadata(Some(title));
-            }
             self.set_osd(format!("Loaded: {}", title));
 
             // Auto-load matching sidecar timeline
@@ -6804,10 +6845,8 @@ impl PealayerApp {
             self.cache_duration = None;
             self.cache_buffering_percent = None;
             self.add_recent_media(path);
+            self.set_media_file_info(crate::media_info::MediaFileInfo::default());
             let safe_target = crate::media::redact_media_target(trimmed);
-            if let Some(ref mut mc) = self.media_controls {
-                mc.update_metadata(Some(&safe_target));
-            }
             self.set_osd(format!("Loading URL: {safe_target}"));
         }
     }
@@ -6914,7 +6953,7 @@ impl PealayerApp {
         self.is_eof = false;
         self.is_paused = false;
         if let Some(ref mut mc) = self.media_controls {
-            mc.update_metadata(None);
+            mc.update_metadata(crate::platform::media_controls::SessionMetadata::default());
             mc.update_playback(false, false, 0.0, 0.0);
         }
         self.set_osd("Video Closed".to_string());
@@ -9606,7 +9645,7 @@ pub(crate) mod tests {
             app.media_keys_enabled=enabled;app.media_keys_background_enabled=background;
             app.media_controls=Some(crate::platform::media_controls::MediaControlsManager::memory_only_test_manager(&app.app_name));
             let old_volume=app.volume;
-            app.media_cmd_tx.send(souvlaki::MediaControlEvent::SetVolume(0.17)).unwrap();
+            app.media_cmd_tx.send(souvlaki::MediaControlEvent::SetVolume(0.17).into()).unwrap();
             let ctx=egui::Context::default();
             let mut frame=eframe::Frame::_new_kittest();
             let _=ctx.run_logic(&egui::RawInput::default(),|ctx|eframe::App::logic(&mut app,ctx,&mut frame));
@@ -9627,12 +9666,55 @@ pub(crate) mod tests {
         let old_volume=app.volume;
         let (tx,rx)=std::sync::mpsc::channel();app.interop_rx=rx;
         tx.send(InteropCommand::UpdateConfig {values:serde_json::json!({"media_keys_background_enabled":false})}).unwrap();
-        app.media_cmd_tx.send(souvlaki::MediaControlEvent::SetVolume(0.17)).unwrap();
+        app.media_cmd_tx.send(souvlaki::MediaControlEvent::SetVolume(0.17).into()).unwrap();
         let ctx=egui::Context::default();let mut frame=eframe::Frame::_new_kittest();
         let _=ctx.run_logic(&egui::RawInput::default(),|ctx|eframe::App::logic(&mut app,ctx,&mut frame));
         assert!(!app.media_keys_background_enabled);
         assert_eq!(app.volume,old_volume,"already queued media action must not run under the new scope");
         crate::platform::interop::set_live_config(original);
+    }
+
+    #[test]
+    fn native_session_dispatch_revalidates_media_seekability_and_playlist_capabilities() {
+        let _lock = lock_app_tests();
+        let mut app = PealayerApp::default();
+        let ctx = egui::Context::default();
+        assert!(!app.media_control_command_allowed(&ctx, &InteropCommand::Play));
+        assert!(!app.media_control_command_allowed(&ctx, &InteropCommand::SetRate { rate:1.5 }));
+        app.current_video_path = Some("movie.mkv".into());
+        assert!(app.media_control_command_allowed(&ctx, &InteropCommand::SetRate { rate:1.5 }));
+        assert!(!app.media_control_command_allowed(&ctx, &InteropCommand::SeekTo {seconds:5.0}));
+        app.is_seekable = true;
+        assert!(app.media_control_command_allowed(&ctx, &InteropCommand::SeekTo {seconds:5.0}));
+        assert!(!app.media_control_command_allowed(&ctx, &InteropCommand::Next));
+        app.media_file_info.playlist = (0..2).map(|index| crate::media_info::MediaCollectionEntry {
+            index, properties: if index == 0 { [("current".into(),"yes".into())].into() }
+                else { Default::default() },
+        }).collect();
+        assert!(app.media_control_command_allowed(&ctx, &InteropCommand::Next));
+        assert!(!app.media_control_command_allowed(&ctx, &InteropCommand::Previous));
+        app.media_keys_background_enabled = false;
+        assert!(!app.media_control_command_allowed(&ctx, &InteropCommand::SetRate { rate:1.5 }));
+        assert!(app.media_control_command_allowed(&ctx, &InteropCommand::Activate));
+        app.media_keys_enabled = false;
+        assert!(!app.media_control_command_allowed(&ctx, &InteropCommand::Activate));
+    }
+
+    #[test]
+    fn os_and_web_session_projection_uses_the_cached_authoritative_metadata() {
+        let _lock = lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.current_video_path = Some("movie.mkv".into());
+        app.set_media_file_info(crate::media_info::MediaFileInfo {
+            metadata: [("title".into(),"Real title".into()),("artist".into(),"Real artist".into())].into(),
+            ..Default::default()
+        });
+        let metadata = app.media_session_metadata();
+        assert_eq!(metadata.title.as_deref(),Some("Real title"));
+        assert_eq!(metadata.artist.as_deref(),Some("Real artist"));
+        assert!(metadata.album.is_none());
+        app.current_video_path = None;
+        assert_eq!(app.media_session_metadata(), crate::platform::media_controls::SessionMetadata::default());
     }
 
     #[test]

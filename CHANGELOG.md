@@ -8,6 +8,10 @@ retroactively attributed to an older download.
 
 ### 🎬 Playback and audio
 
+- Publish factual OS media metadata and contextual transport/timeline state;
+  Windows supports speed requests and cached alpha artwork with complete
+  callback cleanup, while Web clears stale live/idle session positions.
+
 - Reach important connected-board controls from the Windows tray's PCController
   submenu, with contextual availability and the existing E-STOP release guard.
 

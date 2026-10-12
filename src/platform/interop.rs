@@ -1268,6 +1268,9 @@ pub struct PlayerStatusResponse {
     /// Measured native UI cadence, not the monitor refresh rate or browser FPS.
     pub ui_fps: Option<f64>,
     pub current_video: Option<String>,
+    pub media_session: crate::platform::media_controls::SessionMetadata,
+    pub media_session_capabilities: crate::platform::media_controls::SessionCapabilities,
+    pub quick_seek_seconds: f64,
     #[serde(default)]
     pub media_tracks: Vec<WebMediaTrack>,
     #[serde(default)]
@@ -1625,6 +1628,9 @@ impl Default for PlayerStatusResponse {
             media_fps: 0.0,
             ui_fps: None,
             current_video: None,
+            media_session: Default::default(),
+            media_session_capabilities: Default::default(),
+            quick_seek_seconds: 10.0,
             media_tracks: Vec::new(),
             chapters: Vec::new(),
             current_chapter_index: None,
