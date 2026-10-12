@@ -54,6 +54,23 @@ zero. The Effects Library heading starts at its content edge, vertically centere
 
 ## Verification and delivery boundaries
 
+### Peer RGB cache invalidation
+
+The hardware cache introduced in `fff09372` required each producer to advance
+`hardware_revision`. Native peer workers installed changed snapshots and woke
+the UI, but omitted that invalidation: a paused status RGB dot could keep its
+cached color even after a new authoritative frame arrived. Full peer snapshot
+installation now changes the snapshot and revision in one critical section,
+before the worker requests repaint. Identical snapshots do not advance it.
+The cache remains enabled; no animation timer, synthetic color, disk logging,
+or extra controller polling is introduced.
+
+Regressions prime the cache first, install RGB-only peer changes (including off),
+render the paused status dot with no input, and verify native/Web projections.
+They also cover unchanged snapshots, missing hardware, a restarted source and
+the existing direct-controller RGB push path. These fixtures do not command a
+physical LED or claim live animation acceptance when the board reports steady RGB.
+
 Focused tests cover real native FPS clicks, menu ownership/hiding and drag/drop,
 title placement, unavailable telemetry, bounded charts, source switching, typed
 HOT activation/clear, and ordered operation recovery. Web model tests cover the

@@ -2030,6 +2030,20 @@ pub fn compile_direct_pwm_cues(timeline: &Timeline) -> Vec<CompiledDirectPwmCue>
         .collect()
 }
 
+/// Install a complete authoritative snapshot and invalidate UI projections in
+/// the same critical section. A repaint alone cannot invalidate their cache.
+pub(crate) fn install_hardware_snapshot(
+    capabilities: &Mutex<Option<crate::four_d::controller::HardwareCapabilities>>,
+    revision: &AtomicU64,
+    next: Option<crate::four_d::controller::HardwareCapabilities>,
+) -> bool {
+    let Ok(mut current) = capabilities.lock() else { return false; };
+    if *current == next { return false; }
+    *current = next;
+    revision.fetch_add(1, Ordering::Release);
+    true
+}
+
 fn spawn_peer_engine() -> EngineHandle {
     let lifecycle=Arc::new(());
     let (tx,rx)=mpsc::channel();
@@ -2043,6 +2057,7 @@ fn spawn_peer_engine() -> EngineHandle {
     };
     let owner=Arc::downgrade(&lifecycle);
     let capabilities=handle.hardware_capabilities.clone();
+    let hardware_revision=handle.hardware_revision.clone();
     let connected=handle.is_connected.clone();
     let estop=handle.estop_active.clone();
     let results=handle.controller_call_results.clone();
@@ -2063,7 +2078,9 @@ fn spawn_peer_engine() -> EngineHandle {
                     plan.authority=snapshot.session.status.pointer("/hardware_sync/authority").cloned().and_then(|value|serde_json::from_value(value).ok());
                     if let Some(actor)=snapshot.session.status.pointer("/hardware_sync/authority_client_id").and_then(serde_json::Value::as_str){plan.authority_client_id=actor.into();}
                 }
-                let hardware_changed = if let Ok(mut value)=capabilities.lock(){let changed=*value!=snapshot.session.hardware;*value=snapshot.session.hardware;changed}else{false};
+                let hardware_changed = install_hardware_snapshot(
+                    &capabilities, &hardware_revision, snapshot.session.hardware,
+                );
                 let next_estop=snapshot.session.status.get("estop_active").and_then(serde_json::Value::as_bool).unwrap_or(false);
                 let estop_changed=estop.swap(next_estop,Ordering::SeqCst)!=next_estop;
                 if let Ok(mut error)=errors.lock(){*error=client.error.lock().ok().and_then(|value|value.clone());}
