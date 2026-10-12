@@ -29,6 +29,8 @@ statements are not the present product state.
   progress and authoritative HOT alerts. The Effects Library heading is start
   aligned. [Widget contract and evidence](status-bar-widgets.md) retains the Cafe
   runtime blocker and physical/human acceptance boundaries.
+  Peer RGB-only snapshot updates now invalidate the native hardware cache before
+  repaint; paused rendering and native/Web projections have focused regressions.
 
 - Native cue properties now has guarded ×/Escape dismissal, square icon controls,
   centered caption groups and a viewport-bounded two-column layout on wider

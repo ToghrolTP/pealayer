@@ -2897,10 +2897,11 @@ impl PealayerApp {
         &self,
         capabilities: Option<crate::four_d::controller::HardwareCapabilities>,
     ) {
-        if let Ok(mut current) = self.engine_handle.hardware_capabilities.lock() {
-            *current = capabilities;
-        }
-        self.engine_handle.hardware_revision.fetch_add(1, Ordering::Relaxed);
+        crate::four_d::engine::install_hardware_snapshot(
+            &self.engine_handle.hardware_capabilities,
+            &self.engine_handle.hardware_revision,
+            capabilities,
+        );
     }
 
     pub fn advertised_hardware(&self) -> Option<crate::four_d::controller::HardwareCapabilities> {
@@ -11087,6 +11088,69 @@ pub(crate) mod tests {
         let m_rev = app.media_view_revision.load(Ordering::Relaxed);
         app.bump_media_view_revision();
         assert_eq!(app.media_view_revision.load(Ordering::Relaxed), m_rev + 1);
+    }
+
+    #[test]
+    fn peer_rgb_snapshots_invalidate_cached_native_and_web_hardware() {
+        let _guard = lock_app_tests();
+        let app = PealayerApp::default();
+        assert!(app.advertised_hardware().is_none()); // Prime the idle UI cache.
+        let mut hardware = crate::four_d::controller::HardwareCapabilities {
+            board_connected: true,
+            host_instance_id: "peer-controller".into(),
+            ..Default::default()
+        };
+        for (index, (red, green, blue)) in [(0, 128, 40), (128, 0, 0), (0, 0, 0)].into_iter().enumerate() {
+            hardware.status_led = Some(crate::four_d::controller::HardwareStatusLed {
+                red, green, blue, brightness: 128, effect: 1, condition: 8,
+            });
+            hardware.status_led_revision = index as u64 + 1;
+            let before = app.engine_handle.hardware_revision.load(Ordering::Acquire);
+            assert!(crate::four_d::engine::install_hardware_snapshot(
+                &app.engine_handle.hardware_capabilities,
+                &app.engine_handle.hardware_revision,
+                Some(hardware.clone()),
+            ));
+            assert_eq!(app.engine_handle.hardware_revision.load(Ordering::Acquire), before + 1);
+            let cached = app.advertised_hardware().unwrap();
+            assert_eq!(cached.status_led, hardware.status_led);
+            let web = web_hardware_details(&cached, Default::default());
+            assert_eq!(web["status_led"], serde_json::json!({"red":red,"green":green,"blue":blue}));
+            assert!(!crate::four_d::engine::install_hardware_snapshot(
+                &app.engine_handle.hardware_capabilities,
+                &app.engine_handle.hardware_revision,
+                Some(hardware.clone()),
+            ));
+            assert_eq!(app.engine_handle.hardware_revision.load(Ordering::Acquire), before + 1);
+        }
+        // Missing hardware and a restarted source also invalidate a primed cache.
+        app.update_hardware_capabilities(None);
+        assert!(app.advertised_hardware().is_none());
+        hardware.host_instance_id = "restarted-peer-controller".into();
+        hardware.status_led_revision = 1;
+        app.update_hardware_capabilities(Some(hardware.clone()));
+        assert_eq!(app.advertised_hardware().unwrap(), hardware);
+    }
+
+    #[test]
+    fn controller_rgb_only_push_invalidates_a_primed_ui_cache() {
+        let _guard = lock_app_tests();
+        let app = PealayerApp::default();
+        app.update_hardware_capabilities(Some(crate::four_d::controller::HardwareCapabilities {
+            board_connected: true,
+            ..Default::default()
+        }));
+        assert!(app.advertised_hardware().unwrap().status_led.is_none());
+        let target = app.engine_handle.controller_push_target();
+        let event = serde_json::json!({"kind":"status_led.changed","metadata":{
+            "red":"9","green":"87","blue":"123","brightness":"128",
+            "effect":"1","condition":"8","revision":"42"
+        }});
+        assert!(target.apply_notification("controller.state", &event));
+        assert_eq!(app.advertised_hardware().unwrap().status_led.unwrap().blue, 123);
+        let revision = app.engine_handle.hardware_revision.load(Ordering::Acquire);
+        assert!(!target.apply_notification("controller.state", &event));
+        assert_eq!(app.engine_handle.hardware_revision.load(Ordering::Acquire), revision);
     }
 
     #[test]

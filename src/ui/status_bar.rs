@@ -1098,6 +1098,39 @@ mod tests {
         assert_eq!(tracker.live_fps(), Some(2.0));
     }
     #[test]
+    fn paused_status_rgb_paints_each_installed_peer_frame_without_input() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let context = egui::Context::default();
+        let mut app = PealayerApp::default();
+        app.is_paused = true;
+        app.is_connected = true;
+        app.status_bar.status_rgb = true;
+        assert!(app.advertised_hardware().is_none());
+        for (red, green, blue) in [(0, 128, 40), (0, 0, 0), (255, 0, 64)] {
+            crate::four_d::engine::install_hardware_snapshot(
+                &app.engine_handle.hardware_capabilities,
+                &app.engine_handle.hardware_revision,
+                Some(HardwareCapabilities {
+                    board_connected: true,
+                    status_led: Some(HardwareStatusLed {
+                        red, green, blue, brightness: 128, effect: 1, condition: 8,
+                    }),
+                    ..Default::default()
+                }),
+            );
+            let mut output = context.run_ui(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 420.0))),
+                ..Default::default()
+            }, |ui| draw(&mut app, ui));
+            assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                egui::epaint::Shape::Circle(circle) if circle.radius == 6.0
+                    && circle.fill == egui::Color32::from_rgb(red, green, blue)
+            )), "paused RGB dot did not paint the installed peer frame");
+            output.textures_delta.clear();
+        }
+    }
+
+    #[test]
     fn updating_values_keep_slots_and_workspace_stays_at_the_logical_end() {
         let _guard = crate::app::tests::lock_app_tests();
         for (width, rtl) in [(1000.0, false), (420.0, false), (1000.0, true)] {
