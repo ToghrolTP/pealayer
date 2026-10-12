@@ -1729,9 +1729,9 @@ fn effect_controls_time_field(
             ui.input(|input| input.modifiers),
         ).round().max(1.0) as u64;
         let gap = ui.spacing().item_spacing.x;
-        let number_width = (ui.available_width() - 52.0 - gap * 2.0).max(1.0);
+        let number_width = (ui.available_width() - 56.0 - gap * 2.0).max(1.0);
         ui.horizontal(|ui| {
-            if ui.add_sized([26.0, 28.0], egui::Button::new(crate::ui::icons::MINUS))
+            if ui.add_sized([28.0, 28.0], egui::Button::new(crate::ui::icons::MINUS))
                 .on_hover_text("Decrease · Ctrl: fine / Shift: coarse").clicked() {
                 *value = value.saturating_sub(step).clamp(*range.start(), *range.end());
                 undo = true;
@@ -1741,7 +1741,7 @@ fn effect_controls_time_field(
             undo |= editor.drag_started() || editor.gained_focus()
                 || (editor.changed() && !editor.dragged());
             editor.on_hover_text("Enter an exact time (for example 1.25s or 00:01:02.500)");
-            if ui.add_sized([26.0, 28.0], egui::Button::new(crate::ui::icons::PLUS))
+            if ui.add_sized([28.0, 28.0], egui::Button::new(crate::ui::icons::PLUS))
                 .on_hover_text("Increase · Ctrl: fine / Shift: coarse").clicked() {
                 *value = value.saturating_add(step).clamp(*range.start(), *range.end());
                 undo = true;
@@ -1862,14 +1862,20 @@ fn effect_controls_card_with_ping<R>(
                 } else {
                     ui.visuals().strong_text_color()
                 };
-                egui::Frame::new()
-                    .fill(icon_color.gamma_multiply(if emphasized { 0.18 } else { 0.10 }))
-                    .corner_radius(6.0)
-                    .inner_margin(egui::Margin::same(6))
-                    .show(ui, |ui| {
-                        ui.label(egui::RichText::new(icon).size(17.0).color(icon_color));
-                    });
-                ui.vertical(|ui| {
+                let (icon_rect, _) = ui.allocate_exact_size(egui::Vec2::splat(32.0), egui::Sense::hover());
+                ui.painter().rect_filled(icon_rect, 6.0,
+                    icon_color.gamma_multiply(if emphasized { 0.18 } else { 0.10 }));
+                ui.painter().text(icon_rect.center(), egui::Align2::CENTER_CENTER,
+                    icon, egui::FontId::proportional(17.0), icon_color);
+                let text_height = ui.fonts_mut(|fonts| {
+                    fonts.row_height(&egui::FontId::proportional(14.0))
+                        + if subtitle.is_some_and(|text| !text.trim().is_empty()) {
+                            fonts.row_height(&egui::TextStyle::Small.resolve(ui.style()))
+                                + ui.spacing().item_spacing.y
+                        } else { 0.0 }
+                });
+                ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), text_height),
+                    egui::Layout::top_down(egui::Align::Min), |ui| {
                     ui.add(egui::Label::new(egui::RichText::new(title).strong().size(14.0))
                         .truncate()).on_hover_text(title);
                     if let Some(subtitle) = subtitle.filter(|value| !value.trim().is_empty()) {
@@ -1881,13 +1887,6 @@ fn effect_controls_card_with_ping<R>(
             ui.add_space(6.0);
             add_contents(ui)
         });
-    if emphasized {
-        let stripe = egui::Rect::from_min_max(
-            card.response.rect.min,
-            egui::pos2(card.response.rect.min.x + 3.0, card.response.rect.max.y),
-        );
-        ui.painter().rect_filled(stripe, 10.0, ui.visuals().selection.bg_fill);
-    }
     card
 }
 
@@ -2606,7 +2605,8 @@ fn timeline_row_visible_for_reveal(
 }
 
 fn effect_controls_reveal_button(ui: &mut egui::Ui, label: &str, help: &str) -> egui::Response {
-    ui.button(format!("{}  {label}", crate::ui::icons::TARGET)).on_hover_text(help)
+    ui.add(egui::Button::new(format!("{}  {label}", crate::ui::icons::TARGET))
+        .min_size(egui::vec2(0.0, 28.0))).on_hover_text(help)
 }
 
 fn timeline_track_picker_item_is_dimmed(row: &TimelineTrackRow) -> bool {
@@ -3446,6 +3446,21 @@ fn timeline_cue_dialog_id() -> egui::Id {
     egui::Id::new("timeline-add-cue-dialog")
 }
 
+#[derive(Clone)]
+struct CueDialogSession {
+    baseline: std::sync::Arc<crate::four_d::history::TimelineSnapshot>,
+    undo: std::sync::Arc<crate::four_d::history::UndoStack>,
+    confirm_dismiss: bool,
+}
+
+fn cue_dialog_columns(width: f32, docked: bool) -> Option<(f32, f32)> {
+    // Both columns must remain useful for unit-aware inputs and translated titles.
+    (!docked && width >= 680.0).then(|| {
+        let left = (width - 16.0) * 0.40;
+        (left, width - 16.0 - left)
+    })
+}
+
 #[derive(Clone, Debug)]
 struct TimelineCueDialogState {
     instance_id: uuid::Uuid,
@@ -3465,7 +3480,10 @@ fn open_timeline_cue_editor(
     app.selected_timeline_keyframe = None;
     match app.timeline_cue_editor_presentation {
         crate::config::TimelineCueEditorPresentation::Dialog => {
-            context.data_mut(|data| data.insert_temp(timeline_cue_dialog_id(), state));
+            context.data_mut(|data| {
+                data.remove::<CueDialogSession>(timeline_cue_dialog_id().with(state.instance_id));
+                data.insert_temp(timeline_cue_dialog_id(), state);
+            });
         }
         crate::config::TimelineCueEditorPresentation::Panel => {
             app.open_or_focus_tab(PealayerTab::EffectControls);
@@ -3680,6 +3698,16 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
                 let displayed_kind = app.tr(kind_label);
                 let displayed_ownership = app.tr(ownership_label);
                 let template = &mut app.timeline.templates[t_idx];
+                let columns = cue_dialog_columns(panel_width, show_header);
+                let origin = ui.cursor().min;
+                let mut identity_ui = ui.new_child(egui::UiBuilder::new()
+                    .id_salt("cue-identity-column")
+                    .max_rect(egui::Rect::from_min_size(origin,
+                        egui::vec2(columns.map_or(panel_width, |(left, _)| left), ui.available_height())))
+                    .layout(egui::Layout::top_down(egui::Align::Min)));
+                {
+                let ui = if columns.is_some() { &mut identity_ui } else { &mut *ui };
+                let panel_width = columns.map_or(panel_width, |(left, _)| left);
                 effect_controls_card_with_ping(
                     ui,
                     panel_width,
@@ -3716,8 +3744,19 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
                         });
                     },
                 );
+                }
 
-                ui.add_space(8.0);
+                let mut value_ui = ui.new_child(egui::UiBuilder::new()
+                    .id_salt("cue-value-column")
+                    .max_rect(egui::Rect::from_min_size(
+                        origin + egui::vec2(columns.map_or(0.0, |(left, _)| left + 16.0), 0.0),
+                        egui::vec2(columns.map_or(panel_width, |(_, right)| right), ui.available_height())))
+                    .layout(egui::Layout::top_down(egui::Align::Min)));
+                {
+                let ui = if columns.is_some() { &mut value_ui } else { &mut *ui };
+                let panel_width = columns.map_or(panel_width, |(_, right)| right);
+
+                if columns.is_none() { ui.add_space(8.0); }
 
                 effect_controls_card(
                     ui,
@@ -4063,6 +4102,10 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
                     );
                 }
 
+                }
+                if columns.is_some() {
+                    ui.allocate_rect(identity_ui.min_rect().union(value_ui.min_rect()), egui::Sense::hover());
+                }
                 ui.add_space(8.0);
                 egui::CollapsingHeader::new(format!("{}  {details_label}", crate::ui::icons::INFO))
                     .id_salt(("cue-details", id))
@@ -4122,27 +4165,34 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
                         ui.horizontal_wrapped(|ui| {
                             reveal_cue = effect_controls_reveal_button(ui, &reveal_label, &reveal_help).clicked();
                             if ui
-                                .button(format!("{}  {jump_label}", crate::ui::icons::SKIP_BACK))
+                                .add(egui::Button::new(format!("{}  {jump_label}", crate::ui::icons::SKIP_BACK))
+                                    .min_size(egui::vec2(0.0, 28.0)))
                                 .clicked()
                             {
                                 jump_to_cue = true;
                             }
                             if ui
-                                .button(format!("{}  {duplicate_label}", crate::ui::icons::COPY))
+                                .add(egui::Button::new(format!("{}  {duplicate_label}", crate::ui::icons::COPY))
+                                    .min_size(egui::vec2(0.0, 28.0)))
                                 .clicked()
                             {
                                 duplicate_cue = true;
                             }
                             let destructive = egui::Color32::from_rgb(220, 74, 74);
+                            let delete_text = format!("{}  {delete_cue_label}", crate::ui::icons::TRASH);
+                            if columns.is_some() {
+                                let delete_width = ui.painter().layout_no_wrap(delete_text.clone(),
+                                    egui::TextStyle::Button.resolve(ui.style()), destructive).size().x
+                                    + ui.spacing().button_padding.x * 2.0;
+                                ui.add_space((ui.available_width() - delete_width - ui.spacing().item_spacing.x).max(0.0));
+                            }
                             if ui
                                 .add(
                                     egui::Button::new(
-                                        egui::RichText::new(format!(
-                                            "{}  {delete_cue_label}",
-                                            crate::ui::icons::TRASH
-                                        ))
+                                        egui::RichText::new(delete_text)
                                         .color(destructive),
                                     )
+                                    .min_size(egui::vec2(0.0, 28.0))
                                     .fill(destructive.gamma_multiply(0.08))
                                     .stroke(egui::Stroke::new(
                                         1.0,
@@ -4641,51 +4691,113 @@ fn draw_timeline_cue_dialog(app: &mut PealayerApp, context: &egui::Context) {
         return;
     };
     let instance_id = state.instance_id;
+    let session_id = timeline_cue_dialog_id().with(instance_id);
     if !app.timeline.instances.iter().any(|instance| instance.id == instance_id) {
         context.data_mut(|data| data.remove::<TimelineCueDialogState>(timeline_cue_dialog_id()));
+        context.data_mut(|data| data.remove::<CueDialogSession>(session_id));
         return;
     }
+    let mut session = context.data(|data| data.get_temp::<CueDialogSession>(session_id))
+        .unwrap_or_else(|| CueDialogSession {
+            baseline: std::sync::Arc::new(app.snapshot_timeline()),
+            undo: std::sync::Arc::new(app.undo_stack.clone()), confirm_dismiss: false,
+        });
     app.selected_instance_ids.clear();
     app.selected_instance_ids.insert(instance_id);
     let mut open = true;
     let mut accept = false;
     let mut discard = false;
+    let mut dismiss = false;
     let done_label = app.tr("Done");
-    let discard_label = app.tr("Discard cue");
+    let discard_label = app.tr(if state.discard_on_cancel { "Discard cue" } else { "Discard changes" });
     if !egui::Popup::is_any_open(context)
+        && !session.confirm_dismiss
         && context.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape))
     {
-        if state.discard_on_cancel { discard = true; } else { accept = true; }
+        dismiss = true;
     }
     crate::ui::sync_elegance_theme(context);
+    let width = (context.content_rect().width() - 64.0).clamp(180.0, 920.0);
+    let heading = if state.discard_on_cancel { app.tr("New cue properties") } else { app.tr("Cue properties") };
+    let close_help = app.tr("Close");
     elegance::Modal::new("timeline-add-cue-dialog", &mut open)
-        .heading(if state.discard_on_cancel { app.tr("New cue properties") } else { app.tr("Cue properties") })
-        .header_icon(crate::ui::icons::SLIDERS_HORIZONTAL)
-        .max_width(560.0)
-        // The compact multiplication-sign close looked detached from this
-        // dense editor and made destructive cancellation ambiguous.
+        .max_width(width)
+        // Own the header so its text, icon and real square close hit-target
+        // share one vertically centered row, not Elegance's top-aligned halo.
         .closable(false)
         .footer(|ui| {
             accept = ui.add(elegance::Button::new(&done_label)).clicked();
-            if state.discard_on_cancel {
-                discard = ui.add(elegance::Button::new(&discard_label).outline()).clicked();
-            }
+            discard = ui.add(elegance::Button::new(&discard_label).outline()).clicked();
         })
         .show(context, |ui| {
+            ui.set_width((width - 34.0).max(1.0));
+            ui.horizontal(|ui| {
+                let (rect, _) = ui.allocate_exact_size(egui::Vec2::splat(32.0), egui::Sense::hover());
+                ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER,
+                    crate::ui::icons::SLIDERS_HORIZONTAL, egui::FontId::proportional(20.0),
+                    ui.visuals().selection.bg_fill);
+                ui.add(egui::Label::new(egui::RichText::new(&heading).strong().size(16.0)).truncate());
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    dismiss |= ui.add_sized([32.0, 32.0], egui::Button::new(
+                        egui::RichText::new("×").size(22.0)).frame(false))
+                        .on_hover_text(&close_help).clicked();
+                });
+            });
+            ui.add_space(6.0);
+            ui.separator();
+            ui.add_space(8.0);
+            egui::ScrollArea::vertical().id_salt("cue-properties-body")
+                .max_height((context.content_rect().height() - 180.0).max(80.0))
+                .auto_shrink([false, true]).show(ui, |ui| {
             ui.push_id(("cue-properties", instance_id), |ui| {
                 draw_effect_controls(app, ui, false);
             });
+            });
         });
+    if dismiss {
+        if *session.baseline == app.snapshot_timeline() {
+            if state.discard_on_cancel { discard = true; } else { accept = true; }
+        } else {
+            session.confirm_dismiss = true;
+        }
+    }
+    if session.confirm_dismiss && !accept && !discard {
+        let mut confirm_open = true;
+        let keep_editing = app.tr("Keep editing");
+        let save_close = app.tr("Save and close");
+        let confirmation = app.tr("Discard changes?");
+        let message = app.tr("This cue has unsaved changes. Save them or discard them before closing.");
+        elegance::Modal::new("cue-confirm-dismiss", &mut confirm_open)
+            .heading(confirmation).alert(true).max_width(440.0)
+            .close_on_backdrop(false)
+            .footer(|ui| {
+                accept = ui.add(elegance::Button::new(save_close)).clicked();
+                discard = ui.add(elegance::Button::new(&discard_label).outline()).clicked();
+                if ui.add(elegance::Button::new(keep_editing).outline()).clicked() {
+                    session.confirm_dismiss = false;
+                }
+            }).show(context, |ui| { ui.label(message); });
+        if !confirm_open { session.confirm_dismiss = false; }
+    }
     if state.discard_on_cancel
         && !app.timeline.instances.iter().any(|instance| instance.id == instance_id)
     {
         discard = true;
     }
     if discard {
-        discard_inserted_timeline_cue(app, instance_id, state.timeline_before_insert, state.undo_before_insert);
+        if state.discard_on_cancel {
+            discard_inserted_timeline_cue(app, instance_id, state.timeline_before_insert, state.undo_before_insert);
+        } else {
+            app.restore_timeline_snapshot(session.baseline.as_ref().clone());
+            app.undo_stack = session.undo.as_ref().clone();
+            app.commit_timeline_edit();
+        }
     }
     if accept || discard || !app.timeline.instances.iter().any(|instance| instance.id == instance_id) {
         context.data_mut(|data| data.remove::<TimelineCueDialogState>(timeline_cue_dialog_id()));
+        context.data_mut(|data| data.remove::<CueDialogSession>(session_id));
+    } else {
+        context.data_mut(|data| data.insert_temp(session_id, session));
     }
 }
 
@@ -11512,6 +11624,126 @@ mod timeline_row_tests {
             discard_ui_output(output);
             assert_eq!(value, 54_267);
             assert!(field_width <= available, "field overflow at {available}: {field_width}");
+        }
+    }
+
+    #[test]
+    fn cue_dialog_responsive_columns_keep_docked_controls_compact() {
+        for width in [220.0, 480.0, 679.0] { assert!(cue_dialog_columns(width, false).is_none()); }
+        for width in [680.0, 800.0, 920.0] {
+            let (left, right) = cue_dialog_columns(width, false).unwrap();
+            assert!((left + right + 16.0 - width).abs() < 0.01);
+            assert!(left >= 260.0 && right >= 390.0);
+            assert!(cue_dialog_columns(width, true).is_none());
+        }
+    }
+
+    #[test]
+    fn cue_dialog_render_has_square_icons_centered_headers_and_responsive_cards() {
+        let _guard = crate::app::tests::lock_app_tests();
+        for width in [480.0, 1100.0] {
+            let mut app = PealayerApp::default();
+            let context = egui::Context::default();
+            let effect = crate::four_d::models::Effect::direct_control(
+                "Fog relay".into(), crate::ui::icons::PLUG.into(), 1000, "relay.5".into(), 10000, Some(5));
+            let instance = crate::four_d::models::EffectInstance::new(effect.id, 1000);
+            let id = instance.id;
+            app.timeline.templates.push(effect);
+            app.timeline.instances.push(instance);
+            context.data_mut(|data| data.insert_temp(timeline_cue_dialog_id(), TimelineCueDialogState {
+                instance_id: id, discard_on_cancel: false, timeline_before_insert: None, undo_before_insert: None,
+            }));
+            let render = |app: &mut PealayerApp, events, time| context.run_ui(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 800.0))),
+                events, time: Some(time), ..Default::default()
+            }, |_| draw_timeline_cue_dialog(app, &context));
+            for time in [0.0, 1.0, 2.0] { discard_ui_output(render(&mut app, vec![], time)); }
+            let output = render(&mut app, vec![], 3.0);
+            let text_rect = |label: &str| output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text) if text.galley.job.text == label =>
+                    Some(egui::Rect::from_min_size(text.pos, text.galley.size())),
+                _ => None,
+            }).unwrap_or_else(|| panic!("Missing {label}"));
+            let identity = text_rect("Selected cue");
+            let timing = text_rect("Timing");
+            if width >= 1100.0 {
+                assert!(timing.left() > identity.right());
+                assert!((timing.center().y - identity.center().y).abs() < 1.0);
+            } else {
+                assert!(timing.top() > identity.bottom());
+            }
+            let icon = text_rect(crate::ui::icons::PLUG);
+            assert!((icon.center().y - identity.center().y).abs() < 1.0,
+                "Single-line header must be centered with icon: {icon:?}, {identity:?}");
+            let output_title = text_rect("Direct channel value");
+            let output_subtitle = text_rect("relay.5");
+            let output_icon = output.shapes.iter().rev().find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text) if text.galley.job.text == crate::ui::icons::PLUG =>
+                    Some(egui::Rect::from_min_size(text.pos, text.galley.size())),
+                _ => None,
+            }).unwrap();
+            assert!((output_icon.center().y - output_title.union(output_subtitle).center().y).abs() < 1.0,
+                "Multiline title group must center beside its icon");
+            let squares: Vec<_> = output.shapes.iter().filter_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Rect(rect) if rect.rect.width() == 32.0 && rect.rect.height() == 32.0 => Some(rect.rect),
+                _ => None,
+            }).collect();
+            assert!(squares.len() >= 3, "All three card icon tiles must be square");
+            let close = text_rect("×");
+            assert!(close.left() > text_rect("Cue properties").right());
+            assert!(text_rect("Done").bottom() < 800.0);
+            let point = close.center();
+            discard_ui_output(output);
+            for (time, pressed) in [(4.0, true), (4.05, false)] {
+                discard_ui_output(render(&mut app, vec![egui::Event::PointerMoved(point),
+                    egui::Event::PointerButton { pos: point, button: egui::PointerButton::Primary,
+                        pressed, modifiers: egui::Modifiers::NONE }], time));
+            }
+            assert!(context.data(|data| data.get_temp::<TimelineCueDialogState>(timeline_cue_dialog_id())).is_none(),
+                "Upper-right close must dismiss unchanged cue");
+            assert_eq!(app.timeline.instances.len(), 1);
+        }
+    }
+
+    #[test]
+    fn cue_dialog_escape_confirms_edits_but_closes_unchanged_cues() {
+        let _guard = crate::app::tests::lock_app_tests();
+        for inserted in [false, true] {
+            for dirty in [false, true] {
+                let mut app = PealayerApp::default();
+                let context = egui::Context::default();
+                let effect = crate::four_d::models::Effect::direct_control(
+                    "Fog relay".into(), crate::ui::icons::PLUG.into(), 1000, "relay.5".into(), 10000, Some(5));
+                let instance = crate::four_d::models::EffectInstance::new(effect.id, 1000);
+                let id = instance.id;
+                let before = app.snapshot_timeline();
+                app.timeline.templates.push(effect);
+                app.timeline.instances.push(instance);
+                context.data_mut(|data| data.insert_temp(timeline_cue_dialog_id(), TimelineCueDialogState {
+                    instance_id: id, discard_on_cancel: inserted,
+                    timeline_before_insert: inserted.then_some(before), undo_before_insert: None,
+                }));
+                let render = |app: &mut PealayerApp, events| {
+                    discard_ui_output(context.run_ui(egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1100.0, 800.0))),
+                        events, ..Default::default()
+                    }, |_| draw_timeline_cue_dialog(app, &context)));
+                };
+                render(&mut app, vec![]);
+                if dirty { app.timeline.instances[0].start_time_ms += 250; }
+                render(&mut app, vec![egui::Event::Key {
+                    key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }]);
+                let state = context.data(|data| data.get_temp::<TimelineCueDialogState>(timeline_cue_dialog_id()));
+                assert_eq!(state.is_some(), dirty);
+                if dirty {
+                    assert!(context.data(|data| data.get_temp::<CueDialogSession>(timeline_cue_dialog_id().with(id))).unwrap().confirm_dismiss);
+                    assert_eq!(app.timeline.instances[0].start_time_ms, 1250, "confirmation must not lose edits");
+                } else {
+                    assert_eq!(app.timeline.instances.is_empty(), inserted, "only an unaccepted new cue is removed");
+                }
+            }
         }
     }
 
