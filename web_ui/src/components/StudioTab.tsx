@@ -54,7 +54,7 @@ import { PlaybackButton } from './PlaybackButton';
 import { SequenceTimeline, SequenceTimelineActions } from './SequenceTimeline';
 import { ColorDropdown } from './ColorDropdown';
 import { DesignerFieldLabel } from './DesignerFieldLabel';
-import { sequenceExtraKinds } from '../cueAuthoring';
+import { sequenceExtraKinds, sequenceLaneChoices } from '../cueAuthoring';
 import { StepRepeatFields } from './StepRepeatFields';
 import { TimeValueField } from './TimeValueField';
 import { newCueId, repeatedSequenceDurationMs, formatTimeMs, sequenceStepTemplate, moveSequenceStep, sequenceLaneKey } from '../cueAuthoring';
@@ -631,7 +631,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                   <label>{tr(locale, 'Interval')} <TimeValueField value={effectDraft.repeat_interval_ms ?? 0} human={state.human_readable_time_units !== false} onChange={value => setEffectDraft({ ...effectDraft, repeat_interval_ms: Math.round(value) })} /></label>
                   <span className="muted">{tr(locale, '0s uses the full effect length; interval is start-to-start')}</span>
                   <span>{repeatedSequenceDurationMs(effectDraft.steps, effectDraft.repeat_count ?? 1, effectDraft.repeat_interval_ms ?? 0) === null ? tr(locale, 'Effect repeat interval cannot be shorter than its length') : formatTimeMs(repeatedSequenceDurationMs(effectDraft.steps, effectDraft.repeat_count ?? 1, effectDraft.repeat_interval_ms ?? 0)!, state.human_readable_time_units !== false)}</span>
-                  <Button disabled={captureBusy || savingEffect || !state.controller_connected || !effectDraft.name?.trim()} icon={<CaretRightFilled />} onClick={() => { void sendCmd('controller_effect.publish_and_run', effectPayload(effectDraft)); }}>{tr(locale, 'Publish & Run')}</Button>
+                  <Button disabled={captureBusy || savingEffect || !state.controller_connected || !state.hardware_connected || Boolean(state.estop_active) || !effectDraft.name?.trim() || !effectDraft.steps.length || repeatedSequenceDurationMs(effectDraft.steps,effectDraft.repeat_count ?? 1,effectDraft.repeat_interval_ms ?? 0) === null} icon={<CaretRightFilled />} onClick={() => { void sendCmd('controller_effect.publish_and_run', effectPayload(effectDraft)); }}>{tr(locale, 'Publish & Run')}</Button>
                 </Space>
                 <SequenceTimeline key={effectDraft.id} steps={effectDraft.steps} locale={locale} controls={state.hardware_details?.controls} disabled={captureBusy} actionsRef={sequenceActions} extraKinds={sequenceExtraKinds(state.hardware_details)}
                   human={state.human_readable_time_units !== false} onEdit={index => {
@@ -642,7 +642,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                 <Divider titlePlacement="start" plain>{tr(locale, 'Sequence steps')}</Divider>
                 <div className="sequence-editor-web__toolbar">
                   <ConfigProvider componentDisabled={false}><EffectRecorder state={state} sendCmd={sendCmd} locale={locale} effect={effectPayload(effectDraft)} onSequenceChange={(steps, id) => setEffectDraft((current) => current ? { ...current, steps, id: String(id), reference: `effect:${id}`, is_new: false } : current)} /></ConfigProvider>
-                  <Button disabled={captureBusy} icon={<PlusOutlined />} onClick={() => sequenceActions.current?.addStep()}>{tr(locale, 'Add step')}</Button>
+                  <Button disabled={captureBusy || (!effectDraft.steps.length && !sequenceLaneChoices(state.hardware_details?.controls ?? [],sequenceExtraKinds(state.hardware_details)).length)} icon={<PlusOutlined />} onClick={() => sequenceActions.current?.addStep()}>{tr(locale, 'Add step')}</Button>
                   <Select
                     className="effect-melody-picker"
                     disabled={captureBusy || !state.controller_connected}

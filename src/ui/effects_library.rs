@@ -3481,12 +3481,17 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 .load(std::sync::atomic::Ordering::Relaxed);
                             let phase = app.controller_effect_preview_phase(&reference);
                             let stop_preview = matches!(phase, crate::app::ControllerEffectPreviewPhase::Stop);
+                            let draft = &app.effect_library_draft;
+                            let publishable = !draft.name.trim().is_empty() && draft.name.chars().count() <= 64
+                                && !draft.name.chars().any(char::is_control)
+                                && if draft.kind == "sequence" { !draft.steps.is_empty() && repeated_sequence_duration_ms(&draft.steps,draft.repeat_count,draft.repeat_interval_ms).is_ok() }
+                                else { serde_json::from_str::<serde_json::Value>(&draft.program_json).is_ok_and(|program| program.is_object()) };
                             ui.add_enabled_ui(!capture_locked, |ui| { ui.horizontal_wrapped(|ui| {
                                 if ui.button(format!("{} {}", crate::ui::icons::X, app.tr("Discard"))).clicked() {
                                     discard_designer_draft(app, ui.ctx()); discard_requested = true;
                                 }
                                 if ui
-                                    .button(if controller_reachable {
+                                    .add_enabled(!controller_reachable || publishable, egui::Button::new(if controller_reachable {
                                         format!(
                                             "{} {}",
                                             crate::ui::icons::FLOPPY_DISK,
@@ -3498,7 +3503,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                             crate::ui::icons::FLOPPY_DISK,
                                             app.tr("Keep offline draft")
                                         )
-                                    })
+                                    }))
                                     .clicked()
                                 {
                                     if controller_reachable {
@@ -3514,7 +3519,8 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 }
                                 if ui
                                     .add_enabled(
-                                        controller_reachable && app.hardware_effect_authoring.pending_operation.is_none(),
+                                        controller_reachable && app.hardware_effect_authoring.pending_operation.is_none()
+                                            && (stop_preview || (publishable && !app.estop_active && capabilities.as_ref().is_some_and(|hardware| hardware.board_connected))),
                                         egui::Button::new(format!(
                                             "{} {}",
                                             if stop_preview { crate::ui::icons::STOP_CIRCLE } else { crate::ui::icons::PLAY },

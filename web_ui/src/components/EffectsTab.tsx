@@ -57,7 +57,7 @@ import { SoundEffectFields } from './SoundEffectFields';
 import { SequenceTimeline, SequenceTimelineActions } from './SequenceTimeline';
 import { StepRepeatFields } from './StepRepeatFields';
 import { TimeValueField } from './TimeValueField';
-import { formatTimeMs, repeatedSequenceDurationMs, sequenceKindLabels, sequenceExtraKinds, sequenceStepTemplate, moveSequenceStep, sequenceLaneKey } from '../cueAuthoring';
+import { formatTimeMs, repeatedSequenceDurationMs, sequenceKindLabels, sequenceExtraKinds, sequenceStepTemplate, moveSequenceStep, sequenceLaneKey, sequenceLaneChoices } from '../cueAuthoring';
 
 interface EffectsTabProps {
   state: PlayerState;
@@ -506,7 +506,7 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale, 
             <Typography.Text type={repeatedSequenceDurationMs(draft.steps, draft.repeat_count, draft.repeat_interval_ms) === null ? 'danger' : 'secondary'}>
               {repeatedSequenceDurationMs(draft.steps, draft.repeat_count, draft.repeat_interval_ms) === null ? tr(locale, 'Effect repeat interval cannot be shorter than its length') : formatTimeMs(repeatedSequenceDurationMs(draft.steps, draft.repeat_count, draft.repeat_interval_ms)!, state.human_readable_time_units !== false)}
             </Typography.Text>
-            <Button disabled={captureBusy || saving || !state.controller_connected || !draft.name.trim()} icon={<PlayCircleOutlined />} onClick={() => { void sendCmd('controller_effect.publish_and_run', draftPayload(draft)); }}>{tr(locale, 'Publish & Run')}</Button>
+            <Button disabled={captureBusy || saving || !state.controller_connected || !state.hardware_connected || Boolean(state.estop_active) || !draft.name.trim() || !draft.steps.length || repeatedSequenceDurationMs(draft.steps,draft.repeat_count,draft.repeat_interval_ms) === null} icon={<PlayCircleOutlined />} onClick={() => { void sendCmd('controller_effect.publish_and_run', draftPayload(draft)); }}>{tr(locale, 'Publish & Run')}</Button>
           </>}
           {draft.kind !== 'audio' && <label><DesignerFieldLabel label="Color" locale={locale} /><ColorDropdown disabled={captureBusy} locale={locale}
             value={draft.color.startsWith('#') ? 'custom' : draft.color}
@@ -517,7 +517,7 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale, 
         {draft.kind === 'audio' ? <SoundEffectFields program={audioProgram} onChange={updateAudio} state={state} reference={draft.reference} apiBaseUrl={apiBaseUrl} locale={locale} sendCmd={sendCmd} /> : draft.kind === 'sequence' ? <>
           <div className="effect-editor__toolbar"><strong>{tr(locale, 'Sequence steps')}</strong><Space wrap>
             <EffectRecorder state={state} sendCmd={sendCmd} locale={locale} effect={draftPayload(draft)} onSequenceChange={(steps, id) => setDraft((current) => current ? { ...current, id: String(id), reference: `effect:${id}`, is_new: false, steps } : current)} />
-            <Button disabled={captureBusy} icon={<PlusOutlined />} onClick={() => sequenceActions.current?.addStep()}>{tr(locale, 'Add step')}</Button>
+            <Button disabled={captureBusy || (!draft.steps.length && !sequenceLaneChoices(state.hardware_details?.controls ?? [],sequenceExtraKinds(state.hardware_details)).length)} icon={<PlusOutlined />} onClick={() => sequenceActions.current?.addStep()}>{tr(locale, 'Add step')}</Button>
             <MelodySelect
               className="effect-melody-picker"
               disabled={captureBusy || !state.controller_connected}
