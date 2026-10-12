@@ -16,6 +16,8 @@
 - Never invoke egui Context accessors, widgets, or repaint callbacks from inside input/data/memory/output transactions; the context lock is non-reentrant. Snapshot inputs first, then perform the narrow transaction.
 # Continuity and native Windows assets
 
+- Modal corner-close controls must use `ui::dialog::close_button`, whose paint, hit target and focus outline share an exact square independent of text padding. Use `confirmation_modal` for unsaved-change prompts; do not reintroduce stock text-sized × buttons. Keep geometry and non-destructive Close/Escape regression coverage across fonts, display scales and interaction states.
+
 - On Windows, Pealayer-owned source, caches, staging and runtime files belong under `%LOCALAPPDATA%\Programs\Pealayer`. The canonical source is `source\Pealayer`, the shared Cargo cache is `build-cache\cargo-target`, and the running executable is `bin\pealayer.exe`. `C:\development` is reserved for development tools, not Pealayer checkouts or build artifacts. Use the shared Windows path resolver rather than inventing another checkout/cache path; preserve existing work when relocating it.
 - GitHub is the source of truth. Before each handoff, audit all relevant worktrees and local-only commits, push useful source/tests/docs/scripts to named branches, verify exact GitHub refs, and record the owning issue/PR, tests, blockers and next action. Preserve concurrent/user work; never reset or clean it away.
 - Never publish credentials, private settings/media URLs, user artwork, caches, logs or generated-only artifacts. Back up private runtime state separately before proposing a machine wipe; clean repository worktrees alone do not establish wipe readiness.

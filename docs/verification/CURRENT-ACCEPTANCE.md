@@ -10,6 +10,11 @@ statements are not the present product state.
 
 ## Delivered source and deployment
 
+- Modal corner-close controls share a fixed square with a larger, ink-centered ×.
+  Unsaved Preferences/cue confirmations retain non-destructive dismissal.
+  [Geometry contract and native fixture](square-modal-close.md) prevent regressions
+  from text padding, font metrics or display scaling.
+
 - Publishing-authority prompts share a non-mutating Dismiss action, corner close
   and Escape behavior on native/Web. [Dismissal semantics and regression](authority-modal-dismissal.md)
   distinguish dismissal from handoff rejection and retain the live/Cafe boundaries.

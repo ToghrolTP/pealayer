@@ -778,17 +778,12 @@ fn draw_preferences_editor(draft: &mut PreferencesDraft, ui: &mut egui::Ui) -> P
         });
     });
     if draft.confirm_close {
-        let mut confirm_open = true;
         let mut cancel = false;
         let mut discard = false;
         let mut save = false;
-        elegance::Modal::new("preferences-confirm-close", &mut confirm_open)
-            .heading(tr("Unsaved preferences"))
-            .header_icon(crate::ui::icons::WARNING)
-            .header_accent(elegance::Accent::Amber)
-            .alert(true)
-            .close_on_backdrop(false)
-            .footer(|ui| {
+        let confirm = crate::ui::dialog::confirmation_modal(ui.ctx(), egui::Id::new("preferences-confirm-close"),
+            &tr("Unsaved preferences"), crate::ui::icons::WARNING,
+            &tr("Save your changes before closing Preferences?"), &tr("Close"), |ui| {
                 if ui.add(elegance::Button::new(format!("{}  {}", crate::ui::icons::FLOPPY_DISK, tr("Save")))
                     .min_width(crate::ui::dialog::ACTION_BUTTON_WIDTH)).clicked() {
                     save = true;
@@ -801,9 +796,7 @@ fn draw_preferences_editor(draft: &mut PreferencesDraft, ui: &mut egui::Ui) -> P
                     .outline().min_width(crate::ui::dialog::ACTION_BUTTON_WIDTH)).clicked() {
                     cancel = true;
                 }
-            })
-            .show(ui.ctx(), |ui| {
-                ui.label(tr("Save your changes before closing Preferences?"));
+                cancel || save || discard
             });
         if save {
             outcome.request_save();
@@ -811,7 +804,7 @@ fn draw_preferences_editor(draft: &mut PreferencesDraft, ui: &mut egui::Ui) -> P
         if discard {
             outcome.discard = true;
         }
-        draft.confirm_close = confirm_open && !cancel && !save && !discard;
+        draft.confirm_close = !confirm.dismissed && !cancel && !save && !discard;
     }
     outcome
 }
@@ -2098,6 +2091,55 @@ mod tests {
         assert!(draft.is_dirty());
         draft.mark_saved();
         assert!(!draft.is_dirty());
+    }
+
+    #[test]
+    fn unsaved_preferences_corner_close_and_escape_keep_the_dirty_draft() {
+        for escape in [false, true] {
+            let context = egui::Context::default();
+            crate::ui::i18n::configure_ui_fonts(&context, false);
+            let mut draft = PreferencesDraft::new(AppConfig::default(), 0);
+            draft.config.playback_speed = 1.25;
+            draft.confirm_close = true;
+            let before = draft.config.clone();
+            let saved = draft.saved_config.clone();
+            let render = |draft: &mut PreferencesDraft, events, time| context.run_ui(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 800.0))),
+                events, time: Some(time), ..Default::default()
+            }, |ui| {
+                let outcome = draw_preferences_editor(draft, ui);
+                assert!(!outcome.save && !outcome.discard && !outcome.close);
+            });
+            for time in [0.0, 0.05, 0.1] {
+                let mut output = render(&mut draft, vec![], time);
+                output.textures_delta.clear();
+            }
+            let mut output = render(&mut draft, vec![], 0.15);
+            let point = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "×" =>
+                    Some(text.pos + text.galley.mesh_bounds.center().to_vec2()),
+                _ => None,
+            }).expect("unsaved-preferences close glyph");
+            output.textures_delta.clear();
+            if escape {
+                let mut output = render(&mut draft, vec![egui::Event::Key {
+                    key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }], 0.2);
+                output.textures_delta.clear();
+            } else {
+                for (time, pressed) in [(0.2, true), (0.25, false)] {
+                    let mut output = render(&mut draft, vec![egui::Event::PointerMoved(point),
+                        egui::Event::PointerButton { pos: point, button: egui::PointerButton::Primary,
+                            pressed, modifiers: egui::Modifiers::NONE }], time);
+                    output.textures_delta.clear();
+                }
+            }
+            assert!(!draft.confirm_close);
+            assert!(draft.is_dirty());
+            assert_eq!(draft.config, before);
+            assert_eq!(draft.saved_config, saved);
+        }
     }
 
     #[test]

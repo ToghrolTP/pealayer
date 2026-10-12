@@ -8,9 +8,101 @@ use eframe::egui;
 pub const NAVIGATION_HEIGHT: f32 = 32.0;
 pub const ACTION_HEIGHT: f32 = 28.0;
 pub const NAVIGATION_DETAIL_HEIGHT: f32 = 44.0;
-pub(crate) const ACTION_BUTTON_WIDTH: f32 = 104.0;
+pub const ACTION_BUTTON_WIDTH: f32 = 104.0;
 const CONTROL_CORNER_RADIUS: f32 = 7.0;
 const CONTROL_TEXT_SIZE: f32 = 13.0;
+pub const CLOSE_BUTTON_SIDE: f32 = 32.0;
+pub const CLOSE_GLYPH_SIZE: f32 = 22.0;
+
+/// Icon geometry is independent of text padding, font metrics and interact_size.
+/// Keep paint, hit target and focus outline inside the same exact square.
+pub fn close_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::Vec2::splat(CLOSE_BUTTON_SIDE), egui::Sense::click());
+    let visuals = ui.style().interact(&response);
+    let fill = if response.hovered() || response.is_pointer_button_down_on() || response.has_focus() {
+        visuals.weak_bg_fill
+    } else { egui::Color32::TRANSPARENT };
+    let stroke = if response.has_focus() { egui::Stroke::new(1.0, ui.visuals().selection.bg_fill) } else { visuals.bg_stroke };
+    ui.painter().rect(rect, visuals.corner_radius, fill, stroke, egui::StrokeKind::Inside);
+    let galley = ui.painter().layout_no_wrap("×".into(), egui::FontId::proportional(CLOSE_GLYPH_SIZE), visuals.fg_stroke.color);
+    // Center the visible ink, not the font's unused ascent or side bearings.
+    let ink = if galley.mesh_bounds.is_positive() { galley.mesh_bounds } else {
+        egui::Rect::from_min_size(egui::Pos2::ZERO, galley.size())
+    };
+    ui.painter().galley(rect.center() - ink.center().to_vec2(), galley, visuals.fg_stroke.color);
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, response.enabled(), label));
+    response.on_hover_text(label)
+}
+
+pub struct ConfirmationResponse {
+    pub dismissed: bool,
+    pub close: egui::Response,
+}
+
+/// Shared unsaved-change chrome. Close/Escape mean Keep editing; the caller owns
+/// Save/Discard. Backdrop clicks never silently dispose of a dirty draft.
+pub fn confirmation_modal(ctx: &egui::Context, id: egui::Id, heading: &str,
+    icon: &str, message: &str, close_label: &str, footer: impl FnOnce(&mut egui::Ui) -> bool) -> ConfirmationResponse {
+    crate::ui::sync_elegance_theme(ctx);
+    let theme = elegance::Theme::current(ctx);
+    let focus_id = id.with("previous-focus");
+    let first_frame = ctx.data(|data| data.get_temp::<Option<egui::Id>>(focus_id)).is_none();
+    if first_frame {
+        let previous = ctx.memory(|memory| memory.focused());
+        ctx.data_mut(|data| data.insert_temp(focus_id, previous));
+    }
+    let width = (ctx.content_rect().width() - 64.0).clamp(160.0, 440.0);
+    let frame = egui::Frame::new().fill(theme.palette.card)
+        .stroke(egui::Stroke::new(1.0, theme.palette.border))
+        .corner_radius(theme.card_radius).inner_margin(egui::Margin::same(12));
+    let modal = egui::Modal::new(id).frame(frame)
+        .backdrop_color(egui::Color32::from_black_alpha(150)).show(ctx, |ui| {
+            ui.ctx().accesskit_node_builder(ui.unique_id(), |node| {
+                node.set_role(egui::accesskit::Role::AlertDialog);
+                node.set_label(heading);
+            });
+            ui.set_width(width);
+            let close = ui.horizontal(|ui| {
+                // Reserve the trailing square first so long captions cannot push
+                // it out of the viewport. Text still reads start-aligned.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let close = close_button(ui, close_label);
+                    let title_width = ui.available_width().max(1.0);
+                    ui.allocate_ui_with_layout(egui::vec2(title_width, CLOSE_BUTTON_SIDE),
+                        egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            if !icon.is_empty() {
+                                let (tile, _) = ui.allocate_exact_size(egui::Vec2::splat(CLOSE_BUTTON_SIDE), egui::Sense::hover());
+                                let accent = theme.palette.amber;
+                                ui.painter().circle_filled(tile.center(), CLOSE_BUTTON_SIDE * 0.5,
+                                    egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 35));
+                                ui.painter().text(tile.center(), egui::Align2::CENTER_CENTER, icon,
+                                    egui::FontId::proportional(20.0), accent);
+                            }
+                            ui.add(egui::Label::new(theme.heading_text(heading)).truncate());
+                        });
+                    close
+                }).inner
+            }).inner;
+            if first_frame { close.request_focus(); }
+            ui.add_space(6.0);
+            ui.separator();
+            ui.add_space(8.0);
+            ui.label(message);
+            ui.add_space(8.0);
+            ui.separator();
+            let resolved = ui.with_layout(egui::Layout::right_to_left(egui::Align::Center)
+                .with_main_wrap(true), footer).inner;
+            (close, resolved)
+        });
+    let (close, resolved) = modal.inner;
+    let dismissed = close.clicked() || (modal.is_top_modal && !modal.any_popup_open
+        && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)));
+    if dismissed || resolved {
+        let previous = ctx.data_mut(|data| data.remove_temp::<Option<egui::Id>>(focus_id)).flatten();
+        if let Some(previous) = previous { ctx.memory_mut(|memory| memory.request_focus(previous)); }
+    }
+    ConfirmationResponse { dismissed, close }
+}
 
 /// Single-line input text stays centered when its row supplies extra height.
 /// Multiline/wrapped editors intentionally keep TextEdit's top alignment.
@@ -344,6 +436,102 @@ pub fn escape_pressed(ctx: &egui::Context) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn close_square_and_ink_center_survive_fonts_scaling_and_interaction_states() {
+        use super::*;
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            for prefer_persian in [false, true] {
+                let context = egui::Context::default();
+                context.set_pixels_per_point(scale);
+                crate::ui::i18n::configure_ui_fonts(&context, prefer_persian);
+                context.all_styles_mut(|style| {
+                    style.spacing.interact_size = egui::Vec2::splat(80.0);
+                    style.spacing.button_padding = egui::vec2(18.0, 14.0);
+                    style.text_styles.insert(egui::TextStyle::Button, egui::FontId::proportional(30.0));
+                });
+                let mut previous = None;
+                for frame in 0..6 {
+                    let mut rect = egui::Rect::NOTHING;
+                    let point = previous.map(|rect: egui::Rect| rect.center()).unwrap_or(egui::Pos2::ZERO);
+                    let events = if frame == 0 { vec![] } else {
+                        let mut events = vec![egui::Event::PointerMoved(point)];
+                        if frame == 2 || frame == 3 {
+                            events.push(egui::Event::PointerButton { pos: point, button: egui::PointerButton::Primary,
+                                pressed: frame == 2, modifiers: egui::Modifiers::NONE });
+                        }
+                        events
+                    };
+                    let mut output = context.run_ui(egui::RawInput { events,
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(300.0, 200.0))),
+                        time: Some(frame as f64 * 0.05), ..Default::default()
+                    }, |ui| {
+                        let response = close_button(ui, "Close");
+                        rect = response.rect;
+                        if frame == 4 { response.request_focus(); }
+                    });
+                    assert_eq!(rect.size(), egui::Vec2::splat(CLOSE_BUTTON_SIDE));
+                    if let Some(previous) = previous { assert_eq!(rect, previous); }
+                    let ink_center = output.shapes.iter().find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == "×" =>
+                            Some(text.pos + text.galley.mesh_bounds.center().to_vec2()),
+                        _ => None,
+                    }).expect("visible close glyph");
+                    assert!(ink_center.distance(rect.center()) < 0.05);
+                    assert!(CLOSE_GLYPH_SIZE > egui::TextStyle::Small.resolve(&context.global_style()).size);
+                    output.textures_delta.clear();
+                    previous = Some(rect);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn confirmation_close_is_bounded_and_backdrop_is_not_destructive() {
+        use super::*;
+        for width in [350.0, 800.0] {
+            let context = egui::Context::default();
+            let mut open = true;
+            let mut close_rect = egui::Rect::NOTHING;
+            let render = |open: &mut bool, close_rect: &mut egui::Rect, events, time| {
+                context.run_ui(egui::RawInput { events,
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 500.0))),
+                    time: Some(time), ..Default::default()
+                }, |_| {
+                    if *open {
+                        let response = confirmation_modal(&context, egui::Id::new("test-confirm"),
+                            "Unsaved preferences with a long heading", crate::ui::icons::WARNING,
+                            "Save your changes before closing Preferences?", "Close", |ui| {
+                                let _ = ui.button("Cancel"); false
+                            });
+                        *close_rect = response.close.rect;
+                        *open = !response.dismissed;
+                    }
+                })
+            };
+            for time in [0.0, 0.05, 0.1] {
+                let mut output = render(&mut open, &mut close_rect, vec![], time);
+                output.textures_delta.clear();
+            }
+            assert_eq!(close_rect.size(), egui::Vec2::splat(CLOSE_BUTTON_SIDE));
+            assert!(close_rect.left() >= 0.0 && close_rect.right() <= width);
+            let press = |point, pressed| egui::Event::PointerButton { pos: point,
+                button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+            for (time, pressed) in [(0.15, true), (0.2, false)] {
+                let mut output = render(&mut open, &mut close_rect,
+                    vec![egui::Event::PointerMoved(egui::pos2(4.0, 4.0)), press(egui::pos2(4.0, 4.0), pressed)], time);
+                output.textures_delta.clear();
+            }
+            assert!(open, "Backdrop must not dismiss an unsaved-change confirmation");
+            let point = close_rect.center();
+            for (time, pressed) in [(0.25, true), (0.3, false)] {
+                let mut output = render(&mut open, &mut close_rect,
+                    vec![egui::Event::PointerMoved(point), press(point, pressed)], time);
+                output.textures_delta.clear();
+            }
+            assert!(!open, "Square Close must keep editing, without a footer action");
+        }
+    }
+
     #[test]
     fn inline_caption_fonts_and_baselines_are_stable_with_an_inside_outline() {
         use super::*;

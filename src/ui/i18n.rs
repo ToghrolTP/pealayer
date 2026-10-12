@@ -2,7 +2,9 @@ use crate::config::AppLanguage;
 use eframe::egui;
 use std::sync::Arc;
 
-pub(crate) fn configure_ui_fonts(context: &egui::Context, prefer_vazirmatn: bool) {
+/// Also used by isolated native UI fixtures so their font metrics match the app.
+#[doc(hidden)]
+pub fn configure_ui_fonts(context: &egui::Context, prefer_vazirmatn: bool) {
     let mut fonts = egui::FontDefinitions::default();
     egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
 
