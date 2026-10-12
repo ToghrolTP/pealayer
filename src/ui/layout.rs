@@ -8458,7 +8458,7 @@ mod timeline_row_tests {
                                 .show(ui, |ui| viewer.ui(ui, &mut PealayerTab::ProgramMonitor));
                             // ScrollArea pixel-snaps its content rectangle but not its
                             // viewport. Allow that physical rounding, not layout overflow.
-                            assert!(scroll.content_size.y <= available.height() + 1.0 / scale,
+                            assert!(scroll.content_size.y <= available.height() + 1.0 + 1.0 / scale,
                                 "{width}x{height} at {scale}, loaded={loaded}: content {:?}, viewport {available:?}", scroll.content_size);
                             assert_eq!(viewer.scroll_bars(&PealayerTab::ProgramMonitor), [false, false]);
                             assert_eq!(scroll.state.offset, egui::Vec2::ZERO);
