@@ -462,22 +462,19 @@ fn render_widget(
             ));
         }
         Widget::Connection => {
-            let ready = hardware.is_some_and(|hardware| hardware.board_connected);
             let requested = app
                 .engine_handle
                 .connection_requested
                 .load(std::sync::atomic::Ordering::Relaxed);
-            let text = if app.is_connected && ready {
+            let availability = crate::four_d::programming::hardware_availability(app.is_connected, requested, hardware);
+            let ready = availability == crate::four_d::programming::HardwareAvailability::Ready;
+            let text = if ready {
                 hardware
                     .map(|hardware| app.display_text(&hardware.board_name))
                     .filter(|name| !name.is_empty())
                     .unwrap_or_else(|| app.tr("Connected board"))
-            } else if app.is_connected {
-                app.tr("PCController connected; board not connected")
-            } else if requested {
-                app.tr("Connecting…")
             } else {
-                app.tr("Hardware: Disconnected")
+                app.tr(availability.label())
             };
             (
                 format!("{} {text}", crate::ui::icons::PLUG),
@@ -1029,6 +1026,28 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn programming_latch_status_is_painted_without_a_disconnected_claim() {
+        let _lock=crate::app::tests::lock_app_tests();
+        let context=egui::Context::default();
+        let mut app=PealayerApp::default();
+        app.is_connected=true;
+        app.engine_handle.is_connected.store(true,std::sync::atomic::Ordering::Relaxed);
+        install_hardware_snapshot_for_test(&app);
+        let mut output=context.run_ui(egui::RawInput {
+            screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(1600.0,420.0))),..Default::default()
+        },|ui| draw(&mut app,ui));
+        assert!(output.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Text(text) if text.galley.text().contains("Programming latch"))));
+        assert!(!output.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Text(text) if text.galley.text().contains("Disconnected") || text.galley.text().contains("not connected"))));
+        output.textures_delta.clear();
+    }
+
+    fn install_hardware_snapshot_for_test(app:&PealayerApp) {
+        crate::four_d::engine::install_hardware_snapshot(&app.engine_handle.hardware_capabilities,&app.engine_handle.hardware_revision,
+            Some(HardwareCapabilities {board_connected:true,
+                programming:Some(crate::four_d::programming::HardwareProgrammingState{latch_known:true,programming_latch:true,revision:1,..Default::default()}),..Default::default()}));
+    }
 
     #[test]
     fn regular_metrics_are_centered_muted_and_color_only_with_real_limits_or_hot() {

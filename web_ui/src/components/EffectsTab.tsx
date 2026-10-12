@@ -8,6 +8,7 @@ const newAudioId = () => {
   return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
 };
 import { ColorPicker } from './ColorPicker';
+import { hardwareOutputsAvailable } from '../hardwareAvailability';
 import { ColorDropdown } from './ColorDropdown';
 import { DesignerFieldLabel } from './DesignerFieldLabel';
 import {
@@ -506,7 +507,7 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale, 
             <Typography.Text type={repeatedSequenceDurationMs(draft.steps, draft.repeat_count, draft.repeat_interval_ms) === null ? 'danger' : 'secondary'}>
               {repeatedSequenceDurationMs(draft.steps, draft.repeat_count, draft.repeat_interval_ms) === null ? tr(locale, 'Effect repeat interval cannot be shorter than its length') : formatTimeMs(repeatedSequenceDurationMs(draft.steps, draft.repeat_count, draft.repeat_interval_ms)!, state.human_readable_time_units !== false)}
             </Typography.Text>
-            <Button disabled={captureBusy || saving || !state.controller_connected || !state.hardware_connected || Boolean(state.estop_active) || !draft.name.trim() || !draft.steps.length || repeatedSequenceDurationMs(draft.steps,draft.repeat_count,draft.repeat_interval_ms) === null} icon={<PlayCircleOutlined />} onClick={() => { void sendCmd('controller_effect.publish_and_run', draftPayload(draft)); }}>{tr(locale, 'Publish & Run')}</Button>
+            <Button disabled={captureBusy || saving || !hardwareOutputsAvailable(state) || Boolean(state.estop_active) || !draft.name.trim() || !draft.steps.length || repeatedSequenceDurationMs(draft.steps,draft.repeat_count,draft.repeat_interval_ms) === null} icon={<PlayCircleOutlined />} onClick={() => { void sendCmd('controller_effect.publish_and_run', draftPayload(draft)); }}>{tr(locale, 'Publish & Run')}</Button>
           </>}
           {draft.kind !== 'audio' && <label><DesignerFieldLabel label="Color" locale={locale} /><ColorDropdown disabled={captureBusy} locale={locale}
             value={draft.color.startsWith('#') ? 'custom' : draft.color}

@@ -10,6 +10,11 @@ statements are not the present product state.
 
 ## Delivered source and deployment
 
+- Programming latch/handoff state is separate from coordinator/board loss in
+  native/Web presentation and typed output rejection handling.
+  [Paired contract and verification](programming-latch-state.md) retain safety
+  latches, genuine disconnect behavior and explicit paired installation gates.
+
 - Native/Web Simple and Program Monitor seekbars share exactly one pointer-time
   hover card containing chapter/keyframe metadata and optional thumbnails.
   [Hover ownership and regression coverage](seek-hover-card.md) preserve saved

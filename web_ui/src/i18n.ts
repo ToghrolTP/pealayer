@@ -1,6 +1,9 @@
 export type UiLocale = 'en' | 'fa';
 
 const fa: Record<string, string> = {
+  'Programming latch active': 'قفل برنامه‌ریزی فعال است',
+  'Programming board…': 'در حال برنامه‌ریزی برد…',
+  'Programming recovery pending': 'بازیابی برنامه‌ریزی در انتظار است',
   'Keyframe': 'فریم کلیدی',
   'Show thumbnails in Simple seek preview': 'نمایش تصویر در پیش‌نمایش جابه‌جایی فضای ساده',
   'Show thumbnails in NLE seek preview': 'نمایش تصویر در پیش‌نمایش جابه‌جایی فضای تدوین',
