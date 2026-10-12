@@ -9080,20 +9080,8 @@ fn observe_default_mpv_client(mpv_client: &libmpv2::Mpv) {
     let _ = mpv_client.observe_property("paused-for-cache", libmpv2::Format::Flag, 22);
 }
 
-#[cfg(not(test))]
-fn default_mpv_client(mpv: &libmpv2::Mpv) -> Arc<libmpv2::Mpv> {
-    let mpv_client = Arc::new(
-        mpv.create_client(None)
-            .expect("Failed to create mpv client"),
-    );
-    observe_default_mpv_client(&mpv_client);
-    mpv_client
-}
-
-#[cfg(test)]
 static TEST_MPV_CLIENT: std::sync::OnceLock<Arc<libmpv2::Mpv>> = std::sync::OnceLock::new();
 
-#[cfg(test)]
 fn shared_test_mpv_client() -> Arc<libmpv2::Mpv> {
     Arc::clone(TEST_MPV_CLIENT.get_or_init(|| {
         let mpv_client = Arc::new(
@@ -9106,10 +9094,9 @@ fn shared_test_mpv_client() -> Arc<libmpv2::Mpv> {
     }))
 }
 
-#[cfg(test)]
 fn default_mpv_client(_mpv: &libmpv2::Mpv) -> Arc<libmpv2::Mpv> {
     let mpv_client = shared_test_mpv_client();
-    // Every unit fixture starts with an empty client event queue. The player
+    // Every fixture starts with an empty client event queue. The player
     // core and client are both process-global. Rust's test harness creates a
     // fresh worker thread for each test even with `--test-threads=1`, so a
     // thread-local client would still be destroyed between fixtures and race
@@ -9129,14 +9116,10 @@ impl Default for PealayerApp {
         let (web_state_tx, _web_state_rx) = std::sync::mpsc::channel();
         let (_web_cmd_tx, web_cmd_rx) = std::sync::mpsc::channel();
         let (media_cmd_tx, media_cmd_rx) = std::sync::mpsc::channel();
-        let engine_handle = crate::four_d::engine::spawn_engine();
-        // Production app instances need the independent playback-clock client.
-        // Unit fixtures exercise the shared observed client below and must not
-        // create an additional native client/thread for every `default()` call:
-        // asynchronous libmpv teardown can otherwise race the Windows GNU test
-        // harness after a fixture has already been dropped.
-        #[cfg(not(test))]
-        engine_handle.attach_playback_clock(mpv);
+        // Fixtures exercise UI, layout, and command state without background transport
+        // or hardware worker threads. A memory-only test engine avoids spawning detached
+        // media sync threads and client teardown races during test execution.
+        let engine_handle = crate::four_d::engine::memory_only_test_engine();
         let frame_cache = std::sync::Arc::new(std::sync::RwLock::new(
             crate::mpv::frame_cache::FrameCache::new(128 * 1024 * 1024),
         ));
