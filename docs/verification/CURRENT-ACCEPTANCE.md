@@ -10,6 +10,11 @@ statements are not the present product state.
 
 ## Delivered source and deployment
 
+- No-hardware authoring uses PCController's shared production firmware. Native
+  settings/front-panel caches bootstrap without a controller GUI; isolated
+  [integration and sensor-mapping evidence](virtual-development.md) retain the
+  physical/peripheral and installed-GUI/deployment limits.
+
 - OS media sessions use factual cached tags, contextual shared capabilities,
   bounded timeline updates and explicit stale-state cleanup. Windows owns all
   transport/position/rate callbacks and cached alpha artwork in one session.

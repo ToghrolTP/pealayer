@@ -1636,7 +1636,25 @@ impl ControllerClient {
     }
 
     pub fn hardware_capabilities(&mut self) -> Result<HardwareCapabilities, String> {
-        let snapshot = self.call("controller.snapshot", json!({}))?;
+        let mut snapshot = self.call("controller.snapshot", json!({}))?;
+        // A headless native coordinator may have HELLO/status but no GUI owner
+        // to seed settings/front-panel reads. Bootstrap these read-only caches
+        // once from the current native target, never per animation/frame and
+        // never add synchronous panel waits to a busy physical UART refresh.
+        let native_target = snapshot["connected"].as_bool() == Some(true)
+            && snapshot.pointer("/hello/build_features").and_then(Value::as_u64).is_some_and(|features| features & 128 != 0);
+        if native_target {
+            let mut seeded = false;
+            if snapshot["have_settings"].as_bool() == Some(false) {
+                self.call("controller.command.execute", json!({"command":"settings"}))?;
+                seeded = true;
+            }
+            if snapshot["have_front_panel"].as_bool() == Some(false) {
+                self.call("controller.front_panel", json!({}))?;
+                seeded = true;
+            }
+            if seeded { snapshot = self.call("controller.snapshot", json!({}))?; }
+        }
         super::programming::HardwareProgrammingState::parse(&snapshot["programming"])?;
         let peripherals = self.call("controller.peripherals.get", json!({}))?;
         let folders = parse_channel_folders(&peripherals)?;
