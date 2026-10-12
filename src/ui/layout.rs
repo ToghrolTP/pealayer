@@ -629,7 +629,7 @@ fn pan_timeline_offset(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum TimelineWheelAction {
+pub(super) enum TimelineWheelAction {
     Zoom(f32),
     HorizontalScroll(f32),
     VerticalScroll(f32),
@@ -657,20 +657,20 @@ fn timeline_wheel_action(
 }
 
 fn timeline_wheel_behavior(app: &PealayerApp, modifiers: egui::Modifiers) -> crate::config::TimelineWheelBehavior {
-    if modifiers.shift { app.timeline_shift_wheel_action }
-    else if modifiers.ctrl || modifiers.command { app.timeline_ctrl_wheel_action }
-    else if modifiers.alt { app.timeline_alt_wheel_action }
-    else { app.timeline_plain_wheel_action }
+    crate::config::TimelineWheelPreferences {
+        plain: app.timeline_plain_wheel_action, ctrl: app.timeline_ctrl_wheel_action,
+        shift: app.timeline_shift_wheel_action, alt: app.timeline_alt_wheel_action,
+    }.behavior(modifiers)
 }
 
-fn timeline_wheel_modifiers(input: &egui::InputState) -> egui::Modifiers {
+pub(super) fn timeline_wheel_modifiers(input: &egui::InputState) -> egui::Modifiers {
     input.events.iter().rev().find_map(|event| match event {
         egui::Event::MouseWheel { modifiers, .. } => Some(*modifiers),
         _ => None,
     }).unwrap_or(input.modifiers)
 }
 
-fn timeline_wheel_over_surface(ui: &egui::Ui, surface: egui::Rect,
+pub(super) fn timeline_wheel_over_surface(ui: &egui::Ui, surface: egui::Rect,
     behavior: crate::config::TimelineWheelBehavior) -> Option<(TimelineWheelAction, f32)> {
     if !ui.rect_contains_pointer(surface) { return None; }
     // Surface-class touchscreens expose pan and pinch together. Preserve both
@@ -3082,6 +3082,18 @@ fn timeline_track_rows(app: &PealayerApp) -> Vec<TimelineTrackRow> {
         .into_iter()
         .filter(|row| row.linked && row.visible && !hardware_row_has_analog_track(app, row))
         .collect()
+}
+
+fn timeline_cue_accepts_row(effect: &crate::four_d::models::Effect, row: &TimelineTrackRow) -> bool {
+    if !row.enabled { return false; }
+    if let Some(direct) = &effect.direct_control {
+        return row.control_key.as_deref().is_some_and(|key| direct.can_retarget_to(key));
+    }
+    match row.kind {
+        TimelineTrackKind::Relay(relay) => effect.target.is_compatible_with_relay(relay)
+            && effect.actions.iter().map(|action| action.relay_id).collect::<std::collections::BTreeSet<_>>().len() <= 1,
+        _ => false,
+    }
 }
 
 fn hardware_row_has_analog_track(app: &PealayerApp, row: &TimelineTrackRow) -> bool {
@@ -16132,14 +16144,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         / timeline_track_height)
                                                         .floor()
                                                         as i32;
-                                                    if let Some(target_r) = relay_for_timeline_row(&timeline_rows, track_index) {
+                                                    if let Some(row) = usize::try_from(track_index).ok().and_then(|index| timeline_rows.get(index)) {
                                                         let target_compatible = self.app.timeline.instances.iter()
                                                             .find(|i| i.id == drag.instance_id)
                                                             .and_then(|inst| self.app.timeline.templates.iter().find(|t| t.id == inst.effect_id))
-                                                            .map(|tmpl| tmpl.target.is_compatible_with_relay(target_r))
-                                                            .unwrap_or(true);
+                                                            .is_some_and(|tmpl| timeline_cue_accepts_row(tmpl, row));
 
-                                                        if !self.app.track_locked.contains(&target_r) && target_compatible {
+                                                        let unlocked = row.enabled && row.relay_ids.iter().all(|id| !self.app.track_locked.contains(id));
+                                                        if unlocked && target_compatible {
                                                             let row_y = tracks_top
                                                                 + track_index as f32
                                                                     * timeline_track_height;
@@ -16151,7 +16163,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                 ),
                                                             );
                                                             painter.rect_filled(dest_rect, 0.0, egui::Color32::from_rgba_unmultiplied(46, 204, 113, 25)); // Faint green highlight
-                                                        } else if !target_compatible && !self.app.track_locked.contains(&target_r) {
+                                                        } else if !target_compatible && unlocked {
                                                             let row_y = tracks_top
                                                                 + track_index as f32
                                                                     * timeline_track_height;
@@ -16689,6 +16701,18 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     crate::app::DragMode::Move => {
                                                         // Vertical track switching
                                                         let mut target_relay = None;
+                                                        let target_row = ui.ctx().pointer_latest_pos().and_then(|pointer| {
+                                                            let index = ((pointer.y - tracks_top) / timeline_track_height).floor() as i32;
+                                                            usize::try_from(index).ok().and_then(|index| timeline_rows.get(index))
+                                                        });
+                                                        if let Some(row) = target_row
+                                                            && row.relay_ids.iter().all(|id| !self.app.track_locked.contains(id))
+                                                            && self.app.timeline.instances.iter().find(|i| i.id == drag_state.instance_id)
+                                                                .and_then(|i| self.app.timeline.templates.iter().find(|t| t.id == i.effect_id))
+                                                                .is_some_and(|template| timeline_cue_accepts_row(template, row))
+                                                            && let Some(key) = &row.control_key {
+                                                            self.app.retarget_channel_timeline_cue(drag_state.instance_id, key, &row.name);
+                                                        }
                                                         let moving_seat = self.app.timeline.instances.iter()
                                                             .find(|i| i.id == drag_state.instance_id)
                                                             .and_then(|i| self.app.timeline.templates.iter().find(|t| t.id == i.effect_id))
@@ -16700,18 +16724,19 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                 && let Some(row) = timeline_rows.get(index)
                                                                 && let TimelineTrackKind::Hardware(key) = &row.kind
                                                                 && matches!(key.as_str(), "seat.a" | "seat.b")
+                                                                && row.enabled
                                                                 && row.relay_ids.iter().all(|id| !self.app.track_locked.contains(id))
                                                             {
                                                                 self.app.retarget_seat_timeline_cue(drag_state.instance_id, key, &row.name);
                                                                 self.app.selected_timeline_track = Some(row.key.clone());
                                                             }
                                                         }
-                                                        let moving_direct_pwm = self.app.timeline.instances.iter()
+                                                        let moving_direct_channel = self.app.timeline.instances.iter()
                                                             .find(|instance| instance.id == drag_state.instance_id)
                                                             .and_then(|instance| self.app.timeline.templates.iter().find(|template| template.id == instance.effect_id))
                                                             .and_then(|template| template.direct_control.as_ref())
-                                                            .is_some_and(|cue| cue.control_key.starts_with("pwm."));
-                                                        if !moving_seat && !moving_direct_pwm && let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
+                                                            .is_some_and(|cue| cue.motion.is_none());
+                                                        if !moving_seat && !moving_direct_channel && let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
                                                     let relative_y = mouse_pos.y - tracks_top;
                                                     let track_index = (relative_y
                                                                 / timeline_track_height)
@@ -16722,8 +16747,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                     let is_compatible = self.app.timeline.instances.iter()
                                                                         .find(|i| i.id == drag_state.instance_id)
                                                                         .and_then(|inst| self.app.timeline.templates.iter().find(|t| t.id == inst.effect_id))
-                                                                        .map(|tmpl| tmpl.target.is_compatible_with_relay(target_r))
-                                                                        .unwrap_or(true);
+                                                                        .zip(target_row)
+                                                                        .is_some_and(|(tmpl, row)| timeline_cue_accepts_row(tmpl, row));
                                                                     if is_compatible {
                                                                         target_relay = Some(target_r);
                                                                     }
@@ -16774,7 +16799,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                 if inst_id == drag_state.instance_id {
                                                                     if let Some(r) = target_relay {
                                                                         if let Some(template) = self.app.timeline.templates.iter_mut().find(|t| t.id == inst.effect_id) {
-                                                                            template.actions = crate::four_d::patterns::generate_constant(r, true, template.duration_ms);
+                                                                            for action in &mut template.actions { action.relay_id = r; }
+                                                                            template.target = crate::four_d::models::HardwareTarget::for_relay(r);
                                                                         }
                                                                     }
                                                                 }
@@ -16782,9 +16808,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         }
 
                                                         let start_secs = primary_new_start as f64 / 1000.0;
-                                                        let track_name = target_relay
-                                                            .map(relay_identifier_label)
-                                                            .unwrap_or_else(|| "Track".to_string());
+                                                        let track_name = target_row.map(|row| row.name.clone())
+                                                            .or_else(|| self.app.timeline.instances.iter().find(|i| i.id == drag_state.instance_id)
+                                                                .and_then(|i| self.app.timeline.templates.iter().find(|t| t.id == i.effect_id))
+                                                                .map(|effect| effect.name.clone())).unwrap_or_default();
                                                         format!("⏱ Start: {:.3}s | {}", start_secs, track_name)
                                                     }
                                                     crate::app::DragMode::ResizeRight => {

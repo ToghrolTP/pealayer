@@ -178,9 +178,10 @@ pub fn icon_mime(path: &Path) -> &'static str {
 pub fn sync_native_window_icon(ctx: &egui::Context, state: PlaybackIconState) {
     set_current_state(state);
     let revision = crate::platform::interop::live_config_revision();
-    let stamp = (state, revision);
+    let hwnd = crate::platform::windows::get_registered_hwnd();
+    let stamp = (state, revision, hwnd);
     let already_synced = ctx.data_mut(|data| {
-        data.get_temp::<(PlaybackIconState, u64)>(egui::Id::new(
+        data.get_temp::<(PlaybackIconState, u64, isize)>(egui::Id::new(
             "pealayer-playback-window-icon-stamp",
         )) == Some(stamp)
     });
@@ -195,10 +196,10 @@ pub fn sync_native_window_icon(ctx: &egui::Context, state: PlaybackIconState) {
     let source = icon_source_signature(&config, state);
     let changed = ctx.data_mut(|data| {
         let id = egui::Id::new("pealayer-playback-window-icon");
-        if data.get_temp::<u64>(id) == Some(source) {
+        if data.get_temp::<(u64, isize)>(id) == Some((source, hwnd)) {
             false
         } else {
-            data.insert_temp(id, source);
+            data.insert_temp(id, (source, hwnd));
             true
         }
     });
@@ -212,7 +213,6 @@ pub fn sync_native_window_icon(ctx: &egui::Context, state: PlaybackIconState) {
     // Title-only changes still update the notification area's tooltip. Windows
     // copies the borrowed HWND icon; WM_SETICON updates it again after eframe
     // processes the viewport command below.
-    let hwnd = crate::platform::windows::get_registered_hwnd();
     if hwnd != 0 {
         let _ = crate::platform::windows::update_system_tray_icon(
             hwnd, &crate::config::resolved_app_name(&config),
@@ -222,12 +222,27 @@ pub fn sync_native_window_icon(ctx: &egui::Context, state: PlaybackIconState) {
         return;
     }
 
-    let icon = icon_bytes(&config, state).and_then(|(_, bytes)| icon_data_from_bytes(&bytes))
+    apply_native_window_icon(ctx, &config, state);
+}
+
+/// Main and independently hosted Preferences use the same shell-quality path.
+pub(crate) fn apply_native_window_icon(ctx: &egui::Context, config: &AppConfig, state: PlaybackIconState) {
+    let icon = icon_bytes(config, state).and_then(|(_, bytes)| icon_data_from_bytes(&bytes))
         .or_else(|| {
             eframe::icon_data::from_png_bytes(include_bytes!("../assets/pealayer-icon.png")).ok()
         });
     if let Some(icon) = icon {
         let icon = std::sync::Arc::new(icon);
+        #[cfg(target_os = "windows")]
+        {
+            let hwnd = crate::platform::windows::get_registered_hwnd();
+            if hwnd != 0 {
+                match crate::platform::window_icons::apply(hwnd, &icon) {
+                    Ok(()) => return,
+                    Err(error) => log::warn!("Native application icon update: {error}"),
+                }
+            }
+        }
         let viewports = ctx.input(|input| input.raw.viewports.keys().copied().collect::<Vec<_>>());
         for viewport in viewports {
             ctx.send_viewport_cmd_to(viewport, egui::ViewportCommand::Icon(Some(icon.clone())));
@@ -392,11 +407,11 @@ mod tests {
         sync_native_window_icon(&ctx, PlaybackIconState::Stopped);
 
         let stamp = ctx.data_mut(|data| {
-            data.get_temp::<(PlaybackIconState, u64)>(egui::Id::new(
+            data.get_temp::<(PlaybackIconState, u64, isize)>(egui::Id::new(
                 "pealayer-playback-window-icon-stamp",
             ))
         });
-        assert_eq!(stamp, Some((PlaybackIconState::Stopped, revision)));
+        assert_eq!(stamp, Some((PlaybackIconState::Stopped, revision, crate::platform::windows::get_registered_hwnd())));
         crate::platform::interop::set_live_config(crate::config::AppConfig::default());
     }
 

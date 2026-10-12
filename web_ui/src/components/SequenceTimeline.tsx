@@ -4,15 +4,17 @@ import { CopyOutlined, DeleteOutlined, SelectOutlined, ScissorOutlined } from '@
 import { deleteSequenceCues, duplicateSequenceCues, editStepInstance, formatTimeMs, moveSequenceStep, selectCueIndices, sequenceKindLabels, sequenceLaneName, sequenceLaneKey, sequenceLaneChoices, sequenceStepTemplate, sequenceNeedsQuantize, quantizeSequence, stepInstances, stepRepetition, SequenceStep } from '../cueAuthoring';
 import { sequenceDurationMs } from '../melodyCatalog';
 import { tr, UiLocale } from '../i18n';
+import { defaultTimelineWheelPreferences, timelineWheelAction, sequenceWheelNavigation, TimelineWheelPreferences } from '../timelineWheel';
 
 /** Pure authoring gestures: never seek, preview or send hardware commands. */
 export interface SequenceTimelineActions { addStep: () => void }
-export function SequenceTimeline<T extends SequenceStep>({ steps, onChange, locale, controls = [], disabled = false, onSelect, onEdit, human = true, extraKinds = [], actionsRef }: {
+export function SequenceTimeline<T extends SequenceStep>({ steps, onChange, locale, controls = [], disabled = false, onSelect, onEdit, human = true, extraKinds = [], actionsRef, wheelPreferences = defaultTimelineWheelPreferences }: {
   steps: T[]; onChange: (steps: T[]) => void; locale: UiLocale;
   controls?: Array<{ key: string; name: string; default_name?: string; kind: string; locked?: boolean }>;
   disabled?: boolean; onSelect?: (index: number) => void; human?: boolean;
   onEdit?: (index: number) => void;
   extraKinds?: string[]; actionsRef?: { current: SequenceTimelineActions | null };
+  wheelPreferences?: TimelineWheelPreferences;
 }) {
   const [selected, setSelected] = useState(() => new Set(steps.length ? [0] : []));
   const primary = useRef(0);
@@ -28,6 +30,8 @@ export function SequenceTimeline<T extends SequenceStep>({ steps, onChange, loca
   const [selectedLane, setSelectedLane] = useState('');
   const insertionTime = useRef<number | undefined>(undefined);
   const [quantum, setQuantum] = useState(50);
+  const [scale, setScale] = useState(.08);
+  const scaleRef = useRef(.08);
   const laneChoices = sequenceLaneChoices(controls, extraKinds);
   useEffect(() => {
     const element = container.current; if (!element) return;
@@ -52,8 +56,30 @@ export function SequenceTimeline<T extends SequenceStep>({ steps, onChange, loca
   const laneFor = sequenceLaneKey;
   const lanes = [...new Set([...controls.filter(c => ['motion', 'seat'].includes(c.kind) && !c.locked).map(c => c.key), ...steps.map(laneFor)])];
   const span = Math.max(1000, sequenceDurationMs(steps));
-  const width = Math.max(600, span * .08 + 160);
-  const scale = .08;
+  const width = Math.max(600, span * scale + 160);
+  useEffect(() => {
+    const element = container.current; if (!element) return;
+    const wheel = (event: WheelEvent) => {
+      if (disabled || (event.target as HTMLElement).closest('input,textarea,select,[contenteditable="true"],.ant-select')) return;
+      event.preventDefault(); event.stopPropagation();
+      if (drag.current) return;
+      const unit = event.deltaMode === 1 ? 20 : event.deltaMode === 2 ? element.clientHeight : 1;
+      const {action, delta} = timelineWheelAction(event, wheelPreferences);
+      if (action === 'none' || delta === 0) return;
+      const next = sequenceWheelNavigation(scaleRef.current, action, delta * unit, element.scrollLeft, element.scrollTop,
+        event.clientX - element.getBoundingClientRect().left, element.clientWidth, element.clientHeight, element.scrollHeight, span);
+      if (next.scale !== scaleRef.current) {
+        // Resize before scrolling so the browser cannot clamp to the old extent.
+        const content = element.firstElementChild as HTMLElement | null;
+        if (content) content.style.minWidth = `${next.width + 140}px`;
+        element.querySelectorAll<HTMLElement>('.sequence-authoring__lane').forEach(lane => { lane.style.width = `${next.width}px`; });
+        scaleRef.current = next.scale; setScale(next.scale);
+      }
+      element.scrollLeft = next.left; element.scrollTop = next.top;
+    };
+    element.addEventListener('wheel', wheel, {passive: false});
+    return () => element.removeEventListener('wheel', wheel);
+  }, [disabled, span, wheelPreferences]);
   const choose = (index: number, toggle = false, range = false) => {
     if (steps[index]) setSelectedLane(laneFor(steps[index])); insertionTime.current = undefined;
     const selectionAnchor = anchor.current;

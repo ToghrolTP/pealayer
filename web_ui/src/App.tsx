@@ -658,8 +658,8 @@ const App: React.FC = () => {
                 seekbarHoverThumbnails={Boolean(appConfig?.nle_seekbar_hover_thumbnails)}
                 surface="timeline"
                 timelineWheelPreferences={state.timeline_wheel_preferences ?? {
-                  plain: appConfig?.timeline_plain_wheel_action ?? 'zoom',
-                  ctrl: appConfig?.timeline_ctrl_wheel_action ?? 'vertical_scroll',
+                  plain: appConfig?.timeline_plain_wheel_action ?? 'vertical_scroll',
+                  ctrl: appConfig?.timeline_ctrl_wheel_action ?? 'zoom',
                   shift: appConfig?.timeline_shift_wheel_action ?? 'horizontal_scroll',
                   alt: appConfig?.timeline_alt_wheel_action ?? 'zoom',
                 }}

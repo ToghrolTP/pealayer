@@ -240,7 +240,8 @@ struct StandalonePreferencesApp {
     draft: PreferencesDraft,
     owner_hwnd: isize,
     native_window_initialized: bool,
-    applied_appearance: Option<(AppTheme, bool, bool, [u8; 3], crate::config::ColorPalette)>,
+    applied_appearance: Option<(AppTheme, bool, bool, [u8; 3], crate::config::ColorPalette,
+        crate::config::UiControlDensity, crate::config::UiAnimationMode)>,
     config_watcher: Option<crate::config::ConfigFileWatcher>,
     config_reload_due: Option<std::time::Instant>,
     branding_config: Option<AppConfig>,
@@ -296,10 +297,7 @@ impl StandalonePreferencesApp {
             let name = crate::config::resolved_app_name(config);
             let language = crate::config::resolve_language(crate::config::resolved_language_preference(config));
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("{} — {name}", native_tr(language, "Preferences"))));
-            if let Some(icon) = crate::branding::icon_bytes(config, crate::branding::PlaybackIconState::Stopped)
-                .and_then(|(_, bytes)| crate::branding::icon_data_from_bytes(&bytes)) {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Icon(Some(std::sync::Arc::new(icon))));
-            }
+            crate::branding::apply_native_window_icon(ctx, config, crate::branding::PlaybackIconState::Stopped);
             self.branding_config = Some(config.clone());
         }
         let appearance = (
@@ -308,6 +306,8 @@ impl StandalonePreferencesApp {
             self.draft.config.windows_mica_backdrop,
             crate::ui::platform_accent_rgb(&self.draft.config),
             self.draft.config.color_palette,
+            self.draft.config.ui_control_density,
+            self.draft.config.ui_animation_mode,
         );
         if self.applied_appearance != Some(appearance) {
             crate::ui::configure_native_appearance(ctx, &self.draft.config);
@@ -2219,6 +2219,27 @@ mod tests {
             )
             .drop_without_applying_deltas();
         }
+    }
+
+    #[test]
+    fn open_preferences_applies_density_and_motion_changes_without_reopening() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let mut helper = StandalonePreferencesApp {
+            draft: PreferencesDraft::new(AppConfig::default(), 0), owner_hwnd: 0,
+            native_window_initialized: false, applied_appearance: None,
+            config_watcher: None, config_reload_due: None, branding_config: None,
+        };
+        let ctx = egui::Context::default();
+        helper.apply_appearance(&ctx);
+        assert_eq!(ctx.global_style().spacing.interact_size.y, 24.0);
+        helper.draft.config.ui_control_density = crate::config::UiControlDensity::Comfortable;
+        helper.draft.config.ui_animation_mode = crate::config::UiAnimationMode::Disabled;
+        helper.apply_appearance(&ctx);
+        assert_eq!(ctx.global_style().spacing.interact_size.y, 32.0);
+        assert_eq!(ctx.global_style().animation_time, 0.0);
+        helper.draft.restore_saved();
+        helper.apply_appearance(&ctx);
+        assert_eq!(ctx.global_style().spacing.interact_size.y, 24.0);
     }
 
     #[test]

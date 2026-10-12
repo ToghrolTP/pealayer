@@ -6,7 +6,7 @@ export interface TimelineWheelPreferences {
   alt: TimelineWheelBehavior;
 }
 export const defaultTimelineWheelPreferences: TimelineWheelPreferences = {
-  plain: 'zoom', ctrl: 'vertical_scroll', shift: 'horizontal_scroll', alt: 'zoom',
+  plain: 'vertical_scroll', ctrl: 'zoom', shift: 'horizontal_scroll', alt: 'zoom',
 };
 
 export function timelineWheelAction(
@@ -24,4 +24,18 @@ export function timelineWheelAction(
 export function timelineZoomAtPointer(zoom: number, delta: number, scrollLeft: number, pointerX: number) {
   const nextZoom = Math.max(1, Math.min(25, zoom * Math.exp(-delta * .002)));
   return { zoom: nextZoom, scrollLeft: Math.max(0, (scrollLeft + pointerX) * nextZoom / zoom - pointerX) };
+}
+
+export function sequenceWheelNavigation(scale: number, action: TimelineWheelBehavior, delta: number,
+  left: number, top: number, pointerX: number, viewportWidth: number, viewportHeight: number,
+  contentHeight: number, durationMs: number) {
+  const nextScale = action === 'zoom' ? Math.max(.03, Math.min(.32, scale * Math.exp(-delta * .002))) : scale;
+  const pointer = Math.max(0, Math.min(viewportWidth, pointerX));
+  const timeX = Math.max(0, left + pointer - 140);
+  const anchored = nextScale !== scale && timeX > 0 ? timeX * nextScale / scale + 140 - pointer : left;
+  const horizontal = action === 'horizontal_scroll' || (action === 'vertical_scroll' && contentHeight <= viewportHeight);
+  const width = Math.max(600, durationMs * nextScale + 160);
+  return { scale: nextScale, width,
+    left: Math.max(0, Math.min(width + 140 - viewportWidth, anchored + (horizontal ? delta : 0))),
+    top: Math.max(0, Math.min(contentHeight - viewportHeight, top + (action === 'vertical_scroll' && !horizontal ? delta : 0))) };
 }

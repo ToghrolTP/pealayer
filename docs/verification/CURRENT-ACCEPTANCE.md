@@ -10,6 +10,12 @@ statements are not the present product state.
 
 ## Delivered source and deployment
 
+- Effect Designer wheel routing, same-kind direct relay/PWM retargeting, renamed
+  drag captions, native alpha/titlebar/tray icon ownership and live Preferences
+  density preview have focused native regressions.
+  [Causes, tests and deployment boundaries](native-icons-and-timeline-navigation.md)
+  retain restart, Cafe launch and physical/audio timing acceptance gates.
+
 - Inputs, selector triggers and single-line choices share one Control density
   preference and a consistent chevron. Buzzer loop hover geometry is stable;
   Stop follows owned melody/tone activity across native, Web and tray.

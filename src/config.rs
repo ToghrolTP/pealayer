@@ -63,6 +63,22 @@ pub struct TimelineWheelPreferences {
     pub alt: TimelineWheelBehavior,
 }
 
+impl TimelineWheelPreferences {
+    pub(crate) fn behavior(self, modifiers: eframe::egui::Modifiers) -> TimelineWheelBehavior {
+        if modifiers.shift { self.shift }
+        else if modifiers.ctrl || modifiers.command { self.ctrl }
+        else if modifiers.alt { self.alt }
+        else { self.plain }
+    }
+}
+
+impl Default for TimelineWheelPreferences {
+    fn default() -> Self {
+        Self { plain: TimelineWheelBehavior::VerticalScroll, ctrl: TimelineWheelBehavior::Zoom,
+            shift: TimelineWheelBehavior::HorizontalScroll, alt: TimelineWheelBehavior::Zoom }
+    }
+}
+
 /// Stable, persisted actions available in the native timeline toolbar.
 ///
 /// The overflow button is deliberately not represented here: it is always
