@@ -1,4 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
+import { hardwareOutputsAvailable } from '../hardwareAvailability';
 import { DeleteOutlined, LoadingOutlined, StopOutlined } from '@ant-design/icons';
 import { Button, Checkbox, Modal, Popconfirm, Select, Space, Tooltip } from 'antd';
 import type { PlayerState } from './RemoteControlTab';
@@ -35,7 +36,7 @@ export const EffectRecorder: React.FC<EffectRecorderProps> = ({ state, sendCmd, 
   }, [recording]);
   const active = Boolean(recording?.active);
   const pending = Boolean(recording?.pending);
-  const canRecord = state.controller_connected && state.hardware_connected;
+  const canRecord = hardwareOutputsAvailable(state);
   const recordDot = <span className="record-dot" />;
   return <Space wrap size={8} className="effect-capture-controls">
     <Select aria-label={tr(locale, 'Capture mode')} value={mode} disabled={active || pending} onChange={nextMode => {

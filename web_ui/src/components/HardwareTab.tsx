@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { hardwareAvailability, hardwareLabels, hardwareOutputsAvailable } from '../hardwareAvailability';
 import { RfManager } from './RfManager';
 import { PublishingAuthority } from './PublishingAuthority';
 import { ColorPicker } from './ColorPicker';
@@ -116,6 +117,8 @@ const telemetryValue = (value: number | boolean | null | undefined, unit = '') =
 
 export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale }) => {
   const details = state.hardware_details;
+  const outputAvailable = hardwareOutputsAvailable(state);
+  const availability = hardwareAvailability(state);
   const [stripPixels, setStripPixels] = useState<number | null>(null);
   const [stripColor, setStripColor] = useState('#38D27A');
   const [stripSecondColor, setStripSecondColor] = useState('#2478FF');
@@ -351,7 +354,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
                 max={100}
                 step={0.1}
                 value={value}
-                disabled={control.locked || !state.hardware_connected}
+                disabled={control.locked || !outputAvailable}
                 onChange={(percent) => {
                   setPwmDrafts((current) => ({ ...current, [control.key]: percent }));
                   if (control.channel !== null && control.channel !== undefined) {
@@ -366,13 +369,13 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
               style={{ '--indicator-color': control.indicator_color || control.color || 'var(--green)' } as React.CSSProperties}
               aria-label={tr(locale, isMotionControl(control) ? control.direction === 'up' ? 'Up' : control.direction === 'down' ? 'Down' : control.direction === 'stop' ? 'Stopped' : 'State unavailable from the board' : active ? 'On' : 'Off')}
               title={tr(locale, isMotionControl(control) ? control.direction === 'up' ? 'Up' : control.direction === 'down' ? 'Down' : control.direction === 'stop' ? 'Stopped' : 'State unavailable from the board' : active ? 'Turn off' : 'Turn on')}
-              disabled={!immediateToggle || control.locked || !state.hardware_connected || Boolean(state.estop_active)}
+              disabled={!immediateToggle || control.locked || !outputAvailable || Boolean(state.estop_active)}
               {...(immediateToggle ? actionInputProps(control, immediateToggle) : {})}
             />}
             <Space.Compact className="hardware-control__actions">
               {visibleActions(control).map((action) => <Tooltip title={action.name || action.verb} key={action.id}>
                 <Button
-                  disabled={control.locked || !state.hardware_connected || (state.estop_active && action.verb !== 'stop')}
+                  disabled={control.locked || !outputAvailable || (state.estop_active && action.verb !== 'stop')}
                   danger={action.verb === 'stop'}
                   type={(action.verb.toLowerCase() === 'on' && active) || (action.verb.toLowerCase() === 'off' && !active) ? 'primary' : 'default'}
                   {...actionInputProps(control, action)}
@@ -386,7 +389,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
         </section>)}
       </div>,
     }));
-  }, [details, locale, pwmDrafts, sendCmd, state.estop_active, state.hardware_connected, dragKey, dropKey, controls, optimisticActive, channelFolders]);
+  }, [details, locale, pwmDrafts, sendCmd, state.estop_active, outputAvailable, dragKey, dropKey, controls, optimisticActive, channelFolders]);
 
   if (!details || !state.controller_connected) {
     return <section className="surface-page hardware-page">
@@ -436,7 +439,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
       </div>
       <Space wrap>
         {state.hardware_connected && <Button icon={<ToolOutlined />} onClick={() => setManagerOpen(true)}>{tr(locale, 'Manage channels')}</Button>}
-        <Tag color={state.hardware_connected ? 'success' : 'warning'}>{state.hardware_connected ? tr(locale, 'Connected') : tr(locale, 'Board unavailable')}</Tag>
+        <Tag color={availability === 'ok' ? 'success' : 'warning'}>{tr(locale, hardwareLabels[availability])}</Tag>
         <Button
           className={`hardware-estop ${state.estop_active ? 'is-active' : ''}`}
           danger
@@ -707,7 +710,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
         <Button
           type="primary"
           icon={<PlayCircleOutlined />}
-          disabled={!state.hardware_connected || !selectedMelody || Boolean(state.estop_active)}
+          disabled={!outputAvailable || !selectedMelody || Boolean(state.estop_active)}
           onClick={() => sendCmd('hardware.buzzer.melody', { name: selectedMelody, repeats: melodyLoop ? 0 : melodyRepeats })}
         >{tr(locale, 'Play melody')}</Button>
         <Button danger={Boolean(details.buzzer?.playing)} disabled={!state.hardware_connected || !details.buzzer?.playing} icon={<StopOutlined />} onClick={() => sendCmd('hardware.buzzer.stop')}>{tr(locale, 'Stop buzzer')}</Button>
@@ -720,7 +723,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
         <label><span>{tr(locale, 'Duration')}</span><InputNumber min={1} max={65535} addonAfter="ms" value={toneDuration} onChange={(value) => setToneDuration(value ?? 250)} /></label>
         <Button
           icon={<SoundOutlined />}
-          disabled={!state.hardware_connected || Boolean(state.estop_active)}
+          disabled={!outputAvailable || Boolean(state.estop_active)}
           onClick={() => sendCmd('hardware.buzzer.tone', { frequency_hz: toneFrequency, duration_ms: toneDuration })}
         >{tr(locale, 'Play tone')}</Button>
       </div>

@@ -6134,7 +6134,7 @@ fn draw_control_context_menu(
                 for action in &control.actions {
                     if ui
                         .add_enabled(
-                            !app.estop_active && !control.locked,
+                            !app.estop_active && !control.locked && !app.hardware_programming_blocked(),
                             egui::Button::new(format!(
                                 "{} {}",
                                 crate::ui::icons::action(&action.verb),
@@ -6156,7 +6156,7 @@ fn draw_control_context_menu(
         ] {
             if ui
                 .add_enabled(
-                    !app.estop_active && !control.locked,
+                    !app.estop_active && !control.locked && !app.hardware_programming_blocked(),
                     egui::Button::new(format!("{icon} {label}")),
                 )
                 .clicked()
@@ -6457,6 +6457,7 @@ fn draw_buzzer_tool(
     let pending = app.board_operation.is_some();
     let playing = capabilities.buzzer.is_playing();
     let (can_start, can_stop) = buzzer_action_availability(capabilities.board_connected, pending, app.estop_active, playing);
+    let can_start = can_start && !capabilities.programming_blocked();
     let board_silent = capabilities
         .settings
         .as_ref()
@@ -6763,7 +6764,7 @@ fn draw_addressable_strip_tool(
             .unwrap_or_default()
     });
     let pending = app.hardware_effect_authoring.pending_operation.is_some();
-    let mutation_enabled = !pending && !app.estop_active;
+    let mutation_enabled = !pending && !app.estop_active && !app.hardware_programming_blocked();
     let live = strip.running || app.hardware_effect_authoring.preview_active;
 
     board_tool_card(
@@ -7471,7 +7472,7 @@ fn draw_compact_control_card(
                         if let Some(stop) = contextual_stop_action(capabilities, control) {
                             let response = hardware_header_widget(ui, &control.key, "stop", |ui| ui
                                 .add_enabled(
-                                    !app.estop_active && !control.locked,
+                                    !app.estop_active && !control.locked && !app.hardware_programming_blocked(),
                                     egui::Button::new(crate::ui::icons::action(&stop.verb))
                                         .min_size(egui::vec2(28.0, 26.0)),
                                 )
@@ -7523,7 +7524,7 @@ fn draw_compact_control_card(
                         for action in ordered.into_iter().rev() {
                             let response = ui
                                 .add_enabled(
-                                    !app.estop_active && !control.locked,
+                                    !app.estop_active && !control.locked && !app.hardware_programming_blocked(),
                                     egui::Button::new(crate::ui::icons::action(&action.verb))
                                         .min_size(egui::vec2(28.0, 26.0)),
                                 )
@@ -7568,7 +7569,7 @@ fn draw_compact_control_card(
                         ] {
                             let response = ui
                                 .add_enabled(
-                                    !app.estop_active && !control.locked,
+                                    !app.estop_active && !control.locked && !app.hardware_programming_blocked(),
                                     egui::Button::new(icon).min_size(egui::vec2(28.0, 26.0)),
                                 )
                                 .on_hover_text(label);
@@ -7767,7 +7768,7 @@ fn draw_control_card(
                                             "stop",
                                             |ui| {
                                                 ui.add_enabled(
-                                                    !app.estop_active && !control.locked,
+                                                    !app.estop_active && !control.locked && !app.hardware_programming_blocked(),
                                                     egui::Button::new(crate::ui::icons::action(
                                                         &stop.verb,
                                                     )),
@@ -7913,7 +7914,7 @@ fn draw_control_card(
                                         }
                                         let response = ui
                                             .add_enabled_ui(
-                                                !app.estop_active && !control.locked,
+                                                !app.estop_active && !control.locked && !app.hardware_programming_blocked(),
                                                 |ui| {
                                                     ui.add_sized(
                                                         [ui.available_width(), 28.0],
@@ -7975,7 +7976,7 @@ fn draw_control_card(
                                         ));
                                 }
                                 let response = uis[index]
-                                    .add_enabled_ui(!app.estop_active && !control.locked, |ui| {
+                                    .add_enabled_ui(!app.estop_active && !control.locked && !app.hardware_programming_blocked(), |ui| {
                                         ui.add_sized([ui.available_width(), 28.0], button)
                                     })
                                     .inner;
@@ -8056,7 +8057,7 @@ fn draw_compact_relay_group(
                         }
                         let handle = hardware_channel_drag_handle(app, ui, control, HardwareChannelDragSurface::Monitor);
                         let response = ui
-                            .add_enabled(!app.estop_active && !control.locked, button)
+                            .add_enabled(!app.estop_active && !control.locked && !app.hardware_programming_blocked(), button)
                             .on_hover_text(format!(
                                 "{} · {}{}",
                                 crate::ui::i18n::visual_text(app.language, &control.name),
@@ -13956,6 +13957,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             ui.add_space(8.0);
                         }
 
+                        let availability = crate::four_d::programming::hardware_availability(self.app.is_connected, false, capabilities.as_ref());
+                        if matches!(availability, crate::four_d::programming::HardwareAvailability::Programming | crate::four_d::programming::HardwareAvailability::ProgrammingLatch | crate::four_d::programming::HardwareAvailability::ProgrammingRecovery) {
+                            ui.colored_label(ui.visuals().warn_fg_color,
+                                format!("{} {}", crate::ui::icons::LOCK, self.app.tr(availability.label())));
+                        }
                         if !self.app.is_connected {
                             ui.label(egui::RichText::new(
                                 self.app.tr("Hardware Disconnected")

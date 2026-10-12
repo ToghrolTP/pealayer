@@ -75,6 +75,7 @@ export interface PlayerState {
     mode: 'simple' | 'nle';
   }>;
   controller_connected?: boolean;
+  hardware_connection_requested?: boolean;
   hardware_connected?: boolean;
   hardware_endpoint?: string;
   hardware_transport?: string | null;
@@ -98,6 +99,12 @@ export interface PlayerState {
     supports_lcd_display?: boolean;
   } | null;
   hardware_details?: {
+    outputs_available: boolean;
+    programming: {
+      active: boolean; phase: string; restoration_pending: boolean; intentional_uart_release: boolean;
+      latch_known: boolean; programming_latch: boolean; revision: number; connection_generation: number; updated_at: string;
+      device: { port: string; vid?: string; pid?: string; serial_number?: string; instance_id?: string; friendly_name?: string };
+    } | null;
     board_name: string;
     capability_bits: number;
     host_instance_id: string;

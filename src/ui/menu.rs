@@ -699,9 +699,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     }
 
                     // Connection visual indicator dot
-                    let dot_color = if app.is_connected {
+                    let hardware = app.advertised_hardware();
+                    let availability = crate::four_d::programming::hardware_availability(app.is_connected, connection_requested, hardware.as_ref());
+                    let dot_color = if availability == crate::four_d::programming::HardwareAvailability::Ready {
                         egui::Color32::from_rgb(46, 204, 113) // Green
-                    } else if connection_requested {
+                    } else if app.is_connected || connection_requested {
                         egui::Color32::from_rgb(241, 196, 15) // Amber
                     } else {
                         egui::Color32::from_rgb(231, 76, 60) // Red
@@ -712,7 +714,9 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     ui.painter()
                         .circle_filled(dot_rect.center(), 4.0, dot_color);
 
-                    let status_lbl = if app.is_connected {
+                    let status_lbl = if app.is_connected && matches!(availability, crate::four_d::programming::HardwareAvailability::Programming | crate::four_d::programming::HardwareAvailability::ProgrammingLatch | crate::four_d::programming::HardwareAvailability::ProgrammingRecovery) {
+                        app.tr(availability.label())
+                    } else if app.is_connected {
                         if crate::four_d::controller::is_controller_endpoint(&app.serial_port) {
                             app.advertised_hardware()
                                 .filter(|capabilities| capabilities.board_connected)

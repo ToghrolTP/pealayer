@@ -138,6 +138,8 @@ impl HardwareBuzzerState {
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HardwareCapabilities {
     pub board_connected: bool,
+    pub programming: Option<super::programming::HardwareProgrammingState>,
+    pub connection_generation: u64,
     pub board_name: String,
     pub board_identity: HardwareBoardIdentity,
     pub port: HardwarePort,
@@ -990,7 +992,14 @@ impl HardwareCapabilities {
         let same_host = self.host_instance_id.is_empty()
             || current.host_instance_id.is_empty()
             || self.host_instance_id == current.host_instance_id;
+        if self.host_instance_id == current.host_instance_id && self.connection_generation < current.connection_generation {
+            *self = current.clone();
+            return;
+        }
         if same_host {
+            if let Some(live) = &current.programming
+                && self.programming.as_ref().is_none_or(|state| live.revision > state.revision)
+            { self.programming = Some(live.clone()); }
             for live in &current.operations {
                 if let Some(refreshed) = self.operations.iter_mut().find(|value| value.id == live.id) {
                     if !refreshed.at_least_as_new_as(live) { *refreshed = live.clone(); }
@@ -1039,6 +1048,28 @@ impl HardwareCapabilities {
         let changed = self.front_panel.as_ref() != Some(&panel);
         self.front_panel = Some(panel);
         Ok(changed)
+    }
+
+    pub fn programming_latched(&self) -> bool {
+        match &self.programming {
+            Some(state) => state.latch_known && state.programming_latch,
+            None => self.board_connected && self.settings.as_ref().is_some_and(|settings| settings.programming_latch),
+        }
+    }
+
+    pub fn programming_blocked(&self) -> bool {
+        self.programming_latched() || self.programming.as_ref().is_some_and(|state| state.active)
+    }
+
+    pub fn outputs_available(&self) -> bool {
+        self.board_connected && !self.programming_blocked()
+    }
+
+    pub(crate) fn apply_programming_state(&mut self, value: &Value) -> bool {
+        let Ok(state) = super::programming::HardwareProgrammingState::parse(value) else { return false; };
+        if self.programming.as_ref().is_some_and(|current| state.revision <= current.revision) { return false; }
+        self.programming = Some(state);
+        true
     }
 
     pub(crate) fn mark_board_disconnected(&mut self) -> bool {
@@ -1556,19 +1587,19 @@ impl ControllerClient {
         }
     }
 
-    pub fn send_command(&mut self, command: Command) -> Result<(), String> {
+    pub(crate) fn send_command(&mut self, command: Command) -> Result<(), ControllerRpcError> {
         if matches!(command, Command::RelaySet { id: 0, .. }) {
-            return Err("relay ID must be non-zero".to_string());
+            return Err("relay ID must be non-zero".to_string().into());
         }
         if matches!(command, Command::MotionSide { side, motion } if side > 1 || motion > 2) {
-            return Err("motion side or direction is outside the controller contract".to_string());
+            return Err("motion side or direction is outside the controller contract".to_string().into());
         }
         match command {
             Command::Ping => {
-                self.call("controller.ping", json!({}))?;
+                self.call_detailed("controller.ping", json!({}))?;
             }
             Command::RelaySet { id, state } => {
-                self.call(
+                self.call_detailed(
                     "controller.command.execute",
                     json!({"command": format!("relay {id} {}", if state { "on" } else { "off" })}),
                 )?;
@@ -1581,24 +1612,24 @@ impl ControllerClient {
                     2 => "down",
                     _ => unreachable!("validated above"),
                 };
-                self.call(
+                self.call_detailed(
                     "controller.command.execute",
                     json!({"command": format!("relay side {side} {motion}")}),
                 )?;
             }
             Command::PwmSet { channel, value } => {
                 let percent = f64::from(value) * 100.0 / 255.0;
-                self.call(
+                self.call_detailed(
                     "controller.pwm.set",
                     json!({"channel": channel, "percent": percent}),
                 )?;
             }
             Command::AllOff => {
-                self.call(
+                self.call_detailed(
                     "controller.command.execute",
                     json!({"command": "relay off"}),
                 )?;
-                self.call("controller.pwm.off", json!({}))?;
+                self.call_detailed("controller.pwm.off", json!({}))?;
             }
         }
         Ok(())
@@ -1606,6 +1637,7 @@ impl ControllerClient {
 
     pub fn hardware_capabilities(&mut self) -> Result<HardwareCapabilities, String> {
         let snapshot = self.call("controller.snapshot", json!({}))?;
+        super::programming::HardwareProgrammingState::parse(&snapshot["programming"])?;
         let peripherals = self.call("controller.peripherals.get", json!({}))?;
         let folders = parse_channel_folders(&peripherals)?;
         validate_effect_snapshot(&snapshot)?;
@@ -2010,6 +2042,7 @@ fn parse_hardware_capabilities_with_front_panel(
         .get("connected")
         .and_then(Value::as_bool)
         .unwrap_or(false);
+    let programming = snapshot.get("programming").and_then(|value| super::programming::HardwareProgrammingState::parse(value).ok());
     let capability_bits = snapshot
         .pointer("/hello/capabilities")
         .and_then(Value::as_u64)
@@ -2887,6 +2920,8 @@ fn parse_hardware_capabilities_with_front_panel(
 
     HardwareCapabilities {
         board_connected,
+        programming,
+        connection_generation: snapshot.get("connection_generation").and_then(Value::as_u64).unwrap_or(0),
         board_name,
         board_identity,
         port,
@@ -3482,6 +3517,32 @@ mod tests {
     }
 
     #[test]
+    fn programming_rejections_keep_the_command_stream_and_never_replay_outputs() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let address = listener.local_addr().unwrap();
+        let server = thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            for method in ["controller.ping", "controller.app.instance.report", "controller.command.execute", "controller.pwm.set", "controller.command.execute", "controller.command.execute", "controller.ping"] {
+                let mut line=String::new(); reader.read_line(&mut line).unwrap();
+                let request:Value=serde_json::from_str(&line).unwrap();
+                assert_eq!(request["method"],method);
+                let response=if matches!(method,"controller.ping"|"controller.app.instance.report") {
+                    json!({"jsonrpc":"2.0","id":request["id"],"result":{"ok":true}})
+                } else { json!({"jsonrpc":"2.0","id":request["id"],"error":{"code":-32000,"message":"programming latch active","data":{"kind":"device_rejected","resource":"board","retryable":false}}}) };
+                writeln!(stream,"{response}").unwrap();
+            }
+        });
+        let mut client=ControllerClient::connect_playback_events(&format!("pccontroller://{address}")).unwrap();
+        for command in [Command::RelaySet{id:5,state:true},Command::PwmSet{channel:0,value:100},Command::MotionSide{side:0,motion:1},Command::AllOff] {
+            let error=client.send_command(command).unwrap_err();
+            assert!(!error.transport_failed); assert_eq!(error.kind.as_deref(),Some("device_rejected"));
+        }
+        assert_eq!(client.call_detailed("controller.ping",json!({})).unwrap()["ok"],true);
+        server.join().unwrap();
+    }
+
+    #[test]
     fn hot_and_operation_events_remain_authoritative_and_ordered() {
         let mut hardware = HardwareCapabilities::default();
         hardware.board_connected = true;
@@ -3532,6 +3593,8 @@ mod tests {
                     "controller.ping" | "controller.app.instance.report" => json!({"jsonrpc":"2.0","id":request["id"],"result":{"ok":true}}),
                     "controller.snapshot" => json!({"jsonrpc":"2.0","id":request["id"],"result":{
                         "connected": true,
+                        "connection_generation": 1,
+                        "programming": super::super::programming::HardwareProgrammingState::default(),
                         "hello": {"capabilities": CAPABILITY_ADDRESSABLE_LED | CAPABILITY_SEGMENTS},
                         "have_front_panel": true,
                         "front_panel": {
