@@ -10,6 +10,12 @@ statements are not the present product state.
 
 ## Delivered source and deployment
 
+- Cafe's current native package and both PCController hosts are now updated;
+  Cafe is the paused authority and Erfan is a connected cache-only consumer.
+  Erfan's new Pealayer package is staged but its updater invocation was blocked.
+  [Paired delivery receipt and remaining action](paired-peer-deployment.md)
+  supersede the older Cafe blanket smoke-launch blocker, not physical/soak gates.
+
 - No-hardware authoring uses PCController's shared production firmware. Native
   settings/front-panel caches bootstrap without a controller GUI; isolated
   [integration and sensor-mapping evidence](virtual-development.md) retain the
