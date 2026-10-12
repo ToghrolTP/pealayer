@@ -8198,6 +8198,27 @@ impl PealayerApp {
         true
     }
 
+    /// Move one direct relay/PWM placement without rewriting its values or pattern.
+    /// The UI validates the authoritative destination's lock/capability first.
+    pub(crate) fn retarget_channel_timeline_cue(&mut self, instance_id: uuid::Uuid, key: &str, name: &str) -> bool {
+        let Some(direct) = self.timeline.instances.iter().find(|i| i.id == instance_id)
+            .and_then(|i| self.timeline.templates.iter().find(|t| t.id == i.effect_id))
+            .and_then(|t| t.direct_control.as_ref()) else { return false; };
+        if direct.motion.is_some() || direct.control_key == key || !direct.can_retarget_to(key) { return false; }
+        let label = if key.starts_with("relay.") {
+            self.tr(if direct.value_basis_points >= 5_000 { "On" } else { "Off" })
+        } else { format!("{:.2}%", f32::from(direct.value_basis_points) / 100.0) };
+        let Some(id) = self.isolate_template_for_instance(instance_id) else { return false; };
+        let template = self.timeline.templates.iter_mut().find(|t| t.id == id).expect("isolated template");
+        template.direct_control.as_mut().expect("validated direct cue").control_key = key.to_string();
+        template.name = format!("{name} · {label}");
+        if let Some(relay) = key.strip_prefix("relay.").and_then(|value| value.parse::<u8>().ok()) {
+            template.target = crate::four_d::models::HardwareTarget::for_relay(relay);
+            for action in &mut template.actions { action.relay_id = relay; }
+        }
+        true
+    }
+
     pub(crate) fn commit_timeline_edit(&mut self) {
         self.persist_timeline_track_preferences();
         self.sync_timeline_engine();
@@ -9911,6 +9932,44 @@ pub(crate) mod tests {
         assert_eq!(edited.direct_control.as_ref().unwrap().motion.as_ref().unwrap().side, 1);
         assert_eq!(edited.duration_ms, 500);
         assert_eq!(edited.name, "Seat Right · Down");
+    }
+
+    #[test]
+    fn channel_retarget_preserves_shared_templates_values_and_all_edges() {
+        use crate::four_d::models::{AtomicAction, DirectCueBehavior, Effect, EffectInstance, HardwareTarget};
+        let _lock = lock_app_tests();
+        for (source, target, relay) in [("relay.5", "relay.6", Some(5)), ("pwm.0", "pwm.15", None)] {
+            let mut app = PealayerApp::default();
+            let mut effect = Effect::direct_control("Custom channel · Off".into(), "plug".into(), 750, source.into(), 0, relay);
+            let direct = effect.direct_control.as_mut().unwrap();
+            direct.behavior = if relay.is_some() { DirectCueBehavior::SetKeep } else { DirectCueBehavior::Ramp };
+            direct.end_value_basis_points = 7_123;
+            if let Some(relay_id) = relay { effect.actions.push(AtomicAction { relay_id, state: true, offset_ms: 123 }); }
+            let original = effect.clone();
+            let first = EffectInstance::new(effect.id, 321);
+            let second = EffectInstance::new(effect.id, 654);
+            let second_id = second.id;
+            app.timeline.templates.push(effect);
+            app.timeline.instances = vec![first.clone(), second];
+            assert!(!app.retarget_channel_timeline_cue(second_id, if relay.is_some() { "pwm.0" } else { "relay.6" }, "Wrong kind"));
+            assert!(!app.retarget_channel_timeline_cue(second_id, "pwm.16", "Invalid"));
+            assert!(app.retarget_channel_timeline_cue(second_id, target, "Renamed channel"));
+            assert!(!app.retarget_channel_timeline_cue(second_id, target, "Renamed channel"));
+            assert_eq!(app.timeline.templates.iter().find(|t| t.id == first.effect_id).unwrap(), &original);
+            let second = &app.timeline.instances[1];
+            let edited = app.timeline.templates.iter().find(|t| t.id == second.effect_id).unwrap();
+            assert_eq!(second.start_time_ms, 654);
+            assert_eq!(edited.duration_ms, original.duration_ms);
+            let cue = edited.direct_control.as_ref().unwrap();
+            let before = original.direct_control.as_ref().unwrap();
+            assert_eq!(cue.control_key, target);
+            assert_eq!((cue.behavior, cue.value_basis_points, cue.end_value_basis_points), (before.behavior, before.value_basis_points, before.end_value_basis_points));
+            assert!(edited.name.starts_with("Renamed channel · "));
+            if relay.is_some() {
+                assert_eq!(edited.target, HardwareTarget::Relay(6));
+                assert_eq!(edited.actions.iter().map(|a| (a.relay_id, a.state, a.offset_ms)).collect::<Vec<_>>(), vec![(6, false, 0), (6, true, 123)]);
+            }
+        }
     }
 
     #[test]

@@ -2403,7 +2403,9 @@ pub fn register_system_tray_icon(hwnd_raw: isize, tip: &str) -> Result<(), Strin
         let instance: windows::Win32::Foundation::HINSTANCE = module.into();
         let window_icon = SendMessageW(hwnd, WM_GETICON,
             Some(windows::Win32::Foundation::WPARAM(ICON_SMALL2 as usize)), None).0;
-        let hicon = if window_icon != 0 {
+        let hicon = if let Some(owned) = crate::platform::window_icons::tray_icon(hwnd_raw) {
+            HICON(owned as *mut _)
+        } else if window_icon != 0 {
             HICON(window_icon as *mut _)
         } else {
             LoadIconW(Some(instance), PCWSTR(1usize as *const u16))
@@ -2444,6 +2446,7 @@ fn refresh_system_tray_window_icon(hwnd_raw: isize, icon_raw: isize) -> Result<(
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::Shell::{NIF_ICON, NIM_MODIFY, NOTIFYICONDATAW, Shell_NotifyIconW};
     use windows::Win32::UI::WindowsAndMessaging::HICON;
+    let icon_raw = crate::platform::window_icons::tray_icon(hwnd_raw).unwrap_or(icon_raw);
     let mut nid = NOTIFYICONDATAW {
         cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
         hWnd: HWND(hwnd_raw as *mut _),
@@ -2513,7 +2516,8 @@ pub fn update_system_tray_icon(hwnd_raw: isize, tip: &str) -> Result<(), String>
     let hwnd = HWND(hwnd_raw as *mut _);
 
     unsafe {
-        let icon = SendMessageW(hwnd, WM_GETICON, Some(WPARAM(ICON_SMALL2 as usize)), Some(LPARAM(0))).0;
+        let icon = crate::platform::window_icons::tray_icon(hwnd_raw).unwrap_or_else(||
+            SendMessageW(hwnd, WM_GETICON, Some(WPARAM(ICON_SMALL2 as usize)), Some(LPARAM(0))).0);
         let mut nid = NOTIFYICONDATAW {
             cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
             hWnd: hwnd,

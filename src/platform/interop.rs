@@ -3158,7 +3158,9 @@ fn controller_subscription_params() -> Value {
     serde_json::json!({
         "topics":["state","events","status","opcodes"],
         "interval_ms":500,
-        "state_interval_ms":250,
+        // Display/PWM frames must reach the repaint path at screen cadence;
+        // the independent slow status sample remains at 500 ms.
+        "state_interval_ms":16,
         "after_id":0
     })
 }
@@ -3398,7 +3400,7 @@ mod tests {
     fn controller_subscription_keeps_edges_immediate_and_bounds_continuous_frames() {
         let params = controller_subscription_params();
         assert_eq!(params["interval_ms"], 500);
-        assert_eq!(params["state_interval_ms"], 250);
+        assert_eq!(params["state_interval_ms"], 16);
         assert!(params["topics"]
             .as_array()
             .unwrap()

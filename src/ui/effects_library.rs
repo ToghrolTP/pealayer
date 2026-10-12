@@ -1362,6 +1362,30 @@ fn paint_sequence_cue_label(
     );
 }
 
+fn sequence_wheel_navigation(
+    zoom: f32, offset: egui::Vec2, viewport: egui::Rect, content: egui::Vec2,
+    label_width: f32, duration_ms: u64, action: super::layout::TimelineWheelAction, pointer_x: f32,
+) -> (f32, egui::Vec2) {
+    use super::layout::TimelineWheelAction as Action;
+    let (next_zoom, translation) = match action {
+        Action::Zoom(delta) => ((zoom * (delta * 0.002).exp()).clamp(30.0, 320.0), egui::Vec2::ZERO),
+        Action::HorizontalScroll(delta) => (zoom, egui::vec2(delta, 0.0)),
+        // Short sequences have no hidden rows: pan time instead of doing nothing.
+        Action::VerticalScroll(delta) if content.y <= viewport.height() => (zoom, egui::vec2(delta, 0.0)),
+        Action::VerticalScroll(delta) => (zoom, egui::vec2(0.0, delta)),
+        Action::MultiGesture { zoom_factor, translation } => ((zoom * zoom_factor).clamp(30.0, 320.0), translation),
+    };
+    let pointer = (pointer_x - viewport.left()).clamp(0.0, viewport.width());
+    let time_x = (offset.x + pointer - label_width).max(0.0);
+    let anchored_x = if next_zoom != zoom { time_x * next_zoom / zoom + label_width - pointer } else { offset.x };
+    let next_width = label_width + (duration_ms as f32 * next_zoom / 1_000.0 + 80.0)
+        .max((viewport.width() - label_width).max(360.0));
+    (next_zoom, egui::vec2(
+        (anchored_x - translation.x).clamp(0.0, (next_width - viewport.width()).max(0.0)),
+        (offset.y - translation.y).clamp(0.0, (content.y - viewport.height()).max(0.0)),
+    ))
+}
+
 fn draw_sequence_timeline(
     ui: &mut egui::Ui,
     draft: &mut ControllerEffectDraft,
@@ -1369,6 +1393,7 @@ fn draw_sequence_timeline(
     human_readable_time_units: bool,
     hide_cue_text_overflow: bool,
     capabilities: Option<&crate::four_d::controller::HardwareCapabilities>,
+    wheel_preferences: crate::config::TimelineWheelPreferences,
 ) {
     let state_prefix = (
         "effect-sequence-timeline",
@@ -1495,12 +1520,23 @@ fn draw_sequence_timeline(
                 label_width + timeline_width,
                 ruler_height + (lanes.len() + 1) as f32 * row_height,
             );
-            egui::ScrollArea::horizontal()
+            let mut pending_wheel = None;
+            let mut scroll = egui::ScrollArea::both()
                 .id_salt((state_prefix.clone(), "scroll"))
+                .max_height(240.0)
+                .content_margin(egui::Margin::ZERO)
+                .scroll_source(egui::scroll_area::ScrollSource { mouse_wheel: false, ..Default::default() })
                 .auto_shrink([false, true])
-                .show(ui, |ui| {
+                .show_viewport(ui, |ui, viewport| {
                     let (canvas, canvas_response) =
                         ui.allocate_exact_size(canvas_size, egui::Sense::click());
+                    // Only claim the canvas, not toolbar/fields or popup menus.
+                    let surface = viewport.translate(canvas.min.to_vec2()).intersect(ui.clip_rect());
+                    if ui.is_enabled() && !egui::Popup::is_any_open(ui.ctx()) {
+                        let modifiers = ui.input(super::layout::timeline_wheel_modifiers);
+                        pending_wheel = super::layout::timeline_wheel_over_surface(ui, surface,
+                            wheel_preferences.behavior(modifiers));
+                    }
                     let painter = ui.painter_at(canvas);
                     let timeline_left = canvas.left() + label_width;
                     let visuals = ui.visuals().clone();
@@ -1877,6 +1913,16 @@ fn draw_sequence_timeline(
                         }
                     });
                 });
+            if let Some((action, pointer_x)) = pending_wheel {
+                (zoom, scroll.state.offset) = sequence_wheel_navigation(zoom, scroll.state.offset,
+                    scroll.inner_rect, scroll.content_size, label_width, duration_ms, action, pointer_x);
+                scroll.state.store(ui.ctx(), scroll.id);
+                ui.data_mut(|data| data.insert_persisted(zoom_id, zoom));
+                ui.ctx().request_repaint();
+            }
+            #[cfg(test)]
+            ui.data_mut(|data| data.insert_temp(egui::Id::new((state_prefix.clone(), "viewport-fixture")),
+                (scroll.inner_rect, scroll.state.offset, scroll.content_size)));
 
             let shortcut_enabled = ui.is_enabled() && !egui::Popup::is_any_open(ui.ctx())
                 && (cue_has_focus || (!ui.ctx().egui_wants_keyboard_input() && ui.rect_contains_pointer(ui.max_rect())));
@@ -2160,6 +2206,7 @@ fn draw_sequence_step_editor(
     capabilities: Option<&crate::four_d::controller::HardwareCapabilities>,
     human_readable_time_units: bool,
     hide_cue_text_overflow: bool,
+    wheel_preferences: crate::config::TimelineWheelPreferences,
 ) {
     let selection_id = egui::Id::new((
         "effect-sequence-selected-cue",
@@ -2176,6 +2223,7 @@ fn draw_sequence_step_editor(
         human_readable_time_units,
         hide_cue_text_overflow,
         capabilities,
+        wheel_preferences,
     );
     ui.data_mut(|data| data.insert_persisted(selection_id, selected_index));
     ui.add_space(8.0);
@@ -3378,6 +3426,10 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     capabilities.as_ref(),
                                     human_readable_time_units,
                                     hide_cue_text_overflow,
+                                    crate::config::TimelineWheelPreferences {
+                                        plain: app.timeline_plain_wheel_action, ctrl: app.timeline_ctrl_wheel_action,
+                                        shift: app.timeline_shift_wheel_action, alt: app.timeline_alt_wheel_action,
+                                    },
                                 ));
                                 ui.add_space(8.0);
                                 if crate::ui::icons::disclosure_header(
@@ -3763,6 +3815,64 @@ mod tests {
     }
 
     #[test]
+    fn designer_wheel_routes_real_events_and_preserves_pointer_time() {
+        use crate::config::{TimelineWheelBehavior as Behavior, TimelineWheelPreferences};
+        for (lanes, modifiers, prefs, expect_zoom, expect_x, expect_y) in [
+            (1, egui::Modifiers::NONE, TimelineWheelPreferences::default(), false, true, false),
+            (16, egui::Modifiers::NONE, TimelineWheelPreferences::default(), false, false, true),
+            (1, egui::Modifiers::CTRL, TimelineWheelPreferences::default(), true, true, false),
+            (16, egui::Modifiers::SHIFT, TimelineWheelPreferences::default(), false, true, false),
+            (1, egui::Modifiers::ALT, TimelineWheelPreferences { alt: Behavior::None, ..Default::default() }, false, false, false),
+            (1, egui::Modifiers::CTRL, TimelineWheelPreferences { ctrl: Behavior::HorizontalScroll, ..Default::default() }, false, true, false),
+        ] {
+            let context = egui::Context::default();
+            let mut draft = ControllerEffectDraft::default();
+            draft.steps = (0..lanes).map(|target| crate::four_d::controller::HardwareMacroStep {
+                kind: "pwm".into(), target: Some(target), value: Some(50), duration_ms: Some(60_000), ..Default::default()
+            }).collect();
+            let original = draft.steps.clone();
+            let mut selected = 0;
+            let prefix = ("effect-sequence-timeline", draft.reference.clone(), draft.id.clone());
+            let fixture_id = egui::Id::new((prefix.clone(), "viewport-fixture"));
+            let zoom_id = egui::Id::new((prefix, "zoom"));
+            let render = |events, draft: &mut ControllerEffectDraft, selected: &mut usize| {
+                let mut output = context.run_ui(egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 700.0))),
+                    events, ..Default::default()
+                }, |ui| {
+                    draw_sequence_timeline(ui, draft, selected, true, true, None, prefs);
+                });
+                output.textures_delta.clear();
+            };
+            for _ in 0..2 { render(vec![], &mut draft, &mut selected); }
+            let (viewport, before, content) = context.data(|data| data.get_temp::<(egui::Rect, egui::Vec2, egui::Vec2)>(fixture_id).unwrap());
+            let pointer = viewport.center();
+            // Negative wheel pans forwards; positive zoom increases the scale.
+            let delta = if expect_zoom { 60.0 } else { -60.0 };
+            render(vec![egui::Event::PointerMoved(pointer), egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, delta), modifiers, phase: egui::TouchPhase::Move,
+            }], &mut draft, &mut selected);
+            let (_, after, _) = context.data(|data| data.get_temp::<(egui::Rect, egui::Vec2, egui::Vec2)>(fixture_id).unwrap());
+            let zoom = context.data_mut(|data| data.get_persisted::<f32>(zoom_id).unwrap());
+            assert_eq!(zoom > 90.0, expect_zoom, "{lanes} lanes, {modifiers:?}");
+            assert_eq!(after.x > before.x, expect_x, "{lanes} lanes, {modifiers:?}: {after:?}, viewport={viewport:?}, content={content:?}");
+            assert_eq!(after.y > before.y, expect_y, "{lanes} lanes, {modifiers:?}: {after:?}");
+            if expect_zoom {
+                let x = pointer.x - viewport.left();
+                let old_time = (before.x + x - 126.0) / 90.0;
+                let new_time = (after.x + x - 126.0) / zoom;
+                assert!((old_time - new_time).abs() < 0.001);
+            }
+            assert_eq!(draft.steps, original, "navigation must not edit cues");
+            // Wheel above the canvas belongs to controls/the outer dialog.
+            render(vec![egui::Event::PointerMoved(egui::pos2(viewport.center().x, 15.0)), egui::Event::MouseWheel {
+                unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, 30.0), modifiers: egui::Modifiers::CTRL, phase: egui::TouchPhase::Move,
+            }], &mut draft, &mut selected);
+            assert_eq!(context.data_mut(|data| data.get_persisted::<f32>(zoom_id).unwrap()), zoom);
+        }
+    }
+
+    #[test]
     fn designer_bulk_shortcuts_keep_text_editing_and_delete_only_selected_cues() {
         let context = egui::Context::default();
         context.all_styles_mut(|style| style.animation_time = 0.0);
@@ -3781,7 +3891,7 @@ mod tests {
                 ..Default::default()
             }, |ui| {
                 if edit_text { ui.text_edit_singleline(text).request_focus(); }
-                draw_sequence_timeline(ui, draft, selected, true, true, None);
+                draw_sequence_timeline(ui, draft, selected, true, true, None, Default::default());
             });
             output.textures_delta.clear();
         };
@@ -3870,7 +3980,7 @@ mod tests {
                         events,
                         ..Default::default()
                     },
-                    |ui| draw_sequence_timeline(ui, draft, selected, true, true, None),
+                    |ui| draw_sequence_timeline(ui, draft, selected, true, true, None, Default::default()),
                 );
                 output.textures_delta.clear();
                 output
@@ -4216,7 +4326,7 @@ mod tests {
             let render = |events, draft: &mut ControllerEffectDraft, selected: &mut usize| {
                 let mut output = context.run_ui(egui::RawInput {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 700.0))), events, ..Default::default()
-                }, |ui| draw_sequence_timeline(ui, draft, selected, true, true, None));
+                }, |ui| draw_sequence_timeline(ui, draft, selected, true, true, None, Default::default()));
                 output.textures_delta.clear();
                 output
             };
@@ -4446,7 +4556,7 @@ mod tests {
                     events,
                     ..Default::default()
                 },
-                |ui| draw_sequence_timeline(ui, draft, selected, true, true, Some(&capabilities)),
+                |ui| draw_sequence_timeline(ui, draft, selected, true, true, Some(&capabilities), Default::default()),
             );
             output.textures_delta.clear();
             output
