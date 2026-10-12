@@ -8999,6 +8999,8 @@ fn web_hardware_details(
             "melody_name": capabilities.buzzer.melody_name,
             "board_silent": capabilities.settings.as_ref().map(|settings| settings.silent),
         },
+        "macro_running": capabilities.macro_running,
+        "status_led_override": capabilities.status_led_override,
         "settings": settings,
         "front_panel": front_panel,
         "strip": strip,
@@ -11236,7 +11238,7 @@ pub(crate) mod tests {
         app.engine_handle.is_connected.store(true, Ordering::Release);
         let mut hardware = crate::four_d::controller::HardwareCapabilities {
             board_connected: true, host_instance_id: "first-host".into(),
-            supports_status_led_settings: true, ..Default::default()
+            supports_status_led_settings: true, status_led_override: Some(true), ..Default::default()
         };
         app.update_hardware_capabilities(Some(hardware.clone()));
         let target = app.tray_board_menu().unwrap().target;
@@ -11249,6 +11251,12 @@ pub(crate) mod tests {
         app.board_operation = Some("fixture-pending".into());
         assert!(app.process_board_tray_action(&context, BoardTrayAction::AutomaticStatusLed, Some(&target)).is_err());
         assert_eq!(app.board_operation.as_deref(), Some("fixture-pending"));
+        app.board_operation = None;
+        let mut idle = app.advertised_hardware().unwrap();
+        idle.status_led_override = Some(false);
+        app.update_hardware_capabilities(Some(idle));
+        assert!(app.process_board_tray_action(&context, BoardTrayAction::AutomaticStatusLed, Some(&target)).is_err());
+        assert!(app.board_operation.is_none());
         app.engine_handle.is_connected.store(false, Ordering::Release);
         assert!(app.tray_board_menu().is_none());
         assert!(app.process_board_tray_action(&context, BoardTrayAction::Monitor, Some(&target)).is_err());

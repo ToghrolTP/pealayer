@@ -708,7 +708,10 @@ impl ControllerPushTarget {
             }
         }
         if matches!(method, "controller.state" | "controller.event")
-            && params.get("kind").and_then(serde_json::Value::as_str) == Some("macro.recording")
+            && (params.get("kind").and_then(serde_json::Value::as_str) == Some("macro.recording")
+                || (params.get("kind").and_then(serde_json::Value::as_str) == Some("macro")
+                    && matches!(params.get("lifecycle").and_then(serde_json::Value::as_str),
+                        Some("started" | "completed" | "cancelled" | "failed"))))
         {
             // The event is edge-triggered; the authoritative sequence preview
             // lives in controller.snapshot. Coalesce bursts through the
@@ -3027,6 +3030,20 @@ mod tests {
         assert!(target.apply_notification("controller.event", &serde_json::json!({"kind":"output"})));
         assert!(handle.catalog_refresh_requested.swap(false, Ordering::Relaxed));
         target.apply_notification("controller.state", &serde_json::json!({"kind":"buzzer.note"}));
+        assert!(!handle.catalog_refresh_requested.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn macro_lifecycle_refreshes_execution_state_without_per_step_catalog_pulls() {
+        let handle = memory_only_test_engine();
+        let target = handle.controller_push_target();
+        for lifecycle in ["started", "completed", "cancelled", "failed"] {
+            assert!(target.apply_notification("controller.event", &serde_json::json!({
+                "kind":"macro", "lifecycle":lifecycle
+            })));
+            assert!(handle.catalog_refresh_requested.swap(false, Ordering::Relaxed));
+        }
+        target.apply_notification("controller.event", &serde_json::json!({"kind":"macro","lifecycle":"step"}));
         assert!(!handle.catalog_refresh_requested.load(Ordering::Relaxed));
     }
 

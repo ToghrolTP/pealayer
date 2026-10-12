@@ -93,7 +93,7 @@ mod tests {
             AppLanguage::English,
         )
         .unwrap();
-        assert_eq!(menu.title, "PCController · Renamed board");
+        assert_eq!(menu.title, "Hardware · Renamed board");
         let ids: std::collections::BTreeSet<_> =
             menu.items.iter().map(|item| item.action as u32).collect();
         assert_eq!(ids.len(), menu.items.len());
@@ -237,6 +237,62 @@ mod tests {
     }
 
     #[test]
+    fn effects_and_led_release_follow_live_state_and_reject_stale_enabled_selections() {
+        let mut hardware = hardware();
+        hardware.strip_control.as_mut().unwrap().running = false;
+        let build = |hardware: &HardwareCapabilities| BoardTrayMenu::build(
+            Some(hardware), true, true, false, false, AppLanguage::English).unwrap();
+        for running in [None, Some(false), Some(true), Some(false)] {
+            hardware.macro_running = running;
+            let menu = build(&hardware);
+            assert_eq!(menu.allows(BoardTrayAction::StopEffects, &menu.target), running == Some(true));
+        }
+        hardware.macro_running = Some(true);
+        hardware.status_led_override = Some(true);
+        let active = build(&hardware);
+        assert!(active.allows(BoardTrayAction::AutomaticStatusLed, &active.target));
+        hardware.macro_running = Some(false);
+        hardware.status_led_override = Some(false);
+        let idle = build(&hardware);
+        assert!(!idle.allows(BoardTrayAction::StopEffects, &active.target));
+        assert!(!idle.allows(BoardTrayAction::AutomaticStatusLed, &active.target));
+        hardware.status_led_override = None;
+        assert!(!build(&hardware).allows(BoardTrayAction::AutomaticStatusLed, &active.target));
+        // Animation can retain pixels after ending: clear is still useful.
+        assert!(idle.allows(BoardTrayAction::ClearStrip, &idle.target));
+    }
+
+    #[test]
+    fn remote_operations_block_ordinary_actions_but_not_emergency_stop() {
+        let mut hardware = hardware();
+        hardware.buzzer.melody_id = 1;
+        hardware.macro_running = Some(true);
+        hardware.status_led_override = Some(true);
+        hardware.operations.push(crate::four_d::controller::HardwareOperation {
+            id: "remote-operation".into(), kind: "firmware".into(),
+            state: "programming".into(), ..Default::default()
+        });
+        let menu = BoardTrayMenu::build(Some(&hardware), true, false, false, false, AppLanguage::English).unwrap();
+        assert!(menu.allows(BoardTrayAction::EngageEmergencyStop, &menu.target));
+        assert!(menu.items.iter().filter(|item| !matches!(item.action,
+            BoardTrayAction::Monitor | BoardTrayAction::EngageEmergencyStop)).all(|item| !item.enabled));
+        hardware.operations[0].state = "completed".into();
+        let menu = BoardTrayMenu::build(Some(&hardware), true, false, false, false, AppLanguage::English).unwrap();
+        assert!(menu.allows(BoardTrayAction::StopEffects, &menu.target));
+        assert!(menu.allows(BoardTrayAction::AutomaticStatusLed, &menu.target));
+    }
+
+    #[test]
+    fn default_board_title_is_hardware() {
+        let mut hardware = hardware();
+        for name in ["", "PCController"] {
+            hardware.board_name = name.into();
+            assert_eq!(BoardTrayMenu::build(Some(&hardware), true, false, false, false,
+                AppLanguage::English).unwrap().title, "Hardware");
+        }
+    }
+
+    #[test]
     fn board_actions_are_translated_without_translating_board_names() {
         let hardware = hardware();
         let english = BoardTrayMenu::build(
@@ -257,7 +313,9 @@ mod tests {
             AppLanguage::Persian,
         )
         .unwrap();
-        assert_eq!(english.title, persian.title);
+        assert_ne!(english.title, persian.title);
+        assert!(english.title.ends_with(" · Renamed board"));
+        assert!(persian.title.ends_with(" · Renamed board"));
         for (english, persian) in english.items.iter().zip(&persian.items) {
             assert_ne!(
                 english.label, persian.label,
@@ -323,6 +381,8 @@ impl BoardTrayMenu {
                 && !hardware.host_instance_id.is_empty()
         })?;
         let tr = |text| crate::ui::i18n::tr(language, text);
+        // Includes operations started by another client, not just this app.
+        let busy = board_busy || effect_busy || hardware.operations.iter().any(|op| op.active());
         let mut items = vec![
             BoardTrayItem {
                 action: BoardTrayAction::Monitor,
@@ -353,13 +413,14 @@ impl BoardTrayMenu {
         // Buzzer capability bits or the configured catalog advertise controls; do not
         // guess availability from board model names or relay numbers.
         if hardware.supports_buzzer_controls() {
-            stops.push((BoardTrayAction::StopBuzzer, "Stop buzzer", !board_busy && hardware.buzzer.is_playing()));
+            stops.push((BoardTrayAction::StopBuzzer, "Stop buzzer", !busy && hardware.buzzer.is_playing()));
         }
-        if !hardware.macros.is_empty() {
+        let strip_running = hardware.strip_control.as_ref().is_some_and(|strip| strip.running);
+        if !hardware.macros.is_empty() || (hardware.supports_addressable_led && hardware.strip_control.is_some()) {
             stops.push((
                 BoardTrayAction::StopEffects,
                 "Stop board effects",
-                !effect_busy,
+                !busy && (hardware.macro_running == Some(true) || strip_running),
             ));
         }
         if hardware.supports_addressable_led
@@ -368,15 +429,15 @@ impl BoardTrayMenu {
             stops.push((
                 BoardTrayAction::StopStrip,
                 "Stop strip animation",
-                strip.running && !effect_busy,
+                strip.running && !busy,
             ));
-            stops.push((BoardTrayAction::ClearStrip, "Clear LED strip", !effect_busy));
+            stops.push((BoardTrayAction::ClearStrip, "Clear LED strip", !busy));
         }
         if hardware.supports_status_led_settings {
             stops.push((
                 BoardTrayAction::AutomaticStatusLed,
                 "Restore automatic status LED",
-                !board_busy,
+                !busy && hardware.status_led_override == Some(true),
             ));
         }
         for (index, (action, label, enabled)) in stops.into_iter().enumerate() {
@@ -394,9 +455,9 @@ impl BoardTrayMenu {
             .take(64)
             .collect();
         let title = if name.is_empty() || name == "PCController" {
-            "PCController".into()
+            tr("Hardware")
         } else {
-            format!("PCController · {name}")
+            format!("{} · {name}", tr("Hardware"))
         };
         Some(Self {
             target: TrayBoardTarget {

@@ -171,6 +171,10 @@ pub struct HardwareCapabilities {
     pub strip_control: Option<HardwareStripControl>,
     pub strip_effects: Vec<HardwareStripEffect>,
     pub buzzer: HardwareBuzzerState,
+    /// Authoritative execution/ownership, not catalog presence or rendered RGB.
+    /// None means the snapshot did not provide a recognized current state.
+    pub macro_running: Option<bool>,
+    pub status_led_override: Option<bool>,
     pub melodies: Vec<HardwareMelody>,
     pub macros: Vec<HardwareMacro>,
     pub effect_groups: Vec<HardwareEffectGroup>,
@@ -2923,6 +2927,14 @@ fn parse_hardware_capabilities_with_front_panel(
         strip_control,
         strip_effects,
         buzzer,
+        macro_running: snapshot.pointer("/macros/playback/running").and_then(Value::as_bool),
+        status_led_override: match snapshot.pointer("/outputs/status_owner").and_then(Value::as_str) {
+            Some("board-preview" | "board-effect") => Some(true),
+            Some("native-lifecycle" | "host-static") => Some(false),
+            Some("host-fallback") => snapshot.pointer("/outputs/effect_id")
+                .map(|id| value_as_u64(id).map(|id| id != 0)).unwrap_or(Some(false)),
+            _ => None,
+        },
         melodies: Vec::new(),
         macros,
         effect_groups: snapshot
@@ -3557,6 +3569,34 @@ mod tests {
         assert_eq!(capabilities.buzzer.melody_id, 17);
         assert_eq!(capabilities.buzzer.melody_name, "attention");
         server.join().unwrap();
+    }
+
+    #[test]
+    fn snapshot_execution_and_led_ownership_are_typed_not_inferred_from_catalogs() {
+        for (owner, id, expected) in [
+            ("board-preview", None, Some(true)), ("board-effect", Some(9), Some(true)),
+            ("native-lifecycle", None, Some(false)), ("host-static", None, Some(false)),
+            ("host-fallback", Some(9), Some(true)), ("host-fallback", None, Some(false)),
+            ("unknown", Some(9), None),
+        ] {
+            let mut snapshot = json!({"macros":{"playback":{"running":true}},
+                "outputs":{"status_owner":owner}});
+            if let Some(id) = id { snapshot["outputs"]["effect_id"] = json!(id); }
+            let parsed = parse_hardware_capabilities(&snapshot, &json!({}));
+            assert_eq!(parsed.macro_running, Some(true));
+            assert_eq!(parsed.status_led_override, expected, "{owner}");
+            snapshot["macros"]["playback"]["running"] = json!(false);
+            assert_eq!(parse_hardware_capabilities(&snapshot, &json!({})).macro_running, Some(false));
+        }
+        let unknown = parse_hardware_capabilities(&json!({}), &json!({}));
+        assert_eq!(unknown.macro_running, None);
+        assert_eq!(unknown.status_led_override, None);
+        let invalid = parse_hardware_capabilities(&json!({
+            "macros":{"playback":{"running":"true"}},
+            "outputs":{"status_owner":"host-fallback","effect_id":"invalid"}
+        }), &json!({}));
+        assert_eq!(invalid.macro_running, None);
+        assert_eq!(invalid.status_led_override, None);
     }
 
     #[test]
