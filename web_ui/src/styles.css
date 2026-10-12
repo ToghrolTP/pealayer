@@ -160,7 +160,7 @@ body {
 .app-menu .ant-menu-item { color: var(--muted); border-radius: 8px; margin-block: 3px; }
 .app-menu .ant-menu-item-selected { color: var(--text) !important; background: var(--accent-soft) !important; }
 .app-menu .ant-menu-item-selected::after { border-inline-end-color: var(--accent) !important; }
-.app-content { min-width: 0; min-height: 0; width: 100%; max-width: 1240px; margin: 0 auto; padding: 24px; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
+.app-content { min-width: 0; min-height: 0; width: 100%; max-width: 1240px; margin: 0 auto; padding: 24px; overflow: auto; overscroll-behavior: contain; scrollbar-gutter: stable; isolation: isolate; }
 .app-content--studio { max-width: none; padding: 14px; }
 
 .preferences-page { width: min(1020px, 100%); margin: 0 auto; display: grid; gap: 16px; }
@@ -374,7 +374,7 @@ body {
 .transport-state.is-playing { color: var(--green); }
 .program-viewer { position: relative; min-width: 0; min-height: 0; margin: 12px; overflow: hidden; display: grid; grid-template-columns: minmax(0, 1fr); place-items: center; border: 1px solid var(--line); border-radius: 8px; background: #05070a; }
 .program-viewer img { width: 100%; height: 100%; display: block; object-fit: contain; object-position: center; }
-.media-surface { width: 100%; height: 100%; min-width: 0; min-height: 0; position: relative; display: grid; place-items: center; overflow: hidden; background: #05070a; }
+.media-surface { width: 100%; height: 100%; min-width: 0; min-height: 0; position: relative; display: grid; place-items: center; overflow: hidden; background: #05070a; contain: paint; }
 .media-surface--interactive { touch-action: none; user-select: none; cursor: pointer; }
 .media-surface--interactive.is-gesture-active { cursor: ew-resize; }
 .media-surface video, .media-surface img { width: 100%; height: 100%; display: block; object-fit: contain; object-position: center; }
@@ -862,6 +862,8 @@ html[data-motion="disabled"] *, html[data-motion="disabled"] *::before, html[dat
   border: 1px solid var(--line);
   border-radius: 12px;
   box-shadow: var(--shadow);
+  isolation: isolate;
+  contain: paint;
 }
 .remote-player__preview { aspect-ratio: 16 / 9; min-height: 240px; display: grid; place-items: center; overflow: hidden; background: #05070a; border-bottom: 1px solid var(--line); }
 .remote-player__preview img { width: 100%; height: 100%; object-fit: contain; object-position: center; }

@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { chapterAt, chapterLabel } from './seekbar';
 import type { PlayerState } from './RemoteControlTab';
@@ -121,41 +121,67 @@ export const SeekThumbnailPreview: React.FC<SeekThumbnailPreviewProps> = ({
     document.body,
   ) : null;
 
+  const moveRaf = useRef<number | null>(null);
+
+  useEffect(() => () => {
+    if (moveRaf.current !== null) {
+      window.cancelAnimationFrame(moveRaf.current);
+      moveRaf.current = null;
+    }
+  }, []);
+
   return (
     <div
       className={`seek-thumbnail-host${className ? ` ${className}` : ''}`}
       title={!enabled ? hoverLabel : undefined}
       onPointerDown={(event) => {
         if (event.button !== 0) return;
+        if (moveRaf.current !== null) {
+          window.cancelAnimationFrame(moveRaf.current);
+          moveRaf.current = null;
+        }
         setSeeking(true);
         setHover(null);
       }}
       onPointerMove={(event) => {
         if (seeking || (event.buttons & 1) !== 0 || !Number.isFinite(duration) || duration <= 0) return;
-        const bounds = event.currentTarget.getBoundingClientRect();
-        if (bounds.width <= 0) return;
-        const fraction = Math.min(1, Math.max(0, (event.clientX - bounds.left) / bounds.width));
-        const chapter = chapterAt(chapters, duration * fraction);
-        const nearest = keyframes.filter((marker) => marker.time_ms >= 0 && marker.time_ms / 1000 <= duration)
-          .map((marker) => ({ marker, distance: Math.abs(marker.time_ms / 1000 / duration * bounds.width - (event.clientX - bounds.left)) }))
-          .filter((entry) => entry.distance <= 6).sort((a, b) => a.distance - b.distance)[0]?.marker;
-        const label = nearest ? `Keyframe${nearest.label ? ` · ${nearest.label}` : ''} · ${formatPreviewTime(nearest.time_ms / 1000)}` : chapter ? chapterLabel(chapter) : '';
-        setHoverLabel(label);
-        if (!enabled) return;
-        const second = Math.floor(Math.min(duration * fraction, Math.max(0, duration - 0.001)));
-        const halfPreview = PREVIEW_WIDTH / 2;
-        const x = Math.min(
-          Math.max(event.clientX, halfPreview + PREVIEW_EDGE_GAP),
-          Math.max(halfPreview + PREVIEW_EDGE_GAP, window.innerWidth - halfPreview - PREVIEW_EDGE_GAP),
-        );
-        const bottom = Math.max(PREVIEW_EDGE_GAP, window.innerHeight - bounds.top + PREVIEW_EDGE_GAP);
-        setHover((current) => (
-          current?.second === second && current.x === x && current.bottom === bottom && current.chapter === label
-            ? current
-            : { x, bottom, second, chapter: label }
-        ));
+        const clientX = event.clientX;
+        const currentTarget = event.currentTarget;
+        if (moveRaf.current !== null) return;
+        moveRaf.current = window.requestAnimationFrame(() => {
+          moveRaf.current = null;
+          const bounds = currentTarget.getBoundingClientRect();
+          if (bounds.width <= 0) return;
+          const fraction = Math.min(1, Math.max(0, (clientX - bounds.left) / bounds.width));
+          const chapter = chapterAt(chapters, duration * fraction);
+          const nearest = keyframes.filter((marker) => marker.time_ms >= 0 && marker.time_ms / 1000 <= duration)
+            .map((marker) => ({ marker, distance: Math.abs(marker.time_ms / 1000 / duration * bounds.width - (clientX - bounds.left)) }))
+            .filter((entry) => entry.distance <= 6).sort((a, b) => a.distance - b.distance)[0]?.marker;
+          const label = nearest ? `Keyframe${nearest.label ? ` · ${nearest.label}` : ''} · ${formatPreviewTime(nearest.time_ms / 1000)}` : chapter ? chapterLabel(chapter) : '';
+          setHoverLabel((prev) => (prev !== label ? label : prev));
+          if (!enabled) return;
+          const second = Math.floor(Math.min(duration * fraction, Math.max(0, duration - 0.001)));
+          const halfPreview = PREVIEW_WIDTH / 2;
+          const x = Math.min(
+            Math.max(clientX, halfPreview + PREVIEW_EDGE_GAP),
+            Math.max(halfPreview + PREVIEW_EDGE_GAP, window.innerWidth - halfPreview - PREVIEW_EDGE_GAP),
+          );
+          const bottom = Math.max(PREVIEW_EDGE_GAP, window.innerHeight - bounds.top + PREVIEW_EDGE_GAP);
+          setHover((current) => (
+            current?.second === second && current.x === x && current.bottom === bottom && current.chapter === label
+              ? current
+              : { x, bottom, second, chapter: label }
+          ));
+        });
       }}
-      onPointerLeave={() => setHover(null)}
+      onPointerLeave={() => {
+        if (moveRaf.current !== null) {
+          window.cancelAnimationFrame(moveRaf.current);
+          moveRaf.current = null;
+        }
+        setHover(null);
+        setHoverLabel('');
+      }}
     >
       {children}
       {preview}

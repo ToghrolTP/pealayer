@@ -639,7 +639,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                     panel?.scrollIntoView({ block: 'nearest', behavior: document.documentElement.dataset.motion === 'disabled' ? 'auto' : 'smooth' });
                     panel?.querySelector<HTMLInputElement>('input')?.focus({preventScroll:true});
                   }} onChange={steps => setEffectDraft({ ...effectDraft, steps })} />
-                <Divider titlePlacement="start" plain>{tr(locale, 'Sequence steps')}</Divider>
+                <Divider orientation="start" plain>{tr(locale, 'Sequence steps')}</Divider>
                 <div className="sequence-editor-web__toolbar">
                   <ConfigProvider componentDisabled={false}><EffectRecorder state={state} sendCmd={sendCmd} locale={locale} effect={effectPayload(effectDraft)} onSequenceChange={(steps, id) => setEffectDraft((current) => current ? { ...current, steps, id: String(id), reference: `effect:${id}`, is_new: false } : current)} /></ConfigProvider>
                   <Button disabled={captureBusy || (!effectDraft.steps.length && !sequenceLaneChoices(state.hardware_details?.controls ?? [],sequenceExtraKinds(state.hardware_details)).length)} icon={<PlusOutlined />} onClick={() => sequenceActions.current?.addStep()}>{tr(locale, 'Add step')}</Button>

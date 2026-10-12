@@ -192,6 +192,10 @@ export function useWebPlatform(
     for (const [action, handler] of actions) {
       try { navigator.mediaSession.setActionHandler(action, handler); } catch { /* Browser exposes only a subset. */ }
     }
+  }, [appIconPath, appName, dispatchCommand, state.current_video, state.live, state.playing, state.app_icon_revision]);
+
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
     if (Number.isFinite(state.duration) && Number.isFinite(state.playback_time) && (state.duration ?? 0) > 0) {
       try {
         navigator.mediaSession.setPositionState({
@@ -201,7 +205,7 @@ export function useWebPlatform(
         });
       } catch { /* Live streams and partially-known media may reject position data. */ }
     }
-  }, [appIconPath, appName, dispatchCommand, state.current_video, state.duration, state.live, state.playback_rate, state.playback_time, state.playing]);
+  }, [state.duration, state.playback_rate, state.playback_time]);
 
   useEffect(() => {
     const shouldHold = keepAwakeEnabled && state.playing && document.visibilityState === 'visible';

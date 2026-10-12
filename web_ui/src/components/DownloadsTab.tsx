@@ -49,7 +49,7 @@ export function DownloadsTab({ apiBaseUrl, sendCmd }: { apiBaseUrl: string; send
   return <section className="download-center">
     <div className="download-heading"><Typography.Title level={3}><DownloadOutlined /> Downloads</Typography.Title>
       {snapshot && <Typography.Text type="secondary">{snapshot.active} active · {bytes(snapshot.total_speed)}/s</Typography.Text>}</div>
-    {error && <Alert type="error" showIcon title={error} />}
+    {error && <Alert type="error" showIcon message={error} />}
     <Card className="download-compose">
       <div className="download-add"><Input aria-label="Download URL" placeholder="https://…" value={url} onChange={e => setUrl(e.target.value)} />
         <Button type="primary" icon={<PlusOutlined />} loading={pending} disabled={!url.trim()} onClick={() => void command('pealayer.downloads.add', { url: url.trim(), use_proxy: proxy, engine, connections: engine === 'aria2' ? connections : 1 }).then(ok => { if (ok) setUrl(''); })}>Add</Button></div>
@@ -80,7 +80,7 @@ export function DownloadsTab({ apiBaseUrl, sendCmd }: { apiBaseUrl: string; send
         <div className="download-stats"><span>{bytes(job.downloaded)}{job.total ? ` / ${bytes(job.total)}` : ''}</span><span>{bytes(job.speed)}/s</span>
           {job.eta_seconds != null && <span>{Math.floor(job.eta_seconds / 60)}m {job.eta_seconds % 60}s left</span>}</div>
         <svg className={`download-chart${job.samples.length > 1 ? '' : ' download-chart--empty'}`} viewBox="0 0 600 38" preserveAspectRatio="none" role="img" aria-label="Measured download speed"><polyline points={points} fill="none" stroke="currentColor" strokeWidth="2" vectorEffect="non-scaling-stroke" /></svg>
-        {job.error && <Alert type="error" showIcon title={job.error} />}
+        {job.error && <Alert type="error" showIcon message={job.error} />}
         <div className="download-actions">
           {job.actions.includes('pause') && <Button disabled={pending} icon={<PauseOutlined />} onClick={() => act('pause')}>Pause</Button>}
           {job.actions.includes('resume') && <Button disabled={pending} icon={<PlayCircleOutlined />} onClick={() => act('resume')}>Resume</Button>}

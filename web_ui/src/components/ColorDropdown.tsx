@@ -11,9 +11,9 @@ export function ColorDropdown({ value, customHex, options, onChange, locale, dis
 }) {
   const [open, setOpen] = useState(false);
   const [expanded, setExpanded] = useState(false);
-  const list = useRef<HTMLDivElement>(null);
+  const list = useRef<HTMLDivElement | null>(null);
   const keyboardOpen = useRef(false);
-  const trigger = useRef<HTMLButtonElement>(null);
+  const trigger = useRef<HTMLButtonElement | null>(null);
   const [popup, setPopup] = useState<{ placement: 'topLeft' | 'bottomLeft'; height: number }>({ placement: 'bottomLeft', height: 520 });
   const show = (next: boolean) => {
     if (next && trigger.current) {

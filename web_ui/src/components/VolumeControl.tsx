@@ -1,3 +1,4 @@
+import React from 'react';
 import { Button, Slider, Tooltip } from 'antd';
 import { MutedOutlined, SoundOutlined } from '@ant-design/icons';
 import type { PlayerState } from './RemoteControlTab';
@@ -5,7 +6,7 @@ import { tr, UiLocale } from '../i18n';
 
 // Both workspaces use the same authoritative volume/mute controls. Keep the
 // stored level visible while muted so unmuting does not silently reset it.
-export function VolumeControl({ state, sendCmd, locale, className = '' }: {
+export const VolumeControl = React.memo(function VolumeControl({ state, sendCmd, locale, className = '' }: {
   state: PlayerState;
   sendCmd: (command: string, extra?: Record<string, unknown>) => void;
   locale: UiLocale;
@@ -39,4 +40,11 @@ export function VolumeControl({ state, sendCmd, locale, className = '' }: {
       </output>
     </div>
   );
-}
+}, (prev, next) => (
+  prev.locale === next.locale
+  && prev.className === next.className
+  && prev.sendCmd === next.sendCmd
+  && prev.state.muted === next.state.muted
+  && prev.state.volume === next.state.volume
+  && prev.state.current_video === next.state.current_video
+));

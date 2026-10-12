@@ -35,7 +35,7 @@ export const ApplicationStatusBar: React.FC<ApplicationStatusBarProps> = ({ stat
   const voltage = numericTelemetry(telemetry?.bus_mv), current = numericTelemetry(telemetry?.current_ma), temperature = numericTelemetry(telemetry?.led_temperature_centi_c);
   useEffect(() => {
     setSamples((previous) => appendSample(previous, { time: Date.now(), values: [voltage === undefined ? undefined : voltage / 1000, current, temperature === undefined ? undefined : temperature / 100] }));
-  }, [state, voltage, current, temperature]);
+  }, [voltage, current, temperature]);
   const label = (widget: StatusWidget) => tr(locale, LABELS[widget]);
   const show = (widget: StatusWidget, visible: boolean) => onVisibilityChange(setWidgetVisible(config, widget, visible));
   const changeMode = (fps_mode: FpsMode) => onVisibilityChange({ ...config, fps_mode });

@@ -106,9 +106,29 @@ export const MediaSurface: React.FC<MediaSurfaceProps> = ({ state, apiBaseUrl, e
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const pointerGesture = useRef<PointerGesture | null>(null);
   const [fallback, setFallback] = useState(false);
+  const [fallbackStamp, setFallbackStamp] = useState(0);
+  const lastFallbackRef = useRef(0);
   const [gestureActive, setGestureActive] = useState(false);
   const target = state.current_video ?? '';
   const source = useMemo(() => target ? mediaSource(target, apiBaseUrl) : '', [target, apiBaseUrl]);
+
+  useEffect(() => {
+    if (!fallback) return;
+    const now = Date.now();
+    const time = state.playback_time ?? 0;
+    const interval = state.playing ? 1000 : 250;
+    if (now - lastFallbackRef.current >= interval) {
+      lastFallbackRef.current = now;
+      setFallbackStamp(Math.max(0, Math.round(time)));
+    } else {
+      const remaining = interval - (now - lastFallbackRef.current);
+      const timer = window.setTimeout(() => {
+        lastFallbackRef.current = Date.now();
+        setFallbackStamp(Math.max(0, Math.round(state.playback_time ?? 0)));
+      }, remaining);
+      return () => window.clearTimeout(timer);
+    }
+  }, [fallback, state.playback_time, state.playing]);
 
   const invokeClickAction = useCallback((action: MediaClickAction) => {
     if (!target || action === 'none' || action === 'context_menu') return;
@@ -243,9 +263,8 @@ export const MediaSurface: React.FC<MediaSurfaceProps> = ({ state, apiBaseUrl, e
 
   let surface: React.ReactElement;
   if (fallback) {
-    const stamp = Math.max(0, Math.round((state.playback_time ?? 0) * 1000));
     surface = <div className={`media-surface media-surface--fallback media-surface--interactive ${gestureActive ? 'is-gesture-active' : ''} ${className ?? ''}`} {...pointerHandlers}>
-      <img src={`${apiBaseUrl}/api/player/frame?t=${stamp}`} alt={emptyLabel} />
+      <img src={`${apiBaseUrl}/api/player/frame?t=${fallbackStamp}`} alt={emptyLabel} />
       <OsdOverlay state={state} />
     </div>;
   } else surface = <div className={`media-surface media-surface--interactive ${gestureActive ? 'is-gesture-active' : ''} ${className ?? ''}`} {...pointerHandlers}>
