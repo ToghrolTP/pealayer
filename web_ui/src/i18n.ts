@@ -1,6 +1,9 @@
 export type UiLocale = 'en' | 'fa';
 
 const fa: Record<string, string> = {
+  'Dismiss': 'بستن پیام',
+  'Publishing authority': 'اختیار انتشار',
+  'Close this prompt without changing publishing authority or pending requests.': 'این پیام را بدون تغییر اختیار انتشار یا درخواست‌های در انتظار ببندید.',
   'Frame rate': 'نرخ فریم',
   'Media': 'رسانه',
   'Screen': 'صفحه',

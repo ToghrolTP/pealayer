@@ -453,7 +453,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
         >{tr(locale, 'E-STOP')}</Button>
       </Space>
     </header>
-    <PublishingAuthority state={state} sendCmd={sendCmd} controls />
+    <PublishingAuthority state={state} sendCmd={sendCmd} controls locale={locale} />
 
     <Modal
       className="channel-manager-modal"

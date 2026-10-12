@@ -10,6 +10,10 @@ statements are not the present product state.
 
 ## Delivered source and deployment
 
+- Publishing-authority prompts share a non-mutating Dismiss action, corner close
+  and Escape behavior on native/Web. [Dismissal semantics and regression](authority-modal-dismissal.md)
+  distinguish dismissal from handoff rejection and retain the live/Cafe boundaries.
+
 - Program Monitor reserves the automatic video/footer spacing and behaves as a
   fitted viewport rather than a scrollable document. [Viewport contract and
   regression](program-monitor-viewport.md) covers panel sizes and display scales;

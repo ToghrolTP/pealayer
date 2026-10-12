@@ -884,6 +884,10 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Technical details" => "جزئیات فنی",
         "Copy details" => "رونوشت جزئیات",
         "Close" => "بستن",
+        "Dismiss" => "بستن پیام",
+        "Publishing authority" => "اختیار انتشار",
+        "Close this prompt without changing publishing authority or pending requests." =>
+            "این پیام را بدون تغییر اختیار انتشار یا درخواست‌های در انتظار ببندید.",
         "Screen" => "صفحه",
         "Screen render rate" => "نرخ ترسیم صفحه",
         "Current draw" => "جریان مصرفی",

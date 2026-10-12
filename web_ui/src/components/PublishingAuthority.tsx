@@ -2,15 +2,17 @@ import React, { useState } from 'react';
 import { Alert, Button, Modal, Space, Typography } from 'antd';
 import { LockOutlined, UnlockOutlined, SwapOutlined, WarningOutlined, LinkOutlined } from '@ant-design/icons';
 import type { PlayerState } from './RemoteControlTab';
+import { tr, type UiLocale } from '../i18n';
 
 interface Props {
   state: PlayerState;
   sendCmd: (command: string, payload?: Record<string, unknown>) => Promise<boolean>;
   controls?: boolean;
+  locale: UiLocale;
 }
 
 /** PCController owns the reservation; neither surface invents local ownership. */
-export const PublishingAuthority: React.FC<Props> = ({ state, sendCmd, controls = false }) => {
+export const PublishingAuthority: React.FC<Props> = ({ state, sendCmd, controls = false, locale }) => {
   const [dismissed, setDismissed] = useState<number | null>(null);
   const sync = state.hardware_sync;
   const authority = sync?.authority;
@@ -43,16 +45,20 @@ export const PublishingAuthority: React.FC<Props> = ({ state, sendCmd, controls 
       {connect}
     </Space>} />;
   const visible = (conflict || (owner && Boolean(request))) && dismissed !== authority.revision;
-  return <Modal open={visible} title={<Space><WarningOutlined />Publishing authority</Space>}
-    width={480} onCancel={() => setDismissed(authority.revision)} footer={owner && request ? <Space wrap>
-      <Button onClick={() => change('reject', request.client_id)}>Decline</Button>
-      <Button type="primary" disabled={!paused || authority.exclusive}
-        onClick={() => change('accept', request.client_id)}>Accept handoff</Button>
-    </Space> : <Space wrap>
-      <Button onClick={() => setDismissed(authority.revision)}>Monitor</Button>
-      {connect}
-      {!authority.exclusive && <Button type="primary" disabled={Boolean(pending)} onClick={() => change('request')}>
-        {pending ? 'Handoff requested' : 'Request handoff'}</Button>}
+  // Local UI dismissal is deliberately not an authority request/reject/release.
+  const dismiss = () => setDismissed(authority.revision);
+  return <Modal open={visible} title={<Space><WarningOutlined />{tr(locale, 'Publishing authority')}</Space>}
+    width={480} closable keyboard onCancel={dismiss} footer={<Space wrap>
+      <Button onClick={dismiss} title={tr(locale, 'Close this prompt without changing publishing authority or pending requests.')}>{tr(locale, 'Dismiss')}</Button>
+      {owner && request ? <>
+        <Button onClick={() => change('reject', request.client_id)}>Decline</Button>
+        <Button type="primary" disabled={!paused || authority.exclusive}
+          onClick={() => change('accept', request.client_id)}>Accept handoff</Button>
+      </> : <>
+        {connect}
+        {!authority.exclusive && <Button type="primary" disabled={Boolean(pending)} onClick={() => change('request')}>
+          {pending ? 'Handoff requested' : 'Request handoff'}</Button>}
+      </>}
     </Space>}>
     {owner && request ? <>
       <p>{request.label} requests control of the media clock and hardware timeline.</p>
