@@ -44,7 +44,7 @@ statements are not the present product state.
   [Transition contract and regressions](hardware-preparation-recovery.md) retain
   real timing faults, strict deadlines and the physical/Cafe acceptance gates.
 
-- Windows tray menus expose a capability-driven PCController board submenu,
+- Windows tray menus expose a capability-driven Hardware board submenu,
   with monitor reveal, guarded E-STOP release and tracked stop/clear/automatic
   LED actions. [Tray contract and verification](windows-tray-board-actions.md)
   retain source-switch, physical-click and Cafe runtime boundaries.
