@@ -10,6 +10,10 @@ statements are not the present product state.
 
 ## Delivered source and deployment
 
+- Hardware caption alignment is independent of reverse trailing-action layout.
+  [Exact regression cause and rendering checks](hardware-caption-alignment.md)
+  retain real RTL text placement and matching inline-edit geometry.
+
 - Hardware preparation recovery handles acknowledged empty plans, preserves new
   errors against old clock ACKs and pauses the coordinator before replacement.
   [Transition contract and regressions](hardware-preparation-recovery.md) retain
