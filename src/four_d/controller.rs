@@ -173,6 +173,58 @@ pub struct HardwareCapabilities {
     pub macros: Vec<HardwareMacro>,
     pub effect_groups: Vec<HardwareEffectGroup>,
     pub effect_recording: HardwareEffectRecording,
+    pub operations: Vec<HardwareOperation>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct HardwareOperation {
+    pub id: String,
+    pub kind: String,
+    pub state: String,
+    pub stage: String,
+    pub detail: String,
+    pub progress_percent: Option<u8>,
+    pub bytes_done: Option<u64>,
+    pub bytes_total: Option<u64>,
+    pub updated_at: String,
+}
+
+impl HardwareOperation {
+    // PCController emits UTC RFC3339Nano. Normalize the optional fractional
+    // part: plain string comparison incorrectly orders a whole second's Z.
+    fn timestamp(&self) -> Option<(&str, u32)> {
+        let value = self.updated_at.strip_suffix('Z')?;
+        let (seconds, fraction) = value.split_once('.').unwrap_or((value, ""));
+        if seconds.len() != 19 || fraction.len() > 9 || !fraction.bytes().all(|byte| byte.is_ascii_digit()) { return None; }
+        let nanos = if fraction.is_empty() { 0 } else { fraction.parse::<u32>().ok()? * 10u32.pow(9 - fraction.len() as u32) };
+        Some((seconds, nanos))
+    }
+    fn at_least_as_new_as(&self, other: &Self) -> bool {
+        match (self.timestamp(), other.timestamp()) {
+            (Some(left), Some(right)) => left >= right,
+            (Some(_), None) => true,
+            _ => false,
+        }
+    }
+    pub fn active(&self) -> bool {
+        !matches!(self.state.as_str(), "complete" | "completed" | "failed" | "cancelled" | "aborted" | "idle")
+    }
+    fn parse(value: &Value, metadata: bool) -> Option<Self> {
+        let string = |key| value.get(key).and_then(Value::as_str).unwrap_or_default().to_string();
+        let id = string(if metadata { "operation_id" } else { "id" });
+        let kind = string("kind");
+        let state = string("state");
+        if id.is_empty() || kind.is_empty() || state.is_empty() { return None; }
+        Some(Self {
+            id, kind, state, stage: string("stage"), detail: string("detail"),
+            progress_percent: value.get("progress_known").and_then(value_as_bool)
+                .filter(|known| *known).and_then(|_| value.get("progress_percent").and_then(value_as_u64))
+                .map(|percent| percent.min(100) as u8),
+            bytes_done: value.get("bytes_done").and_then(value_as_u64),
+            bytes_total: value.get("bytes_total").and_then(value_as_u64).filter(|total| *total > 0),
+            updated_at: string("updated_at"),
+        })
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -478,6 +530,7 @@ pub struct HardwareTelemetry {
     /// is already inverse-mapped through each channel's configured curve.
     pub pwm_logical_percent_milli: Vec<Option<u32>>,
     pub door_open: Option<bool>,
+    pub hot: Option<bool>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -734,7 +787,26 @@ impl HardwareCapabilities {
     /// polling. PCController publishes the physical LED result after its MCU
     /// compositor has applied priority, brightness, and procedural effects.
     pub(crate) fn apply_state_notification(&mut self, event: &Value) -> bool {
+        if event.get("kind").and_then(Value::as_str).is_some_and(|kind| kind.starts_with("update.")) {
+            let Some(value) = event.get("metadata").and_then(|value| HardwareOperation::parse(value, true)) else { return false; };
+            if let Some(previous) = self.operations.iter_mut().find(|item| item.id == value.id) {
+                if *previous == value || !value.at_least_as_new_as(previous) { return false; }
+                *previous = value;
+            } else {
+                if self.operations.len() >= 8 { self.operations.remove(0); }
+                self.operations.push(value);
+            }
+            return true;
+        }
         match event.get("kind").and_then(Value::as_str) {
+            Some("hot") => {
+                let Some(device) = event.get("device").filter(|value| value.is_object()) else { return false; };
+                if device.get("alert_kind").and_then(Value::as_u64) != Some(2) { return false; }
+                // Go omits false alert_active on a typed HOT-clear event.
+                let active = device.get("alert_active").and_then(Value::as_bool).unwrap_or(false);
+                if self.telemetry.hot == Some(active) { false }
+                else { self.telemetry.hot = Some(active); true }
+            }
             Some("front_panel.segment") => {
                 let Some(metadata) = event.get("metadata").filter(|value| value.is_object()) else {
                     return false;
@@ -907,6 +979,13 @@ impl HardwareCapabilities {
         let same_host = self.host_instance_id.is_empty()
             || current.host_instance_id.is_empty()
             || self.host_instance_id == current.host_instance_id;
+        if same_host {
+            for live in &current.operations {
+                if let Some(refreshed) = self.operations.iter_mut().find(|value| value.id == live.id) {
+                    if !refreshed.at_least_as_new_as(live) { *refreshed = live.clone(); }
+                } else if self.operations.len() < 8 { self.operations.push(live.clone()); }
+            }
+        }
         if self.board_connected
             && same_host
             && current.status_led.is_some()
@@ -1164,6 +1243,7 @@ fn telemetry_from_status(status: &Value, board_connected: bool) -> HardwareTelem
                 .and_then(Value::as_bool)
                 .unwrap_or(false)
         }),
+        hot: board_connected.then(|| status.get("hot").and_then(Value::as_bool)).flatten(),
     }
 }
 
@@ -1537,6 +1617,11 @@ impl ControllerClient {
             apply_pwm_values(&mut capabilities.telemetry, values);
         }
         capabilities.melodies = parse_melodies(&melodies)?;
+        // Read-only seed for a client that connects in the middle of an update;
+        // subsequent stage/byte changes arrive over controller.state events.
+        if let Ok(status) = self.call("controller.update.status", json!({}))
+            && let Some(operation) = HardwareOperation::parse(&status, false)
+        { capabilities.operations.push(operation); }
         Ok(capabilities)
     }
 
@@ -2839,6 +2924,7 @@ fn parse_hardware_capabilities_with_front_panel(
             .and_then(|value| serde_json::from_value(value).ok())
             .unwrap_or_default(),
         effect_recording,
+        operations: Vec::new(),
     }
 }
 
@@ -3377,6 +3463,32 @@ mod tests {
     }
 
     #[test]
+    fn hot_and_operation_events_remain_authoritative_and_ordered() {
+        let mut hardware = HardwareCapabilities::default();
+        hardware.board_connected = true;
+        assert!(!hardware.apply_state_notification(&json!({"kind":"hot", "device":{"alert_kind":1,"alert_active":true}})));
+        assert!(hardware.apply_state_notification(&json!({"kind":"hot", "device":{"alert_kind":2,"alert_active":true}})));
+        assert_eq!(hardware.telemetry.hot, Some(true));
+        assert!(hardware.apply_state_notification(&json!({"kind":"hot", "device":{"alert_kind":2}})));
+        assert_eq!(hardware.telemetry.hot, Some(false));
+        let event = |state, known, percent, timestamp| json!({"kind":"update.programming", "metadata":{
+            "operation_id":"op-1", "kind":"firmware", "state":state, "stage":"preflight", "progress_known":known,
+            "progress_percent":percent,"updated_at":timestamp
+        }});
+        assert!(hardware.apply_state_notification(&event("preflight", "false", "0", "2026-10-12T02:00:00Z")));
+        assert_eq!(hardware.operations[0].progress_percent, None, "preflight is not a synthetic 0 percent");
+        let mut stale = hardware.clone();
+        assert!(hardware.apply_state_notification(&event("completed", "true", "100", "2026-10-12T02:00:00.001Z")));
+        assert!(!hardware.operations[0].active());
+        assert!(!hardware.apply_state_notification(&event("programming", "true", "5", "2026-10-12T02:00:00Z")));
+        stale.preserve_newer_live_state_from(&hardware);
+        assert_eq!(stale.operations, hardware.operations, "catalog refresh must retain terminal event");
+        stale.host_instance_id = "other-host".into(); hardware.host_instance_id = "current-host".into();
+        stale.operations.clear(); stale.preserve_newer_live_state_from(&hardware);
+        assert!(stale.operations.is_empty(), "do not retain another host's operations");
+    }
+
+    #[test]
     fn capability_snapshot_avoids_redundant_front_panel_and_split_catalog_calls() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let address = listener.local_addr().unwrap();
@@ -3390,6 +3502,7 @@ mod tests {
                 "controller.peripherals.get",
                 "controller.melodies.list",
                 "controller.pwm.values",
+                "controller.update.status",
             ];
             for call in 0..expected.len() {
                 let mut line = String::new();
@@ -3414,6 +3527,10 @@ mod tests {
                         "notes": [{"frequency_hz": 880, "duration_ms": 100, "gap_ms": 25}]
                     }]}),
                     "controller.pwm.values" => json!({"jsonrpc":"2.0","id":request["id"],"result":{"values":[]}}),
+                    "controller.update.status" => json!({"jsonrpc":"2.0","id":request["id"],"result":{
+                        "id":"op-active", "kind":"firmware", "state":"programming", "stage":"write", "progress_known":true, "progress_percent":42,
+                        "updated_at":"2026-10-12T02:00:00Z"
+                    }}),
                     _ => unreachable!(),
                 };
                 writeln!(stream, "{response}").unwrap();

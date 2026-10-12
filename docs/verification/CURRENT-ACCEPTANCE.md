@@ -10,6 +10,12 @@ statements are not the present product state.
 
 ## Delivered source and deployment
 
+- Status widgets share independent context menus and drag ordering, three FPS
+  sources, compact telemetry, an optional bounded RAM chart, real operation
+  progress and authoritative HOT alerts. The Effects Library heading is start
+  aligned. [Widget contract and evidence](status-bar-widgets.md) retains the Cafe
+  runtime blocker and physical/human acceptance boundaries.
+
 - Native cue properties now has guarded ×/Escape dismissal, square icon controls,
   centered caption groups and a viewport-bounded two-column layout on wider
   screens. [Dialog contract and checks](cue-dialog-responsive-dismissal.md)

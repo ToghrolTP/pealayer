@@ -1337,6 +1337,8 @@ pub struct PlayerStatusResponse {
     pub hardware_details: Option<Value>,
     #[serde(default)]
     pub update: crate::update::UpdateStatus,
+    #[serde(default)]
+    pub status_operations: Vec<crate::ui::status_bar::StatusProgress>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -1647,6 +1649,7 @@ impl Default for PlayerStatusResponse {
             timeline_tracks: Vec::new(),
             osd: None,
             hardware_details: None,
+            status_operations: Vec::new(),
             update: crate::update::UpdateStatus::default(),
         }
     }

@@ -1,163 +1,245 @@
-use crate::ui::dropdown::DropdownUiExt;
 use crate::app::PealayerApp;
+use crate::config::{StatusBarFpsMode, StatusBarWidget as Widget, StatusChartMetric};
+use crate::four_d::controller::{HardwareCapabilities, HardwareStatusLed};
+use crate::ui::dropdown::DropdownUiExt;
 use eframe::egui;
+use std::collections::VecDeque;
+use std::time::{Duration, Instant};
 
-fn friendly_name(value: &str) -> String {
-    value
-        .split(['-', '_', '.'])
-        .filter(|part| !part.is_empty())
-        .map(|part| {
-            let mut chars = part.chars();
-            chars
-                .next()
-                .map(|first| first.to_uppercase().collect::<String>() + chars.as_str())
-                .unwrap_or_default()
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+const ITEM_HEIGHT: f32 = 22.0;
+const LOG_LIMIT: usize = 240;
+
+pub fn widget_label(item: Widget) -> &'static str {
+    match item {
+        Widget::Fps => "Frame rate",
+        Widget::Hot => "HOT alerts",
+        Widget::Estop => "E-STOP",
+        Widget::Connection => "Hardware connection",
+        Widget::StatusRgb => "Physical status RGB",
+        Widget::Voltage => "Voltage",
+        Widget::Current => "Current draw",
+        Widget::Temperature => "Temperature",
+        Widget::Warnings => "Hardware warnings",
+        Widget::Timeline => "Hardware timing",
+        Widget::Progress => "Operation progress",
+        Widget::Chart => "Telemetry log chart",
+        Widget::Message => "Status message",
+        Widget::Workspace => "Workspace mode",
+    }
 }
 
-pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
-    if ui.input(|input| input.viewport().fullscreen.unwrap_or(false)) {
-        return;
+fn widget_icon(item: Widget) -> &'static str {
+    use crate::ui::icons::*;
+    match item {
+        Widget::Fps => GAUGE,
+        Widget::Hot | Widget::Estop | Widget::Warnings => WARNING,
+        Widget::Connection => PLUG,
+        Widget::StatusRgb => LIGHTBULB,
+        Widget::Voltage => LIGHTNING,
+        Widget::Current => CIRCUITRY,
+        Widget::Temperature => THERMOMETER,
+        Widget::Chart => WAVEFORM,
+        Widget::Timeline => CLOCK,
+        Widget::Progress => ARROW_CLOCKWISE,
+        Widget::Message => INFO,
+        Widget::Workspace => APP_WINDOW,
     }
+}
 
-    let panel = egui::Panel::bottom("status_bar").show_inside(ui, |ui| {
-        ui.with_layout(
-            crate::ui::i18n::layout(app.rtl, egui::Align::Center),
-            |ui| {
-                if app.status_bar.media_rate {
-                    if let Some(fps_info) = app.current_fps_display(std::time::Instant::now()) {
-                        let icon = if fps_info.is_ui_rate { crate::ui::icons::GAUGE } else { crate::ui::icons::FILE_VIDEO };
-                        let response = ui.add_sized([110.0, ui.text_style_height(&egui::TextStyle::Body)],
-                            egui::Label::new(format!("{icon}  {}", fps_info.formatted)).sense(egui::Sense::click()).selectable(false))
-                            .on_hover_cursor(egui::CursorIcon::PointingHand).on_hover_text(&fps_info.tooltip);
-                        let mut changed = false;
-                        if response.clicked() {
-                            app.status_bar.fps_mode = if fps_info.is_ui_rate { crate::config::StatusBarFpsMode::Media } else { crate::config::StatusBarFpsMode::Ui };
-                            changed = true;
-                        }
-                        response.context_menu(|ui| {
-                            ui.strong(app.tr("Frame rate")); ui.separator();
-                            for (mode, icon, label) in [
-                                (crate::config::StatusBarFpsMode::Media, crate::ui::icons::FILE_VIDEO, "Media frame rate"),
-                                (crate::config::StatusBarFpsMode::Ui, crate::ui::icons::GAUGE, "UI render rate"),
-                            ] {
-                                if ui.dropdown_choice(app.status_bar.fps_mode == mode, format!("{icon}  {}", app.tr(label))).clicked() {
-                                    app.status_bar.fps_mode = mode; changed = true; ui.close();
-                                }
-                            }
-                            ui.separator();
-                            if ui.button(format!("{}  {}", crate::ui::icons::EYE_SLASH, app.tr("Hide"))).clicked() {
-                                app.status_bar.media_rate = false; changed = true; ui.close();
-                            }
-                        });
-                        if changed { app.request_status_bar_save(ui.ctx()); }
-                        ui.separator();
-                    }
-                }
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct StatusProgress {
+    pub id: String,
+    pub source: String,
+    pub label: String,
+    pub phase: String,
+    pub fraction: Option<f32>,
+    pub detail: String,
+}
 
-                if app.status_bar.hardware {
-                    draw_hardware_status(app, ui);
-                }
-                if app.is_connected
-                    && let Ok(plan) = app.engine_handle.prepared_timeline.try_lock()
-                    && plan.has_items()
-                {
-                    ui.separator();
-                    let state=if plan.error.is_some(){"Hardware timing fault"}
-                        else if plan.deferred_reason.is_some(){"Hardware waiting"}
-                        else if plan.acknowledged_revision!=plan.revision{"Preparing hardware"}
-                        else {"Hardware timeline"};
-                    let color=if plan.error.is_some(){ui.visuals().error_fg_color}else{ui.visuals().text_color()};
-                    ui.colored_label(color,state).on_hover_text(plan.error.clone().or_else(||plan.deferred_reason.clone())
-                        .unwrap_or_else(||format!("Revision {} · {} acknowledged commands · maximum ACK lateness {} ms",plan.revision,
-                            plan.feedback["acknowledged"],plan.feedback["max_ack_lateness_ms"])));
-                }
-
-                if let Some(message) = current_status_message(app) {
-                    ui.separator();
-                    ui.add(
-                        egui::Label::new(egui::RichText::new(&message).small())
-                            .truncate()
-                            .selectable(false),
-                    )
-                    .on_hover_text(message);
-                }
-
-                if app.estop_active {
-                    ui.separator();
-                    ui.colored_label(
-                        egui::Color32::from_rgb(231, 76, 60),
-                        format!("{} {}", crate::ui::icons::WARNING, app.tr("E-STOP ACTIVE")),
-                    );
-                }
-
-                if app.status_bar.workspace {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let response = ui.label(format!(
-                            "{}: {}",
-                            app.tr("Workspace"),
-                            app.active_workspace_name()
-                        ));
-                        if hide_item_menu(app, response, app.tr("Workspace mode")) {
-                            app.status_bar.workspace = false;
-                            app.request_status_bar_save(ui.ctx());
-                        }
-                    });
-                }
-            },
-        );
-    });
-
-    panel
-        .response
-        .interact(egui::Sense::click())
-        .context_menu(|ui| {
-            let title = app.tr("Status bar");
-            let media_rate = app.tr("Frame rate");
-            let hardware = app.tr("Hardware connection");
-            let telemetry = app.tr("Hardware telemetry");
-            let status_rgb = app.tr("Physical status RGB");
-            let warnings = app.tr("Hardware warnings");
-            let workspace = app.tr("Workspace mode");
-            ui.strong(title);
-            ui.separator();
-            let mut changed = false;
-            changed |= ui
-                .checkbox(&mut app.status_bar.media_rate, media_rate)
-                .changed();
-            changed |= ui
-                .checkbox(&mut app.status_bar.hardware, hardware)
-                .changed();
-            changed |= ui
-                .checkbox(&mut app.status_bar.telemetry, telemetry)
-                .changed();
-            changed |= ui
-                .checkbox(&mut app.status_bar.status_rgb, status_rgb)
-                .changed();
-            changed |= ui
-                .checkbox(&mut app.status_bar.warnings, warnings)
-                .changed();
-            changed |= ui
-                .checkbox(&mut app.status_bar.workspace, workspace)
-                .changed();
-            if changed {
-                app.request_status_bar_save(ui.ctx());
-            }
+pub fn active_operations(capabilities: Option<&HardwareCapabilities>) -> Vec<StatusProgress> {
+    if let Some(snapshot) = crate::peer::client().and_then(|client| client.snapshot()) {
+        return snapshot
+            .session
+            .status
+            .get("status_operations")
+            .cloned()
+            .and_then(|value| serde_json::from_value(value).ok())
+            .unwrap_or_default();
+    }
+    let mut result = Vec::new();
+    let update = crate::update::manager().status();
+    if update.active() {
+        let fraction = update.progress_percent().map(|value| value as f32 / 100.0);
+        result.push(StatusProgress {
+            id: update.operation_id.unwrap_or_else(|| "app-update".into()),
+            source: "app".into(),
+            label: "App update".into(),
+            phase: update.state,
+            fraction,
+            detail: update.message,
         });
+    }
+    if let Some(capabilities) = capabilities {
+        for operation in capabilities
+            .operations
+            .iter()
+            .filter(|operation| operation.active())
+        {
+            result.push(StatusProgress {
+                id: operation.id.clone(),
+                source: "controller".into(),
+                label: operation.kind.clone(),
+                phase: operation.stage.clone(),
+                fraction: operation
+                    .progress_percent
+                    .map(|value| f32::from(value) / 100.0),
+                detail: operation.detail.clone(),
+            });
+        }
+    }
+    if let Some(downloads) = crate::downloads::progress_if_initialized() {
+        for job in downloads {
+            result.push(StatusProgress {
+                id: job.id.clone(),
+                source: "download".into(),
+                label: "Download".into(),
+                phase: format!("{:?}", job.state),
+                fraction: job
+                    .total
+                    .filter(|total| *total > 0)
+                    .map(|total| (job.downloaded as f64 / total as f64).clamp(0.0, 1.0) as f32),
+                detail: format!("{} bytes received · {} bytes/s", job.downloaded, job.speed),
+            });
+        }
+    }
+    result.truncate(16);
+    result
+}
+
+#[derive(Clone)]
+struct LogSample {
+    time: Instant,
+    values: [Option<f64>; 3],
+}
+#[derive(Clone, Default)]
+struct TelemetryLog {
+    samples: VecDeque<LogSample>,
+}
+
+impl TelemetryLog {
+    fn sample(&mut self, now: Instant, hardware: Option<&HardwareCapabilities>) {
+        if self
+            .samples
+            .back()
+            .is_some_and(|last| now.duration_since(last.time) < Duration::from_millis(500))
+        {
+            return;
+        }
+        let live = hardware
+            .filter(|hardware| hardware.board_connected)
+            .map(|hardware| &hardware.telemetry);
+        let values = live
+            .map(|value| {
+                [
+                    value.bus_mv.map(|value| f64::from(value) / 1000.0),
+                    value.current_ma.map(f64::from),
+                    value
+                        .led_temperature_centi_c
+                        .map(|value| f64::from(value) / 100.0),
+                ]
+            })
+            .unwrap_or([None; 3]);
+        self.samples.push_back(LogSample { time: now, values });
+        while self.samples.len() > LOG_LIMIT {
+            self.samples.pop_front();
+        }
+    }
+    fn index(metric: StatusChartMetric) -> usize {
+        match metric {
+            StatusChartMetric::Voltage => 0,
+            StatusChartMetric::Current => 1,
+            StatusChartMetric::Temperature => 2,
+        }
+    }
+    fn summary(&self, metric: StatusChartMetric) -> String {
+        let index = Self::index(metric);
+        let (name, unit) = match metric {
+            StatusChartMetric::Voltage => ("Voltage", "V"),
+            StatusChartMetric::Current => ("Current draw", "mA"),
+            StatusChartMetric::Temperature => ("Temperature", "°C"),
+        };
+        let values: Vec<_> = self
+            .samples
+            .iter()
+            .filter_map(|sample| sample.values[index])
+            .collect();
+        let range = if values.is_empty() {
+            "—".to_string()
+        } else {
+            format!(
+                "{:.2}–{:.2} {unit}",
+                values.iter().copied().fold(f64::INFINITY, f64::min),
+                values.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+            )
+        };
+        format!(
+            "{name} · {range} · {}/240 samples · RAM only",
+            self.samples.len()
+        )
+    }
+    fn paint(&self, ui: &mut egui::Ui, rect: egui::Rect, metric: StatusChartMetric) {
+        let index = Self::index(metric);
+        let values: Vec<_> = self
+            .samples
+            .iter()
+            .filter_map(|sample| sample.values[index])
+            .collect();
+        let (Some(first), Some(last)) = (self.samples.front(), self.samples.back()) else {
+            return;
+        };
+        if values.is_empty() {
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "—",
+                egui::FontId::proportional(12.0),
+                ui.visuals().weak_text_color(),
+            );
+            return;
+        }
+        let low = values.iter().copied().fold(f64::INFINITY, f64::min);
+        let high = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        let pad = ((high - low) * 0.1).max(0.1);
+        let span = last.time.duration_since(first.time).as_secs_f64().max(0.5);
+        let mut previous = None;
+        for sample in &self.samples {
+            let point = sample.values[index].map(|value| {
+                egui::pos2(
+                    rect.left()
+                        + rect.width()
+                            * (sample.time.duration_since(first.time).as_secs_f64() / span) as f32,
+                    rect.bottom()
+                        - rect.height() * ((value - low + pad) / (high - low + 2.0 * pad)) as f32,
+                )
+            });
+            if let (Some(start), Some(end)) = (previous, point) {
+                ui.painter().line_segment(
+                    [start, end],
+                    egui::Stroke::new(1.5, ui.visuals().selection.bg_fill),
+                );
+            }
+            previous = point;
+        }
+    }
 }
 
 fn current_status_message(app: &PealayerApp) -> Option<String> {
     let update = crate::update::manager().status();
-    if update.active() {
-        return Some(match update.progress_percent() {
-            Some(percent) => format!("{} · {percent:.0}%", update.message),
-            None => update.message,
-        });
+    if update.active() && !app.status_bar.progress {
+        return Some(update.message);
     }
     let (message, timestamp) = app.osd_message.as_ref()?;
-    let lifetime = std::time::Duration::from_secs_f32(
+    let lifetime = Duration::from_secs_f32(
         app.osd_display_options
             .as_ref()
             .and_then(|options| options.timeout_seconds)
@@ -167,231 +249,827 @@ fn current_status_message(app: &PealayerApp) -> Option<String> {
     (timestamp.elapsed() <= lifetime).then(|| message.clone())
 }
 
-fn hide_item_menu(app: &PealayerApp, response: egui::Response, label: String) -> bool {
-    let mut hide = false;
-    response.context_menu(|ui| {
-        ui.label(egui::RichText::new(&label).strong());
+fn status_led_display_color(led: &HardwareStatusLed) -> egui::Color32 {
+    egui::Color32::from_rgb(led.red, led.green, led.blue)
+}
+
+fn metric_text(hardware: Option<&HardwareCapabilities>, item: Widget) -> Option<String> {
+    let telemetry = &hardware
+        .filter(|hardware| hardware.board_connected)?
+        .telemetry;
+    match item {
+        Widget::Voltage => telemetry
+            .bus_mv
+            .map(|value| format!("{:.2} V", f64::from(value) / 1000.0)),
+        Widget::Current => telemetry.current_ma.map(|value| format!("{value} mA")),
+        Widget::Temperature => telemetry
+            .led_temperature_centi_c
+            .map(|value| format!("{:.1} °C", f64::from(value) / 100.0)),
+        _ => None,
+    }
+}
+
+fn text_widget(
+    ui: &mut egui::Ui,
+    text: &str,
+    max_width: f32,
+    monospace: bool,
+    color: egui::Color32,
+) -> egui::Response {
+    let font = if monospace {
+        egui::FontId::monospace(12.0)
+    } else {
+        egui::FontId::proportional(12.0)
+    };
+    let width = (ui
+        .painter()
+        .layout_no_wrap(text.into(), font.clone(), color)
+        .size()
+        .x
+        + 8.0)
+        .min(max_width);
+    ui.add_sized(
+        [width, ITEM_HEIGHT],
+        egui::Label::new(egui::RichText::new(text).font(font).color(color))
+            .truncate()
+            .selectable(false)
+            .sense(egui::Sense::click_and_drag()),
+    )
+    .on_hover_text(text)
+}
+
+fn render_widget(
+    app: &PealayerApp,
+    ui: &mut egui::Ui,
+    item: Widget,
+    hardware: Option<&HardwareCapabilities>,
+    log: &TelemetryLog,
+    progress: &[StatusProgress],
+) -> Option<(egui::Response, String)> {
+    let color = ui.visuals().text_color();
+    let (text, width, mono, color) = match item {
+        Widget::Fps => {
+            let fps = app.current_fps_display(Instant::now())?;
+            let mode = app.tr(match app.status_bar.fps_mode {
+                StatusBarFpsMode::Media => "Media",
+                StatusBarFpsMode::Ui => "Screen",
+                StatusBarFpsMode::Auto => "Auto",
+            });
+            let text = format!(
+                "{} {mode} · {}",
+                if fps.is_ui_rate {
+                    crate::ui::icons::GAUGE
+                } else {
+                    crate::ui::icons::FILE_VIDEO
+                },
+                fps.formatted
+            );
+            return Some((
+                text_widget(ui, &text, 142.0, false, color).on_hover_text(fps.tooltip),
+                text,
+            ));
+        }
+        Widget::Connection => {
+            let ready = hardware.is_some_and(|hardware| hardware.board_connected);
+            let requested = app
+                .engine_handle
+                .connection_requested
+                .load(std::sync::atomic::Ordering::Relaxed);
+            let text = if app.is_connected && ready {
+                hardware
+                    .map(|hardware| app.display_text(&hardware.board_name))
+                    .filter(|name| !name.is_empty())
+                    .unwrap_or_else(|| app.tr("Connected board"))
+            } else if app.is_connected {
+                app.tr("PCController connected; board not connected")
+            } else if requested {
+                app.tr("Connecting…")
+            } else {
+                app.tr("Hardware: Disconnected")
+            };
+            (
+                format!("{} {text}", crate::ui::icons::PLUG),
+                200.0,
+                false,
+                if ready && app.is_connected {
+                    egui::Color32::from_rgb(46, 204, 113)
+                } else {
+                    ui.visuals().warn_fg_color
+                },
+            )
+        }
+        Widget::Voltage | Widget::Current | Widget::Temperature => {
+            (metric_text(hardware, item)?, 80.0, true, color)
+        }
+        Widget::StatusRgb => {
+            let led = hardware
+                .filter(|hardware| hardware.board_connected)?
+                .status_led
+                .as_ref()?;
+            let (rect, response) = ui
+                .allocate_exact_size(egui::vec2(20.0, ITEM_HEIGHT), egui::Sense::click_and_drag());
+            ui.painter()
+                .circle_filled(rect.center(), 6.0, status_led_display_color(led));
+            return Some((
+                response.on_hover_text(format!(
+                    "RGB {}, {}, {} · brightness {}",
+                    led.red, led.green, led.blue, led.brightness
+                )),
+                "RGB".into(),
+            ));
+        }
+        Widget::Hot => {
+            if hardware
+                .filter(|hardware| hardware.board_connected)?
+                .telemetry
+                .hot
+                != Some(true)
+            {
+                return None;
+            }
+            (
+                format!(
+                    "{} HOT · {}",
+                    crate::ui::icons::WARNING,
+                    app.tr("Temperature alert")
+                ),
+                195.0,
+                false,
+                ui.visuals().error_fg_color,
+            )
+        }
+        Widget::Estop => {
+            if !app.estop_active {
+                return None;
+            }
+            (
+                format!("{} {}", crate::ui::icons::WARNING, app.tr("E-STOP ACTIVE")),
+                160.0,
+                false,
+                ui.visuals().error_fg_color,
+            )
+        }
+        Widget::Warnings => {
+            let warning = hardware?.warnings.first()?;
+            let text = format!("{} {}", crate::ui::icons::WARNING, warning.code);
+            return Some((
+                text_widget(ui, &text, 180.0, false, ui.visuals().warn_fg_color)
+                    .on_hover_text(&warning.message),
+                text,
+            ));
+        }
+        Widget::Timeline => {
+            if !app.is_connected {
+                return None;
+            }
+            let plan = app.engine_handle.prepared_timeline.try_lock().ok()?;
+            if !plan.has_items() {
+                return None;
+            }
+            let state = if plan.error.is_some() {
+                "Hardware timing fault"
+            } else if plan.deferred_reason.is_some() {
+                "Hardware waiting"
+            } else if plan.acknowledged_revision != plan.revision {
+                "Preparing hardware"
+            } else {
+                "Hardware timeline"
+            };
+            let text = format!("{} {}", crate::ui::icons::CLOCK, app.tr(state));
+            let tooltip = plan
+                .error
+                .clone()
+                .or_else(|| plan.deferred_reason.clone())
+                .unwrap_or_else(|| {
+                    format!(
+                        "Revision {} · ACK {}",
+                        plan.revision, plan.acknowledged_revision
+                    )
+                });
+            let color = if plan.error.is_some() {
+                ui.visuals().error_fg_color
+            } else {
+                color
+            };
+            drop(plan);
+            return Some((
+                text_widget(ui, &text, 165.0, false, color).on_hover_text(tooltip),
+                text,
+            ));
+        }
+        Widget::Message => (current_status_message(app)?, 230.0, false, color),
+        Widget::Workspace => (
+            format!(
+                "{} {}",
+                crate::ui::icons::APP_WINDOW,
+                app.active_workspace_name()
+            ),
+            130.0,
+            false,
+            color,
+        ),
+        Widget::Progress => {
+            let operation = progress.first()?;
+            let text = format!(
+                "{} · {}{}",
+                operation.label,
+                operation.phase,
+                operation
+                    .fraction
+                    .map(|value| format!(" · {:.0}%", value * 100.0))
+                    .unwrap_or_default()
+            );
+            let (rect, response) = ui.allocate_exact_size(
+                egui::vec2(168.0, ITEM_HEIGHT),
+                egui::Sense::click_and_drag(),
+            );
+            if let Some(fraction) = operation.fraction {
+                ui.painter().rect_filled(
+                    egui::Rect::from_min_size(
+                        rect.left_bottom() - egui::vec2(0.0, 3.0),
+                        egui::vec2(rect.width() * fraction, 3.0),
+                    ),
+                    1.0,
+                    ui.visuals().selection.bg_fill,
+                );
+            } else {
+                ui.put(
+                    egui::Rect::from_min_size(rect.left_top(), egui::vec2(14.0, 14.0)),
+                    egui::Spinner::new().size(12.0),
+                );
+            }
+            ui.painter().with_clip_rect(rect).text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                &text,
+                egui::FontId::proportional(11.0),
+                color,
+            );
+            let tooltip = progress
+                .iter()
+                .map(|operation| {
+                    format!(
+                        "{} · {}\n{}",
+                        operation.label, operation.phase, operation.detail
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            return Some((response.on_hover_text(tooltip), text));
+        }
+        Widget::Chart => {
+            let (rect, response) = ui.allocate_exact_size(
+                egui::vec2(100.0, ITEM_HEIGHT),
+                egui::Sense::click_and_drag(),
+            );
+            log.paint(
+                ui,
+                rect.shrink2(egui::vec2(3.0, 3.0)),
+                app.status_bar.chart_metric,
+            );
+            let label = app.tr("Telemetry log chart");
+            let response = response.on_hover_ui(|ui| {
+                ui.label(&label);
+                ui.weak(log.summary(app.status_bar.chart_metric));
+                let (rect, _) =
+                    ui.allocate_exact_size(egui::vec2(260.0, 90.0), egui::Sense::hover());
+                log.paint(ui, rect, app.status_bar.chart_metric);
+            });
+            return Some((response, label));
+        }
+    };
+    Some((text_widget(ui, &text, width, mono, color), text))
+}
+
+fn item_menu(app: &mut PealayerApp, ui: &mut egui::Ui, item: Widget, log_id: egui::Id) {
+    ui.strong(format!(
+        "{} {}",
+        widget_icon(item),
+        app.tr(widget_label(item))
+    ));
+    ui.separator();
+    let mut changed = false;
+    if item == Widget::Fps {
+        for (mode, title) in [
+            (StatusBarFpsMode::Media, "Media"),
+            (StatusBarFpsMode::Ui, "Screen"),
+            (StatusBarFpsMode::Auto, "Auto"),
+        ] {
+            if ui
+                .dropdown_choice(app.status_bar.fps_mode == mode, app.tr(title))
+                .clicked()
+            {
+                app.status_bar.fps_mode = mode;
+                changed = true;
+                ui.close();
+            }
+        }
         ui.separator();
+    }
+    if item == Widget::Chart {
+        for (metric, title) in [
+            (StatusChartMetric::Voltage, "Voltage"),
+            (StatusChartMetric::Current, "Current draw"),
+            (StatusChartMetric::Temperature, "Temperature"),
+        ] {
+            if ui
+                .dropdown_choice(app.status_bar.chart_metric == metric, app.tr(title))
+                .clicked()
+            {
+                app.status_bar.chart_metric = metric;
+                changed = true;
+                ui.close();
+            }
+        }
         if ui
-            .button(format!(
-                "{} {} {label}",
-                crate::ui::icons::EYE_SLASH,
-                app.tr("Hide")
-            ))
+            .dropdown_choice(false, app.tr("Clear chart history"))
             .clicked()
         {
-            hide = true;
+            ui.ctx()
+                .data_mut(|data| data.remove::<TelemetryLog>(log_id));
             ui.close();
         }
-    });
-    hide
-}
-
-fn draw_hardware_status(app: &mut PealayerApp, ui: &mut egui::Ui) {
-    let connection_requested = app
-        .engine_handle
-        .connection_requested
-        .load(std::sync::atomic::Ordering::Relaxed);
-    let capabilities = app.advertised_hardware();
-    let board_ready = capabilities
-        .as_ref()
-        .is_some_and(|value| value.board_connected);
-    let coordinator_endpoint = crate::four_d::controller::is_controller_endpoint(&app.serial_port);
-    let selected_transport = app
-        .engine_handle
-        .active_transport
-        .try_lock()
-        .ok()
-        .and_then(|value| value.clone());
-    let dot_color = if app.is_connected && (!coordinator_endpoint || board_ready) {
-        egui::Color32::from_rgb(46, 204, 113)
-    } else if connection_requested || app.is_connected {
-        egui::Color32::from_rgb(241, 196, 15)
-    } else {
-        egui::Color32::from_rgb(231, 76, 60)
-    };
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
-    ui.painter().circle_filled(rect.center(), 4.0, dot_color);
-
-    let label_text = if app.is_connected && coordinator_endpoint && board_ready {
-        let board_name = capabilities
-            .as_ref()
-            .map(|value| app.display_text(&value.board_name))
-            .filter(|name| !name.is_empty())
-            .or_else(|| {
-                capabilities
-                    .as_ref()
-                    .and_then(|value| value.board_profile.as_ref())
-                    .map(|profile| friendly_name(&profile.key))
-            })
-            .unwrap_or_else(|| app.tr("Connected board"));
-        selected_transport
-            .as_deref()
-            .map(|transport| format!("{board_name} via {transport}"))
-            .unwrap_or(board_name)
-    } else if app.is_connected && coordinator_endpoint {
-        app.tr("PCController connected; board not connected")
-    } else if app.is_connected {
-        format!("{} direct diagnostic", app.serial_port)
-    } else if connection_requested {
-        format!("{} {}", crate::ui::icons::PLUG, app.tr("Connecting…"))
-    } else {
-        app.tr("Hardware: Disconnected")
-    };
-    let mut connection_label = ui.label(label_text);
-    if app.is_connected && coordinator_endpoint && !board_ready {
-        connection_label =
-            connection_label.on_hover_text(app.hardware_unavailable_detail(capabilities.as_ref()));
-    } else if let Some(notice) = &app.connection_notice {
-        connection_label = connection_label.on_hover_text(notice);
+        ui.separator();
     }
-    if hide_item_menu(app, connection_label, app.tr("Hardware connection")) {
-        app.status_bar.hardware = false;
-        app.request_status_bar_save(ui.ctx());
-        return;
-    }
-
-    let Some(capabilities) = capabilities.as_ref().filter(|value| value.board_connected) else {
-        return;
-    };
-    if app.status_bar.status_rgb
-        && let Some(status_led) = &capabilities.status_led
-    {
-        let brightness = f32::from(status_led.brightness) / 255.0;
-        // PCController publishes the already-composited physical RGB result.
-        // Do not multiply it by brightness a second time: the Web UI mirrors
-        // these raw channels directly and Pealayer must show the same hue.
-        let color = status_led_display_color(status_led);
-        let (led_rect, led_response) =
-            ui.allocate_exact_size(egui::vec2(17.0, 17.0), egui::Sense::click());
-        ui.painter().circle_filled(
-            led_rect.center(),
-            8.0,
-            color.gamma_multiply((0.12 + brightness * 0.20).clamp(0.12, 0.32)),
-        );
-        ui.painter().circle_filled(led_rect.center(), 6.0, color);
-        ui.painter().circle_stroke(
-            led_rect.center(),
-            6.0,
-            egui::Stroke::new(
-                1.25_f32,
-                ui.visuals().widgets.noninteractive.fg_stroke.color,
-            ),
-        );
-        let led_response = led_response.on_hover_text(format!(
-            "{} RGB({}, {}, {}) · {} {} · {} {}",
-            app.tr("Hardware status LED"),
-            status_led.red,
-            status_led.green,
-            status_led.blue,
-            app.tr("brightness"),
-            status_led.brightness,
-            app.tr("effect"),
-            status_led.effect,
-        ));
-        if led_response.clicked() {
-            app.preferences_tab = 2;
-            crate::ui::preferences::open(app, ui.ctx());
-        }
-        if hide_item_menu(app, led_response, app.tr("Physical status RGB")) {
-            app.status_bar.status_rgb = false;
-                app.request_status_bar_save(ui.ctx());
-        }
-    }
-
-    if app.status_bar.telemetry {
-        let telemetry = &capabilities.telemetry;
-        let mut telemetry_response = None;
-        if let Some(bus_mv) = telemetry.bus_mv {
-            telemetry_response = Some(ui.add_sized([65.0, ui.text_style_height(&egui::TextStyle::Body)], egui::Label::new(egui::RichText::new(format!("{:.2} V", f64::from(bus_mv) / 1000.0)).monospace())));
-        }
-        if let Some(current_ma) = telemetry.current_ma {
-            telemetry_response = Some(ui.add_sized([80.0, ui.text_style_height(&egui::TextStyle::Body)], egui::Label::new(egui::RichText::new(format!("{current_ma} mA")).monospace())));
-        }
-        if let Some(temperature) = telemetry.led_temperature_centi_c {
-            telemetry_response =
-                Some(ui.add_sized([75.0, ui.text_style_height(&egui::TextStyle::Body)], egui::Label::new(egui::RichText::new(format!("{:.1} °C", f64::from(temperature) / 100.0)).monospace())));
-        }
-        if let Some(response) = telemetry_response
-            && hide_item_menu(app, response, app.tr("Hardware telemetry"))
-        {
-            app.status_bar.telemetry = false;
-            app.request_status_bar_save(ui.ctx());
-        }
-    }
-    if app.status_bar.warnings
-        && let Some(warning) = capabilities.warnings.first()
-    {
-        let response = ui
-            .colored_label(
-                ui.visuals().warn_fg_color,
-                format!("{} {}", crate::ui::icons::WARNING, warning.code),
+    if matches!(
+        item,
+        Widget::Connection
+            | Widget::Voltage
+            | Widget::Current
+            | Widget::Temperature
+            | Widget::StatusRgb
+            | Widget::Warnings
+            | Widget::Hot
+            | Widget::Timeline
+    ) {
+        if ui
+            .dropdown_choice(
+                false,
+                format!("{} {}", crate::ui::icons::GAUGE, app.tr("Hardware Monitor")),
             )
-            .on_hover_text(&warning.message);
-        if response.clicked() {
-            app.preferences_tab = 2;
-            crate::ui::preferences::open(app, ui.ctx());
+            .clicked()
+        {
+            app.open_or_focus_tab(crate::ui::layout::PealayerTab::HardwareMonitor);
+            ui.close();
         }
-        if hide_item_menu(app, response, app.tr("Hardware warnings")) {
-            app.status_bar.warnings = false;
-                    app.request_status_bar_save(ui.ctx());
+    }
+    let order = app.status_bar.ordered();
+    let index = order.iter().position(|value| *value == item).unwrap();
+    for (earlier, title) in [(true, "Move earlier"), (false, "Move later")] {
+        let target = if earlier {
+            index.checked_sub(1)
+        } else {
+            (index + 1 < order.len()).then_some(index + 1)
+        };
+        if ui
+            .add_enabled_ui(target.is_some(), |ui| {
+                ui.dropdown_choice(false, app.tr(title))
+            })
+            .inner
+            .clicked()
+            && let Some(target) = target
+        {
+            changed |= app.status_bar.reorder(item, order[target], !earlier);
+            ui.close();
         }
+    }
+    ui.separator();
+    if ui
+        .dropdown_choice(
+            false,
+            format!(
+                "{} {} {} {}",
+                crate::ui::icons::EYE_SLASH,
+                app.tr("Hide"),
+                widget_icon(item),
+                app.tr(widget_label(item))
+            ),
+        )
+        .clicked()
+    {
+        app.status_bar.set_visible(item, false);
+        changed = true;
+        ui.close();
+    }
+    if changed {
+        app.request_status_bar_save(ui.ctx());
     }
 }
 
-fn status_led_display_color(
-    status_led: &crate::four_d::controller::HardwareStatusLed,
-) -> egui::Color32 {
-    egui::Color32::from_rgb(status_led.red, status_led.green, status_led.blue)
+pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    if ui.input(|input| input.viewport().fullscreen.unwrap_or(false)) {
+        return;
+    }
+    let hardware = app.advertised_hardware();
+    let progress = active_operations(hardware.as_ref());
+    let log_id = egui::Id::new("status-bar-telemetry-log");
+    let now = Instant::now();
+    let log = ui.ctx().data_mut(|data| {
+        let log = data.get_temp_mut_or_default::<TelemetryLog>(log_id);
+        log.sample(now, hardware.as_ref());
+        log.clone()
+    });
+    let mut item_rects = Vec::new();
+    #[cfg(test)]
+    let mut widget_rects = Vec::new();
+    let panel = egui::Panel::bottom("status_bar").show_inside(ui, |ui| {
+        ui.spacing_mut().item_spacing.x = 5.0;
+        // Register the background first, on every frame. Adding it after the
+        // children (or only when not hovered) steals their next press because
+        // egui hit-tests the previous frame's registered interaction order.
+        let background = ui.interact(
+            ui.max_rect(),
+            ui.id().with("status-background"),
+            egui::Sense::click(),
+        );
+        egui::ScrollArea::horizontal()
+            .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+            .scroll_source(egui::scroll_area::ScrollSource::MOUSE_WHEEL)
+            .auto_shrink([false, true])
+            .show(ui, |ui| {
+                ui.with_layout(
+                    crate::ui::i18n::layout(app.rtl, egui::Align::Center),
+                    |ui| {
+                        for item in app.status_bar.ordered() {
+                            if !app.status_bar.visible(item) {
+                                continue;
+                            }
+                            let id = ui.make_persistent_id(("status-widget", item));
+                            let Some((response, text)) = ui
+                                .push_id(item, |ui| {
+                                    render_widget(app, ui, item, hardware.as_ref(), &log, &progress)
+                                })
+                                .inner
+                            else {
+                                continue;
+                            };
+                            item_rects.push(response.rect);
+                            #[cfg(test)]
+                            widget_rects.push((item, response.rect));
+                            let offset_id = id.with("offset");
+                            crate::ui::layout::remember_drag_offset_on_press(
+                                ui.ctx(),
+                                response.rect,
+                                offset_id,
+                            );
+                            if response.clicked() && item == Widget::Fps {
+                                app.status_bar.fps_mode = app.status_bar.fps_mode.next();
+                                app.request_status_bar_save(ui.ctx());
+                            }
+                            if response.clicked()
+                                && item == Widget::Progress
+                                && progress
+                                    .first()
+                                    .is_some_and(|value| value.source == "download")
+                            {
+                                crate::downloads::open(ui.ctx());
+                            }
+                            if response.clicked()
+                                && matches!(item, Widget::StatusRgb | Widget::Warnings)
+                            {
+                                app.preferences_tab = 2;
+                                crate::ui::preferences::open(app, ui.ctx());
+                            }
+                            response.dnd_set_drag_payload(item);
+                            if response.dragged() {
+                                let pointer = ui.ctx().pointer_interact_pos();
+                                let offset = ui
+                                    .ctx()
+                                    .data(|data| data.get_temp::<egui::Vec2>(offset_id))
+                                    .unwrap_or(response.rect.size() * 0.5);
+                                if let Some(pointer) = pointer {
+                                    let rect = egui::Rect::from_min_size(
+                                        pointer - offset,
+                                        response.rect.size(),
+                                    );
+                                    let painter = ui.ctx().layer_painter(egui::LayerId::new(
+                                        egui::Order::Tooltip,
+                                        id,
+                                    ));
+                                    painter.rect_filled(rect, 4.0, ui.visuals().window_fill());
+                                    painter.rect_stroke(
+                                        rect,
+                                        4.0,
+                                        ui.visuals().selection.stroke,
+                                        egui::StrokeKind::Inside,
+                                    );
+                                    painter.text(
+                                        rect.center(),
+                                        egui::Align2::CENTER_CENTER,
+                                        &text,
+                                        egui::FontId::proportional(12.0),
+                                        ui.visuals().text_color(),
+                                    );
+                                }
+                            }
+                            if let Some(moved) = response.dnd_hover_payload::<Widget>()
+                                && *moved != item
+                            {
+                                let after = ui.ctx().pointer_interact_pos().is_some_and(|point| {
+                                    (point.x > response.rect.center().x) != app.rtl
+                                });
+                                let x = if after != app.rtl {
+                                    response.rect.right()
+                                } else {
+                                    response.rect.left()
+                                };
+                                ui.painter().line_segment(
+                                    [
+                                        egui::pos2(x, response.rect.top()),
+                                        egui::pos2(x, response.rect.bottom()),
+                                    ],
+                                    egui::Stroke::new(2.0, ui.visuals().selection.bg_fill),
+                                );
+                            }
+                            if let Some(moved) = response.dnd_release_payload::<Widget>() {
+                                let after = ui.ctx().pointer_interact_pos().is_some_and(|point| {
+                                    (point.x > response.rect.center().x) != app.rtl
+                                });
+                                if app.status_bar.reorder(*moved, item, after) {
+                                    app.request_status_bar_save(ui.ctx());
+                                }
+                            }
+                            response.context_menu(|ui| item_menu(app, ui, item, log_id));
+                        }
+                    },
+                );
+            });
+        background
+    });
+    #[cfg(test)]
+    ui.ctx()
+        .data_mut(|data| data.insert_temp(egui::Id::new("test-status-widget-rects"), widget_rects));
+    // The background's menu must never steal an individual widget's hit target.
+    let over_item = ui
+        .ctx()
+        .pointer_interact_pos()
+        .is_some_and(|point| item_rects.iter().any(|rect| rect.contains(point)));
+    if !over_item {
+        panel.inner.context_menu(|ui| {
+            ui.strong(app.tr("Status bar"));
+            ui.separator();
+            let mut changed = false;
+            for item in app.status_bar.ordered() {
+                let visible = app.status_bar.visible(item);
+                if ui
+                    .dropdown_choice(
+                        visible,
+                        format!("{} {}", widget_icon(item), app.tr(widget_label(item))),
+                    )
+                    .clicked()
+                {
+                    app.status_bar.set_visible(item, !visible);
+                    changed = true;
+                }
+            }
+            ui.separator();
+            if ui
+                .dropdown_choice(false, app.tr("Reset widget order"))
+                .clicked()
+            {
+                app.status_bar.order = Widget::ALL;
+                changed = true;
+                ui.close();
+            }
+            if changed {
+                app.request_status_bar_save(ui.ctx());
+            }
+        });
+    }
+    if app.status_bar.fps_mode != StatusBarFpsMode::Media
+        || app.status_bar.chart
+        || !progress.is_empty()
+    {
+        ui.ctx().request_repaint_after(Duration::from_millis(500));
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
     #[test]
     fn physical_status_led_uses_authoritative_rgb_without_double_dimming() {
-        let led = crate::four_d::controller::HardwareStatusLed {
-            red: 0,
-            green: 255,
-            blue: 0,
-            brightness: 32,
-            effect: 0,
-            condition: 0,
-        };
         assert_eq!(
-            status_led_display_color(&led),
-            egui::Color32::from_rgb(0, 255, 0)
+            status_led_display_color(&HardwareStatusLed {
+                red: 0,
+                green: 255,
+                blue: 0,
+                brightness: 32,
+                effect: 0,
+                condition: 0
+            }),
+            egui::Color32::GREEN
         );
     }
-
     #[test]
     fn status_bar_message_uses_the_same_lifetime_as_osd() {
-        let _lock = crate::app::tests::lock_app_tests();
+        let _guard = crate::app::tests::lock_app_tests();
         let mut app = PealayerApp::default();
         app.osd_timeout_seconds = 4.0;
-        app.set_osd("Remote command accepted".to_string());
+        app.set_osd("Remote command accepted".into());
         assert_eq!(
             current_status_message(&app).as_deref(),
             Some("Remote command accepted")
         );
     }
-
     #[test]
-    fn status_bar_fps_indicator_reflects_app_fps_display() {
-        let _lock = crate::app::tests::lock_app_tests();
+    fn chart_is_bounded_and_disconnect_does_not_become_zero() {
+        let mut log = TelemetryLog::default();
+        let now = Instant::now();
+        for index in 0..300 {
+            log.sample(now + Duration::from_secs(index), None);
+        }
+        assert_eq!(log.samples.len(), LOG_LIMIT);
+        assert!(log.samples.iter().all(|sample| sample.values == [None; 3]));
+    }
+    #[test]
+    fn widget_reorder_is_unique_and_visibility_is_independent() {
+        let mut config = crate::config::StatusBarConfig::default();
+        assert!(!config.chart);
+        assert!(config.reorder(Widget::Temperature, Widget::Fps, false));
+        assert_eq!(config.order[0], Widget::Temperature);
+        assert_eq!(config.ordered().len(), Widget::ALL.len());
+        config.set_visible(Widget::Voltage, false);
+        assert!(config.visible(Widget::Current) && !config.visible(Widget::Voltage));
+        config.set_visible(Widget::Connection, false);
+        assert!(config.visible(Widget::Current));
+    }
+    #[test]
+    fn fps_auto_uses_play_pause_and_unknown_rate_stays_visible() {
+        let _guard = crate::app::tests::lock_app_tests();
         let mut app = PealayerApp::default();
-        app.status_bar.media_rate = true;
-        let now = std::time::Instant::now();
-        let display = app.current_fps_display(now);
-        assert!(display.is_some());
-        let info = display.unwrap();
-        assert_eq!(info.is_ui_rate, false);
-        assert_eq!(info.formatted, "— fps");
-        app.status_bar.fps_mode = crate::config::StatusBarFpsMode::Ui;
-        assert_eq!(app.current_fps_display(now).unwrap().formatted, "— fps");
-
-        app.status_bar.media_rate = false;
+        app.status_bar.fps_mode = StatusBarFpsMode::Auto;
+        app.current_video_path = Some("fixture.mp4".into());
+        app.media_fps = 24.0;
+        app.is_paused = false;
+        assert!(!app.current_fps_display(Instant::now()).unwrap().is_ui_rate);
+        app.is_paused = true;
+        assert!(app.current_fps_display(Instant::now()).unwrap().is_ui_rate);
+        app.status_bar.fps_mode = StatusBarFpsMode::Media;
+        app.media_fps = 0.0;
+        assert_eq!(
+            app.current_fps_display(Instant::now()).unwrap().formatted,
+            "— fps"
+        );
+        assert_eq!(
+            StatusBarFpsMode::Media.next().next().next(),
+            StatusBarFpsMode::Media
+        );
+    }
+    #[test]
+    fn reactive_idle_screen_rate_uses_real_intervals_without_continuous_repaint() {
+        let mut tracker = crate::app::FrameRateTracker::default();
+        let start = Instant::now();
+        tracker.record_frame(start);
+        assert_eq!(tracker.live_fps(), None);
+        tracker.record_frame(start + Duration::from_millis(500));
+        assert_eq!(tracker.live_fps(), Some(2.0));
+        tracker.record_frame(start + Duration::from_millis(1000));
+        assert_eq!(tracker.live_fps(), Some(2.0));
+    }
+    #[test]
+    fn real_status_bar_click_menu_and_drag_do_not_lose_widget_ownership() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.status_bar = crate::config::StatusBarConfig::default();
+        for widget in Widget::ALL {
+            app.status_bar
+                .set_visible(widget, matches!(widget, Widget::Fps | Widget::Workspace));
+        }
+        app.status_bar.fps_mode = StatusBarFpsMode::Media;
+        let context = egui::Context::default();
+        let mut time = 0.0;
+        let mut frame = |app: &mut PealayerApp, events: Vec<egui::Event>| {
+            time += 0.05;
+            let mut output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(700.0, 420.0),
+                    )),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ui| draw(app, ui),
+            );
+            output.textures_delta.clear();
+            output
+        };
+        let find_text = |output: &egui::FullOutput, needle: &str| {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| {
+                    if let egui::epaint::Shape::Text(text) = &shape.shape {
+                        text.galley
+                            .text()
+                            .contains(needle)
+                            .then(|| egui::Rect::from_min_size(text.pos, text.galley.size()))
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_else(|| panic!("missing status text {needle}"))
+        };
+        let button = |pos, which, pressed| egui::Event::PointerButton {
+            pos,
+            button: which,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(&mut app, vec![]);
+        let output = frame(&mut app, vec![]);
+        find_text(&output, "Media");
+        let widget_rect = |widget| {
+            context
+                .data(|data| {
+                    data.get_temp::<Vec<(Widget, egui::Rect)>>(egui::Id::new(
+                        "test-status-widget-rects",
+                    ))
+                })
+                .unwrap()
+                .into_iter()
+                .find(|(item, _)| *item == widget)
+                .unwrap()
+                .1
+        };
+        let point = widget_rect(Widget::Fps).center();
+        frame(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(point),
+                button(point, egui::PointerButton::Primary, true),
+            ],
+        );
+        frame(
+            &mut app,
+            vec![button(point, egui::PointerButton::Primary, false)],
+        );
+        assert_eq!(app.status_bar.fps_mode, StatusBarFpsMode::Ui);
+        let output = frame(&mut app, vec![]);
+        find_text(&output, "Screen");
+        let source = widget_rect(Widget::Fps).center();
+        let target = widget_rect(Widget::Workspace).right_center() - egui::vec2(2.0, 0.0);
+        frame(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(source),
+                button(source, egui::PointerButton::Primary, true),
+            ],
+        );
+        frame(
+            &mut app,
+            vec![egui::Event::PointerMoved(source + egui::vec2(15.0, 0.0))],
+        );
+        frame(&mut app, vec![egui::Event::PointerMoved(target)]);
+        frame(
+            &mut app,
+            vec![button(target, egui::PointerButton::Primary, false)],
+        );
+        assert!(
+            app.status_bar
+                .order
+                .iter()
+                .position(|item| *item == Widget::Fps)
+                > app
+                    .status_bar
+                    .order
+                    .iter()
+                    .position(|item| *item == Widget::Workspace)
+        );
+        let output = frame(&mut app, vec![]);
+        find_text(&output, "Screen");
+        let point = widget_rect(Widget::Fps).center();
+        frame(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(point),
+                button(point, egui::PointerButton::Secondary, true),
+            ],
+        );
+        frame(
+            &mut app,
+            vec![button(point, egui::PointerButton::Secondary, false)],
+        );
+        let output = frame(&mut app, vec![]);
+        let hide = find_text(&output, "Hide");
+        find_text(&output, "Frame rate");
+        frame(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(hide.center()),
+                button(hide.center(), egui::PointerButton::Primary, true),
+            ],
+        );
+        frame(
+            &mut app,
+            vec![button(hide.center(), egui::PointerButton::Primary, false)],
+        );
         assert!(!app.status_bar.media_rate);
+        assert!(
+            app.status_bar.workspace,
+            "item menu must not toggle the background's other widgets"
+        );
     }
 }

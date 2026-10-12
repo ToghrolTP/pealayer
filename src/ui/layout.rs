@@ -1257,8 +1257,9 @@ fn effects_library_toolbar(app: &mut PealayerApp, ui: &mut egui::Ui, width: f32)
         if ui.button(crate::ui::icons::SPEAKER_HIGH).on_hover_text(app.tr("New audio effect")).clicked() { app.begin_audio_effect(); }
         let title = app.tr("Effects Library");
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            ui.add_sized([ui.available_width().max(1.0), ui.spacing().interact_size.y],
-                egui::Label::new(egui::RichText::new(&title).strong()).truncate()).on_hover_text(title);
+            left_aligned_click_label(ui, &title, ui.available_width().max(1.0),
+                ui.spacing().interact_size.y, egui::TextStyle::Body.resolve(ui.style()).size)
+                .on_hover_text(title);
         });
     });
     ui.add_space(4.0);
@@ -11329,6 +11330,22 @@ mod timeline_row_tests {
             discard_ui_output(output);
             assert!((edges.0 - edges.1).abs() < 0.1, "Manage/Search drift at {width}: {edges:?}");
             assert!((edges.1 - edges.2).abs() < 0.1, "Search/card drift at {width}: {edges:?}");
+        }
+    }
+    #[test]
+    fn effects_library_heading_starts_at_the_content_edge() {
+        let _guard = crate::app::tests::lock_app_tests();
+        for width in [220.0, 360.0, 540.0] {
+            let mut app = PealayerApp::default();
+            let context = egui::Context::default(); let mut left = 0.0;
+            let mut output = context.run_ui(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0, 300.0))), ..Default::default()
+            }, |ui| { left = ui.cursor().left(); effects_library_toolbar(&mut app, ui, width); });
+            let title_x = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text) if text.galley.text() == "Effects Library" => Some(text.pos.x), _ => None
+            }).expect("visible library heading");
+            output.textures_delta.clear();
+            assert!((title_x - left - 4.0).abs() < 1.0, "heading centered or offset at width {width}: {title_x} vs {left}");
         }
     }
 

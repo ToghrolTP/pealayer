@@ -3,6 +3,10 @@ use pealayer_downloads::Manager;
 use std::sync::{Mutex, OnceLock};
 
 static MANAGER: OnceLock<Result<Manager, String>> = OnceLock::new();
+/// Status rendering must not create the download store or start engines.
+pub fn progress_if_initialized() -> Option<Vec<pealayer_downloads::JobProgress>> {
+    MANAGER.get().and_then(|manager| manager.as_ref().ok()).map(Manager::active_progress)
+}
 pub fn manager() -> Result<&'static Manager, String> {
     MANAGER
         .get_or_init(|| pealayer_downloads::default_root().and_then(Manager::open))

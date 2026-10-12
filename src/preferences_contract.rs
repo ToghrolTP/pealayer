@@ -1153,7 +1153,7 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
         ),
         PreferenceControl::select(
             "status_bar.fps_mode", "advanced", "Status bar", "Frame rate source",
-            &[("media", "Media frame rate"), ("ui", "UI render rate")],
+            &[("media", "Media frame rate"), ("ui", "Screen render rate"), ("auto", "Auto")],
         ),
         PreferenceControl::boolean(
             "status_bar.telemetry",
@@ -1167,6 +1167,9 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "Status bar",
             "Workspace mode",
         ),
+        PreferenceControl::boolean("status_bar.chart", "advanced", "Status bar", "Telemetry log chart"),
+        PreferenceControl::boolean("status_bar.progress", "advanced", "Status bar", "Operation progress"),
+        PreferenceControl::boolean("status_bar.hot", "advanced", "Status bar", "HOT alerts"),
     ];
     for key in ["quick_seek_seconds", "mouse_seek_seconds_per_notch"] {
         if let Some(control) = controls.iter_mut().find(|control| control.key == key) {
