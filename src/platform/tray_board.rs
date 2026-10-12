@@ -128,6 +128,7 @@ mod tests {
             ]
         );
         hardware.capability_bits = 1 << 27; // Buzzer push, even with no catalog.
+        hardware.buzzer.melody_id = 9;
         let menu = BoardTrayMenu::build(
             Some(&hardware),
             true,
@@ -138,6 +139,16 @@ mod tests {
         )
         .unwrap();
         assert!(menu.allows(BoardTrayAction::StopBuzzer, &menu.target));
+    }
+
+    #[test]
+    fn buzzer_stop_tracks_idle_running_and_completed_output_even_under_estop() {
+        let mut hardware = hardware();
+        for (id, allowed) in [(0, false), (9, true), (0, false)] {
+            hardware.buzzer.melody_id = id;
+            let menu = BoardTrayMenu::build(Some(&hardware), true, true, false, false, AppLanguage::English).unwrap();
+            assert_eq!(menu.allows(BoardTrayAction::StopBuzzer, &menu.target), allowed);
+        }
     }
 
     #[test]
@@ -342,7 +353,7 @@ impl BoardTrayMenu {
         // Buzzer capability bits or the configured catalog advertise controls; do not
         // guess availability from board model names or relay numbers.
         if hardware.supports_buzzer_controls() {
-            stops.push((BoardTrayAction::StopBuzzer, "Stop buzzer", !board_busy));
+            stops.push((BoardTrayAction::StopBuzzer, "Stop buzzer", !board_busy && hardware.buzzer.is_playing()));
         }
         if !hardware.macros.is_empty() {
             stops.push((

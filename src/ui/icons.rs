@@ -297,7 +297,7 @@ pub fn searchable_icon_picker_contents(
                     .max(70.0);
             let search_response = ui.add_sized(
                 [search_width, ui.spacing().interact_size.y],
-                crate::ui::dialog::singleline_text_edit(search)
+                crate::ui::dialog::singleline_text_edit(ui, search)
                     .id_salt(search_id.with("input"))
                     .hint_text(config.search_hint)
                     .desired_width(search_width),
@@ -466,13 +466,7 @@ pub fn searchable_icon_picker(
         .height(320.0)
         .truncate()
         .icon(|ui, rect, visuals, _| {
-            ui.painter().text(
-                rect.center(),
-                egui::Align2::CENTER_CENTER,
-                CARET_DOWN,
-                egui::FontId::proportional(14.0),
-                visuals.text_color(),
-            );
+            crate::ui::control_density::paint_chevron(ui, rect, visuals.text_color());
         })
         .selected_text(egui::RichText::new(selected_text).size(if config.show_selected_name { egui::TextStyle::Button.resolve(ui.style()).size } else { 16.0 }))
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)

@@ -117,7 +117,7 @@ pub fn custom_menu_row(
     let response = crate::ui::dropdown::choice_with_close(ui, selected, label, Some(color), false);
     let field = egui::Rect::from_center_size(
         egui::pos2(response.rect.right() - 70.0, response.rect.center().y),
-        egui::vec2(124.0, 28.0),
+        egui::vec2(124.0, (response.rect.height() - 4.0).max(1.0)),
     );
     ui.painter().rect(
         field,
@@ -167,8 +167,8 @@ pub fn palette_popup(
             }
             ui.separator();
             let field = ui.add_sized(
-                [ui.available_width(), 28.0],
-                crate::ui::dialog::singleline_text_edit(&mut draft)
+                [ui.available_width(), crate::ui::control_density::height(ui)],
+                crate::ui::dialog::singleline_text_edit(ui, &mut draft)
                     .font(egui::TextStyle::Button.resolve(ui.style()))
                     .char_limit(7)
                     .hint_text("#RRGGBB"),
@@ -205,7 +205,7 @@ pub fn palette_popup(
 
 /// Compact RGB-valued control with the same swatches as HEX fields.
 pub fn color_button_srgba(ui: &mut egui::Ui, color: &mut egui::Color32) -> egui::Response {
-    let (rect, mut response) = ui.allocate_exact_size(egui::vec2(28.0, 28.0), egui::Sense::click());
+    let (rect, mut response) = ui.allocate_exact_size(egui::Vec2::splat(crate::ui::control_density::height(ui)), egui::Sense::click());
     ui.painter().circle_filled(rect.center(), 8.0, *color);
     ui.painter().circle_stroke(
         rect.center(),
@@ -251,8 +251,8 @@ pub fn color_field(
 ) -> egui::Response {
     let id = ui.next_auto_id().with("rgb-color-field");
     let mut response = ui.add_sized(
-        [width, 28.0],
-        crate::ui::dialog::singleline_text_edit(hex)
+        [width, crate::ui::control_density::height(ui)],
+        crate::ui::dialog::singleline_text_edit(ui, hex)
             .font(egui::TextStyle::Button.resolve(ui.style()))
             .id(id)
             .desired_width(width)
@@ -332,7 +332,7 @@ fn palette_contents(ui: &mut egui::Ui, id: egui::Id, hex: &mut String, fallback:
     let font = egui::TextStyle::Button.resolve(ui.style());
     let frame = egui::Frame::NONE.inner_margin(egui::Margin::symmetric(6, 0)).fill(ui.visuals().extreme_bg_color)
         .stroke(ui.visuals().widgets.inactive.bg_stroke).corner_radius(3.0);
-    let field = ui.add_sized([ui.available_width(), 28.0], crate::ui::dialog::singleline_text_edit(&mut draft)
+    let field = ui.add_sized([ui.available_width(), crate::ui::control_density::height(ui)], crate::ui::dialog::singleline_text_edit(ui, &mut draft)
         .id(id.with("input")).font(font).frame(frame).char_limit(7).hint_text("#RRGGBB"));
     let rgb = crate::config::parse_rgb_hex(&draft).unwrap_or(fallback);
     let mut color = egui::Color32::from_rgb(rgb[0], rgb[1], rgb[2]);
@@ -360,15 +360,19 @@ pub fn color_dropdown(ui: &mut egui::Ui, salt: impl std::hash::Hash + std::fmt::
     let label = if value == "custom" { custom_label } else { selected.map(|option| option.label.as_str()).unwrap_or(value) };
     let rgb = selected.map(|option| option.rgb).unwrap_or(custom_rgb);
     let mut changed = false;
-    let mut response = ui.push_id(&salt, |ui| ui.add_sized([width, crate::ui::dropdown::ROW_HEIGHT],
-        egui::Button::new(""))).inner;
+    let mut response = ui.push_id(&salt, |ui| {
+        let (rect, response) = ui.allocate_exact_size(egui::vec2(width, crate::ui::control_density::height(ui)), egui::Sense::click());
+        let visuals = ui.style().interact(&response);
+        ui.painter().rect(rect, visuals.corner_radius, visuals.weak_bg_fill, visuals.bg_stroke, egui::StrokeKind::Inside);
+        response
+    }).inner;
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, ui.is_enabled(), label));
     let galley = ui.painter().layout_no_wrap(label.to_owned(), egui::TextStyle::Button.resolve(ui.style()), ui.visuals().text_color());
     ui.painter().with_clip_rect(response.rect.shrink(1.0)).galley(
         egui::pos2(response.rect.left()+27.0,response.rect.center().y-galley.size().y/2.0),galley,ui.visuals().text_color());
     crate::ui::dropdown::paint_swatch(ui, response.rect, egui::Color32::from_rgb(rgb[0],rgb[1],rgb[2]));
-    ui.painter().text(response.rect.right_center() - egui::vec2(10.0,0.0), egui::Align2::CENTER_CENTER,
-        crate::ui::icons::CARET_DOWN, egui::FontId::proportional(12.0), ui.visuals().weak_text_color());
+    crate::ui::control_density::paint_chevron(ui, egui::Rect::from_center_size(
+        response.rect.right_center() - egui::vec2(10.0,0.0), egui::vec2(14.0,14.0)), ui.visuals().text_color());
     let max_height = (ui.ctx().content_rect().height() - 32.0).clamp(120.0,720.0);
     if response.has_focus() && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE,egui::Key::ArrowDown)
         || input.consume_key(egui::Modifiers::NONE,egui::Key::ArrowUp)) {

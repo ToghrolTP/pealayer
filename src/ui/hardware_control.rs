@@ -1423,8 +1423,8 @@ fn draw_channel_manager_page(
                                             egui::Stroke::new(1.0, ui.visuals().error_fg_color);
                                     }
                                     ui.add_sized(
-                                        [42.0, 25.0],
-                                        crate::ui::dialog::singleline_text_edit(&mut order_draft)
+                                        [42.0, crate::ui::control_density::height(ui)],
+                                        crate::ui::dialog::singleline_text_edit(ui, &mut order_draft)
                                             .id(order_edit_id)
                                             .horizontal_align(egui::Align::Center)
                                             .vertical_align(egui::Align::Center)
@@ -2664,8 +2664,8 @@ fn draw_channel_detail_page(
                                         &app.hardware_control_name_draft,
                                     );
                                     ui.add_sized(
-                                        [field_width, 28.0],
-                                        crate::ui::dialog::singleline_text_edit(
+                                        [field_width, crate::ui::control_density::height(ui)],
+                                        crate::ui::dialog::singleline_text_edit(ui,
                                             &mut app.hardware_control_name_draft,
                                         )
                                         .horizontal_align(align),

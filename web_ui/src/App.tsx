@@ -109,6 +109,9 @@ const App: React.FC = () => {
   }, []);
   const motionMode = appearance?.ui_animation_mode ?? appConfig?.ui_animation_mode ?? 'system';
   const animationsEnabled = motionMode === 'enabled' || (motionMode === 'system' && !systemReducedMotion);
+  const controlDensity = appearance?.ui_control_density ?? appConfig?.ui_control_density ?? 'compact';
+  const controlHeight = controlDensity === 'compact' ? 24 : 32;
+  useEffect(() => { document.documentElement.style.setProperty('--control-height', `${controlHeight}px`); }, [controlHeight]);
   useEffect(() => { document.documentElement.dataset.motion = animationsEnabled ? 'enabled' : 'disabled'; }, [animationsEnabled]);
 
   useEffect(() => {
@@ -187,13 +190,14 @@ const App: React.FC = () => {
         && previous?.color_palette === appearance.color_palette
         && previous?.accent_color === appearance.accent_color
         && previous?.custom_accent_color === appearance.custom_accent_color
-        && previous?.ui_animation_mode === appearance.ui_animation_mode) return previous;
+        && previous?.ui_animation_mode === appearance.ui_animation_mode
+        && previous?.ui_control_density === appearance.ui_control_density) return previous;
         // Motion is part of the shared appearance contract, not a browser-only toggle.
       const next = mergeAppearance(previous ?? {}, appearance);
       persistJson(STORAGE.config, next);
       return next;
     });
-  }, [appearance?.theme, appearance?.color_palette, appearance?.accent_color, appearance?.custom_accent_color, appearance?.ui_animation_mode]);
+  }, [appearance?.theme, appearance?.color_palette, appearance?.accent_color, appearance?.custom_accent_color, appearance?.ui_animation_mode, appearance?.ui_control_density]);
 
   const accentColor = resolvedAccent(runtime, appConfig, appearance);
   const accentTextColor = accentForeground(accentColor);
@@ -543,10 +547,14 @@ const App: React.FC = () => {
 
   return (
     <ConfigProvider direction={runtime?.direction}
+      componentSize={controlDensity === 'compact' ? 'small' : 'middle'}
       theme={{
         algorithm: resolvedTheme === 'light' ? theme.defaultAlgorithm : theme.darkAlgorithm,
           token: {
             motion: animationsEnabled,
+          controlHeight,
+          controlHeightSM: controlHeight,
+          controlHeightLG: controlHeight,
           colorPrimary: accentColor,
           colorTextLightSolid: accentTextColor,
           // Ant Design derives additional colors from these tokens. Supply
@@ -565,6 +573,8 @@ const App: React.FC = () => {
           fontFamily: `-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif`,
         },
         components: {
+          Select: { optionHeight: controlHeight, optionPadding: '0 8px' },
+          Menu: { itemHeight: controlHeight },
           Modal: {
             contentBg: palette['surface-1'],
             headerBg: 'transparent',

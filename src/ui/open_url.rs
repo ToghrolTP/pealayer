@@ -576,7 +576,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     .desired_rows(3)
                                     .hint_text("https://...")
                             } else {
-                                crate::ui::dialog::singleline_text_edit(&mut app.url_input_buffer)
+                                crate::ui::dialog::singleline_text_edit(ui, &mut app.url_input_buffer)
                                     .id(edit_id)
                                     .desired_width(f32::INFINITY)
                                     .hint_text("https://...")

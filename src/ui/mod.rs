@@ -2,6 +2,7 @@ pub mod about;
 pub mod audio;
 pub mod board_info;
 pub mod controls;
+pub mod control_density;
 mod monitor_controls;
 pub mod color_picker;
 pub mod motion;
@@ -203,6 +204,7 @@ pub fn configure_native_visuals(ctx: &eframe::egui::Context, config: &crate::con
     ctx.set_visuals_of(Theme::Dark, dark);
     ctx.set_visuals_of(Theme::Light, light);
     ctx.all_styles_mut(configure_interaction_style);
+    ctx.all_styles_mut(|style| control_density::configure(style, config.ui_control_density));
     elegance_theme::set_source_palette(ctx, config.color_palette);
     motion::configure(ctx, config.ui_animation_mode);
 }

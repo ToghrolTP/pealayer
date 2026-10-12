@@ -1271,7 +1271,7 @@ fn effects_library_toolbar(app: &mut PealayerApp, ui: &mut egui::Ui, width: f32)
         ui.label(app.tr("Search"));
         let hint = app.tr("Search effects...");
         let align = crate::ui::i18n::input_alignment(app.rtl, &app.effects_search_query);
-        let search = ui.add(crate::ui::dialog::singleline_text_edit(&mut app.effects_search_query)
+        let search = ui.add(crate::ui::dialog::singleline_text_edit(ui, &mut app.effects_search_query)
             .horizontal_align(align).hint_text(hint).desired_width(ui.available_width()));
         search_rect = search.rect;
         if search.changed() {
@@ -3824,7 +3824,7 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
                         let name_align = crate::ui::i18n::input_alignment(app.rtl, &template.name);
                         let name_editor = ui.add_sized(
                             [ui.available_width(), 28.0],
-                            crate::ui::dialog::singleline_text_edit(&mut template.name)
+                            crate::ui::dialog::singleline_text_edit(ui, &mut template.name)
                                 .horizontal_align(name_align),
                         );
                         if name_editor.gained_focus() { push_undo = true; }
@@ -6405,6 +6405,10 @@ fn board_tool_card(ui: &mut egui::Ui, icon: &str, title: &str, body: impl FnOnce
         });
 }
 
+fn buzzer_action_availability(connected: bool, pending: bool, estop: bool, playing: bool) -> (bool, bool) {
+    (connected && !pending && !estop, connected && !pending && playing)
+}
+
 fn draw_buzzer_tool(
     app: &mut PealayerApp,
     ui: &mut egui::Ui,
@@ -6436,9 +6440,8 @@ fn draw_buzzer_tool(
             .clamp(1, 60_000)
     });
     let pending = app.board_operation.is_some();
-    let can_start = capabilities.board_connected && !pending && !app.estop_active;
-    let can_stop = capabilities.board_connected && !pending;
     let playing = capabilities.buzzer.is_playing();
+    let (can_start, can_stop) = buzzer_action_availability(capabilities.board_connected, pending, app.estop_active, playing);
     let board_silent = capabilities
         .settings
         .as_ref()
@@ -6542,8 +6545,7 @@ fn draw_buzzer_tool(
 
             ui.horizontal_wrapped(|ui| {
                 let mut loop_until_stopped = repeats == 0;
-                if ui
-                    .toggle_value(&mut loop_until_stopped, app.tr("Loop until stopped"))
+                if crate::ui::dialog::stable_toggle(ui, &mut loop_until_stopped, &app.tr("Loop until stopped"))
                     .changed()
                 {
                     repeats = if loop_until_stopped { 0 } else { 1 };
@@ -6570,7 +6572,7 @@ fn draw_buzzer_tool(
                         can_stop,
                         egui::Button::new(format!(
                             "{} {}",
-                            crate::ui::icons::STOP_CIRCLE,
+                            crate::ui::icons::STOP,
                             app.tr("Stop buzzer")
                         )),
                     )
@@ -7212,7 +7214,7 @@ fn draw_rf_code_tool(app: &mut PealayerApp, ui: &mut egui::Ui) {
     board_tool_card(ui, crate::ui::icons::RADIO, &app.tr("RF code"), |ui| {
         let response = ui.add_sized(
             [ui.available_width(), 28.0],
-            crate::ui::dialog::singleline_text_edit(&mut code)
+            crate::ui::dialog::singleline_text_edit(ui, &mut code)
                 .hint_text("0x12AB34")
                 .font(egui::TextStyle::Monospace),
         );
@@ -9713,6 +9715,18 @@ mod timeline_row_tests {
         assert!(text.contains("Stop buzzer"));
         assert!(text.contains("Tone test"));
         output.textures_delta.clear();
+    }
+
+    #[test]
+    fn buzzer_actions_follow_activity_connection_busy_and_estop() {
+        assert_eq!(buzzer_action_availability(true, false, false, false), (true, false));
+        assert_eq!(buzzer_action_availability(true, false, false, true), (true, true));
+        assert_eq!(buzzer_action_availability(true, false, true, true), (false, true));
+        assert_eq!(buzzer_action_availability(true, false, true, false), (false, false));
+        for playing in [false, true] {
+            assert_eq!(buzzer_action_availability(false, false, false, playing), (false, false));
+            assert_eq!(buzzer_action_availability(true, true, false, playing), (false, false));
+        }
     }
 
     #[test]
@@ -13725,7 +13739,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 &draft.name,
                                             );
                                             let name_response = ui.add(
-                                                crate::ui::dialog::singleline_text_edit(&mut draft.name)
+                                                crate::ui::dialog::singleline_text_edit(ui, &mut draft.name)
                                                     .horizontal_align(name_align)
                                                     .desired_width(250.0),
                                             );
@@ -14470,7 +14484,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 });
                                 let filter_response = header_ui.add_sized(
                                     [158.0, 22.0],
-                                    crate::ui::dialog::singleline_text_edit(&mut timeline_track_filter)
+                                    crate::ui::dialog::singleline_text_edit(ui, &mut timeline_track_filter)
                                         .hint_text(self.app.tr("Tracks"))
                                         .frame(egui::Frame::NONE)
                                         .margin(egui::Margin::symmetric(4, 2)),
@@ -14669,7 +14683,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 });
                                                 let edit = ui.add_sized(
                                                     [label_width, timeline_track_height],
-                                                    crate::ui::dialog::singleline_text_edit(&mut draft),
+                                                    crate::ui::dialog::singleline_text_edit(ui, &mut draft),
                                                 );
                                                 let focus = ui.ctx().data_mut(|data| {
                                                     data.get_temp::<bool>(rename_focus_id)
@@ -15260,7 +15274,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 });
                                                 let edit = ui.add_sized(
                                                     [88.0, 22.0],
-                                                    crate::ui::dialog::singleline_text_edit(&mut draft),
+                                                    crate::ui::dialog::singleline_text_edit(ui, &mut draft),
                                                 );
                                                 let focus = ui.ctx().data_mut(|data| {
                                                     data.get_temp::<bool>(rename_focus_id)
@@ -15878,7 +15892,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 let mut label = marker.label.clone();
                                                 ui.horizontal(|ui| {
                                                     ui.label(self.app.tr("Name"));
-                                                    if ui.add(crate::ui::dialog::singleline_text_edit(&mut label).desired_width(160.0)).changed() {
+                                                    if ui.add(crate::ui::dialog::singleline_text_edit(ui, &mut label).desired_width(160.0)).changed() {
                                                         self.app.undo_stack.push(self.app.snapshot_timeline());
                                                         if let Some(keyframe) = self.app.timeline.keyframes.iter_mut().find(|keyframe| keyframe.id == marker.id) {
                                                             keyframe.label = label;

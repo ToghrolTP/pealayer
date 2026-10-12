@@ -163,7 +163,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     egui::Grid::new("create_template_grid").show(ui, |ui| {
                         ui.label(app.tr("Name:"));
                         let name_align = crate::ui::i18n::input_alignment(app.rtl, &name);
-                        ui.add(crate::ui::dialog::singleline_text_edit(&mut name).horizontal_align(name_align));
+                        ui.add(crate::ui::dialog::singleline_text_edit(ui, &mut name).horizontal_align(name_align));
                         ui.end_row();
 
                         ui.label(app.tr("Icon:"));
@@ -314,7 +314,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
                         ui.horizontal(|ui| {
                             let mut text_edit =
-                                crate::ui::dialog::singleline_text_edit(&mut time_str).desired_width(80.0);
+                                crate::ui::dialog::singleline_text_edit(ui, &mut time_str).desired_width(80.0);
                             if !is_valid {
                                 text_edit = text_edit.text_color(egui::Color32::RED);
                             }

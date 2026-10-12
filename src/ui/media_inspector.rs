@@ -345,8 +345,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.label(crate::ui::icons::MAGNIFYING_GLASS);
         let response = ui.add_sized(
-            [ui.available_width().min(360.0), 24.0],
-            crate::ui::dialog::singleline_text_edit(&mut filter).hint_text(search_hint),
+            [ui.available_width().min(360.0), crate::ui::control_density::height(ui)],
+            crate::ui::dialog::singleline_text_edit(ui, &mut filter).hint_text(search_hint),
         );
         if response.changed() {
             ui.ctx()

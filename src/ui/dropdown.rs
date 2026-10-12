@@ -1,8 +1,6 @@
 //! Shared native dropdown focus, full-width choices and stable color lanes.
 use eframe::egui;
 
-pub const ROW_HEIGHT: f32 = 32.0;
-
 #[derive(Clone)]
 struct Entry {
     id: egui::Id,
@@ -31,7 +29,9 @@ impl ComboBox {
     pub fn from_id_salt(salt: impl egui::AsIdSalt) -> Self {
         let hashed_salt = egui::IdSalt::new(&salt);
         Self {
-            inner: egui::ComboBox::from_id_salt(salt),
+            inner: egui::ComboBox::from_id_salt(salt).icon(|ui, rect, visuals, _| {
+                crate::ui::control_density::paint_chevron(ui, rect, visuals.text_color());
+            }),
             salt: hashed_salt,
         }
     }
@@ -76,10 +76,14 @@ impl ComboBox {
         body: impl FnOnce(&mut egui::Ui) -> R,
     ) -> egui::InnerResponse<Option<R>> {
         let button = ui.make_persistent_id(self.salt);
+        let previous_height = ui.spacing().interact_size.y;
+        let height = crate::ui::control_density::height(ui);
+        if height != previous_height { ui.spacing_mut().interact_size.y = height; }
         let result = self
             .inner
             .popup_style(egui::style::StyleModifier::new(dropdown_style))
             .show_ui(ui, |ui| menu_ui(ui, button, body));
+        if height != previous_height { ui.spacing_mut().interact_size.y = previous_height; }
         if result.inner.is_none() {
             clear_menu(ui.ctx(), button);
         }
@@ -89,7 +93,6 @@ impl ComboBox {
 
 fn dropdown_style(style: &mut egui::Style) {
     style.interaction.selectable_labels = false;
-    style.spacing.interact_size.y = ROW_HEIGHT;
     for widget in [
         &mut style.visuals.widgets.inactive,
         &mut style.visuals.widgets.hovered,
@@ -318,7 +321,7 @@ pub fn choice_with_close(ui: &mut egui::Ui, selected: bool, text: impl Into<egui
     let text = text.into();
     let width = ui.available_width();
     let (rect, response) =
-        ui.allocate_exact_size(egui::vec2(width, ROW_HEIGHT), egui::Sense::click());
+        ui.allocate_exact_size(egui::vec2(width, crate::ui::control_density::height(ui)), egui::Sense::click());
     let response = register_choice(ui, response, selected);
     response.widget_info(|| {
         egui::WidgetInfo::selected(
@@ -578,6 +581,7 @@ mod tests {
                 });
                 let frame = |pointer| {
                     let mut rows = Vec::new();
+                    let mut row_height = 0.0;
                     let mut output = ctx.run_ui(
                         egui::RawInput {
                             screen_rect: Some(egui::Rect::from_min_size(
@@ -589,6 +593,7 @@ mod tests {
                         },
                         |ui| {
                             ui.set_width(310.0);
+                            row_height = crate::ui::control_density::height(ui);
                             rows.push(
                                 choice(ui, true, "System accent", Some(egui::Color32::BLUE)).rect,
                             );
@@ -610,7 +615,7 @@ mod tests {
                     );
                     for row in &rows {
                         assert_eq!(row.width(), 310.0);
-                        assert_eq!(row.height(), ROW_HEIGHT);
+                        assert_eq!(row.height(), row_height);
                     }
                     let inset = output
                         .shapes

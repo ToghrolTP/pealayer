@@ -14,6 +14,27 @@ const CONTROL_TEXT_SIZE: f32 = 13.0;
 pub const CLOSE_BUTTON_SIDE: f32 = 32.0;
 pub const CLOSE_GLYPH_SIZE: f32 = 22.0;
 
+/// Selectable captions reserve padding once; hover/selection strokes are painted
+/// inside the fixed hit rectangle, never included in text layout or row sizing.
+pub fn stable_toggle(ui: &mut egui::Ui, selected: &mut bool, label: &str) -> egui::Response {
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let galley = ui.painter().layout_no_wrap(label.into(), font, ui.visuals().text_color());
+    let padding = ui.spacing().button_padding;
+    let size = (galley.size() + padding * 2.0).max(ui.spacing().interact_size);
+    let (rect, mut response) = ui.allocate_exact_size(size, egui::Sense::click());
+    if response.clicked() {
+        *selected = !*selected;
+        response.mark_changed();
+    }
+    let visuals = ui.style().interact_selectable(&response, *selected);
+    if *selected || response.hovered() || response.has_focus() || response.is_pointer_button_down_on() {
+        ui.painter().rect(rect, visuals.corner_radius, visuals.weak_bg_fill, visuals.bg_stroke, egui::StrokeKind::Inside);
+    }
+    ui.painter().galley(rect.center() - galley.size() * 0.5, galley, visuals.fg_stroke.color);
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::Button, response.enabled(), *selected, label));
+    response
+}
+
 /// Icon geometry is independent of text padding, font metrics and interact_size.
 /// Keep paint, hit target and focus outline inside the same exact square.
 pub fn close_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
@@ -106,15 +127,17 @@ pub fn confirmation_modal(ctx: &egui::Context, id: egui::Id, heading: &str,
 
 /// Single-line input text stays centered when its row supplies extra height.
 /// Multiline/wrapped editors intentionally keep TextEdit's top alignment.
-pub fn singleline_text_edit(text: &mut dyn egui::TextBuffer) -> egui::TextEdit<'_> {
+pub fn singleline_text_edit<'a>(ui: &egui::Ui, text: &'a mut dyn egui::TextBuffer) -> egui::TextEdit<'a> {
     egui::TextEdit::singleline(text).vertical_align(egui::Align::Center)
+        .font(egui::TextStyle::Button).margin(egui::Margin::symmetric(4, 0))
+        .min_size(egui::vec2(0.0, crate::ui::control_density::height(ui)))
 }
 
 /// Inline captions and editors share one fixed slot. Paint the outline inside
 /// that slot instead of letting a TextEdit frame move its baseline by a pixel.
 pub fn inline_caption_edit(ui: &mut egui::Ui, id: egui::Id, text: &mut String,
     size: egui::Vec2, font: egui::FontId, alignment: egui::Align) -> egui::Response {
-    let response = ui.add_sized(size, singleline_text_edit(text).id(id).font(font)
+    let response = ui.add_sized(size, singleline_text_edit(ui, text).min_size(egui::vec2(0.0, size.y)).id(id).font(font)
         .text_color(ui.visuals().strong_text_color()).horizontal_align(alignment)
         .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 0))).char_limit(64));
     let visuals = ui.style().interact(&response);
@@ -437,6 +460,41 @@ pub fn escape_pressed(ctx: &egui::Context) -> bool {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn loop_toggle_hover_selection_and_focus_do_not_move_text_or_neighbors() {
+        for dark in [false, true] {
+            for scale in [1.0, 1.25, 1.5, 2.0] {
+                let context = egui::Context::default();
+                context.set_pixels_per_point(scale);
+                context.set_visuals(if dark { egui::Visuals::dark() } else { egui::Visuals::light() });
+                let mut baseline = None;
+                for state in 0..6 {
+                    let mut selected = state == 3;
+                    let mut geometry = (egui::Rect::NOTHING, egui::Rect::NOTHING);
+                    let pointer = if state == 0 { egui::pos2(500.0, 300.0) } else { egui::pos2(35.0, 15.0) };
+                    let mut output = context.run_ui(egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(520.0, 320.0))),
+                        events: vec![egui::Event::PointerMoved(pointer)],
+                        ..Default::default()
+                    }, |ui| {
+                        ui.horizontal(|ui| {
+                            let toggle = super::stable_toggle(ui, &mut selected, "Loop until stopped");
+                            if state == 4 { toggle.request_focus(); }
+                            geometry = (toggle.rect, ui.label("Repeats").rect);
+                        });
+                    });
+                    let text_position = output.shapes.iter().find_map(|shape| match &shape.shape {
+                        egui::epaint::Shape::Text(text) if text.galley.text() == "Loop until stopped" => Some(text.pos),
+                        _ => None,
+                    }).expect("visible toggle caption");
+                    let current = (geometry, text_position);
+                    if let Some(baseline) = baseline { assert_eq!(current, baseline, "toggle shifted at {scale}, dark={dark}, state={state}"); }
+                    else { baseline = Some(current); }
+                    output.textures_delta.clear();
+                }
+            }
+        }
+    }
+    #[test]
     fn close_square_and_ink_center_survive_fonts_scaling_and_interaction_states() {
         use super::*;
         for scale in [1.0, 1.25, 1.5, 2.0] {
@@ -560,7 +618,7 @@ mod tests {
         let ctx = egui::Context::default();
         let mut text = "Center me".to_owned();
         let mut frame = ctx.run_ui(egui::RawInput::default(), |ui| {
-            let output = singleline_text_edit(&mut text).min_size(egui::vec2(200.0, 46.0)).show(ui);
+            let output = singleline_text_edit(ui, &mut text).min_size(egui::vec2(200.0, 46.0)).show(ui);
             let text_center = output.galley_pos.y + output.galley.size().y * 0.5;
             assert!((text_center - output.response.rect.center().y).abs() <= 1.0);
             let wrapped = egui::TextEdit::multiline(&mut text).min_size(egui::vec2(200.0, 80.0)).show(ui);

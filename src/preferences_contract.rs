@@ -383,6 +383,8 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             &[("system", "System"), ("light", "Light"), ("dark", "Dark")],
         ),
         PreferenceControl::accent(config),
+        PreferenceControl::select("ui_control_density", "appearance", "Interface", "Control density",
+            &[("compact", "Compact"), ("comfortable", "Comfortable")]),
         PreferenceControl::select("ui_animation_mode", "appearance", "Interface", "Animations and transitions",
             &[("system", "System default"), ("enabled", "Enabled"), ("disabled", "Disabled")]),
         PreferenceControl::select(
@@ -1203,6 +1205,7 @@ fn semantic_preference_icon(control: &PreferenceControl) -> &'static str {
         "accent_color" | "accent" => "palette",
         "color_palette" => "swatches",
         "ui_animation_mode" => "waveform",
+        "ui_control_density" => "sliders-horizontal",
         "language" => "translate",
         "fullscreen_video_background" => "frame-corners",
         "always_on_top" => "push-pin",
@@ -1286,9 +1289,9 @@ mod tests {
         let controls = preference_controls(&crate::config::AppConfig::default());
         let interface: Vec<_> = controls.iter().filter(|control| control.section == "appearance" && control.group == "Interface").collect();
         assert_eq!(interface.iter().map(|control| control.key).collect::<Vec<_>>(),
-            ["theme", "accent_color", "ui_animation_mode", "color_palette", "app_icon_preset", "fullscreen_video_background", "language"]);
+            ["theme", "accent_color", "ui_control_density", "ui_animation_mode", "color_palette", "app_icon_preset", "fullscreen_video_background", "language"]);
         assert_eq!(interface.iter().map(|control| control.icon).collect::<Vec<_>>(),
-            ["circle-half", "palette", "waveform", "swatches", "image", "frame-corners", "translate"]);
+            ["circle-half", "palette", "sliders-horizontal", "waveform", "swatches", "image", "frame-corners", "translate"]);
         for (key, icon) in [("always_on_top", "push-pin"), ("osd_position", "target"), ("osd_timeout_seconds", "clock"),
             ("app_icon_playing", "play"), ("app_icon_paused", "pause"), ("app_icon_stopped", "stop-circle")] {
             assert_eq!(controls.iter().find(|control| control.key == key).unwrap().icon, icon);
