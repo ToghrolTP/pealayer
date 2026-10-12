@@ -14,6 +14,13 @@ Single-line native inputs share `dialog::singleline_text_edit`, centering both
 text and placeholders vertically when allocated extra row height. Multiline
 and wrapped editors retain top alignment.
 
+Appearance / Typography owns normal UI and monospace family choices. Native
+preview, Save/Discard and cross-client appearance reconciliation use the same
+shared preference path. Fonts load on a changed selection, not on each paint;
+bundled Ubuntu/Hack/Vazirmatn and their licences support offline Web/native parity.
+Status widgets can independently opt out of monospace, without changing the
+application-wide family setting.
+
 Appearance ends with **Application icons**, a single optional disclosure. With
 no configured overrides it initially stays collapsed. Configured overrides make
 it initially open; the user can still collapse or expand it. It contains:

@@ -848,6 +848,7 @@ pub fn run() -> eframe::Result {
                 hardware_control_pwm_percent: 0.0,
                 keyboard_shortcuts_enabled: loaded_config.keyboard_shortcuts_enabled,
                 media_keys_enabled: loaded_config.media_keys_enabled,
+                media_keys_background_enabled: loaded_config.media_keys_background_enabled,
                 application_shortcuts: loaded_config.application_shortcuts.clone(),
                 global_hardware_hotkeys_enabled: loaded_config.global_hardware_hotkeys_enabled,
                 hardware_key_bindings: loaded_config.hardware_key_bindings.clone(),
@@ -911,6 +912,7 @@ pub fn run() -> eframe::Result {
                 timeline_toolbar_hidden: loaded_config.timeline_toolbar_hidden.clone(),
                 pending_timeline_toolbar_save: None,
                 pending_status_bar_save: None,
+                pending_control_bar_save: None,
                 workspace_rendering: false,
                 deferred_config_save: false,
                 non_user_control_visibility: loaded_config.non_user_control_visibility,
@@ -931,6 +933,7 @@ pub fn run() -> eframe::Result {
                 native_dialog_windows: loaded_config.native_dialog_windows,
                 native_preferences: None,
                 status_bar: loaded_config.status_bar,
+                control_bars: loaded_config.control_bars,
                 config_fingerprint: crate::config::AppConfig::fingerprint(
                     &crate::config::AppConfig::get_config_path(),
                 )

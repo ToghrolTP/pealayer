@@ -383,6 +383,12 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             &[("system", "System"), ("light", "Light"), ("dark", "Dark")],
         ),
         PreferenceControl::accent(config),
+        PreferenceControl::select("ui_control_density", "appearance", "Interface", "Control density",
+            &[("compact", "Compact"), ("comfortable", "Comfortable")]),
+        PreferenceControl::select("ui_font_family", "appearance", "Typography", "UI font",
+            &[("system", "System font"), ("bundled", "Bundled font"), ("vazirmatn", "Vazirmatn")]),
+        PreferenceControl::select("monospace_font_family", "appearance", "Typography", "Monospace font",
+            &[("system", "System font"), ("bundled", "Bundled font")]),
         PreferenceControl::select("ui_animation_mode", "appearance", "Interface", "Animations and transitions",
             &[("system", "System default"), ("enabled", "Enabled"), ("disabled", "Disabled")]),
         PreferenceControl::select(
@@ -509,10 +515,10 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
                 "seekbar_hover_thumbnails",
                 "playback",
                 "Seek preview",
-                "Show preview card in Simple workspace",
+                "Show thumbnails in Simple seek preview",
             );
             control.description =
-                Some("Shows a compact decoded-frame card above the Simple player seekbar");
+                Some("Adds a decoded frame to the shared cursor-position and chapter hover card");
             control
         },
         {
@@ -520,10 +526,10 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
                 "nle_seekbar_hover_thumbnails",
                 "playback",
                 "Seek preview",
-                "Show preview card in NLE workspace",
+                "Show thumbnails in NLE seek preview",
             );
             control.description =
-                Some("Disabled by default so the NLE transport and timeline remain unobstructed");
+                Some("Adds a decoded frame to the shared cursor-position and chapter hover card");
             control
         },
         seekbar_color_control("seekbar_markers.chapter_color", "Chapter markers"),
@@ -807,7 +813,13 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
                 "media_keys_enabled", "input", "Keyboard shortcuts",
                 "Respond to keyboard media controls",
             );
-            control.description = Some("Play, pause, stop, next/previous and seek through the OS media session, even in the background. Independent of in-app shortcuts and hardware hotkeys.");
+            control.description = Some("Play, pause, stop, next/previous and seek through the OS media session. Independent of in-app shortcuts and hardware hotkeys.");
+            control
+        },
+        {
+            let mut control=PreferenceControl::boolean("media_keys_background_enabled","input","Keyboard shortcuts",
+                "Allow media controls while Pealayer is in the background");
+            control.description=Some("Keep keyboard media buttons and OS transport controls working when another window has focus, including when Pealayer is minimized. Requires Respond to keyboard media controls; does not override the OS choice of media player.");
             control
         },
         PreferenceControl::text("application_shortcuts.fullscreen", "input", "Application shortcuts", "Toggle fullscreen", "F11 (empty disables)"),
@@ -1170,6 +1182,8 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
         PreferenceControl::boolean("status_bar.chart", "advanced", "Status bar", "Telemetry log chart"),
         PreferenceControl::boolean("status_bar.progress", "advanced", "Status bar", "Operation progress"),
         PreferenceControl::boolean("status_bar.hot", "advanced", "Status bar", "HOT alerts"),
+        PreferenceControl::boolean("status_bar.dividers", "advanced", "Status bar", "Show dividers"),
+        PreferenceControl::boolean("status_bar.semantic_colors", "advanced", "Status bar", "Semantic colors"),
     ];
     for key in ["quick_seek_seconds", "mouse_seek_seconds_per_notch"] {
         if let Some(control) = controls.iter_mut().find(|control| control.key == key) {
@@ -1203,6 +1217,8 @@ fn semantic_preference_icon(control: &PreferenceControl) -> &'static str {
         "accent_color" | "accent" => "palette",
         "color_palette" => "swatches",
         "ui_animation_mode" => "waveform",
+        "ui_control_density" => "sliders-horizontal",
+        "ui_font_family" | "monospace_font_family" => "text-t",
         "language" => "translate",
         "fullscreen_video_background" => "frame-corners",
         "always_on_top" => "push-pin",
@@ -1218,7 +1234,7 @@ fn semantic_preference_icon(control: &PreferenceControl) -> &'static str {
         key if key.starts_with("subtitle_") => "subtitles",
         key if key.starts_with("timeline_") => "waveform",
         key if key.starts_with("web_") => "globe",
-        key if key.starts_with("keyboard_") || key.starts_with("shortcut_") => "keyboard",
+        key if key.starts_with("keyboard_") || key.starts_with("shortcut_") || key.starts_with("media_keys_") => "keyboard",
         _ => match control.kind {
             PreferenceControlKind::Accent | PreferenceControlKind::Color => "palette",
             PreferenceControlKind::Boolean => "check-square",
@@ -1286,9 +1302,9 @@ mod tests {
         let controls = preference_controls(&crate::config::AppConfig::default());
         let interface: Vec<_> = controls.iter().filter(|control| control.section == "appearance" && control.group == "Interface").collect();
         assert_eq!(interface.iter().map(|control| control.key).collect::<Vec<_>>(),
-            ["theme", "accent_color", "ui_animation_mode", "color_palette", "app_icon_preset", "fullscreen_video_background", "language"]);
+            ["theme", "accent_color", "ui_control_density", "ui_animation_mode", "color_palette", "app_icon_preset", "fullscreen_video_background", "language"]);
         assert_eq!(interface.iter().map(|control| control.icon).collect::<Vec<_>>(),
-            ["circle-half", "palette", "waveform", "swatches", "image", "frame-corners", "translate"]);
+            ["circle-half", "palette", "sliders-horizontal", "waveform", "swatches", "image", "frame-corners", "translate"]);
         for (key, icon) in [("always_on_top", "push-pin"), ("osd_position", "target"), ("osd_timeout_seconds", "clock"),
             ("app_icon_playing", "play"), ("app_icon_paused", "pause"), ("app_icon_stopped", "stop-circle")] {
             assert_eq!(controls.iter().find(|control| control.key == key).unwrap().icon, icon);
@@ -1789,12 +1805,14 @@ mod tests {
         let config = crate::config::AppConfig::default();
         assert!(config.keyboard_shortcuts_enabled);
         assert!(config.media_keys_enabled);
+        assert!(config.media_keys_background_enabled);
         assert!(config.global_hardware_hotkeys_enabled);
 
         let controls = preference_controls(&config);
         for key in [
             "keyboard_shortcuts_enabled",
             "media_keys_enabled",
+            "media_keys_background_enabled",
             "global_hardware_hotkeys_enabled",
         ] {
             let control = controls
@@ -1825,6 +1843,20 @@ mod tests {
         assert_eq!(contract.values["media_keys_enabled"], false);
         assert!(old.apply_patch(&serde_json::json!({"media_keys_enabled": "off"})).is_err());
         assert!(disabled.apply_patch(&serde_json::json!({"media_keys_enabled": true})).unwrap().media_keys_enabled);
+    }
+
+    #[test]
+    fn background_media_control_scope_is_persistent_shared_and_independent() {
+        let original=crate::config::AppConfig::default();
+        let edited=original.apply_patch(&serde_json::json!({"media_keys_background_enabled":false})).unwrap();
+        assert!(edited.media_keys_enabled && edited.keyboard_shortcuts_enabled && edited.global_hardware_hotkeys_enabled);
+        assert!(!edited.media_keys_background_enabled);
+        let restored:crate::config::AppConfig=serde_json::from_value(serde_json::to_value(&edited).unwrap()).unwrap();
+        assert_eq!(restored,edited);
+        let contract=preferences_contract(&edited);
+        assert_eq!(contract.defaults["media_keys_background_enabled"],true);
+        assert_eq!(contract.values["media_keys_background_enabled"],false);
+        assert!(original.apply_patch(&serde_json::json!({"media_keys_background_enabled":"yes"})).is_err());
     }
 
     #[test]

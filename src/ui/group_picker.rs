@@ -57,7 +57,7 @@ pub(crate) fn group_picker<'a>(
                     .min((ui.ctx().content_rect().width() - 24.0).max(80.0)),
             );
             let edit = ui.add(
-                crate::ui::dialog::singleline_text_edit(&mut search)
+                crate::ui::dialog::singleline_text_edit(ui, &mut search)
                     .id(search_id)
                     .hint_text(crate::ui::i18n::tr(language, "Search or create group..."))
                     .desired_width(ui.available_width()),

@@ -2,7 +2,7 @@
 //! from hardware cards and cues; persistence never runs inside DockArea.
 use crate::app::PealayerApp;
 use crate::config::TimelineToolbarAction as Action;
-use eframe::egui::{self, Align2, Color32, FontId, Id, Rect, Response, Sense, Stroke, StrokeKind};
+use eframe::egui::{self, Align2, Color32, FontId, Id, Rect, Response, Stroke, StrokeKind};
 
 const CELL: f32 = super::layout::TIMELINE_RULER_HEIGHT;
 
@@ -14,88 +14,17 @@ struct ToolbarDrag {
 }
 
 fn register_drag(response: &Response, action: Action, moved_for_drag: bool) {
-    let offset_id = response.id.with("pointer-offset");
-    let started_id = response.id.with("payload-started");
-    let fresh_press = response.ctx.input(|input| {
-        input.pointer.button_pressed(egui::PointerButton::Primary)
-            && input
-                .pointer
-                .press_origin()
-                .is_some_and(|pos| response.rect.contains(pos))
+    super::action_customization::register_drag(response, moved_for_drag, |grab_offset| ToolbarDrag {
+        action, source_rect: response.rect, grab_offset,
     });
-    if fresh_press {
-        response
-            .ctx
-            .data_mut(|data| data.remove_temp::<bool>(started_id));
-    }
-    let started = response
-        .ctx
-        .data(|data| data.get_temp::<bool>(started_id))
-        .unwrap_or(false);
-    // Use the same mouse-down capture as effect cards, before egui promotes
-    // the gesture. Freeze source geometry in the payload for the whole drag.
-    super::layout::remember_drag_offset_on_press(&response.ctx, response.rect, offset_id);
-    if response.dragged_by(egui::PointerButton::Primary)
-        && moved_for_drag
-        && !started
-        && !egui::DragAndDrop::has_any_payload(&response.ctx)
-    {
-        let grab_offset = response
-            .ctx
-            .data(|data| data.get_temp(offset_id))
-            .unwrap_or_else(|| response.rect.size() * 0.5);
-        egui::DragAndDrop::set_payload(
-            &response.ctx,
-            ToolbarDrag {
-                action,
-                source_rect: response.rect,
-                grab_offset,
-            },
-        );
-        // Escape clears egui's payload at frame start. Do not recreate it
-        // while the same mouse gesture remains held after cancellation.
-        response
-            .ctx
-            .data_mut(|data| data.insert_temp(started_id, true));
-    }
-    if response
-        .ctx
-        .input(|input| input.pointer.button_released(egui::PointerButton::Primary))
-    {
-        response
-            .ctx
-            .data_mut(|data| data.remove_temp::<bool>(started_id));
-    }
 }
-
-fn moved_for_drag(ctx: &egui::Context) -> bool {
-    let distance = ctx.options(|options| options.input_options.max_click_dist);
-    ctx.input(|input| {
-        input
-            .pointer
-            .press_origin()
-            .zip(input.pointer.interact_pos())
-            .is_some_and(|(start, current)| start.distance(current) > distance)
-    })
-}
-
+fn moved_for_drag(ctx: &egui::Context) -> bool { super::action_customization::moved_for_drag(ctx) }
 fn drop_payload(response: &Response) -> Option<std::sync::Arc<ToolbarDrag>> {
-    response
-        .ctx
-        .input(|input| input.pointer.button_released(egui::PointerButton::Primary))
-        .then(|| response.dnd_release_payload::<ToolbarDrag>())
-        .flatten()
+    super::action_customization::drop_payload(response)
 }
-
 fn hide_action(hidden: &mut Vec<Action>, action: Action) -> bool {
-    if hidden.contains(&action) {
-        false
-    } else {
-        hidden.push(action);
-        true
-    }
+    super::action_customization::hide_action(hidden, action)
 }
-
 fn ghost_rect(drag: &ToolbarDrag, pointer: egui::Pos2) -> Rect {
     drag.source_rect.translate(super::layout::drag_translation(
         pointer,
@@ -106,14 +35,7 @@ fn ghost_rect(drag: &ToolbarDrag, pointer: egui::Pos2) -> Rect {
 
 fn control_outline(visuals: &egui::Visuals, selected: bool, pressed: bool) -> Stroke {
     // selection.stroke is contrast ink, NOT the accent outline color.
-    Stroke::new(
-        1.0,
-        if selected || pressed {
-            visuals.selection.bg_fill
-        } else {
-            Color32::TRANSPARENT
-        },
-    )
+    super::action_customization::outline(visuals,selected,pressed)
 }
 
 fn paint_drag_preview(
@@ -202,64 +124,11 @@ pub(super) fn held_pan_delta(direction: f32, viewport_width: f32, frame_seconds:
 }
 
 fn move_action(order: &mut Vec<Action>, action: Action, target: Action, after: bool) -> bool {
-    if action == target {
-        return false;
-    }
-    let before = order.clone();
-    order.retain(|candidate| *candidate != action);
-    if let Some(index) = order.iter().position(|candidate| *candidate == target) {
-        order.insert(index + usize::from(after), action);
-    }
-    *order != before
+    super::action_customization::move_action(order, action, target, after)
 }
-
-fn control(
-    ui: &mut egui::Ui,
-    rect: Rect,
-    id: Id,
-    icon: &str,
-    label: &str,
-    enabled: bool,
-    selected: bool,
-) -> Response {
-    let response = ui.interact(rect, id, Sense::click_and_drag());
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
-    let visuals = ui.style().interact_selectable(&response, selected);
-    // Paint the border INSIDE an invariant hit box, including its transparent
-    // inactive state. Hover/selection can never change the allocated size.
-    let fill = if selected {
-        ui.visuals().selection.bg_fill
-    } else if response.hovered() || response.is_pointer_button_down_on() {
-        visuals.weak_bg_fill
-    } else {
-        Color32::TRANSPARENT
-    };
-    let stroke = control_outline(
-        ui.visuals(),
-        selected,
-        enabled && response.is_pointer_button_down_on(),
-    );
-    ui.painter()
-        .rect(rect.shrink(2.0), 4.0, fill, stroke, StrokeKind::Inside);
-    let color = if enabled {
-        visuals.text_color()
-    } else {
-        ui.visuals().weak_text_color()
-    };
-    ui.painter().text(
-        rect.center(),
-        Align2::CENTER_CENTER,
-        icon,
-        FontId::proportional(14.0),
-        color,
-    );
-    response.on_hover_cursor(if enabled {
-        egui::CursorIcon::PointingHand
-    } else {
-        egui::CursorIcon::Default
-    })
+fn control(ui:&mut egui::Ui,rect:Rect,id:Id,icon:&str,label:&str,enabled:bool,selected:bool)->Response {
+    super::action_customization::control(ui,rect,id,icon,label,enabled,selected,false)
 }
-
 pub(super) fn draw(
     ui: &mut egui::Ui,
     app: &mut PealayerApp,

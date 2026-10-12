@@ -35,11 +35,11 @@ pub(crate) fn draw_sfx_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 let mut program: crate::mpv::sfx::AudioProgram = serde_json::from_str(&draft.program_json).unwrap_or_default();
                 if let Some(file) = crate::ui::peer_browser::take_preference_file(ui.ctx(), "sfx_source") { program.source = file; }
                 egui::Grid::new("sfx-identity").num_columns(2).spacing([14.0, 10.0]).show(ui, |ui| {
-                    ui.label(crate::ui::effects_library::designer_label(ui, "Name")); ui.add(dialog::singleline_text_edit(&mut draft.name).desired_width(ui.available_width())); ui.end_row();
+                    ui.label(crate::ui::effects_library::designer_label(ui, "Name")); ui.add(dialog::singleline_text_edit(ui, &mut draft.name).desired_width(ui.available_width())); ui.end_row();
                     ui.label(crate::ui::effects_library::designer_label(ui, "Group")); crate::ui::group_picker::group_picker(ui, "sfx-group", &mut draft.category, effects.iter().map(|effect| effect.group.as_str()), ui.available_width(), app.language); ui.end_row();
                     ui.label(crate::ui::effects_library::designer_label(ui, "Icon")); crate::ui::icons::searchable_control_icon_picker(ui, "sfx-icon", &mut draft.icon, ui.available_width(), &designer_tr(ui, "Search icons..."), &designer_tr(ui, "Presets"), &designer_tr(ui, "No matching icons"), app.language); ui.end_row();
                     ui.label(crate::ui::effects_library::designer_label(ui, "Audio file / URL")); ui.horizontal(|ui| {
-                        ui.add(dialog::singleline_text_edit(&mut program.source).desired_width((ui.available_width()-86.0).max(100.0)));
+                        ui.add(dialog::singleline_text_edit(ui, &mut program.source).desired_width((ui.available_width()-86.0).max(100.0)));
                         if ui.button(format!("{} {}", icons::FOLDER_OPEN, designer_tr(ui, "Browse"))).clicked() {
                             if crate::peer::active() { crate::ui::peer_browser::open(ui.ctx(), crate::ui::peer_browser::Purpose::PreferenceFile { key: "sfx_source".into(), extensions: vec!["wav","mp3","ogg","flac","m4a","aac","opus"].into_iter().map(str::to_string).collect() }, None); }
                             else if let Some(file) = rfd::FileDialog::new().set_title(designer_tr(ui, "Choose sound effect")).add_filter(designer_tr(ui, "Audio"), &["wav","mp3","ogg","flac","m4a","aac","opus"]).pick_file() { program.source = file.to_string_lossy().into(); }

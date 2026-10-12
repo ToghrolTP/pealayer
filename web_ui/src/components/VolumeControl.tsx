@@ -6,16 +6,17 @@ import { tr, UiLocale } from '../i18n';
 
 // Both workspaces use the same authoritative volume/mute controls. Keep the
 // stored level visible while muted so unmuting does not silently reset it.
-export const VolumeControl = React.memo(function VolumeControl({ state, sendCmd, locale, className = '' }: {
+export const VolumeControl = React.memo(function VolumeControl({ state, sendCmd, locale, className = '', showMute = true }: {
   state: PlayerState;
   sendCmd: (command: string, extra?: Record<string, unknown>) => void;
   locale: UiLocale;
   className?: string;
+  showMute?: boolean;
 }) {
   const label = tr(locale, state.muted ? 'Unmute' : 'Mute');
   return (
     <div className={`media-volume ${className}`}>
-      <Tooltip title={label}>
+      {showMute && <Tooltip title={label}>
         <Button
           type="text"
           className={`transport-action ${state.muted ? 'transport-action--pause' : ''}`}
@@ -25,7 +26,7 @@ export const VolumeControl = React.memo(function VolumeControl({ state, sendCmd,
           icon={state.muted || state.volume === 0 ? <MutedOutlined /> : <SoundOutlined />}
           onClick={() => sendCmd('set_mute', { muted: !state.muted })}
         />
-      </Tooltip>
+      </Tooltip>}
       <Slider
         aria-label={tr(locale, 'Volume')}
         min={0}

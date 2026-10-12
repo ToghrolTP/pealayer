@@ -11,6 +11,7 @@ interface MediaTrackSelectorsProps {
   sendCmd: (command: string, payload?: Record<string, unknown>) => Promise<boolean>;
   locale: UiLocale;
   compact?: boolean;
+  only?: TrackKind;
 }
 
 const kinds: Array<{ kind: TrackKind; icon: React.ReactNode; label: string }> = [
@@ -27,10 +28,11 @@ export const MediaTrackSelectors = React.memo(function MediaTrackSelectors({
   sendCmd,
   locale,
   compact = false,
+  only,
 }: MediaTrackSelectorsProps) {
   return (
-  <div className={`media-track-selectors${compact ? ' media-track-selectors--compact' : ''}`}>
-    {kinds.map(({ kind, icon, label }) => {
+    <div className={`media-track-selectors${compact ? ' media-track-selectors--compact' : ''}`}>
+    {kinds.filter(({kind}) => !only || kind === only).map(({ kind, icon, label }) => {
       const tracks = (state.media_tracks ?? []).filter((track) => track.kind === kind);
       const selected = tracks.find((track) => track.selected)?.id ?? 'none';
       const options = [

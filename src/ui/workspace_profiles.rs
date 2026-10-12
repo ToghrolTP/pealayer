@@ -1,5 +1,20 @@
 use crate::app::PealayerApp;
 use eframe::egui;
+use crate::ui::dropdown::DropdownUiExt;
+
+/// Shared stable-ID choices for the main menu and status-bar selector.
+pub(crate) fn profile_choices(ui: &mut egui::Ui,
+    profiles: &[(String, crate::config::WorkspaceProfile)], active: Option<&str>) -> Option<String> {
+    let mut selected = None;
+    for (id, profile) in profiles {
+        let label = format!("{}  {}", crate::ui::icons::workspace_icon(&profile.icon), profile.name);
+        if ui.dropdown_choice(active == Some(id.as_str()), label).on_hover_text(&profile.name).clicked() {
+            selected = Some(id.clone());
+            ui.close();
+        }
+    }
+    selected
+}
 
 /// One manager for every workspace, including the two editable profiles that
 /// seed a first installation. The same stable IDs, names, icons, and ordering
@@ -39,7 +54,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             let name_hint = app.tr("Workspace name");
             ui.add_sized(
                 [ui.available_width().max(280.0) - 250.0, 30.0],
-                crate::ui::dialog::singleline_text_edit(&mut app.workspace_profile_name_draft)
+                crate::ui::dialog::singleline_text_edit(ui, &mut app.workspace_profile_name_draft)
                     .hint_text(name_hint),
             );
             workspace_icon_picker(
@@ -103,7 +118,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     }
                                     let name_response = ui.add_sized(
                                         [ui.available_width().max(420.0) - 390.0, 28.0],
-                                        crate::ui::dialog::singleline_text_edit(&mut name),
+                                        crate::ui::dialog::singleline_text_edit(ui, &mut name),
                                     );
                                     metadata_changed |= name_response.changed();
                                     metadata_changed |= workspace_icon_picker(

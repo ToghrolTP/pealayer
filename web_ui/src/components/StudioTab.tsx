@@ -8,11 +8,8 @@ import {
   CaretRightFilled,
   ClockCircleOutlined,
   DeleteOutlined,
-  DesktopOutlined,
   DisconnectOutlined,
   EditOutlined,
-  FastBackwardOutlined,
-  FastForwardOutlined,
   FileTextOutlined,
   EyeInvisibleOutlined,
   EyeOutlined,
@@ -43,23 +40,26 @@ import { formatTimelineTime } from '../timelineTime';
 import { SeekThumbnailPreview } from './SeekThumbnailPreview';
 import { SeekbarMarkers, useSeekbar } from './seekbar';
 import { MediaSurface } from './MediaSurface';
-import { VolumeControl } from './VolumeControl';
+
 import { ElapsedTimeInput } from './ElapsedTimeInput';
 import type { MediaGesturePreferences } from './MediaSurface';
 import { defaultTimelineWheelPreferences, timelineWheelAction, timelineZoomAtPointer } from '../timelineWheel';
 import type { TimelineWheelPreferences } from '../timelineWheel';
 import { appendMelodySteps, sequenceDurationMs } from '../melodyCatalog';
-import { MediaTrackSelectors } from './MediaTrackSelectors';
-import { PlaybackButton } from './PlaybackButton';
+
+import { ControlBar } from './ControlBar';
+import type { ControlBarProps } from './ControlBar';
 import { SequenceTimeline, SequenceTimelineActions } from './SequenceTimeline';
 import { ColorDropdown } from './ColorDropdown';
 import { DesignerFieldLabel } from './DesignerFieldLabel';
 import { sequenceExtraKinds, sequenceLaneChoices } from '../cueAuthoring';
 import { StepRepeatFields } from './StepRepeatFields';
 import { TimeValueField } from './TimeValueField';
+import { workspaceGlyph } from '../workspacePresentation';
 import { newCueId, repeatedSequenceDurationMs, formatTimeMs, sequenceStepTemplate, moveSequenceStep, sequenceLaneKey } from '../cueAuthoring';
 
 interface StudioTabProps {
+  controlBar: Pick<ControlBarProps, 'onLayoutChange' | 'onPreferences' | 'onFullscreen'>;
   state: PlayerState;
   sendCmd: (command: string, payload?: Record<string, unknown>) => Promise<boolean>;
   locale: UiLocale;
@@ -67,6 +67,7 @@ interface StudioTabProps {
   quickSeekSeconds: number;
   apiBaseUrl: string;
   seekbarHoverThumbnails: boolean;
+  showSubseconds: boolean;
   surface?: 'studio' | 'timeline';
   timelineWheelPreferences?: TimelineWheelPreferences;
   mediaGestures: MediaGesturePreferences;
@@ -99,17 +100,8 @@ const workspaceIconOptions = [
   { value: 'layout', label: 'Layout' },
 ];
 
-const workspaceGlyph = (icon?: string) => {
-  switch (icon) {
-    case 'timeline': return <EditOutlined />;
-    case 'hardware': return <RadarChartOutlined />;
-    case 'effects': return <AppstoreOutlined />;
-    case 'tabs': return <AppstoreOutlined />;
-    default: return <DesktopOutlined />;
-  }
-};
 
-export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, appName, quickSeekSeconds, apiBaseUrl, seekbarHoverThumbnails, surface = 'studio', timelineWheelPreferences = defaultTimelineWheelPreferences, mediaGestures }) => {
+export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, appName, quickSeekSeconds, apiBaseUrl, seekbarHoverThumbnails, showSubseconds, surface = 'studio', timelineWheelPreferences = defaultTimelineWheelPreferences, mediaGestures, controlBar }) => {
   const timelineGridRef = useRef<HTMLDivElement | null>(null);
   const timelinePointersRef = useRef(new Map<number, { x: number; y: number; pointerType: string }>());
   const timelineGestureRef = useRef<null | {
@@ -633,7 +625,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                   <span>{repeatedSequenceDurationMs(effectDraft.steps, effectDraft.repeat_count ?? 1, effectDraft.repeat_interval_ms ?? 0) === null ? tr(locale, 'Effect repeat interval cannot be shorter than its length') : formatTimeMs(repeatedSequenceDurationMs(effectDraft.steps, effectDraft.repeat_count ?? 1, effectDraft.repeat_interval_ms ?? 0)!, state.human_readable_time_units !== false)}</span>
                   <Button disabled={captureBusy || savingEffect || !state.controller_connected || !state.hardware_connected || Boolean(state.estop_active) || !effectDraft.name?.trim() || !effectDraft.steps.length || repeatedSequenceDurationMs(effectDraft.steps,effectDraft.repeat_count ?? 1,effectDraft.repeat_interval_ms ?? 0) === null} icon={<CaretRightFilled />} onClick={() => { void sendCmd('controller_effect.publish_and_run', effectPayload(effectDraft)); }}>{tr(locale, 'Publish & Run')}</Button>
                 </Space>
-                <SequenceTimeline key={effectDraft.id} steps={effectDraft.steps} locale={locale} controls={state.hardware_details?.controls} disabled={captureBusy} actionsRef={sequenceActions} extraKinds={sequenceExtraKinds(state.hardware_details)}
+                <SequenceTimeline key={effectDraft.id} steps={effectDraft.steps} locale={locale} controls={state.hardware_details?.controls} disabled={captureBusy} wheelPreferences={timelineWheelPreferences} actionsRef={sequenceActions} extraKinds={sequenceExtraKinds(state.hardware_details)}
                   human={state.human_readable_time_units !== false} onEdit={index => {
                     const panel = document.querySelector<HTMLElement>(`[data-step-properties="${index}"]`);
                     panel?.scrollIntoView({ block: 'nearest', behavior: document.documentElement.dataset.motion === 'disabled' ? 'auto' : 'smooth' });
@@ -832,24 +824,13 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
         </div>
 
         <div className="studio-transport">
-          <Tooltip title={`${tr(locale, 'Seek backward')} ${quickSeekSeconds}s`}>
-            <Button icon={<FastBackwardOutlined />} onClick={() => sendCmd('seek', { seconds: -quickSeekSeconds })} />
-          </Tooltip>
-          <PlaybackButton
-            className="studio-transport__play"
-            playing={state.playing}
-            loaded={Boolean(state.current_video)}
-            locale={locale}
-            onClick={() => sendCmd('toggle_pause')}
-          />
-          <Tooltip title={`${tr(locale, 'Seek forward')} ${quickSeekSeconds}s`}>
-            <Button icon={<FastForwardOutlined />} onClick={() => sendCmd('seek', { seconds: quickSeekSeconds })} />
-          </Tooltip>
+          <ControlBar state={state} sendCmd={sendCmd} locale={locale} surface="monitor" quickSeekSeconds={quickSeekSeconds} {...controlBar} middle={<div className="control-bar__timeline">
           <ElapsedTimeInput className="studio-timecode" seconds={currentSeconds}
             disabled={!state.current_video || !state.seekable || durationSeconds <= 0}
             mediaIdentity={state.current_video} locale={locale} onCommit={seek.commitSeconds} />
           <SeekThumbnailPreview
-            enabled={seekbarHoverThumbnails && Boolean(state.seekable) && durationSeconds > 0}
+            enabled={seekbarHoverThumbnails}
+            seekable={Boolean(state.seekable)} live={state.live} locale={locale} showSubseconds={showSubseconds}
             duration={durationSeconds}
             mediaIdentity={state.current_video}
             apiBaseUrl={apiBaseUrl}
@@ -865,16 +846,15 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
               disabled={!state.seekable || durationSeconds <= 0}
               onChange={seek.change}
               onChangeComplete={seek.commit}
-              tooltip={seekbarHoverThumbnails ? { open: false } : { formatter: (value) => formatTime(((value ?? 0) / 100) * durationSeconds) }}
+              tooltip={{ open: false }}
             />
             <SeekbarMarkers state={state} seconds={activeSeek / 100 * durationSeconds} onChapter={seek.commitSeconds} />
           </SeekThumbnailPreview>
           <span className="studio-timecode studio-timecode--muted">
             {state.live ? tr(locale, 'LIVE') : formatTime(durationSeconds)}
           </span>
-          <VolumeControl className="studio-volume" state={state} sendCmd={sendCmd} locale={locale} />
+          </div>} />
         </div>
-        <MediaTrackSelectors state={state} sendCmd={sendCmd} locale={locale} compact />
       </section>
 
       <section className="studio-panel timeline-panel-web">

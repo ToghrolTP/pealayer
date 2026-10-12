@@ -175,7 +175,8 @@ static WINDOW_MAGNETIC_DRAG: Mutex<MagneticDragSession> = Mutex::new(MagneticDra
 static SHELL_SUBCLASS_HWND: AtomicIsize = AtomicIsize::new(0);
 static SHELL_COMMAND_MESSAGES: AtomicU64 = AtomicU64::new(0);
 static SHELL_COMMANDS_QUEUED: AtomicU64 = AtomicU64::new(0);
-static SHELL_COMMANDS: Mutex<VecDeque<u32>> = Mutex::new(VecDeque::new());
+static SHELL_COMMANDS: Mutex<VecDeque<ShellCommand>> = Mutex::new(VecDeque::new());
+static SHELL_BOARD_MENU: Mutex<Option<super::tray_board::BoardTrayMenu>> = Mutex::new(None);
 static SHELL_PAUSED: AtomicBool = AtomicBool::new(true);
 static SHELL_MUTED: AtomicBool = AtomicBool::new(false);
 static SHELL_FULLSCREEN: AtomicBool = AtomicBool::new(false);
@@ -198,6 +199,36 @@ static THUMBNAIL_TOOLBAR_LAST_ERROR: Mutex<Option<String>> = Mutex::new(None);
 static THUMBNAIL_TOOLBAR_ICONS: Mutex<Vec<isize>> = Mutex::new(Vec::new());
 
 fn queue_shell_command(command: u32) {
+    queue_shell_selection(ShellCommand { id: command, board_target: None, media_key: false });
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ShellCommand {
+    pub id: u32,
+    pub board_target: Option<super::tray_board::TrayBoardTarget>,
+    /// WM_APPCOMMAND, not an explicitly targeted tray/taskbar action.
+    pub media_key: bool,
+}
+impl ShellCommand {
+    pub(crate) fn allowed_under_media_scope(&self,allowed:bool)->bool {!self.media_key || allowed}
+}
+
+#[cfg(target_os="windows")]
+pub fn is_application_foreground()->bool {
+    use windows::Win32::System::Threading::GetCurrentProcessId;
+    use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow,GetWindowThreadProcessId};
+    unsafe {
+        let hwnd=GetForegroundWindow();
+        if hwnd.0.is_null(){return false;}
+        let mut pid=0;
+        GetWindowThreadProcessId(hwnd,Some(&mut pid));
+        pid!=0 && pid==GetCurrentProcessId()
+    }
+}
+#[cfg(not(target_os="windows"))]
+pub fn is_application_foreground()->bool {false}
+
+fn queue_shell_selection(command: ShellCommand) {
     if let Ok(mut commands) = SHELL_COMMANDS.lock() {
         commands.push_back(command);
         SHELL_COMMANDS_QUEUED.fetch_add(1, Ordering::Relaxed);
@@ -2191,7 +2222,7 @@ unsafe extern "system" fn shell_window_proc(
                 SHELL_MUTED.load(Ordering::Relaxed),
                 SHELL_HAS_MEDIA.load(Ordering::Relaxed),
             ) {
-                queue_shell_command(command);
+                queue_shell_selection(command);
             }
             return LRESULT(0);
         }
@@ -2226,7 +2257,7 @@ unsafe extern "system" fn shell_window_proc(
             SHELL_MEDIA_KEYS_ENABLED.load(Ordering::Relaxed),
             SHELL_HAS_MEDIA.load(Ordering::Relaxed),
         ) {
-            queue_shell_command(command);
+            queue_shell_selection(ShellCommand {id:command,board_target:None,media_key:true});
             return LRESULT(1);
         }
     }
@@ -2312,7 +2343,13 @@ pub fn update_shell_command_state(
     SHELL_MEDIA_KEYS_ENABLED.store(media_keys_enabled, Ordering::Relaxed);
 }
 
-pub fn take_shell_command() -> Option<u32> {
+pub fn update_tray_board_menu(menu: Option<super::tray_board::BoardTrayMenu>) {
+    if let Ok(mut current) = SHELL_BOARD_MENU.lock() && *current != menu {
+        *current = menu;
+    }
+}
+
+pub fn take_shell_command() -> Option<ShellCommand> {
     SHELL_COMMANDS
         .lock()
         .ok()
@@ -2326,7 +2363,12 @@ pub fn shell_command_diagnostics() -> serde_json::Value {
         "thumbnail_click_messages": SHELL_COMMAND_MESSAGES.load(Ordering::Relaxed),
         "commands_queued": SHELL_COMMANDS_QUEUED.load(Ordering::Relaxed),
         "queue_depth": SHELL_COMMANDS.lock().map(|queue| queue.len()).unwrap_or_default(),
+        "board_menu": SHELL_BOARD_MENU.lock().ok().and_then(|menu| menu.as_ref().map(|menu|
+            serde_json::json!({"title": menu.title, "items": menu.items.iter().map(|item|
+                serde_json::json!({"command":item.action as u32,"label":item.label,"enabled":item.enabled})
+            ).collect::<Vec<_>>()}))),
         "has_media": SHELL_HAS_MEDIA.load(Ordering::Relaxed),
+        "media_keys_allowed": SHELL_MEDIA_KEYS_ENABLED.load(Ordering::Relaxed),
         "paused": SHELL_PAUSED.load(Ordering::Relaxed),
         "muted": SHELL_MUTED.load(Ordering::Relaxed),
         "thumbnail_toolbar": {
@@ -2382,7 +2424,9 @@ pub fn register_system_tray_icon(hwnd_raw: isize, tip: &str) -> Result<(), Strin
         let instance: windows::Win32::Foundation::HINSTANCE = module.into();
         let window_icon = SendMessageW(hwnd, WM_GETICON,
             Some(windows::Win32::Foundation::WPARAM(ICON_SMALL2 as usize)), None).0;
-        let hicon = if window_icon != 0 {
+        let hicon = if let Some(owned) = crate::platform::window_icons::tray_icon(hwnd_raw) {
+            HICON(owned as *mut _)
+        } else if window_icon != 0 {
             HICON(window_icon as *mut _)
         } else {
             LoadIconW(Some(instance), PCWSTR(1usize as *const u16))
@@ -2423,6 +2467,7 @@ fn refresh_system_tray_window_icon(hwnd_raw: isize, icon_raw: isize) -> Result<(
     use windows::Win32::Foundation::HWND;
     use windows::Win32::UI::Shell::{NIF_ICON, NIM_MODIFY, NOTIFYICONDATAW, Shell_NotifyIconW};
     use windows::Win32::UI::WindowsAndMessaging::HICON;
+    let icon_raw = crate::platform::window_icons::tray_icon(hwnd_raw).unwrap_or(icon_raw);
     let mut nid = NOTIFYICONDATAW {
         cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
         hWnd: HWND(hwnd_raw as *mut _),
@@ -2492,7 +2537,8 @@ pub fn update_system_tray_icon(hwnd_raw: isize, tip: &str) -> Result<(), String>
     let hwnd = HWND(hwnd_raw as *mut _);
 
     unsafe {
-        let icon = SendMessageW(hwnd, WM_GETICON, Some(WPARAM(ICON_SMALL2 as usize)), Some(LPARAM(0))).0;
+        let icon = crate::platform::window_icons::tray_icon(hwnd_raw).unwrap_or_else(||
+            SendMessageW(hwnd, WM_GETICON, Some(WPARAM(ICON_SMALL2 as usize)), Some(LPARAM(0))).0);
         let mut nid = NOTIFYICONDATAW {
             cbSize: std::mem::size_of::<NOTIFYICONDATAW>() as u32,
             hWnd: hwnd,
@@ -2540,7 +2586,7 @@ pub fn remove_system_tray_icon(hwnd_raw: isize) -> Result<(), String> {
 }
 
 #[cfg(target_os = "windows")]
-fn install_tray_menu_icons(menu: isize) -> Vec<isize> {
+fn install_tray_menu_icons(menu: isize, board: bool) -> Vec<isize> {
     #[repr(C)]
     struct BitmapInfoHeader {
         size: u32,
@@ -2610,6 +2656,10 @@ fn install_tray_menu_icons(menu: isize) -> Vec<isize> {
         0x0000, 0x4002, 0x6006, 0x300C, 0x1818, 0x0C30, 0x0660, 0x03C0, 0x03C0, 0x0660, 0x0C30,
         0x1818, 0x300C, 0x6006, 0x4002, 0x0000,
     ];
+    const STOP: [u16; 16] = [
+        0, 0, 0, 0x1FF8, 0x1FF8, 0x1FF8, 0x1FF8, 0x1FF8,
+        0x1FF8, 0x1FF8, 0x1FF8, 0x1FF8, 0x1FF8, 0, 0, 0,
+    ];
 
     fn create_argb_bitmap(mask: [u16; 16], color: u32) -> isize {
         const BI_RGB: u32 = 0;
@@ -2658,13 +2708,21 @@ fn install_tray_menu_icons(menu: isize) -> Vec<isize> {
     }
 
     let menu_text = unsafe { GetSysColor(7) }; // COLOR_MENUTEXT
-    [
+    let media_icons = [
         (TRAY_CMD_SHOW, WINDOW),
         (TRAY_CMD_PLAYPAUSE, PLAY),
         (TRAY_CMD_MUTE, SPEAKER),
         (TRAY_CMD_OPEN, FOLDER),
         (TRAY_CMD_EXIT, CLOSE),
-    ]
+    ];
+    // Reuse the bounded, theme-colored native menu glyphs. Bitmaps are owned
+    // only for this popup and released after DestroyMenu (including children).
+    let board_icons = [
+        (2201, WINDOW), (2202, STOP), (2203, PLAY), (2204, SPEAKER),
+        (2205, STOP), (2206, STOP), (2207, CLOSE), (2208, PLAY),
+    ];
+    let icons = if board { &board_icons[..] } else { &media_icons[..] };
+    icons.iter().copied()
     .into_iter()
     .filter_map(|(command, bits)| {
         let bitmap = create_argb_bitmap(bits, menu_text);
@@ -2704,12 +2762,42 @@ fn set_menu_default_item(menu: isize, command: u32) {
 }
 
 #[cfg(target_os = "windows")]
+fn append_board_tray_submenu(
+    parent: windows::Win32::UI::WindowsAndMessaging::HMENU,
+    board: &super::tray_board::BoardTrayMenu,
+) -> Result<windows::Win32::UI::WindowsAndMessaging::HMENU, String> {
+    use windows::Win32::UI::WindowsAndMessaging::{AppendMenuW, CreatePopupMenu,
+        DestroyMenu, MF_STRING, MF_SEPARATOR, MF_POPUP, MF_DISABLED, MF_GRAYED};
+    use windows::core::PCWSTR;
+    let caption = |text: &str| text.replace('&', "&&").encode_utf16().chain(Some(0)).collect::<Vec<_>>();
+    unsafe {
+        let submenu = CreatePopupMenu().map_err(|error| error.to_string())?;
+        let result = (|| -> windows::core::Result<()> {
+            for item in &board.items {
+                if item.separator_before { AppendMenuW(submenu, MF_SEPARATOR, 0, PCWSTR::null())?; }
+                let text = caption(&item.label);
+                let flags = if item.enabled { MF_STRING } else { MF_STRING | MF_DISABLED | MF_GRAYED };
+                AppendMenuW(submenu, flags, item.action as usize, PCWSTR(text.as_ptr()))?;
+            }
+            AppendMenuW(parent, MF_SEPARATOR, 0, PCWSTR::null())?;
+            let title = caption(&board.title);
+            AppendMenuW(parent, MF_POPUP, submenu.0 as usize, PCWSTR(title.as_ptr()))
+        })();
+        if let Err(error) = result {
+            let _ = DestroyMenu(submenu);
+            return Err(error.to_string());
+        }
+        Ok(submenu) // parent owns submenu from this point onward.
+    }
+}
+
+#[cfg(target_os = "windows")]
 pub fn show_tray_popup_menu(
     hwnd_raw: isize,
     is_paused: bool,
     is_muted: bool,
     has_media: bool,
-) -> Option<u32> {
+) -> Option<ShellCommand> {
     use windows::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
     use windows::Win32::UI::WindowsAndMessaging::{
         AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, MF_DISABLED, MF_GRAYED,
@@ -2722,6 +2810,8 @@ pub fn show_tray_popup_menu(
         return None;
     }
     let hwnd = HWND(hwnd_raw as *mut _);
+    // Do not retain the mutex through TrackPopupMenu's nested message loop.
+    let board_menu = SHELL_BOARD_MENU.lock().ok().and_then(|menu| menu.clone());
 
     unsafe {
         let mut cursor = POINT { x: 0, y: 0 };
@@ -2781,6 +2871,13 @@ pub fn show_tray_popup_menu(
             TRAY_CMD_OPEN as usize,
             PCWSTR(open_text.as_ptr()),
         );
+        let mut icons = Vec::new();
+        if let Some(board) = &board_menu {
+            match append_board_tray_submenu(hmenu, board) {
+                Ok(submenu) => icons.extend(install_tray_menu_icons(submenu.0 as isize, true)),
+                Err(error) => log::warn!("Cannot create PCController tray submenu: {error}"),
+            }
+        }
         let _ = AppendMenuW(hmenu, MF_SEPARATOR, 0, PCWSTR::null());
         let _ = AppendMenuW(
             hmenu,
@@ -2789,7 +2886,7 @@ pub fn show_tray_popup_menu(
             PCWSTR(exit_text.as_ptr()),
         );
 
-        let icons = install_tray_menu_icons(hmenu.0 as isize);
+        icons.extend(install_tray_menu_icons(hmenu.0 as isize, false));
         set_menu_default_item(hmenu.0 as isize, TRAY_CMD_SHOW);
 
         let _ = SetForegroundWindow(hwnd);
@@ -2806,7 +2903,11 @@ pub fn show_tray_popup_menu(
         let _ = DestroyMenu(hmenu);
         delete_tray_menu_icons(&icons);
 
-        if cmd.0 != 0 { Some(cmd.0 as u32) } else { None }
+        if cmd.0 == 0 { return None; }
+        let id = cmd.0 as u32;
+        let board_target = super::tray_board::BoardTrayAction::from_command(id)
+            .and_then(|_| board_menu.map(|menu| menu.target));
+        Some(ShellCommand { id, board_target, media_key: false })
     }
 }
 
@@ -2831,7 +2932,7 @@ pub fn show_tray_popup_menu(
     _is_paused: bool,
     _is_muted: bool,
     _has_media: bool,
-) -> Option<u32> {
+) -> Option<ShellCommand> {
     None
 }
 
@@ -2850,6 +2951,14 @@ pub fn sync_windows_jump_list_with_options(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn media_scope_does_not_disable_explicit_tray_or_taskbar_buttons() {
+        let key=super::ShellCommand {id:super::THUMB_BUTTON_PLAYPAUSE,board_target:None,media_key:true};
+        let click=super::ShellCommand {id:super::THUMB_BUTTON_PLAYPAUSE,board_target:None,media_key:false};
+        assert!(!key.allowed_under_media_scope(false));
+        assert!(key.allowed_under_media_scope(true));
+        assert!(click.allowed_under_media_scope(false));
+    }
     use super::*;
 
     #[test]
@@ -3047,6 +3156,36 @@ mod tests {
         assert_eq!(tray_menu_label(TRAY_CMD_MUTE, false), "Mute");
         assert_eq!(tray_menu_label(TRAY_CMD_OPEN, false), "Open Media...");
         assert_eq!(tray_menu_label(TRAY_CMD_EXIT, false), "Exit");
+    }
+
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn win32_board_submenu_contains_real_enabled_disabled_commands() {
+        use windows::Win32::UI::WindowsAndMessaging::{CreatePopupMenu, DestroyMenu,
+            GetSubMenu, GetMenuItemCount, GetMenuState, MF_BYCOMMAND, MF_GRAYED};
+        use super::super::tray_board::{BoardTrayAction, BoardTrayMenu};
+        let hardware = crate::four_d::controller::HardwareCapabilities {
+            board_connected: true, host_instance_id: "fixture-host".into(),
+            supports_addressable_led: true,
+            strip_control: Some(crate::four_d::controller::HardwareStripControl::default()),
+            ..Default::default()
+        };
+        let board = BoardTrayMenu::build(Some(&hardware), true, true, false, false,
+            crate::config::AppLanguage::English).unwrap();
+        unsafe {
+            let parent = CreatePopupMenu().unwrap();
+            let child = append_board_tray_submenu(parent, &board).unwrap();
+            assert_eq!(GetSubMenu(parent, 1), child);
+            assert_eq!(GetMenuItemCount(Some(child)), (board.items.len()
+                + board.items.iter().filter(|item| item.separator_before).count()) as i32);
+            for item in &board.items {
+                let state = GetMenuState(child, item.action as u32, MF_BYCOMMAND);
+                assert_ne!(state, u32::MAX, "command missing from actual Win32 submenu");
+                assert_eq!(state & MF_GRAYED.0 != 0, !item.enabled);
+            }
+            assert_eq!(GetMenuState(child, BoardTrayAction::StopBuzzer as u32, MF_BYCOMMAND), u32::MAX);
+            DestroyMenu(parent).unwrap(); // also destroys child.
+        }
     }
 
     #[test]

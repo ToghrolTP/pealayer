@@ -2,6 +2,7 @@ pub mod about;
 pub mod audio;
 pub mod board_info;
 pub mod controls;
+pub mod control_density;
 mod monitor_controls;
 pub mod color_picker;
 pub mod motion;
@@ -30,6 +31,8 @@ pub mod preferences;
 pub mod peer_browser;
 pub mod seek_preview;
 pub mod status_bar;
+pub(crate) mod action_customization;
+pub(crate) mod control_bar;
 pub mod subtitles;
 pub mod toasts;
 pub mod video;
@@ -136,6 +139,7 @@ pub fn configure_main_window_style(ctx: &eframe::egui::Context) {
 /// theme can change later without reconstructing widget styling, and both the
 /// main window and independently hosted dialogs use this same function.
 pub fn configure_native_visuals(ctx: &eframe::egui::Context, config: &crate::config::AppConfig) {
+    i18n::configure_preferred_fonts(ctx, config);
     color_picker::configure_language(ctx, config.language);
     use eframe::egui::{Color32, CornerRadius, Stroke, Theme, Visuals};
 
@@ -203,6 +207,7 @@ pub fn configure_native_visuals(ctx: &eframe::egui::Context, config: &crate::con
     ctx.set_visuals_of(Theme::Dark, dark);
     ctx.set_visuals_of(Theme::Light, light);
     ctx.all_styles_mut(configure_interaction_style);
+    ctx.all_styles_mut(|style| control_density::configure(style, config.ui_control_density));
     elegance_theme::set_source_palette(ctx, config.color_palette);
     motion::configure(ctx, config.ui_animation_mode);
 }

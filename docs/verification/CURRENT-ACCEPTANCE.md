@@ -10,6 +10,65 @@ statements are not the present product state.
 
 ## Delivered source and deployment
 
+- Native/Web Simple and Program Monitor seekbars share exactly one pointer-time
+  hover card containing chapter/keyframe metadata and optional thumbnails.
+  [Hover ownership and regression coverage](seek-hover-card.md) preserve saved
+  thumbnail preferences, ordered scrubbing and explicit installed/live gates.
+
+- Native/Web Preferences expose an independent background media-button scope,
+  preserving the one OS session and rechecking queued transport commands.
+  [Policy and regression coverage](background-media-controls.md) retain live
+  keyboard/minimize, OS-routing and local/Cafe installation acceptance gates.
+
+- Simple and Program Monitor action buttons share context menus, saved order,
+  start/end placement and hide/restore, with safe primary drag, Escape and
+  contextual transport. [Customization contract and regression coverage](control-bar-customization.md)
+  retain dock/authoring-safe persistence and local/Cafe runtime acceptance gates.
+
+- The status workspace item is an icon-labelled profile dropdown; Simple's
+  duplicate transport cycling button is removed. [Shared selection and checks](status-bar-widgets.md)
+  preserve renamed titles, stable IDs, trailing anchoring and deployment gates.
+
+- Effects Designer navigation groups actual effects by folder with expandable
+  dividers, counts and stable selection. [Grouping and verification](designer-effect-groups.md)
+  retain safe-restart and Cafe live-acceptance gates.
+
+- Effect Designer wheel routing, same-kind direct relay/PWM retargeting, renamed
+  drag captions, native alpha/titlebar/tray icon ownership and live Preferences
+  density preview have focused native regressions.
+  [Causes, tests and deployment boundaries](native-icons-and-timeline-navigation.md)
+  retain restart, Cafe launch and physical/audio timing acceptance gates.
+
+- Inputs, selector triggers and single-line choices share one Control density
+  preference and a consistent chevron. Buzzer loop hover geometry is stable;
+  Stop follows owned melody/tone activity across native, Web and tray.
+  [Contract, cause and delivery boundaries](control-density-and-buzzer.md)
+  retain paired PCController and restart/Cafe acceptance gates.
+
+- Effects Library rename uses matching display/edit header slots and glyph
+  baselines without resizing the card or moving metadata.
+  [Geometry contract and popup regressions](effect-card-rename-geometry.md)
+  preserve icon search, draft/commit behavior and RTL placement.
+
+- Hardware caption alignment is independent of reverse trailing-action layout.
+  [Exact regression cause and rendering checks](hardware-caption-alignment.md)
+  retain real RTL text placement and matching inline-edit geometry.
+
+- Hardware preparation recovery handles acknowledged empty plans, preserves new
+  errors against old clock ACKs and pauses the coordinator before replacement.
+  [Transition contract and regressions](hardware-preparation-recovery.md) retain
+  real timing faults, strict deadlines and the physical/Cafe acceptance gates.
+
+- Windows tray menus expose a capability-driven Hardware board submenu,
+  with monitor reveal, guarded E-STOP release and tracked stop/clear/automatic
+  LED actions. [Tray contract and verification](windows-tray-board-actions.md)
+  retain source-switch, physical-click and Cafe runtime boundaries.
+
+- Modal corner-close controls share a fixed square with a larger, ink-centered ×.
+  Unsaved Preferences/cue confirmations retain non-destructive dismissal.
+  [Geometry contract and native fixture](square-modal-close.md) prevent regressions
+  from text padding, font metrics or display scaling.
+
 - Publishing-authority prompts share a non-mutating Dismiss action, corner close
   and Escape behavior on native/Web. [Dismissal semantics and regression](authority-modal-dismissal.md)
   distinguish dismissal from handoff rejection and retain the live/Cafe boundaries.
@@ -24,6 +83,8 @@ statements are not the present product state.
   progress and authoritative HOT alerts. The Effects Library heading is start
   aligned. [Widget contract and evidence](status-bar-widgets.md) retains the Cafe
   runtime blocker and physical/human acceptance boundaries.
+  Peer RGB-only snapshot updates now invalidate the native hardware cache before
+  repaint; paused rendering and native/Web projections have focused regressions.
 
 - Native cue properties now has guarded ×/Escape dismissal, square icon controls,
   centered caption groups and a viewport-bounded two-column layout on wider

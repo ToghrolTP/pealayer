@@ -7,6 +7,7 @@ const hardware = read('src/components/HardwareTab.tsx');
 const studio = read('src/components/StudioTab.tsx');
 const remote = read('src/components/RemoteControlTab.tsx');
 const playbackButton = read('src/components/PlaybackButton.tsx');
+const controlBar = read('src/components/ControlBar.tsx');
 const volumeControl = read('src/components/VolumeControl.tsx');
 const elapsedInput = read('src/components/ElapsedTimeInput.tsx');
 const media = read('src/components/MediaSurface.tsx');
@@ -27,10 +28,16 @@ const authority = read('src/components/PublishingAuthority.tsx');
 const webPlatform = read('src/webPlatform.ts');
 
 const contracts = [
-  [studio.includes('<VolumeControl') && remote.includes('<VolumeControl') && volumeControl.includes("sendCmd('set_volume'") && volumeControl.includes("sendCmd('set_mute'") && volumeControl.includes('aria-label={tr(locale, \'Volume\')}'), 'Simple and NLE share accessible horizontal volume and mute controls using session commands'],
-  [css.includes('grid-template-rows: auto minmax(0, 1fr) auto auto') && css.includes('.studio-volume { grid-column: 1 / -1; grid-row: 4; width: 100%; }'), 'the monitor reserves its selectors and gives narrow panels a full-width volume row'],
+  [effects.includes('category: draft.category') && effects.includes('draft?.category') && effects.includes('effectGroupName(effect)'),
+    'Effect folder preview follows the edited draft without changing the saved catalog'],
+  [app.includes('appearance?.ui_control_density') && app.includes('controlHeightSM: controlHeight') && app.includes('controlHeightLG: controlHeight')
+    && css.includes('height: var(--control-height, 24px)') && read('src/appearance.ts').includes('ui_control_density: appearance.ui_control_density'),
+    'Inputs, selectors and color menu rows follow one shared appearance density'],
+  [hardware.includes('disabled={!state.hardware_connected || !details.buzzer?.playing}'), 'Buzzer stop follows authoritative activity, not connection alone'],
+  [studio.includes('<ControlBar') && remote.includes('<ControlBar') && controlBar.includes('<VolumeControl') && volumeControl.includes("sendCmd('set_volume'") && controlBar.includes("sendCmd('set_mute'") && volumeControl.includes('aria-label={tr(locale, \'Volume\')}'), 'Simple and NLE share accessible horizontal volume and mute controls using session commands'],
+  [css.includes('.control-bar { width: 100%; min-width: 0; display: flex; flex-wrap: wrap;') && css.includes('.control-bar__volume.media-volume') && controlBar.indexOf('{group(true)}') < controlBar.indexOf('<VolumeControl'), 'the monitor wraps bounded groups with trailing selectors before volume'],
   [studio.includes('<ElapsedTimeInput') && remote.includes('<ElapsedTimeInput') && elapsedInput.includes('setSelectionRange') && elapsedInput.includes('onPaste=') && elapsedInput.includes("event.key === 'Escape'"), 'both playback surfaces share an immutable segmented elapsed-time editor with paste and cancellation'],
-  [studio.includes('<PlaybackButton') && remote.includes('<PlaybackButton') && playbackButton.includes('disabled={!loaded || playing === undefined}') && playbackButton.includes("playing ? 'Pause' : 'Play'"), 'both playback surfaces render their action and enabled state from the authoritative snapshot'],
+  [studio.includes('<ControlBar') && remote.includes('<ControlBar') && controlBar.includes('<PlaybackButton') && playbackButton.includes('disabled={!loaded || playing === undefined}') && playbackButton.includes("playing ? 'Pause' : 'Play'"), 'both playback surfaces render their action and enabled state from the authoritative snapshot'],
   [css.includes('.transport-action--play { --transport-color: var(--green); }') && css.includes('.transport-action--pause { --transport-color: var(--amber); }') && css.includes('border: 1px solid') && !css.includes('transform: translateY(1px);\n  box-shadow:'), 'transport intents share semantic colors and fixed borders instead of moving on hover/press'],
   [studio.includes('useSeekbar(state, sendCmd)') && remote.includes('useSeekbar(state, sendCmd)') && seekbar.includes("send('scrub_to'") && seekbar.includes("send('finish_scrub'"), 'Simple and NLE seekbars share ordered live preview and exact commit commands'],
   [seekbar.includes('state.settled_seek_revision') && seekbar.includes('baselineRevision.current') && seekbar.includes('state.settled_seek_target'), 'seek drafts wait for a correlated decoder settlement, not stale or already-advancing position samples'],
@@ -67,7 +74,8 @@ const contracts = [
   [library.includes("trigger={['contextMenu']}") && library.includes('Copy full path'), 'media entries expose application-style context actions'],
   [media.includes('state.osd') && css.includes('.media-osd--custom'), 'Web video surfaces render the native configurable OSD contract'],
   [app.includes('<ApplicationStatusBar') && statusBar.includes("trigger={['contextMenu']}") && statusBar.includes('status_rgb'), 'application footer renders live shared state and persisted context-menu visibility'],
-  [css.includes('.studio-transport__play.ant-btn {') && css.includes('border-radius: 50%'), 'timeline play control keeps a circular hit target'],
+  [statusBar.includes("sendCmd('set_workspace', { profile: key })") && statusBar.includes('workspaceGlyph(activeWorkspace?.icon)') && statusBar.includes("trigger={['click']}") && !statusBar.includes('state.active_workspace_profile || state.workspace'), 'status workspace selector uses authoritative icons, renamed captions and stable-ID switching'],
+  [css.includes('.control-bar__action .ant-btn, .control-bar__overflow .ant-btn { width: var(--control-height); height: var(--control-height);') && controlBar.includes('stop:<StopOutlined/>'), 'control-bar icons use square density slots and Stop is not a record-like circled square'],
   [css.includes('color-mix(in srgb, var(--accent) 74%') && !css.includes('.effect-profile__icon { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 8px; color: var(--green)'), 'decorative Web UI surfaces use the shared accent rather than Pealayer green'],
   [!rfManager.includes('setInterval'), 'RF manager uses push events and explicit refresh instead of polling'],
   [rfManager.includes("command('catalog', { read_board: true })") && rfManager.includes('dataSource={catalog.entries ?? []}'), 'RF manager loads and renders authoritative learned board codes'],

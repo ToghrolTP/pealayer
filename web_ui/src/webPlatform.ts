@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PlayerState } from './components/RemoteControlTab';
+import { mediaControlsAllowed } from './mediaControlsPolicy';
 
 interface InstallPromptEvent extends Event {
   prompt(): Promise<void>;
@@ -88,6 +89,8 @@ export function useWebPlatform(
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
   const wakeLockDisabledRef = useRef(false);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const mediaPolicyRef = useRef({enabled:state.media_keys_enabled,background:state.media_keys_background_enabled});
+  mediaPolicyRef.current = {enabled:state.media_keys_enabled,background:state.media_keys_background_enabled};
 
   const capabilities = useMemo<WebPlatformCapabilities>(() => {
     return {
@@ -181,19 +184,33 @@ export function useWebPlatform(
     const actions: Array<[MediaSessionAction, MediaSessionActionHandler]> = [
       ['play', () => dispatchCommand('play')],
       ['pause', () => dispatchCommand('pause')],
-      ['stop', () => dispatchCommand('pause')],
+      ['stop', () => dispatchCommand('stop')],
       ['seekbackward', (details) => dispatchCommand('seek', { seconds: -(details.seekOffset || 10) })],
       ['seekforward', (details) => dispatchCommand('seek', { seconds: details.seekOffset || 10 })],
       ['seekto', (details) => {
         if (typeof details.seekTime === 'number') dispatchCommand('seek_to', { seconds: details.seekTime });
       }],
-      ['previoustrack', () => dispatchCommand('chapter_previous')],
-      ['nexttrack', () => dispatchCommand('chapter_next')],
+      ['previoustrack', () => dispatchCommand('previous')],
+      ['nexttrack', () => dispatchCommand('next')],
     ];
+    let active = true;
     for (const [action, handler] of actions) {
-      try { navigator.mediaSession.setActionHandler(action, handler); } catch { /* Browser exposes only a subset. */ }
+      try { navigator.mediaSession.setActionHandler(action, state.media_keys_enabled===true ? (details) => {
+        const policy=mediaPolicyRef.current;
+        if(active && mediaControlsAllowed(policy.enabled,policy.background,document.visibilityState==='visible'&&document.hasFocus())) handler(details);
+      } : null); } catch { /* Browser exposes only a subset. */ }
     }
-  }, [appIconPath, appName, dispatchCommand, state.current_video, state.live, state.playing, state.app_icon_revision]);
+    if (state.media_keys_enabled !== true) {
+      navigator.mediaSession.metadata = null;
+      navigator.mediaSession.playbackState = 'none';
+    }
+    return () => {
+      active=false;
+      for (const [action] of actions) {
+        try { navigator.mediaSession.setActionHandler(action,null); } catch { /* Unsupported action. */ }
+      }
+    };
+  }, [appIconPath, appName, dispatchCommand, state.current_video, state.live, state.playing, state.app_icon_revision, state.media_keys_enabled]);
 
   useEffect(() => {
     if (!('mediaSession' in navigator)) return;

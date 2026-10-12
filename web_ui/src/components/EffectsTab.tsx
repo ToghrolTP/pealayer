@@ -174,7 +174,7 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale, 
   const [movingEffect, setMovingEffect] = useState<string | null>(null);
   const captureBusy = Boolean(state.effect_recording?.active || state.effect_recording?.pending);
   const presentedEffects = useMemo(() => effects.map(effect => draft && !draft.is_new && draft.reference === effect.reference
-    ? { ...effect, name: draft.name, icon: draft.icon } : effect), [effects, draft?.reference, draft?.name, draft?.icon, draft?.is_new]);
+    ? { ...effect, name: draft.name, icon: draft.icon, category: draft.category } : effect), [effects, draft?.reference, draft?.name, draft?.icon, draft?.category, draft?.is_new]);
   const selectedEffect = presentedEffects.find((effect) => effect.reference === selected);
   const draggedEffect = effects.find((effect) => effect.reference === draggingEffect);
   const effectGroupName = (effect: typeof effects[number]) => effect.category || tr(locale, 'Other');
@@ -531,7 +531,7 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale, 
             <Popconfirm title={tr(locale, 'Delete all sequence steps?')} onConfirm={() => setDraft({ ...draft, steps: [] })}><Button disabled={captureBusy || draft.steps.length === 0} icon={<DeleteOutlined />}>{tr(locale, 'Clear steps')}</Button></Popconfirm>
           </Space></div>
           <ConfigProvider componentDisabled={captureBusy}>
-          <SequenceTimeline key={draft.id} steps={draft.steps} locale={locale} controls={state.hardware_details?.controls} disabled={captureBusy}
+          <SequenceTimeline key={draft.id} steps={draft.steps} locale={locale} controls={state.hardware_details?.controls} disabled={captureBusy} wheelPreferences={state.timeline_wheel_preferences}
             human={state.human_readable_time_units !== false} actionsRef={sequenceActions} extraKinds={sequenceExtraKinds(state.hardware_details)} onSelect={index => setActiveStep(String(index))} onEdit={revealStepProperties} onChange={steps => setDraft({ ...draft, steps })} />
           <Collapse className="effect-step-list" activeKey={[activeStep]} onChange={keys => setActiveStep(String(Array.isArray(keys) ? keys[0] ?? '' : keys))} items={draft.steps.map((step, index) => ({
             key: String(index),

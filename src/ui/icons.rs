@@ -14,7 +14,7 @@ pub use egui_phosphor::regular::{
     PALETTE, PAPER_PLANE_TILT, PAUSE, PENCIL_SIMPLE, PLAY, PLUG, PLUS, POWER, PROHIBIT, PUSH_PIN,
     PUSH_PIN_SLASH, RADIO, RECORD, REWIND, SCISSORS, SEAT, SELECTION_ALL, SKIP_BACK, SKIP_FORWARD,
     SLIDERS_HORIZONTAL, SNOWFLAKE, SPARKLE, SPEAKER_HIGH, SPEAKER_NONE, SPEAKER_SLASH, STOP, STOP_CIRCLE,
-    SUBTITLES, TABS, TARGET, TEXT_ALIGN_CENTER, TEXT_ALIGN_LEFT, TEXT_ALIGN_RIGHT, THERMOMETER, TOGGLE_RIGHT, TRASH, WARNING, WAVEFORM,
+    SUBTITLES, TABS, TARGET, TEXT_T, TEXT_ALIGN_CENTER, TEXT_ALIGN_LEFT, TEXT_ALIGN_RIGHT, THERMOMETER, TOGGLE_RIGHT, TRASH, WARNING, WAVEFORM,
     X,
 };
 
@@ -297,7 +297,7 @@ pub fn searchable_icon_picker_contents(
                     .max(70.0);
             let search_response = ui.add_sized(
                 [search_width, ui.spacing().interact_size.y],
-                crate::ui::dialog::singleline_text_edit(search)
+                crate::ui::dialog::singleline_text_edit(ui, search)
                     .id_salt(search_id.with("input"))
                     .hint_text(config.search_hint)
                     .desired_width(search_width),
@@ -466,13 +466,7 @@ pub fn searchable_icon_picker(
         .height(320.0)
         .truncate()
         .icon(|ui, rect, visuals, _| {
-            ui.painter().text(
-                rect.center(),
-                egui::Align2::CENTER_CENTER,
-                CARET_DOWN,
-                egui::FontId::proportional(14.0),
-                visuals.text_color(),
-            );
+            crate::ui::control_density::paint_chevron(ui, rect, visuals.text_color());
         })
         .selected_text(egui::RichText::new(selected_text).size(if config.show_selected_name { egui::TextStyle::Button.resolve(ui.style()).size } else { 16.0 }))
         .close_behavior(egui::PopupCloseBehavior::CloseOnClickOutside)
@@ -503,6 +497,32 @@ pub fn searchable_icon_button(
     tooltip: &str,
     config: IconPickerConfig<'_>,
 ) -> bool {
+    searchable_icon_button_with_slot(ui, id_salt, value, size, None, tooltip, config)
+}
+
+/// A fixed header slot shares the existing searchable popup without letting
+/// a combobox's arrow/padding enlarge or shift an inline identity row.
+pub fn searchable_icon_button_sized(
+    ui: &mut eframe::egui::Ui,
+    id_salt: impl std::hash::Hash + std::fmt::Debug,
+    value: &mut String,
+    glyph_size: f32,
+    slot: eframe::egui::Vec2,
+    tooltip: &str,
+    config: IconPickerConfig<'_>,
+) -> bool {
+    searchable_icon_button_with_slot(ui, id_salt, value, glyph_size, Some(slot), tooltip, config)
+}
+
+fn searchable_icon_button_with_slot(
+    ui: &mut eframe::egui::Ui,
+    id_salt: impl std::hash::Hash + std::fmt::Debug,
+    value: &mut String,
+    size: f32,
+    slot: Option<eframe::egui::Vec2>,
+    tooltip: &str,
+    config: IconPickerConfig<'_>,
+) -> bool {
     use eframe::egui;
 
     let picker_id = ui.make_persistent_id(&id_salt);
@@ -514,11 +534,11 @@ pub fn searchable_icon_button(
         .unwrap_or(config.fallback_glyph);
     let response = ui
         .push_id(&id_salt, |ui| {
-            ui.add(
-                egui::Button::new(egui::RichText::new(glyph).size(size))
-                    .frame(false)
-                    .min_size(egui::vec2(size + 6.0, size + 6.0)),
-            )
+            let button = egui::Button::new(egui::RichText::new(glyph).size(size)).frame(false);
+            match slot {
+                Some(slot) => ui.add_sized(slot, button),
+                None => ui.add(button.min_size(egui::vec2(size + 6.0, size + 6.0))),
+            }
         })
         .inner
         .on_hover_text(tooltip);
@@ -832,6 +852,43 @@ mod tests {
         assert!(!hardware.contains("draw_control_icon_choices"));
         assert!(!layout.contains(concat!("effect_group_icon_", "preset")));
         assert!(!four_d.contains("text_edit_singleline(&mut icon)"));
+    }
+
+    #[test]
+    fn fixed_slot_icon_picker_opens_the_shared_popup_without_resizing_its_header() {
+        let context = eframe::egui::Context::default();
+        let mut icon = String::new();
+        let mut render = |events| {
+            let mut rect = eframe::egui::Rect::NOTHING;
+            let mut popup_id = eframe::egui::Id::NULL;
+            let mut output = context.run_ui(eframe::egui::RawInput {events,..Default::default()},|ui| {
+                rect = ui.horizontal(|ui| {
+                    popup_id = ui.make_persistent_id("fixed-icon-slot").with("popup");
+                    searchable_icon_button_sized(ui,"fixed-icon-slot",&mut icon,16.0,
+                        eframe::egui::vec2(20.0,24.0),"Change icon",IconPickerConfig {
+                            language:crate::config::AppLanguage::English,presets:CONTROL_ICON_PRESETS,
+                            fallback_glyph:SPARKLE,fallback_name:"Sparkle",width:260.0,
+                            show_selected_name:false,search_hint:"Search icons...",presets_label:"Presets",
+                            no_matches_label:"No matching icons",clear_label:None,
+                        });
+                    ui.min_rect()
+                }).inner;
+            });
+            output.textures_delta.clear();
+            (rect,popup_id)
+        };
+        let (closed,popup_id) = render(Vec::new());
+        let point = closed.center();
+        render(vec![eframe::egui::Event::PointerMoved(point),eframe::egui::Event::PointerButton {
+            pos:point,button:eframe::egui::PointerButton::Primary,pressed:true,modifiers:Default::default()
+        }]);
+        let (open,_) = render(vec![eframe::egui::Event::PointerButton {
+            pos:point,button:eframe::egui::PointerButton::Primary,pressed:false,modifiers:Default::default()
+        }]);
+        assert!(eframe::egui::Popup::is_id_open(&context,popup_id));
+        assert_eq!(closed,open,"Opening search must not resize the trigger/header");
+        assert_eq!(closed.height(),24.0);
+        assert!(closed.width()<=24.0);
     }
 
     fn picker_frame(

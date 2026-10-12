@@ -141,6 +141,8 @@ pub enum InteropCommand {
     Seek {
         seconds: f64,
     },
+    /// Use the authority's current paused/playing mode and configured step.
+    TransportNudge { direction: i32 },
     SeekTo {
         seconds: f64,
     },
@@ -554,6 +556,9 @@ impl InteropCommand {
                 } else { Ok(()) }
             },
             Self::Launch { request } => request.validate(),
+            Self::TransportNudge { direction } if !matches!(direction, -1 | 1) => {
+                Err("Transport direction must be -1 or 1".into())
+            }
             Self::Seek { seconds } if !seconds.is_finite() => {
                 Err("seek value must be finite".to_string())
             }
@@ -874,6 +879,8 @@ pub fn command_catalog() -> Value {
             "press_front_panel_key", "board_information", "rf_control", "open_rf_manager"
         ],
         "json_rpc_prefix": "pealayer",
+        "transport": { "nudge": "pealayer.transport.nudge", "directions": [-1,1],
+            "paused_step": "frame_step_count", "playing_step": "quick_seek_seconds" },
         "discovery": "/api/player/commands"
     })
 }
@@ -1018,6 +1025,9 @@ pub fn parse_text_command(input: &str) -> Result<InteropCommand, String> {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AppearanceState {
     pub ui_animation_mode: crate::config::UiAnimationMode,
+    pub ui_control_density: crate::config::UiControlDensity,
+    pub ui_font_family: crate::config::UiFontFamily,
+    pub monospace_font_family: crate::config::UiFontFamily,
     pub theme: crate::config::AppTheme,
     pub color_palette: crate::config::ColorPalette,
     pub accent_color: crate::config::AccentColor,
@@ -1033,6 +1043,9 @@ impl AppearanceState {
         Self {
             theme: crate::config::resolved_theme(config),
             ui_animation_mode: config.ui_animation_mode,
+            ui_control_density: config.ui_control_density,
+            ui_font_family: config.ui_font_family,
+            monospace_font_family: config.monospace_font_family,
             color_palette: config.color_palette,
             accent_color: config.accent_color,
             custom_accent_color: config.custom_accent_color.clone(),
@@ -1262,6 +1275,9 @@ pub struct PlayerStatusResponse {
     #[serde(default)]
     pub current_chapter_index: Option<i64>,
     pub seekbar_markers: crate::config::SeekbarMarkersConfig,
+    pub control_bars: crate::config::ControlBarsConfig,
+    pub media_keys_enabled: bool,
+    pub media_keys_background_enabled: bool,
     pub timeline_keyframes: Vec<crate::four_d::models::TimelineKeyframe>,
     pub seek_pending: bool,
     pub settled_seek_revision: u64,
@@ -1613,6 +1629,9 @@ impl Default for PlayerStatusResponse {
             chapters: Vec::new(),
             current_chapter_index: None,
             seekbar_markers: crate::config::SeekbarMarkersConfig::default(),
+            control_bars: crate::config::ControlBarsConfig::default(),
+            media_keys_enabled: true,
+            media_keys_background_enabled: true,
             timeline_keyframes: Vec::new(),
             seek_pending: false,
             settled_seek_revision: 0,
@@ -1730,6 +1749,11 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
                 .ok_or_else(|| "missing integer parameter: index".to_string())?;
             Some(InteropCommand::SetChapter { index })
         }
+        "pealayer.transport.nudge" => Some(InteropCommand::TransportNudge {
+            direction: request.params.get("direction").and_then(Value::as_i64)
+                .filter(|direction| matches!(direction, -1 | 1))
+                .ok_or("Transport direction must be -1 or 1")? as i32,
+        }),
         "seek" | "pealayer.seek" => Some(InteropCommand::Seek {
             seconds: number(&["seconds"])?,
         }),
@@ -3156,7 +3180,9 @@ fn controller_subscription_params() -> Value {
     serde_json::json!({
         "topics":["state","events","status","opcodes"],
         "interval_ms":500,
-        "state_interval_ms":250,
+        // Display/PWM frames must reach the repaint path at screen cadence;
+        // the independent slow status sample remains at 500 ms.
+        "state_interval_ms":16,
         "after_id":0
     })
 }
@@ -3363,6 +3389,21 @@ mod tests {
     use super::*;
 
     #[test]
+    fn contextual_nudge_rpc_is_typed_bounded_and_uses_the_authority_step() {
+        for direction in [-1,1] {
+            let request=JsonRpcRequest {jsonrpc:Some("2.0".into()),id:Value::Null,
+                method:"pealayer.transport.nudge".into(),params:serde_json::json!({"direction":direction})};
+            assert_eq!(command_from_json_rpc(&request).unwrap(),Some(InteropCommand::TransportNudge {direction}));
+        }
+        for direction in [0,2,-2,i64::MAX] {
+            let request=JsonRpcRequest {jsonrpc:Some("2.0".into()),id:Value::Null,
+                method:"pealayer.transport.nudge".into(),params:serde_json::json!({"direction":direction})};
+            assert!(command_from_json_rpc(&request).is_err());
+        }
+        assert!(InteropCommand::TransportNudge {direction:0}.validate().is_err());
+    }
+
+    #[test]
     fn process_status_and_quit_use_the_native_dispatcher_without_session_forwarding() {
         let (tx,rx)=std::sync::mpsc::channel();
         let context=eframe::egui::Context::default();
@@ -3396,7 +3437,7 @@ mod tests {
     fn controller_subscription_keeps_edges_immediate_and_bounds_continuous_frames() {
         let params = controller_subscription_params();
         assert_eq!(params["interval_ms"], 500);
-        assert_eq!(params["state_interval_ms"], 250);
+        assert_eq!(params["state_interval_ms"], 16);
         assert!(params["topics"]
             .as_array()
             .unwrap()

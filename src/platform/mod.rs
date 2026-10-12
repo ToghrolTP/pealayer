@@ -5,7 +5,10 @@ pub mod interop;
 pub mod media_controls;
 pub mod registry;
 pub mod taskbar_preview;
+pub mod tray_board;
 pub mod windows;
+#[cfg(target_os = "windows")]
+pub(crate) mod window_icons;
 pub(crate) mod windows_quick_actions;
 #[cfg(test)]
 mod windows_shell_icons;

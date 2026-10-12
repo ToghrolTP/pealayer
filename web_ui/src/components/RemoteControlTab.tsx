@@ -2,8 +2,6 @@ import React from 'react';
 import type { RfSnapshot } from './RfManager';
 import { Button, Select, Slider, Tooltip } from 'antd';
 import {
-  FastBackwardOutlined,
-  FastForwardOutlined,
   StepBackwardOutlined,
   StepForwardOutlined,
   VideoCameraOutlined,
@@ -17,12 +15,17 @@ import { SeekbarMarkers, useSeekbar } from './seekbar';
 import type { AppearanceState } from '../appearance';
 import type { TimelineWheelPreferences } from '../timelineWheel';
 import type { HardwareMelody } from '../melodyCatalog';
+
+import { ControlBar } from './ControlBar';
 import { MediaTrackSelectors } from './MediaTrackSelectors';
-import { PlaybackButton } from './PlaybackButton';
-import { VolumeControl } from './VolumeControl';
+import type { ControlBarProps } from './ControlBar';
+import type { ControlBarsConfig } from '../controlBars';
 import { ElapsedTimeInput } from './ElapsedTimeInput';
 
 export interface PlayerState {
+  control_bars?: ControlBarsConfig;
+  media_keys_enabled?: boolean;
+  media_keys_background_enabled?: boolean;
   external_mpv?: {mode: 'internal' | 'external' | 'dual' | 'remote'; connected: boolean; endpoint: string; error?: string | null};
   app_icon_revision?: number;
   rf?: RfSnapshot;
@@ -77,6 +80,7 @@ export interface PlayerState {
   hardware_transport?: string | null;
   hardware_error?: string | null;
   hardware_sync?: { revision: number; prepared_revision: number; error?: string | null; ack_age_ms?: number | null;
+    label: string; play_requested: boolean;
     authority_client_id?: string;
     authority?: { owner_id: string; owner_label: string; exclusive: boolean; revision: number;
       owner_endpoint?: string | null;
@@ -116,6 +120,8 @@ export interface PlayerState {
     warnings?: Array<{ code: string; severity: string; message: string }>;
     melodies?: HardwareMelody[];
     buzzer?: { playing: boolean; melody_id: number; melody_name: string; board_silent: boolean };
+    macro_running?: boolean | null;
+    status_led_override?: boolean | null;
     settings?: Record<string, number | boolean> | null;
     front_panel?: {
       raw_segments: number[]; brightness: number; blink: boolean; segments_active: boolean;
@@ -247,6 +253,7 @@ export interface PlayerState {
 }
 
 interface RemoteControlTabProps {
+  controlBar: Pick<ControlBarProps, 'onLayoutChange' | 'onPreferences' | 'onFullscreen'>;
   state: PlayerState;
   sendCmd: (command: string, payload?: Record<string, any>) => Promise<boolean>;
   onOpenLibraryTab?: () => void;
@@ -254,6 +261,7 @@ interface RemoteControlTabProps {
   quickSeekSeconds: number;
   apiBaseUrl: string;
   seekbarHoverThumbnails: boolean;
+  showSubseconds: boolean;
   mediaGestures: MediaGesturePreferences;
 }
 
@@ -273,7 +281,9 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
   quickSeekSeconds,
   apiBaseUrl,
   seekbarHoverThumbnails,
+  showSubseconds,
   mediaGestures,
+  controlBar,
 }) => {
   const seek = useSeekbar(state, sendCmd);
 
@@ -310,7 +320,8 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
           disabled={!state.current_video || !state.seekable || !state.duration}
           mediaIdentity={state.current_video} onCommit={seek.commitSeconds} />
         <SeekThumbnailPreview
-          enabled={seekbarHoverThumbnails && Boolean(state.seekable) && Boolean(state.duration)}
+          enabled={seekbarHoverThumbnails}
+          seekable={Boolean(state.seekable)} live={state.live} locale={locale} showSubseconds={showSubseconds}
           duration={state.duration || 0}
           mediaIdentity={state.current_video}
           apiBaseUrl={apiBaseUrl}
@@ -325,7 +336,7 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
             disabled={!state.current_video || !state.seekable || !state.duration}
             onChange={seek.change}
             onChangeComplete={seek.commit}
-            tooltip={seekbarHoverThumbnails ? { open: false } : { formatter: (value) => formatTime(((value || 0) / 100) * (state.duration || 0)) }}
+            tooltip={{ open: false }}
           />
           <SeekbarMarkers state={state} seconds={seek.value / 100 * (state.duration ?? 0)} onChapter={seek.commitSeconds} />
         </SeekThumbnailPreview>
@@ -334,19 +345,7 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
 
       <div className="remote-player__controls">
         {(state.remote_browser?.previous_file || state.remote_browser?.next_file) && <Tooltip title="Previous file"><Button shape="circle" icon={<StepBackwardOutlined />} disabled={!state.remote_browser.previous_file} onClick={() => sendCmd('previous')} /></Tooltip>}
-        <Tooltip title={`${tr(locale, 'Seek backward')} ${quickSeekSeconds}s`}>
-          <Button shape="circle" icon={<FastBackwardOutlined />} disabled={!state.current_video || !state.seekable} onClick={() => sendCmd('seek', { seconds: -quickSeekSeconds })} />
-        </Tooltip>
-          <PlaybackButton
-            className="remote-player__play"
-            playing={state.playing}
-            loaded={Boolean(state.current_video)}
-            locale={locale}
-            onClick={() => sendCmd('toggle_pause')}
-          />
-        <Tooltip title={`${tr(locale, 'Seek forward')} ${quickSeekSeconds}s`}>
-          <Button shape="circle" icon={<FastForwardOutlined />} disabled={!state.current_video || !state.seekable} onClick={() => sendCmd('seek', { seconds: quickSeekSeconds })} />
-        </Tooltip>
+        <ControlBar state={state} sendCmd={sendCmd} locale={locale} surface="simple" quickSeekSeconds={quickSeekSeconds} {...controlBar} />
         {(state.remote_browser?.previous_file || state.remote_browser?.next_file) && <Tooltip title="Next file"><Button shape="circle" icon={<StepForwardOutlined />} disabled={!state.remote_browser.next_file} onClick={() => sendCmd('next')} /></Tooltip>}
       </div>
 
@@ -372,8 +371,6 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
       )}
 
       <MediaTrackSelectors state={state} sendCmd={sendCmd} locale={locale} />
-
-      <VolumeControl className="remote-player__volume" state={state} sendCmd={sendCmd} locale={locale} />
     </section>
   );
 };

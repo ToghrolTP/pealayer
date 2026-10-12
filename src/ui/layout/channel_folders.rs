@@ -914,7 +914,7 @@ pub(super) fn draw_dialogs(
         .default_width(340.0)
         .show(ui.ctx(), |ui| {
             ui.label(app.tr("Name"));
-            let response = ui.add(crate::ui::dialog::singleline_text_edit(&mut draft.name));
+            let response = ui.add(crate::ui::dialog::singleline_text_edit(ui, &mut draft.name));
             if draft.focus {
                 response.request_focus();
                 draft.focus = false;

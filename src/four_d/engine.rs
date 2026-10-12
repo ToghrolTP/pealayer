@@ -708,7 +708,10 @@ impl ControllerPushTarget {
             }
         }
         if matches!(method, "controller.state" | "controller.event")
-            && params.get("kind").and_then(serde_json::Value::as_str) == Some("macro.recording")
+            && (params.get("kind").and_then(serde_json::Value::as_str) == Some("macro.recording")
+                || (params.get("kind").and_then(serde_json::Value::as_str) == Some("macro")
+                    && matches!(params.get("lifecycle").and_then(serde_json::Value::as_str),
+                        Some("started" | "completed" | "cancelled" | "failed"))))
         {
             // The event is edge-triggered; the authoritative sequence preview
             // lives in controller.snapshot. Coalesce bursts through the
@@ -832,6 +835,33 @@ fn should_yield_direct_transport(
     coordinator_reachable: bool,
 ) -> bool {
     is_direct && !diagnostic_override && coordinator_reachable
+}
+
+/// UI projection/confirmation fixtures must not race a live transport worker.
+/// The disconnected command channel also makes accidental dispatch fail closed.
+pub(crate) fn memory_only_test_engine() -> EngineHandle {
+    let (sender, _) = mpsc::channel();
+    EngineHandle {
+        lifecycle: Arc::new(()),
+        playback_time_ms: Arc::new(AtomicU64::new(0)),
+        media_playback: Arc::new(Mutex::new(super::media_sync::PlaybackSample::default())),
+        prepared_timeline: Arc::new(Mutex::new(super::media_timeline::PreparedTimeline::default())),
+        media_clock_owned: Arc::new(AtomicBool::new(false)),
+        is_playing: Arc::new(AtomicBool::new(false)),
+        estop_active: Arc::new(AtomicBool::new(false)),
+        connection_requested: Arc::new(AtomicBool::new(false)),
+        is_connected: Arc::new(AtomicBool::new(false)),
+        serial_port: Arc::new(Mutex::new(super::controller::DEFAULT_ENDPOINT.into())),
+        active_transport: Arc::new(Mutex::new(None)),
+        connection_error: Arc::new(Mutex::new(None)),
+        hardware_capabilities: Arc::new(Mutex::new(None)),
+        hardware_revision: Arc::new(AtomicU64::new(1)),
+        controller_call_results: Arc::new(Mutex::new(VecDeque::new())),
+        catalog_refresh_requested: Arc::new(AtomicBool::new(false)),
+        rf_catalog_refresh_requested: Arc::new(AtomicBool::new(false)),
+        state_notifier: Arc::new(Mutex::new(None)),
+        sender,
+    }
 }
 
 pub fn spawn_engine() -> EngineHandle {
@@ -2030,6 +2060,20 @@ pub fn compile_direct_pwm_cues(timeline: &Timeline) -> Vec<CompiledDirectPwmCue>
         .collect()
 }
 
+/// Install a complete authoritative snapshot and invalidate UI projections in
+/// the same critical section. A repaint alone cannot invalidate their cache.
+pub(crate) fn install_hardware_snapshot(
+    capabilities: &Mutex<Option<crate::four_d::controller::HardwareCapabilities>>,
+    revision: &AtomicU64,
+    next: Option<crate::four_d::controller::HardwareCapabilities>,
+) -> bool {
+    let Ok(mut current) = capabilities.lock() else { return false; };
+    if *current == next { return false; }
+    *current = next;
+    revision.fetch_add(1, Ordering::Release);
+    true
+}
+
 fn spawn_peer_engine() -> EngineHandle {
     let lifecycle=Arc::new(());
     let (tx,rx)=mpsc::channel();
@@ -2043,6 +2087,7 @@ fn spawn_peer_engine() -> EngineHandle {
     };
     let owner=Arc::downgrade(&lifecycle);
     let capabilities=handle.hardware_capabilities.clone();
+    let hardware_revision=handle.hardware_revision.clone();
     let connected=handle.is_connected.clone();
     let estop=handle.estop_active.clone();
     let results=handle.controller_call_results.clone();
@@ -2063,7 +2108,9 @@ fn spawn_peer_engine() -> EngineHandle {
                     plan.authority=snapshot.session.status.pointer("/hardware_sync/authority").cloned().and_then(|value|serde_json::from_value(value).ok());
                     if let Some(actor)=snapshot.session.status.pointer("/hardware_sync/authority_client_id").and_then(serde_json::Value::as_str){plan.authority_client_id=actor.into();}
                 }
-                let hardware_changed = if let Ok(mut value)=capabilities.lock(){let changed=*value!=snapshot.session.hardware;*value=snapshot.session.hardware;changed}else{false};
+                let hardware_changed = install_hardware_snapshot(
+                    &capabilities, &hardware_revision, snapshot.session.hardware,
+                );
                 let next_estop=snapshot.session.status.get("estop_active").and_then(serde_json::Value::as_bool).unwrap_or(false);
                 let estop_changed=estop.swap(next_estop,Ordering::SeqCst)!=next_estop;
                 if let Ok(mut error)=errors.lock(){*error=client.error.lock().ok().and_then(|value|value.clone());}
@@ -2983,6 +3030,20 @@ mod tests {
         assert!(target.apply_notification("controller.event", &serde_json::json!({"kind":"output"})));
         assert!(handle.catalog_refresh_requested.swap(false, Ordering::Relaxed));
         target.apply_notification("controller.state", &serde_json::json!({"kind":"buzzer.note"}));
+        assert!(!handle.catalog_refresh_requested.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn macro_lifecycle_refreshes_execution_state_without_per_step_catalog_pulls() {
+        let handle = memory_only_test_engine();
+        let target = handle.controller_push_target();
+        for lifecycle in ["started", "completed", "cancelled", "failed"] {
+            assert!(target.apply_notification("controller.event", &serde_json::json!({
+                "kind":"macro", "lifecycle":lifecycle
+            })));
+            assert!(handle.catalog_refresh_requested.swap(false, Ordering::Relaxed));
+        }
+        target.apply_notification("controller.event", &serde_json::json!({"kind":"macro","lifecycle":"step"}));
         assert!(!handle.catalog_refresh_requested.load(Ordering::Relaxed));
     }
 

@@ -3,11 +3,15 @@ export type StatusWidget = typeof WIDGETS[number];
 export type FpsMode = 'media' | 'ui' | 'auto';
 export type ChartMetric = 'voltage' | 'current' | 'temperature';
 export type StatusBarKey = 'media_rate' | 'hardware' | 'telemetry' | Exclude<StatusWidget, 'fps' | 'connection'>;
-export type StatusBarVisibility = Record<StatusBarKey, boolean> & { fps_mode: FpsMode; chart_metric: ChartMetric; order: StatusWidget[] };
+export type StatusBarVisibility = Record<StatusBarKey, boolean> & { fps_mode: FpsMode; chart_metric: ChartMetric; order: StatusWidget[];
+  dividers: boolean; semantic_colors: boolean; monospace: boolean[]; trailing: boolean[]; metric_limits: Array<[number | null, number | null]> };
 export const DEFAULT_VISIBILITY: StatusBarVisibility = {
   media_rate: true, hardware: true, telemetry: true, status_rgb: true, warnings: true, workspace: true,
   voltage: true, current: true, temperature: true, hot: true, estop: true, timeline: true, message: true,
   progress: true, chart: false, fps_mode: 'auto', chart_metric: 'voltage', order: [...WIDGETS],
+  dividers: true, semantic_colors: false,
+  monospace: WIDGETS.map((item) => ['fps', 'voltage', 'current', 'temperature'].includes(item)),
+  trailing: WIDGETS.map((item) => item === 'workspace'), metric_limits: [[null, null], [null, null], [null, null]],
 };
 export function orderedWidgets(order?: readonly string[]): StatusWidget[] {
   return [...new Set([...(order ?? []), ...WIDGETS].filter((value): value is StatusWidget => WIDGETS.includes(value as StatusWidget)))];
@@ -26,7 +30,7 @@ export function setWidgetVisible(config: StatusBarVisibility, widget: StatusWidg
 }
 export function reorderWidgets(order: readonly string[], source: StatusWidget, target: StatusWidget, after: boolean): StatusWidget[] {
   const complete = orderedWidgets(order);
-  if (source === target || source === 'workspace') return complete;
+  if (source === target) return complete;
   const result = complete.filter((widget) => widget !== source);
   result.splice(result.indexOf(target) + Number(after), 0, source);
   return result;

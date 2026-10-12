@@ -147,6 +147,17 @@ pub struct DirectControlCue {
 }
 
 impl DirectControlCue {
+    pub(crate) fn can_retarget_to(&self, key: &str) -> bool {
+        fn channel(key: &str, prefix: &str, range: std::ops::RangeInclusive<u8>) -> Option<u8> {
+            key.strip_prefix(prefix)?.parse::<u8>().ok().filter(|value| range.contains(value))
+        }
+        if self.motion.is_some() {
+            return matches!(self.control_key.as_str(), "seat.a" | "seat.b") && matches!(key, "seat.a" | "seat.b");
+        }
+        (channel(&self.control_key, "relay.", 1..=8).is_some() && channel(key, "relay.", 1..=8).is_some())
+            || (channel(&self.control_key, "pwm.", 0..=15).is_some() && channel(key, "pwm.", 0..=15).is_some())
+    }
+
     pub fn value_at(&self, elapsed_ms: u64, duration_ms: u64) -> u16 {
         self.behavior.value_at(self.value_basis_points, self.end_value_basis_points, elapsed_ms, duration_ms)
     }

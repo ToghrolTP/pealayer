@@ -63,6 +63,22 @@ pub struct TimelineWheelPreferences {
     pub alt: TimelineWheelBehavior,
 }
 
+impl TimelineWheelPreferences {
+    pub(crate) fn behavior(self, modifiers: eframe::egui::Modifiers) -> TimelineWheelBehavior {
+        if modifiers.shift { self.shift }
+        else if modifiers.ctrl || modifiers.command { self.ctrl }
+        else if modifiers.alt { self.alt }
+        else { self.plain }
+    }
+}
+
+impl Default for TimelineWheelPreferences {
+    fn default() -> Self {
+        Self { plain: TimelineWheelBehavior::VerticalScroll, ctrl: TimelineWheelBehavior::Zoom,
+            shift: TimelineWheelBehavior::HorizontalScroll, alt: TimelineWheelBehavior::Zoom }
+    }
+}
+
 /// Stable, persisted actions available in the native timeline toolbar.
 ///
 /// The overflow button is deliberately not represented here: it is always
@@ -628,6 +644,12 @@ pub enum StatusChartMetric { #[default] Voltage, Current, Temperature }
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct StatusBarConfig {
+    pub dividers: bool,
+    pub semantic_colors: bool,
+    pub monospace: [bool; StatusBarWidget::COUNT],
+    pub trailing: [bool; StatusBarWidget::COUNT],
+    /// Optional user-defined bounds in mV, mA and centi-C. No guessed safe ranges.
+    pub metric_limits: [[Option<i32>; 2]; 3],
     pub media_rate: bool,
     pub fps_mode: StatusBarFpsMode,
     pub hardware: bool,
@@ -651,6 +673,10 @@ pub struct StatusBarConfig {
 impl Default for StatusBarConfig {
     fn default() -> Self {
         Self {
+            dividers: true, semantic_colors: false,
+            monospace: [true, false, false, false, false, true, true, true, false, false, false, false, false, false],
+            trailing: [false, false, false, false, false, false, false, false, false, false, false, false, false, true],
+            metric_limits: [[None; 2]; 3],
             media_rate: true,
             fps_mode: StatusBarFpsMode::Auto,
             hardware: true,
@@ -666,6 +692,9 @@ impl Default for StatusBarConfig {
 }
 
 impl StatusBarConfig {
+    pub fn at_end(&self, item: StatusBarWidget) -> bool { self.trailing[item as usize] }
+    pub fn uses_monospace(&self, item: StatusBarWidget) -> bool { self.monospace[item as usize] }
+    pub fn place_at_end(&mut self, item: StatusBarWidget, end: bool) { self.trailing[item as usize] = end; }
     pub fn ordered(&self) -> Vec<StatusBarWidget> {
         let mut result = Vec::with_capacity(StatusBarWidget::COUNT);
         for item in self.order.into_iter().chain(StatusBarWidget::ALL) {
@@ -793,6 +822,110 @@ impl Default for WorkspaceProfile {
 #[serde(rename_all = "snake_case")]
 pub enum UiAnimationMode { #[default] System, Enabled, Disabled }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UiControlDensity { #[default] Compact, Comfortable }
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UiFontFamily { #[default] System, Bundled, Vazirmatn }
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum ControlBarAction { PlayPause, Stop, Back, Forward, PreviousChapter, NextChapter,
+    VideoTrack, AudioTrack, SubtitleTrack, Fullscreen, Pin, AudioSettings, SubtitleSettings, Mute, Preferences }
+impl ControlBarAction {
+    pub const COUNT: usize = 15;
+    pub const ALL: [Self; Self::COUNT] = [Self::PlayPause,Self::Stop,Self::Back,Self::Forward,
+        Self::PreviousChapter,Self::NextChapter,Self::VideoTrack,Self::AudioTrack,Self::SubtitleTrack,
+        Self::Fullscreen,Self::Pin,Self::AudioSettings,Self::SubtitleSettings,Self::Mute,Self::Preferences];
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ControlBarSurface { Simple, Monitor }
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ControlBarLayout {
+    pub order: [ControlBarAction; ControlBarAction::COUNT],
+    pub hidden: [bool; ControlBarAction::COUNT],
+    pub end: [bool; ControlBarAction::COUNT],
+}
+impl ControlBarLayout {
+    pub fn defaults(surface: ControlBarSurface) -> Self {
+        use ControlBarAction::*;
+        let mut result = Self {order:ControlBarAction::ALL,hidden:[true;ControlBarAction::COUNT],end:[false;ControlBarAction::COUNT]};
+        let visible: &[ControlBarAction] = match surface {
+            ControlBarSurface::Simple => &[Back,PlayPause,Forward,Fullscreen,Pin,AudioSettings,SubtitleSettings,Mute],
+            ControlBarSurface::Monitor => &[PlayPause,Stop,Back,Forward,Fullscreen,VideoTrack,AudioTrack,SubtitleTrack,Mute],
+        };
+        for action in visible { result.hidden[*action as usize]=false; }
+        for action in [Fullscreen,Pin,VideoTrack,AudioTrack,SubtitleTrack,AudioSettings,SubtitleSettings,Mute,Preferences] { result.end[action as usize]=true; }
+        if surface==ControlBarSurface::Simple {
+            let order:Vec<_>=[Back,PlayPause,Forward].into_iter().chain(ControlBarAction::ALL).fold(Vec::new(),|mut list,a|{if !list.contains(&a){list.push(a)} list});
+            result.order=order.try_into().unwrap();
+        }
+        result
+    }
+    pub fn ordered(&self) -> Vec<ControlBarAction> {
+        self.order.into_iter().chain(ControlBarAction::ALL).fold(Vec::new(),|mut order,a|{if !order.contains(&a){order.push(a)} order})
+    }
+    pub fn move_to(&mut self, action:ControlBarAction,target:ControlBarAction,after:bool) -> bool {
+        let mut order=self.ordered();
+        let changed=move_ordered_action(&mut order,action,target,after);
+        let side_changed=self.end[action as usize]!=self.end[target as usize];
+        self.end[action as usize]=self.end[target as usize];
+        self.order=order.try_into().unwrap(); changed||side_changed
+    }
+}
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct ControlBarsConfig { pub simple:ControlBarLayout, pub monitor:ControlBarLayout }
+impl Default for ControlBarsConfig { fn default()->Self {Self {
+    simple:ControlBarLayout::defaults(ControlBarSurface::Simple),monitor:ControlBarLayout::defaults(ControlBarSurface::Monitor),
+}} }
+impl ControlBarsConfig {
+    pub fn layout(&self,surface:ControlBarSurface)->ControlBarLayout {match surface {ControlBarSurface::Simple=>self.simple,ControlBarSurface::Monitor=>self.monitor}}
+    pub fn layout_mut(&mut self,surface:ControlBarSurface)->&mut ControlBarLayout {match surface {ControlBarSurface::Simple=>&mut self.simple,ControlBarSurface::Monitor=>&mut self.monitor}}
+}
+pub(crate) fn move_ordered_action<T:Copy+PartialEq>(order:&mut Vec<T>,action:T,target:T,after:bool)->bool {
+    if action==target || !order.contains(&target) || !order.contains(&action) {return false;}
+    let before=order.clone(); order.retain(|candidate|*candidate!=action);
+    let index=order.iter().position(|candidate|*candidate==target).unwrap();
+    order.insert(index+usize::from(after),action); *order!=before
+}
+
+#[cfg(test)]
+mod control_bar_tests {
+    use super::*;
+    #[test]
+    fn layouts_preserve_hidden_identity_and_sides_across_reorder_and_roundtrip() {
+        use ControlBarAction::*;
+        let mut bars=ControlBarsConfig::default();
+        assert_eq!(bars.simple.ordered()[..3], [Back,PlayPause,Forward]);
+        assert!(!bars.monitor.hidden[Stop as usize]);
+        assert!(bars.simple.hidden[Stop as usize]);
+        bars.simple.hidden[Back as usize]=true;
+        assert!(bars.simple.move_to(Back,Mute,true));
+        assert!(bars.simple.end[Back as usize]);
+        assert!(bars.simple.hidden[Back as usize]);
+        assert_eq!(bars.monitor,ControlBarLayout::defaults(ControlBarSurface::Monitor));
+        let restored:ControlBarsConfig=serde_json::from_value(serde_json::to_value(bars).unwrap()).unwrap();
+        assert_eq!(restored,bars);
+        assert_eq!(restored.simple.ordered().len(),ControlBarAction::COUNT);
+        assert!(!bars.simple.move_to(Mute,Mute,true));
+    }
+    #[test]
+    fn repeated_order_entries_cannot_lose_other_actions_and_malformed_ids_fail() {
+        let mut layout=ControlBarLayout::defaults(ControlBarSurface::Monitor);
+        layout.order=[ControlBarAction::Mute;ControlBarAction::COUNT];
+        assert_eq!(layout.ordered().len(),ControlBarAction::COUNT);
+        let mut json=serde_json::to_value(ControlBarsConfig::default()).unwrap();
+        json["monitor"]["order"][0]=serde_json::json!("not_an_action");
+        assert!(serde_json::from_value::<ControlBarsConfig>(json.clone()).is_err());
+        json["monitor"]["order"]=serde_json::json!([]);
+        assert!(serde_json::from_value::<ControlBarsConfig>(json).is_err());
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct SeekbarMarkersConfig {
@@ -869,6 +1002,9 @@ pub struct AppConfig {
     pub accent_color: AccentColor,
     pub custom_accent_color: Option<String>,
     pub ui_animation_mode: UiAnimationMode,
+    pub ui_control_density: UiControlDensity,
+    pub ui_font_family: UiFontFamily,
+    pub monospace_font_family: UiFontFamily,
     pub language: AppLanguage,
     pub direction: AppDirection,
     pub hardware_endpoint: Option<String>,
@@ -939,6 +1075,7 @@ pub struct AppConfig {
     pub keyboard_shortcuts_enabled: bool,
     /// Accept OS media-key/session commands, including while in the background.
     pub media_keys_enabled: bool,
+    pub media_keys_background_enabled: bool,
     pub application_shortcuts: crate::application_shortcuts::ApplicationShortcuts,
     /// Allows bindings explicitly marked global to be registered with the OS
     /// and invoked while another application has focus.
@@ -990,6 +1127,7 @@ pub struct AppConfig {
     pub native_dialog_windows: bool,
     pub auto_reload_config: bool,
     pub status_bar: StatusBarConfig,
+    pub control_bars: ControlBarsConfig,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window_geometry: Option<WindowGeometry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1061,6 +1199,9 @@ impl Default for AppConfig {
             accent_color: AccentColor::System,
             custom_accent_color: None,
             ui_animation_mode: UiAnimationMode::System,
+            ui_control_density: UiControlDensity::Compact,
+            ui_font_family: UiFontFamily::System,
+            monospace_font_family: UiFontFamily::Bundled,
             language: AppLanguage::System,
             direction: AppDirection::Auto,
             hardware_endpoint: None,
@@ -1121,6 +1262,7 @@ impl Default for AppConfig {
             hardware_actions_on_press: true,
             keyboard_shortcuts_enabled: true,
             media_keys_enabled: true,
+            media_keys_background_enabled: true,
             application_shortcuts: crate::application_shortcuts::ApplicationShortcuts::default(),
             global_hardware_hotkeys_enabled: true,
             hardware_key_bindings: Vec::new(),
@@ -1161,6 +1303,7 @@ impl Default for AppConfig {
             native_dialog_windows: true,
             auto_reload_config: true,
             status_bar: StatusBarConfig::default(),
+            control_bars: ControlBarsConfig::default(),
             window_geometry: None,
             workspace_dock_layout: None,
             workspace_session: WorkspaceProfile::default(),
@@ -1571,6 +1714,9 @@ impl AppConfig {
         self.accent_color = source.accent_color;
         self.custom_accent_color = source.custom_accent_color.clone();
         self.ui_animation_mode = source.ui_animation_mode;
+        self.ui_control_density = source.ui_control_density;
+        self.ui_font_family = source.ui_font_family;
+        self.monospace_font_family = source.monospace_font_family;
         self.app_icon_preset = source.app_icon_preset;
     }
 
@@ -1898,6 +2044,10 @@ impl AppConfig {
         }
         if !self.volume.is_finite() || !(0.0..=130.0).contains(&self.volume) {
             return Err("volume must be between 0 and 130".to_string());
+        }
+        if self.monospace_font_family == UiFontFamily::Vazirmatn { return Err("Vazirmatn is not a monospace font".into()); }
+        if self.status_bar.metric_limits.iter().any(|range| matches!(range, [Some(low), Some(high)] if low > high)) {
+            return Err("Status widget minimum must not exceed maximum".into());
         }
         if !self.playback_speed.is_finite() || !(0.25..=4.0).contains(&self.playback_speed) {
             return Err("playback_speed must be between 0.25 and 4".to_string());
@@ -2603,6 +2753,24 @@ mod tests {
         assert!(config.validate().is_ok());
         config.custom_accent_color = Some("blue".to_string());
         assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn control_density_is_persisted_and_reconciled_with_shared_appearance() {
+        let source = AppConfig { ui_control_density: UiControlDensity::Comfortable,
+            ui_font_family: UiFontFamily::Vazirmatn, monospace_font_family: UiFontFamily::System, ..Default::default() };
+        let values = serde_json::to_value(&source).unwrap();
+        assert_eq!(values["ui_control_density"], "comfortable");
+        let restored: AppConfig = serde_json::from_value(values).unwrap();
+        assert_eq!(restored.ui_control_density, UiControlDensity::Comfortable);
+        assert_eq!(restored.ui_font_family, UiFontFamily::Vazirmatn);
+        assert_eq!(restored.monospace_font_family, UiFontFamily::System);
+        let mut target = AppConfig::default();
+        target.copy_appearance_from(&source);
+        assert_eq!(target.ui_control_density, UiControlDensity::Comfortable);
+        assert_eq!(target.ui_font_family, UiFontFamily::Vazirmatn);
+        assert_eq!(target.monospace_font_family, UiFontFamily::System);
+        assert_eq!(AppConfig::default().ui_control_density, UiControlDensity::Compact);
     }
 
     #[test]

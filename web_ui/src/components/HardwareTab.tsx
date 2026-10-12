@@ -710,7 +710,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
           disabled={!state.hardware_connected || !selectedMelody || Boolean(state.estop_active)}
           onClick={() => sendCmd('hardware.buzzer.melody', { name: selectedMelody, repeats: melodyLoop ? 0 : melodyRepeats })}
         >{tr(locale, 'Play melody')}</Button>
-        <Button danger disabled={!state.hardware_connected} icon={<StopOutlined />} onClick={() => sendCmd('hardware.buzzer.stop')}>{tr(locale, 'Stop buzzer')}</Button>
+        <Button danger={Boolean(details.buzzer?.playing)} disabled={!state.hardware_connected || !details.buzzer?.playing} icon={<StopOutlined />} onClick={() => sendCmd('hardware.buzzer.stop')}>{tr(locale, 'Stop buzzer')}</Button>
       </div>
 
       <Collapse className="buzzer-control__diagnostics" ghost items={[{

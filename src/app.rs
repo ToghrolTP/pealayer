@@ -14,9 +14,39 @@ pub(crate) struct PendingTimelineToolbarSave {
     flight: Option<TimelineToolbarSaveFlight>,
 }
 
-pub(crate) struct PendingStatusBarSave {
-    desired: crate::config::StatusBarConfig,
-    flight: Option<(crate::config::StatusBarConfig, std::sync::mpsc::Receiver<Result<serde_json::Value, String>>, std::time::Instant, bool)>,
+pub(crate) struct PendingBarSave<T> {
+    desired: T,
+    flight: Option<(T, std::sync::mpsc::Receiver<Result<serde_json::Value, String>>, std::time::Instant, bool)>,
+}
+type PendingStatusBarSave=PendingBarSave<crate::config::StatusBarConfig>;
+type PendingControlBarSave=PendingBarSave<crate::config::ControlBarsConfig>;
+
+/// Same narrow compare-and-set/coalescing path for both user-owned bars.
+/// It never snapshots dock/workspace state while a panel borrows that state.
+fn poll_bar_save<T:Copy+PartialEq+serde::Serialize>(pending:&mut PendingBarSave<T>,key:&str,
+    read:impl Fn(&crate::config::AppConfig)->T,apply:impl Fn(&mut crate::config::AppConfig,T))->Result<bool,String> {
+    let Some(client)=crate::peer::client() else {
+        let mut config=crate::platform::interop::get_live_config();
+        if read(&config)==pending.desired {return Ok(true);}
+        apply(&mut config,pending.desired);
+        config.save()?; crate::platform::interop::set_live_config(config); return Ok(true);
+    };
+    let current=read(&client.snapshot().ok_or("Remote preferences are unavailable")?.session.config);
+    if let Some((sent,reply,started,accepted))=&mut pending.flight {
+        if !*accepted {match reply.try_recv() {
+            Ok(result)=>{result?; *accepted=true;},
+            Err(std::sync::mpsc::TryRecvError::Disconnected)=>return Err("Preference save dispatcher stopped".into()),
+            Err(std::sync::mpsc::TryRecvError::Empty)=>{},
+        }}
+        if *accepted && current==*sent {pending.flight=None;}
+        else if started.elapsed()>std::time::Duration::from_secs(20) {return Err("Preference save was not confirmed by the authority".into());}
+        else {return Ok(false);}
+    }
+    if current==pending.desired {return Ok(true);}
+    let mut expected=serde_json::Map::new(); expected.insert(key.into(),serde_json::to_value(current).map_err(|e|e.to_string())?);
+    let mut values=serde_json::Map::new(); values.insert(key.into(),serde_json::to_value(pending.desired).map_err(|e|e.to_string())?);
+    let reply=client.queue_with_reply("/api/peer/config",serde_json::json!({"operation":"save","expected":expected,"values":values}))?;
+    pending.flight=Some((pending.desired,reply,std::time::Instant::now(),false)); Ok(false)
 }
 
 struct TimelineToolbarSaveFlight {
@@ -757,6 +787,7 @@ pub struct PealayerApp {
     pub(crate) hardware_control_pwm_percent: f64,
     pub(crate) keyboard_shortcuts_enabled: bool,
     pub(crate) media_keys_enabled: bool,
+    pub(crate) media_keys_background_enabled: bool,
     pub(crate) application_shortcuts: crate::application_shortcuts::ApplicationShortcuts,
     pub(crate) global_hardware_hotkeys_enabled: bool,
     pub(crate) hardware_key_bindings: Vec<crate::config::HardwareKeyBinding>,
@@ -815,6 +846,7 @@ pub struct PealayerApp {
     pub(crate) timeline_toolbar_hidden: Vec<crate::config::TimelineToolbarAction>,
     pub(crate) pending_timeline_toolbar_save: Option<PendingTimelineToolbarSave>,
     pub(crate) pending_status_bar_save: Option<PendingStatusBarSave>,
+    pub(crate) pending_control_bar_save: Option<PendingControlBarSave>,
     pub(crate) workspace_rendering: bool,
     pub(crate) deferred_config_save: bool,
     pub(crate) non_user_control_visibility: crate::config::NonUserControlVisibility,
@@ -835,6 +867,7 @@ pub struct PealayerApp {
     pub(crate) native_dialog_windows: bool,
     pub(crate) native_preferences: Option<crate::ui::preferences::NativePreferencesController>,
     pub(crate) status_bar: crate::config::StatusBarConfig,
+    pub(crate) control_bars: crate::config::ControlBarsConfig,
     pub(crate) config_fingerprint: Option<u64>,
     pub(crate) config_watcher: Option<crate::config::ConfigFileWatcher>,
     pub(crate) config_reload_due: Option<std::time::Instant>,
@@ -985,6 +1018,7 @@ impl eframe::App for PealayerApp {
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         self.flush_timeline_toolbar_save(ctx);
         self.flush_status_bar_save(ctx);
+        self.flush_control_bar_save(ctx);
         if std::mem::take(&mut self.deferred_config_save) {
             self.save_config();
         }
@@ -1114,11 +1148,11 @@ impl eframe::App for PealayerApp {
             inbound_commands.push(("Web UI", command));
         }
         while let Ok(event) = self.media_cmd_rx.try_recv() {
-            if self.media_keys_enabled
-                && let Some(command) = crate::platform::media_controls::map_media_control_event(
+            if let Some(command) = crate::platform::media_controls::map_media_control_event(
                     event,
                     self.quick_seek_seconds,
                 )
+                && self.media_control_command_allowed(ctx,&command)
             {
                 inbound_commands.push(("Media controls", command));
             }
@@ -1128,9 +1162,9 @@ impl eframe::App for PealayerApp {
             delivery.acknowledge_applied();
         }
         for (source, command) in inbound_commands {
-            // A preceding IPC/config command can disable media keys during
-            // this same frame. Do not apply already-queued OS actions then.
-            if source == "Media controls" && !self.media_keys_enabled {
+            // A preceding IPC/config command can change either media permission
+            // during this frame. Revalidate scope before queued OS actions.
+            if source == "Media controls" && !self.media_control_command_allowed(ctx,&command) {
                 continue;
             }
             self.apply_interop_command(ctx, command, source);
@@ -1531,6 +1565,9 @@ impl eframe::App for PealayerApp {
                     .collect(),
                 current_chapter_index,
                 seekbar_markers: self.seekbar_markers.clone(),
+                control_bars: self.control_bars,
+                media_keys_enabled: self.media_keys_enabled,
+                media_keys_background_enabled: self.media_keys_background_enabled,
                 timeline_keyframes: self.timeline.keyframes.clone(),
                 seek_pending: self.is_scrubbing || self.pending_scrub_commit.is_some(),
                 settled_seek_revision: self.settled_seek_revision,
@@ -1574,6 +1611,7 @@ impl eframe::App for PealayerApp {
                     .filter(|plan|plan.has_items() || plan.authority.is_some()).map(|plan|serde_json::json!({
                         "authority":plan.authority,"authority_client_id":plan.authority_client_id,
                         "revision":plan.revision,"prepared_revision":plan.acknowledged_revision,
+                        "label":plan.presentation_label(),"play_requested":plan.play_requested,
                         "clock_ack_revision":plan.clock_ack_revision,"clock_ack_epoch":plan.clock_ack_epoch,
                         "ack_age_ms":plan.last_ack.map(|ack|ack.elapsed().as_millis() as u64),
                         "error":plan.error,"deferred_reason":plan.deferred_reason,
@@ -2269,6 +2307,21 @@ fn board_settings_command(
 }
 
 impl PealayerApp {
+    fn media_controls_allowed(&self,ctx:&egui::Context)->bool {
+        if !self.media_keys_enabled {return false;}
+        if self.media_keys_background_enabled {return true;}
+        let foreground=if self.web_only {false}
+            else if cfg!(target_os="windows") && self.window_handle.unwrap_or_else(crate::platform::windows::get_registered_hwnd)!=0 {
+                crate::platform::windows::is_application_foreground()
+            }else{ctx.input(|input|input.raw.viewports.values().any(|viewport|viewport.focused==Some(true)))};
+        crate::platform::media_controls::media_controls_allowed(self.media_keys_enabled,self.media_keys_background_enabled,foreground)
+    }
+    fn media_control_command_allowed(&self,ctx:&egui::Context,command:&InteropCommand)->bool {
+        // Explicit OS-session window/file requests must still be able to raise
+        // a foreground-only player. They are not keyboard transport buttons.
+        if matches!(command,InteropCommand::Activate|InteropCommand::Quit|InteropCommand::Open{..}) {self.media_keys_enabled}
+        else{self.media_controls_allowed(ctx)}
+    }
     pub(crate) fn process_keyboard_shortcuts(&mut self, ctx: &egui::Context) {
         if !self.keyboard_shortcuts_enabled {
             return;
@@ -2752,16 +2805,87 @@ impl PealayerApp {
         }
     }
 
+    fn tray_board_menu(&self) -> Option<crate::platform::tray_board::BoardTrayMenu> {
+        // Direct UART diagnostics must not create a PCController tray surface.
+        let coordinator = crate::peer::active() || self.engine_handle.serial_port.lock()
+            .is_ok_and(|endpoint| crate::four_d::controller::is_controller_endpoint(&endpoint));
+        crate::platform::tray_board::BoardTrayMenu::build(
+            self.advertised_hardware().as_ref(),
+            coordinator && self.engine_handle.is_connected.load(Ordering::Acquire),
+            self.engine_handle.estop_active.load(Ordering::SeqCst),
+            self.board_operation.is_some(),
+            self.hardware_effect_authoring.pending_operation.is_some()
+                || self.hardware_effect_authoring.pending_saved_macro_id.is_some(),
+            self.language,
+        )
+    }
+
+    fn process_board_tray_action(
+        &mut self,
+        ctx: &egui::Context,
+        action: crate::platform::tray_board::BoardTrayAction,
+        target: Option<&crate::platform::tray_board::TrayBoardTarget>,
+    ) -> Result<(), String> {
+        use crate::platform::tray_board::BoardTrayAction;
+        // A popup runs a nested Windows message loop. Revalidate its frozen
+        // target/capabilities on selection, never on a later reconnect replay.
+        let menu = self.tray_board_menu().ok_or_else(|| self.tr("No live PCController board is connected"))?;
+        if !target.is_some_and(|target| menu.allows(action, target)) {
+            return Err(self.tr("Board tray action is no longer available; reopen the menu"));
+        }
+        match action {
+            BoardTrayAction::Monitor => {
+                let fullscreen = ctx.input(|input| input.viewport().fullscreen.unwrap_or(self.was_fullscreen));
+                self.apply_workspace_request(true, fullscreen);
+                self.request_fullscreen(ctx, false, fullscreen);
+                crate::ui::layout::reveal_and_focus_tab(&mut self.dock_state, crate::ui::layout::PealayerTab::HardwareMonitor);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                self.save_config();
+            }
+            BoardTrayAction::EngageEmergencyStop | BoardTrayAction::ReleaseEmergencyStop => {
+                self.estop_active = self.engine_handle.estop_active.load(Ordering::SeqCst);
+                self.request_emergency_stop_change(action == BoardTrayAction::EngageEmergencyStop);
+                if self.show_estop_release_dialog {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+                }
+            }
+            BoardTrayAction::StopBuzzer => self.stop_buzzer()?,
+            BoardTrayAction::StopEffects => self.stop_strip_preview()?,
+            BoardTrayAction::StopStrip => self.stop_addressable_strip()?,
+            BoardTrayAction::ClearStrip => self.clear_addressable_strip()?,
+            BoardTrayAction::AutomaticStatusLed => self.release_status_led_override()?,
+        }
+        ctx.request_repaint();
+        Ok(())
+    }
+
     fn process_shell_commands(&mut self, ctx: &egui::Context) {
+        crate::platform::windows::update_tray_board_menu(self.tray_board_menu());
         crate::platform::windows::update_shell_command_state(
             self.is_paused,
             self.is_muted,
             self.was_fullscreen,
             self.current_video_path.is_some(),
-            self.media_keys_enabled,
+            self.media_controls_allowed(ctx),
         );
         while let Some(command) = crate::platform::windows::take_shell_command() {
-            match command {
+            if !command.allowed_under_media_scope(self.media_controls_allowed(ctx)) {continue;}
+            if let Some(action) = crate::platform::tray_board::BoardTrayAction::from_command(command.id) {
+                if let Err(error) = self.process_board_tray_action(ctx, action, command.board_target.as_ref()) {
+                    self.set_osd(error.clone());
+                    if let Some(hwnd) = self.window_handle {
+                        let _ = crate::platform::windows::show_system_notification(hwnd, &self.app_name, &error);
+                    }
+                    let _ = crate::messaging::publish(crate::messaging::ToastRequest {
+                        id: Some("hardware.tray".into()), title: self.tr("PCController tray action"),
+                        message: error, severity: crate::messaging::Severity::Warning, timeout_ms: 8000,
+                    }, "hardware");
+                }
+                continue;
+            }
+            match command.id {
                 crate::platform::windows::THUMB_BUTTON_PREV => self.seek_relative(-10.0),
                 crate::platform::windows::THUMB_BUTTON_PLAYPAUSE
                 | crate::platform::windows::TRAY_CMD_PLAYPAUSE => self.toggle_playback(),
@@ -2798,6 +2922,7 @@ impl PealayerApp {
                 _ => {}
             }
         }
+        crate::platform::windows::update_tray_board_menu(self.tray_board_menu());
     }
 
     /// Change the native stacking level only on policy or playback transitions.
@@ -2897,10 +3022,11 @@ impl PealayerApp {
         &self,
         capabilities: Option<crate::four_d::controller::HardwareCapabilities>,
     ) {
-        if let Ok(mut current) = self.engine_handle.hardware_capabilities.lock() {
-            *current = capabilities;
-        }
-        self.engine_handle.hardware_revision.fetch_add(1, Ordering::Relaxed);
+        crate::four_d::engine::install_hardware_snapshot(
+            &self.engine_handle.hardware_capabilities,
+            &self.engine_handle.hardware_revision,
+            capabilities,
+        );
     }
 
     pub fn advertised_hardware(&self) -> Option<crate::four_d::controller::HardwareCapabilities> {
@@ -4137,6 +4263,12 @@ impl PealayerApp {
             InteropCommand::NextChapter => self.next_media_chapter(),
             InteropCommand::SetChapter { index } => self.jump_to_media_chapter(index),
             InteropCommand::Seek { seconds } => self.seek_relative(seconds),
+            InteropCommand::TransportNudge { direction } => {
+                if self.current_video_path.is_some() {
+                    if self.is_paused { self.step_frames(direction); }
+                    else if self.is_seekable { self.seek_relative(f64::from(direction)*self.quick_seek_seconds); }
+                }
+            },
             InteropCommand::SeekTo { seconds } => {
                 if self.is_seekable {
                     let target = seconds.max(0.0).min(self.duration);
@@ -6878,6 +7010,7 @@ impl PealayerApp {
         cfg.hardware_actions_on_press = self.hardware_actions_on_press;
         cfg.keyboard_shortcuts_enabled = self.keyboard_shortcuts_enabled;
         cfg.media_keys_enabled = self.media_keys_enabled;
+        cfg.media_keys_background_enabled = self.media_keys_background_enabled;
         cfg.application_shortcuts = self.application_shortcuts.clone();
         cfg.global_hardware_hotkeys_enabled = self.global_hardware_hotkeys_enabled;
         cfg.hardware_key_bindings = self.hardware_key_bindings.clone();
@@ -6897,6 +7030,7 @@ impl PealayerApp {
         cfg.native_dialog_windows = self.native_dialog_windows;
         cfg.auto_reload_config = self.auto_reload_config;
         cfg.status_bar = self.status_bar;
+        cfg.control_bars = self.control_bars;
         cfg.window_geometry = self.window_geometry;
         let mut dock_state = self.dock_state.clone();
         crate::ui::layout::sanitize_dock_rects(&mut dock_state);
@@ -6983,34 +7117,10 @@ impl PealayerApp {
     /// or synchronously wait for the remote authority from a footer click.
     fn flush_status_bar_save(&mut self, ctx: &egui::Context) {
         let Some(mut pending) = self.pending_status_bar_save.take() else { return };
-        let result = (|| -> Result<bool, String> {
-            let Some(client) = crate::peer::client() else {
-                let mut config = crate::platform::interop::get_live_config();
-                config.status_bar = pending.desired;
-                config.save()?;
-                crate::platform::interop::set_live_config(config);
-                self.config_fingerprint = crate::config::AppConfig::fingerprint(&crate::config::AppConfig::get_config_path()).ok();
-                return Ok(true);
-            };
-            let current = client.snapshot().ok_or("Remote status bar state is unavailable")?.session.config.status_bar;
-            if let Some((sent, reply, started, accepted)) = &mut pending.flight {
-                if !*accepted {
-                    match reply.try_recv() {
-                        Ok(result) => { result?; *accepted = true; },
-                        Err(std::sync::mpsc::TryRecvError::Disconnected) => return Err("Status bar save dispatcher stopped".into()),
-                        Err(std::sync::mpsc::TryRecvError::Empty) => {},
-                    }
-                }
-                if *accepted && current == *sent { pending.flight = None; }
-                else if started.elapsed() > std::time::Duration::from_secs(20) { return Err("Status bar save was not confirmed by the authority".into()); }
-                else { return Ok(false); }
-            }
-            if current == pending.desired { return Ok(true); }
-            let reply = client.queue_with_reply("/api/peer/config", serde_json::json!({"operation":"save",
-                "expected":{"status_bar":current}, "values":{"status_bar":pending.desired}}))?;
-            pending.flight = Some((pending.desired, reply, std::time::Instant::now(), false));
-            Ok(false)
-        })();
+        let result = poll_bar_save(&mut pending,"status_bar",|config|config.status_bar,|config,value|config.status_bar=value);
+        if matches!(result,Ok(true)) {
+            self.config_fingerprint=crate::config::AppConfig::fingerprint(&crate::config::AppConfig::get_config_path()).ok();
+        }
         match result {
             Ok(true) => self.config_status = "Status bar saved".into(),
             Ok(false) => { self.pending_status_bar_save = Some(pending); ctx.request_repaint_after(std::time::Duration::from_millis(100)); },
@@ -7029,6 +7139,28 @@ impl PealayerApp {
         self.timeline_follow_playhead = preferences.follow;
         self.timeline_toolbar_order = crate::config::normalize_timeline_toolbar_order(&preferences.order);
         self.timeline_toolbar_hidden = preferences.hidden.clone();
+    }
+
+    pub(crate) fn request_control_bar_save(&mut self,ctx:&egui::Context) {
+        if let Some(pending)=&mut self.pending_control_bar_save {pending.desired=self.control_bars;}
+        else {self.pending_control_bar_save=Some(PendingBarSave {desired:self.control_bars,flight:None});}
+        ctx.request_repaint();
+    }
+    fn flush_control_bar_save(&mut self,ctx:&egui::Context) {
+        if self.show_preferences_dialog || self.preference_preview_original.is_some() {return;}
+        let Some(mut pending)=self.pending_control_bar_save.take() else {return};
+        match poll_bar_save(&mut pending,"control_bars",|c|c.control_bars,|c,v|c.control_bars=v) {
+            Ok(true)=>{self.config_status="Control bar saved".into();
+                self.config_fingerprint=crate::config::AppConfig::fingerprint(&crate::config::AppConfig::get_config_path()).ok();},
+            Ok(false)=>{self.pending_control_bar_save=Some(pending);ctx.request_repaint_after(std::time::Duration::from_millis(100));},
+            Err(error)=>{
+                self.control_bars=crate::peer::client().and_then(|c|c.snapshot()).map(|s|s.session.config.control_bars)
+                    .unwrap_or_else(||crate::platform::interop::get_live_config().control_bars);
+                self.config_status=error.clone();
+                let _=crate::messaging::publish(crate::messaging::ToastRequest {id:Some("control_bars.save".into()),
+                    title:"Control bar change could not be saved".into(),message:error,severity:crate::messaging::Severity::Warning,timeout_ms:8000},"control_bar");
+            }
+        }
     }
 
     /// Runs outside panel drawing. Only toolbar keys are persisted or sent;
@@ -7256,6 +7388,7 @@ impl PealayerApp {
         }
         self.keyboard_shortcuts_enabled = config.keyboard_shortcuts_enabled;
         self.media_keys_enabled = config.media_keys_enabled;
+        self.media_keys_background_enabled = config.media_keys_background_enabled;
         if !self.media_keys_enabled {
             self.media_controls = None;
         }
@@ -7280,6 +7413,7 @@ impl PealayerApp {
         self.native_dialog_windows = config.native_dialog_windows;
         self.auto_reload_config = config.auto_reload_config;
         self.status_bar = config.status_bar;
+        self.control_bars = config.control_bars;
         self.workspace_profiles = config.workspace_profiles.clone();
         self.active_workspace_profile = config.active_workspace_profile.clone();
         self.effect_library_draft = config.effect_working_draft.clone().unwrap_or_default();
@@ -7442,6 +7576,12 @@ impl PealayerApp {
                 }
                 match operation {
                     "save"=>{
+                        if owner.is_some() && value.get("values").and_then(serde_json::Value::as_object)
+                            .is_some_and(|values|!values.is_empty()&&values.keys().all(|key|
+                                crate::config::TimelineToolbarPreferences::owns_key(key)
+                                || matches!(key.as_str(),"control_bars"|"status_bar"))) {
+                            return Err("Finish the Preferences preview before customizing toolbars".into());
+                        }
                         crate::peer::validate_config_expectations(&crate::platform::interop::get_live_config(), value.get("expected"))?;
                         let config=crate::platform::interop::get_live_config().apply_patch(value.get("values").ok_or("Configuration values are required")?)?;
                         config.save()?;
@@ -7449,9 +7589,15 @@ impl PealayerApp {
                         // reset media properties or replace the working effect.
                         if value.get("values").and_then(serde_json::Value::as_object)
                             .is_some_and(|values| !values.is_empty() && values.keys().all(|key|
-                                crate::config::TimelineToolbarPreferences::owns_key(key)))
+                                crate::config::TimelineToolbarPreferences::owns_key(key)
+                                || matches!(key.as_str(), "control_bars" | "status_bar")))
                         {
-                            self.apply_timeline_toolbar_preferences(&crate::config::TimelineToolbarPreferences::from_config(&config));
+                            let values=value["values"].as_object().unwrap();
+                            if values.keys().any(|key|crate::config::TimelineToolbarPreferences::owns_key(key)) {
+                                self.apply_timeline_toolbar_preferences(&crate::config::TimelineToolbarPreferences::from_config(&config));
+                            }
+                            if values.contains_key("control_bars") {self.control_bars = config.control_bars;}
+                            if values.contains_key("status_bar") {self.status_bar = config.status_bar;}
                             crate::platform::interop::set_live_config(config);
                             self.config_fingerprint = crate::config::AppConfig::fingerprint(
                                 &crate::config::AppConfig::get_config_path()).ok();
@@ -7517,17 +7663,18 @@ impl PealayerApp {
                 pending.desired.apply(&mut config);
             }
             if let Some(pending) = &self.pending_status_bar_save { config.status_bar = pending.desired; }
+            if let Some(pending) = &self.pending_control_bar_save { config.control_bars = pending.desired; }
             let workspace_changed=state.config.as_ref().is_none_or(|old|old.active_workspace_profile!=config.active_workspace_profile || old.workspace_session.nle!=config.workspace_session.nle || old.workspace_dock_layout!=config.workspace_dock_layout);
-            let status_bar_only = state.config.as_ref().is_some_and(|old| {
-                let mut comparison = old.clone(); comparison.status_bar = config.status_bar; comparison == config
+            let bar_preferences_only = state.config.as_ref().is_some_and(|old| {
+                let mut comparison = old.clone(); comparison.status_bar = config.status_bar;
+                comparison.control_bars=config.control_bars;
+                crate::config::TimelineToolbarPreferences::from_config(&config).apply(&mut comparison);
+                comparison == config
             });
-            if status_bar_only {
-                self.status_bar = config.status_bar;
-                crate::platform::interop::set_live_config(snapshot.session.config.clone());
-            } else if state.config.as_ref().is_some_and(|old|
-                crate::config::TimelineToolbarPreferences::only_changed(old, &config))
-            {
+            if bar_preferences_only {
                 self.apply_timeline_toolbar_preferences(&crate::config::TimelineToolbarPreferences::from_config(&config));
+                self.status_bar = config.status_bar;
+                self.control_bars=config.control_bars;
                 crate::platform::interop::set_live_config(snapshot.session.config.clone());
             } else if let Err(error)=crate::peer::mirror(||self.apply_runtime_config(ctx,config.clone())){self.config_status=error;}
             if workspace_changed{
@@ -7759,11 +7906,8 @@ impl PealayerApp {
         self.language_preference = preference;
         self.language = crate::config::resolve_language(preference);
         self.rtl = crate::config::resolve_rtl(self.direction_preference, self.language);
-        crate::ui::i18n::configure_ui_fonts(
-            ctx,
-            self.language == crate::config::AppLanguage::Persian,
-        );
         self.save_config();
+        crate::ui::i18n::configure_preferred_fonts(ctx, &crate::platform::interop::get_live_config());
     }
 
     pub(crate) fn set_direction(&mut self, preference: crate::config::AppDirection) {
@@ -8122,6 +8266,27 @@ impl PealayerApp {
         direct.control_key = control_key.to_string();
         direct.motion.as_mut().expect("validated motion cue").side = side;
         template.name = format!("{seat_name} · {label}");
+        true
+    }
+
+    /// Move one direct relay/PWM placement without rewriting its values or pattern.
+    /// The UI validates the authoritative destination's lock/capability first.
+    pub(crate) fn retarget_channel_timeline_cue(&mut self, instance_id: uuid::Uuid, key: &str, name: &str) -> bool {
+        let Some(direct) = self.timeline.instances.iter().find(|i| i.id == instance_id)
+            .and_then(|i| self.timeline.templates.iter().find(|t| t.id == i.effect_id))
+            .and_then(|t| t.direct_control.as_ref()) else { return false; };
+        if direct.motion.is_some() || direct.control_key == key || !direct.can_retarget_to(key) { return false; }
+        let label = if key.starts_with("relay.") {
+            self.tr(if direct.value_basis_points >= 5_000 { "On" } else { "Off" })
+        } else { format!("{:.2}%", f32::from(direct.value_basis_points) / 100.0) };
+        let Some(id) = self.isolate_template_for_instance(instance_id) else { return false; };
+        let template = self.timeline.templates.iter_mut().find(|t| t.id == id).expect("isolated template");
+        template.direct_control.as_mut().expect("validated direct cue").control_key = key.to_string();
+        template.name = format!("{name} · {label}");
+        if let Some(relay) = key.strip_prefix("relay.").and_then(|value| value.parse::<u8>().ok()) {
+            template.target = crate::four_d::models::HardwareTarget::for_relay(relay);
+            for action in &mut template.actions { action.relay_id = relay; }
+        }
         true
     }
 
@@ -8905,6 +9070,8 @@ fn web_hardware_details(
             "melody_name": capabilities.buzzer.melody_name,
             "board_silent": capabilities.settings.as_ref().map(|settings| settings.silent),
         },
+        "macro_running": capabilities.macro_running,
+        "status_led_override": capabilities.status_led_override,
         "settings": settings,
         "front_panel": front_panel,
         "strip": strip,
@@ -9007,20 +9174,8 @@ fn observe_default_mpv_client(mpv_client: &libmpv2::Mpv) {
     let _ = mpv_client.observe_property("paused-for-cache", libmpv2::Format::Flag, 22);
 }
 
-#[cfg(not(test))]
-fn default_mpv_client(mpv: &libmpv2::Mpv) -> Arc<libmpv2::Mpv> {
-    let mpv_client = Arc::new(
-        mpv.create_client(None)
-            .expect("Failed to create mpv client"),
-    );
-    observe_default_mpv_client(&mpv_client);
-    mpv_client
-}
-
-#[cfg(test)]
 static TEST_MPV_CLIENT: std::sync::OnceLock<Arc<libmpv2::Mpv>> = std::sync::OnceLock::new();
 
-#[cfg(test)]
 fn shared_test_mpv_client() -> Arc<libmpv2::Mpv> {
     Arc::clone(TEST_MPV_CLIENT.get_or_init(|| {
         let mpv_client = Arc::new(
@@ -9033,10 +9188,9 @@ fn shared_test_mpv_client() -> Arc<libmpv2::Mpv> {
     }))
 }
 
-#[cfg(test)]
 fn default_mpv_client(_mpv: &libmpv2::Mpv) -> Arc<libmpv2::Mpv> {
     let mpv_client = shared_test_mpv_client();
-    // Every unit fixture starts with an empty client event queue. The player
+    // Every fixture starts with an empty client event queue. The player
     // core and client are both process-global. Rust's test harness creates a
     // fresh worker thread for each test even with `--test-threads=1`, so a
     // thread-local client would still be destroyed between fixtures and race
@@ -9056,14 +9210,10 @@ impl Default for PealayerApp {
         let (web_state_tx, _web_state_rx) = std::sync::mpsc::channel();
         let (_web_cmd_tx, web_cmd_rx) = std::sync::mpsc::channel();
         let (media_cmd_tx, media_cmd_rx) = std::sync::mpsc::channel();
-        let engine_handle = crate::four_d::engine::spawn_engine();
-        // Production app instances need the independent playback-clock client.
-        // Unit fixtures exercise the shared observed client below and must not
-        // create an additional native client/thread for every `default()` call:
-        // asynchronous libmpv teardown can otherwise race the Windows GNU test
-        // harness after a fixture has already been dropped.
-        #[cfg(not(test))]
-        engine_handle.attach_playback_clock(mpv);
+        // Fixtures exercise UI, layout, and command state without background transport
+        // or hardware worker threads. A memory-only test engine avoids spawning detached
+        // media sync threads and client teardown races during test execution.
+        let engine_handle = crate::four_d::engine::memory_only_test_engine();
         let frame_cache = std::sync::Arc::new(std::sync::RwLock::new(
             crate::mpv::frame_cache::FrameCache::new(128 * 1024 * 1024),
         ));
@@ -9263,6 +9413,7 @@ impl Default for PealayerApp {
             hardware_control_pwm_percent: 0.0,
             keyboard_shortcuts_enabled: true,
             media_keys_enabled: true,
+            media_keys_background_enabled: true,
             application_shortcuts: crate::application_shortcuts::ApplicationShortcuts::default(),
             global_hardware_hotkeys_enabled: true,
             hardware_key_bindings: Vec::new(),
@@ -9322,6 +9473,7 @@ impl Default for PealayerApp {
             timeline_toolbar_hidden: crate::config::default_timeline_toolbar_hidden(),
             pending_timeline_toolbar_save: None,
             pending_status_bar_save: None,
+            pending_control_bar_save: None,
             workspace_rendering: false,
             deferred_config_save: false,
             non_user_control_visibility: crate::config::NonUserControlVisibility::Dimmed,
@@ -9342,6 +9494,7 @@ impl Default for PealayerApp {
             native_dialog_windows: true,
             native_preferences: None,
             status_bar: crate::config::StatusBarConfig::default(),
+            control_bars: crate::config::ControlBarsConfig::default(),
             config_fingerprint: crate::config::AppConfig::fingerprint(
                 &crate::config::AppConfig::get_config_path(),
             )
@@ -9434,6 +9587,98 @@ pub(crate) mod tests {
         assert!(values.get("workspace_dock_layout").is_none());
         assert!(values.get("workspace_session").is_none());
         assert!(app.pending_timeline_toolbar_save.as_ref().unwrap().flight.is_none());
+        app.control_bars.monitor.hidden[crate::config::ControlBarAction::Stop as usize]=true;
+        app.request_control_bar_save(&egui::Context::default());
+        assert!(app.pending_control_bar_save.as_ref().unwrap().flight.is_none());
+        assert_eq!(app.pending_control_bar_save.as_ref().unwrap().desired,app.control_bars);
+    }
+
+    #[test]
+    fn background_media_commands_obey_scope_without_native_registrations_or_focus() {
+        let _lock=lock_app_tests();
+        let original=crate::platform::interop::get_live_config();
+        for (enabled,background,accept) in [(true,true,true),(true,false,false),(false,true,false)] {
+            let mut app=PealayerApp::default();
+            app.web_only=true;app.auto_reload_config=false;app.keyboard_shortcuts_enabled=false;
+            app.media_keys_enabled=enabled;app.media_keys_background_enabled=background;
+            app.media_controls=Some(crate::platform::media_controls::MediaControlsManager::memory_only_test_manager(&app.app_name));
+            let old_volume=app.volume;
+            app.media_cmd_tx.send(souvlaki::MediaControlEvent::SetVolume(0.17)).unwrap();
+            let ctx=egui::Context::default();
+            let mut frame=eframe::Frame::_new_kittest();
+            let _=ctx.run_logic(&egui::RawInput::default(),|ctx|eframe::App::logic(&mut app,ctx,&mut frame));
+            assert_eq!(app.volume,if accept{17.0}else{old_volume},"enabled={enabled}, background={background}");
+            assert_eq!(app.media_keys_background_enabled,background);
+        }
+        crate::platform::interop::set_live_config(original);
+    }
+
+    #[test]
+    fn queued_media_action_rechecks_background_permission_after_same_frame_config_change() {
+        let _lock=lock_app_tests();
+        let original=crate::platform::interop::get_live_config();
+        let mut app=PealayerApp::default();
+        app.web_only=true;app.auto_reload_config=false;app.keyboard_shortcuts_enabled=false;
+        app.media_controls=Some(crate::platform::media_controls::MediaControlsManager::memory_only_test_manager(&app.app_name));
+        crate::platform::interop::set_live_config(app.runtime_config_snapshot());
+        let old_volume=app.volume;
+        let (tx,rx)=std::sync::mpsc::channel();app.interop_rx=rx;
+        tx.send(InteropCommand::UpdateConfig {values:serde_json::json!({"media_keys_background_enabled":false})}).unwrap();
+        app.media_cmd_tx.send(souvlaki::MediaControlEvent::SetVolume(0.17)).unwrap();
+        let ctx=egui::Context::default();let mut frame=eframe::Frame::_new_kittest();
+        let _=ctx.run_logic(&egui::RawInput::default(),|ctx|eframe::App::logic(&mut app,ctx,&mut frame));
+        assert!(!app.media_keys_background_enabled);
+        assert_eq!(app.volume,old_volume,"already queued media action must not run under the new scope");
+        crate::platform::interop::set_live_config(original);
+    }
+
+    #[test]
+    fn explicit_media_session_window_requests_can_raise_a_foreground_only_player() {
+        let _lock=lock_app_tests();
+        let mut app=PealayerApp::default();app.web_only=true;app.media_keys_background_enabled=false;
+        let ctx=egui::Context::default();
+        for command in [InteropCommand::Activate,InteropCommand::Quit,InteropCommand::Open{target:"fixture.mkv".into()}] {
+            assert!(app.media_control_command_allowed(&ctx,&command));
+        }
+        assert!(!app.media_control_command_allowed(&ctx,&InteropCommand::TogglePause));
+        app.media_keys_enabled=false;
+        assert!(!app.media_control_command_allowed(&ctx,&InteropCommand::Activate));
+    }
+
+    #[test]
+    fn narrow_bar_saves_and_peer_edits_preserve_live_workspace_and_authoring() {
+        let _lock=lock_app_tests();
+        let original=crate::platform::interop::get_live_config();
+        let mut live=crate::config::AppConfig::default();
+        live.active_workspace_profile=Some("authoring".into());
+        live.workspace_session.name="Preserve this layout".into();
+        crate::platform::interop::set_live_config(live.clone());
+        let ctx=egui::Context::default();
+        let mut app=PealayerApp::default();
+        app.workspace_rendering=true;
+        app.dock_state=egui_dock::DockState::new(vec![]);
+        app.control_bars.simple.hidden[crate::config::ControlBarAction::Mute as usize]=true;
+        app.request_control_bar_save(&ctx);
+        app.control_bars.monitor.end[crate::config::ControlBarAction::Stop as usize]=true;
+        app.request_control_bar_save(&ctx);
+        app.flush_control_bar_save(&ctx);
+        assert!(app.pending_control_bar_save.is_none());
+        let saved=crate::platform::interop::get_live_config();
+        assert_eq!(saved.workspace_session,live.workspace_session);
+        assert_eq!(saved.active_workspace_profile,live.active_workspace_profile);
+        assert_eq!(saved.control_bars,app.control_bars);
+        let desired=crate::config::ControlBarsConfig::default();
+        app.timeline.keyframes.push(crate::four_d::models::TimelineKeyframe {id:uuid::Uuid::new_v4(),time_ms:123,label:"Uncommitted timeline".into()});
+        let dock_before=serde_json::to_value(&app.dock_state).unwrap();
+        app.apply_peer_request(&ctx,"/api/peer/config",serde_json::json!({
+            "operation":"save","expected":{"control_bars":saved.control_bars},
+            "values":{"control_bars":desired}
+        })).unwrap();
+        assert_eq!(app.control_bars,desired);
+        assert_eq!(app.timeline.keyframes[0].label,"Uncommitted timeline");
+        assert_eq!(serde_json::to_value(&app.dock_state).unwrap(),dock_before);
+        assert_eq!(crate::platform::interop::get_live_config().workspace_session,live.workspace_session);
+        crate::platform::interop::set_live_config(original);
     }
 
     #[test]
@@ -9855,6 +10100,44 @@ pub(crate) mod tests {
         assert_eq!(edited.direct_control.as_ref().unwrap().motion.as_ref().unwrap().side, 1);
         assert_eq!(edited.duration_ms, 500);
         assert_eq!(edited.name, "Seat Right · Down");
+    }
+
+    #[test]
+    fn channel_retarget_preserves_shared_templates_values_and_all_edges() {
+        use crate::four_d::models::{AtomicAction, DirectCueBehavior, Effect, EffectInstance, HardwareTarget};
+        let _lock = lock_app_tests();
+        for (source, target, relay) in [("relay.5", "relay.6", Some(5)), ("pwm.0", "pwm.15", None)] {
+            let mut app = PealayerApp::default();
+            let mut effect = Effect::direct_control("Custom channel · Off".into(), "plug".into(), 750, source.into(), 0, relay);
+            let direct = effect.direct_control.as_mut().unwrap();
+            direct.behavior = if relay.is_some() { DirectCueBehavior::SetKeep } else { DirectCueBehavior::Ramp };
+            direct.end_value_basis_points = 7_123;
+            if let Some(relay_id) = relay { effect.actions.push(AtomicAction { relay_id, state: true, offset_ms: 123 }); }
+            let original = effect.clone();
+            let first = EffectInstance::new(effect.id, 321);
+            let second = EffectInstance::new(effect.id, 654);
+            let second_id = second.id;
+            app.timeline.templates.push(effect);
+            app.timeline.instances = vec![first.clone(), second];
+            assert!(!app.retarget_channel_timeline_cue(second_id, if relay.is_some() { "pwm.0" } else { "relay.6" }, "Wrong kind"));
+            assert!(!app.retarget_channel_timeline_cue(second_id, "pwm.16", "Invalid"));
+            assert!(app.retarget_channel_timeline_cue(second_id, target, "Renamed channel"));
+            assert!(!app.retarget_channel_timeline_cue(second_id, target, "Renamed channel"));
+            assert_eq!(app.timeline.templates.iter().find(|t| t.id == first.effect_id).unwrap(), &original);
+            let second = &app.timeline.instances[1];
+            let edited = app.timeline.templates.iter().find(|t| t.id == second.effect_id).unwrap();
+            assert_eq!(second.start_time_ms, 654);
+            assert_eq!(edited.duration_ms, original.duration_ms);
+            let cue = edited.direct_control.as_ref().unwrap();
+            let before = original.direct_control.as_ref().unwrap();
+            assert_eq!(cue.control_key, target);
+            assert_eq!((cue.behavior, cue.value_basis_points, cue.end_value_basis_points), (before.behavior, before.value_basis_points, before.end_value_basis_points));
+            assert!(edited.name.starts_with("Renamed channel · "));
+            if relay.is_some() {
+                assert_eq!(edited.target, HardwareTarget::Relay(6));
+                assert_eq!(edited.actions.iter().map(|a| (a.relay_id, a.state, a.offset_ms)).collect::<Vec<_>>(), vec![(6, false, 0), (6, true, 123)]);
+            }
+        }
     }
 
     #[test]
@@ -11087,6 +11370,148 @@ pub(crate) mod tests {
         let m_rev = app.media_view_revision.load(Ordering::Relaxed);
         app.bump_media_view_revision();
         assert_eq!(app.media_view_revision.load(Ordering::Relaxed), m_rev + 1);
+    }
+
+    #[test]
+    fn board_tray_release_preserves_gui_confirmation_and_authoritative_latch() {
+        let _guard = lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.engine_handle = crate::four_d::engine::memory_only_test_engine();
+        *app.engine_handle.serial_port.lock().unwrap() = crate::four_d::controller::DEFAULT_ENDPOINT.into();
+        app.engine_handle.is_connected.store(true, Ordering::Release);
+        app.engine_handle.estop_active.store(true, Ordering::SeqCst);
+        app.estop_active = true;
+        app.confirm_estop_release = true;
+        app.update_hardware_capabilities(Some(crate::four_d::controller::HardwareCapabilities {
+            board_connected: true, host_instance_id: "fixture-host".into(), ..Default::default()
+        }));
+        let menu = app.tray_board_menu().unwrap();
+        app.process_board_tray_action(&egui::Context::default(),
+            crate::platform::tray_board::BoardTrayAction::ReleaseEmergencyStop, Some(&menu.target)).unwrap();
+        assert!(app.show_estop_release_dialog);
+        assert!(app.estop_active);
+        assert!(app.engine_handle.estop_active.load(Ordering::SeqCst));
+        assert!(app.board_operation.is_none());
+    }
+
+    #[test]
+    fn board_tray_rejects_stale_target_disconnection_and_busy_commands() {
+        use crate::platform::tray_board::BoardTrayAction;
+        let _guard = lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.engine_handle = crate::four_d::engine::memory_only_test_engine();
+        *app.engine_handle.serial_port.lock().unwrap() = crate::four_d::controller::DEFAULT_ENDPOINT.into();
+        app.engine_handle.is_connected.store(true, Ordering::Release);
+        let mut hardware = crate::four_d::controller::HardwareCapabilities {
+            board_connected: true, host_instance_id: "first-host".into(),
+            supports_status_led_settings: true, status_led_override: Some(true), ..Default::default()
+        };
+        app.update_hardware_capabilities(Some(hardware.clone()));
+        let target = app.tray_board_menu().unwrap().target;
+        hardware.host_instance_id = "another-host".into();
+        app.update_hardware_capabilities(Some(hardware));
+        let context = egui::Context::default();
+        assert!(app.process_board_tray_action(&context, BoardTrayAction::AutomaticStatusLed, Some(&target)).is_err());
+        assert!(app.board_operation.is_none());
+        let target = app.tray_board_menu().unwrap().target;
+        app.board_operation = Some("fixture-pending".into());
+        assert!(app.process_board_tray_action(&context, BoardTrayAction::AutomaticStatusLed, Some(&target)).is_err());
+        assert_eq!(app.board_operation.as_deref(), Some("fixture-pending"));
+        app.board_operation = None;
+        let mut idle = app.advertised_hardware().unwrap();
+        idle.status_led_override = Some(false);
+        app.update_hardware_capabilities(Some(idle));
+        assert!(app.process_board_tray_action(&context, BoardTrayAction::AutomaticStatusLed, Some(&target)).is_err());
+        assert!(app.board_operation.is_none());
+        app.engine_handle.is_connected.store(false, Ordering::Release);
+        assert!(app.tray_board_menu().is_none());
+        assert!(app.process_board_tray_action(&context, BoardTrayAction::Monitor, Some(&target)).is_err());
+        app.engine_handle.is_connected.store(true, Ordering::Release);
+        *app.engine_handle.serial_port.lock().unwrap() = "COM-fixture-direct".into();
+        assert!(app.tray_board_menu().is_none());
+    }
+
+    #[test]
+    fn board_tray_monitor_restores_and_focuses_its_closed_tab() {
+        let _guard = lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.engine_handle = crate::four_d::engine::memory_only_test_engine();
+        *app.engine_handle.serial_port.lock().unwrap() = crate::four_d::controller::DEFAULT_ENDPOINT.into();
+        app.engine_handle.is_connected.store(true, Ordering::Release);
+        app.update_hardware_capabilities(Some(crate::four_d::controller::HardwareCapabilities {
+            board_connected: true, host_instance_id: "fixture-host".into(), ..Default::default()
+        }));
+        app.show_four_d_editor = false;
+        app.dock_state = egui_dock::DockState::new(vec![crate::ui::layout::PealayerTab::ProgramMonitor]);
+        let target = app.tray_board_menu().unwrap().target;
+        app.process_board_tray_action(&egui::Context::default(),
+            crate::platform::tray_board::BoardTrayAction::Monitor, Some(&target)).unwrap();
+        assert!(app.show_four_d_editor);
+        let path = app.dock_state.find_tab(&crate::ui::layout::PealayerTab::HardwareMonitor).unwrap();
+        assert_eq!(app.dock_state.leaf(path.node_path()).unwrap().active, path.tab);
+    }
+
+    #[test]
+    fn peer_rgb_snapshots_invalidate_cached_native_and_web_hardware() {
+        let _guard = lock_app_tests();
+        let app = PealayerApp::default();
+        assert!(app.advertised_hardware().is_none()); // Prime the idle UI cache.
+        let mut hardware = crate::four_d::controller::HardwareCapabilities {
+            board_connected: true,
+            host_instance_id: "peer-controller".into(),
+            ..Default::default()
+        };
+        for (index, (red, green, blue)) in [(0, 128, 40), (128, 0, 0), (0, 0, 0)].into_iter().enumerate() {
+            hardware.status_led = Some(crate::four_d::controller::HardwareStatusLed {
+                red, green, blue, brightness: 128, effect: 1, condition: 8,
+            });
+            hardware.status_led_revision = index as u64 + 1;
+            let before = app.engine_handle.hardware_revision.load(Ordering::Acquire);
+            assert!(crate::four_d::engine::install_hardware_snapshot(
+                &app.engine_handle.hardware_capabilities,
+                &app.engine_handle.hardware_revision,
+                Some(hardware.clone()),
+            ));
+            assert_eq!(app.engine_handle.hardware_revision.load(Ordering::Acquire), before + 1);
+            let cached = app.advertised_hardware().unwrap();
+            assert_eq!(cached.status_led, hardware.status_led);
+            let web = web_hardware_details(&cached, Default::default());
+            assert_eq!(web["status_led"], serde_json::json!({"red":red,"green":green,"blue":blue}));
+            assert!(!crate::four_d::engine::install_hardware_snapshot(
+                &app.engine_handle.hardware_capabilities,
+                &app.engine_handle.hardware_revision,
+                Some(hardware.clone()),
+            ));
+            assert_eq!(app.engine_handle.hardware_revision.load(Ordering::Acquire), before + 1);
+        }
+        // Missing hardware and a restarted source also invalidate a primed cache.
+        app.update_hardware_capabilities(None);
+        assert!(app.advertised_hardware().is_none());
+        hardware.host_instance_id = "restarted-peer-controller".into();
+        hardware.status_led_revision = 1;
+        app.update_hardware_capabilities(Some(hardware.clone()));
+        assert_eq!(app.advertised_hardware().unwrap(), hardware);
+    }
+
+    #[test]
+    fn controller_rgb_only_push_invalidates_a_primed_ui_cache() {
+        let _guard = lock_app_tests();
+        let app = PealayerApp::default();
+        app.update_hardware_capabilities(Some(crate::four_d::controller::HardwareCapabilities {
+            board_connected: true,
+            ..Default::default()
+        }));
+        assert!(app.advertised_hardware().unwrap().status_led.is_none());
+        let target = app.engine_handle.controller_push_target();
+        let event = serde_json::json!({"kind":"status_led.changed","metadata":{
+            "red":"9","green":"87","blue":"123","brightness":"128",
+            "effect":"1","condition":"8","revision":"42"
+        }});
+        assert!(target.apply_notification("controller.state", &event));
+        assert_eq!(app.advertised_hardware().unwrap().status_led.unwrap().blue, 123);
+        let revision = app.engine_handle.hardware_revision.load(Ordering::Acquire);
+        assert!(!target.apply_notification("controller.state", &event));
+        assert_eq!(app.engine_handle.hardware_revision.load(Ordering::Acquire), revision);
     }
 
     #[test]

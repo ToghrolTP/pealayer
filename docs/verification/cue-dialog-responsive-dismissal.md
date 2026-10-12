@@ -13,6 +13,19 @@ Card icon tiles are exact 32-point squares, time steppers are 28-point squares,
 and measured title/subtitle groups center beside their icons. Selected cards
 use one accent outline, without a competing left stripe.
 
+The docked `No cue selected` empty card uses that same fixed square, not a
+content-sized frame. The header reserves the complete title/subtitle height
+before placing the icon: otherwise the horizontal row centers the first widget
+against its initial control height and cannot recenter it after a large-font
+caption grows. Caption growth changes the row height, never the tile dimensions.
+The dedicated empty-state renderer regression checks the painted square and
+caption-group alignment at narrow/wide widths, compact/comfortable densities,
+light/dark themes, 1/1.25/1.5/2 display scales and larger subtitle fonts, including
+right-to-left placement. Rendering does not select a cue or mutate the timeline.
+The isolated native suite passed 832 tests with one existing ignored (833 total)
+after this empty-state/header change. This is source/render verification, not
+proof that an older running application has been replaced.
+
 ## Dismissal
 
 - Done accepts the current edits.

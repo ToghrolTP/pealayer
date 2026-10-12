@@ -2,7 +2,24 @@ use crate::config::AppLanguage;
 use eframe::egui;
 use std::sync::Arc;
 
-pub(crate) fn configure_ui_fonts(context: &egui::Context, prefer_vazirmatn: bool) {
+/// Also used by isolated native UI fixtures so their font metrics match the app.
+#[doc(hidden)]
+pub fn configure_ui_fonts(context: &egui::Context, prefer_vazirmatn: bool) {
+    context.data_mut(|data| data.remove::<(crate::config::UiFontFamily, crate::config::UiFontFamily, bool)>(egui::Id::new("preferred-ui-fonts")));
+    install_ui_fonts(context, prefer_vazirmatn, crate::config::UiFontFamily::System, crate::config::UiFontFamily::Bundled);
+}
+
+pub fn configure_preferred_fonts(context: &egui::Context, config: &crate::config::AppConfig) {
+    let key = egui::Id::new("preferred-ui-fonts");
+    let desired = (config.ui_font_family, config.monospace_font_family,
+        crate::config::resolve_language(crate::config::resolved_language_preference(config)) == AppLanguage::Persian);
+    if context.data(|data| data.get_temp::<(crate::config::UiFontFamily, crate::config::UiFontFamily, bool)>(key)) == Some(desired) { return; }
+    install_ui_fonts(context, desired.2, desired.0, desired.1);
+    context.data_mut(|data| data.insert_temp(key, desired));
+}
+
+fn install_ui_fonts(context: &egui::Context, prefer_vazirmatn: bool,
+    normal: crate::config::UiFontFamily, mono: crate::config::UiFontFamily) {
     let mut fonts = egui::FontDefinitions::default();
     egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
 
@@ -40,16 +57,28 @@ pub(crate) fn configure_ui_fonts(context: &egui::Context, prefer_vazirmatn: bool
         .families
         .get_mut(&egui::FontFamily::Proportional)
         .expect("egui provides a proportional font family");
-    if prefer_vazirmatn {
+    if normal == crate::config::UiFontFamily::Vazirmatn || prefer_vazirmatn && normal == crate::config::UiFontFamily::System {
         proportional.insert(0, "pealayer-vazirmatn".to_owned());
         if has_system_font {
             proportional.insert(1, "pealayer-system-ui".to_owned());
         }
-    } else if has_system_font {
+    } else if has_system_font && normal == crate::config::UiFontFamily::System {
         proportional.insert(0, "pealayer-system-ui".to_owned());
         proportional.insert(1, "pealayer-vazirmatn".to_owned());
     } else {
-        proportional.insert(0, "pealayer-vazirmatn".to_owned());
+        proportional.push("pealayer-vazirmatn".to_owned());
+    }
+
+    if mono == crate::config::UiFontFamily::System {
+        let paths = [
+            #[cfg(windows)] r"C:\Windows\Fonts\consola.ttf",
+            #[cfg(target_os = "macos")] "/System/Library/Fonts/Menlo.ttc",
+            #[cfg(target_os = "linux")] "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
+        ];
+        if let Some(bytes) = paths.iter().find_map(|path| std::fs::read(path).ok()) {
+            fonts.font_data.insert("pealayer-system-mono".into(), Arc::new(egui::FontData::from_owned(bytes)));
+            fonts.families.get_mut(&egui::FontFamily::Monospace).unwrap().insert(0, "pealayer-system-mono".into());
+        }
     }
 
     // Named emphasis faces preserve normal UI sizes and icon/fallback coverage.
@@ -69,7 +98,9 @@ pub(crate) fn configure_ui_fonts(context: &egui::Context, prefer_vazirmatn: bool
         ][..]),
     ] {
         let mut faces = fonts.families.get(&fallback).cloned().unwrap_or_default();
-        if let Some(bytes) = paths.iter().find_map(|path| std::fs::read(path).ok()) {
+        if (fallback == egui::FontFamily::Proportional && normal == crate::config::UiFontFamily::System
+            || fallback == egui::FontFamily::Monospace && mono == crate::config::UiFontFamily::System)
+            && let Some(bytes) = paths.iter().find_map(|path| std::fs::read(path).ok()) {
             fonts.font_data.insert(name.into(), Arc::new(egui::FontData::from_owned(bytes)));
             faces.insert(0, name.into());
         }
@@ -107,6 +138,21 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Monitor" => "نمایشگر",
         "Tabs" => "زبانه‌ها",
         "Hardware" => "سخت‌افزار",
+        "UI font" => "قلم رابط کاربری",
+        "Typography" => "تایپوگرافی",
+        "Monospace font" => "قلم هم‌عرض",
+        "System font" => "قلم سیستم",
+        "Bundled font" => "قلم همراه برنامه",
+        "Vazirmatn" => "وزیرمتن",
+        "Place at start" => "قرار دادن در ابتدا",
+        "Place at end" => "قرار دادن در انتها",
+        "Use monospace" => "استفاده از قلم هم‌عرض",
+        "Semantic colors" => "رنگ‌های معنایی",
+        "Value range" => "محدوده مقدار",
+        "Minimum" => "کمینه",
+        "Maximum" => "بیشینه",
+        "Show dividers" => "نمایش جداکننده‌ها",
+        "Fonts…" => "قلم‌ها…",
         "Effects" => "جلوه‌ها",
         "Layout" => "چیدمان",
         "Select all cues" => "انتخاب همهٔ نشانه‌ها",
@@ -239,7 +285,16 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "PCController catalog" => "فهرست PCController",
         "Preferences SFX output" => "خروجی جلوهٔ صوتی از تنظیمات",
         "Preparing hardware" => "آماده‌سازی سخت‌افزار",
+        "Arming hardware" => "فعال‌سازی خط زمان سخت‌افزار",
+        "Hardware preparation blocked" => "آماده‌سازی سخت‌افزار متوقف شده",
+        "Hardware plan invalid" => "برنامه سخت‌افزار نامعتبر است",
+        "Hardware waiting" => "سخت‌افزار در انتظار است",
+        "Hardware authority required" => "اجازه انتشار سخت‌افزار لازم است",
         "Preview unavailable" => "پیش‌نمایش در دسترس نیست",
+        "Keyframe" => "فریم کلیدی",
+        "Show thumbnails in Simple seek preview" => "نمایش تصویر در پیش‌نمایش جابه‌جایی فضای ساده",
+        "Show thumbnails in NLE seek preview" => "نمایش تصویر در پیش‌نمایش جابه‌جایی فضای تدوین",
+        "Adds a decoded frame to the shared cursor-position and chapter hover card" => "افزودن تصویر به کارت مشترک موقعیت نشانگر و فصل",
         "Program" => "برنامه",
         "Program must be valid JSON" => "برنامه باید JSON معتبر باشد",
         "PWM" => "PWM",
@@ -620,6 +675,13 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Repeats" => "تعداد تکرار",
         "Play melody" => "پخش ملودی",
         "Stop buzzer" => "توقف بیزر",
+        "Stop board effects" => "توقف جلوه‌های برد",
+        "Stop strip animation" => "توقف پویانمایی نوار LED",
+        "Clear LED strip" => "خاموش‌کردن نوار LED",
+        "Restore automatic status LED" => "بازگرداندن LED وضعیت خودکار",
+        "No live PCController board is connected" => "هیچ برد زنده‌ای به PCController متصل نیست",
+        "Board tray action is no longer available; reopen the menu" => "عملیات سینی برد دیگر در دسترس نیست؛ منو را دوباره باز کنید",
+        "PCController tray action" => "عملیات سینی PCController",
         "Tone test" => "آزمایش صدا",
         "Frequency" => "فرکانس",
         "Play tone" => "پخش صدا",
@@ -759,6 +821,10 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
             "نمایش خودکار زمان با واحدهای خوانا مانند ثانیه، دقیقه و ساعت؛ برای نمایش همیشگی میلی‌ثانیه غیرفعال کنید."
         }
         "Keyboard shortcuts" => "میان‌برهای صفحه‌کلید",
+        "Respond to keyboard media controls" => "پاسخ به دکمه‌های رسانه‌ای صفحه‌کلید",
+        "Allow media controls while Pealayer is in the background" => "فعال‌سازی دکمه‌های رسانه‌ای هنگامی که پی‌لیر در پس‌زمینه است",
+        "Play, pause, stop, next/previous and seek through the OS media session. Independent of in-app shortcuts and hardware hotkeys." => "پخش، مکث، توقف، بعدی/قبلی و جابه‌جایی از طریق کنترل رسانه‌ای سیستم‌عامل؛ مستقل از میان‌برهای داخل برنامه و کلیدهای سخت‌افزاری.",
+        "Keep keyboard media buttons and OS transport controls working when another window has focus, including when Pealayer is minimized. Requires Respond to keyboard media controls; does not override the OS choice of media player." => "دکمه‌های رسانه‌ای صفحه‌کلید و سیستم‌عامل هنگام فعال‌بودن پنجره‌ای دیگر یا کوچک‌شدن پی‌لیر کار کنند. گزینهٔ پاسخ به دکمه‌های رسانه‌ای باید فعال باشد؛ انتخاب پخش‌کننده توسط سیستم‌عامل تغییر نمی‌کند.",
         "Enable in-app keyboard shortcuts and hardware bindings" => {
             "فعال‌سازی میان‌برها و کلیدهای سخت‌افزاری داخل برنامه"
         }
@@ -902,6 +968,11 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Clear chart history" => "پاک‌کردن تاریخچهٔ نمودار",
         "Reset widget order" => "بازنشانی ترتیب ابزارک‌ها",
         "Move earlier" => "انتقال به قبل",
+        "Control bar" => "نوار کنترل",
+        "Show / hide actions" => "نمایش / پنهان‌کردن فرمان‌ها",
+        "Reset toolbar" => "بازنشانی نوار ابزار",
+        "Play / Pause" => "پخش / مکث",
+        "Pin controls" => "سنجاق‌کردن کنترل‌ها",
         "Move later" => "انتقال به بعد",
         "Discard changes" => "لغو تغییرات",
         "Close the current cue editor first" => "ابتدا ویرایشگر نشانهٔ فعلی را ببندید",
@@ -1130,6 +1201,9 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Add track" => "افزودن مسیر",
         "Grid" => "شبکه",
         "Animations and transitions" => "پویانمایی و گذارها",
+        "Control density" => "تراکم کنترل‌ها",
+        "Compact" => "فشرده",
+        "Comfortable" => "آزاد",
         "Recent colors" => "رنگ‌های اخیر",
         "Pealayer colors" => "رنگ‌های پی‌لیر",
         "Orange" => "نارنجی",

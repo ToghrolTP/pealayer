@@ -240,7 +240,9 @@ struct StandalonePreferencesApp {
     draft: PreferencesDraft,
     owner_hwnd: isize,
     native_window_initialized: bool,
-    applied_appearance: Option<(AppTheme, bool, bool, [u8; 3], crate::config::ColorPalette)>,
+    applied_appearance: Option<(AppTheme, bool, bool, [u8; 3], crate::config::ColorPalette,
+        crate::config::UiControlDensity, crate::config::UiAnimationMode,
+        crate::config::UiFontFamily, crate::config::UiFontFamily)>,
     config_watcher: Option<crate::config::ConfigFileWatcher>,
     config_reload_due: Option<std::time::Instant>,
     branding_config: Option<AppConfig>,
@@ -296,10 +298,7 @@ impl StandalonePreferencesApp {
             let name = crate::config::resolved_app_name(config);
             let language = crate::config::resolve_language(crate::config::resolved_language_preference(config));
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("{} — {name}", native_tr(language, "Preferences"))));
-            if let Some(icon) = crate::branding::icon_bytes(config, crate::branding::PlaybackIconState::Stopped)
-                .and_then(|(_, bytes)| crate::branding::icon_data_from_bytes(&bytes)) {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Icon(Some(std::sync::Arc::new(icon))));
-            }
+            crate::branding::apply_native_window_icon(ctx, config, crate::branding::PlaybackIconState::Stopped);
             self.branding_config = Some(config.clone());
         }
         let appearance = (
@@ -308,6 +307,10 @@ impl StandalonePreferencesApp {
             self.draft.config.windows_mica_backdrop,
             crate::ui::platform_accent_rgb(&self.draft.config),
             self.draft.config.color_palette,
+            self.draft.config.ui_control_density,
+            self.draft.config.ui_animation_mode,
+            self.draft.config.ui_font_family,
+            self.draft.config.monospace_font_family,
         );
         if self.applied_appearance != Some(appearance) {
             crate::ui::configure_native_appearance(ctx, &self.draft.config);
@@ -778,17 +781,12 @@ fn draw_preferences_editor(draft: &mut PreferencesDraft, ui: &mut egui::Ui) -> P
         });
     });
     if draft.confirm_close {
-        let mut confirm_open = true;
         let mut cancel = false;
         let mut discard = false;
         let mut save = false;
-        elegance::Modal::new("preferences-confirm-close", &mut confirm_open)
-            .heading(tr("Unsaved preferences"))
-            .header_icon(crate::ui::icons::WARNING)
-            .header_accent(elegance::Accent::Amber)
-            .alert(true)
-            .close_on_backdrop(false)
-            .footer(|ui| {
+        let confirm = crate::ui::dialog::confirmation_modal(ui.ctx(), egui::Id::new("preferences-confirm-close"),
+            &tr("Unsaved preferences"), crate::ui::icons::WARNING,
+            &tr("Save your changes before closing Preferences?"), &tr("Close"), |ui| {
                 if ui.add(elegance::Button::new(format!("{}  {}", crate::ui::icons::FLOPPY_DISK, tr("Save")))
                     .min_width(crate::ui::dialog::ACTION_BUTTON_WIDTH)).clicked() {
                     save = true;
@@ -801,9 +799,7 @@ fn draw_preferences_editor(draft: &mut PreferencesDraft, ui: &mut egui::Ui) -> P
                     .outline().min_width(crate::ui::dialog::ACTION_BUTTON_WIDTH)).clicked() {
                     cancel = true;
                 }
-            })
-            .show(ui.ctx(), |ui| {
-                ui.label(tr("Save your changes before closing Preferences?"));
+                cancel || save || discard
             });
         if save {
             outcome.request_save();
@@ -811,7 +807,7 @@ fn draw_preferences_editor(draft: &mut PreferencesDraft, ui: &mut egui::Ui) -> P
         if discard {
             outcome.discard = true;
         }
-        draft.confirm_close = confirm_open && !cancel && !save && !discard;
+        draft.confirm_close = !confirm.dismissed && !cancel && !save && !discard;
     }
     outcome
 }
@@ -1146,8 +1142,8 @@ fn render_contract_control(
                                 let to_align = crate::ui::i18n::input_alignment(rtl_ui, &item.to);
                                 changed |= ui
                                     .add_sized(
-                                        [field_width, PREFERENCE_ROW_HEIGHT],
-                                        crate::ui::dialog::singleline_text_edit(&mut item.from)
+                                        [field_width, crate::ui::control_density::height(ui)],
+                                        crate::ui::dialog::singleline_text_edit(ui, &mut item.from)
                                             .horizontal_align(from_align)
                                             .hint_text(tr("Source text")),
                                     )
@@ -1155,8 +1151,8 @@ fn render_contract_control(
                                 ui.label(crate::ui::icons::ARROW_RIGHT);
                                 changed |= ui
                                     .add_sized(
-                                        [field_width, PREFERENCE_ROW_HEIGHT],
-                                        crate::ui::dialog::singleline_text_edit(&mut item.to)
+                                        [field_width, crate::ui::control_density::height(ui)],
+                                        crate::ui::dialog::singleline_text_edit(ui, &mut item.to)
                                             .horizontal_align(to_align)
                                             .hint_text(tr("Replacement")),
                                     )
@@ -1211,8 +1207,8 @@ fn render_contract_control(
                 let browse_width = 85.0;
                 let clear_width = 24.0;
                 edited |= ui.add_sized(
-                    [(width - browse_width - clear_width - PREFERENCE_COLUMN_GAP * 2.0).max(55.0), PREFERENCE_ROW_HEIGHT],
-                    crate::ui::dialog::singleline_text_edit(&mut text).hint_text(tr(control.placeholder.unwrap_or_default())),
+                    [(width - browse_width - clear_width - PREFERENCE_COLUMN_GAP * 2.0).max(55.0), crate::ui::control_density::height(ui)],
+                    crate::ui::dialog::singleline_text_edit(ui, &mut text).hint_text(tr(control.placeholder.unwrap_or_default())),
                 ).on_hover_text(&text).changed();
                 if ui.add_sized([browse_width, 26.0], egui::Button::new(format!(
                     "{} {}", crate::ui::icons::FOLDER_OPEN, tr("Browse..."),
@@ -1258,7 +1254,7 @@ fn render_contract_control(
             preference_row(ui, control_icon, &tr(control.label), label_width, |ui| {
                 let control_width = ui.available_width().min(PREFERENCE_CONTROL_MAX_WIDTH);
                 let response = ui.add(
-                    crate::ui::dialog::singleline_text_edit(&mut text)
+                    crate::ui::dialog::singleline_text_edit(ui, &mut text)
                         .horizontal_align(text_align)
                         .desired_width(control_width)
                         .hint_text(control.placeholder.unwrap_or_default()),
@@ -1720,6 +1716,7 @@ fn preference_control_icon(name: &str) -> &'static str {
         "check-square" => CHECK_SQUARE,
         "sliders-horizontal" => SLIDERS_HORIZONTAL,
         "text-align-left" => TEXT_ALIGN_LEFT,
+        "text-t" => TEXT_T,
         "list-checks" => LIST_CHECKS,
         "pencil-simple" => PENCIL_SIMPLE,
         _ => GEAR,
@@ -1818,6 +1815,7 @@ fn group_icon(group: &str) -> &'static str {
         "Video surface" => crate::ui::icons::SELECTION_ALL,
         "Window movement" => crate::ui::icons::APP_WINDOW,
         "Status bar" => crate::ui::icons::GAUGE,
+        "Typography" => crate::ui::icons::TEXT_T,
         "Windows graphics and composition" | "Dialog windows" => crate::ui::icons::APP_WINDOW,
         _ => crate::ui::icons::GEAR,
     }
@@ -1884,14 +1882,18 @@ mod tests {
                     accent_frame(&ctx,&control,&mut values,vec![]);
                     let open = accent_frame(&ctx,&control,&mut values,vec![]);
                     let blue = accent_text_position(&open,"macOS blue");
+                    let row_height = open.shapes.iter().filter_map(|shape| match &shape.shape {
+                        egui::epaint::Shape::Rect(rect) if rect.rect.contains(blue) && rect.rect.width() > 50.0 => Some(rect.rect.height()),
+                        _ => None,
+                    }).min_by(f32::total_cmp).expect("preset geometry");
                     let menu_width = open.shapes.iter().find_map(|shape| match &shape.shape {
-                        egui::epaint::Shape::Rect(rect) if rect.rect.height() == crate::ui::dropdown::ROW_HEIGHT && rect.rect.contains(blue) => Some(rect.rect.width()), _=>None,
+                        egui::epaint::Shape::Rect(rect) if rect.rect.height() == row_height && rect.rect.contains(blue) => Some(rect.rect.width()), _=>None,
                     }).expect("preset row");
                     let rows: Vec<_> = open.shapes.iter().filter_map(|shape| match &shape.shape {
-                        egui::epaint::Shape::Rect(rect) if rect.rect.height() == crate::ui::dropdown::ROW_HEIGHT
+                        egui::epaint::Shape::Rect(rect) if rect.rect.height() == row_height
                             && rect.rect.width() == menu_width
-                            && rect.rect.center().y >= blue.y - 2.0 * (crate::ui::dropdown::ROW_HEIGHT + 2.0) - 0.5
-                            && rect.rect.center().y <= blue.y + crate::ui::dropdown::ROW_HEIGHT + 2.5 => Some(rect.rect), _ => None,
+                            && rect.rect.center().y >= blue.y - 2.0 * (row_height + 2.0) - 0.5
+                            && rect.rect.center().y <= blue.y + row_height + 2.5 => Some(rect.rect), _ => None,
                     }).collect();
                     assert_eq!(rows.len(),4,"four full-width rows at scale {scale}");
                     assert!(rows.iter().all(|row| row.width() == rows[0].width()));
@@ -2101,6 +2103,55 @@ mod tests {
     }
 
     #[test]
+    fn unsaved_preferences_corner_close_and_escape_keep_the_dirty_draft() {
+        for escape in [false, true] {
+            let context = egui::Context::default();
+            crate::ui::i18n::configure_ui_fonts(&context, false);
+            let mut draft = PreferencesDraft::new(AppConfig::default(), 0);
+            draft.config.playback_speed = 1.25;
+            draft.confirm_close = true;
+            let before = draft.config.clone();
+            let saved = draft.saved_config.clone();
+            let render = |draft: &mut PreferencesDraft, events, time| context.run_ui(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 800.0))),
+                events, time: Some(time), ..Default::default()
+            }, |ui| {
+                let outcome = draw_preferences_editor(draft, ui);
+                assert!(!outcome.save && !outcome.discard && !outcome.close);
+            });
+            for time in [0.0, 0.05, 0.1] {
+                let mut output = render(&mut draft, vec![], time);
+                output.textures_delta.clear();
+            }
+            let mut output = render(&mut draft, vec![], 0.15);
+            let point = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == "×" =>
+                    Some(text.pos + text.galley.mesh_bounds.center().to_vec2()),
+                _ => None,
+            }).expect("unsaved-preferences close glyph");
+            output.textures_delta.clear();
+            if escape {
+                let mut output = render(&mut draft, vec![egui::Event::Key {
+                    key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                }], 0.2);
+                output.textures_delta.clear();
+            } else {
+                for (time, pressed) in [(0.2, true), (0.25, false)] {
+                    let mut output = render(&mut draft, vec![egui::Event::PointerMoved(point),
+                        egui::Event::PointerButton { pos: point, button: egui::PointerButton::Primary,
+                            pressed, modifiers: egui::Modifiers::NONE }], time);
+                    output.textures_delta.clear();
+                }
+            }
+            assert!(!draft.confirm_close);
+            assert!(draft.is_dirty());
+            assert_eq!(draft.config, before);
+            assert_eq!(draft.saved_config, saved);
+        }
+    }
+
+    #[test]
     fn every_preferences_save_requests_close_after_success() {
         let mut outcome = PreferencesOutcome::default();
         assert!(!outcome.close_after_save);
@@ -2173,6 +2224,27 @@ mod tests {
             )
             .drop_without_applying_deltas();
         }
+    }
+
+    #[test]
+    fn open_preferences_applies_density_and_motion_changes_without_reopening() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let mut helper = StandalonePreferencesApp {
+            draft: PreferencesDraft::new(AppConfig::default(), 0), owner_hwnd: 0,
+            native_window_initialized: false, applied_appearance: None,
+            config_watcher: None, config_reload_due: None, branding_config: None,
+        };
+        let ctx = egui::Context::default();
+        helper.apply_appearance(&ctx);
+        assert_eq!(ctx.global_style().spacing.interact_size.y, 24.0);
+        helper.draft.config.ui_control_density = crate::config::UiControlDensity::Comfortable;
+        helper.draft.config.ui_animation_mode = crate::config::UiAnimationMode::Disabled;
+        helper.apply_appearance(&ctx);
+        assert_eq!(ctx.global_style().spacing.interact_size.y, 32.0);
+        assert_eq!(ctx.global_style().animation_time, 0.0);
+        helper.draft.restore_saved();
+        helper.apply_appearance(&ctx);
+        assert_eq!(ctx.global_style().spacing.interact_size.y, 24.0);
     }
 
     #[test]

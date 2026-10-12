@@ -8,6 +8,12 @@ retroactively attributed to an older download.
 
 ### 🎬 Playback and audio
 
+- Reach important connected-board controls from the Windows tray's PCController
+  submenu, with contextual availability and the existing E-STOP release guard.
+
+- Refresh physical status RGB and hardware readings in native peer clients when
+  authoritative snapshots change, including while playback is paused.
+
 - Use external mpv as the player, alongside a muted internal preview, or control
   an existing mpv through event-driven socket/named-pipe IPC.
 - Import, preview and schedule sound effects independently of movie audio, with

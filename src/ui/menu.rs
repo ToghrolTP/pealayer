@@ -471,17 +471,9 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         ui.close();
                     }
                     ui.separator();
-                    for (id, profile) in app.ordered_workspace_profiles() {
-                        let active = app.active_workspace_profile.as_deref() == Some(id.as_str());
-                        let label = format!(
-                            "{}  {}",
-                            crate::ui::icons::workspace_icon(&profile.icon),
-                            profile.name
-                        );
-                        if ui.dropdown_choice(active, label).clicked() {
-                            app.restore_workspace_profile(ui.ctx(), &id);
-                            ui.close();
-                        }
+                    if let Some(id) = crate::ui::workspace_profiles::profile_choices(ui,
+                        &app.ordered_workspace_profiles(), app.active_workspace_profile.as_deref()) {
+                        app.restore_workspace_profile(ui.ctx(), &id);
                     }
                     ui.separator();
                     crate::ui::icons::submenu(
@@ -691,8 +683,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     );
                                     endpoint_changed |= ui
                                         .add_sized(
-                                            [240.0, 22.0],
-                                            crate::ui::dialog::singleline_text_edit(&mut app.serial_port)
+                                            [240.0, crate::ui::control_density::height(ui)],
+                                            crate::ui::dialog::singleline_text_edit(ui, &mut app.serial_port)
                                                 .hint_text(endpoint_hint),
                                         )
                                         .on_hover_text(app.tr(

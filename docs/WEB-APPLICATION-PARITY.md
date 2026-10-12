@@ -97,11 +97,18 @@ uses the shared Rust preference contract, so Web preferences can configure the
 native authority too. This is **not** a claim that React already has equivalent
 draggable ruler controls; that counterpart remains part of timeline parity.
 
+Control-bar follow-up (12 October): [shared customization](verification/control-bar-customization.md)
+covers native Simple/Program Monitor and Web player/Monitor action menus,
+saved ordering, logical start/end placement and hide/restore. Native gesture
+helpers are shared with the ruler; React action bars share one component and
+the same semantic preference schema. This does not complete React ruler-toolbar
+parity or establish installed/native/mobile gesture acceptance.
+
 | Area | Current state | Completion evidence | Remaining work |
 | --- | --- | --- | --- |
 | Application shell | In progress | Installable SPA/PWA, responsive navigation, shared appearance and connection state; footer now consumes the native persisted visibility contract and exposes right-click hide/show actions | Finish application-style command header and compact/mobile command access |
 | Playback surface | In progress | Browser-native video now uses Pealayer's seekable byte-range endpoint and follows the Rust/mpv clock; unsupported browser codecs fall back to the backend frame surface | Add negotiated low-latency transcoded canvas stream over WebSocket, browser capability reporting and stream diagnostics |
-| Transport | Mostly complete | Play/pause, seek, volume, mute, rate, chapters, thumbnail preview and remote-folder previous/next use shared commands; video, audio and subtitle selectors now consume live libmpv track metadata and invoke the same validated selection commands in Simple and NLE layouts; the primary timeline action has a fixed circular hit target | Complete frame-step state, contextual shortcuts and exact buffer visualization |
+| Transport | Mostly complete | Play/pause, seek, volume, mute, rate, chapters, thumbnail preview and remote-folder previous/next use shared commands; native/Web Simple and NLE seekbars have one cursor-position card with chapter/keyframe details and an optional image, without competing tooltips; video, audio and subtitle selectors consume live libmpv track metadata and invoke the same validated selection commands in Simple and NLE layouts; the primary timeline action has a fixed circular hit target | Complete frame-step state, contextual shortcuts, exact buffer visualization and installed real-media hover acceptance |
 | Hardware monitor | In progress | Live advertised controls, pointer-down relay actions with immediate optimistic feedback and authoritative reconciliation, clickable indicators, PWM, motion hold/release, drag ordering, custom channel icons and complete card context menu | Complete bulk management, bindings, channel timeline actions and every advertised board setting |
 | Emergency stop | Complete for Web interaction | Filled red danger control, immediate pointer-down dispatch and shared interlock state | Continue physical-board acceptance whenever hardware is attached |
 | Front panel | In progress | Live PCController masks now render as four illuminated seven-segment glyphs, with brightness/activity/blink state plus K1–K4 commands and LCD text | Match the complete egui board-information tabs, settings and contextual commands |

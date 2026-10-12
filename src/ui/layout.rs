@@ -58,7 +58,7 @@ fn sidebar_content_width(available_width: f32) -> f32 {
     (available_width - SIDEBAR_SCROLLBAR_WIDTH - SIDEBAR_SCROLLBAR_GAP).max(1.0)
 }
 
-fn sidebar_scroll<R>(
+pub(super) fn sidebar_scroll<R>(
     ui: &mut egui::Ui,
     id: &str,
     body: impl FnOnce(&mut egui::Ui) -> R,
@@ -98,12 +98,13 @@ fn hardware_monitor_scroll<R>(
     output
 }
 
-pub(crate) fn left_aligned_click_label(
+pub(crate) fn aligned_click_label(
     ui: &mut egui::Ui,
     text: &str,
     width: f32,
     height: f32,
     size: f32,
+    align: egui::Align,
 ) -> egui::Response {
     let (rect, response) =
         ui.allocate_exact_size(egui::vec2(width.max(1.0), height), egui::Sense::click());
@@ -112,8 +113,14 @@ pub(crate) fn left_aligned_click_label(
         egui::FontId::proportional(size),
         ui.visuals().strong_text_color(),
     );
-    let rtl = crate::ui::i18n::input_alignment(ui.layout().main_dir == egui::Direction::RightToLeft, text) == egui::Align::Max;
-    let x = if rtl { rect.right() - 4.0 - galley.size().x } else { rect.left() + 4.0 };
+    // Trailing actions use a reverse layout even in an English/LTR UI. Text
+    // alignment must come from the application/logical caption, never that
+    // local button-allocation direction. Match the inline editor's 4px inset.
+    let x = match align {
+        egui::Align::Min => rect.left() + 4.0,
+        egui::Align::Center => rect.center().x - galley.size().x * 0.5,
+        egui::Align::Max => rect.right() - 4.0 - galley.size().x,
+    };
     ui.painter()
         .with_clip_rect(rect.intersect(ui.clip_rect()))
         .galley(
@@ -287,10 +294,6 @@ struct InlineEffectIdentityEdit {
 fn request_effect_card_rename(ctx: &egui::Context, item_id: egui::Id) {
     ctx.data_mut(|data| data.insert_temp(item_id.with("rename-request"), true));
     ctx.request_repaint();
-}
-
-fn effect_card_rename_name_width(available_after_icon: f32, spacing: f32) -> f32 {
-    (available_after_icon - 48.0 - spacing * 2.0).max(1.0)
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -626,7 +629,7 @@ fn pan_timeline_offset(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-enum TimelineWheelAction {
+pub(super) enum TimelineWheelAction {
     Zoom(f32),
     HorizontalScroll(f32),
     VerticalScroll(f32),
@@ -654,20 +657,20 @@ fn timeline_wheel_action(
 }
 
 fn timeline_wheel_behavior(app: &PealayerApp, modifiers: egui::Modifiers) -> crate::config::TimelineWheelBehavior {
-    if modifiers.shift { app.timeline_shift_wheel_action }
-    else if modifiers.ctrl || modifiers.command { app.timeline_ctrl_wheel_action }
-    else if modifiers.alt { app.timeline_alt_wheel_action }
-    else { app.timeline_plain_wheel_action }
+    crate::config::TimelineWheelPreferences {
+        plain: app.timeline_plain_wheel_action, ctrl: app.timeline_ctrl_wheel_action,
+        shift: app.timeline_shift_wheel_action, alt: app.timeline_alt_wheel_action,
+    }.behavior(modifiers)
 }
 
-fn timeline_wheel_modifiers(input: &egui::InputState) -> egui::Modifiers {
+pub(super) fn timeline_wheel_modifiers(input: &egui::InputState) -> egui::Modifiers {
     input.events.iter().rev().find_map(|event| match event {
         egui::Event::MouseWheel { modifiers, .. } => Some(*modifiers),
         _ => None,
     }).unwrap_or(input.modifiers)
 }
 
-fn timeline_wheel_over_surface(ui: &egui::Ui, surface: egui::Rect,
+pub(super) fn timeline_wheel_over_surface(ui: &egui::Ui, surface: egui::Rect,
     behavior: crate::config::TimelineWheelBehavior) -> Option<(TimelineWheelAction, f32)> {
     if !ui.rect_contains_pointer(surface) { return None; }
     // Surface-class touchscreens expose pan and pinch together. Preserve both
@@ -1257,8 +1260,9 @@ fn effects_library_toolbar(app: &mut PealayerApp, ui: &mut egui::Ui, width: f32)
         if ui.button(crate::ui::icons::SPEAKER_HIGH).on_hover_text(app.tr("New audio effect")).clicked() { app.begin_audio_effect(); }
         let title = app.tr("Effects Library");
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
-            left_aligned_click_label(ui, &title, ui.available_width().max(1.0),
-                ui.spacing().interact_size.y, egui::TextStyle::Body.resolve(ui.style()).size)
+            aligned_click_label(ui, &title, ui.available_width().max(1.0),
+                ui.spacing().interact_size.y, egui::TextStyle::Body.resolve(ui.style()).size,
+                crate::ui::i18n::input_alignment(app.rtl, &title))
                 .on_hover_text(title);
         });
     });
@@ -1267,7 +1271,7 @@ fn effects_library_toolbar(app: &mut PealayerApp, ui: &mut egui::Ui, width: f32)
         ui.label(app.tr("Search"));
         let hint = app.tr("Search effects...");
         let align = crate::ui::i18n::input_alignment(app.rtl, &app.effects_search_query);
-        let search = ui.add(crate::ui::dialog::singleline_text_edit(&mut app.effects_search_query)
+        let search = ui.add(crate::ui::dialog::singleline_text_edit(ui, &mut app.effects_search_query)
             .horizontal_align(align).hint_text(hint).desired_width(ui.available_width()));
         search_rect = search.rect;
         if search.changed() {
@@ -1288,8 +1292,10 @@ fn effect_card_header_widths(available_after_icon: f32, item_spacing: f32) -> (f
     // action container are separate horizontal-layout items, so their own gap
     // must also be removed from the title budget. Omitting that final gap made
     // every child card one spacing unit wider than its group header.
+    // TextEdit has a 24-point minimum; reserve its 4-point inset on both sides
+    // in display mode too so entering rename cannot widen a narrow card.
     let actions_width = (EFFECT_CARD_ACTION_BUTTONS_WIDTH + item_spacing * 3.0)
-        .min((available_after_icon - item_spacing - 12.0).max(1.0));
+        .min((available_after_icon - item_spacing - 32.0).max(1.0));
     let title_width = (available_after_icon - actions_width - item_spacing).max(1.0);
     (title_width, actions_width)
 }
@@ -1312,6 +1318,7 @@ fn effect_library_card_header(
     primary_action_icon: &str,
     primary_action_enabled: bool,
     tooltips: [&str; 7],
+    title_align: egui::Align,
 ) -> EffectCardHeaderResponse {
     ui.horizontal(|ui| {
         // Compact spacing is local to a narrow card, never a global theme change.
@@ -1364,10 +1371,23 @@ fn effect_library_card_header(
                     // slot open. A short caption otherwise pulls all actions left.
                     ui.set_min_width(title_width);
                     let (rect, response) = ui.allocate_exact_size(egui::vec2(title_width, 24.0), egui::Sense::click());
-                    let galley = egui::WidgetText::from(egui::RichText::new(title).font(egui::TextStyle::Button.resolve(ui.style()))).into_galley(
-                        ui,Some(egui::TextWrapMode::Truncate),(title_width-8.0).max(1.0),egui::TextStyle::Button);
-                    let rtl = crate::ui::i18n::input_alignment(ui.layout().main_dir == egui::Direction::RightToLeft,title) == egui::Align::Max;
-                    let x = if rtl {rect.right()-4.0-galley.size().x} else {rect.left()+4.0};
+                    let font = egui::TextStyle::Button.resolve(ui.style());
+                    let mut job = egui::text::LayoutJob::simple_singleline(title.to_owned(),font.clone(),ui.visuals().strong_text_color());
+                    job.halign = title_align;
+                    job.keep_trailing_whitespace = true;
+                    job.wrap.max_width = (title_width-8.0).max(1.0);
+                    job.wrap.max_rows = 1;
+                    job.wrap.break_anywhere = true;
+                    let line_height = ui.fonts_mut(|fonts|fonts.row_height(&font)) + ui.spacing().extra_text_line_spacing;
+                    job.sections[0].format.line_height = Some(line_height);
+                    let galley = ui.fonts_mut(|fonts|fonts.layout_job(job));
+                    // Match TextEdit's aligned galley as well as its inset:
+                    // RTL row positions are pixel-snapped inside the galley.
+                    let x = match title_align {
+                        egui::Align::Min => rect.left()+4.0-galley.rect.left(),
+                        egui::Align::Max => rect.right()-4.0-galley.rect.right(),
+                        egui::Align::Center => rect.center().x-galley.rect.center().x,
+                    };
                     ui.painter().with_clip_rect(rect).galley(egui::pos2(x, rect.center().y - galley.size().y / 2.0), galley, ui.visuals().strong_text_color());
                     response
                 },
@@ -1404,6 +1424,56 @@ fn effect_library_card_header(
         }
     })
     .inner
+}
+
+struct EffectCardRenameHeaderResponse {
+    name: egui::Response,
+    save: egui::Response,
+    cancel: egui::Response,
+}
+
+fn effect_library_card_rename_header(
+    ui: &mut egui::Ui,
+    id: egui::Id,
+    edit: &mut InlineEffectIdentityEdit,
+    language: crate::config::AppLanguage,
+    rtl: bool,
+) -> EffectCardRenameHeaderResponse {
+    ui.horizontal(|ui| {
+        if ui.available_width() < 180.0 {
+            ui.spacing_mut().item_spacing.x = ui.spacing().item_spacing.x.min(2.0);
+        }
+        ui.add_sized([14.0,24.0],egui::Label::new(egui::RichText::new(crate::ui::icons::DOTS_SIX_VERTICAL).size(14.0).weak()));
+        let tr = |text| crate::ui::i18n::tr(language,text);
+        crate::ui::icons::searchable_icon_button_sized(ui,id.with("inline-icon"),&mut edit.icon,
+            16.0,egui::vec2(20.0,24.0),&tr("Change icon"),crate::ui::icons::IconPickerConfig {
+                language,presets:crate::ui::icons::CONTROL_ICON_PRESETS,
+                fallback_glyph:crate::ui::icons::SPARKLE,fallback_name:"Sparkle",
+                width:260.0,show_selected_name:false,search_hint:&tr("Search icons..."),
+                presets_label:&tr("Presets"),no_matches_label:&tr("No matching icons"),clear_label:None,
+            });
+        // Exactly the same name slot and action gutter as the display header.
+        // Two edit actions replace four display actions without moving text.
+        let spacing = ui.spacing().item_spacing.x;
+        let (name_width,actions_width) = effect_card_header_widths(ui.available_width(),spacing);
+        let align = crate::ui::i18n::input_alignment(rtl,&edit.name);
+        let name = ui.allocate_ui_with_layout(egui::vec2(name_width,24.0),
+            egui::Layout::left_to_right(egui::Align::Center),|ui| {
+                ui.set_min_width(name_width);
+                crate::ui::dialog::inline_caption_edit(ui,id.with("inline-name"),&mut edit.name,
+                    egui::vec2(name_width,24.0),egui::TextStyle::Button.resolve(ui.style()),align)
+            }).inner;
+        let button_width = ((actions_width-spacing*3.0)/4.0).max(1.0);
+        let (cancel,save) = ui.allocate_ui_with_layout(egui::vec2(actions_width,24.0),
+            egui::Layout::right_to_left(egui::Align::Center),|ui| {
+                ui.set_min_width(actions_width);
+                let size = egui::vec2(button_width,24.0);
+                let cancel = hover_icon_action(ui,id.with("inline-cancel"),crate::ui::icons::X,size,true,true,&tr("Cancel"));
+                let save = hover_icon_action(ui,id.with("inline-save"),crate::ui::icons::CHECK,size,true,true,&tr("Save"));
+                (cancel,save)
+            }).inner;
+        EffectCardRenameHeaderResponse {name,save,cancel}
+    }).inner
 }
 
 fn effect_card<R>(
@@ -1857,7 +1927,21 @@ fn effect_controls_card_with_ping<R>(
         .inner_margin(egui::Margin::symmetric(EFFECT_CONTROLS_CARD_MARGIN, 9))
         .show(ui, |ui| {
             ui.set_width(effect_controls_frame_content_width(outer_width));
-            ui.horizontal(|ui| {
+            let text_height = ui.fonts_mut(|fonts| {
+                fonts.row_height(&egui::FontId::proportional(14.0))
+                    + if subtitle.is_some_and(|text| !text.trim().is_empty()) {
+                        fonts.row_height(&egui::TextStyle::Small.resolve(ui.style()))
+                            + ui.spacing().item_spacing.y
+                    } else { 0.0 }
+            });
+            // Reserve the full caption height before allocating the square.
+            // A horizontal row cannot retroactively center an earlier widget
+            // when its following two-line caption grows for accessibility fonts.
+            let header_layout = if ui.layout().prefer_right_to_left() {
+                egui::Layout::right_to_left(egui::Align::Center)
+            } else { egui::Layout::left_to_right(egui::Align::Center) };
+            ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), text_height.max(32.0)),
+                header_layout, |ui| {
                 let icon_color = if ping_strength > 0.0 || emphasized {
                     ui.visuals().selection.bg_fill
                 } else {
@@ -1868,13 +1952,6 @@ fn effect_controls_card_with_ping<R>(
                     icon_color.gamma_multiply(if emphasized { 0.18 } else { 0.10 }));
                 ui.painter().text(icon_rect.center(), egui::Align2::CENTER_CENTER,
                     icon, egui::FontId::proportional(17.0), icon_color);
-                let text_height = ui.fonts_mut(|fonts| {
-                    fonts.row_height(&egui::FontId::proportional(14.0))
-                        + if subtitle.is_some_and(|text| !text.trim().is_empty()) {
-                            fonts.row_height(&egui::TextStyle::Small.resolve(ui.style()))
-                                + ui.spacing().item_spacing.y
-                        } else { 0.0 }
-                });
                 ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), text_height),
                     egui::Layout::top_down(egui::Align::Min), |ui| {
                     ui.add(egui::Label::new(egui::RichText::new(title).strong().size(14.0))
@@ -1894,6 +1971,19 @@ fn effect_controls_card_with_ping<R>(
 fn effect_controls_badge(ui: &mut egui::Ui, icon: &str, text: impl Into<String>) {
     crate::ui::sync_elegance_theme(ui.ctx());
     ui.add(elegance::Badge::new(format!("{icon}  {}", text.into()), elegance::BadgeTone::Neutral).preserve_case());
+}
+
+/// Pure empty-state chrome: inspecting its geometry needs no media player,
+/// controller engine, selected cue or mutable authoring state.
+fn effect_controls_empty_card(ui: &mut egui::Ui, width: f32, title: &str,
+    subtitle: &str, insertion_hint: &str) -> egui::InnerResponse<()> {
+    effect_controls_card(ui, width, crate::ui::icons::SELECTION_ALL, title,
+        Some(subtitle), false, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                effect_controls_badge(ui, crate::ui::icons::KEYBOARD, "A");
+                ui.label(egui::RichText::new(insertion_hint).small().weak());
+            });
+        })
 }
 
 fn effect_controls_kind(
@@ -3014,6 +3104,18 @@ fn timeline_track_rows(app: &PealayerApp) -> Vec<TimelineTrackRow> {
         .collect()
 }
 
+fn timeline_cue_accepts_row(effect: &crate::four_d::models::Effect, row: &TimelineTrackRow) -> bool {
+    if !row.enabled { return false; }
+    if let Some(direct) = &effect.direct_control {
+        return row.control_key.as_deref().is_some_and(|key| direct.can_retarget_to(key));
+    }
+    match row.kind {
+        TimelineTrackKind::Relay(relay) => effect.target.is_compatible_with_relay(relay)
+            && effect.actions.iter().map(|action| action.relay_id).collect::<std::collections::BTreeSet<_>>().len() <= 1,
+        _ => false,
+    }
+}
+
 fn hardware_row_has_analog_track(app: &PealayerApp, row: &TimelineTrackRow) -> bool {
     let TimelineTrackKind::Hardware(control_key) = &row.kind else {
         return false;
@@ -3754,7 +3856,7 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
                         let name_align = crate::ui::i18n::input_alignment(app.rtl, &template.name);
                         let name_editor = ui.add_sized(
                             [ui.available_width(), 28.0],
-                            crate::ui::dialog::singleline_text_edit(&mut template.name)
+                            crate::ui::dialog::singleline_text_edit(ui, &mut template.name)
                                 .horizontal_align(name_align),
                         );
                         if name_editor.gained_focus() { push_undo = true; }
@@ -4523,29 +4625,12 @@ fn draw_effect_controls(app: &mut PealayerApp, ui: &mut egui::Ui, show_header: b
             app.commit_timeline_edit();
         }
     } else {
-        effect_controls_card(
+        effect_controls_empty_card(
             ui,
             panel_width,
-            crate::ui::icons::SELECTION_ALL,
             &app.tr("No cue selected"),
-            Some(&app.tr("Select a cue on the timeline to manage it")),
-            false,
-            |ui| {
-                ui.horizontal_wrapped(|ui| {
-                    effect_controls_badge(
-                        ui,
-                        crate::ui::icons::KEYBOARD,
-                        "A",
-                    );
-                    ui.label(
-                        egui::RichText::new(app.tr(
-                            "Select a hardware track and press A, or double-click its lane, to add a cue.",
-                        ))
-                        .small()
-                        .weak(),
-                    );
-                });
-            },
+            &app.tr("Select a cue on the timeline to manage it"),
+            &app.tr("Select a hardware track and press A, or double-click its lane, to add a cue."),
         );
     }
     if let Some(id) = manage_audio { app.select_audio_effect(id); app.show_effect_library_editor = true; }
@@ -4765,9 +4850,7 @@ fn draw_timeline_cue_dialog(app: &mut PealayerApp, context: &egui::Context) {
                     ui.visuals().selection.bg_fill);
                 ui.add(egui::Label::new(egui::RichText::new(&heading).strong().size(16.0)).truncate());
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    dismiss |= ui.add_sized([32.0, 32.0], egui::Button::new(
-                        egui::RichText::new("×").size(22.0)).frame(false))
-                        .on_hover_text(&close_help).clicked();
+                    dismiss |= crate::ui::dialog::close_button(ui, &close_help).clicked();
                 });
             });
             ui.add_space(6.0);
@@ -4789,22 +4872,20 @@ fn draw_timeline_cue_dialog(app: &mut PealayerApp, context: &egui::Context) {
         }
     }
     if session.confirm_dismiss && !accept && !discard {
-        let mut confirm_open = true;
         let keep_editing = app.tr("Keep editing");
         let save_close = app.tr("Save and close");
         let confirmation = app.tr("Discard changes?");
         let message = app.tr("This cue has unsaved changes. Save them or discard them before closing.");
-        elegance::Modal::new("cue-confirm-dismiss", &mut confirm_open)
-            .heading(confirmation).alert(true).max_width(440.0)
-            .close_on_backdrop(false)
-            .footer(|ui| {
+        let confirm = crate::ui::dialog::confirmation_modal(context, egui::Id::new("cue-confirm-dismiss"),
+            &confirmation, crate::ui::icons::WARNING, &message, &close_help, |ui| {
                 accept = ui.add(elegance::Button::new(save_close)).clicked();
                 discard = ui.add(elegance::Button::new(&discard_label).outline()).clicked();
                 if ui.add(elegance::Button::new(keep_editing).outline()).clicked() {
                     session.confirm_dismiss = false;
                 }
-            }).show(context, |ui| { ui.label(message); });
-        if !confirm_open { session.confirm_dismiss = false; }
+                accept || discard || !session.confirm_dismiss
+            });
+        if confirm.dismissed { session.confirm_dismiss = false; }
     }
     if state.discard_on_cancel
         && !app.timeline.instances.iter().any(|instance| instance.id == instance_id)
@@ -6339,6 +6420,10 @@ fn board_tool_card(ui: &mut egui::Ui, icon: &str, title: &str, body: impl FnOnce
         });
 }
 
+fn buzzer_action_availability(connected: bool, pending: bool, estop: bool, playing: bool) -> (bool, bool) {
+    (connected && !pending && !estop, connected && !pending && playing)
+}
+
 fn draw_buzzer_tool(
     app: &mut PealayerApp,
     ui: &mut egui::Ui,
@@ -6370,9 +6455,8 @@ fn draw_buzzer_tool(
             .clamp(1, 60_000)
     });
     let pending = app.board_operation.is_some();
-    let can_start = capabilities.board_connected && !pending && !app.estop_active;
-    let can_stop = capabilities.board_connected && !pending;
     let playing = capabilities.buzzer.is_playing();
+    let (can_start, can_stop) = buzzer_action_availability(capabilities.board_connected, pending, app.estop_active, playing);
     let board_silent = capabilities
         .settings
         .as_ref()
@@ -6476,8 +6560,7 @@ fn draw_buzzer_tool(
 
             ui.horizontal_wrapped(|ui| {
                 let mut loop_until_stopped = repeats == 0;
-                if ui
-                    .toggle_value(&mut loop_until_stopped, app.tr("Loop until stopped"))
+                if crate::ui::dialog::stable_toggle(ui, &mut loop_until_stopped, &app.tr("Loop until stopped"))
                     .changed()
                 {
                     repeats = if loop_until_stopped { 0 } else { 1 };
@@ -6504,7 +6587,7 @@ fn draw_buzzer_tool(
                         can_stop,
                         egui::Button::new(format!(
                             "{} {}",
-                            crate::ui::icons::STOP_CIRCLE,
+                            crate::ui::icons::STOP,
                             app.tr("Stop buzzer")
                         )),
                     )
@@ -7146,7 +7229,7 @@ fn draw_rf_code_tool(app: &mut PealayerApp, ui: &mut egui::Ui) {
     board_tool_card(ui, crate::ui::icons::RADIO, &app.tr("RF code"), |ui| {
         let response = ui.add_sized(
             [ui.available_width(), 28.0],
-            crate::ui::dialog::singleline_text_edit(&mut code)
+            crate::ui::dialog::singleline_text_edit(ui, &mut code)
                 .hint_text("0x12AB34")
                 .font(egui::TextStyle::Monospace),
         );
@@ -7373,7 +7456,8 @@ fn draw_compact_control_card(
                         8.0
                     };
                     let response = hardware_header_widget(ui, &control.key, "caption", |ui| {
-                        left_aligned_click_label(ui, &title, (ui.available_width() - reserved).max(48.0), 24.0, 13.0)
+                        aligned_click_label(ui, &title, (ui.available_width() - reserved).max(48.0), 24.0, 13.0,
+                            crate::ui::i18n::input_alignment(app.rtl, &control.name))
                     });
                     if response.clicked() {
                         ui.data_mut(|data| {
@@ -7702,12 +7786,13 @@ fn draw_control_card(
                                     }
                                     let title =
                                         hardware_header_widget(ui, &control.key, "caption", |ui| {
-                                            left_aligned_click_label(
+                                            aligned_click_label(
                                                 ui,
                                                 &title_text,
                                                 ui.available_width().max(52.0),
                                                 24.0,
                                                 13.0,
+                                                crate::ui::i18n::input_alignment(app.rtl, &control.name),
                                             )
                                         });
                                     if title.clicked() {
@@ -8452,7 +8537,7 @@ mod timeline_row_tests {
                                 .show(ui, |ui| viewer.ui(ui, &mut PealayerTab::ProgramMonitor));
                             // ScrollArea pixel-snaps its content rectangle but not its
                             // viewport. Allow that physical rounding, not layout overflow.
-                            assert!(scroll.content_size.y <= available.height() + 1.0 / scale,
+                            assert!(scroll.content_size.y <= available.height() + 1.0 + 1.0 / scale,
                                 "{width}x{height} at {scale}, loaded={loaded}: content {:?}, viewport {available:?}", scroll.content_size);
                             assert_eq!(viewer.scroll_bars(&PealayerTab::ProgramMonitor), [false, false]);
                             assert_eq!(scroll.state.offset, egui::Vec2::ZERO);
@@ -8884,6 +8969,66 @@ mod timeline_row_tests {
 
     fn discard_ui_output(mut output: egui::FullOutput) {
         output.textures_delta.clear();
+    }
+
+    #[test]
+    fn caption_text_alignment_is_independent_of_trailing_action_layout() {
+        for reverse_actions in [false, true] {
+            for (logical, rtl_ui) in [("Seat Left",false),("Seat Right",true),("صندلی چپ",false),("Seat · صندلی",false)] {
+                let context = egui::Context::default();
+                let rect = std::cell::Cell::new(egui::Rect::NOTHING);
+                let align = crate::ui::i18n::input_alignment(rtl_ui,logical);
+                let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+                    ui.set_width(420.0);
+                    ui.with_layout(if reverse_actions {egui::Layout::right_to_left(egui::Align::Center)}
+                        else {egui::Layout::left_to_right(egui::Align::Center)}, |ui| {
+                        let _ = ui.button("Rename");
+                        rect.set(aligned_click_label(ui,logical,250.0,24.0,13.0,align).rect);
+                    });
+                });
+                let text = output.shapes.iter().find_map(|shape| match &shape.shape {
+                    egui::epaint::Shape::Text(text) if text.galley.job.text == logical => Some(text),
+                    _ => None,
+                }).expect("Caption must be painted");
+                let expected_x = if align == egui::Align::Max {
+                    rect.get().right()-4.0-text.galley.size().x
+                } else {rect.get().left()+4.0};
+                assert!((text.pos.x-expected_x).abs()<0.1,"reverse_actions={reverse_actions}, rtl_ui={rtl_ui}, text={logical}");
+                assert!((text.pos.y+text.galley.size().y*0.5-rect.get().center().y).abs()<0.1);
+                output.textures_delta.clear();
+            }
+        }
+    }
+
+    #[test]
+    fn actual_hardware_seat_captions_stay_at_start_in_both_card_modes() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.engine_handle = crate::four_d::engine::memory_only_test_engine();
+        app.rtl = false;
+        app.language = crate::config::AppLanguage::English;
+        let capabilities = crate::four_d::controller::HardwareCapabilities::default();
+        for compact in [false,true] {
+            app.compact_hardware_controls = compact;
+            for width in [260.0,480.0] {
+                for (key,name) in [("seat.a","Seat Left"),("seat.b","Seat Right")] {
+                    let context = egui::Context::default();
+                    let control = crate::four_d::controller::HardwareControl {
+                        key:key.into(),kind:"seat".into(),name:name.into(),..Default::default()
+                    };
+                    let mut output = context.run_ui(egui::RawInput {
+                        screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(width,300.0))),
+                        ..Default::default()
+                    }, |ui| {draw_control_card(&mut app,ui,&capabilities,&control);});
+                    let text = output.shapes.iter().find_map(|shape| match &shape.shape {
+                        egui::epaint::Shape::Text(text) if text.galley.job.text == name => Some(text),
+                        _ => None,
+                    }).expect("Real seat card must paint its caption");
+                    assert!(text.pos.x<width*0.5,"{name} moved to trailing edge: compact={compact}, width={width}, x={}",text.pos.x);
+                    output.textures_delta.clear();
+                }
+            }
+        }
     }
 
     #[test]
@@ -9585,6 +9730,18 @@ mod timeline_row_tests {
         assert!(text.contains("Stop buzzer"));
         assert!(text.contains("Tone test"));
         output.textures_delta.clear();
+    }
+
+    #[test]
+    fn buzzer_actions_follow_activity_connection_busy_and_estop() {
+        assert_eq!(buzzer_action_availability(true, false, false, false), (true, false));
+        assert_eq!(buzzer_action_availability(true, false, false, true), (true, true));
+        assert_eq!(buzzer_action_availability(true, false, true, true), (false, true));
+        assert_eq!(buzzer_action_availability(true, false, true, false), (false, false));
+        for playing in [false, true] {
+            assert_eq!(buzzer_action_availability(false, false, false, playing), (false, false));
+            assert_eq!(buzzer_action_availability(true, true, false, playing), (false, false));
+        }
     }
 
     #[test]
@@ -10940,7 +11097,7 @@ mod timeline_row_tests {
                         ui.set_width(280.0);
                         let caption = |ui: &mut egui::Ui, width| {
                             let response = hardware_header_widget(ui, "seat.a", "caption", |ui| {
-                                left_aligned_click_label(ui, "Seat A", width, 24.0, 13.0)
+                                aligned_click_label(ui, "Seat A", width, 24.0, 13.0, egui::Align::Min)
                             });
                             caption_rect.set(response.rect);
                             if response.clicked() {
@@ -11264,7 +11421,7 @@ mod timeline_row_tests {
                         true, 2, "New effect in group");
                     let card = effect_card(ui, 300.0, |ui| effect_library_card_header(ui, id,
                         crate::ui::icons::SPARKLE, "Seat test", crate::ui::icons::PLAY, true,
-                        ["Drag", "Icon", "Rename", "Run", "Place", "More", "Rename"]));
+                        ["Drag", "Icon", "Rename", "Run", "Place", "More", "Rename"],egui::Align::Min));
                     ui.data_mut(|data| data.insert_temp(id.with("source-rect"), card.response.rect));
                     responses = Some((add, card.inner.place, card.inner.run, card.inner.more, card.response.rect));
                 });
@@ -11544,6 +11701,7 @@ mod timeline_row_tests {
                                     crate::ui::icons::PLAY,
                                     true,
                                     ["Drag", "Icon", "Rename", "Run", "Place", "More", "Rename"],
+                                    egui::Align::Min,
                                 );
                                 geometry.set((
                                     header.grip.rect,
@@ -11580,7 +11738,7 @@ mod timeline_row_tests {
         for available in [112.0, 180.0, 297.0] {
             let (title, actions) = effect_card_header_widths(available, spacing);
             assert!(title + spacing + actions <= available + f32::EPSILON);
-            assert_eq!(actions, 120.0_f32.min(available - spacing - 12.0));
+            assert_eq!(actions, 120.0_f32.min(available - spacing - 32.0));
         }
 
         let context = egui::Context::default();
@@ -11639,6 +11797,65 @@ mod timeline_row_tests {
         discard_ui_output(output);
         let (header, card) = widths.get();
         assert_eq!(header, card);
+    }
+
+    #[test]
+    fn no_cue_selected_icon_tile_is_square_beside_two_line_caption() {
+        for density in [crate::config::UiControlDensity::Compact,
+            crate::config::UiControlDensity::Comfortable] {
+            for dark in [false, true] {
+                for scale in [1.0, 1.25, 1.5, 2.0] {
+                    for font_size in [12.0, 20.0] {
+                        for (width, rtl) in [(180.0, false), (360.0, false), (560.0, false), (360.0, true)] {
+                            let context = egui::Context::default();
+                            context.set_pixels_per_point(scale);
+                            context.set_visuals(if dark { egui::Visuals::dark() }
+                                else { egui::Visuals::light() });
+                            context.all_styles_mut(|style| {
+                                crate::ui::control_density::configure(style, density);
+                                style.text_styles.insert(egui::TextStyle::Small,
+                                    egui::FontId::proportional(font_size));
+                            });
+                            let mut output = context.run_ui(egui::RawInput {
+                                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO,
+                                    egui::vec2(width, 360.0))), ..Default::default()
+                            }, |ui| {
+                                ui.with_layout(egui::Layout::top_down(if rtl { egui::Align::Max }
+                                    else { egui::Align::Min }), |ui| {
+                                    effect_controls_empty_card(ui, effect_controls_content_width(ui.available_width()),
+                                        "No cue selected", "Select a cue on the timeline to manage it",
+                                        "Select a hardware track and press A, or double-click its lane, to add a cue.");
+                                });
+                            });
+                            // Release textures before asserting to avoid a second
+                            // panic from egui's texture teardown on a failed fixture.
+                            output.textures_delta.clear();
+                            let text_rect = |label: &str| output.shapes.iter().find_map(|shape|
+                                match &shape.shape {
+                                    egui::epaint::Shape::Text(text) if text.galley.job.text == label =>
+                                        Some(egui::Rect::from_min_size(text.pos, text.galley.size())),
+                                    _ => None,
+                                }).unwrap_or_else(|| panic!("Missing empty-state text: {label}"));
+                            let icon = text_rect(crate::ui::icons::SELECTION_ALL);
+                            let title = text_rect("No cue selected");
+                            let subtitle = text_rect("Select a cue on the timeline to manage it");
+                            let tile = output.shapes.iter().find_map(|shape| match &shape.shape {
+                                egui::epaint::Shape::Rect(rect) if rect.rect.contains(icon.center())
+                                    && rect.stroke.width == 0.0 => Some(rect.rect),
+                                _ => None,
+                            }).expect("Empty-state icon must have a painted tile");
+                            assert_eq!(tile.size(), egui::Vec2::splat(32.0),
+                                "Tile stretched: {density:?}, dark={dark}, scale={scale}, font={font_size}, width={width}");
+                            assert!(tile.contains_rect(icon), "Icon must fit inside its square");
+                            assert!((tile.center().y - title.union(subtitle).center().y).abs() < 1.0,
+                                "Square must center beside the complete caption group: tile={tile:?}, title={title:?}, subtitle={subtitle:?}, font={font_size}, width={width}");
+                            assert!(if rtl { tile.left() >= title.right() }
+                                else { tile.right() <= title.left() });
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]
@@ -11964,6 +12181,7 @@ mod timeline_row_tests {
                                         crate::ui::icons::PLAY,
                                         true,
                                         ["Drag", "Icon", "Rename", "Run", "Place", "More", "Rename"],
+                                        egui::Align::Min,
                                     );
                                     let button = match action {
                                         0 => header.run,
@@ -12025,11 +12243,55 @@ mod timeline_row_tests {
     }
 
     #[test]
-    fn effect_card_rename_input_reserves_confirm_cancel_without_widening() {
-        for available in [64.0, 98.0, 220.0, 460.0] {
-            for spacing in [2.0, 4.0] {
-                let name = effect_card_rename_name_width(available, spacing);
-                assert_eq!(name + 48.0 + spacing * 2.0, available);
+    fn effect_card_rename_keeps_card_height_title_slot_and_painted_text_origin() {
+        for width in [180.0,300.0,480.0] {
+            for rtl in [false,true] {
+                for dark in [false,true] {
+                    let context = egui::Context::default();
+                    context.set_visuals(if dark {egui::Visuals::dark()} else {egui::Visuals::light()});
+                    let name = if width < 240.0 {"ef1"} else {"Seat Test 1"};
+                    let mut edit = InlineEffectIdentityEdit {name:name.into(),icon:String::new()};
+                    let mut geometry = Vec::new();
+                    for editing in [false,true,false,true] {
+                        let mut title_rect = egui::Rect::NOTHING;
+                        let mut card_rect = egui::Rect::NOTHING;
+                        let mut metadata_rect = (egui::Rect::NOTHING,egui::Rect::NOTHING);
+                        let mut output = context.run_ui(egui::RawInput {
+                            screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(600.0,300.0))),
+                            ..Default::default()
+                        },|ui| {
+                            let card = effect_card(ui,width,|ui| {
+                                title_rect = if editing {
+                                    effect_library_card_rename_header(ui,egui::Id::new("rename-geometry"),&mut edit,
+                                        crate::config::AppLanguage::English,rtl).name.rect
+                                } else {
+                                    effect_library_card_header(ui,egui::Id::new("rename-geometry"),crate::ui::icons::SPARKLE,
+                                        name,crate::ui::icons::PLAY,true,["Drag","Icon","Rename","Run","Place","More","Rename"],
+                                        crate::ui::i18n::input_alignment(rtl,name)).title.rect
+                                };
+                                ui.add_space(5.0);
+                                metadata_rect = effect_library_metadata(ui,"Timed sequence","1.5 sec");
+                            });
+                            card_rect = card.response.rect;
+                        });
+                        let painted = output.shapes.iter().find_map(|shape|match &shape.shape {
+                            egui::epaint::Shape::Text(text) if text.galley.job.text == name => {
+                                let row = text.galley.rows.first()?;
+                                let glyph = row.glyphs.first()?;
+                                Some(text.pos + row.pos.to_vec2() + glyph.pos.to_vec2())
+                            },
+                            _=>None
+                        }).expect("Display/editor name must be painted");
+                        geometry.push((card_rect,title_rect,metadata_rect,painted));
+                        output.textures_delta.clear();
+                    }
+                    for pair in geometry.windows(2) {
+                        assert_eq!(pair[0].0,pair[1].0,"Card resized: width={width}, rtl={rtl}, dark={dark}");
+                        assert_eq!(pair[0].1,pair[1].1,"Name slot moved");
+                        assert_eq!(pair[0].2,pair[1].2,"Metadata row shifted");
+                        assert!((pair[0].3-pair[1].3).length()<0.1,"Painted glyph moved: {:?} -> {:?}; width={width}, rtl={rtl}, dark={dark}",pair[0].3,pair[1].3);
+                    }
+                }
             }
         }
     }
@@ -12076,6 +12338,7 @@ mod timeline_row_tests {
                                     crate::ui::icons::PLAY,
                                     true,
                                     ["Drag", "Icon", "Rename", "Run", "Place", "More", "Rename"],
+                                    egui::Align::Min,
                                 )
                             })
                         },
@@ -13335,80 +13598,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     |ui| {
                                                         effect_card(ui, card_width, |ui| {
                                                             if let Some(edit) = inline_edit.as_mut() {
-                                                                ui.horizontal(|ui| {
-                                                                    if ui.available_width() < 180.0 {
-                                                                        ui.spacing_mut().item_spacing.x = ui.spacing().item_spacing.x.min(2.0);
-                                                                    }
-                                                                    ui.add_sized([14.0,24.0], egui::Label::new(egui::RichText::new(crate::ui::icons::DOTS_SIX_VERTICAL).size(14.0).weak()));
-                                                                    let search_hint = self.app.tr("Search icons...");
-                                                                    let presets_label = self.app.tr("Presets");
-                                                                    let no_matches_label = self.app.tr("No matching icons");
-                                                                    crate::ui::icons::searchable_icon_picker(
-                                                                        ui,
-                                                                        item_id.with("inline-icon"),
-                                                                        &mut edit.icon,
-                                                                        crate::ui::icons::IconPickerConfig {
-                                                                            language: self.app.language,
-                                                                            presets: crate::ui::icons::CONTROL_ICON_PRESETS,
-                                                                            fallback_glyph: crate::ui::icons::SPARKLE,
-                                                                            fallback_name: "Sparkle",
-                                                                            width: 32.0,
-                                                                            show_selected_name: false,
-                                                                            search_hint: &search_hint,
-                                                                            presets_label: &presets_label,
-                                                                            no_matches_label: &no_matches_label,
-                                                                            clear_label: None,
-                                                                        },
-                                                                    );
-                                                                    let action_spacing = ui.spacing().item_spacing.x;
-                                                                    let name_width = effect_card_rename_name_width(ui.available_width(), action_spacing);
-                                                                    let name_align = crate::ui::i18n::input_alignment(
-                                                                        self.app.rtl,
-                                                                        &edit.name,
-                                                                    );
-                                                                    let name_response = crate::ui::dialog::inline_caption_edit(ui,
-                                                                        item_id.with("inline-name"), &mut edit.name, egui::vec2(name_width, 24.0),
-                                                                        egui::TextStyle::Button.resolve(ui.style()), name_align);
-                                                                    if ui.data_mut(|data| data.remove_temp::<bool>(item_id.with("rename-focus")).unwrap_or(false)) {
-                                                                        name_response.request_focus();
-                                                                    }
-                                                                    if name_response.lost_focus()
-                                                                        && ui.input(|input| {
-                                                                            input.key_pressed(egui::Key::Enter)
-                                                                        })
-                                                                    {
-                                                                        save_inline_edit = true;
-                                                                    }
-                                                                    if ui
-                                                                        .add_sized(
-                                                                            [24.0, 24.0],
-                                                                            egui::Button::new(
-                                                                                crate::ui::icons::CHECK,
-                                                                            )
-                                                                            .frame(false),
-                                                                        )
-                                                                        .on_hover_text(self.app.tr("Save"))
-                                                                        .clicked()
-                                                                    {
-                                                                        save_inline_edit = true;
-                                                                    }
-                                                                    if ui
-                                                                        .add_sized(
-                                                                            [24.0, 24.0],
-                                                                            egui::Button::new(
-                                                                                crate::ui::icons::X,
-                                                                            )
-                                                                            .frame(false),
-                                                                        )
-                                                                        .on_hover_text(self.app.tr("Cancel"))
-                                                                        .clicked()
-                                                                        || ui.input(|input| {
-                                                                            input.key_pressed(egui::Key::Escape)
-                                                                        })
-                                                                    {
-                                                                        cancel_inline_edit = true;
-                                                                    }
-                                                                });
+                                                                let header = effect_library_card_rename_header(ui,item_id,edit,self.app.language,self.app.rtl);
+                                                                if ui.data_mut(|data| data.remove_temp::<bool>(item_id.with("rename-focus")).unwrap_or(false)) {
+                                                                    header.name.request_focus();
+                                                                }
+                                                                save_inline_edit = header.save.clicked() || (header.name.lost_focus()
+                                                                    && ui.input(|input|input.key_pressed(egui::Key::Enter)));
+                                                                cancel_inline_edit = header.cancel.clicked()
+                                                                    || ui.input(|input|input.key_pressed(egui::Key::Escape));
                                                             } else {
                                                                 let header = effect_library_card_header(
                                                                     ui,
@@ -13426,6 +13623,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                         &self.app.tr("More actions"),
                                                                         &self.app.tr("Rename"),
                                                                     ],
+                                                                    crate::ui::i18n::input_alignment(self.app.rtl,&displayed_effect_name),
                                                                 );
                                                                 begin_inline_edit |= header.rename.clicked() || header.icon.clicked() || header.title.clicked();
                                                                 run_now = header.run.clicked();
@@ -13615,7 +13813,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 &draft.name,
                                             );
                                             let name_response = ui.add(
-                                                crate::ui::dialog::singleline_text_edit(&mut draft.name)
+                                                crate::ui::dialog::singleline_text_edit(ui, &mut draft.name)
                                                     .horizontal_align(name_align)
                                                     .desired_width(250.0),
                                             );
@@ -14360,7 +14558,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 });
                                 let filter_response = header_ui.add_sized(
                                     [158.0, 22.0],
-                                    crate::ui::dialog::singleline_text_edit(&mut timeline_track_filter)
+                                    crate::ui::dialog::singleline_text_edit(ui, &mut timeline_track_filter)
                                         .hint_text(self.app.tr("Tracks"))
                                         .frame(egui::Frame::NONE)
                                         .margin(egui::Margin::symmetric(4, 2)),
@@ -14559,7 +14757,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 });
                                                 let edit = ui.add_sized(
                                                     [label_width, timeline_track_height],
-                                                    crate::ui::dialog::singleline_text_edit(&mut draft),
+                                                    crate::ui::dialog::singleline_text_edit(ui, &mut draft),
                                                 );
                                                 let focus = ui.ctx().data_mut(|data| {
                                                     data.get_temp::<bool>(rename_focus_id)
@@ -15150,7 +15348,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 });
                                                 let edit = ui.add_sized(
                                                     [88.0, 22.0],
-                                                    crate::ui::dialog::singleline_text_edit(&mut draft),
+                                                    crate::ui::dialog::singleline_text_edit(ui, &mut draft),
                                                 );
                                                 let focus = ui.ctx().data_mut(|data| {
                                                     data.get_temp::<bool>(rename_focus_id)
@@ -15768,7 +15966,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 let mut label = marker.label.clone();
                                                 ui.horizontal(|ui| {
                                                     ui.label(self.app.tr("Name"));
-                                                    if ui.add(crate::ui::dialog::singleline_text_edit(&mut label).desired_width(160.0)).changed() {
+                                                    if ui.add(crate::ui::dialog::singleline_text_edit(ui, &mut label).desired_width(160.0)).changed() {
                                                         self.app.undo_stack.push(self.app.snapshot_timeline());
                                                         if let Some(keyframe) = self.app.timeline.keyframes.iter_mut().find(|keyframe| keyframe.id == marker.id) {
                                                             keyframe.label = label;
@@ -16008,14 +16206,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         / timeline_track_height)
                                                         .floor()
                                                         as i32;
-                                                    if let Some(target_r) = relay_for_timeline_row(&timeline_rows, track_index) {
+                                                    if let Some(row) = usize::try_from(track_index).ok().and_then(|index| timeline_rows.get(index)) {
                                                         let target_compatible = self.app.timeline.instances.iter()
                                                             .find(|i| i.id == drag.instance_id)
                                                             .and_then(|inst| self.app.timeline.templates.iter().find(|t| t.id == inst.effect_id))
-                                                            .map(|tmpl| tmpl.target.is_compatible_with_relay(target_r))
-                                                            .unwrap_or(true);
+                                                            .is_some_and(|tmpl| timeline_cue_accepts_row(tmpl, row));
 
-                                                        if !self.app.track_locked.contains(&target_r) && target_compatible {
+                                                        let unlocked = row.enabled && row.relay_ids.iter().all(|id| !self.app.track_locked.contains(id));
+                                                        if unlocked && target_compatible {
                                                             let row_y = tracks_top
                                                                 + track_index as f32
                                                                     * timeline_track_height;
@@ -16027,7 +16225,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                 ),
                                                             );
                                                             painter.rect_filled(dest_rect, 0.0, egui::Color32::from_rgba_unmultiplied(46, 204, 113, 25)); // Faint green highlight
-                                                        } else if !target_compatible && !self.app.track_locked.contains(&target_r) {
+                                                        } else if !target_compatible && unlocked {
                                                             let row_y = tracks_top
                                                                 + track_index as f32
                                                                     * timeline_track_height;
@@ -16565,6 +16763,18 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     crate::app::DragMode::Move => {
                                                         // Vertical track switching
                                                         let mut target_relay = None;
+                                                        let target_row = ui.ctx().pointer_latest_pos().and_then(|pointer| {
+                                                            let index = ((pointer.y - tracks_top) / timeline_track_height).floor() as i32;
+                                                            usize::try_from(index).ok().and_then(|index| timeline_rows.get(index))
+                                                        });
+                                                        if let Some(row) = target_row
+                                                            && row.relay_ids.iter().all(|id| !self.app.track_locked.contains(id))
+                                                            && self.app.timeline.instances.iter().find(|i| i.id == drag_state.instance_id)
+                                                                .and_then(|i| self.app.timeline.templates.iter().find(|t| t.id == i.effect_id))
+                                                                .is_some_and(|template| timeline_cue_accepts_row(template, row))
+                                                            && let Some(key) = &row.control_key {
+                                                            self.app.retarget_channel_timeline_cue(drag_state.instance_id, key, &row.name);
+                                                        }
                                                         let moving_seat = self.app.timeline.instances.iter()
                                                             .find(|i| i.id == drag_state.instance_id)
                                                             .and_then(|i| self.app.timeline.templates.iter().find(|t| t.id == i.effect_id))
@@ -16576,18 +16786,19 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                 && let Some(row) = timeline_rows.get(index)
                                                                 && let TimelineTrackKind::Hardware(key) = &row.kind
                                                                 && matches!(key.as_str(), "seat.a" | "seat.b")
+                                                                && row.enabled
                                                                 && row.relay_ids.iter().all(|id| !self.app.track_locked.contains(id))
                                                             {
                                                                 self.app.retarget_seat_timeline_cue(drag_state.instance_id, key, &row.name);
                                                                 self.app.selected_timeline_track = Some(row.key.clone());
                                                             }
                                                         }
-                                                        let moving_direct_pwm = self.app.timeline.instances.iter()
+                                                        let moving_direct_channel = self.app.timeline.instances.iter()
                                                             .find(|instance| instance.id == drag_state.instance_id)
                                                             .and_then(|instance| self.app.timeline.templates.iter().find(|template| template.id == instance.effect_id))
                                                             .and_then(|template| template.direct_control.as_ref())
-                                                            .is_some_and(|cue| cue.control_key.starts_with("pwm."));
-                                                        if !moving_seat && !moving_direct_pwm && let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
+                                                            .is_some_and(|cue| cue.motion.is_none());
+                                                        if !moving_seat && !moving_direct_channel && let Some(mouse_pos) = ui.ctx().pointer_latest_pos() {
                                                     let relative_y = mouse_pos.y - tracks_top;
                                                     let track_index = (relative_y
                                                                 / timeline_track_height)
@@ -16598,8 +16809,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                     let is_compatible = self.app.timeline.instances.iter()
                                                                         .find(|i| i.id == drag_state.instance_id)
                                                                         .and_then(|inst| self.app.timeline.templates.iter().find(|t| t.id == inst.effect_id))
-                                                                        .map(|tmpl| tmpl.target.is_compatible_with_relay(target_r))
-                                                                        .unwrap_or(true);
+                                                                        .zip(target_row)
+                                                                        .is_some_and(|(tmpl, row)| timeline_cue_accepts_row(tmpl, row));
                                                                     if is_compatible {
                                                                         target_relay = Some(target_r);
                                                                     }
@@ -16650,7 +16861,8 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                                 if inst_id == drag_state.instance_id {
                                                                     if let Some(r) = target_relay {
                                                                         if let Some(template) = self.app.timeline.templates.iter_mut().find(|t| t.id == inst.effect_id) {
-                                                                            template.actions = crate::four_d::patterns::generate_constant(r, true, template.duration_ms);
+                                                                            for action in &mut template.actions { action.relay_id = r; }
+                                                                            template.target = crate::four_d::models::HardwareTarget::for_relay(r);
                                                                         }
                                                                     }
                                                                 }
@@ -16658,9 +16870,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                         }
 
                                                         let start_secs = primary_new_start as f64 / 1000.0;
-                                                        let track_name = target_relay
-                                                            .map(relay_identifier_label)
-                                                            .unwrap_or_else(|| "Track".to_string());
+                                                        let track_name = target_row.map(|row| row.name.clone())
+                                                            .or_else(|| self.app.timeline.instances.iter().find(|i| i.id == drag_state.instance_id)
+                                                                .and_then(|i| self.app.timeline.templates.iter().find(|t| t.id == i.effect_id))
+                                                                .map(|effect| effect.name.clone())).unwrap_or_default();
                                                         format!("⏱ Start: {:.3}s | {}", start_secs, track_name)
                                                     }
                                                     crate::app::DragMode::ResizeRight => {

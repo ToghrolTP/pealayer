@@ -86,12 +86,12 @@ export const SeekbarMarkers: React.FC<{ state: PlayerState; seconds: number; onC
   return <div className="seekbar-markers">
     {active && <span className="seekbar-markers__active" style={{ left: `${active.time_seconds / duration * 100}%`, width: `${(end - active.time_seconds) / duration * 100}%`, background: colors?.active_chapter_color ?? '#B0B0B0' }} />}
     {chapters.map((chapter) => <button key={chapter.index} type="button" className="seekbar-markers__chapter"
-      disabled={!state.seekable} title={`${chapterLabel(chapter)} · ${formatTimelineTime(chapter.time_seconds)}`}
+      disabled={!state.seekable}
       aria-label={`${chapterLabel(chapter)} · ${formatTimelineTime(chapter.time_seconds)}`}
       style={{ left: `${chapter.time_seconds / duration * 100}%`, color: colors?.chapter_color ?? '#969696' }}
       onPointerDown={(event) => event.stopPropagation()} onClick={(event) => { event.stopPropagation(); onChapter(chapter.time_seconds); }} />)}
     {(state.timeline_keyframes ?? []).filter((marker) => marker.time_ms / 1000 <= duration).map((marker) => <span key={marker.id}
-      className="seekbar-markers__keyframe" title={`Keyframe${marker.label ? ` · ${marker.label}` : ''} · ${formatTimelineTime(marker.time_ms / 1000)}`}
+      className="seekbar-markers__keyframe"
       style={{ left: `${marker.time_ms / 1000 / duration * 100}%`, background: colors?.keyframe_color ?? '#EF4444' }} />)}
   </div>;
 };

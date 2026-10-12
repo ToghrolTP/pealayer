@@ -276,6 +276,7 @@ fn snapshot_hardware_sync(
     match timeline.try_lock() {
         Ok(plan) => serde_json::json!({
             "state": "available",
+            "label": plan.presentation_label(),
             "revision": plan.revision,
             "prepared_revision": plan.acknowledged_revision,
             "clock_ack_revision": plan.clock_ack_revision,

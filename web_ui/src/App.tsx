@@ -21,12 +21,13 @@ import { useClipboardUrls } from './clipboardUrls';
 import './remote-location.css';
 import type { PlayerState } from './components/RemoteControlTab';
 import type { MediaGesturePreferences } from './components/MediaSurface';
+import type { ControlLayout, ControlSurface } from './controlBars';
 import { tr } from './i18n';
 import { useWebPlatform } from './webPlatform';
 import './styles.css';
 import './shared-toasts.css';
 import palettes from '../../assets/themes/palettes.json';
-import { accentForeground, mergeAppearance, paletteName as resolvePaletteName, resolvedAccent, resolvedAppearanceTheme } from './appearance';
+import { accentForeground, mergeAppearance, paletteName as resolvePaletteName, resolvedAccent, resolvedAppearanceTheme, uiFontCss, monoFontCss } from './appearance';
 
 const { Sider, Content } = Layout;
 const RemoteControlTab = React.lazy(() => import('./components/RemoteControlTab').then((module) => ({ default: module.RemoteControlTab })));
@@ -144,6 +145,15 @@ const App: React.FC = () => {
   }, []);
   const motionMode = appearance?.ui_animation_mode ?? appConfig?.ui_animation_mode ?? 'system';
   const animationsEnabled = motionMode === 'enabled' || (motionMode === 'system' && !systemReducedMotion);
+  const controlDensity = appearance?.ui_control_density ?? appConfig?.ui_control_density ?? 'compact';
+  const controlHeight = controlDensity === 'compact' ? 24 : 32;
+  const uiFont = uiFontCss(appearance?.ui_font_family ?? appConfig?.ui_font_family ?? 'system');
+  const monoFont = monoFontCss(appearance?.monospace_font_family ?? appConfig?.monospace_font_family ?? 'bundled');
+  useEffect(() => {
+    document.documentElement.style.setProperty('--ui-font', uiFont);
+    document.documentElement.style.setProperty('--mono-font', monoFont);
+  }, [uiFont, monoFont]);
+  useEffect(() => { document.documentElement.style.setProperty('--control-height', `${controlHeight}px`); }, [controlHeight]);
   useEffect(() => { document.documentElement.dataset.motion = animationsEnabled ? 'enabled' : 'disabled'; }, [animationsEnabled]);
 
   useEffect(() => {
@@ -248,13 +258,16 @@ const App: React.FC = () => {
         && previous?.color_palette === appearance.color_palette
         && previous?.accent_color === appearance.accent_color
         && previous?.custom_accent_color === appearance.custom_accent_color
-        && previous?.ui_animation_mode === appearance.ui_animation_mode) return previous;
+        && previous?.ui_animation_mode === appearance.ui_animation_mode
+        && previous?.ui_control_density === appearance.ui_control_density
+        && previous?.ui_font_family === appearance.ui_font_family
+        && previous?.monospace_font_family === appearance.monospace_font_family) return previous;
         // Motion is part of the shared appearance contract, not a browser-only toggle.
       const next = mergeAppearance(previous ?? {}, appearance);
       persistJson(STORAGE.config, next);
       return next;
     });
-  }, [appearance?.theme, appearance?.color_palette, appearance?.accent_color, appearance?.custom_accent_color, appearance?.ui_animation_mode]);
+  }, [appearance?.theme, appearance?.color_palette, appearance?.accent_color, appearance?.custom_accent_color, appearance?.ui_animation_mode, appearance?.ui_control_density, appearance?.ui_font_family, appearance?.monospace_font_family]);
 
   const accentColor = resolvedAccent(runtime, appConfig, appearance);
   const accentTextColor = accentForeground(accentColor);
@@ -375,6 +388,27 @@ const App: React.FC = () => {
     if (state.remote_browser?.visible && state.remote_browser.target === target) return;
     void sendCmd('pealayer.remote.browse', { target, clipboard: true });
   }, [sendCmd, state.remote_browser?.target, state.remote_browser?.visible]);
+
+  const updateControlBar = useCallback(async (surface: ControlSurface, layout: ControlLayout) => {
+    try {
+      // Read the latest authority before a narrow CAS; never overwrite a peer's
+      // other bar or the working dock/session with a cached full config.
+      const currentResponse = await fetch(apiEndpoint('/api/config'), {signal:AbortSignal.timeout(10000)});
+      if (!currentResponse.ok) throw new Error('Remote preferences are unavailable');
+      const current = await currentResponse.json();
+      if (!current.control_bars) throw new Error('Control bar preferences are unavailable');
+      const next = { ...current.control_bars, [surface]: layout };
+      const response = await fetch(apiEndpoint('/api/peer/config'), {
+        method: 'POST', headers: {'Content-Type':'application/json'},signal:AbortSignal.timeout(10000),
+        body: JSON.stringify({operation:'save', expected:{control_bars:current.control_bars}, values:{control_bars:next}}),
+      });
+      const reply = await response.json();
+      if (!response.ok || reply.error) throw new Error(reply.error || 'Control bar update failed');
+      return true;
+    } catch(error) { void message.error(String(error));return false; }
+  },[apiEndpoint]);
+  const controlBar = {onLayoutChange:updateControlBar, onPreferences:()=>setActiveTab('preferences'),
+    onFullscreen:()=>{void platform.toggleFullscreen();}};
   useClipboardUrls(appConfig?.clipboard_url_detection === true, connected, browseClipboard);
 
   const resolveWebSocketUrl = useCallback(() => {
@@ -604,10 +638,14 @@ const App: React.FC = () => {
 
   return (
     <ConfigProvider direction={runtime?.direction}
+      componentSize={controlDensity === 'compact' ? 'small' : 'middle'}
       theme={{
         algorithm: resolvedTheme === 'light' ? theme.defaultAlgorithm : theme.darkAlgorithm,
           token: {
             motion: animationsEnabled,
+          controlHeight,
+          controlHeightSM: controlHeight,
+          controlHeightLG: controlHeight,
           colorPrimary: accentColor,
           colorTextLightSolid: accentTextColor,
           // Ant Design derives additional colors from these tokens. Supply
@@ -623,9 +661,11 @@ const App: React.FC = () => {
           colorText: palette.text,
           colorTextSecondary: palette.muted,
           borderRadius: 9,
-          fontFamily: `-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif`,
+          fontFamily: uiFont,
         },
         components: {
+          Select: { optionHeight: controlHeight, optionPadding: '0 8px' },
+          Menu: { itemHeight: controlHeight },
           Modal: {
             contentBg: palette['surface-1'],
             headerBg: 'transparent',
@@ -697,6 +737,7 @@ const App: React.FC = () => {
             <React.Suspense fallback={<FujiLoader locale={runtime?.locale || 'en'} />}>
             {activeTab === 'timeline' && (
               <StudioTab
+                controlBar={controlBar}
                 state={state}
                 sendCmd={sendCmd}
                 locale={runtime?.locale || 'en'}
@@ -704,10 +745,11 @@ const App: React.FC = () => {
                 quickSeekSeconds={quickSeekSeconds}
                 apiBaseUrl={apiBaseUrl}
                 seekbarHoverThumbnails={Boolean(appConfig?.nle_seekbar_hover_thumbnails)}
+                showSubseconds={appConfig?.show_subseconds !== false}
                 surface="timeline"
                 timelineWheelPreferences={state.timeline_wheel_preferences ?? {
-                  plain: appConfig?.timeline_plain_wheel_action ?? 'zoom',
-                  ctrl: appConfig?.timeline_ctrl_wheel_action ?? 'vertical_scroll',
+                  plain: appConfig?.timeline_plain_wheel_action ?? 'vertical_scroll',
+                  ctrl: appConfig?.timeline_ctrl_wheel_action ?? 'zoom',
                   shift: appConfig?.timeline_shift_wheel_action ?? 'horizontal_scroll',
                   alt: appConfig?.timeline_alt_wheel_action ?? 'zoom',
                 }}
@@ -716,6 +758,7 @@ const App: React.FC = () => {
             )}
             {activeTab === 'player' && (
               <RemoteControlTab
+                controlBar={controlBar}
                 state={state}
                 sendCmd={sendCmd}
                 onOpenLibraryTab={() => setActiveTab('library')}
@@ -723,6 +766,7 @@ const App: React.FC = () => {
                 quickSeekSeconds={quickSeekSeconds}
                 apiBaseUrl={apiBaseUrl}
                 seekbarHoverThumbnails={Boolean(appConfig?.seekbar_hover_thumbnails)}
+                showSubseconds={appConfig?.show_subseconds !== false}
                 mediaGestures={mediaGestures}
               />
             )}
@@ -762,10 +806,11 @@ const App: React.FC = () => {
           state={state}
           connected={connected}
           connectionMode={connectionMode}
-          activeSurface={activeTab === 'timeline' ? tr(runtime?.locale || 'en', 'Timeline') : tr(runtime?.locale || 'en', menuItems.find(item => item?.key === activeTab)?.label as string || activeTab)}
+          sendCmd={sendCmd}
           locale={runtime?.locale || 'en'}
           visibility={appConfig?.status_bar}
           onVisibilityChange={updateStatusBarVisibility}
+          onNavigate={setActiveTab}
         />
       </Layout>
     </ConfigProvider>
