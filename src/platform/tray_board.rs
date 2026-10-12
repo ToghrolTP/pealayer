@@ -382,7 +382,7 @@ impl BoardTrayMenu {
         })?;
         let tr = |text| crate::ui::i18n::tr(language, text);
         // Includes operations started by another client, not just this app.
-        let busy = board_busy || effect_busy || hardware.operations.iter().any(|op| op.active());
+        let busy = board_busy || effect_busy || hardware.programming_blocked() || hardware.operations.iter().any(|op| op.active());
         let mut items = vec![
             BoardTrayItem {
                 action: BoardTrayAction::Monitor,
@@ -405,7 +405,7 @@ impl BoardTrayMenu {
             items.push(BoardTrayItem {
                 action: BoardTrayAction::ReleaseEmergencyStop,
                 label: tr("Release E-STOP"),
-                enabled: true,
+                enabled: !hardware.programming_blocked(),
                 separator_before: false,
             });
         }

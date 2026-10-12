@@ -598,6 +598,9 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Current decimals" => "رقم‌های اعشاری جریان",
         "Advanced" => "پیشرفته",
         "Programming latch" => "قفل برنامه‌ریزی",
+        "Programming latch active" => "قفل برنامه‌ریزی فعال است",
+        "Programming board…" => "در حال برنامه‌ریزی برد…",
+        "Programming recovery pending" => "بازیابی برنامه‌ریزی در انتظار است",
         "Programming latch blocks motion, relays, PWM, and lighting until disabled." => {
             "قفل برنامه‌ریزی تا زمان غیرفعال‌شدن، حرکت، رله‌ها، PWM و روشنایی را مسدود می‌کند."
         }

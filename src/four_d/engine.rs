@@ -57,6 +57,17 @@ fn record_controller_transport_failure(
     }
 }
 
+fn record_output_failure(
+    error: &super::controller::ControllerRpcError,
+    connected: &AtomicBool,
+    connection_error: &Mutex<Option<String>>,
+) {
+    // A programming latch or policy rejection is not a broken wire. Keep the
+    // authenticated coordinator and advertised state; never replay the output.
+    record_controller_transport_failure("output", error, connected, connection_error);
+    publish_controller_rejection("output", error);
+}
+
 fn discard_failed_transport<T>(
     transport: &mut Option<T>,
     connected: &AtomicBool,
@@ -72,12 +83,12 @@ fn discard_failed_transport<T>(
 }
 
 impl HardwareTransport {
-    fn send(&mut self, command: Command) -> Result<(), String> {
+    fn send(&mut self, command: Command) -> Result<(), super::controller::ControllerRpcError> {
         if matches!(command, Command::RelaySet { id: 0, .. }) {
-            return Err("relay ID must be non-zero".to_string());
+            return Err("relay ID must be non-zero".to_string().into());
         }
         if matches!(command, Command::MotionSide { side, motion } if side > 1 || motion > 2) {
-            return Err("motion side or direction is outside the controller contract".to_string());
+            return Err("motion side or direction is outside the controller contract".to_string().into());
         }
         match self {
             Self::Controller(client) => client.send_command(command),
@@ -87,7 +98,7 @@ impl HardwareTransport {
                 *sequence = sequence.wrapping_add(1).max(1);
                 port.write_all(&frame)
                     .and_then(|_| port.flush())
-                    .map_err(|error| format!("direct COBS serial write failed: {error}"))?;
+                    .map_err(|error| super::controller::ControllerRpcError::transport(format!("direct COBS serial write failed: {error}")))?;
 
                 let expected_opcode = if matches!(command, Command::Ping) {
                     0x81 // HELLO_RESP
@@ -126,7 +137,7 @@ impl HardwareTransport {
                                             .map(|byte| format!("{byte:02X}"))
                                             .collect::<Vec<_>>()
                                             .join(" ")
-                                    ));
+                                    ).into());
                                 }
                                 if opcode == expected_opcode {
                                     return Ok(());
@@ -139,13 +150,13 @@ impl HardwareTransport {
                                 std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock
                             ) => {}
                         Err(error) => {
-                            return Err(format!("direct COBS serial read failed: {error}"));
+                            return Err(super::controller::ControllerRpcError::transport(format!("direct COBS serial read failed: {error}")));
                         }
                     }
                 }
-                Err(format!(
+                Err(super::controller::ControllerRpcError::transport(format!(
                     "direct board response timeout for sequence {request_sequence}"
-                ))
+                )))
             }
         }
     }
@@ -234,10 +245,11 @@ const EMERGENCY_STOP_CONTROLLER_COMMANDS: [&str; 5] = [
 /// source that could reassert motion. Direct-serial diagnostics have no host
 /// coordinator to cancel, so the board-level all-relays-off path is issued
 /// twice there as well.
-fn enforce_emergency_stop(transport: &mut HardwareTransport) -> Result<(), String> {
+fn enforce_emergency_stop(transport: &mut HardwareTransport) -> Result<(), super::controller::ControllerRpcError> {
     let mut errors = Vec::new();
+    let mut transport_failed = false;
     if matches!(transport, HardwareTransport::Controller(_)) {
-        if let Err(error) = transport.call_controller(
+        if let Err(error) = transport.call_controller_detailed(
             "controller.estop.set",
             serde_json::json!({
                 "active": true,
@@ -245,29 +257,35 @@ fn enforce_emergency_stop(transport: &mut HardwareTransport) -> Result<(), Strin
                 "reason": "operator engaged E-STOP",
             }),
         ) {
+            transport_failed |= error.transport_failed;
             errors.push(format!("engage PCController E-STOP contract: {error}"));
         }
     }
     if let Err(error) = transport.send(Command::AllOff) {
+        transport_failed |= error.transport_failed;
         errors.push(format!("initial output release: {error}"));
     }
     if matches!(transport, HardwareTransport::Controller(_)) {
         for command in EMERGENCY_STOP_CONTROLLER_COMMANDS {
-            if let Err(error) = transport.call_controller(
+            if let Err(error) = transport.call_controller_detailed(
                 "controller.command.execute",
                 serde_json::json!({"command": command}),
             ) {
+                transport_failed |= error.transport_failed;
                 errors.push(format!("{command}: {error}"));
             }
         }
     }
     if let Err(error) = transport.send(Command::AllOff) {
+        transport_failed |= error.transport_failed;
         errors.push(format!("final output release: {error}"));
     }
     if errors.is_empty() {
         Ok(())
     } else {
-        Err(errors.join("; "))
+        let mut error = super::controller::ControllerRpcError::from(errors.join("; "));
+        error.transport_failed = transport_failed;
+        Err(error)
     }
 }
 
@@ -708,7 +726,7 @@ impl ControllerPushTarget {
             }
         }
         if matches!(method, "controller.state" | "controller.event")
-            && (params.get("kind").and_then(serde_json::Value::as_str) == Some("macro.recording")
+            && (matches!(params.get("kind").and_then(serde_json::Value::as_str), Some("macro.recording" | "settings.changed" | "programming.lifecycle"))
                 || (params.get("kind").and_then(serde_json::Value::as_str) == Some("macro")
                     && matches!(params.get("lifecycle").and_then(serde_json::Value::as_str),
                         Some("started" | "completed" | "cancelled" | "failed"))))
@@ -745,6 +763,30 @@ impl ControllerPushTarget {
             return false;
         };
         let changed = match method {
+            "controller.snapshot" => {
+                // A low-rate authoritative snapshot follows settings and
+                // programming lifecycle edges. It is not a physical detach.
+                let source = params.get("host_instance_id").and_then(serde_json::Value::as_str);
+                let valid = params.get("connected").and_then(serde_json::Value::as_bool)
+                    .zip(params.get("programming").and_then(|value| super::programming::HardwareProgrammingState::parse(value).ok()));
+                let generation = params.get("connection_generation").and_then(serde_json::Value::as_u64);
+                let latest_generation = capabilities.connection_generation.max(capabilities.programming.as_ref().map_or(0, |state| state.connection_generation));
+                if source != Some(capabilities.host_instance_id.as_str()) || valid.is_none() || generation.is_none() {
+                    if let Some(refresh) = self.catalog_refresh_requested.upgrade() { refresh.store(true, Ordering::Relaxed); }
+                    false
+                } else if generation.unwrap() < latest_generation || capabilities.programming.as_ref().is_some_and(|state| valid.as_ref().unwrap().1.revision < state.revision) {
+                    false
+                } else {
+                    let (connected, _) = valid.unwrap();
+                    let new_generation = generation.unwrap() != capabilities.connection_generation;
+                    capabilities.connection_generation = generation.unwrap();
+                    let changed = capabilities.apply_programming_state(&params["programming"]);
+                    if connected && (!capabilities.board_connected || new_generation) {
+                        if let Some(refresh) = self.catalog_refresh_requested.upgrade() { refresh.store(true, Ordering::Relaxed); }
+                    }
+                    if !connected || new_generation { capabilities.mark_board_disconnected() || changed } else { changed }
+                }
+            }
             "controller.status" => {
                 // A status push proves that the coordinator can hear the board,
                 // but it does not carry the board identity or capability
@@ -819,6 +861,9 @@ impl ControllerPushTarget {
         let source_changed = !capabilities.host_instance_id.is_empty();
         capabilities.host_instance_id = instance_id.to_string();
         if source_changed {
+            capabilities.programming = None;
+            capabilities.connection_generation = 0;
+            capabilities.settings = None;
             capabilities.status_led = None;
             capabilities.status_led_revision = 0;
             if let Some(rev) = self.hardware_revision.upgrade() {
@@ -1002,10 +1047,12 @@ pub fn spawn_engine() -> EngineHandle {
                                             "connected, but capability discovery failed: {error}"
                                         ));
                                     }
-                                    engine_connected.store(false, Ordering::Relaxed);
-                                    connected = false;
-                                    active_transport = None;
-                                    continue;
+                                    if controller_wire_failed(&error) {
+                                        engine_connected.store(false, Ordering::Relaxed);
+                                        connected = false;
+                                        active_transport = None;
+                                        continue;
+                                    }
                                 }
                             }
                             // Connecting a monitor is read-only. Cancellation
@@ -1066,13 +1113,15 @@ pub fn spawn_engine() -> EngineHandle {
                                     "reassert emergency stop after reconnect: {error}"
                                 ));
                             }
-                            engine_connected.store(false, Ordering::Relaxed);
-                            connected = false;
-                            active_transport = None;
-                            if let Ok(mut guard) = engine_transport_description.lock() {
-                                *guard = None;
+                            if error.transport_failed {
+                                engine_connected.store(false, Ordering::Relaxed);
+                                connected = false;
+                                active_transport = None;
+                                if let Ok(mut guard) = engine_transport_description.lock() {
+                                    *guard = None;
+                                }
+                                continue;
                             }
-                            continue;
                         }
                         last_ping = std::time::Instant::now();
                         last_owner_check = std::time::Instant::now();
@@ -1220,15 +1269,13 @@ pub fn spawn_engine() -> EngineHandle {
                                 if let Some(ref mut transport) = active_transport {
                                     let cmd = Command::PwmSet { channel, value };
                                     if let Err(e) = transport.send(cmd) {
-                                        if let Ok(mut err_guard) = engine_conn_error.lock() {
-                                            *err_guard = Some(e);
-                                        }
-                                        engine_connected
-                                            .store(false, std::sync::atomic::Ordering::Relaxed);
-                                        connected = false;
-                                        active_transport = None;
-                                        if let Ok(mut guard) = engine_transport_description.lock() {
-                                            *guard = None;
+                                        record_output_failure(&e, &engine_connected, &engine_conn_error);
+                                        if e.transport_failed {
+                                            connected = false;
+                                            active_transport = None;
+                                            if let Ok(mut guard) = engine_transport_description.lock() {
+                                                *guard = None;
+                                            }
                                         }
                                     }
                                 }
@@ -1249,10 +1296,7 @@ pub fn spawn_engine() -> EngineHandle {
                                 }
                                 active_strip_effect = None;
                                 if let Err(e) = transport.send(Command::AllOff) {
-                                    if let Ok(mut guard) = engine_conn_error.lock() {
-                                        *guard = Some(e);
-                                    }
-                                    engine_connected.store(false, Ordering::Relaxed);
+                                    record_output_failure(&e, &engine_connected, &engine_conn_error);
                                 } else if resume_strip {
                                     if let Some(id) = active_controller_strip_effect_at(
                                         &controller_strip_effects,
@@ -1291,10 +1335,7 @@ pub fn spawn_engine() -> EngineHandle {
                         if connected {
                             if let Some(ref mut transport) = active_transport {
                                 if let Err(e) = transport.send(cmd) {
-                                    if let Ok(mut guard) = engine_conn_error.lock() {
-                                        *guard = Some(e);
-                                    }
-                                    engine_connected.store(false, Ordering::Relaxed);
+                                    record_output_failure(&e, &engine_connected, &engine_conn_error);
                                 }
                             }
                         }
@@ -1701,10 +1742,7 @@ pub fn spawn_engine() -> EngineHandle {
                                 side: action.side,
                                 motion: action.motion,
                             }) {
-                                if let Ok(mut guard) = engine_conn_error.lock() {
-                                    *guard = Some(error);
-                                }
-                                engine_connected.store(false, Ordering::Relaxed);
+                                record_output_failure(&error, &engine_connected, &engine_conn_error);
                             }
                         }
                     }
@@ -1728,10 +1766,7 @@ pub fn spawn_engine() -> EngineHandle {
                                     state: action.state,
                                 };
                                 if let Err(e) = transport.send(cmd) {
-                                    if let Ok(mut guard) = engine_conn_error.lock() {
-                                        *guard = Some(e);
-                                    }
-                                    engine_connected.store(false, Ordering::Relaxed);
+                                    record_output_failure(&e, &engine_connected, &engine_conn_error);
                                 }
                             }
                         }
@@ -1787,11 +1822,8 @@ pub fn spawn_engine() -> EngineHandle {
                                         channel,
                                         value: val,
                                     };
-                                    if let Err(e) = transport.send(cmd) {
-                                        if let Ok(mut guard) = engine_conn_error.lock() {
-                                            *guard = Some(e);
-                                        }
-                                        engine_connected.store(false, Ordering::Relaxed);
+                                if let Err(e) = transport.send(cmd) {
+                                    record_output_failure(&e, &engine_connected, &engine_conn_error);
                                     }
                                 }
                             }
@@ -2898,6 +2930,44 @@ mod tests {
         connected.store(next_connected, Ordering::Relaxed);
         assert!(!connected.load(Ordering::Relaxed));
         assert!(transport.is_none());
+    }
+
+    #[test]
+    fn output_latch_rejection_preserves_connection_but_a_wire_failure_discards_it() {
+        let connected=AtomicBool::new(true); let error=Mutex::new(None);
+        let description=Mutex::new(Some("external:tcp".into()));
+        let capabilities=Mutex::new(Some(super::super::controller::HardwareCapabilities{board_connected:true,..Default::default()}));
+        let mut transport=Some(());
+        record_output_failure(&super::super::controller::controller_json_rpc_error(&serde_json::json!({"message":"programming latch active","data":{"kind":"device_rejected","resource":"board"}})),&connected,&error);
+        assert!(discard_failed_transport(&mut transport,&connected,&description,&capabilities));
+        assert!(capabilities.lock().unwrap().as_ref().unwrap().board_connected);
+        assert!(error.lock().unwrap().is_none());
+        record_output_failure(&super::super::controller::ControllerRpcError::transport("socket closed".into()),&connected,&error);
+        assert!(!discard_failed_transport(&mut transport,&connected,&description,&capabilities));
+    }
+
+    #[test]
+    fn programming_snapshot_is_source_bound_ordered_and_invalidates_hardware_cache() {
+        let handle=memory_only_test_engine(); let target=handle.controller_push_target();
+        handle.is_connected.store(true,Ordering::Relaxed);
+        install_hardware_snapshot(&handle.hardware_capabilities,&handle.hardware_revision,
+            Some(super::super::controller::HardwareCapabilities{board_connected:true,host_instance_id:"owner".into(),connection_generation:7,..Default::default()}));
+        let mut state=super::super::programming::HardwareProgrammingState{active:true,restoration_pending:true,intentional_uart_release:true,latch_known:true,programming_latch:true,
+            revision:4,connection_generation:7,updated_at:"2026-10-12T16:30:00Z".into(),..Default::default()};
+        let snapshot=|state:&super::super::programming::HardwareProgrammingState,source:&str,generation,connected| serde_json::json!({"host_instance_id":source,"connected":connected,"connection_generation":generation,"programming":state});
+        assert!(!target.apply_notification("controller.snapshot",&snapshot(&state,"other-owner",8,false)));
+        let revision=handle.hardware_revision.load(Ordering::Relaxed);
+        assert!(target.apply_notification("controller.snapshot",&snapshot(&state,"owner",8,false)));
+        assert!(handle.hardware_revision.load(Ordering::Relaxed)>revision);
+        assert!(handle.is_connected.load(Ordering::Relaxed));
+        assert_eq!(super::super::programming::hardware_availability(true,false,handle.hardware_capabilities.lock().unwrap().as_ref()),super::super::programming::HardwareAvailability::Programming);
+        assert!(!target.apply_notification("controller.snapshot",&snapshot(&state,"owner",8,false)));
+        state.revision=3;
+        assert!(!target.apply_notification("controller.snapshot",&snapshot(&state,"owner",7,true)));
+        assert_eq!(handle.hardware_capabilities.lock().unwrap().as_ref().unwrap().programming.as_ref().unwrap().revision,4);
+        state.revision=5; state.intentional_uart_release=false; state.latch_known=false;
+        assert!(target.apply_notification("controller.snapshot",&snapshot(&state,"owner",8,false)));
+        assert_eq!(super::super::programming::hardware_availability(true,false,handle.hardware_capabilities.lock().unwrap().as_ref()),super::super::programming::HardwareAvailability::BoardUnavailable);
     }
 
     #[test]

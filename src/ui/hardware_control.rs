@@ -536,7 +536,7 @@ pub(crate) fn draw_manager_live_action(
     capabilities: &HardwareCapabilities,
     control: &HardwareControl,
 ) {
-    let enabled = !app.estop_active && !control.locked;
+    let enabled = !app.estop_active && !control.locked && !app.hardware_programming_blocked();
     let on = channel_is_active(capabilities, control);
     let is_motion = crate::ui::layout::is_motion_control(control);
     // Motion is directional, not boolean. It must never fall through to the
@@ -747,7 +747,7 @@ pub(crate) fn draw_timeline_live_control(
         let response = crate::ui::layout::draw_pwm_editor_row(
             ui,
             &mut percent,
-            !app.estop_active && !control.locked,
+            !app.estop_active && !control.locked && !app.hardware_programming_blocked(),
         );
         ui.data_mut(|data| data.insert_temp(value_id, percent));
         crate::ui::layout::transmit_pwm_editor_response(
@@ -2443,7 +2443,7 @@ fn draw_channel_live_control(
             ui.columns(columns, |uis| {
                 for (index, action) in row.iter().enumerate() {
                     let response = uis[index].add_enabled(
-                        !app.estop_active && !control.locked,
+                        !app.estop_active && !control.locked && !app.hardware_programming_blocked(),
                         egui::Button::new(format!(
                             "{}  {}",
                             crate::ui::icons::action(&action.verb),
@@ -2489,7 +2489,7 @@ fn draw_channel_live_control(
             .enumerate()
             {
                 let response = uis[index].add_enabled(
-                    !app.estop_active && !control.locked,
+                    !app.estop_active && !control.locked && !app.hardware_programming_blocked(),
                     egui::Button::new(format!("{icon}  {label}"))
                         .corner_radius(7.0)
                         .min_size(egui::vec2(uis[index].available_width(), 36.0)),

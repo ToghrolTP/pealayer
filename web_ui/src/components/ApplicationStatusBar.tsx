@@ -1,4 +1,5 @@
 import React, { useEffect, useState } from 'react';
+import { hardwareAvailability, hardwareLabels } from '../hardwareAvailability';
 import { Dropdown, InputNumber } from 'antd';
 import type { MenuProps } from 'antd';
 import { ApiOutlined, BgColorsOutlined, ClockCircleOutlined, DashboardOutlined, DownOutlined, EyeInvisibleOutlined, LineChartOutlined, VideoCameraOutlined, WarningOutlined, ThunderboltOutlined, SyncOutlined } from '@ant-design/icons';
@@ -103,7 +104,7 @@ export const ApplicationStatusBar: React.FC<ApplicationStatusBarProps> = ({ stat
       case 'fps': return <button type="button" className="app-statusbar__fps" onClick={() => changeMode(nextFpsMode(config.fps_mode))}
         title={`${tr(locale, MODE_LABELS[config.fps_mode])} · ${tr(locale, screenRate ? 'Screen render rate' : 'Media frame rate')} · ${tr(locale, 'Click to switch frame rate source')}`}>
         {screenRate ? <DashboardOutlined /> : <VideoCameraOutlined />}<span className="status-fps-value">{rate != null && Number.isFinite(rate) && rate > 0 && (screenRate || state.current_video) ? `${rate.toFixed(2)} fps` : '— fps'}</span></button>;
-      case 'connection': return <><ApiOutlined />{hardwareLive ? state.hardware?.board_name || state.hardware_details?.board_name || 'PCController' : connected && state.controller_connected ? tr(locale, 'PCController connected; board not connected') : tr(locale, 'Hardware: Disconnected')}</>;
+      case 'connection': { const availability = hardwareAvailability(state, connected); return <><ApiOutlined />{availability === 'ok' ? state.hardware?.board_name || state.hardware_details?.board_name || 'PCController' : tr(locale, hardwareLabels[availability])}</>; }
       case 'hot': return hardwareLive && telemetry?.hot === true ? <><WarningOutlined /> HOT · {tr(locale, 'Temperature alert')}</> : null;
       case 'estop': return state.estop_active ? <><WarningOutlined />{tr(locale, 'E-STOP ACTIVE')}</> : null;
       case 'voltage': return voltage === undefined ? null : `${(voltage / 1000).toFixed(2)} V`;

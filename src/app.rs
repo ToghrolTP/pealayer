@@ -1218,6 +1218,8 @@ impl eframe::App for PealayerApp {
             && self
                 .advertised_hardware()
                 .is_some_and(|capabilities| capabilities.board_connected);
+        let programming_handoff = self.advertised_hardware().is_some_and(|caps| caps.programming.as_ref()
+            .is_some_and(|state| state.intentional_uart_release && state.restoration_pending));
         // A consumer's transport is the Pealayer peer link, not the board.
         // Losing that link must never pause the authority or invent a USB loss.
         let hardware_lost = !crate::peer::active() && hardware_connection_was_lost(
@@ -1225,6 +1227,7 @@ impl eframe::App for PealayerApp {
             connected_now,
             self.was_board_connected,
             board_connected_now,
+            programming_handoff,
         );
         if hardware_lost {
             let title = if !connected_now { "PCController connection lost" } else { "Board unavailable" };
@@ -1512,14 +1515,7 @@ impl eframe::App for PealayerApp {
                     shift: self.timeline_shift_wheel_action,
                     alt: self.timeline_alt_wheel_action,
                 }),
-                status: if !controller_connected {
-                    "connecting"
-                } else if !hardware_connected {
-                    "hardware_unavailable"
-                } else {
-                    "ok"
-                }
-                .to_string(),
+                status: crate::four_d::programming::hardware_availability(controller_connected, hardware_connection_requested, hardware.as_ref()).code().to_string(),
                 playing: !self.is_paused && self.current_video_path.is_some(),
                 volume: self.volume,
                 muted: self.is_muted,
@@ -3027,6 +3023,10 @@ impl PealayerApp {
             &self.engine_handle.hardware_revision,
             capabilities,
         );
+    }
+
+    pub fn hardware_programming_blocked(&self) -> bool {
+        self.is_connected && self.advertised_hardware().is_some_and(|caps| caps.programming_blocked())
     }
 
     pub fn advertised_hardware(&self) -> Option<crate::four_d::controller::HardwareCapabilities> {
@@ -9013,6 +9013,8 @@ fn web_hardware_details(
     });
     serde_json::json!({
         "board_name": capabilities.board_name,
+        "programming": capabilities.programming,
+        "outputs_available": capabilities.outputs_available(),
         "capability_bits": capabilities.capability_bits,
         "host_instance_id": capabilities.host_instance_id,
         "motion_control_mode": match motion_control_mode {
@@ -9555,8 +9557,9 @@ fn hardware_connection_was_lost(
     transport_connected: bool,
     was_board_connected: bool,
     board_connected: bool,
+    programming_handoff: bool,
 ) -> bool {
-    (was_transport_connected && !transport_connected) || (was_board_connected && !board_connected)
+    (was_transport_connected && !transport_connected) || (was_board_connected && !board_connected && !programming_handoff)
 }
 
 #[cfg(test)]
@@ -10535,10 +10538,12 @@ pub(crate) mod tests {
 
     #[test]
     fn board_loss_is_detected_behind_a_healthy_controller_transport() {
-        assert!(hardware_connection_was_lost(true, true, true, false));
-        assert!(hardware_connection_was_lost(true, false, true, false));
-        assert!(!hardware_connection_was_lost(true, true, false, false));
-        assert!(!hardware_connection_was_lost(false, true, false, true));
+        assert!(hardware_connection_was_lost(true, true, true, false, false));
+        assert!(hardware_connection_was_lost(true, false, true, false, false));
+        assert!(!hardware_connection_was_lost(true, true, false, false, false));
+        assert!(!hardware_connection_was_lost(false, true, false, true, false));
+        assert!(!hardware_connection_was_lost(true, true, true, false, true), "deliberate programming handoff is not a disconnect notification/pause");
+        assert!(hardware_connection_was_lost(true, false, true, false, true), "a real coordinator loss still wins over cached programming state");
     }
 
     #[test]

@@ -38,6 +38,7 @@ import recordingColors from '../../../assets/themes/recording-colors.json';
 import { mediaBasename } from '../mediaLabel';
 import { formatTimelineTime } from '../timelineTime';
 import { SeekThumbnailPreview } from './SeekThumbnailPreview';
+import { hardwareAvailability, hardwareLabels, hardwareOutputsAvailable } from '../hardwareAvailability';
 import { SeekbarMarkers, useSeekbar } from './seekbar';
 import { MediaSurface } from './MediaSurface';
 
@@ -544,8 +545,8 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
         </div>
 
         <footer className="effects-panel__footer">
-          <span className={`status-light ${state.hardware_connected ? 'is-online' : ''}`} />
-          <span>{state.hardware?.board_name || tr(locale, 'No hardware')}</span>
+          <span className={`status-light ${hardwareAvailability(state) === 'ok' ? 'is-online' : ''}`} />
+          <span>{hardwareAvailability(state) === 'ok' ? state.hardware?.board_name || tr(locale, 'No hardware') : tr(locale, hardwareLabels[hardwareAvailability(state)])}</span>
           {state.hardware_sync && <span title={state.hardware_sync.error ||
             `Revision ${state.hardware_sync.revision} · ${state.hardware_sync.timeline?.acknowledged || 0}/${state.hardware_sync.timeline?.step_count || 0} ACK · max ${state.hardware_sync.timeline?.max_ack_lateness_ms || 0} ms`}>
             {state.hardware_sync.error ? tr(locale, 'Hardware timing fault') :
@@ -623,7 +624,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                   <label>{tr(locale, 'Interval')} <TimeValueField value={effectDraft.repeat_interval_ms ?? 0} human={state.human_readable_time_units !== false} onChange={value => setEffectDraft({ ...effectDraft, repeat_interval_ms: Math.round(value) })} /></label>
                   <span className="muted">{tr(locale, '0s uses the full effect length; interval is start-to-start')}</span>
                   <span>{repeatedSequenceDurationMs(effectDraft.steps, effectDraft.repeat_count ?? 1, effectDraft.repeat_interval_ms ?? 0) === null ? tr(locale, 'Effect repeat interval cannot be shorter than its length') : formatTimeMs(repeatedSequenceDurationMs(effectDraft.steps, effectDraft.repeat_count ?? 1, effectDraft.repeat_interval_ms ?? 0)!, state.human_readable_time_units !== false)}</span>
-                  <Button disabled={captureBusy || savingEffect || !state.controller_connected || !state.hardware_connected || Boolean(state.estop_active) || !effectDraft.name?.trim() || !effectDraft.steps.length || repeatedSequenceDurationMs(effectDraft.steps,effectDraft.repeat_count ?? 1,effectDraft.repeat_interval_ms ?? 0) === null} icon={<CaretRightFilled />} onClick={() => { void sendCmd('controller_effect.publish_and_run', effectPayload(effectDraft)); }}>{tr(locale, 'Publish & Run')}</Button>
+                  <Button disabled={captureBusy || savingEffect || !hardwareOutputsAvailable(state) || Boolean(state.estop_active) || !effectDraft.name?.trim() || !effectDraft.steps.length || repeatedSequenceDurationMs(effectDraft.steps,effectDraft.repeat_count ?? 1,effectDraft.repeat_interval_ms ?? 0) === null} icon={<CaretRightFilled />} onClick={() => { void sendCmd('controller_effect.publish_and_run', effectPayload(effectDraft)); }}>{tr(locale, 'Publish & Run')}</Button>
                 </Space>
                 <SequenceTimeline key={effectDraft.id} steps={effectDraft.steps} locale={locale} controls={state.hardware_details?.controls} disabled={captureBusy} wheelPreferences={timelineWheelPreferences} actionsRef={sequenceActions} extraKinds={sequenceExtraKinds(state.hardware_details)}
                   human={state.human_readable_time_units !== false} onEdit={index => {
