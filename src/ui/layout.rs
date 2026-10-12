@@ -58,7 +58,7 @@ fn sidebar_content_width(available_width: f32) -> f32 {
     (available_width - SIDEBAR_SCROLLBAR_WIDTH - SIDEBAR_SCROLLBAR_GAP).max(1.0)
 }
 
-fn sidebar_scroll<R>(
+pub(super) fn sidebar_scroll<R>(
     ui: &mut egui::Ui,
     id: &str,
     body: impl FnOnce(&mut egui::Ui) -> R,

@@ -174,7 +174,7 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale, 
   const [movingEffect, setMovingEffect] = useState<string | null>(null);
   const captureBusy = Boolean(state.effect_recording?.active || state.effect_recording?.pending);
   const presentedEffects = useMemo(() => effects.map(effect => draft && !draft.is_new && draft.reference === effect.reference
-    ? { ...effect, name: draft.name, icon: draft.icon } : effect), [effects, draft?.reference, draft?.name, draft?.icon, draft?.is_new]);
+    ? { ...effect, name: draft.name, icon: draft.icon, category: draft.category } : effect), [effects, draft?.reference, draft?.name, draft?.icon, draft?.category, draft?.is_new]);
   const selectedEffect = presentedEffects.find((effect) => effect.reference === selected);
   const draggedEffect = effects.find((effect) => effect.reference === draggingEffect);
   const effectGroupName = (effect: typeof effects[number]) => effect.category || tr(locale, 'Other');
