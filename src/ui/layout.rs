@@ -8428,6 +8428,43 @@ mod timeline_row_tests {
     }
 
     #[test]
+    fn program_monitor_fits_its_scroll_viewport_at_all_sizes_and_scales() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let mut app = PealayerApp::default();
+        for loaded in [false, true] {
+            app.current_video_path = loaded.then(|| std::path::PathBuf::from("monitor-layout-fixture.mkv"));
+            app.media_metadata_loaded = loaded;
+            app.duration = if loaded { 7200.0 } else { 0.0 };
+            app.is_seekable = loaded;
+            for scale in [1.0, 1.25, 1.5, 2.0] {
+                for (width, height) in [(240.0, 200.0), (400.0, 300.0), (700.0, 450.0), (1200.0, 700.0)] {
+                    let context = egui::Context::default();
+                    context.set_pixels_per_point(scale);
+                    crate::ui::i18n::configure_ui_fonts(&context, false);
+                    for frame in 0..3 {
+                        let output = context.run_ui(egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, height))),
+                            time: Some(frame as f64), ..Default::default()
+                        }, |ui| {
+                            let mut viewer = PealayerTabViewer { app: &mut app };
+                            let available = ui.available_rect_before_wrap();
+                            let scroll = egui::ScrollArea::new(viewer.scroll_bars(&PealayerTab::ProgramMonitor))
+                                .show(ui, |ui| viewer.ui(ui, &mut PealayerTab::ProgramMonitor));
+                            // ScrollArea pixel-snaps its content rectangle but not its
+                            // viewport. Allow that physical rounding, not layout overflow.
+                            assert!(scroll.content_size.y <= available.height() + 1.0 / scale,
+                                "{width}x{height} at {scale}, loaded={loaded}: content {:?}, viewport {available:?}", scroll.content_size);
+                            assert_eq!(viewer.scroll_bars(&PealayerTab::ProgramMonitor), [false, false]);
+                            assert_eq!(scroll.state.offset, egui::Vec2::ZERO);
+                        });
+                        discard_ui_output(output);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn timeline_wheel_uses_original_axes_and_native_units_for_all_modifiers() {
         let wheel = |unit, delta, modifiers| egui::Event::MouseWheel {
             unit, delta, modifiers, phase: egui::TouchPhase::Move,
@@ -12993,7 +13030,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
     fn scroll_bars(&self, tab: &Self::Tab) -> [bool; 2] {
         match tab {
-            PealayerTab::EffectsLibrary
+            // This is a fitted video viewport with a responsive footer, not a
+            // document. The dock's pixel-rounded ScrollArea otherwise permits
+            // fractional scrolling even when all content fits its logical size.
+            PealayerTab::ProgramMonitor
+            | PealayerTab::EffectsLibrary
             | PealayerTab::HardwareMonitor
             | PealayerTab::MediaInspector => [false, false],
             _ => [true, true],
@@ -13016,7 +13057,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                     PealayerTab::ProgramMonitor => {
                         ui.vertical(|ui| {
                             let controls = crate::ui::monitor_controls::Metrics::measure(self.app, ui);
-                            let footer_height = controls.height(ui.available_width()) + 5.0;
+                            // allocate_ui advances by item_spacing before add_space:
+                            // reserve both, otherwise the full-height surface overflows
+                            // the dock's ScrollArea at every panel size.
+                            let footer_height = controls.height(ui.available_width())
+                                + ui.spacing().item_spacing.y + 5.0;
                             let video_h = (ui.available_height() - footer_height).max(0.0);
                             let video_size = egui::vec2(ui.available_width(), video_h);
                             ui.allocate_ui_with_layout(video_size, egui::Layout::top_down(egui::Align::Center), |ui| {
