@@ -10,6 +10,11 @@ statements are not the present product state.
 
 ## Delivered source and deployment
 
+- Effects Library rename uses matching display/edit header slots and glyph
+  baselines without resizing the card or moving metadata.
+  [Geometry contract and popup regressions](effect-card-rename-geometry.md)
+  preserve icon search, draft/commit behavior and RTL placement.
+
 - Hardware caption alignment is independent of reverse trailing-action layout.
   [Exact regression cause and rendering checks](hardware-caption-alignment.md)
   retain real RTL text placement and matching inline-edit geometry.
