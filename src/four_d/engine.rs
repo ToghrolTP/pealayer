@@ -834,6 +834,34 @@ fn should_yield_direct_transport(
     is_direct && !diagnostic_override && coordinator_reachable
 }
 
+/// UI projection/confirmation fixtures must not race a live transport worker.
+/// The disconnected command channel also makes accidental dispatch fail closed.
+#[cfg(test)]
+pub(crate) fn memory_only_test_engine() -> EngineHandle {
+    let (sender, _) = mpsc::channel();
+    EngineHandle {
+        lifecycle: Arc::new(()),
+        playback_time_ms: Arc::new(AtomicU64::new(0)),
+        media_playback: Arc::new(Mutex::new(super::media_sync::PlaybackSample::default())),
+        prepared_timeline: Arc::new(Mutex::new(super::media_timeline::PreparedTimeline::default())),
+        media_clock_owned: Arc::new(AtomicBool::new(false)),
+        is_playing: Arc::new(AtomicBool::new(false)),
+        estop_active: Arc::new(AtomicBool::new(false)),
+        connection_requested: Arc::new(AtomicBool::new(false)),
+        is_connected: Arc::new(AtomicBool::new(false)),
+        serial_port: Arc::new(Mutex::new(super::controller::DEFAULT_ENDPOINT.into())),
+        active_transport: Arc::new(Mutex::new(None)),
+        connection_error: Arc::new(Mutex::new(None)),
+        hardware_capabilities: Arc::new(Mutex::new(None)),
+        hardware_revision: Arc::new(AtomicU64::new(1)),
+        controller_call_results: Arc::new(Mutex::new(VecDeque::new())),
+        catalog_refresh_requested: Arc::new(AtomicBool::new(false)),
+        rf_catalog_refresh_requested: Arc::new(AtomicBool::new(false)),
+        state_notifier: Arc::new(Mutex::new(None)),
+        sender,
+    }
+}
+
 pub fn spawn_engine() -> EngineHandle {
     if crate::peer::active() { return spawn_peer_engine(); }
     let lifecycle = Arc::new(());

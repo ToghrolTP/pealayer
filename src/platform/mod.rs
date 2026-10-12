@@ -5,6 +5,7 @@ pub mod interop;
 pub mod media_controls;
 pub mod registry;
 pub mod taskbar_preview;
+pub mod tray_board;
 pub mod windows;
 pub(crate) mod windows_quick_actions;
 #[cfg(test)]
