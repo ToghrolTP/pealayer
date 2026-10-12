@@ -11,6 +11,9 @@ Owner: [issue #80](https://github.com/ToghrolTP/pealayer/issues/80).
   scrolls overflowing rows, or pans time when there are no hidden rows. None
   consumes the gesture without changing navigation. Only the visible timeline
   viewport claims input; toolbar/fields and open popup menus retain theirs.
+  Web's sequence designer uses the same advertised policy, bounded row scrolling
+  and pointer-time invariant. Its missing-policy fallback now matches native
+  defaults (plain vertical, Ctrl zoom) instead of silently swapping them.
 - Direct relay cues were checked against the library effect's fixed relay
   target, rejecting moves between channels. Native destination highlighting and
   movement now share same-kind direct-cue validation and authoritative row
@@ -41,6 +44,8 @@ custom None/horizontal policies, vertical overflow, pointer-time invariance and
 toolbar exclusion; shared-template relay/PWM preservation; a private invisible
 Windows fixture for both icon slots, DPI-sized replacement, borrowed-handle
 survival and owned cleanup; true-color icon bitmap sizes; Preferences preview.
+Web build, all 49 parity guards, cue authoring and wheel-routing/navigation
+checks, responsive checks and installable/offline PWA validation passed.
 
 These tests do not operate the production window or board. The running local
 application has not been replaced while unsaved-edit readiness is unanswered.
