@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Card, Table, Breadcrumb, Button, Input, Tag, Space, Avatar, message, Popconfirm, Spin, Typography, Dropdown } from 'antd';
 import {
   FolderOutlined,
@@ -11,6 +11,8 @@ import {
   CopyOutlined,
 } from '@ant-design/icons';
 import { tr, UiLocale } from '../i18n';
+import { FileLocationSelect } from './FileLocationSelect';
+import { filesystemBreadcrumbs } from '../fileLocations';
 
 const { Text } = Typography;
 
@@ -36,45 +38,43 @@ interface MediaLibraryTabProps {
   apiBaseUrl: string;
 }
 
-const filesystemPath = (value: string) => {
-  const withoutNamespace = value.replace(/^\\\\\?\\/, '');
-  const windows = /^[A-Za-z]:[\\/]/.test(withoutNamespace);
-  const separator = windows ? '\\' : '/';
-  const normalized = withoutNamespace.replace(/[\\/]+/g, separator);
-  const drive = windows ? normalized.slice(0, 2) : '';
-  const parts = normalized.slice(windows ? 2 : 0).split(separator).filter(Boolean);
-  const root = windows ? `${drive}\\` : '/';
-  return { windows, separator, drive, parts, root };
-};
-
 export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMediaPlayStarted, locale, apiBaseUrl }) => {
   const [data, setData] = useState<BrowseResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [currentPath, setCurrentPath] = useState<string | undefined>(undefined);
+  const [pathInput, setPathInput] = useState('');
+  const request = useRef<AbortController | null>(null);
 
   const fetchDirectory = async (path?: string) => {
+    request.current?.abort();
+    const controller = new AbortController(); request.current = controller;
     setLoading(true);
     try {
       const query = path ? `?path=${encodeURIComponent(path)}` : '';
-      const res = await fetch(`${apiBaseUrl}/api/fs/browse${query}`);
+      const res = await fetch(`${apiBaseUrl}/api/fs/browse${query}`, { signal: controller.signal });
       if (res.ok) {
         const json: BrowseResponse = await res.json();
+        if (controller.signal.aborted) return;
         setData(json);
         setCurrentPath(json.current_path);
+        setPathInput(json.current_path);
       } else {
-        message.error(tr(locale, 'Failed loading directory'));
+        const failure = await res.json();
+        if (!controller.signal.aborted) message.error(failure.error || tr(locale, 'Failed loading directory'));
       }
     } catch {
-      message.error(tr(locale, 'Error connecting to file system API'));
+      if (!controller.signal.aborted) message.error(tr(locale, 'Error connecting to file system API'));
     } finally {
-      setLoading(false);
+      if (!controller.signal.aborted) setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchDirectory(currentPath);
-  }, []);
+    setData(null); setCurrentPath(undefined); setPathInput('');
+    void fetchDirectory();
+    return () => request.current?.abort();
+  }, [apiBaseUrl]);
 
   const handlePlayMedia = (filePath: string, fileName: string) => {
     sendCmd('pealayer.open', { target: filePath });
@@ -232,33 +232,21 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
     },
   ];
 
-  const path = filesystemPath(data?.current_path || '/');
-
-  const breadcrumbItems = [
-    {
-      title: (
-        <a onClick={() => fetchDirectory(path.root)}>
-          {path.windows ? path.drive : tr(locale, 'Root')}
-        </a>
-      ),
-    },
-    ...path.parts.map((part, index) => {
-      const prefix = path.windows ? `${path.drive}\\` : '/';
-      const subPath = prefix + path.parts.slice(0, index + 1).join(path.separator);
-      return {
-        title: (
-          <a onClick={() => fetchDirectory(subPath)}>
-            {part}
-          </a>
-        ),
-      };
-    }),
-  ];
+  const breadcrumbItems = data ? filesystemBreadcrumbs(data.current_path).map(item => ({
+    title: <a onClick={() => void fetchDirectory(item.path)}>{item.name === 'Root' ? tr(locale, 'Root') : item.name}</a>,
+  })) : [];
 
   return (
     <Card bordered={false} className="surface-card media-library" bodyStyle={{ padding: 20 }}>
       {/* Header controls: Breadcrumb & Search bar */}
       <Space direction="vertical" style={{ width: '100%' }} size="middle">
+        <div className="media-library__location-bar">
+          <FileLocationSelect apiBaseUrl={apiBaseUrl} locale={locale} disabled={loading} onSelect={path => void fetchDirectory(path)} />
+          <Input value={pathInput} aria-label={tr(locale, 'Folder path')} placeholder={tr(locale, 'Folder path')}
+            onChange={event => setPathInput(event.target.value)} onPressEnter={() => void fetchDirectory(pathInput)} />
+          <Button icon={<FolderOutlined />} disabled={loading || !pathInput.trim()} aria-label={tr(locale, 'Open folder')}
+            onClick={() => void fetchDirectory(pathInput)} />
+        </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
           <Space>
             {data?.parent_path && (

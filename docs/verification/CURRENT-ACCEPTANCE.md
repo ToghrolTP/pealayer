@@ -10,6 +10,11 @@ statements are not the present product state.
 
 ## Delivered source and deployment
 
+- Web media/file browsing now exposes shared drive/location selection, mapped and
+  remembered network locations, Windows folder shortcuts/known folders and recent
+  custom media folders. [Contract and verification](web-file-locations.md) retain
+  account/access, non-scanning and real share/deployment acceptance limits.
+
 - The latest native paired Cafe update is installed, preserved and verified;
   PR #174 is merged. [Issue 80 delivery receipt](issue80-native-delivery.md)
   records current executable/runtime identities and ready matching ACK 72.

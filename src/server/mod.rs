@@ -1,4 +1,5 @@
 pub mod fs_api;
+mod fs_locations;
 mod media_stream;
 mod download_media;
 pub mod thumbnails;
@@ -1068,6 +1069,8 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
             player_seek_thumbnail_response(&request.target, state)
         }
         ("GET", "/api/fs/browse") => browse_response(&request.target),
+        ("GET", "/api/fs/locations") => HttpResponse::json(200, "OK",
+            serde_json::json!({"locations": fs_locations::locations(&web.recent_media)}).to_string()),
         ("GET", "/api/fs/thumbnail") => thumbnail_response(&request.target),
         ("POST", "/api/fs/rename") => rename_response(&request.body),
         ("POST", "/api/fs/trash") => trash_response(&request.body),
@@ -1691,7 +1694,7 @@ fn browse_response(target: &str) -> HttpResponse {
             "OK",
             serde_json::to_string(&result).unwrap_or_else(|_| "{}".to_string()),
         ),
-        Err(error) => HttpResponse::text(400, "Bad Request", error),
+        Err(error) => HttpResponse::json(400, "Bad Request", serde_json::json!({"error": error}).to_string()),
     }
 }
 
@@ -1934,6 +1937,7 @@ mod tests {
             denied_web_capability("GET", "/api/fs/browse", &restricted),
             Some("host file access")
         );
+        assert_eq!(denied_web_capability("GET", "/api/fs/locations", &restricted), Some("host file access"));
         assert_eq!(
             denied_web_capability("POST", "/api/update/begin", &restricted),
             Some("application updates")

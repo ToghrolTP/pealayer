@@ -1,6 +1,11 @@
 export type UiLocale = 'en' | 'fa';
 
 const fa: Record<string, string> = {
+  'Locations': 'مکان‌ها', 'Drives': 'درایوها', 'Network locations': 'مکان‌های شبکه',
+  'Folders': 'پوشه‌ها', 'Recent folders': 'پوشه‌های اخیر', 'Refresh locations': 'تازه‌سازی مکان‌ها',
+  'Failed loading locations': 'بارگذاری مکان‌ها ناموفق بود', 'Home': 'خانه',
+  'Current folder': 'پوشهٔ جاری', 'Desktop': 'دسکتاپ', 'Documents': 'اسناد',
+  'Downloads': 'بارگیری‌ها', 'Videos': 'ویدیوها', 'Music': 'موسیقی', 'Pictures': 'تصاویر',
   'Programming latch active': 'قفل برنامه‌ریزی فعال است',
   'Programming board…': 'در حال برنامه‌ریزی برد…',
   'Programming recovery pending': 'بازیابی برنامه‌ریزی در انتظار است',

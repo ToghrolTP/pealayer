@@ -3,6 +3,7 @@ import { Alert, Button, Input, Modal, Table, Typography } from 'antd';
 import { ArrowUpOutlined, FileImageOutlined, FolderOpenOutlined, ReloadOutlined } from '@ant-design/icons';
 import { tr, type UiLocale } from '../i18n';
 import { preferenceFileAllowed, preferenceFileParent } from '../preferenceFiles';
+import { FileLocationSelect } from './FileLocationSelect';
 
 interface FileEntry { name: string; path: string; is_dir: boolean; size_bytes: number }
 interface Directory { current_path: string; parent_path: string | null; entries: FileEntry[] }
@@ -23,7 +24,7 @@ export const ServerFilePicker: React.FC<Props> = ({ apiBaseUrl, locale, extensio
     request.current?.abort();
     const controller = new AbortController();
     request.current = controller;
-    setLoading(true); setError(null); setSelected(null); setDirectory(null);
+    setLoading(true); setError(null); setSelected(null);
     try {
       const response = await fetch(`${apiBaseUrl}/api/fs/browse${next ? `?path=${encodeURIComponent(next)}` : ''}`, { signal: controller.signal });
       const value = await response.json();
@@ -41,9 +42,10 @@ export const ServerFilePicker: React.FC<Props> = ({ apiBaseUrl, locale, extensio
   const rows = (directory?.entries ?? []).filter(entry => (entry.is_dir
     || preferenceFileAllowed(entry.name, extensions))
     && entry.name.toLocaleLowerCase().includes(filter.toLocaleLowerCase()));
-  return <Modal open title={title} width={680} style={{ maxWidth: 'calc(100vw - 32px)' }}
+  return <Modal open title={title} width={680} className="server-file-picker" style={{ maxWidth: 'calc(100vw - 32px)' }}
     onCancel={onCancel} onOk={() => selected && onSelect(selected)} okText={tr(locale, 'Select')}
     cancelText={tr(locale, 'Cancel')} okButtonProps={{ disabled: !selected || loading }}>
+    <FileLocationSelect apiBaseUrl={apiBaseUrl} locale={locale} disabled={loading} onSelect={next => void browse(next)} />
     <div className="server-file-picker__navigation">
       <Button icon={<ArrowUpOutlined />} disabled={!directory?.parent_path || loading}
         title={tr(locale, 'Parent folder')} aria-label={tr(locale, 'Parent folder')}
