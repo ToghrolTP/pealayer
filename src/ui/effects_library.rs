@@ -3153,6 +3153,7 @@ fn draw_capture_selection(app: &mut PealayerApp, ui: &mut egui::Ui) {
 }
 
 pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    let _timing = crate::performance::span(crate::performance::Phase::Designer);
     ui.data_mut(|data| data.insert_temp(egui::Id::new("effects-designer-language"), app.language));
     if !app.show_effect_library_editor {
         ui.data_mut(|data| data.remove::<ControllerEffectDraft>(original_draft_id()));

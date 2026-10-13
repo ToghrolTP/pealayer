@@ -1,13 +1,13 @@
 //! Fixed-size, allocation-free native frame timing. No history, files or probes.
 use std::sync::{atomic::{AtomicU64, Ordering}, OnceLock};
 
-pub enum Phase { Logic, Ui, Video }
+pub enum Phase { Logic, Ui, Video, Menu, Status, Program, Inspector, Cue, Library, Hardware, Timeline, Designer }
 struct Timing { count: AtomicU64, total: AtomicU64, last: AtomicU64, max: AtomicU64 }
 impl Timing {
     const fn new() -> Self { Self { count: AtomicU64::new(0), total: AtomicU64::new(0),
         last: AtomicU64::new(0), max: AtomicU64::new(0) } }
 }
-static TIMINGS: [Timing; 3] = [Timing::new(), Timing::new(), Timing::new()];
+static TIMINGS: [Timing; 12] = [const { Timing::new() }; 12];
 static RENDERER: OnceLock<serde_json::Value> = OnceLock::new();
 pub struct Span { phase: usize, start: std::time::Instant }
 pub fn span(phase: Phase) -> Span { Span { phase: phase as usize, start: std::time::Instant::now() } }
@@ -34,7 +34,9 @@ pub unsafe fn observe_renderer(gl: &eframe::glow::Context) {
     let _ = RENDERER.set(value);
 }
 pub fn snapshot() -> serde_json::Value {
-    let phases: Vec<_> = ["logic", "ui", "video_callback"].iter().zip(TIMINGS.iter()).map(|(name, timing)| {
+    let phases: Vec<_> = ["logic", "ui", "video_callback", "menu", "status_bar", "program_monitor",
+        "media_inspector", "cue_controls", "effects_library", "hardware_monitor", "timeline", "effects_designer"]
+        .iter().zip(TIMINGS.iter()).map(|(name, timing)| {
         serde_json::json!({"phase":name, "count":timing.count.load(Ordering::Relaxed),
             "total_us":timing.total.load(Ordering::Relaxed), "last_us":timing.last.load(Ordering::Relaxed),
             "max_us":timing.max.load(Ordering::Relaxed)})

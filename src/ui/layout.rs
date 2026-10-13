@@ -13456,6 +13456,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
+        let _timing = crate::performance::span(match tab {
+            PealayerTab::ProgramMonitor => crate::performance::Phase::Program,
+            PealayerTab::MediaInspector => crate::performance::Phase::Inspector,
+            PealayerTab::EffectControls => crate::performance::Phase::Cue,
+            PealayerTab::EffectsLibrary => crate::performance::Phase::Library,
+            PealayerTab::HardwareMonitor => crate::performance::Phase::Hardware,
+            PealayerTab::Timeline => crate::performance::Phase::Timeline,
+        });
         let display_language = self.app.language;
         // High density styling for text elements
         ui.style_mut().override_text_style = Some(egui::TextStyle::Body);
