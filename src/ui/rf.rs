@@ -773,6 +773,10 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     if !app.rf.open {
         return;
     }
+    let live_connected = app
+        .engine_handle
+        .is_connected
+        .load(std::sync::atomic::Ordering::Acquire);
     if app.rf.pending || app.rf.catalog["learning"]["active"] == true {
         ui.ctx().request_repaint_after(Duration::from_millis(250));
     }
@@ -876,7 +880,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         ui.horizontal(|ui| {
                             let learning=catalog["learning"]["active"].as_bool().unwrap_or(false);
                             if learning { ui.colored_label(ui.visuals().selection.bg_fill,"Learning…"); if ui.button("Stop learning").clicked() { request(app,"learn.cancel",json!({})); } }
-                            else if ui.add_enabled(catalog["connected"]==true && !app.rf.pending,egui::Button::new(format!("{} Learn buttons",crate::ui::icons::PLUS))).clicked() { request(app,"learn.start",json!({"mode":"timer","timeout_ms":30000})); }
+                            else if ui.add_enabled(catalog["connected"]==true && live_connected && !app.rf.pending,egui::Button::new(format!("{} Learn buttons",crate::ui::icons::PLUS))).clicked() { request(app,"learn.start",json!({"mode":"timer","timeout_ms":30000})); }
                         });
                         if array(&catalog["entries"]).is_empty() {
                             ui.label(egui::RichText::new("No learned RF buttons. Refresh to read the board or learn a new button.").weak());
@@ -930,7 +934,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 if !array(&option["behaviors"]).is_empty() { choices(ui,"Behavior",&mut app.rf.board_map,"behavior",&options(&option["behaviors"])); }
                             }
                         });
-                        if ui.add_enabled(!app.rf.pending && catalog["connected"]==true && board_map_valid(&app.rf.board_map,&catalog),egui::Button::new("Save on board")).clicked() {
+                        if ui.add_enabled(!app.rf.pending && catalog["connected"]==true && live_connected && board_map_valid(&app.rf.board_map,&catalog),egui::Button::new("Save on board")).clicked() {
                             let mut map=app.rf.board_map.clone(); if map["action"]=="none" { map.as_object_mut().unwrap().remove("target"); }
                             if map["action"]=="none" || map["action"]=="menu" { map.as_object_mut().unwrap().remove("behavior"); }
                             request(app,"map",map);
@@ -955,7 +959,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             ui.label("Repeats"); ui.add(egui::DragValue::new(&mut app.rf.repeats).range(1..=20)); ui.end_row();
                         });
                         let code=app.rf.code.trim(); let parsed=code.strip_prefix("0x").or_else(||code.strip_prefix("0X")).map(|s|u32::from_str_radix(s,16)).unwrap_or_else(||code.parse::<u32>()).ok().filter(|v|*v!=0);
-                        if ui.add_enabled(parsed.is_some() && !app.rf.pending && catalog["connected"]==true,egui::Button::new(format!("{} Transmit",crate::ui::icons::PAPER_PLANE_TILT))).clicked() { request(app,"transmit",json!({"code":parsed,"bits":app.rf.bits,"protocol":app.rf.protocol,"pulse_us":app.rf.pulse_us,"repeats":app.rf.repeats})); }
+                        if ui.add_enabled(parsed.is_some() && !app.rf.pending && catalog["connected"]==true && live_connected,egui::Button::new(format!("{} Transmit",crate::ui::icons::PAPER_PLANE_TILT))).clicked() { request(app,"transmit",json!({"code":parsed,"bits":app.rf.bits,"protocol":app.rf.protocol,"pulse_us":app.rf.pulse_us,"repeats":app.rf.repeats})); }
                     },
                     _=> {
                         for event in array(&catalog["activity"]) { ui.label(event["text"].as_str().unwrap_or_default()); ui.label(egui::RichText::new(event["time"].as_str().unwrap_or_default()).small().weak()); ui.separator(); }
