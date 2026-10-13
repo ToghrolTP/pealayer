@@ -2135,8 +2135,10 @@ impl eframe::App for PealayerApp {
                 }
                 crate::ui::effects_library::draw_editor(self, ui);
                 crate::ui::board_info::draw(self, ui);
-                crate::ui::rf::draw(self, ui);
                 crate::ui::hardware_control::draw(self, ui);
+                // RF assignment can be opened from a channel detail window;
+                // draw it afterwards so the originating window cannot cover it.
+                crate::ui::rf::draw(self, ui);
                 crate::ui::media_track_properties::draw(self, ui);
                 crate::ui::workspace_profiles::draw(self, ui);
 

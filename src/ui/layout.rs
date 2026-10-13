@@ -2262,7 +2262,7 @@ fn draw_pwm_editor_row_with_buttons(
             let increase = buttons.and_then(|(app, control)| pwm_step_action(app, control, "increase"));
             let reserved = (usize::from(decrease.is_some()) + usize::from(increase.is_some())) as f32
                 * (ui.spacing().interact_size.y + gap);
-            let (slider_width, number_width) = pwm_editor_widths((row_width - reserved).max(100.0), gap);
+            let (slider_width, number_width) = pwm_editor_widths((row_width - reserved).max(60.0), gap);
             if let Some(action) = decrease {
                 let (app, control) = buttons.expect("action has a source");
                 draw_pwm_step_button(ui, app, control, action, enabled);
@@ -8580,7 +8580,7 @@ mod timeline_row_tests {
                 crate::four_d::controller::HardwareAction { id: format!("pwm.1.{verb}"), verb: verb.into(), ..Default::default() }
             ).collect(), ..Default::default()
         };
-        for width in [216.0, 300.0, 420.0] {
+        for width in [180.0, 216.0, 300.0, 420.0] {
             for height in [24.0, 28.0, 32.0, 36.0] {
                 let context = egui::Context::default();
                 let (sender, receiver) = std::sync::mpsc::channel();
