@@ -2102,9 +2102,19 @@ struct PwmEditorSession {
     draft: Option<f64>,
     editing: bool,
     dirty: bool,
+    last_frame: Option<u64>,
 }
 
 impl PwmEditorSession {
+    fn at_frame(&mut self, frame: u64) {
+        // A closed/hidden editor must not resurrect an unfinished old write.
+        // Preserve same-frame layout passes and consecutive active frames.
+        if self.last_frame.is_some_and(|last| frame.saturating_sub(last) > 1) {
+            *self = Self::default();
+        }
+        self.last_frame = Some(frame);
+    }
+
     fn begin(&self, observed: f64) -> f64 {
         if self.editing {
             self.draft.unwrap_or(observed)
@@ -2200,6 +2210,7 @@ fn draw_pwm_editor_row_sized(
             let mut session = ui.data_mut(|data| {
                 data.get_temp::<PwmEditorSession>(session_id).unwrap_or_default()
             });
+            session.at_frame(ui.ctx().cumulative_frame_nr());
             *percent = session.begin(*percent);
             let gap = ui.spacing().item_spacing.x;
             let (slider_width, number_width) = pwm_editor_widths(row_width, gap);
@@ -10986,6 +10997,19 @@ mod timeline_row_tests {
         let cancel = session.finish(25.0, false, false, false, true, true);
         assert!(!cancel.changed && !cancel.committed);
         assert_eq!(session.begin(100.0), 100.0);
+    }
+
+    #[test]
+    fn pwm_reopened_editor_does_not_resurrect_an_unsent_stale_draft() {
+        let mut session = PwmEditorSession::default();
+        session.at_frame(10);
+        session.finish(24.0, true, true, false, false, false);
+        session.at_frame(10); // egui layout retry
+        session.at_frame(11);
+        assert_eq!(session.begin(100.0), 24.0);
+        session.at_frame(14); // editor was hidden/closed
+        assert_eq!(session.begin(100.0), 100.0);
+        assert!(!session.finish(100.0, false, false, false, true, false).committed);
     }
 
     #[test]

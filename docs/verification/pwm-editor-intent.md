@@ -11,6 +11,9 @@ session retains the operator's draft across telemetry updates, commits actual
 edits on blur/Enter/drag release, and never sends an unchanged blur. Escape
 cancels a pending commit, not an already acknowledged physical command. The
 bounded live drag cadence and final convergence write remain unchanged.
+Closing/hiding the editor expires its unfinished draft; reopening cannot turn
+an old dirty value into a new write. Consecutive frames and same-frame layout
+passes retain the active editing session.
 
 Channel detail initialization uses the complete channel observation and the
 coordinator's logical percentage. The last-single-channel marker is not the
@@ -20,7 +23,8 @@ opening or displaying an editor does not authorize an output write.
 Regressions cover fractional idle renders producing no engine messages, a
 100% commit followed by unchanged focus/blur producing no zero/duplicate,
 positive drafts retained through stale telemetry, cancel, and selecting channel
-2 from the full vector while another channel is the last single-channel update.
+2 from the full vector while another channel is the last single-channel update,
+and expired hidden-editor drafts.
 Tests and compilation are hosted-only for this pass. Source checks are not
 installed native or physical MOSFET acceptance.
 
