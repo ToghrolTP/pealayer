@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
-import { pwmPolicyPayload } from '../src/pwmPolicy.ts';
+import { pwmMemoryLabel, pwmPolicyPayload } from '../src/pwmPolicy.ts';
+assert.match(pwmMemoryLabel(true), /selected board profile/);
+for (const value of [false,undefined,null,'true',1]) assert.match(pwmMemoryLabel(value), /manages/, 'Never invent persistence from a missing or malformed flag');
 assert.deepEqual(pwmPolicyPayload(1,'restore'),{channel:1,on_behavior:'restore'});
 assert.deepEqual(pwmPolicyPayload(1,'full'),{channel:1,on_behavior:'full'});
 const source=readFileSync(new URL('../src/components/PwmPolicyEditor.tsx',import.meta.url),'utf8');

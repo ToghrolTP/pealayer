@@ -1,10 +1,10 @@
 import { useEffect, useState } from 'react';
 import { Button, Card, Select, Space, Typography } from 'antd';
 import { tr, UiLocale } from '../i18n';
-import { pwmPolicyPayload } from '../pwmPolicy';
+import { pwmMemoryLabel, pwmPolicyPayload } from '../pwmPolicy';
 
 type Policy = 'full' | 'restore';
-type Config = { on_behavior?: Policy | null; remembered_raw?: number | null; remembered_percent?: number | null };
+type Config = { on_behavior?: Policy | null; remembered_raw?: number | null; remembered_percent?: number | null; remembered_persisted?: boolean | null };
 export function PwmPolicyEditor({ config, channel, locale, disabled, sendCmd }: {
   config?: Config | null; channel?: number | null; locale: UiLocale; disabled: boolean;
   sendCmd: (command: string, payload?: Record<string, unknown>) => Promise<boolean>;
@@ -34,6 +34,6 @@ export function PwmPolicyEditor({ config, channel, locale, disabled, sendCmd }: 
         ? `${tr(locale, 'Remembered brightness')}: ${config.remembered_percent.toFixed(1)}%`
         : tr(locale, 'Unknown brightness falls back to 100%')}
     </Typography.Paragraph>
-    <Typography.Text type="secondary">{tr(locale, 'Brightness memory resets when PCController restarts or the board reconnects')}</Typography.Text>
+    <Typography.Text type="secondary">{tr(locale, pwmMemoryLabel(config?.remembered_persisted))}</Typography.Text>
   </Card>;
 }

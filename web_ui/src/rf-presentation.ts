@@ -6,12 +6,39 @@ export type LearnedSignal = Signal & { id: number; code_display: string; last_se
 export const human = (key: string) => key.replace(/[._-]/g, ' ').replace(/^pealayer /, '').replace(/^./, s => s.toUpperCase());
 export const sameSignal = (match: { rf_code: number; rf_bits: number; rf_protocol: number }, entry: Signal) => match.rf_code === entry.code && match.rf_bits === entry.bits && match.rf_protocol === entry.protocol;
 export const controlOptions = (controls: RfControl[]) => controls.flatMap(control => (control.actions ?? []).map(action => ({ value: action.id, label: `${control.name} · ${action.label || action.name || human(action.verb || action.id)}${['increase', 'decrease'].includes(action.verb ?? '') && control.step_percent !== undefined ? ` (${control.step_percent}%)` : ''}` })));
+// Parse only the current typed PWM command grammar, never names or RF binding labels.
+export function pwmBoardAction(action: RfAction) {
+  if (action.type !== 'board') return undefined;
+  const words = (action.command ?? '').trim().split(/\s+/);
+  if (words.length !== 3 || words[0] !== 'pwm' || !['on','off','toggle','increase','decrease','roll','remember'].includes(words[1])
+    || !/^(?:[0-9]|1[0-5])$/.test(words[2])) return undefined;
+  return { key: `pwm.${words[2]}`, verb: words[1] };
+}
+export function actionTargetsControl(action: RfAction, key: string, controls: RfControl[]) {
+  if (action.type === 'control') return Boolean(controls.find(control => control.key === key)?.actions?.some(item => item.id === action.action_id));
+  return pwmBoardAction(action)?.key === key;
+}
+export function groupRfBindings<T extends { match: {rf_code:number;rf_bits:number;rf_protocol:number}; actions: RfAction[] }>(bindings: T[], controls: RfControl[], key?: string) {
+  const groups = new Map<string, T[]>();
+  bindings.forEach((binding, index) => {
+    if (key && !binding.actions.some(action => actionTargetsControl(action, key, controls))) return;
+    const {rf_code:code,rf_bits:bits,rf_protocol:protocol} = binding.match;
+    const valid = Number.isInteger(code) && code > 0 && code <= 0xffffffff && Number.isInteger(bits) && bits >= 1 && bits <= 32 && Number.isInteger(protocol) && protocol >= 1 && protocol <= 12;
+    const id = valid ? `${code}:${bits}:${protocol}` : `invalid:${index}`;
+    const group = groups.get(id) ?? []; group.push(binding); groups.set(id, group);
+  });
+  return [...groups.entries()].map(([id, bindings]) => ({id, bindings}));
+}
 export function actionSummary(action: RfAction, controls: RfControl[], effects: { reference: string; name: string }[]) {
   switch (action.type) {
     case 'control': return controlOptions(controls).find(option => option.value === action.action_id)?.label ?? `Unavailable control · ${action.action_id ?? ''}`;
     case 'app': return `${action.app_target ?? ''} · ${human(action.app_kind ?? '')} ${action.app_value ?? ''}`.trim();
     case 'effect': case 'macro': return effects.find(effect => effect.reference === action.macro)?.name ?? action.macro ?? 'Choose an effect';
-    case 'board': return `Controller · ${action.command ?? ''}`;
+    case 'board': {
+      const pwm = pwmBoardAction(action);
+      const control = controls.find(control => control.key === pwm?.key);
+      return control && pwm ? `${control.name} · ${pwm.verb === 'roll' ? 'Roll brightness' : pwm.verb === 'remember' ? 'Remember brightness' : human(pwm.verb)}` : `Controller · ${action.command ?? ''}`;
+    }
     case 'virtual-key': return `Keyboard · ${action.virtual_key ?? ''}`;
     case 'host': return `Program · ${action.executable ?? ''}`;
     case 'script': return `Script · ${action.script ?? ''}`;

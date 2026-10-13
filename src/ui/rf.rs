@@ -428,6 +428,80 @@ fn control_options(catalog: &Value) -> Vec<(String, String)> {
         .collect()
 }
 
+fn pwm_board_action(action: &Value) -> Option<(String, &str)> {
+    if action["type"] != "board" { return None; }
+    let words = action["command"].as_str()?.split_whitespace().collect::<Vec<_>>();
+    if words.len() != 3 || words[0] != "pwm"
+        || !["on", "off", "toggle", "increase", "decrease", "roll", "remember"].contains(&words[1]) {
+        return None;
+    }
+    let channel = words[2].parse::<u8>().ok().filter(|channel| *channel < 16)?;
+    if channel.to_string() != words[2] { return None; }
+    Some((format!("pwm.{channel}"), words[1]))
+}
+
+fn grouped_bindings(catalog: &Value, key: Option<&str>) -> Vec<Vec<Value>> {
+    let controls = array(&catalog["peripherals"]["controls"]);
+    let mut groups: Vec<Vec<Value>> = Vec::new();
+    for binding in array(&catalog["bindings"]) {
+        if let Some(key) = key {
+            let targeted = array(&binding["actions"]).iter().any(|action| {
+                if action["type"] == "control" {
+                    controls.iter().filter(|control| control["key"] == key).any(|control|
+                        array(&control["actions"]).iter().any(|advertised|
+                            advertised["id"].as_str().is_some_and(|id| !id.is_empty() && action["action_id"] == id)))
+                } else { pwm_board_action(action).is_some_and(|(target, _)| target == key) }
+            });
+            if !targeted { continue; }
+        }
+        let signal = |binding: &Value| {
+            let m = &binding["match"];
+            Some((m["rf_code"].as_u64().filter(|n| (1..=u32::MAX as u64).contains(n))?,
+                m["rf_bits"].as_u64().filter(|n| (1..=32).contains(n))?,
+                m["rf_protocol"].as_u64().filter(|n| (1..=12).contains(n))?))
+        };
+        let target = signal(&binding).and_then(|identity| groups.iter().position(|group| signal(&group[0]) == Some(identity)));
+        if let Some(index) = target { groups[index].push(binding); }
+        else { groups.push(vec![binding]); }
+    }
+    groups
+}
+
+fn draw_saved_assignments(app: &mut PealayerApp, ui: &mut egui::Ui, catalog: &Value, live_connected: bool) {
+    let groups = grouped_bindings(catalog, app.rf.assignment_control.as_deref());
+    ui.separator();
+    ui.strong(app.tr(if app.rf.assignment_control.is_some() { "Saved buttons for this channel" } else { "Saved RF buttons" }));
+    for (index, group) in groups.into_iter().enumerate() {
+        let binding = &group[0];
+        let signal = format!("{} · {} bits · Protocol {}", binding["match"]["rf_code"], binding["match"]["rf_bits"], binding["match"]["rf_protocol"]);
+        ui.push_id((index, &signal), |ui| {
+            ui.collapsing(format!("{signal} · {} gesture rules", group.len()), |ui| {
+                for binding in group {
+                    ui.push_id(binding["name"].as_str().unwrap_or_default(), |ui| {
+                        egui::Frame::group(ui.style()).show(ui, |ui| {
+                            ui.horizontal(|ui| {
+                                let mut enabled = binding["enabled"].as_bool().unwrap_or(false);
+                                if ui.add_enabled(live_connected && !app.rf.pending, egui::Checkbox::new(&mut enabled, "")).changed() {
+                                    let mut updated = binding.clone(); updated["enabled"] = json!(enabled);
+                                    request(app, "binding.put", json!({"binding":updated,"previous_name":binding["name"]}));
+                                }
+                                if ui.dropdown_choice(app.rf.previous_name == binding["name"].as_str().unwrap_or_default(),
+                                    binding["match"]["gesture"].as_str().unwrap_or("Assignment")).clicked() {
+                                    app.rf.draft = binding.clone(); app.rf.previous_name = binding["name"].as_str().unwrap_or_default().into();
+                                    app.rf.assignment_control = None;
+                                    app.rf.assignment_sequence = app.rf.assignment_sequence.wrapping_add(1);
+                                }
+                            });
+                            for action in array(&binding["actions"]) { ui.label(action_summary(&action, catalog)); }
+                            ui.label(egui::RichText::new(binding["name"].as_str().unwrap_or_default()).small().weak());
+                        });
+                    });
+                }
+            });
+        });
+    }
+}
+
 fn action_summary(action: &Value, catalog: &Value) -> String {
     let value = |key| action[key].as_str().unwrap_or_default();
     match value("type") {
@@ -448,7 +522,11 @@ fn action_summary(action: &Value, catalog: &Value) -> String {
             .and_then(|effect| effect["name"].as_str())
             .unwrap_or(value("macro"))
             .to_owned(),
-        "board" => format!("Controller · {}", value("command")),
+        "board" => pwm_board_action(action).and_then(|(key, verb)| {
+            array(&catalog["peripherals"]["controls"]).iter().find(|control| control["key"] == key)
+                .and_then(|control| control["name"].as_str()).map(|name| format!("{} · {}", name,
+                    match verb { "roll" => "Roll brightness", "remember" => "Remember brightness", _ => verb }))
+        }).unwrap_or_else(|| format!("Controller · {}", value("command"))),
         "virtual-key" => format!("Keyboard · {}", value("virtual_key")),
         "host" => format!("Program · {}", value("executable")),
         "script" => format!("Script · {}", value("script")),
@@ -890,17 +968,6 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 }
                             }
                         });
-                        for binding in array(&catalog["bindings"]) {
-                            ui.push_id(binding["name"].as_str().unwrap_or_default(),|ui| { egui::Frame::group(ui.style()).show(ui,|ui| { ui.horizontal(|ui| {
-                                let mut enabled=binding["enabled"].as_bool().unwrap_or(false);
-                                if ui.checkbox(&mut enabled,"").changed() { let mut updated=binding.clone(); updated["enabled"]=json!(enabled); request(app,"binding.put",json!({"binding":updated,"previous_name":binding["name"]})); }
-                                if ui.dropdown_choice(app.rf.previous_name==binding["name"].as_str().unwrap_or_default(),binding["name"].as_str().unwrap_or("Assignment")).clicked() { app.rf.draft=binding.clone(); app.rf.previous_name=binding["name"].as_str().unwrap_or_default().into(); app.rf.assignment_control=None; }
-                                ui.label(egui::RichText::new(format!("{} · {}",binding["match"]["rf_code"],binding["match"]["gesture"].as_str().unwrap_or_default())).weak());
-                            });
-                            for action in array(&binding["actions"]) {ui.label(action_summary(&action,&catalog));}
-                            ui.label(egui::RichText::new(execution_label(&binding)).small().weak());
-                            }); });
-                        }
                         ui.separator();
                         egui::Grid::new("rf_binding_fields").num_columns(2).spacing([16.0,6.0]).show(ui,|ui| {
                             text(ui,"Name",&mut app.rf.draft,"name");
@@ -940,6 +1007,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             }
                             if !app.rf.previous_name.is_empty() && ui.add_enabled(!app.rf.pending,egui::Button::new(format!("{} Remove",crate::ui::icons::TRASH))).clicked() { request(app,"binding.remove",json!({"name":app.rf.previous_name})); }
                         });
+                        draw_saved_assignments(app, ui, &catalog, live_connected);
                     },
                     1=> {
                         ui.horizontal(|ui| {
@@ -1051,6 +1119,24 @@ fn actions_len_button(ui: &mut egui::Ui) -> egui::Response {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn saved_rf_rules_group_by_complete_waveform_and_authoritative_channel_without_mutation() {
+        let rules = ["tap", "hold", "repeat", "hold-end"].map(|gesture| serde_json::json!({
+            "name":gesture,"match":{"rf_code":42,"rf_bits":24,"rf_protocol":1,"gesture":gesture},
+            "actions":[{"type":"board","command":"pwm roll 1"}]}));
+        let catalog = serde_json::json!({"bindings":rules});
+        let before = catalog.clone();
+        let groups = super::grouped_bindings(&catalog, Some("pwm.1"));
+        assert_eq!(groups.len(), 1);
+        assert_eq!(groups[0].len(), 4, "four internal rules are one physical button");
+        assert!(super::grouped_bindings(&catalog, Some("pwm.0")).is_empty());
+        assert_eq!(catalog, before);
+        assert!(super::pwm_board_action(&serde_json::json!({"type":"board","command":"pwm roll 16"})).is_none());
+        assert!(super::pwm_board_action(&serde_json::json!({"type":"board","command":"pwm roll 1 extra"})).is_none());
+        let mut different = catalog.clone();
+        different["bindings"][1]["match"]["rf_bits"] = serde_json::json!(16);
+        assert_eq!(super::grouped_bindings(&different, None).len(), 2);
+    }
     use super::*;
     use serde_json::json;
 
