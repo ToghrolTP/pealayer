@@ -39,7 +39,7 @@ export const seenTime = (entry: LearnedSignal) => entry.last_seen && Number.isFi
 export const lastSeen = (entry: LearnedSignal) => seenTime(entry) ? new Date(entry.last_seen!).toLocaleString() : 'Not seen in this controller session';
 export type MappingOption = { action: string; targets: string[]; behaviors: string[] };
 export type BoardMap = { id: number; action: string; target?: string; behavior?: string };
-export const editBoardMap = (entry: LearnedSignal): BoardMap => ({ id: entry.id, action: entry.board_assignment?.action ?? 'none', target: entry.board_assignment?.target, behavior: entry.board_assignment?.behavior });
+export const editBoardMap = (entry: LearnedSignal): BoardMap => ({ id: entry.id, action: entry.board_assignment?.action ?? '', target: entry.board_assignment?.target, behavior: entry.board_assignment?.behavior });
 export const boardMapValid = (map: BoardMap, entries: LearnedSignal[], options: MappingOption[]) => {
   const option = options.find(option => option.action === map.action);
   return Boolean(entries.some(entry => entry.id === map.id) && option && (!option.targets.length || option.targets.includes(map.target ?? '')) && (!option.behaviors.length || option.behaviors.includes(map.behavior ?? '')));

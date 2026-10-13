@@ -13,6 +13,7 @@ const options = [{ action: 'pwm', targets: ['0'], behaviors: ['toggle'] }];
 assert(boardMapValid(editBoardMap(entry), [entry], options));
 assert(!boardMapValid({ id: 5, action: 'pwm', target: '0' }, [entry], options), 'Required behavior must be chosen before saving');
 assert(!boardMapValid({ id: 9, action: 'pwm', target: '0', behavior: 'toggle' }, [entry], options), 'Stale learned IDs cannot be saved');
+assert(!boardMapValid(editBoardMap({...entry, board_assignment:undefined}),[entry],[{action:'none',targets:[],behaviors:[]}]),'Missing metadata must never silently unassign an existing board map');
 assert.equal(seenTime({ ...entry, last_seen: undefined }), 0);
 assert.equal(seenTime({ ...entry, last_seen: 'not a timestamp' }), 0);
 assert.match(lastSeen({ ...entry, last_seen: undefined }), /Not seen/, 'Refresh must not invent a reception date');

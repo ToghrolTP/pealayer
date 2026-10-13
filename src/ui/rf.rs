@@ -67,7 +67,7 @@ impl Default for RfState {
             protocol: 1,
             pulse_us: 0,
             repeats: 1,
-            board_map: json!({"id":0,"action":"none"}),
+            board_map: json!({"id":null,"action":""}),
             manual_signal: false,
         }
     }
@@ -84,6 +84,18 @@ impl RfState {
         else {
             return;
         };
+        if array(&self.catalog["activity"]).iter().any(|old| {
+            old["kind"] == "rf.receive"
+                && ["rf_code", "rf_bits", "rf_protocol"]
+                    .iter()
+                    .all(|key| old[*key] == event[*key])
+                && old["time"]
+                    .as_str()
+                    .and_then(|value| value.parse::<jiff::Timestamp>().ok())
+                    .is_some_and(|old| old > time)
+        }) {
+            return;
+        }
         if let Some(entries) = self.catalog["entries"].as_array_mut() {
             for entry in entries {
                 if entry["code"] == event["rf_code"]
@@ -109,6 +121,13 @@ impl RfState {
                     .all(|key| old[*key] == event[*key]))
         });
         activity.insert(0, event);
+        activity.sort_by_key(|event| {
+            std::cmp::Reverse(
+                event["time"]
+                    .as_str()
+                    .and_then(|time| time.parse::<jiff::Timestamp>().ok()),
+            )
+        });
         activity.truncate(32);
     }
     pub fn snapshot(&self) -> Value {
@@ -282,6 +301,24 @@ fn signal_matches(binding: &Value, entry: &Value) -> bool {
         && binding["match"]["rf_protocol"] == entry["protocol"]
 }
 
+fn last_received(catalog: &Value) -> Option<Value> {
+    array(&catalog["activity"])
+        .into_iter()
+        .filter(|event| {
+            event["kind"] == "rf.receive"
+                && event["source"] == "board"
+                && event["rf_code"].as_u64().is_some_and(|code| code > 0)
+                && event["time"]
+                    .as_str()
+                    .is_some_and(|time| time.parse::<jiff::Timestamp>().is_ok())
+        })
+        .max_by_key(|event| {
+            event["time"]
+                .as_str()
+                .and_then(|time| time.parse::<jiff::Timestamp>().ok())
+        })
+}
+
 fn action_ready(action: &Value, catalog: &Value) -> bool {
     let value = |key| action[key].as_str().unwrap_or_default();
     match value("type") {
@@ -430,8 +467,7 @@ fn board_assignment(entry: &Value) -> String {
 
 fn edit_board_map(entry: &Value) -> Value {
     let assignment = &entry["board_assignment"];
-    let mut map =
-        json!({"id":entry["id"],"action":assignment["action"].as_str().unwrap_or("none")});
+    let mut map = json!({"id":entry["id"],"action":assignment["action"].as_str().unwrap_or("")});
     for field in ["target", "behavior"] {
         if let Some(value) = assignment[field].as_str() {
             map[field] = json!(value);
@@ -583,7 +619,12 @@ fn action_editor(ui: &mut egui::Ui, action: &mut Value, catalog: &Value) {
                             targets.push((id.into(), id.into()));
                         }
                     }
+                    let previous_target = action["app_target"].clone();
                     choices(ui, "Application", action, "app_target", &targets);
+                    if previous_target != action["app_target"] {
+                        action["app_kind"] = json!("");
+                        action["app_value"] = json!("");
+                    }
                     let target = action["app_target"].as_str().unwrap_or_default();
                     let mut kinds = Vec::new();
                     for app in applications {
@@ -602,7 +643,11 @@ fn action_editor(ui: &mut egui::Ui, action: &mut Value, catalog: &Value) {
                             }
                         }
                     }
+                    let previous_kind = action["app_kind"].clone();
                     choices(ui, "Command", action, "app_kind", &kinds);
+                    if previous_kind != action["app_kind"] {
+                        action["app_value"] = json!("");
+                    }
                     match action["app_kind"].as_str().unwrap_or_default() {
                         "pealayer.mute.set" | "pealayer.fullscreen.set" => choices(
                             ui,
@@ -627,9 +672,22 @@ fn action_editor(ui: &mut egui::Ui, action: &mut Value, catalog: &Value) {
                         | "pealayer.open"
                         | "pealayer.command"
                         | "pealayer.workspace.set" => text(ui, "Value", action, "app_value"),
-                        _ => {
-                            action["app_value"] = json!("");
-                        }
+                        "pealayer.play"
+                        | "pealayer.pause"
+                        | "pealayer.toggle"
+                        | "pealayer.stop"
+                        | "pealayer.next"
+                        | "pealayer.previous"
+                        | "pealayer.chapter.next"
+                        | "pealayer.chapter.previous"
+                        | "pealayer.mute.toggle"
+                        | "pealayer.fullscreen.toggle"
+                        | "pealayer.window.activate"
+                        | "pealayer.window.minimize"
+                        | "pealayer.window.maximize"
+                        | "pealayer.window.restore"
+                        | "pealayer.quit" => {}
+                        _ => text(ui, "Value (advanced)", action, "app_value"),
                     }
                 }
                 "control" => {
@@ -715,7 +773,9 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     if !app.rf.open {
         return;
     }
-    ui.ctx().request_repaint_after(Duration::from_millis(250));
+    if app.rf.pending || app.rf.catalog["learning"]["active"] == true {
+        ui.ctx().request_repaint_after(Duration::from_millis(250));
+    }
     let geometry = crate::ui::dialog::bounded_geometry(
         ui.ctx().content_rect(),
         24.0,
@@ -756,7 +816,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     0=> {
                         ui.horizontal(|ui| {
                             if ui.button(format!("{} New assignment",crate::ui::icons::PLUS)).clicked() { app.rf.draft=new_binding(); app.rf.previous_name.clear(); }
-                            if let Some(event)=array(&catalog["activity"]).iter().find(|e|e["rf_code"].as_u64().unwrap_or(0)>0) {
+                            if let Some(event)=last_received(&catalog) {
                                 if ui.button("Use last received").clicked() {
                                     for (to,from) in [("rf_code","rf_code"),("rf_bits","rf_bits"),("rf_protocol","rf_protocol")] { app.rf.draft["match"][to]=event[from].clone(); }
                                 }
@@ -962,6 +1022,15 @@ mod tests {
         tx["time"] = json!("2026-10-13T11:00:00Z");
         state.receive(tx);
         assert_eq!(state.catalog["entries"][0]["last_seen"], event["time"]);
+        let mut other = event.clone();
+        other["rf_code"] = json!(43);
+        other["time"] = json!("2026-10-13T10:03:00Z");
+        state.receive(other.clone());
+        let mut delayed = event.clone();
+        delayed["time"] = json!("2026-10-13T09:00:00Z");
+        state.receive(delayed);
+        assert_eq!(last_received(&state.catalog).unwrap()["rf_code"], 43);
+        assert_eq!(state.catalog["activity"][0]["time"], other["time"]);
         assert!(!state.pending);
         assert!(state.last_result.is_null());
     }
@@ -994,6 +1063,30 @@ mod tests {
     }
 
     #[test]
+    fn drawing_advertised_peer_action_preserves_its_parameter() {
+        let context = egui::Context::default();
+        let mut action = json!({"type":"app","app_target":"peer","app_kind":"peer.choose","app_value":"kept exactly"});
+        let catalog = json!({"action_types":["app"],"applications":[{"id":"peer","surface":"peer","values":{"app_actions":"peer.choose"}}]});
+        for width in [480.0, 820.0] {
+            let _ = context.run(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 500.0),
+                    )),
+                    ..Default::default()
+                },
+                |ctx| {
+                    egui::CentralPanel::default().show(ctx, |ui| {
+                        action_editor(ui, &mut action, &catalog);
+                    });
+                },
+            );
+            assert_eq!(action["app_value"], "kept exactly");
+        }
+    }
+
+    #[test]
     fn editing_board_mapping_preserves_semantics_and_validates_choices() {
         let entry = json!({"id":5,"board_assignment":{"action":"pwm","target":"0","behavior":"toggle","label":"Window · Toggle"}});
         let map = edit_board_map(&entry);
@@ -1003,6 +1096,11 @@ mod tests {
         );
         let catalog = json!({"entries":[entry],"board_mapping_options":[{"action":"pwm","targets":["0"],"behaviors":["toggle"]}]});
         assert!(board_map_valid(&map, &catalog));
+        let unknown = edit_board_map(&json!({"id":5}));
+        assert!(!board_map_valid(
+            &unknown,
+            &json!({"entries":[{"id":5}],"board_mapping_options":[{"action":"none","targets":[],"behaviors":[]}]})
+        ));
         assert!(!board_map_valid(
             &json!({"id":5,"action":"pwm","target":"0"}),
             &catalog

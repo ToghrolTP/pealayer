@@ -25,7 +25,7 @@ export const RfManager: React.FC<Props> = ({ rf, sendCmd }) => {
   const [manualSignal, setManualSignal] = useState(false);
   const [boardEditorOpen, setBoardEditorOpen] = useState<string[]>([]);
   const [wave, setWave] = useState<Waveform>({ code: 0, bits: 24, protocol: 1, pulse_us: 0, repeats: 1 });
-  const [map, setMap] = useState<{ id: number; action: string; target?: string; behavior?: string }>({ id: 0, action: 'none' });
+  const [map, setMap] = useState<{ id: number; action: string; target?: string; behavior?: string }>({ id: -1, action: '' });
   const catalog = rf?.catalog ?? {};
   const controls = catalog.peripherals?.controls ?? [];
   const entries = [...(catalog.entries ?? [])].sort((a,b) => seenTime(b)-seenTime(a));
@@ -92,8 +92,8 @@ export const RfManager: React.FC<Props> = ({ rf, sendCmd }) => {
               return <Card key={index} size="small" title={`Action ${index + 1}`} extra={<Button size="small" icon={<DeleteOutlined />} aria-label="Remove action" onClick={() => setDraft({ ...draft, actions: draft.actions.filter((_, i) => i !== index) })} />} style={{ marginBottom: 10 }}>
                 <Form.Item label="Action"><Select value={action.type} options={(catalog.action_types ?? []).map(value => ({ value, label: labels[value] ?? human(value) }))} onChange={type => setDraft(current=>({...current,actions:current.actions.map((old,i)=>i===index?{type}:old)}))} /></Form.Item>
                 {action.type === 'app' && <div className="rf-form-grid">
-                  <Form.Item label="Application"><Select showSearch value={action.app_target} options={targetOptions} onChange={app_target => updateAction(index, { app_target, app_kind: '' })} /></Form.Item>
-                  <Form.Item label="Command"><Select showSearch optionFilterProp="label" value={action.app_kind} options={commands.map(value => ({ value, label: human(value) }))} onChange={app_kind => updateAction(index, { app_kind })} /></Form.Item>
+                  <Form.Item label="Application"><Select showSearch value={action.app_target} options={targetOptions} onChange={app_target => updateAction(index, { app_target, app_kind: '', app_value: '' })} /></Form.Item>
+                  <Form.Item label="Command"><Select showSearch optionFilterProp="label" value={action.app_kind} options={commands.map(value => ({ value, label: human(value) }))} onChange={app_kind => updateAction(index, { app_kind, app_value: '' })} /></Form.Item>
                   {['pealayer.mute.set','pealayer.fullscreen.set'].includes(action.app_kind ?? '') ? <Form.Item label="Value"><Select value={action.app_value} options={[{value:'true',label:'On'},{value:'false',label:'Off'}]} onChange={app_value=>updateAction(index,{app_value})} /></Form.Item> : action.app_kind === 'pealayer.rate.set' ? <Form.Item label="Speed"><Select value={action.app_value} options={['0.5','0.75','1','1.25','1.5','2'].map(value=>({value,label:`${value}×`}))} onChange={app_value=>updateAction(index,{app_value})} /></Form.Item> : ['pealayer.volume.set','pealayer.seek','pealayer.seek_to','pealayer.seek_absolute','pealayer.chapter.set','pealayer.open','pealayer.command','pealayer.workspace.set'].includes(action.app_kind ?? '') && <Form.Item label="Value"><Input value={action.app_value} onChange={e => updateAction(index, { app_value: e.target.value })} placeholder={action.app_kind === 'pealayer.command' ? '{"command":"play"}' : undefined} /></Form.Item>}
                 </div>}
                 {action.type === 'control' && <Form.Item label="Controller hardware control" extra="Runs on PCController. Pealayer can be closed."><Select showSearch optionFilterProp="label" value={action.action_id} options={controlOptions(controls)} onChange={action_id => updateAction(index, { action_id })} /></Form.Item>}
