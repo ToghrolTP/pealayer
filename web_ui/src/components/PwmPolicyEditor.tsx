@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { Button, Card, Select, Space, Typography } from 'antd';
 import { tr, UiLocale } from '../i18n';
 import { pwmPolicyPayload } from '../pwmPolicy';
