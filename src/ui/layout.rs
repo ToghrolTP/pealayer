@@ -2201,12 +2201,15 @@ fn draw_pwm_editor_row_sized(
     enabled: bool,
     row_width: f32,
 ) -> PwmEditorResponse {
+    // Unnamed sibling UIs share their persistent `id()`, even when their
+    // widgets have different auto IDs. Never share a dirty hardware draft
+    // through `make_persistent_id("pwm_editor_session")` across those siblings.
+    let session_id = pwm_editor_session_id(ui);
     let mut outcome = PwmEditorResponse::default();
     ui.allocate_ui_with_layout(
         egui::vec2(row_width, 26.0),
         egui::Layout::left_to_right(egui::Align::Center),
         |ui| {
-            let session_id = ui.make_persistent_id("pwm_editor_session");
             let mut session = ui.data_mut(|data| {
                 data.get_temp::<PwmEditorSession>(session_id).unwrap_or_default()
             });
@@ -2281,6 +2284,10 @@ fn draw_pwm_editor_row_sized(
         },
     );
     outcome
+}
+
+fn pwm_editor_session_id(ui: &egui::Ui) -> egui::Id {
+    ui.next_auto_id().with("pwm_editor_session")
 }
 
 pub(crate) fn hardware_control_activated(
@@ -2432,7 +2439,12 @@ fn draw_pwm_card_editor(
     } else {
         capabilities.pwm_percent(channel.id, displayed_raw)
     };
-    let response = draw_pwm_editor_row_sized(ui, &mut percent, !control.locked, row_width);
+    // Keep both the edit session and pointer/focus widget identities bound to
+    // the actual channel, independent of its row, folder, or sibling actions.
+    let editor_id = ui.make_persistent_id(("pwm-card-editor", control.key.as_str(), channel.id));
+    let response = ui.scope_builder(egui::UiBuilder::new().id(editor_id), |ui| {
+        draw_pwm_editor_row_sized(ui, &mut percent, !control.locked, row_width)
+    }).inner;
     let raw = pwm_raw(percent);
     ui.data_mut(|data| data.insert_temp(value_id, raw));
     if response.changed {
@@ -10951,6 +10963,41 @@ mod timeline_row_tests {
         assert_eq!(pwm_raw(0.0), 0);
         assert_eq!(pwm_raw(100.0), 4095);
         assert_eq!(pwm_raw(12.5), 512);
+    }
+
+    #[test]
+    fn pwm_sibling_editors_do_not_share_dirty_drafts_or_dispatch() {
+        let context = egui::Context::default();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        let mut stable_ids = Vec::new();
+        let mut session_ids = Vec::new();
+        let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+            for (channel, observed) in [(1, 25.0), (2, 10.0)] {
+                ui.scope(|ui| {
+                    stable_ids.push(ui.id());
+                    let session_id = pwm_editor_session_id(ui);
+                    session_ids.push(session_id);
+                    let mut percent = observed;
+                    let response = draw_pwm_editor_row(ui, &mut percent, true);
+                    transmit_pwm_editor_response_with(&sender, true, ui, channel, pwm_raw(percent), response);
+                    assert_eq!(percent, observed, "another channel's active draft must not replace telemetry");
+                    assert_eq!(response, PwmEditorResponse::default());
+                    if channel == 1 {
+                        // Model Loostr's still-focused numeric edit before
+                        // Lantern is rendered in the next unnamed sibling.
+                        let frame = context.cumulative_frame_nr();
+                        ui.data_mut(|data| data.insert_temp(session_id, PwmEditorSession {
+                            draft: Some(75.0), editing: true, dirty: true,
+                            last_frame: Some(frame),
+                        }));
+                    }
+                });
+            }
+        });
+        output.textures_delta.clear();
+        assert_eq!(stable_ids[0], stable_ids[1], "fixture must cover unnamed sibling UIs");
+        assert_ne!(session_ids[0], session_ids[1]);
+        assert!(receiver.try_recv().is_err(), "displaying Lantern must not send Loostr's draft");
     }
 
     #[test]
