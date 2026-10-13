@@ -8,6 +8,16 @@ This is the current index. Older handoffs and installed-build receipts remain
 historical evidence; their old open-PR, missing-feature or disconnected-runtime
 statements are not the present product state.
 
+## Fresh audit: 13 October 2026
+
+[The current #80 audit](issue80-current-audit.md) records Cafe's actual running
+source, staged-not-installed #176, delivered controller timeout fixes and a
+reproduced high paused-CPU result in two separated samples. It supersedes older
+installed/readiness/CPU statements below, not the remaining implementation,
+physical/audio/UI, platform or release gates. #80 is **not complete**. Explicit
+recording repeat modes (#114) and Web/video parity (#63–#66) remain unfinished;
+required checks are not passed while the user's test/CI skip remains in effect.
+
 ## Delivered source and deployment
 
 - Web media/file browsing now exposes shared drive/location selection, mapped and
