@@ -10,6 +10,11 @@ statements are not the present product state.
 
 ## Delivered source and deployment
 
+- Relay ON/OFF controls retain semantic green/red in native/Web/mobile, and
+  card header layout centers captions with their unchanged inline-editor slots.
+  [Cause, geometry contract and delivery gates](relay-card-semantics-and-centering.md)
+  preserve disabled safeguards and separate source from installed acceptance.
+
 - Seven-segment changed-state subscriptions no longer request decimation, and
   peer hardware delivery follows revisions instead of 100 ms samples.
   [Cause, current contract and delivery gates](panel-mirror-fidelity.md) retain

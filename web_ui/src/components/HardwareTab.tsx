@@ -73,6 +73,13 @@ const isMotionControl = (control: HardwareControl) =>
 
 const isStopAction = (action: HardwareAction) => action.verb.toLowerCase() === 'stop';
 
+const powerActionClass = (verb: string, selected: boolean) => {
+  const power = verb.toLowerCase();
+  return power === 'on' || power === 'off'
+    ? `hardware-power-action hardware-power-action--${power}${selected ? ' is-selected' : ''}`
+    : '';
+};
+
 const controlIcon = (kind: string, customIcon = '') => {
   if (customIcon.trim()) return effectGlyph(customIcon);
   if (/pwm|mosfet/i.test(kind)) return <DashboardOutlined />;
@@ -377,6 +384,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
                 <Button
                   disabled={control.locked || !outputAvailable || (state.estop_active && action.verb !== 'stop')}
                   danger={action.verb === 'stop'}
+                  className={powerActionClass(action.verb, (action.verb.toLowerCase() === 'on' && active) || (action.verb.toLowerCase() === 'off' && !active))}
                   type={(action.verb.toLowerCase() === 'on' && active) || (action.verb.toLowerCase() === 'off' && !active) ? 'primary' : 'default'}
                   {...actionInputProps(control, action)}
                 >
@@ -581,7 +589,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
                         const selected = (verb === 'on' && active) || (verb === 'off' && !active);
                         const icon = /up/.test(verb) ? <ArrowUpOutlined /> : /down/.test(verb) ? <ArrowDownOutlined /> : verb === 'on' ? <ThunderboltOutlined /> : <PoweroffOutlined />;
                         const label = verb === 'on' ? tr(locale, 'On') : verb === 'off' ? tr(locale, 'Off') : action.name || action.verb;
-                        return <Tooltip title={action.name || action.verb} key={action.id}><Button size="small" icon={icon} type={selected ? 'primary' : 'default'} danger={verb === 'stop'} disabled={control.locked || (state.estop_active && verb !== 'stop')} {...actionInputProps(control, action)}>{label}</Button></Tooltip>;
+                        return <Tooltip title={action.name || action.verb} key={action.id}><Button size="small" icon={icon} className={powerActionClass(verb, selected)} type={selected ? 'primary' : 'default'} danger={verb === 'stop'} disabled={control.locked || (state.estop_active && verb !== 'stop')} {...actionInputProps(control, action)}>{label}</Button></Tooltip>;
                       })}
                     </Space.Compact>
                     <div className="channel-manager__ordering">
