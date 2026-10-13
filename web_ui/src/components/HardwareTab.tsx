@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { hardwareAvailability, hardwareLabels, hardwareOutputsAvailable } from '../hardwareAvailability';
+import { reconcilePWMDrafts } from '../pwmDrafts';
 import { RfManager } from './RfManager';
 import { PublishingAuthority } from './PublishingAuthority';
 import { ColorPicker } from './ColorPicker';
@@ -140,6 +141,13 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
   const [toneFrequency, setToneFrequency] = useState(440);
   const [toneDuration, setToneDuration] = useState(250);
   const [pwmDrafts, setPwmDrafts] = useState<Record<string, number>>({});
+  const pwmEditing = useRef(new Set<string>());
+  const pwmSentAt = useRef<Record<string, number>>({});
+  const pwmOwner = `${details?.host_instance_id}/${details?.connection_generation}`;
+  useEffect(() => { setPwmDrafts({}); pwmEditing.current.clear(); pwmSentAt.current = {}; }, [pwmOwner]);
+  useEffect(() => {
+    if (details) setPwmDrafts(current => reconcilePWMDrafts(current,pwmEditing.current,pwmSentAt.current,details.pwm_revision ?? 0,details.controls));
+  }, [details]);
   const [managerOpen, setManagerOpen] = useState(false);
   const [detailKey, setDetailKey] = useState<string | null>(null);
   const [renamingKey, setRenamingKey] = useState<string | null>(null);
@@ -289,7 +297,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
           {!channelFolders.closed.has(`${folder.kind}:${folder.raw ? 'raw' : folder.name}`) && <div className="hardware-control-grid">
         {folder.controls.map((control) => {
           const isPwm = /pwm|mosfet/i.test(control.kind);
-          const value = pwmDrafts[control.key] ?? control.percent ?? 0;
+          const value = pwmDrafts[control.key] ?? control.percent;
           const active = displayedActive(control);
           const immediateToggle = !isPwm ? toggleAction(control) : undefined;
           const contextItems = [
@@ -356,20 +364,26 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
               <span>{controlCaption(control, locale)}</span>
             </div>
             {isPwm ? <div className="hardware-control__pwm">
-              <Slider
+              {value == null ? <span style={{minHeight:44,display:'inline-flex',alignItems:'center'}}>—</span> : <Slider
                 min={0}
                 max={100}
                 step={0.1}
                 value={value}
-                disabled={control.locked || !outputAvailable}
+                disabled={control.locked || !outputAvailable || details?.pwm_available === false || control.percent == null}
                 onChange={(percent) => {
+                  pwmEditing.current.add(control.key);
+                  pwmSentAt.current[control.key] = details?.pwm_revision ?? 0;
                   setPwmDrafts((current) => ({ ...current, [control.key]: percent }));
                   if (control.channel !== null && control.channel !== undefined) {
                     sendCmd('hardware.pwm.set', { channel: control.channel, percent });
                   }
                 }}
-              />
-              <output>{value.toFixed(1)}%</output>
+                onChangeComplete={() => {
+                  pwmEditing.current.delete(control.key);
+                  setPwmDrafts(current => reconcilePWMDrafts(current,pwmEditing.current,pwmSentAt.current,details?.pwm_revision ?? 0,details?.controls ?? []));
+                }}
+              />}
+              <output>{value == null ? '—' : `${value.toFixed(1)}%`}</output>
             </div> : <button
               type="button"
               className={`hardware-control__indicator ${active ? 'is-on' : ''}`}

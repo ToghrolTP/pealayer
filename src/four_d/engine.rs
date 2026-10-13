@@ -785,10 +785,16 @@ impl ControllerPushTarget {
                     if connected && (!capabilities.board_connected || new_generation) {
                         if let Some(refresh) = self.catalog_refresh_requested.upgrade() { refresh.store(true, Ordering::Relaxed); }
                     }
-                    if !connected || new_generation { capabilities.mark_board_disconnected() || changed } else { changed }
+                    if !connected || new_generation { capabilities.mark_board_disconnected() || changed }
+                    else { capabilities.apply_snapshot_values(params) || changed }
                 }
             }
             "controller.status" => {
+                if params["host_instance_id"].as_str().is_some_and(|id|id!=capabilities.host_instance_id) {return false;}
+                if params["connection_generation"].as_u64().is_some_and(|generation|generation!=capabilities.connection_generation) {
+                    if let Some(refresh)=self.catalog_refresh_requested.upgrade(){refresh.store(true,Ordering::Relaxed);}
+                    return false;
+                }
                 // A status push proves that the coordinator can hear the board,
                 // but it does not carry the board identity or capability
                 // catalog.  After a disconnect, publishing it as connected here
@@ -805,6 +811,7 @@ impl ControllerPushTarget {
                     capabilities.apply_status_notification(params)
                 }
             }
+            "controller.pwm.values" => capabilities.apply_pwm_push(params),
             "controller.state" | "controller.event" => {
                 capabilities.apply_state_notification(params)
             }

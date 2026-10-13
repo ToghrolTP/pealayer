@@ -111,6 +111,9 @@ export interface PlayerState {
     board_name: string;
     capability_bits: number;
     host_instance_id: string;
+    connection_generation?: number;
+    pwm_revision?: number;
+    pwm_available?: boolean | null;
     motion_control_mode?: 'hold' | 'toggle';
     profile?: { key: string; mode: string; configured: boolean; attached: boolean; revision: string; expose_raw_relays: boolean } | null;
     port?: { name: string; display_name: string; friendly_name: string; product: string; manufacturer: string; vid: string; pid: string; serial_number: string };
