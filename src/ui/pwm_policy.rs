@@ -53,7 +53,12 @@ pub(crate) fn draw(app: &mut PealayerApp, ui: &mut egui::Ui,
         } else {
             ui.label(egui::RichText::new(app.tr("Unknown brightness falls back to 100%")).weak());
         }
-        ui.label(egui::RichText::new(app.tr("Brightness memory resets when PCController restarts or the board reconnects")).small().weak());
+        let memory_label = if config.remembered_persisted == Some(true) {
+            "Confirmed brightness is saved in the selected board profile"
+        } else {
+            "PCController manages confirmed brightness memory"
+        };
+        ui.label(egui::RichText::new(app.tr(memory_label)).small().weak());
     });
     ui.data_mut(|data| data.insert_temp(id, (current, draft)));
 }

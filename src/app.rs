@@ -9029,6 +9029,7 @@ fn web_hardware_details(
                         "on_behavior": config.on_behavior,
                         "remembered_raw": config.remembered_raw,
                         "remembered_percent": config.remembered_percent_milli.map(|value| f64::from(value) / 1000.0),
+                        "remembered_persisted": config.remembered_persisted,
                     })),
                 "actions": control.actions.iter().map(|action| serde_json::json!({
                     "id": action.id,

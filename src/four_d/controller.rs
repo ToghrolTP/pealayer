@@ -41,6 +41,7 @@ pub struct HardwarePWMChannelConfig {
     pub on_behavior: Option<PwmOnBehavior>,
     pub remembered_raw: Option<u16>,
     pub remembered_percent_milli: Option<u32>,
+    pub remembered_persisted: Option<bool>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -72,8 +73,15 @@ impl HardwarePWMChannelConfig {
         // Missing/malformed metadata is not permission to fabricate or erase
         // remembered brightness. A fenced authoritative unknown explicitly is.
         if let Some((raw, percent)) = memory {
+            let raw_changed = self.remembered_raw != raw;
             changed |= self.remembered_raw != raw || self.remembered_percent_milli != percent;
             self.remembered_raw = raw; self.remembered_percent_milli = percent;
+            let persisted = if raw.is_none() { None } else { channel["remembered_persisted"].as_bool() };
+            // Incomplete metadata cannot change the provenance of last-good memory.
+            if raw_changed || raw.is_none() || persisted.is_some() {
+                changed |= self.remembered_persisted != persisted;
+                self.remembered_persisted = persisted;
+            }
         }
         changed
     }
@@ -2708,6 +2716,7 @@ fn parse_hardware_capabilities_with_front_panel(
                         on_behavior: PwmOnBehavior::from_value(&entry["on_behavior"]),
                         remembered_raw: None,
                         remembered_percent_milli: None,
+                        remembered_persisted: None,
                     },
                 ))
             })
@@ -3214,11 +3223,13 @@ mod tests {
         values["channels"][1]["remembered_known"] = serde_json::json!(true);
         values["channels"][1]["remembered_raw"] = serde_json::json!(512);
         values["channels"][1]["remembered_percent"] = serde_json::json!(50.123);
+        values["channels"][1]["remembered_persisted"] = serde_json::json!(true);
         assert!(capabilities.apply_pwm_push(&values));
         let expected = capabilities.pwm_channel_config[&1].clone();
         assert_eq!(expected.on_behavior, Some(PwmOnBehavior::Restore));
         assert_eq!(expected.remembered_raw, Some(512));
         assert_eq!(expected.remembered_percent_milli, Some(50_123));
+        assert_eq!(expected.remembered_persisted, Some(true));
         values["revision"] = serde_json::json!(2);
         values["host_instance_id"] = serde_json::json!("foreign");
         values["channels"][1]["remembered_known"] = serde_json::json!(false);
@@ -3235,6 +3246,21 @@ mod tests {
         assert!(capabilities.apply_pwm_push(&values));
         assert_eq!(capabilities.pwm_channel_config[&1].remembered_raw, None);
         assert_eq!(capabilities.pwm_channel_config[&1].remembered_percent_milli, None);
+        assert_eq!(capabilities.pwm_channel_config[&1].remembered_persisted, None);
+    }
+    #[test]
+    fn pwm_memory_provenance_never_follows_a_different_unconfirmed_value() {
+        let mut config = super::HardwarePWMChannelConfig::default();
+        assert!(config.apply_policy_metadata(&serde_json::json!({"remembered_known":true,
+            "remembered_raw":512,"remembered_percent":50,"remembered_persisted":true})));
+        assert_eq!(config.remembered_persisted, Some(true));
+        let old = config.clone();
+        assert!(!config.apply_policy_metadata(&serde_json::json!({"remembered_known":true,
+            "remembered_raw":4096,"remembered_percent":50,"remembered_persisted":false})));
+        assert_eq!(config, old, "malformed memory cannot overwrite last-good provenance");
+        assert!(config.apply_policy_metadata(&serde_json::json!({"remembered_known":true,
+            "remembered_raw":1024,"remembered_percent":60})));
+        assert_eq!(config.remembered_persisted, None, "different raw duty cannot inherit an unconfirmed persistence flag");
     }
     #[test]
     fn current_capture_contract_is_numeric_explicit_and_preserves_step_repetition() {

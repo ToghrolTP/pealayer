@@ -1,9 +1,10 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Card, Checkbox, Collapse, Dropdown, Empty, Form, Input, InputNumber, Modal, Select, Space, Table, Tabs, Tag, Typography } from 'antd';
 import { ApiOutlined, DeleteOutlined, EditOutlined, MoreOutlined, PlusOutlined, ReloadOutlined, SaveOutlined, SendOutlined } from '@ant-design/icons';
-import { actionReady, actionSummary, boardMapValid, controlOptions, editBoardMap, executionLabel, human, lastSeen, sameSignal, seenTime, targetOptions as boardTargetOptions } from '../rf-presentation';
+import { actionReady, actionSummary, boardMapValid, controlOptions, editBoardMap, executionLabel, groupRfBindings, human, lastSeen, sameSignal, seenTime, targetOptions as boardTargetOptions } from '../rf-presentation';
 import type { BoardAssignment, RfControl } from '../rf-presentation';
 import { uniqueRfBindingName, rfBindingNameConflicts } from '../rfBindingNames';
+import { tr, type UiLocale } from '../i18n';
 
 type Action = { type: string; app_kind?: string; app_target?: string; app_value?: string; action_id?: string; command?: string; macro?: string; virtual_key?: string; hold_ms?: number; executable?: string; script?: string; detached?: boolean; args?: string[]; event?: string; rf?: Waveform };
 type Waveform = { code: number; bits: number; protocol: number; pulse_us: number; repeats?: number };
@@ -13,14 +14,15 @@ type Application = { id: string; surface: string; values?: { app_actions?: strin
 type MappingOption = { action: string; targets: string[]; behaviors: string[]; behavior_labels?:Record<string,string> };
 type Catalog = { connected?: boolean; entries?: Entry[]; entries_sampled?: boolean; board_error?: string; bindings?: Binding[]; learning?: { active: boolean; remaining_ms: number; learned: number }; activity?: { id: number; text: string; time: string; rf_code: number; rf_bits: number; rf_protocol: number }[]; hostname?: string; action_types?: string[]; gestures?: string[]; applications?: Application[]; effects?: { name: string; reference: string }[]; peripherals?: { controls: RfControl[] }; board_mapping_options?: MappingOption[]; keyboard?: {allowed?: string[]} };
 export type RfSnapshot = { catalog?: Catalog; pending?: boolean; error?: string; error_detail?: {kind?: string; resource?: string; retryable?: boolean; retry_after_ms?: number}; last_result?: unknown; last_operation?: string };
-type Props = { rf?: RfSnapshot; hardwareConnected?: boolean; sendCmd: (command: string, payload?: Record<string, unknown>) => void;
+type Props = { rf?: RfSnapshot; hardwareConnected?: boolean; locale?: UiLocale; sendCmd: (command: string, payload?: Record<string, unknown>) => void;
   assignment?: { key: string; name: string; nonce: number } };
 const blank = (): Binding => ({ name: '', enabled: true, cooldown_ms: 250, match: { kind: 'rf.gesture', source: 'rf', rf_code: 0, rf_bits: 24, rf_protocol: 1, gesture: 'down' }, actions: [{ type: 'control', action_id: '' }] });
 const labels: Record<string, string> = { app: 'Application', control: 'Controller hardware control', board: 'Controller command (advanced)', effect: 'Effect', rf: 'RF transmit', 'virtual-key': 'Controller host keyboard', host: 'External program', script: 'Script', emit: 'Event' };
 
-export const RfManager: React.FC<Props> = ({ rf, hardwareConnected, sendCmd, assignment }) => {
+export const RfManager: React.FC<Props> = ({ rf, hardwareConnected, sendCmd, assignment, locale = 'en' }) => {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState('assignments');
+  const editorRef = useRef<HTMLDivElement>(null);
   const [assignmentControl, setAssignmentControl] = useState<string>();
   useEffect(() => {
     if (!assignment) return;
@@ -65,6 +67,12 @@ export const RfManager: React.FC<Props> = ({ rf, hardwareConnected, sendCmd, ass
   const mapping = catalog.board_mapping_options?.find(option => option.action === map.action);
   const targetOptions = [...new Set(catalog.applications?.map(app => app.surface))].map(surface => ({ value: surface, label: `${surface} (all)` })).concat((catalog.applications ?? []).map(app => ({ value: app.id, label: app.id })));
   const activeBoardAction = catalog.entries?.find(entry => entry.code === draft.match.rf_code && entry.bits === draft.match.rf_bits && entry.protocol === draft.match.rf_protocol && entry.action_kind !== 0);
+  const assignmentGroups = groupRfBindings(catalog.bindings ?? [], controls, assignmentControl);
+  const assignmentsTable = (bindings: Binding[]) => <Table<Binding> size="small" pagination={false} rowKey="name" dataSource={bindings} scroll={{x:520}} columns={[
+    { title: 'Enabled', width: 80, render: (_, binding) => <Checkbox disabled={!liveConnected || rf?.pending} checked={binding.enabled} onChange={e => command('binding.put', { binding: { ...binding, enabled: e.target.checked }, previous_name: binding.name })} /> },
+    { title: 'Assignment', render: (_,binding) => <Space direction="vertical" size={2}><strong>{human(binding.match.gesture)}</strong>{binding.actions.map((action,i) => <Typography.Text key={i}>{summarize(action)}</Typography.Text>)}<Typography.Text type="secondary">{binding.name}</Typography.Text></Space> },
+    { title: '', width: 80, render: (_, binding) => <Button size="small" icon={<EditOutlined />} onClick={() => { setAssignmentControl(undefined); setDraft(structuredClone(binding)); setPreviousName(binding.name); editorRef.current?.scrollIntoView({block:'start'}); }}>Edit</Button> },
+  ]} />;
   const entryAssignments=(entry:Entry)=><Space direction="vertical" size={4}><Tag color="blue">On board · {entry.board_assignment?.label ?? 'Not reported'}</Tag>{(catalog.bindings ?? []).filter(binding=>sameSignal(binding.match,entry)).map(binding=><div key={binding.name}><strong>{binding.name} · {human(binding.match.gesture)}{!binding.enabled && ' · disabled'}</strong>{binding.actions.map((action,i)=><div key={i}>{summarize(action)}</div>)}<Typography.Text type="secondary">{executionLabel(binding.actions)}</Typography.Text></div>)}</Space>;
   const entryButtons=(entry:Entry)=><Space wrap><Button size="small" onClick={()=>editBoard(entry)}>On board…</Button><Button size="small" onClick={()=>assign(entry)}>On controller…</Button><Dropdown menu={{items:[{key:'transmit',label:'Transmit signal',disabled:rf?.pending||!liveConnected},{key:'board',label:'Edit board action'},{key:'unassign',label:'Unassign board action',disabled:rf?.pending||!liveConnected},{key:'remove',label:'Remove learned button',danger:true,disabled:rf?.pending||!liveConnected}],onClick:({key})=>{if(key==='board')editBoard(entry);if(key==='transmit')command('transmit',{code:entry.code,bits:entry.bits,protocol:entry.protocol,pulse_us:entry.pulse_us,repeats:1});if(key==='unassign')command('map',{id:entry.id,action:'none'});if(key==='remove')Modal.confirm({title:'Remove learned RF button?',onOk:()=>command('remove',{id:entry.id})});}}}><Button size="small" icon={<MoreOutlined/>} aria-label="RF button actions"/></Dropdown></Space>;
   return <>
@@ -84,13 +92,7 @@ export const RfManager: React.FC<Props> = ({ rf, hardwareConnected, sendCmd, ass
             <Button icon={<PlusOutlined />} onClick={() => { setDraft(blank()); setPreviousName(''); }}>New assignment</Button>
             {catalog.activity?.find(event => event.rf_code > 0) && <Button onClick={() => { const event = catalog.activity!.find(event => event.rf_code > 0)!; match({ rf_code: event.rf_code, rf_bits: event.rf_bits, rf_protocol: event.rf_protocol }); }}>Use last received</Button>}
           </Space>
-          <Table<Binding> size="small" pagination={false} rowKey="name" dataSource={catalog.bindings ?? []} columns={[
-            { title: 'Enabled', width: 80, render: (_, binding) => <Checkbox checked={binding.enabled} onChange={e => command('binding.put', { binding: { ...binding, enabled: e.target.checked }, previous_name: binding.name })} /> },
-            { title: 'Assignment', render: (_,binding) => <Space direction="vertical" size={2}><strong>{binding.name}</strong>{binding.actions.map((action,i) => <Typography.Text key={i}>{summarize(action)}</Typography.Text>)}<Typography.Text type="secondary">{executionLabel(binding.actions)}</Typography.Text></Space> },
-            { title: 'Button', render: (_, binding) => <Typography.Text code>{`0x${binding.match.rf_code.toString(16).toUpperCase()} · ${human(binding.match.gesture)}`}</Typography.Text> },
-            { title: '', width: 80, render: (_, binding) => <Button size="small" icon={<EditOutlined />} onClick={() => { setAssignmentControl(undefined); setDraft(structuredClone(binding)); setPreviousName(binding.name); }}>Edit</Button> },
-          ]} />
-          <Form layout="vertical" style={{ marginTop: 18 }}>
+          <div ref={editorRef}><Form layout="vertical" style={{ marginTop: 18 }}>
             <div className="rf-form-grid">
               <Form.Item label="Name"><Input aria-label="Assignment name" value={draft.name} maxLength={64} onChange={e => setDraft({ ...draft, name: e.target.value })} /></Form.Item>
               <Form.Item label="Gesture"><Select aria-label="Gesture" value={draft.match.gesture} options={(catalog.gestures ?? []).map(value => ({ value, label: human(value) }))} onChange={gesture => match({ gesture })} /></Form.Item>
@@ -127,7 +129,11 @@ export const RfManager: React.FC<Props> = ({ rf, hardwareConnected, sendCmd, ass
             {activeBoardAction && <Alert type="warning" showIcon message="This button also has a board action" description={<Button size="small" onClick={() => command('map', { id: activeBoardAction.id, action: 'none' })}>Unassign board action</Button>} style={{ marginTop: 12 }} />}
             {nameConflict && <Alert type="warning" showIcon message="An RF assignment with this name already exists. Choose another name." />}
             <Space style={{ marginTop: 16 }}><Button type="primary" icon={<SaveOutlined />} loading={rf?.pending} disabled={nameConflict || !liveConnected || !draft.name.trim() || !draft.match.rf_code || !actionsReady} onClick={() => command('binding.put', { binding: draft, previous_name: previousName, allow_keyboard: allowKeyboard })}>Save assignment</Button>{previousName && <Button danger icon={<DeleteOutlined />} disabled={rf?.pending} onClick={() => command('binding.remove', { name: previousName })}>Remove</Button>}</Space>
-          </Form>
+          </Form></div>
+          <Typography.Title level={5}>{tr(locale, assignmentControl ? 'Saved buttons for this channel' : 'Saved RF buttons')}</Typography.Title>
+          {assignmentGroups.length ? <Collapse items={assignmentGroups.map(group => ({key:group.id,
+            label:`0x${group.bindings[0].match.rf_code.toString(16).toUpperCase()} · ${group.bindings[0].match.rf_bits} bits · Protocol ${group.bindings[0].match.rf_protocol} · ${group.bindings.length} gesture rules`,
+            children:assignmentsTable(group.bindings)}))} /> : <Empty description={tr(locale, 'No saved buttons for this selection')} />}
         </> },
         { key: 'remotes', label: 'Remotes', children: <>
           <Space style={{ marginBottom: 12 }}>{catalog.learning?.active ? <><Tag color="processing">Learning · {Math.ceil(catalog.learning.remaining_ms / 1000)} s</Tag><Button onClick={() => command('learn.cancel')}>Stop learning</Button></> : <Button icon={<PlusOutlined />} disabled={!liveConnected || rf?.pending} onClick={() => command('learn.start', { mode: 'timer', timeout_ms: 30000 })}>Learn buttons</Button>}</Space>

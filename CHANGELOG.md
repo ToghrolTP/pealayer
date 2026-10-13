@@ -10,7 +10,7 @@ retroactively attributed to an older download.
 
 - Channel Settings exposes the coordinator's shared Full/Restore On policy and
   confirmed remembered brightness, with explicit Apply and live event updates.
-  Restart/reconnect unknown-memory limits remain visible; absolute setters and
+  Unknown-memory fallback remains visible; absolute setters and
   existing autonomous RF/motion mappings are unchanged.
 
 - MOSFET cards put distinct minus/plus actions beside the slider. Hardware
@@ -18,6 +18,9 @@ retroactively attributed to an older download.
   the indicator; these dispatch shared coordinator actions, not guessed values.
 - Start an RF assignment directly from a channel card's context menu or its
   detail page, choosing the learned signal and action before saving.
+- RF assignment editors precede saved buttons; saved gesture rules group by the
+  complete waveform and scope to the selected channel. PWM recall reports
+  controller-confirmed profile persistence rather than assuming a restart reset.
 
 ### 🎬 Playback and audio
 

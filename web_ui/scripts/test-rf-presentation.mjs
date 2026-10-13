@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { sameSignal, actionSummary, controlOptions, editBoardMap, boardMapValid, seenTime, lastSeen, executionLabel } from '../src/rf-presentation.ts';
+import { readFileSync } from 'node:fs';
+import { sameSignal, actionSummary, controlOptions, editBoardMap, boardMapValid, seenTime, lastSeen, executionLabel, pwmBoardAction, groupRfBindings } from '../src/rf-presentation.ts';
 const entry = { id: 5, code: 42, bits: 24, protocol: 1, code_display: '0x2A', last_seen: '2026-10-13T10:00:00Z', board_assignment: { action: 'pwm', target: '0', behavior: 'toggle', label: 'Window · Toggle' } };
 assert(sameSignal({ rf_code: 42, rf_bits: 24, rf_protocol: 1 }, entry));
 assert(!sameSignal({ rf_code: 42, rf_bits: 16, rf_protocol: 1 }, entry), 'Code collisions with different waveform cannot inherit assignments');
@@ -20,4 +21,18 @@ assert.match(lastSeen({ ...entry, last_seen: undefined }), /Not seen/, 'Refresh 
 assert(seenTime(entry) > 0);
 assert.equal(executionLabel([{ type: 'control' }]), 'PCController · Pealayer is only the editor');
 assert.equal(executionLabel([{ type: 'app' }]), 'PCController → application');
+assert.equal(actionSummary({type:'board',command:'pwm roll 0'},controls,[]), 'Window · Roll brightness');
+assert.equal(pwmBoardAction({type:'board',command:'pwm roll 16'}), undefined);
+assert.equal(pwmBoardAction({type:'board',command:'pwm roll 0 extra'}), undefined);
+assert.equal(pwmBoardAction({type:'script',command:'pwm roll 0'}), undefined);
+const rules = ['tap','hold','repeat','hold-end'].map((gesture,i)=>({name:`rule-${i}`,match:{rf_code:42,rf_bits:24,rf_protocol:1,gesture},actions:[{type:'board',command:`pwm ${i ? i===3?'remember':'roll':'toggle'} 0`}]}));
+const before = structuredClone(rules);
+assert.equal(groupRfBindings(rules,controls,'pwm.0').length, 1, 'Four gesture rules are one physical waveform');
+assert.equal(groupRfBindings(rules,controls,'pwm.0')[0].bindings.length, 4);
+assert.equal(groupRfBindings(rules,controls,'pwm.1').length, 0, 'Scope uses exact zero-based target, not human labels');
+assert.equal(groupRfBindings([...rules,{...rules[0],match:{...rules[0].match,rf_bits:16}}],controls).length, 2);
+assert.deepEqual(rules, before, 'Grouping never mutates or rewrites assignments');
+const editorSource = readFileSync(new URL('../src/components/RfManager.tsx',import.meta.url),'utf8');
+assert(editorSource.indexOf('<div ref={editorRef}><Form') < editorSource.indexOf('<Typography.Title level={5}>'), 'Explicit assignment editor must precede saved rules');
+assert.doesNotMatch(editorSource, /setInterval\(/, 'Saved rule grouping does not add modal polling');
 console.log('RF presentation: waveform identity, advertised controls, board mapping preservation, dates and execution labels passed.');

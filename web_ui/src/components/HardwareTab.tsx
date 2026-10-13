@@ -434,7 +434,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
         image={<DisconnectOutlined />}
         description={tr(locale, state.controller_connected ? 'No board is connected or advertising capabilities' : 'Connecting to PCController…')}
       />
-      <RfManager key="rf-manager" rf={state.rf} hardwareConnected={state.hardware_connected} sendCmd={sendCmd} />
+      <RfManager key="rf-manager" rf={state.rf} hardwareConnected={state.hardware_connected} sendCmd={sendCmd} locale={locale} />
     </section>;
   }
 
@@ -689,7 +689,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
 
     <Collapse className="hardware-sections" defaultActiveKey={grouped.map((item) => item.key)} items={grouped} />
     {channelFolders.dialogs}
-    <RfManager key="rf-manager" rf={state.rf} hardwareConnected={state.hardware_connected} sendCmd={sendCmd} assignment={rfAssignment} />
+    <RfManager key="rf-manager" rf={state.rf} hardwareConnected={state.hardware_connected} sendCmd={sendCmd} assignment={rfAssignment} locale={locale} />
 
     <Card
       className={`surface-card buzzer-control${details.buzzer?.playing ? ' is-playing' : ''}`}
