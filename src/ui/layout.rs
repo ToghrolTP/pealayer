@@ -5336,6 +5336,7 @@ fn draw_control_indicator(
     interactive: bool,
     color: egui::Color32,
     intensity: Option<f32>,
+    click_label: Option<&str>,
 ) -> egui::Response {
     let neutral = ui
         .visuals()
@@ -5384,7 +5385,8 @@ fn draw_control_indicator(
         (ControlIndicatorState::Inactive, None) => app.tr("Board reports OFF"),
     };
     response.on_hover_text(if interactive {
-        format!("{status} · {}", app.tr("Click to toggle"))
+        format!("{status} · {}", click_label.map(|label| crate::ui::i18n::visual_text(app.language, label))
+            .unwrap_or_else(|| app.tr("Click to toggle")))
     } else {
         status
     })
@@ -7586,6 +7588,7 @@ fn draw_compact_control_card(
                         && !control.locked && !app.estop_active && !app.hardware_programming_blocked(),
                     active_control_indicator_color(capabilities, control),
                     indicator_intensity,
+                    hardware_indicator_action(app, control, indicator_state).map(|action| action.name.as_str()),
                 );
                 if hardware_control_activated(app, ui, &indicator)
                     && !control.locked
@@ -7882,6 +7885,7 @@ fn draw_control_card(
                                 && !control.locked && !app.estop_active && !app.hardware_programming_blocked(),
                             active_control_indicator_color(capabilities, control),
                             indicator_intensity,
+                            hardware_indicator_action(app, control, indicator_state).map(|action| action.name.as_str()),
                         );
                         if hardware_control_activated(app, ui, &indicator)
                             && !control.locked
@@ -8565,6 +8569,35 @@ mod timeline_row_tests {
         control.actions.pop();
         assert!(pwm_indicator_action(&preferences, &control, None).is_none());
         assert_eq!(pwm_indicator_action(&preferences, &control, Some(true)).unwrap().id, "real.off");
+    }
+
+    #[test]
+    fn pwm_inline_controls_fit_density_and_idle_render_keeps_observed_value() {
+        let app = PealayerApp::default();
+        let control = crate::four_d::controller::HardwareControl {
+            key: "pwm.1".into(), kind: "mosfet".into(),
+            actions: ["decrease", "increase"].into_iter().map(|verb|
+                crate::four_d::controller::HardwareAction { id: format!("pwm.1.{verb}"), verb: verb.into(), ..Default::default() }
+            ).collect(), ..Default::default()
+        };
+        for width in [216.0, 300.0, 420.0] {
+            for height in [24.0, 28.0, 32.0, 36.0] {
+                let context = egui::Context::default();
+                let (sender, receiver) = std::sync::mpsc::channel();
+                let mut percent = 24.007;
+                let output = context.run_ui(egui::RawInput::default(), |ui| {
+                    ui.set_width(width);
+                    ui.spacing_mut().interact_size.y = height;
+                    let response = draw_pwm_control_editor(&app, ui, &control, &mut percent, width);
+                    assert_eq!(response, PwmEditorResponse::default());
+                    assert!(ui.min_rect().width() <= width + 2.0, "width={width}, height={height}: {:?}", ui.min_rect());
+                    transmit_pwm_editor_response_with(&sender, true, ui, 1, pwm_raw(percent), response);
+                });
+                discard_ui_output(output);
+                assert_eq!(percent, 24.007);
+                assert!(receiver.try_recv().is_err());
+            }
+        }
     }
 
     #[test]
