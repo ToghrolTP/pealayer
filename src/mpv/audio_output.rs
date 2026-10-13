@@ -13,6 +13,10 @@ pub struct AudioDevice {
 /// that name intact rather than combining it with a separate `ao` override.
 static DEVICES: OnceLock<RwLock<Vec<AudioDevice>>> = OnceLock::new();
 static DISCOVERING: AtomicBool = AtomicBool::new(false);
+#[cfg(test)]
+static DISCOVERY_COMPLETIONS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+#[cfg(test)]
+pub(crate) fn discovery_completions_for_test() -> u64 { DISCOVERY_COMPLETIONS.load(Ordering::Acquire) }
 pub fn available_audio_devices() -> Vec<AudioDevice> {
     if crate::mpv::external::active() {
         return crate::mpv::external::property("audio-device-list")
@@ -30,6 +34,8 @@ pub fn refresh_devices() {
     }
     let devices = discover_devices();
     DISCOVERING.store(false, Ordering::SeqCst);
+    #[cfg(test)]
+    DISCOVERY_COMPLETIONS.fetch_add(1, Ordering::Release);
     let Some(devices) = devices else {
         return;
     };

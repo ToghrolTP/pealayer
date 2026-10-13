@@ -590,7 +590,15 @@ pub fn dropped_file_kind(path: &std::path::Path) -> DroppedFileKind {
     }
 }
 
+/// Native service startup is explicit, never inferred from viewport visibility.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum NativeServicePolicy {
+    Production,
+    ModelOnly,
+}
+
 pub struct PealayerApp {
+    pub(crate) native_service_policy: NativeServicePolicy,
     pub(crate) web_only: bool,
     pub(crate) app_name: String,
     pub(crate) app_publisher: Option<String>,
@@ -1038,7 +1046,7 @@ impl eframe::App for PealayerApp {
                 .send_viewport_cmd(egui::ViewportCommand::Visible(false));
         }
         #[cfg(target_os = "windows")]
-        {
+        if self.native_service_policy == NativeServicePolicy::Production {
             use raw_window_handle::{HasWindowHandle, RawWindowHandle};
             if crate::platform::windows::get_registered_hwnd() == 0 {
                 if let Ok(handle) = frame.window_handle() {
@@ -1059,16 +1067,13 @@ impl eframe::App for PealayerApp {
             }
         }
 
-        if !self.web_only {
+        if !self.web_only && self.native_service_policy == NativeServicePolicy::Production {
             crate::platform::taskbar_preview::register_repaint(ctx);
             self.ensure_shell_initialized();
             self.process_shell_commands(ctx);
         }
         self.process_controller_call_results();
-        crate::mpv::external::configure(self.mpv.0, ctx, crate::platform::interop::external_mpv_settings());
-        if crate::mpv::sfx::initialize(self.engine_handle.media_playback.clone(), self.engine_handle.estop_active.clone(), ctx) {
-            crate::mpv::sfx::update_plan(&self.timeline);
-        }
+        self.bootstrap_native_services(ctx);
         self.process_audio_effect_results();
         if !self.rf.pending && self.engine_handle.take_rf_catalog_refresh_request() {
             if let Err(error) = self.request_rf(
@@ -1119,7 +1124,8 @@ impl eframe::App for PealayerApp {
         if !self.media_keys_enabled {
             // Drop unregisters the native session and invalidates old callbacks.
             self.media_controls = None;
-        } else if self.media_controls.as_ref().is_none_or(|controls| controls.needs_registration_retry()) {
+        } else if self.native_service_policy == NativeServicePolicy::Production
+            && self.media_controls.as_ref().is_none_or(|controls| controls.needs_registration_retry()) {
             let hwnd = self
                 .window_handle
                 .unwrap_or_else(crate::platform::windows::get_registered_hwnd);
@@ -1324,7 +1330,8 @@ impl eframe::App for PealayerApp {
 
         // Reconcile the workspace with the viewport before publishing status.
         crate::remote_location::install_context(ctx);
-        if let Some(target) = crate::platform::clipboard_urls::take(ctx) {
+        if self.native_service_policy == NativeServicePolicy::Production
+            && let Some(target) = crate::platform::clipboard_urls::take(ctx) {
             if let Err(error) = crate::remote_location::request_copied_link(&target, ctx) {
                 self.set_osd(error);
             }
@@ -2316,6 +2323,16 @@ fn board_settings_command(
 }
 
 impl PealayerApp {
+    fn bootstrap_native_services(&self, ctx: &egui::Context) {
+        if self.native_service_policy != NativeServicePolicy::Production {
+            return;
+        }
+        crate::mpv::external::configure(self.mpv.0, ctx, crate::platform::interop::external_mpv_settings());
+        if crate::mpv::sfx::initialize(self.engine_handle.media_playback.clone(), self.engine_handle.estop_active.clone(), ctx) {
+            crate::mpv::sfx::update_plan(&self.timeline);
+        }
+    }
+
     fn media_controls_allowed(&self,ctx:&egui::Context)->bool {
         if !self.media_keys_enabled {return false;}
         if self.media_keys_background_enabled {return true;}
@@ -3924,6 +3941,10 @@ impl PealayerApp {
             .map(|mut queue| queue.drain(..).collect::<Vec<_>>())
             .unwrap_or_default();
         for result in results {
+            if result.operation=="rf-received" {
+                if let Ok(event)=result.result {self.rf.receive(event);}
+                continue;
+            }
             if result.operation=="hardware-authority" {
                 if let Err(error)=result.result {
                     let _=crate::messaging::publish(crate::messaging::ToastRequest {
@@ -3934,6 +3955,9 @@ impl PealayerApp {
                 continue;
             }
             if result.operation.starts_with("rf-") {
+                if result.result.is_err() {
+                    self.rf.error_detail = result.error_detail.unwrap_or(serde_json::Value::Null);
+                }
                 if self.rf.complete(&result.operation, result.result) {
                     if let Err(error) = self.request_rf("catalog", serde_json::json!({"read_board":true})) { self.rf.error = error; }
                 }
@@ -4698,8 +4722,10 @@ impl PealayerApp {
             }
             InteropCommand::StopAudioPreview => { let _ = crate::mpv::sfx::stop_preview(); }
             InteropCommand::RefreshAudioOutputs => {
-                let ctx = ctx.clone();
-                std::thread::spawn(move || { crate::mpv::audio_output::refresh_devices(); ctx.request_repaint(); });
+                if self.native_service_policy == NativeServicePolicy::Production {
+                    let ctx = ctx.clone();
+                    std::thread::spawn(move || { crate::mpv::audio_output::refresh_devices(); ctx.request_repaint(); });
+                }
             }
             InteropCommand::SaveControllerEffectGroup {
                 original_name,
@@ -7534,7 +7560,9 @@ impl PealayerApp {
             );
         }
         crate::platform::interop::set_live_config(config);
-        crate::mpv::external::configure(self.mpv.0, ctx, crate::platform::interop::get_live_config().external_mpv);
+        if self.native_service_policy == NativeServicePolicy::Production {
+            crate::mpv::external::configure(self.mpv.0, ctx, crate::platform::interop::get_live_config().external_mpv);
+        }
         Ok(())
     }
 
@@ -9270,6 +9298,7 @@ impl Default for PealayerApp {
             crate::mpv::frame_cache::FrameCache::new(128 * 1024 * 1024),
         ));
         Self {
+            native_service_policy: NativeServicePolicy::ModelOnly,
             web_only: false,
             app_name: crate::config::resolved_app_name(&crate::config::AppConfig::default()),
             app_publisher: crate::config::resolved_app_publisher(
@@ -9644,6 +9673,79 @@ pub(crate) mod tests {
         app.request_control_bar_save(&egui::Context::default());
         assert!(app.pending_control_bar_save.as_ref().unwrap().flight.is_none());
         assert_eq!(app.pending_control_bar_save.as_ref().unwrap().desired,app.control_bars);
+    }
+
+    #[test]
+    fn model_app_logic_does_not_bootstrap_native_services() {
+        let _lock = lock_app_tests();
+        let original = crate::platform::interop::get_live_config();
+        let mut app = PealayerApp::default();
+        assert_eq!(app.native_service_policy, NativeServicePolicy::ModelOnly);
+        let before = (
+            crate::mpv::external::initialized_for_test(),
+            crate::mpv::sfx::initialized_for_test(),
+            crate::platform::clipboard_urls::initialized_for_test(),
+            crate::mpv::audio_output::discovery_completions_for_test(),
+        );
+        let ctx = egui::Context::default();
+        let mut frame = eframe::Frame::_new_kittest();
+        app.auto_reload_config = false;
+        for _ in 0..3 {
+            let _ = ctx.run_logic(&egui::RawInput::default(), |ctx| eframe::App::logic(&mut app, ctx, &mut frame));
+        }
+        app.apply_interop_command(&ctx, InteropCommand::RefreshAudioOutputs, "fixture");
+        assert!(app.media_controls.is_none(), "a fixture must not register OS media listeners");
+        assert_eq!(before, (
+            crate::mpv::external::initialized_for_test(),
+            crate::mpv::sfx::initialized_for_test(),
+            crate::platform::clipboard_urls::initialized_for_test(),
+            crate::mpv::audio_output::discovery_completions_for_test(),
+        ));
+        crate::platform::interop::set_live_config(original);
+    }
+
+    #[test]
+    fn native_services_bootstrap_in_an_isolated_process() {
+        // Environment/config isolation belongs to the parent, never mutated
+        // inside the process that owns shared libmpv/native threads.
+        let config = std::env::temp_dir().join(format!("pealayer-native-bootstrap-{}.json", uuid::Uuid::new_v4()));
+        let mut child = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "app::tests::native_services_bootstrap_child", "--nocapture", "--test-threads=1"])
+            .env("PEALAYER_NATIVE_SERVICES_CHILD", "1")
+            .env("PEALAYER_CONFIG_FILE", &config)
+            .spawn().expect("start isolated native-service test");
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            if let Some(status) = child.try_wait().expect("read isolated test status") {
+                assert!(status.success(), "isolated native bootstrap failed: {status}");
+                break;
+            }
+            if std::time::Instant::now() >= deadline {
+                child.kill().expect("terminate only this hung test child");
+                let _ = child.wait();
+                panic!("isolated native bootstrap timed out");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+    }
+
+    #[test]
+    fn native_services_bootstrap_child() {
+        if std::env::var_os("PEALAYER_NATIVE_SERVICES_CHILD").as_deref() != Some(std::ffi::OsStr::new("1")) { return; }
+        let mut app = PealayerApp::default();
+        assert!(!crate::mpv::external::initialized_for_test());
+        assert!(!crate::mpv::sfx::initialized_for_test());
+        app.native_service_policy = NativeServicePolicy::Production;
+        app.bootstrap_native_services(&egui::Context::default());
+        assert!(crate::mpv::external::initialized_for_test());
+        assert!(crate::mpv::sfx::initialized_for_test());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+        while crate::mpv::audio_output::discovery_completions_for_test() == 0 {
+            assert!(std::time::Instant::now() < deadline, "native audio discovery did not complete");
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        // The real probe runs, but loads/plays no audio and never connects to
+        // hardware. A crash fails this child, not an ignored integration gate.
     }
 
     #[test]

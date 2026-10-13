@@ -1294,3 +1294,19 @@ html[data-motion="disabled"] .app-statusbar .status-widget { transition: none; }
 @media (max-width: 420px) { .cue-inspector__timing { grid-template-columns: minmax(0, 1fr); } }
 .rf-manager-modal .ant-modal-body { max-height: min(72vh, 720px); overflow-y: auto; }
 .rf-manager-modal .ant-form-item { margin-bottom: 12px; }
+.rf-manager-modal .rf-form-grid > *, .rf-manager-modal .ant-form-item-control { min-width: 0; }
+.rf-manager-modal .ant-input-number, .rf-manager-modal .ant-select { width: 100%; }
+.rf-manager-modal .ant-space { max-width: 100%; }
+.rf-manager-modal .ant-table-cell { vertical-align: top; overflow-wrap: anywhere; }
+.rf-manager-modal .ant-tag { white-space: normal; margin-inline-end: 0; }
+.rf-manager-modal .ant-table-cell code, .rf-learned-cards code { white-space: nowrap; overflow-wrap: normal; }
+.rf-learned-cards { display: grid; gap: 12px; }
+.rf-learned-cards .ant-card-body { display: grid; gap: 10px; }
+.rf-last-seen { color: var(--muted); font-size: 12px; overflow-wrap: anywhere; }
+.rf-manager-modal .ant-btn, .rf-manager-modal .ant-select-selector { box-sizing: border-box; }
+.rf-manager-modal .ant-btn:not(:disabled):hover { border-width: 1px; }
+.rf-manager-modal .ant-btn:focus-visible { outline-offset: 2px; }
+@media (max-width: 600px) {
+  .rf-manager-modal .rf-form-grid { grid-template-columns: minmax(0, 1fr); }
+  .rf-manager-modal .ant-modal-body { max-height: 76dvh; }
+}

@@ -140,6 +140,8 @@ struct Engine {
     ctx: eframe::egui::Context,
 }
 static ENGINE: OnceLock<Engine> = OnceLock::new();
+#[cfg(test)]
+pub(crate) fn initialized_for_test() -> bool { ENGINE.get().is_some() }
 pub fn initialize(
     clock: Arc<Mutex<crate::four_d::media_sync::PlaybackSample>>,
     estop: Arc<AtomicBool>,
