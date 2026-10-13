@@ -1079,7 +1079,7 @@ mod tests {
         let mut action = json!({"type":"app","app_target":"peer","app_kind":"peer.choose","app_value":"kept exactly"});
         let catalog = json!({"action_types":["app"],"applications":[{"id":"peer","surface":"peer","values":{"app_actions":"peer.choose"}}]});
         for width in [480.0, 820.0] {
-            let _ = context.run_ui(
+            let mut output = context.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -1091,6 +1091,7 @@ mod tests {
                     action_editor(ui, &mut action, &catalog);
                 },
             );
+            output.textures_delta.clear();
             assert_eq!(action["app_value"], "kept exactly");
         }
     }
