@@ -43,7 +43,7 @@ pub struct RfState {
 fn new_binding() -> Value {
     json!({"name":"", "enabled":true,"cooldown_ms":250,
         "match":{"kind":"rf.gesture","source":"rf","rf_code":0,"rf_bits":24,"rf_protocol":1,"gesture":"down"},
-        "actions":[{"type":"app","app_target":"pealayer","app_kind":"pealayer.toggle","app_value":""}]})
+        "actions":[{"type":"control","action_id":""}]})
 }
 
 impl Default for RfState {
@@ -865,7 +865,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 }); ui.add_space(6.0);
                             }
                             if let Some(i)=remove { actions.remove(i); }
-                            if actions.len()<8 && ui.button(format!("{} Add action",crate::ui::icons::PLUS)).clicked() { actions.push(json!({"type":"app","app_target":"pealayer","app_kind":"pealayer.toggle"})); }
+                            if actions.len()<8 && ui.button(format!("{} Add action",crate::ui::icons::PLUS)).clicked() { actions.push(json!({"type":"control","action_id":""})); }
                         }
                         if array(&app.rf.draft["actions"]).iter().any(|a|a["type"]=="virtual-key") {
                             ui.checkbox(&mut app.rf.allow_keyboard,format!("Allow assigned keyboard keys on {}",catalog["hostname"].as_str().unwrap_or("controller host")));
