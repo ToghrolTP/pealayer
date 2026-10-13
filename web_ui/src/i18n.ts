@@ -1,6 +1,7 @@
 export type UiLocale = 'en' | 'fa';
 
 const fa: Record<string, string> = {
+  'An RF assignment with this name already exists. Choose another name.':'تخصیص ریموتی با این نام وجود دارد؛ نام دیگری انتخاب کنید.',
   'Shared On behavior':'رفتار مشترکِ روشن‌کردن', 'Full brightness (100%)':'روشنایی کامل (۱۰۰٪)',
   'Restore last brightness':'بازیابی آخرین روشنایی', 'Apply policy':'اعمال سیاست',
   'Applies to all connected PCController clients':'برای تمام کلاینت‌های متصل به PCController اعمال می‌شود',

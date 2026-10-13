@@ -783,6 +783,7 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Update PWM outputs while dragging" => "به‌روزرسانی زندهٔ خروجی‌های PWM هنگام کشیدن",
         "MOSFET cards" => "کارت‌های ماسفت",
         "Shared On behavior" => "رفتار مشترکِ روشن‌کردن",
+        "An RF assignment with this name already exists. Choose another name." => "تخصیص ریموتی با این نام وجود دارد؛ نام دیگری انتخاب کنید.",
         "Full brightness (100%)" => "روشنایی کامل (۱۰۰٪)",
         "Restore last brightness" => "بازیابی آخرین روشنایی",
         "Applies to all connected PCController clients" => "برای تمام کلاینت‌های متصل به PCController اعمال می‌شود",

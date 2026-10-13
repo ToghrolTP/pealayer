@@ -3,6 +3,7 @@ import { Alert, Button, Card, Checkbox, Collapse, Dropdown, Empty, Form, Input, 
 import { ApiOutlined, DeleteOutlined, EditOutlined, MoreOutlined, PlusOutlined, ReloadOutlined, SaveOutlined, SendOutlined } from '@ant-design/icons';
 import { actionReady, actionSummary, boardMapValid, controlOptions, editBoardMap, executionLabel, human, lastSeen, sameSignal, seenTime, targetOptions as boardTargetOptions } from '../rf-presentation';
 import type { BoardAssignment, RfControl } from '../rf-presentation';
+import { uniqueRfBindingName, rfBindingNameConflicts } from '../rfBindingNames';
 
 type Action = { type: string; app_kind?: string; app_target?: string; app_value?: string; action_id?: string; command?: string; macro?: string; virtual_key?: string; hold_ms?: number; executable?: string; script?: string; detached?: boolean; args?: string[]; event?: string; rf?: Waveform };
 type Waveform = { code: number; bits: number; protocol: number; pulse_us: number; repeats?: number };
@@ -23,7 +24,7 @@ export const RfManager: React.FC<Props> = ({ rf, hardwareConnected, sendCmd, ass
   const [assignmentControl, setAssignmentControl] = useState<string>();
   useEffect(() => {
     if (!assignment) return;
-    const draft = blank(); draft.name = assignment.name;
+    const draft = blank(); draft.name = uniqueRfBindingName(assignment.name, (rf?.catalog?.bindings ?? []).map(binding => binding.name));
     setDraft(draft); setPreviousName(''); setAssignmentControl(assignment.key);
     setTab('assignments'); setOpen(true);
     sendCmd('pealayer.rf', { operation: 'catalog', params: { read_board: true } });
@@ -39,6 +40,7 @@ export const RfManager: React.FC<Props> = ({ rf, hardwareConnected, sendCmd, ass
   const [wave, setWave] = useState<Waveform>({ code: 0, bits: 24, protocol: 1, pulse_us: 0, repeats: 1 });
   const [map, setMap] = useState<{ id: number; action: string; target?: string; behavior?: string }>({ id: -1, action: '' });
   const catalog = rf?.catalog ?? {};
+  const nameConflict = rfBindingNameConflicts(draft.name, previousName, (catalog.bindings ?? []).map(binding => binding.name));
   const controls = catalog.peripherals?.controls ?? [];
   const entries = [...(catalog.entries ?? [])].sort((a,b) => seenTime(b)-seenTime(a));
   const summarize = (action: Action) => actionSummary(action, controls, catalog.effects ?? []);
@@ -83,7 +85,7 @@ export const RfManager: React.FC<Props> = ({ rf, hardwareConnected, sendCmd, ass
             {catalog.activity?.find(event => event.rf_code > 0) && <Button onClick={() => { const event = catalog.activity!.find(event => event.rf_code > 0)!; match({ rf_code: event.rf_code, rf_bits: event.rf_bits, rf_protocol: event.rf_protocol }); }}>Use last received</Button>}
           </Space>
           <Table<Binding> size="small" pagination={false} rowKey="name" dataSource={catalog.bindings ?? []} columns={[
-            { title: 'Enabled', width: 80, render: (_, binding) => <Checkbox checked={binding.enabled} onChange={e => command('binding.put', { binding: { ...binding, enabled: e.target.checked } })} /> },
+            { title: 'Enabled', width: 80, render: (_, binding) => <Checkbox checked={binding.enabled} onChange={e => command('binding.put', { binding: { ...binding, enabled: e.target.checked }, previous_name: binding.name })} /> },
             { title: 'Assignment', render: (_,binding) => <Space direction="vertical" size={2}><strong>{binding.name}</strong>{binding.actions.map((action,i) => <Typography.Text key={i}>{summarize(action)}</Typography.Text>)}<Typography.Text type="secondary">{executionLabel(binding.actions)}</Typography.Text></Space> },
             { title: 'Button', render: (_, binding) => <Typography.Text code>{`0x${binding.match.rf_code.toString(16).toUpperCase()} · ${human(binding.match.gesture)}`}</Typography.Text> },
             { title: '', width: 80, render: (_, binding) => <Button size="small" icon={<EditOutlined />} onClick={() => { setAssignmentControl(undefined); setDraft(structuredClone(binding)); setPreviousName(binding.name); }}>Edit</Button> },
@@ -123,7 +125,8 @@ export const RfManager: React.FC<Props> = ({ rf, hardwareConnected, sendCmd, ass
             {draft.actions.length < 8 && <Button icon={<PlusOutlined />} onClick={() => setDraft({ ...draft, actions: [...draft.actions, { type: 'control', action_id: '' }] })}>Add action</Button>}
             {draft.actions.some(action => action.type === 'virtual-key') && <Form.Item style={{ marginTop: 12 }}><Checkbox checked={allowKeyboard} onChange={e => setAllowKeyboard(e.target.checked)}>Allow assigned keyboard keys on {catalog.hostname || 'controller host'}</Checkbox></Form.Item>}
             {activeBoardAction && <Alert type="warning" showIcon message="This button also has a board action" description={<Button size="small" onClick={() => command('map', { id: activeBoardAction.id, action: 'none' })}>Unassign board action</Button>} style={{ marginTop: 12 }} />}
-            <Space style={{ marginTop: 16 }}><Button type="primary" icon={<SaveOutlined />} loading={rf?.pending} disabled={!liveConnected || !draft.name.trim() || !draft.match.rf_code || !actionsReady} onClick={() => command('binding.put', { binding: draft, previous_name: previousName, allow_keyboard: allowKeyboard })}>Save assignment</Button>{previousName && <Button danger icon={<DeleteOutlined />} disabled={rf?.pending} onClick={() => command('binding.remove', { name: previousName })}>Remove</Button>}</Space>
+            {nameConflict && <Alert type="warning" showIcon message="An RF assignment with this name already exists. Choose another name." />}
+            <Space style={{ marginTop: 16 }}><Button type="primary" icon={<SaveOutlined />} loading={rf?.pending} disabled={nameConflict || !liveConnected || !draft.name.trim() || !draft.match.rf_code || !actionsReady} onClick={() => command('binding.put', { binding: draft, previous_name: previousName, allow_keyboard: allowKeyboard })}>Save assignment</Button>{previousName && <Button danger icon={<DeleteOutlined />} disabled={rf?.pending} onClick={() => command('binding.remove', { name: previousName })}>Remove</Button>}</Space>
           </Form>
         </> },
         { key: 'remotes', label: 'Remotes', children: <>

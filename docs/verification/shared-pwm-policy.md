@@ -40,6 +40,14 @@ Existing board RF and motion mappings are never rewritten by this feature.
 
 ## Acceptance
 
+Fresh scoped RF drafts choose a case-insensitive unique name capped at 64 UTF-8
+bytes. Later catalog refreshes never replace the operator's edited name; a
+collision warns and disables Save. Enabled toggles and explicit edits send the
+known `previous_name`. Accepted binding replies update the authoritative cached
+binding list. The paired controller must also reject new/rename collisions
+atomically: a stale client cannot be allowed to overwrite another assignment.
+These guards never auto-save or change existing RF/motion mappings.
+
 Hosted tests cover policy parsing, invalid/missing channels, fenced memory,
 malformed/unknown retention, exact partial payload and no writes on rendering.
 No application compilation or tests run on the production host. Paired source
