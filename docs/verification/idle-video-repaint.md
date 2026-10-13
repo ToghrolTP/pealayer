@@ -32,3 +32,18 @@ of those phases, not a claim of processor CPU time; compare counter deltas with
 separate process CPU samples. Renderer identity is queried once on the paint
 thread, not in a network handler. Source checks and this optimization alone do
 not close sustained playback, GPU, physical timing or CPU acceptance.
+
+Live Cafe timing subsequently showed no actual paused MPV render passes and
+roughly 1 microsecond per cached video callback, but about 18-20 milliseconds
+for UI layout. Panel timing attributed approximately 10 ms to Hardware Monitor,
+3 ms to Effects Library and 2.5 ms to Timeline. Thus video reuse is verified,
+not a claim that the CPU problem was solved. The actual renderer is Intel HD
+Graphics 4000 rather than a guessed software renderer.
+
+Hardware button safety checks repeatedly called the owned snapshot accessor,
+deep-copying the full hardware/effect catalog for a boolean programming gate.
+Read-only checks now share an immutable `Arc` at the same hardware revision;
+the existing owned accessor remains available to mutation/serialization callers.
+Tests retain cached/paused RGB and revision invalidation and verify that repeated
+reads share a pointer, while a new revision cannot modify an earlier view.
+No live-update cadence, latch, ownership, E-STOP or action validation is weakened.
