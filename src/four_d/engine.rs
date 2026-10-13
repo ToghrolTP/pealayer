@@ -401,6 +401,7 @@ pub struct ControllerCallResult {
 
 #[derive(Debug)]
 struct PendingControllerIntent {
+    created: std::time::Instant,
     method: String,
     params: serde_json::Value,
     refresh_catalog: bool,
@@ -408,18 +409,19 @@ struct PendingControllerIntent {
 
 /// A bounded, fair latest-value queue for live hardware controls.
 ///
-/// Motion buttons, relays, and PWM sliders represent desired state rather
-/// than an audit log. Replacing an older pending value for the same stable
+/// Motion and PWM sliders represent desired state. Relay presses are discrete
+/// edges and must retain their order. Replacing an older continuous value for the same stable
 /// control key prevents a slow board acknowledgement from building an
 /// unbounded FIFO of stale movement commands. The insertion-order side queue
 /// keeps different controls moving fairly under concurrent input.
 #[derive(Debug, Default)]
 struct PendingControllerIntents {
-    order: VecDeque<String>,
+    order: VecDeque<(String, Option<PendingControllerIntent>)>,
     latest: HashMap<String, PendingControllerIntent>,
 }
 
 impl PendingControllerIntents {
+    #[cfg(test)]
     fn replace(
         &mut self,
         control_key: String,
@@ -427,22 +429,34 @@ impl PendingControllerIntents {
         params: serde_json::Value,
         refresh_catalog: bool,
     ) {
+        self.replace_at(control_key, method, params, refresh_catalog, std::time::Instant::now()).unwrap();
+    }
+
+    fn replace_at(&mut self, control_key: String, method: String, params: serde_json::Value,
+        refresh_catalog: bool, created: std::time::Instant) -> Result<(), String> {
+        let ordered = control_key.starts_with("relay.");
         let is_new = !self.latest.contains_key(&control_key);
+        if (ordered || is_new) && self.order.len() >= 64 {
+            return Err(format!("Hardware input queue is full; {control_key} was not sent"));
+        }
+        let intent = PendingControllerIntent { created, method, params, refresh_catalog };
+        if ordered {
+            self.order.push_back((control_key, Some(intent)));
+            return Ok(());
+        }
         self.latest.insert(
             control_key.clone(),
-            PendingControllerIntent {
-                method,
-                params,
-                refresh_catalog,
-            },
+            intent,
         );
         if is_new {
-            self.order.push_back(control_key);
+            self.order.push_back((control_key, None));
         }
+        Ok(())
     }
 
     fn pop_front(&mut self) -> Option<(String, PendingControllerIntent)> {
-        while let Some(control_key) = self.order.pop_front() {
+        while let Some((control_key, ordered)) = self.order.pop_front() {
+            if let Some(intent) = ordered { return Some((control_key, intent)); }
             if let Some(intent) = self.latest.remove(&control_key) {
                 return Some((control_key, intent));
             }
@@ -457,7 +471,7 @@ impl PendingControllerIntents {
 
     #[cfg(test)]
     fn len(&self) -> usize {
-        self.latest.len()
+        self.order.len()
     }
 }
 
@@ -785,10 +799,16 @@ impl ControllerPushTarget {
                     if connected && (!capabilities.board_connected || new_generation) {
                         if let Some(refresh) = self.catalog_refresh_requested.upgrade() { refresh.store(true, Ordering::Relaxed); }
                     }
-                    if !connected || new_generation { capabilities.mark_board_disconnected() || changed } else { changed }
+                    if !connected || new_generation { capabilities.mark_board_disconnected() || changed }
+                    else { capabilities.apply_snapshot_values(params) || changed }
                 }
             }
             "controller.status" => {
+                if params["host_instance_id"].as_str().is_some_and(|id|id!=capabilities.host_instance_id) {return false;}
+                if params["connection_generation"].as_u64().is_some_and(|generation|generation!=capabilities.connection_generation) {
+                    if let Some(refresh)=self.catalog_refresh_requested.upgrade(){refresh.store(true,Ordering::Relaxed);}
+                    return false;
+                }
                 // A status push proves that the coordinator can hear the board,
                 // but it does not carry the board identity or capability
                 // catalog.  After a disconnect, publishing it as connected here
@@ -805,6 +825,7 @@ impl ControllerPushTarget {
                     capabilities.apply_status_notification(params)
                 }
             }
+            "controller.pwm.values" => capabilities.apply_pwm_push(params),
             "controller.state" | "controller.event" => {
                 capabilities.apply_state_notification(params)
             }
@@ -973,6 +994,7 @@ pub fn spawn_engine() -> EngineHandle {
         let mut last_capability_refresh = std::time::Instant::now();
         let mut last_connect_attempt: Option<std::time::Instant> = None;
         let mut pending_controller_intents = PendingControllerIntents::default();
+        let mut awakened_message = None;
 
         let mut active_transport: Option<HardwareTransport> = None;
 
@@ -1195,7 +1217,7 @@ pub fn spawn_engine() -> EngineHandle {
                 .is_some_and(|transport| !transport.is_direct_serial());
             let mut channel_disconnected = false;
             loop {
-                let msg = match rx.try_recv() {
+                let msg = match awakened_message.take().map(Ok).unwrap_or_else(|| rx.try_recv()) {
                     Ok(msg) => msg,
                     Err(mpsc::TryRecvError::Empty) => break,
                     Err(mpsc::TryRecvError::Disconnected) => {
@@ -1432,18 +1454,19 @@ pub fn spawn_engine() -> EngineHandle {
                         }
                     }
                     EngineMessage::CoalescedControllerIntent {
-                        created: _,
+                        created,
                         control_key,
                         method,
                         params,
                         refresh_catalog,
                     } => {
-                        pending_controller_intents.replace(
+                        if let Err(error) = pending_controller_intents.replace_at(
                             control_key,
                             method,
                             params,
                             refresh_catalog,
-                        );
+                            created,
+                        ) && let Ok(mut guard) = engine_conn_error.lock() { *guard = Some(error); }
                     }
                 }
             }
@@ -1456,7 +1479,9 @@ pub fn spawn_engine() -> EngineHandle {
             // PCController/board can delay one in-flight call but can never
             // create a stale command train that starves feedback and recovery.
             if let Some((control_key, intent)) = pending_controller_intents.pop_front() {
-                if engine_estop.load(Ordering::SeqCst)
+                if intent.created.elapsed() > Duration::from_millis(500) {
+                    if let Ok(mut guard) = engine_conn_error.lock() { *guard = Some(format!("Expired hardware input for {control_key} was not sent")); }
+                } else if engine_estop.load(Ordering::SeqCst)
                     && !controller_call_allowed_during_estop(&intent.method, &intent.params)
                 {
                     if let Ok(mut guard) = engine_conn_error.lock() {
@@ -1846,7 +1871,13 @@ pub fn spawn_engine() -> EngineHandle {
                 last_ping = std::time::Instant::now();
             }
 
-            thread::sleep(Duration::from_millis(5));
+            // Incoming controls wake this wait immediately; unchanged scheduling
+            // still has the existing 5 ms upper bound without a busy-spin.
+            match rx.recv_timeout(Duration::from_millis(5)) {
+                Ok(message) => awakened_message = Some(message),
+                Err(mpsc::RecvTimeoutError::Timeout) => {},
+                Err(mpsc::RecvTimeoutError::Disconnected) => break,
+            }
         }
     });
 
@@ -2131,7 +2162,6 @@ fn spawn_peer_engine() -> EngineHandle {
         let client=crate::peer::client().unwrap();
         let mut revision=0;
         let mut pending=PendingControllerIntents::default();
-        let mut deadlines=HashMap::new();
         while owner.strong_count()>0 {
             if let Some(snapshot)=client.snapshot() {
                 connected.store(snapshot.received.elapsed()<Duration::from_secs(2),Ordering::Relaxed);
@@ -2153,7 +2183,7 @@ fn spawn_peer_engine() -> EngineHandle {
                 }
             }
             let mut incoming=Vec::new();
-            match rx.recv_timeout(Duration::from_millis(20)) {
+            match rx.recv_timeout(if pending.order.is_empty() { Duration::from_millis(20) } else { Duration::ZERO }) {
                 Ok(message)=>incoming.push(message),
                 Err(mpsc::RecvTimeoutError::Timeout)=>{},
                 Err(mpsc::RecvTimeoutError::Disconnected)=>break,
@@ -2169,8 +2199,8 @@ fn spawn_peer_engine() -> EngineHandle {
                         }
                         EngineMessage::ReplyControllerCall {method,params,reply}=>{let _=reply.send(call(method,params));}
                         EngineMessage::CoalescedControllerIntent {control_key,method,params,refresh_catalog,created}=>{
-                            deadlines.insert(control_key.clone(),created);
-                            pending.replace(control_key,method,params,refresh_catalog);
+                            if let Err(error)=pending.replace_at(control_key,method,params,refresh_catalog,created)
+                                && let Ok(mut slot)=errors.lock(){*slot=Some(error);}
                         }
                         EngineMessage::ControllerCall {method,params}=>{
                             if let Err(error)=call(method,params) && let Ok(mut slot)=errors.lock(){*slot=Some(error)}
@@ -2182,10 +2212,9 @@ fn spawn_peer_engine() -> EngineHandle {
                         EngineMessage::UpdateQueue(_) | EngineMessage::UpdateMotionQueue(_) | EngineMessage::UpdateControllerMacros(_) | EngineMessage::UpdateControllerStripEffects(_) | EngineMessage::UpdateAnalogTracks(_) | EngineMessage::UpdateDirectPwmCues(_) | EngineMessage::Seek(_) | EngineMessage::ReconfigureEndpoint {..}=>{}
                     }
             }
-            if !connected.load(Ordering::Relaxed){pending.clear();deadlines.clear();}
+            if !connected.load(Ordering::Relaxed){pending.clear();}
             if let Some((key,intent))=pending.pop_front(){
-                let created=deadlines.remove(&key).unwrap_or_else(std::time::Instant::now);
-                if created.elapsed()<=Duration::from_millis(500){
+                if intent.created.elapsed()<=Duration::from_millis(500){
                     if let Err(error)=client.post("/api/peer/controller",&serde_json::json!({"method":intent.method,"params":intent.params})) && let Ok(mut slot)=errors.lock(){*slot=Some(error);}
                 }else if let Ok(mut slot)=errors.lock(){*slot=Some(format!("Expired remote intent for {key} was discarded"));}
             }
@@ -2362,6 +2391,23 @@ mod tests {
         *slot.lock().unwrap() = None;
     }
     use crate::four_d::models::{AtomicAction, Effect, EffectInstance, Timeline};
+
+    #[test]
+    fn relay_click_edges_are_ordered_bounded_and_never_replace_each_other() {
+        let mut pending = PendingControllerIntents::default();
+        for verb in ["on", "off", "toggle", "toggle"] {
+            pending.replace("relay.5".into(), "controller.command.execute".into(),
+                serde_json::json!({"command":format!("relay 5 {verb}")}), false);
+        }
+        assert_eq!(pending.len(), 4);
+        for verb in ["on", "off", "toggle", "toggle"] {
+            assert_eq!(pending.pop_front().unwrap().1.params["command"], format!("relay 5 {verb}"));
+        }
+        for _ in 0..64 { pending.replace("relay.5".into(), "controller.command.execute".into(), serde_json::json!({"command":"relay 5 toggle"}), false); }
+        assert!(pending.replace_at("relay.5".into(), "controller.command.execute".into(), serde_json::json!({"command":"relay 5 on"}), false, std::time::Instant::now()).is_err());
+        assert_eq!(pending.len(), 64);
+        pending.clear(); assert_eq!(pending.len(), 0);
+    }
 
     #[test]
     fn rapid_motion_intents_stay_bounded_and_keep_the_final_stop() {

@@ -1,6 +1,9 @@
 export type UiLocale = 'en' | 'fa';
 
 const fa: Record<string, string> = {
+  'Connection icon':'نماد اتصال', 'Connection mode':'نوع اتصال', 'Circle':'دایره',
+  'Show in chart':'نمایش در نمودار', 'Pause chart logging':'توقف ثبت نمودار', 'Copy chart history':'کپی تاریخچه نمودار',
+  'Chandelier':'لوستر', 'Loostr':'لوستر', 'Stage light':'نور صحنه', 'Garden':'باغ',
   'Locations': 'مکان‌ها', 'Drives': 'درایوها', 'Network locations': 'مکان‌های شبکه',
   'Folders': 'پوشه‌ها', 'Recent folders': 'پوشه‌های اخیر', 'Refresh locations': 'تازه‌سازی مکان‌ها',
   'Failed loading locations': 'بارگذاری مکان‌ها ناموفق بود', 'Home': 'خانه',

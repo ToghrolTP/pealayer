@@ -27,6 +27,19 @@ pub fn paint_chevron(ui: &egui::Ui, rect: egui::Rect, color: egui::Color32) {
     ], egui::Stroke::new(1.5, color)));
 }
 
+pub fn paint_choice_ticks(ui: &egui::Ui, rect: egui::Rect, count: usize, selected: usize) {
+    if count < 2 { return; }
+    let radius = rect.height() / 2.5;
+    let left = rect.left() + radius;
+    let right = rect.right().min(rect.left() + ui.spacing().slider_width) - radius;
+    for index in 0..count {
+        let x = egui::lerp(left..=right, index as f32 / (count - 1) as f32);
+        let color = if index == selected { ui.visuals().selection.stroke.color } else { ui.visuals().weak_text_color() };
+        // Visible notches flank the rail without covering its pointer target.
+        ui.painter().line_segment([egui::pos2(x, rect.bottom() - 3.0), egui::pos2(x, rect.bottom())], egui::Stroke::new(1.0, color));
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

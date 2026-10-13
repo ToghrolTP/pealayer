@@ -659,7 +659,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     // paths are valid even when they are not visible to the local enumerator.
                     let mut endpoint_changed = false;
                     ui.add_enabled_ui(!app.is_connected && !connection_requested, |ui| {
-                        ui.allocate_ui(egui::vec2(154.0, 20.0), |ui| {
+                        ui.allocate_ui_with_layout(egui::vec2(154.0, crate::ui::control_density::height(ui)),
+                            egui::Layout::left_to_right(egui::Align::Center), |ui| {
                             crate::ui::dropdown::ComboBox::from_id_salt("hardware_endpoint_select")
                                 .selected_text(&app.serial_port)
                                 .width(154.0)

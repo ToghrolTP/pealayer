@@ -8,6 +8,7 @@ use std::time::{Duration, Instant};
 
 const ITEM_HEIGHT: f32 = 22.0;
 const LOG_LIMIT: usize = 240;
+const WORKSPACE_WIDTH: f32 = 190.0;
 
 pub fn widget_label(item: Widget) -> &'static str {
     match item {
@@ -330,7 +331,7 @@ fn text_widget(
 
 fn workspace_trigger(ui: &mut egui::Ui, name: &str, icon: &str, rtl: bool,
     tooltip: &str) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(130.0, ITEM_HEIGHT), egui::Sense::click_and_drag());
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(WORKSPACE_WIDTH, ITEM_HEIGHT), egui::Sense::click_and_drag());
     let visuals = ui.style().interact(&response);
     // Private-use icon glyphs must use the normal icon-capable font family,
     // not the custom bold status-caption family.
@@ -342,7 +343,7 @@ fn workspace_trigger(ui: &mut egui::Ui, name: &str, icon: &str, rtl: bool,
     let galley = egui::WidgetText::from(egui::RichText::new(name).font(status_font(ui, false, true)))
         .into_galley(ui, Some(egui::TextWrapMode::Truncate), name_rect.width(), egui::TextStyle::Small);
     ui.painter().with_clip_rect(name_rect).galley(egui::pos2(
-        if rtl { name_rect.left() } else { name_rect.right() - galley.size().x },
+        if rtl { name_rect.right() - galley.size().x } else { name_rect.left() },
         rect.center().y - galley.size().y * 0.5), galley, visuals.text_color());
     crate::ui::control_density::paint_chevron(ui,
         egui::Rect::from_center_size(chevron_center, egui::vec2(14.0, 14.0)), visuals.text_color());
@@ -388,7 +389,7 @@ fn workspace_selector(app: &mut PealayerApp, ui: &mut egui::Ui) -> egui::Respons
     let icon = app.active_workspace_profile.as_ref().and_then(|id| app.workspace_profiles.get(id))
         .map(|profile| crate::ui::icons::workspace_icon(&profile.icon)).unwrap_or(crate::ui::icons::APP_WINDOW);
     let (response, choice) = workspace_dropdown(ui, &profiles, app.active_workspace_profile.as_deref(),
-        &app.active_workspace_name(), icon, app.rtl, &app.tr("Switch workspace"), &app.tr("Manage workspaces..."));
+        &format!("{}: {}", app.tr("Workspace"), app.active_workspace_name()), icon, app.rtl, &app.tr("Switch workspace"), &app.tr("Manage workspaces..."));
     match choice {
         Some(WorkspaceChoice::Restore(id)) => app.restore_workspace_profile(ui.ctx(), &id),
         Some(WorkspaceChoice::Manage) => app.show_workspace_profiles_dialog = true,
@@ -476,9 +477,18 @@ fn render_widget(
             } else {
                 app.tr(availability.label())
             };
+            let icon = match app.status_bar.connection_icon {
+                crate::config::StatusConnectionIcon::Plug => crate::ui::icons::PLUG,
+                crate::config::StatusConnectionIcon::Circle => "●",
+                crate::config::StatusConnectionIcon::Controller => crate::ui::icons::CPU,
+                crate::config::StatusConnectionIcon::None => "",
+            };
+            let mode = app.status_bar.connection_mode.then(|| app.engine_handle.active_transport.try_lock().ok()
+                .and_then(|value| value.clone())).flatten();
+            let text = match mode { Some(mode) => format!("{text} · {mode}"), None => text };
             (
-                format!("{} {text}", crate::ui::icons::PLUG),
-                148.0,
+                format!("{icon} {text}").trim().to_owned(),
+                if app.status_bar.connection_mode { 252.0 } else { 148.0 },
                 false,
                 if ready && app.is_connected {
                     egui::Color32::from_rgb(46, 204, 113)
@@ -689,13 +699,70 @@ fn item_menu(app: &mut PealayerApp, ui: &mut egui::Ui, item: Widget, log_id: egu
     ));
     ui.separator();
     let mut changed = false;
+    if item == Widget::Fps && let Some(fps) = app.current_fps_display(Instant::now()) {
+        if ui.dropdown_choice(false, app.tr("Copy value")).clicked() { ui.ctx().copy_text(fps.formatted); ui.close(); }
+        ui.weak(fps.tooltip);
+    }
+    if item == Widget::Estop && ui.dropdown_choice(false, app.tr("Release E-STOP...")).clicked() {
+        app.request_emergency_stop_change(false); ui.close();
+    }
+    if matches!(item, Widget::Warnings | Widget::Hot) && let Some(hardware) = app.advertised_hardware() {
+        if let Some(text) = metric_text(Some(&hardware), Widget::Temperature) { ui.label(text); }
+        for warning in &hardware.warnings { ui.label(format!("{} · {}", warning.code, warning.message)); }
+        if ui.dropdown_choice(false, app.tr("Show in chart")).clicked() {
+            app.status_bar.chart_metric = StatusChartMetric::Temperature; app.status_bar.chart = true; changed = true; ui.close();
+        }
+    }
+    if item == Widget::Connection {
+        ui.menu_button(app.tr("Connection icon"), |ui| {
+            use crate::config::StatusConnectionIcon;
+            for (value, label) in [(StatusConnectionIcon::Plug, "Plug"), (StatusConnectionIcon::Circle, "Circle"),
+                (StatusConnectionIcon::Controller, "PCController"), (StatusConnectionIcon::None, "None")] {
+                if ui.dropdown_choice(app.status_bar.connection_icon == value, app.tr(label)).clicked() {
+                    app.status_bar.connection_icon = value; changed = true; ui.close();
+                }
+            }
+        });
+        changed |= ui.checkbox(&mut app.status_bar.connection_mode, "Connection mode").changed();
+        if !app.serial_port.is_empty() && ui.dropdown_choice(false, app.tr("Copy endpoint")).clicked() {
+            ui.ctx().copy_text(app.serial_port.clone()); ui.close();
+        }
+    }
+    if let Some(metric) = metric_index(item).map(|index| [StatusChartMetric::Voltage, StatusChartMetric::Current, StatusChartMetric::Temperature][index]) {
+        if ui.dropdown_choice(false, app.tr("Show in chart")).clicked() {
+            app.status_bar.chart_metric = metric; app.status_bar.chart = true; changed = true; ui.close();
+        }
+        if let Some(text) = metric_text(app.advertised_hardware().as_ref(), item)
+            && ui.dropdown_choice(false, app.tr("Copy value")).clicked() { ui.ctx().copy_text(text); ui.close(); }
+    }
+    if item == Widget::Workspace && ui.dropdown_choice(false, app.tr("Manage workspaces...")).clicked() {
+        app.show_workspace_profiles_dialog = true; ui.close();
+    }
+    if item == Widget::StatusRgb && let Some(led) = app.advertised_hardware().and_then(|h| h.status_led) {
+        let color = format!("#{:02X}{:02X}{:02X}", led.red, led.green, led.blue);
+        if ui.dropdown_choice(false, format!("{} · {color}", app.tr("Copy color"))).clicked() { ui.ctx().copy_text(color); ui.close(); }
+    }
+    if item == Widget::Timeline && ui.dropdown_choice(false, app.tr("Show in timeline")).clicked() {
+        app.open_or_focus_tab(crate::ui::layout::PealayerTab::Timeline); ui.close();
+    }
     if item == Widget::Progress {
+        if ui.dropdown_choice(false, app.tr("Copy operation details")).clicked() {
+            let text = active_operations(app.advertised_hardware().as_ref()).iter()
+                .map(|operation| format!("{} · {}\n{}", operation.label, operation.phase, operation.detail)).collect::<Vec<_>>().join("\n");
+            ui.ctx().copy_text(text); ui.close();
+        }
         for operation in active_operations(app.advertised_hardware().as_ref()) {
             ui.label(format!("{} · {}",operation.label,operation.phase)); ui.weak(operation.detail);
         }
         ui.separator();
     }
     if item == Widget::Message && let Some(message) = current_status_message(app) { ui.label(message); ui.separator(); }
+    if item == Widget::Message {
+        if ui.dropdown_choice(false, app.tr("Copy message")).clicked() {
+            if let Some(message) = current_status_message(app) { ui.ctx().copy_text(message); } ui.close();
+        }
+        if ui.dropdown_choice(false, app.tr("Dismiss")).clicked() { app.osd_message = None; ui.close(); }
+    }
     for (end, label) in [(false, "Place at start"), (true, "Place at end")] {
         if ui.dropdown_choice(app.status_bar.at_end(item) == end, app.tr(label)).clicked() {
             app.status_bar.place_at_end(item, end); changed = true; ui.close();
@@ -749,6 +816,17 @@ fn item_menu(app: &mut PealayerApp, ui: &mut egui::Ui, item: Widget, log_id: egu
         ui.separator();
     }
     if item == Widget::Chart {
+        let pause_label = app.tr("Pause chart logging");
+        changed |= ui.checkbox(&mut app.status_bar.chart_paused, pause_label).changed();
+        if ui.dropdown_choice(false, app.tr("Copy chart history")).clicked() {
+            let history = ui.ctx().data(|data| data.get_temp::<TelemetryLog>(log_id)).unwrap_or_default();
+            let mut csv = String::from("elapsed_seconds,voltage_V,current_mA,temperature_C\n");
+            if let Some(first) = history.samples.front() { for sample in &history.samples {
+                csv.push_str(&format!("{:.3},{}\n", sample.time.duration_since(first.time).as_secs_f64(),
+                    sample.values.iter().map(|value| value.map(|v| format!("{v:.3}")).unwrap_or_default()).collect::<Vec<_>>().join(",")));
+            } }
+            ui.ctx().copy_text(csv); ui.close();
+        }
         for (metric, title) in [
             (StatusChartMetric::Voltage, "Voltage"),
             (StatusChartMetric::Current, "Current draw"),
@@ -860,7 +938,7 @@ fn present(app: &PealayerApp, item: Widget, hardware: Option<&HardwareCapabiliti
 }
 fn slot_width(item: Widget) -> f32 { match item {
     Widget::Fps => 88.0, Widget::Voltage | Widget::Current => 58.0, Widget::Temperature => 64.0,
-    Widget::StatusRgb => 20.0, Widget::Workspace => 130.0, Widget::Chart => 100.0,
+    Widget::StatusRgb => 20.0, Widget::Workspace => WORKSPACE_WIDTH, Widget::Chart => 100.0,
     Widget::Progress => 168.0, Widget::Message => 180.0, Widget::Warnings => 150.0,
     Widget::Hot => 160.0, Widget::Estop => 130.0, _ => 148.0,
 } }
@@ -993,7 +1071,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let log_id = egui::Id::new("status-bar-telemetry-log");
     let now = Instant::now();
     let log = ui.ctx().data_mut(|data| { let log=data.get_temp_mut_or_default::<TelemetryLog>(log_id);
-        log.sample(now,hardware.as_ref()); log.clone() });
+        if !app.status_bar.chart_paused { log.sample(now,hardware.as_ref()); } log.clone() });
     let payload = egui::DragAndDrop::payload::<Widget>(ui.ctx());
     let mut rects = Vec::new();
     let panel = egui::Panel::bottom("status_bar").show_inside(ui, |ui| {
@@ -1001,7 +1079,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         ui.with_layout(crate::ui::i18n::layout(app.rtl,egui::Align::Center), |ui| {
             let items=group_items(app,true,hardware.as_ref(),&progress);
             let separators=if app.status_bar.dividers { items.len().saturating_sub(1) as f32*4.0 } else { 0.0 };
-            let end_width=(items.iter().map(|item|slot_width(*item)).sum::<f32>() + items.len().saturating_sub(1) as f32*3.0 + separators)
+            let end_width=(items.iter().map(|item| if *item == Widget::Connection && app.status_bar.connection_mode { 252.0 } else { slot_width(*item) }).sum::<f32>() + items.len().saturating_sub(1) as f32*3.0 + separators)
                 .max(24.0).min((ui.available_width()-48.0).max(24.0));
             let start_width=(ui.available_width()-end_width-3.0).max(1.0);
             ui.allocate_ui_with_layout(egui::vec2(start_width,ITEM_HEIGHT),crate::ui::i18n::layout(app.rtl,egui::Align::Center),
@@ -1136,7 +1214,7 @@ mod tests {
                             slot = workspace_trigger(ui, name, crate::ui::icons::FILE_VIDEO, rtl, "Switch workspace").rect;
                         });
                         output.textures_delta.clear();
-                        assert_eq!(slot.size(), egui::vec2(130.0, ITEM_HEIGHT));
+                        assert_eq!(slot.size(), egui::vec2(WORKSPACE_WIDTH, ITEM_HEIGHT));
                         let icon = output.shapes.iter().find_map(|shape| match &shape.shape {
                             egui::epaint::Shape::Text(text) if text.galley.job.text == crate::ui::icons::FILE_VIDEO => Some(text),
                             _ => None,

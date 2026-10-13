@@ -9056,6 +9056,9 @@ fn web_hardware_details(
         "outputs_available": capabilities.outputs_available(),
         "capability_bits": capabilities.capability_bits,
         "host_instance_id": capabilities.host_instance_id,
+        "connection_generation": capabilities.connection_generation,
+        "pwm_revision": capabilities.pwm_revision,
+        "pwm_available": capabilities.telemetry.pwm_available,
         "motion_control_mode": match motion_control_mode {
             crate::config::MotionControlMode::Hold => "hold",
             crate::config::MotionControlMode::Toggle => "toggle",

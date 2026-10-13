@@ -912,6 +912,11 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
         ("GET", "/api/runtime/app-icon-192.png") => runtime_pwa_icon_response(&request.target, 192),
         ("GET", "/api/runtime/app-icon-512.png") => runtime_pwa_icon_response(&request.target, 512),
         ("GET", "/manifest.webmanifest") => pwa_manifest_response(),
+        ("GET", "/api/icons/catalog") => HttpResponse::json(200, "OK",
+            serde_json::Value::Array(crate::ui::icons::control_icon_catalog().iter()
+                .map(|(key,label,glyph)| serde_json::json!({"key":key,"label":label,"glyph":glyph})).collect()).to_string()),
+        ("GET", "/api/icons/font") => HttpResponse::bytes(200, "OK", "font/otf",
+            egui_phosphor::Variant::Regular.font_bytes().to_vec()),
         ("GET", "/api/config") => HttpResponse::json(
             200,
             "OK",

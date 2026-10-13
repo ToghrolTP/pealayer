@@ -1464,7 +1464,7 @@ fn effect_library_card_rename_header(
         let tr = |text| crate::ui::i18n::tr(language,text);
         crate::ui::icons::searchable_icon_button_sized(ui,id.with("inline-icon"),&mut edit.icon,
             16.0,egui::vec2(20.0,24.0),&tr("Change icon"),crate::ui::icons::IconPickerConfig {
-                language,presets:crate::ui::icons::CONTROL_ICON_PRESETS,
+                language,presets:crate::ui::icons::control_icon_catalog(),
                 fallback_glyph:crate::ui::icons::SPARKLE,fallback_name:"Sparkle",
                 width:260.0,show_selected_name:false,search_hint:&tr("Search icons..."),
                 presets_label:&tr("Presets"),no_matches_label:&tr("No matching icons"),clear_label:None,
@@ -2241,7 +2241,9 @@ fn hardware_control_activation(
     clicked_on_release: bool,
 ) -> bool {
     if activate_on_press {
-        pointer_down_on_control && primary_pressed_this_frame
+        // A complete press/release can arrive in one frame. Its click belongs
+        // to this response even though the pointer is no longer held down.
+        (pointer_down_on_control || clicked_on_release) && primary_pressed_this_frame
     } else {
         clicked_on_release
     }
@@ -5682,7 +5684,7 @@ fn draw_control_icon_picker(
         &tooltip,
         crate::ui::icons::IconPickerConfig {
             language: app.language,
-            presets: crate::ui::icons::CONTROL_ICON_PRESETS,
+            presets: crate::ui::icons::control_icon_catalog(),
             fallback_glyph: crate::ui::icons::control(&control.kind, ""),
             fallback_name: &default_label,
             width: 260.0,
@@ -6531,7 +6533,8 @@ fn draw_buzzer_tool(
 
             ui.add_space(8.0);
             ui.label(egui::RichText::new(app.tr("Configured melody")).strong());
-            ui.horizontal_wrapped(|ui| {
+            ui.horizontal(|ui| {
+                let control_height = crate::ui::control_density::height(ui);
                 let selected_text = if melody.is_empty() {
                     app.tr("No configured melodies")
                 } else {
@@ -6540,7 +6543,7 @@ fn draw_buzzer_tool(
                 let combo_id = ui.make_persistent_id("hardware_buzzer_melody_combo");
                 let was_open = crate::ui::dropdown::ComboBox::is_open(ui.ctx(), combo_id);
                 let response = crate::ui::dropdown::ComboBox::from_id_salt("hardware_buzzer_melody_combo")
-                    .width((ui.available_width() - 32.0).max(1.0))
+                    .width((ui.available_width() - control_height - ui.spacing().item_spacing.x).max(1.0))
                     .wrap_mode(egui::TextWrapMode::Truncate)
                     .selected_text(selected_text)
                     .show_ui(ui, |ui| {
@@ -6568,7 +6571,7 @@ fn draw_buzzer_tool(
                     .response;
                 refresh_catalog |= !was_open && crate::ui::dropdown::ComboBox::is_open(ui.ctx(), response.id);
                 if ui
-                    .small_button(crate::ui::icons::ARROW_CLOCKWISE)
+                    .add_sized([control_height, control_height], egui::Button::new(crate::ui::icons::ARROW_CLOCKWISE))
                     .on_hover_text(app.tr("Refresh melody catalog"))
                     .clicked()
                 {
@@ -7343,13 +7346,16 @@ fn hardware_action_button(ui: &egui::Ui, label: impl Into<String>, verb: &str,
     };
     let Some(tone) = tone else { return egui::Button::new(label).truncate().selected(selected); };
     if !enabled {
-        return egui::Button::new(egui::RichText::new(label).color(ui.visuals().weak_text_color()))
+        return egui::Button::new(egui::RichText::new(label).font(egui::TextStyle::Button.resolve(ui.style())).color(ui.visuals().weak_text_color()))
             .truncate().fill(ui.visuals().widgets.noninteractive.weak_bg_fill)
             .stroke(ui.visuals().widgets.noninteractive.bg_stroke);
     }
-    egui::Button::new(egui::RichText::new(label).color(tone)).truncate().selected(selected)
-        .fill(tone.gamma_multiply(if selected { 0.20 } else { 0.07 }))
-        .stroke(egui::Stroke::new(1.0, tone.gamma_multiply(if selected { 0.8 } else { 0.45 })))
+    if !selected { return egui::Button::new(label).truncate(); }
+    egui::Button::new(egui::RichText::new(label).font(egui::TextStyle::Button.resolve(ui.style())).color(tone)).truncate().selected(true)
+        .fill(tone.gamma_multiply(0.20))
+        // egui's atomic button frame includes stroke width in its geometry.
+        // Recolor the theme's stroke without changing the selected row height.
+        .stroke(egui::Stroke::new(ui.visuals().widgets.inactive.bg_stroke.width, tone.gamma_multiply(0.8)))
 }
 
 /// Keep transformable card layers attached to their workspace panel rather
@@ -7416,8 +7422,7 @@ fn draw_compact_control_card(
                     && !control.locked
                     && let Some(id) = relay_id
                 {
-                    let turn_on = indicator_state != ControlIndicatorState::Active;
-                    crate::ui::hardware_control::set_relay(app, id, turn_on);
+                    crate::ui::hardware_control::toggle_relay(app, id);
                 }
                 if app.prefix_relay_identifiers && let Some(id) = relay_id {
                     ui.label(
@@ -8370,7 +8375,7 @@ mod timeline_row_tests {
                         let mut caption_rect = egui::Rect::NOTHING;
                         let mut icon_rect = egui::Rect::NOTHING;
                         let mut button_rect = egui::Rect::NOTHING;
-                        let _ = context.run_ui(egui::RawInput {
+                        let mut output = context.run_ui(egui::RawInput {
                             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(500.0, 300.0))),
                             ..Default::default()
                         }, |ui| {
@@ -8386,8 +8391,10 @@ mod timeline_row_tests {
                                 button_rect = ui.add(hardware_action_button(ui, "OFF", "off", true, true)).rect;
                             });
                         });
+                        output.textures_delta.clear();
                         assert!((caption_rect.center().y - icon_rect.center().y).abs() < 0.01);
-                        assert!((caption_rect.center().y - button_rect.center().y).abs() < 0.01);
+                        assert!((caption_rect.center().y - button_rect.center().y).abs() < 0.01,
+                            "compact={compact}, density={density:?}, body={body_size}, caption={caption_rect:?}, button={button_rect:?}");
                         if let Some(previous) = display_rect { assert_eq!(caption_rect, previous); }
                         display_rect = Some(caption_rect);
                     }
@@ -11030,6 +11037,7 @@ mod timeline_row_tests {
     #[test]
     fn output_activation_selects_press_or_release_without_double_firing() {
         assert!(hardware_control_activation(true, true, true, false));
+        assert!(hardware_control_activation(true, false, true, true), "One-frame press/release must not be lost");
         assert!(!hardware_control_activation(true, false, false, true));
         assert!(!hardware_control_activation(false, true, true, false));
         assert!(hardware_control_activation(false, false, false, true));
@@ -13978,7 +13986,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 &mut draft.icon,
                                                 crate::ui::icons::IconPickerConfig {
                                                     language: icon_language,
-                                                    presets: crate::ui::icons::CONTROL_ICON_PRESETS,
+                                                    presets: crate::ui::icons::control_icon_catalog(),
                                                     fallback_glyph: crate::ui::icons::FOLDER_OPEN,
                                                     fallback_name: &group_default_icon_label,
                                                     width: 250.0,

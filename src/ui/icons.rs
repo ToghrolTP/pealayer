@@ -19,6 +19,11 @@ pub use egui_phosphor::regular::{
 };
 
 pub const CONTROL_ICON_PRESETS: &[(&str, &str, &str)] = &[
+    ("window", "Window", APP_WINDOW),
+    ("chandelier", "Chandelier", LAMP),
+    ("loostr", "Loostr", LAMP),
+    ("stage-light", "Stage light", egui_phosphor::regular::LIGHTHOUSE),
+    ("garden", "Garden", egui_phosphor::regular::TREE),
     ("sparkle", "Sparkle", SPARKLE),
     ("folder", "Folder", FOLDER_OPEN),
     ("plug", "Plug", PLUG),
@@ -40,6 +45,18 @@ pub const CONTROL_ICON_PRESETS: &[(&str, &str, &str)] = &[
     ("circuitry", "Circuitry", CIRCUITRY),
     ("gear", "Gear", GEAR),
 ];
+
+#[path = "icon_catalog.rs"]
+mod icon_catalog;
+
+pub fn control_icon_catalog() -> &'static [(&'static str, &'static str, &'static str)] {
+    static CATALOG: std::sync::OnceLock<Vec<(&'static str, &'static str, &'static str)>> = std::sync::OnceLock::new();
+    CATALOG.get_or_init(|| {
+        let mut catalog = CONTROL_ICON_PRESETS.to_vec();
+        for entry in icon_catalog::ALL { if !catalog.iter().any(|item| item.0 == entry.0) { catalog.push(*entry); } }
+        catalog
+    })
+}
 
 pub const WORKSPACE_ICON_PRESETS: &[(&str, &str, &str)] = &[
     ("monitor", "Monitor", MONITOR_PLAY),
@@ -69,14 +86,14 @@ pub fn workspace_icon_name(name: &str) -> &'static str {
 }
 
 pub fn named_control_icon(name: &str) -> Option<&'static str> {
-    CONTROL_ICON_PRESETS
+    control_icon_catalog()
         .iter()
         .find(|(key, _, _)| key.eq_ignore_ascii_case(name.trim()))
         .map(|(_, _, glyph)| *glyph)
 }
 
 pub fn control_icon_name(name: &str) -> Option<&'static str> {
-    CONTROL_ICON_PRESETS
+    control_icon_catalog()
         .iter()
         .find(|(key, _, _)| key.eq_ignore_ascii_case(name.trim()))
         .map(|(_, label, _)| *label)
@@ -89,9 +106,10 @@ fn icon_preset_matches(key: &str, label: &str, query: &str) -> bool {
 }
 
 fn translated_icon_name(language: crate::config::AppLanguage, label: &str) -> String {
-    CONTROL_ICON_PRESETS.iter().chain(WORKSPACE_ICON_PRESETS.iter())
-        .find(|(_, title, _)| *title == label)
-        .map(|(_, title, _)| crate::ui::i18n::tr(language, title)).unwrap_or_else(|| label.to_owned())
+    static TITLES: std::sync::OnceLock<std::collections::HashMap<&'static str, &'static str>> = std::sync::OnceLock::new();
+    TITLES.get_or_init(|| control_icon_catalog().iter().chain(WORKSPACE_ICON_PRESETS.iter())
+        .map(|(_,title,_)| (*title,*title)).collect()).get(label)
+        .map(|title| crate::ui::i18n::tr(language, title)).unwrap_or_else(|| label.to_owned())
 }
 
 /// Presentation and catalog data for the shared icon picker. Keeping this in
@@ -586,7 +604,7 @@ pub fn searchable_control_icon_picker(
         value,
         IconPickerConfig {
             language,
-            presets: CONTROL_ICON_PRESETS,
+            presets: control_icon_catalog(),
             fallback_glyph: SPARKLE,
             fallback_name: "Sparkle",
             width,
@@ -699,6 +717,16 @@ mod tests {
         }
     }
     use super::*;
+
+    #[test]
+    fn complete_catalog_resolves_channel_aliases_and_non_preset_icons() {
+        assert!(control_icon_catalog().len() > 1500);
+        for name in ["window", "chandelier", "loostr", "stage-light", "garden", "airplane", "tree-palm"] {
+            assert!(named_control_icon(name).is_some(), "missing {name}");
+        }
+        let unique: std::collections::HashSet<_> = control_icon_catalog().iter().map(|entry| entry.0).collect();
+        assert_eq!(unique.len(), control_icon_catalog().len());
+    }
 
     #[test]
     fn control_icon_presets_are_searchable_by_stable_name() {

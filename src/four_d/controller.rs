@@ -166,6 +166,7 @@ pub struct HardwareCapabilities {
     pub supports_status_led_settings: bool,
     pub status_led: Option<HardwareStatusLed>,
     pub status_led_revision: u64,
+    pub pwm_revision: u64,
     pub settings: Option<HardwareBoardSettings>,
     pub front_panel: Option<HardwareFrontPanel>,
     pub telemetry: HardwareTelemetry,
@@ -243,6 +244,61 @@ pub struct HardwareEffectGroup {
 }
 
 impl HardwareCapabilities {
+    pub(crate) fn apply_pwm_push(&mut self, values: &Value) -> bool {
+        let Some(revision) = values.get("revision").and_then(Value::as_u64) else { return false; };
+        if !self.board_connected || values["host_instance_id"].as_str() != Some(self.host_instance_id.as_str())
+            || values["connection_generation"].as_u64() != Some(self.connection_generation)
+            || revision <= self.pwm_revision || values["time"].as_str().is_none()
+            || values["available"].as_bool().is_none() { return false; }
+        let Some(raw) = values["values"].as_array().filter(|raw|raw.len()==16 && raw.iter().all(|value|value.as_u64().is_some_and(|v|v<=4095))) else { return false; };
+        let Some(channels) = values["channels"].as_array().filter(|values| values.len()==16) else { return false; };
+        let mut seen = std::collections::BTreeSet::new();
+        for channel in channels {
+            if !channel["channel"].as_u64().is_some_and(|value|value<16 && seen.insert(value))
+                || !channel["raw_value"].as_u64().is_some_and(|value|value<=4095)
+                || !channel["logical_percent"].as_f64().is_some_and(|value|value.is_finite() && (0.0..=100.0).contains(&value)) { return false; }
+            if raw[channel["channel"].as_u64().unwrap() as usize] != channel["raw_value"] { return false; }
+        }
+        self.pwm_revision = revision;
+        let available = values["available"].as_bool().unwrap();
+        let availability_changed = self.telemetry.pwm_available != Some(available);
+        self.telemetry.pwm_available = Some(available);
+        if !available { return availability_changed; }
+        apply_pwm_values(&mut self.telemetry,values) || availability_changed
+    }
+
+    pub(crate) fn apply_snapshot_values(&mut self, snapshot: &Value) -> bool {
+        let parsed = parse_hardware_capabilities_with_front_panel(snapshot,&serde_json::json!({}),None);
+        let mut changed = false;
+        if snapshot["have_status"].as_bool() == Some(true) {
+            changed |= self.apply_status_notification(&serde_json::json!({"status":snapshot["status"]}));
+        }
+        if snapshot["have_front_panel"].as_bool() == Some(true) && parsed.front_panel.is_some()
+            && self.front_panel != parsed.front_panel {
+            self.front_panel = parsed.front_panel; changed = true;
+        }
+        if snapshot["have_status_led"].as_bool() == Some(true) && parsed.status_led.is_some()
+            && parsed.status_led_revision >= self.status_led_revision {
+            changed |= self.status_led != parsed.status_led;
+            self.status_led = parsed.status_led; self.status_led_revision = parsed.status_led_revision;
+        }
+        if snapshot["have_settings"].as_bool() == Some(true) && parsed.settings.is_some() && self.settings != parsed.settings {
+            self.settings = parsed.settings; changed = true;
+        }
+        if snapshot["have_board_name"].as_bool() == Some(true) && self.board_identity != parsed.board_identity {
+            self.board_identity = parsed.board_identity; self.board_name = parsed.board_name; changed = true;
+        }
+        if snapshot["motion"].is_object() && parsed.motion.is_some() && self.motion != parsed.motion {
+            self.motion = parsed.motion; changed = true;
+        }
+        if snapshot["outputs"].is_object() {
+            changed |= self.buzzer != parsed.buzzer || self.status_led_override != parsed.status_led_override || self.macro_running != parsed.macro_running;
+            self.buzzer = parsed.buzzer; self.status_led_override = parsed.status_led_override; self.macro_running = parsed.macro_running;
+        }
+        changed |= self.apply_pwm_push(&snapshot["pwm_values"]);
+        changed
+    }
+
     pub(crate) fn supports_buzzer_controls(&self) -> bool {
         self.board_connected && (self.capability_bits & (CAPABILITY_BUZZER_BUSY | CAPABILITY_BUZZER_PUSH) != 0
             || !self.melodies.is_empty())
@@ -528,6 +584,7 @@ pub struct HardwareStatusLed {
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct HardwareTelemetry {
+    pub pwm_available: Option<bool>,
     pub supply_mv: Option<i32>,
     pub bus_mv: Option<i32>,
     pub current_ma: Option<i32>,
@@ -775,7 +832,7 @@ impl HardwareCapabilities {
         let mut next_telemetry = telemetry_from_status(status, self.board_connected);
         next_telemetry.pwm_values = before_telemetry.pwm_values.clone();
         next_telemetry.pwm_logical_percent_milli = before_telemetry.pwm_logical_percent_milli.clone();
-        if let (Some(channel), Some(value)) = (next_telemetry.pwm_channel, next_telemetry.pwm_value)
+        if self.pwm_revision == 0 && let (Some(channel), Some(value)) = (next_telemetry.pwm_channel, next_telemetry.pwm_value)
             && let Some(slot) = next_telemetry.pwm_values.get_mut(usize::from(channel))
         {
             let raw_changed = slot.is_some_and(|previous| previous != value);
@@ -800,6 +857,8 @@ impl HardwareCapabilities {
     /// polling. PCController publishes the physical LED result after its MCU
     /// compositor has applied priority, brightness, and procedural effects.
     pub(crate) fn apply_state_notification(&mut self, event: &Value) -> bool {
+        if event.pointer("/metadata/connection_generation").and_then(value_as_u64)
+            .is_some_and(|generation| generation != self.connection_generation) { return false; }
         if event.get("kind").and_then(Value::as_str).is_some_and(|kind| kind.starts_with("update.")) {
             let Some(value) = event.get("metadata").and_then(|value| HardwareOperation::parse(value, true)) else { return false; };
             if let Some(previous) = self.operations.iter_mut().find(|item| item.id == value.id) {
@@ -850,6 +909,9 @@ impl HardwareCapabilities {
                 changed
             }
             Some("pwm.changed") => {
+                // The calibrated complete value notification follows this
+                // edge; do not erase percentages with a raw intermediate view.
+                if event.pointer("/metadata/revision").is_some() { return false; }
                 let Some(metadata) = event.get("metadata").filter(|value| value.is_object()) else {
                     return false;
                 };
@@ -1080,6 +1142,7 @@ impl HardwareCapabilities {
             || self.front_panel.is_some()
             || self.telemetry != HardwareTelemetry::default();
         self.board_connected = false;
+        self.pwm_revision = 0;
         self.active_relays.clear();
         self.motion = None;
         self.status_led = None;
@@ -1262,6 +1325,7 @@ fn telemetry_from_status(status: &Value, board_connected: bool) -> HardwareTelem
                     .and_then(Value::as_i64)
                     .unwrap_or(0) as i32
             }),
+        pwm_available: board_connected.then(||status.get("pwm_available").and_then(Value::as_bool)).flatten(),
         pwm_channel: status
             .get("pwm_available")
             .and_then(Value::as_bool)
@@ -1708,6 +1772,7 @@ impl ControllerClient {
         capabilities.channel_folders = folders;
         if let Some(values) = pwm_values.as_ref() {
             apply_pwm_values(&mut capabilities.telemetry, values);
+            capabilities.pwm_revision = values["revision"].as_u64().unwrap_or_default();
         }
         capabilities.melodies = parse_melodies(&melodies)?;
         // Read-only seed for a client that connects in the middle of an update;
@@ -3005,6 +3070,7 @@ fn parse_hardware_capabilities_with_front_panel(
             && capability_bits & (CAPABILITY_STATUS_EFFECTS | CAPABILITY_STATUS_LED_PUSH) != 0,
         status_led,
         status_led_revision,
+        pwm_revision: 0,
         settings,
         front_panel,
         telemetry,
@@ -4315,6 +4381,32 @@ mod tests {
             }
         })));
         assert_eq!(capabilities.motion.as_ref().unwrap().left.requested, "down");
+    }
+
+    #[test]
+    fn complete_pwm_push_retains_calibration_and_fences_board_ownership() {
+        let mut capabilities = HardwareCapabilities::default();
+        capabilities.board_connected = true;
+        capabilities.host_instance_id = "primary".into();
+        capabilities.connection_generation = 2;
+        let mut values = json!({
+            "host_instance_id":"primary", "connection_generation":2, "revision":4,
+            "time":"2026-10-13T05:00:00Z", "available":true,
+            "values": (0..16).map(|i|i*100).collect::<Vec<_>>(),
+            "channels": (0..16).map(|i|json!({"channel":i,"raw_value":i*100,"logical_percent":i*5})).collect::<Vec<_>>()
+        });
+        assert!(capabilities.apply_pwm_push(&values));
+        assert_eq!(capabilities.telemetry.pwm_logical_percent_milli[0],Some(0));
+        assert_eq!(capabilities.telemetry.pwm_logical_percent_milli[3],Some(15000));
+        assert!(!capabilities.apply_pwm_push(&values));
+        values["revision"] = json!(5);
+        values["connection_generation"] = json!(1);
+        assert!(!capabilities.apply_pwm_push(&values));
+        values["connection_generation"] = json!(2);
+        values["available"] = json!(false);
+        assert!(capabilities.apply_pwm_push(&values));
+        assert_eq!(capabilities.telemetry.pwm_available,Some(false));
+        assert_eq!(capabilities.telemetry.pwm_logical_percent_milli[3],Some(15000));
     }
 
     #[test]

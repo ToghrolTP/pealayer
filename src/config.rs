@@ -641,9 +641,16 @@ impl StatusBarWidget {
 #[serde(rename_all = "snake_case")]
 pub enum StatusChartMetric { #[default] Voltage, Current, Temperature }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StatusConnectionIcon { #[default] Plug, Circle, Controller, None }
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct StatusBarConfig {
+    pub connection_icon: StatusConnectionIcon,
+    pub connection_mode: bool,
+    pub chart_paused: bool,
     pub dividers: bool,
     pub semantic_colors: bool,
     pub monospace: [bool; StatusBarWidget::COUNT],
@@ -673,6 +680,7 @@ pub struct StatusBarConfig {
 impl Default for StatusBarConfig {
     fn default() -> Self {
         Self {
+            connection_icon: StatusConnectionIcon::Plug, connection_mode: false, chart_paused: false,
             dividers: true, semantic_colors: false,
             monospace: [true, false, false, false, false, true, true, true, false, false, false, false, false, false],
             trailing: [false, false, false, false, false, false, false, false, false, false, false, false, false, true],

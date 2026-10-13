@@ -42,8 +42,9 @@ export const ApplicationStatusBar: React.FC<ApplicationStatusBarProps> = ({ stat
   const telemetry = hardwareLive ? state.hardware_details?.telemetry : undefined;
   const voltage = numericTelemetry(telemetry?.bus_mv), current = numericTelemetry(telemetry?.current_ma), temperature = numericTelemetry(telemetry?.led_temperature_centi_c);
   useEffect(() => {
+    if (config.chart_paused) return;
     setSamples((previous) => appendSample(previous, { time: Date.now(), values: [voltage === undefined ? undefined : voltage / 1000, current, temperature === undefined ? undefined : temperature / 100] }));
-  }, [voltage, current, temperature]);
+  }, [voltage, current, temperature, config.chart_paused]);
   const label = (widget: StatusWidget) => tr(locale, LABELS[widget]);
   const show = (widget: StatusWidget, visible: boolean) => onVisibilityChange(setWidgetVisible(config, widget, visible));
   const changeMode = (fps_mode: FpsMode) => onVisibilityChange({ ...config, fps_mode });
@@ -62,6 +63,15 @@ export const ApplicationStatusBar: React.FC<ApplicationStatusBarProps> = ({ stat
     const order: StatusWidget[] = displayedWidgets(config.order).filter((item) => item !== 'workspace');
     const index = order.indexOf(widget);
     const items: MenuProps['items'] = [{ key: 'title', label: label(widget), icon: ICONS[widget], disabled: true }, { type: 'divider' }];
+    if (widget === 'connection') items.push(
+      { key:'connection-icon', label:tr(locale,'Connection icon'), children:['plug','circle','controller','none'].map(icon=>({key:`icon:${icon}`,label:tr(locale,icon==='controller'?'PCController':icon[0].toUpperCase()+icon.slice(1)),icon:config.connection_icon===icon?'✓':undefined})) },
+      { key:'connection-mode', label:tr(locale,'Connection mode'), icon:config.connection_mode?'✓':undefined });
+    if (METRICS.includes(widget as ChartMetric)) items.push({key:'show-chart', label:tr(locale,'Show in chart')});
+    if (widget === 'chart') items.push({key:'pause-log',label:tr(locale,'Pause chart logging'),icon:config.chart_paused?'✓':undefined}, {key:'copy-log',label:tr(locale,'Copy chart history')});
+    if (widget === 'workspace') items.push({key:'manage-workspaces',label:tr(locale,'Manage workspaces...')});
+    if (['connection','status_rgb','voltage','current','temperature','hot','warnings'].includes(widget)) items.push({key:'hardware',label:tr(locale,'Hardware Monitor')});
+    if (widget === 'timeline') items.push({key:'timeline',label:tr(locale,'Show in timeline')});
+    if (widget === 'progress') items.push({key:'operations',label:tr(locale,'Operation progress')});
     if(widget==='message' && state.osd) items.push({key:'message-detail',label:state.osd.message,disabled:true});
     items.push({ key:'start', label:tr(locale,'Place at start'), icon:!atEnd(widget) ? '✓' : undefined },
       { key:'end', label:tr(locale,'Place at end'), icon:atEnd(widget) ? '✓' : undefined });
@@ -89,6 +99,15 @@ export const ApplicationStatusBar: React.FC<ApplicationStatusBarProps> = ({ stat
       { type: 'divider' }, { key: 'hide', icon: <EyeInvisibleOutlined />, label: <>{tr(locale, 'Hide')} {ICONS[widget]} {label(widget)}</> });
     return { items, onClick: ({ key }) => {
       if (key === 'hide') show(widget, false);
+      else if(key.startsWith('icon:')) onVisibilityChange({...config,connection_icon:key.slice(5) as StatusBarVisibility['connection_icon']});
+      else if(key==='connection-mode') onVisibilityChange({...config,connection_mode:!config.connection_mode});
+      else if(key==='pause-log') onVisibilityChange({...config,chart_paused:!config.chart_paused});
+      else if(key==='show-chart') onVisibilityChange({...config,chart:true,chart_metric:widget as ChartMetric});
+      else if(key==='copy-log') void navigator.clipboard?.writeText('elapsed_seconds,voltage_V,current_mA,temperature_C\n'+samples.map(sample=>`${((sample.time-(samples[0]?.time??sample.time))/1000).toFixed(3)},${sample.values.map(value=>value??'').join(',')}`).join('\n'));
+      else if(key==='manage-workspaces') onNavigate('preferences');
+      else if(key==='hardware') onNavigate('hardware');
+      else if(key==='timeline') onNavigate('studio');
+      else if(key==='operations') onNavigate(operations[0]?.source==='download'?'downloads':'preferences');
       else if(key==='start' || key==='end') place(widget,key==='end');
       else if(key==='mono') onVisibilityChange({...config,monospace:config.monospace.map((value,index)=>index===WIDGETS.indexOf(widget)?!value:value)});
       else if(key==='colors') onVisibilityChange({...config,semantic_colors:!config.semantic_colors});
@@ -104,7 +123,10 @@ export const ApplicationStatusBar: React.FC<ApplicationStatusBarProps> = ({ stat
       case 'fps': return <button type="button" className="app-statusbar__fps" onClick={() => changeMode(nextFpsMode(config.fps_mode))}
         title={`${tr(locale, MODE_LABELS[config.fps_mode])} · ${tr(locale, screenRate ? 'Screen render rate' : 'Media frame rate')} · ${tr(locale, 'Click to switch frame rate source')}`}>
         {screenRate ? <DashboardOutlined /> : <VideoCameraOutlined />}<span className="status-fps-value">{rate != null && Number.isFinite(rate) && rate > 0 && (screenRate || state.current_video) ? `${rate.toFixed(2)} fps` : '— fps'}</span></button>;
-      case 'connection': { const availability = hardwareAvailability(state, connected); return <><ApiOutlined />{availability === 'ok' ? state.hardware?.board_name || state.hardware_details?.board_name || 'PCController' : tr(locale, hardwareLabels[availability])}</>; }
+      case 'connection': { const availability = hardwareAvailability(state, connected); return <>
+        {config.connection_icon === 'circle' ? <i className="status-connection-dot" /> : config.connection_icon === 'none' ? null : config.connection_icon === 'controller' ? <DashboardOutlined /> : <ApiOutlined />}
+        {availability === 'ok' ? state.hardware?.board_name || state.hardware_details?.board_name || 'PCController' : tr(locale, hardwareLabels[availability])}
+        {config.connection_mode && state.hardware_transport ? ` · ${state.hardware_transport}` : null}</>; }
       case 'hot': return hardwareLive && telemetry?.hot === true ? <><WarningOutlined /> HOT · {tr(locale, 'Temperature alert')}</> : null;
       case 'estop': return state.estop_active ? <><WarningOutlined />{tr(locale, 'E-STOP ACTIVE')}</> : null;
       case 'voltage': return voltage === undefined ? null : `${(voltage / 1000).toFixed(2)} V`;
@@ -131,7 +153,7 @@ export const ApplicationStatusBar: React.FC<ApplicationStatusBarProps> = ({ stat
           aria-haspopup="menu" aria-expanded={workspaceMenuOpen} disabled={!connected || workspaceProfiles.length === 0}
           title={`${tr(locale, 'Switch workspace')} · ${activeWorkspace?.name ?? tr(locale, 'Workspace')}`}
           onKeyDown={(event) => { if (event.key === 'ArrowDown' || event.key === 'ArrowUp') { event.preventDefault(); setWorkspaceMenuOpen(true); } }}>
-          {workspaceGlyph(activeWorkspace?.icon)}<span>{activeWorkspace?.name ?? tr(locale, 'Workspace')}</span><DownOutlined />
+          {workspaceGlyph(activeWorkspace?.icon)}<span>{tr(locale, 'Workspace')}: {activeWorkspace?.name ?? tr(locale, 'Workspace')}</span><DownOutlined />
         </button>
       </Dropdown>;
     }
@@ -144,7 +166,7 @@ export const ApplicationStatusBar: React.FC<ApplicationStatusBarProps> = ({ stat
         const child = content(widget); if (child == null) return null;
         return <Dropdown key={widget} trigger={widget==='chart'||widget==='message'?['contextMenu','click']:['contextMenu']} menu={menu(widget)}><span
           className={`status-widget status-widget--${widget}${config.monospace[WIDGETS.indexOf(widget)] ? ' is-monospace' : ''}${dropTarget?.widget === widget ? ` is-drop-${dropTarget.after ? 'after' : 'before'}` : ''}${dragged === widget ? ' is-dragging' : ''}`}
-          style={METRICS.includes(widget as ChartMetric) ? {color: config.semantic_colors && (widget==='temperature' && telemetry?.hot===true) ? 'var(--red)'
+          style={widget==='connection' && config.connection_mode ? {width:252} : METRICS.includes(widget as ChartMetric) ? {color: config.semantic_colors && (widget==='temperature' && telemetry?.hot===true) ? 'var(--red)'
             : config.semantic_colors && (()=>{ const index=METRICS.indexOf(widget as ChartMetric), value=[voltage,current,temperature][index], [low,high]=config.metric_limits[index];
                 return value!=null && (low!=null && value<low || high!=null && value>high); })() ? 'var(--amber)' : 'var(--muted)'} : undefined}
           data-status-widget={widget} title={label(widget)} draggable onContextMenu={(event) => event.stopPropagation()}

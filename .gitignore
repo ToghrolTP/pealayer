@@ -11,3 +11,4 @@ graphify-out/
 *.bin
 /.cargo/config.toml
 *.4d.json
+web_ui/*.tsbuildinfo
