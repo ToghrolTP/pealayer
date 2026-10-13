@@ -10,6 +10,49 @@ statements are not the present product state.
 
 ## Delivered source and deployment
 
+- Cafe's preparation recovery fixes are installed. A live standalone-strip wait
+  and subsequent coordinator outage were resolved with the user's scoped stop
+  and PCController restart approvals. [Live preparation recheck](hardware-preparation-recovery.md)
+  verified paused ready revision/prepare/clock ACK 67 with no errors; actual cue
+  deadline/physical playback acceptance remains separate.
+
+- Native video now isolates libmpv from egui blending/window clipping and renders
+  before sampling the shared texture. [Ghosting cause and delivery gates](video-ghosting.md)
+  document cross-workspace persistence, scoped restoration and render-error
+  validity. Compiler check passed; moving-video acceptance needs an installed build.
+
+- Appearance control density is a four-step slider (Compact, Regular,
+  Comfortable, Spacious), shared by native/Web inputs, selectors and menu rows.
+  [Sizing and verification boundary](control-density-and-buzzer.md) preserves
+  existing choices and Save/Discard behavior. Source compiler checks pass;
+  this iteration skips tests/CI and is not yet installed.
+
+- Relay ON/OFF controls retain semantic green/red in native/Web/mobile, and
+  card header layout centers captions with their unchanged inline-editor slots.
+  [Cause, geometry contract and delivery gates](relay-card-semantics-and-centering.md)
+  preserve disabled safeguards and separate source from installed acceptance.
+
+- Seven-segment changed-state subscriptions no longer request decimation, and
+  peer hardware delivery follows revisions instead of 100 ms samples.
+  [Cause, current contract and delivery gates](panel-mirror-fidelity.md) retain
+  screen-refresh, Web status cadence and installed visual acceptance limits.
+
+- Binary UDP now has paired host RPC, source-target identity, automatic mutual
+  discovery, leased pushes and shared native/Web configuration. The native
+  controller endpoint accepts `udp://IP:port`. [Source and loopback evidence](binary-udp.md)
+  retain installed-host, LAN, packet-loss, physical and Android acceptance gates.
+
+- Cafe's current native package and both PCController hosts are now updated;
+  Cafe is the paused authority and Erfan is a connected cache-only consumer.
+  Erfan's new Pealayer package is staged but its updater invocation was blocked.
+  [Paired delivery receipt and remaining action](paired-peer-deployment.md)
+  supersede the older Cafe blanket smoke-launch blocker, not physical/soak gates.
+
+- No-hardware authoring uses PCController's shared production firmware. Native
+  settings/front-panel caches bootstrap without a controller GUI; isolated
+  [integration and sensor-mapping evidence](virtual-development.md) retain the
+  physical/peripheral and installed-GUI/deployment limits.
+
 - OS media sessions use factual cached tags, contextual shared capabilities,
   bounded timeline updates and explicit stale-state cleanup. Windows owns all
   transport/position/rate callbacks and cached alpha artwork in one session.

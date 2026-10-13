@@ -26,6 +26,7 @@ pub enum PreferenceControlKind {
     MultiSelect,
     ReplacementList,
     Select,
+    ChoiceSlider,
     Text,
 }
 
@@ -180,6 +181,18 @@ impl PreferenceControl {
         let mut control = Self::boolean(key, section, group, label);
         control.kind = PreferenceControlKind::MultiSelect;
         control.options = options;
+        control
+    }
+
+    fn choice_slider(
+        key: &'static str,
+        section: &'static str,
+        group: &'static str,
+        label: &'static str,
+        options: &[(&'static str, &'static str)],
+    ) -> Self {
+        let mut control = Self::select(key, section, group, label, options);
+        control.kind = PreferenceControlKind::ChoiceSlider;
         control
     }
 
@@ -383,8 +396,9 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             &[("system", "System"), ("light", "Light"), ("dark", "Dark")],
         ),
         PreferenceControl::accent(config),
-        PreferenceControl::select("ui_control_density", "appearance", "Interface", "Control density",
-            &[("compact", "Compact"), ("comfortable", "Comfortable")]),
+        PreferenceControl::choice_slider("ui_control_density", "appearance", "Interface", "Control density",
+            &[("compact", "Compact"), ("regular", "Regular"),
+              ("comfortable", "Comfortable"), ("spacious", "Spacious")]),
         PreferenceControl::select("ui_font_family", "appearance", "Typography", "UI font",
             &[("system", "System font"), ("bundled", "Bundled font"), ("vazirmatn", "Vazirmatn")]),
         PreferenceControl::select("monospace_font_family", "appearance", "Typography", "Monospace font",
@@ -954,6 +968,10 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             );
             control
         },
+        PreferenceControl::boolean("binary_udp.enabled", "web", "Binary UDP", "Enable binary UDP"),
+        PreferenceControl::text("binary_udp.listen", "web", "Binary UDP", "UDP listening address", "127.0.0.1:8080"),
+        PreferenceControl::boolean("binary_udp.discovery", "web", "Binary UDP", "Discover and announce peers"),
+        PreferenceControl::boolean("binary_udp.broadcast_events", "web", "Binary UDP", "Broadcast state events"),
         {
             let options = crate::network::discover_bind_targets()
                 .into_iter()
@@ -1239,7 +1257,7 @@ fn semantic_preference_icon(control: &PreferenceControl) -> &'static str {
             PreferenceControlKind::Accent | PreferenceControlKind::Color => "palette",
             PreferenceControlKind::Boolean => "check-square",
             PreferenceControlKind::File => "image",
-            PreferenceControlKind::Number => "sliders-horizontal",
+            PreferenceControlKind::Number | PreferenceControlKind::ChoiceSlider => "sliders-horizontal",
             PreferenceControlKind::MultiSelect => "globe",
             PreferenceControlKind::ReplacementList => "text-align-left",
             PreferenceControlKind::Select => "list-checks",
@@ -1297,6 +1315,21 @@ pub fn set_value_at_path(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn density_slider_choices_match_serialized_shared_sizes() {
+        use crate::config::UiControlDensity;
+        let contract = super::preferences_contract(&crate::config::AppConfig::default());
+        let control = contract.controls.iter().find(|control| control.key == "ui_control_density").unwrap();
+        assert!(matches!(control.kind, super::PreferenceControlKind::ChoiceSlider));
+        assert_eq!(control.options.len(), 4);
+        assert_eq!(contract.values["ui_control_density"], serde_json::json!("compact"));
+        for ((density, option), height) in UiControlDensity::ALL.into_iter().zip(&control.options).zip([24.0, 28.0, 32.0, 36.0]) {
+            assert_eq!(serde_json::to_value(density).unwrap(), option.value);
+            assert_eq!(serde_json::from_value::<UiControlDensity>(option.value.clone()).unwrap(), density);
+            assert_eq!(density.base_height(), height);
+        }
+    }
+
     #[test]
     fn appearance_rows_have_semantic_icons_and_language_is_last() {
         let controls = preference_controls(&crate::config::AppConfig::default());

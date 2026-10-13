@@ -672,6 +672,10 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let ppi = pixels_per_point;
     let (target_phys_w, target_phys_h) = calculate_physical_bounds(dest_rect, ppi);
 
+    // Execute the renderer before sampling the shared texture, not one UI paint
+    // later. Filling this slot below keeps both the image and OSD above it.
+    let video_callback_slot = ui.painter().add(egui::Shape::Noop);
+
     // Draw the offscreen texture if registered, or active pseudo-frame during scrub
     let texture_id_opt = app
         .rtt_state
@@ -851,18 +855,9 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         unsafe {
                             use eframe::glow::HasContext;
 
-                            // Query original FBO binding
-                            let raw_fbo =
-                                gl.get_parameter_i32(eframe::glow::FRAMEBUFFER_BINDING) as u32;
-                            let target_fbo = std::num::NonZeroU32::new(raw_fbo)
-                                .map(eframe::glow::NativeFramebuffer);
-
-                            // Query original viewport to restore it later
-                            let mut original_viewport = [0; 4];
-                            gl.get_parameter_i32_slice(
-                                eframe::glow::VIEWPORT,
-                                &mut original_viewport,
-                            );
+                            // Scope also restores bindings on the unchanged-frame
+                            // early return. Never pass egui's blending/clip to mpv.
+                            let gl_state = crate::mpv::render::MpvGlStateGuard::enter(gl);
 
                             // Dynamic resizing of texture if physical dimensions changed
                             let needs_resize = rtt.texture_width != target_phys_w as u32
@@ -883,6 +878,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 rtt.texture_width = target_phys_w as u32;
                                 rtt.texture_height = target_phys_h as u32;
                                 rtt.has_rendered_frame = false;
+                                gl.bind_texture(eframe::glow::TEXTURE_2D, None);
                             }
 
                             // Query MPV to see if a new video frame is ready to render
@@ -898,22 +894,29 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 return;
                             }
 
-                            // Bind our offscreen FBO
-                            gl.bind_framebuffer(eframe::glow::FRAMEBUFFER, Some(video_fbo));
-
-                            // Set viewport to exact physical framebuffer size
-                            gl.viewport(0, 0, target_phys_w, target_phys_h);
+                            // A successful pass replaces an opaque frame in full;
+                            // no old/undefined pixels survive clipping or resize.
+                            gl_state.begin_frame(video_fbo, target_phys_w, target_phys_h);
 
                             // Render MPV frame at physical pixel size
                             let fbo_id = video_fbo.0.get() as i32;
                             let render_start = std::time::Instant::now();
-                            let _ = rc.0.render::<GetProcAddress>(
+                            let render_result = rc.0.render::<GetProcAddress>(
                                 fbo_id,
                                 target_phys_w,
                                 target_phys_h,
                                 false,
                             );
                             record_mpv_render_duration(render_start.elapsed());
+                            if let Err(error) = render_result {
+                                // Do not cache an unsuccessful or partially drawn
+                                // frame as valid, nor log the same fault every paint.
+                                if needs_resize || rtt.has_rendered_frame {
+                                    log::warn!("Could not render the libmpv video target: {error}");
+                                }
+                                rtt.has_rendered_frame = false;
+                                return;
+                            }
                             rtt.has_rendered_frame = true;
 
                             #[cfg(target_os = "windows")]
@@ -928,16 +931,6 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 );
                             }
 
-                            // Restore original FBO binding
-                            gl.bind_framebuffer(eframe::glow::FRAMEBUFFER, target_fbo);
-
-                            // Restore original viewport
-                            gl.viewport(
-                                original_viewport[0],
-                                original_viewport[1],
-                                original_viewport[2],
-                                original_viewport[3],
-                            );
                         }
                     }
                 }
@@ -946,7 +939,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     };
 
     if !crate::mpv::external::active() || crate::mpv::external::preview() {
-        ui.painter().add(callback);
+        ui.painter().set(video_callback_slot, callback);
     } else {
         let status = crate::mpv::external::status();
         let (tone, message) = external_mpv_notice(&status);
@@ -1169,6 +1162,33 @@ fn external_mpv_notice(status: &crate::mpv::external::Status) -> (elegance::Call
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn video_renderer_is_scheduled_before_image_and_osd() {
+        // CPU-only paint-order guard; no player, decoder, GPU or board worker.
+        let source = include_str!("video.rs").split("#[cfg(test)]").next().unwrap();
+        let slot = source.find("let video_callback_slot = ui.painter().add(egui::Shape::Noop)").unwrap();
+        let image = source.find("ui.painter().image(").unwrap();
+        let osd = source.find("// 2.5 Draw OSD overlay").unwrap();
+        assert!(slot < image && image < osd);
+        assert!(source.contains("ui.painter().set(video_callback_slot, callback)"));
+        assert!(!source.contains("ui.painter().add(callback)"));
+    }
+
+    #[test]
+    fn video_early_returns_and_failed_render_keep_guarded_state_and_validity() {
+        let source = include_str!("video.rs").split("#[cfg(test)]").next().unwrap();
+        let boundary = source.find("MpvGlStateGuard::enter(gl)").unwrap();
+        let update = source.find("let has_new_frame = match rc.0.update()").unwrap();
+        let reuse = source.find("if !needs_resize && !has_new_frame && rtt.has_rendered_frame").unwrap();
+        let clear = source.find("gl_state.begin_frame(video_fbo, target_phys_w, target_phys_h)").unwrap();
+        let render = source.find("let render_result = rc.0.render::<GetProcAddress>").unwrap();
+        let failure = source.find("if let Err(error) = render_result").unwrap();
+        let valid = source.find("rtt.has_rendered_frame = true").unwrap();
+        assert!(boundary < update && update < reuse && reuse < clear && clear < render && render < failure && failure < valid);
+        assert!(source[failure..valid].contains("rtt.has_rendered_frame = false"));
+        assert!(source[failure..valid].contains("return;"));
+    }
 
     #[test]
     fn external_notice_reports_observed_state_not_assumed_playing() {

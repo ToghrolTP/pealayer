@@ -3,10 +3,7 @@ use eframe::egui;
 use crate::config::UiControlDensity;
 
 pub fn configure(style: &mut egui::Style, density: UiControlDensity) {
-    style.spacing.interact_size.y = match density {
-        UiControlDensity::Compact => 24.0,
-        UiControlDensity::Comfortable => 32.0,
-    };
+    style.spacing.interact_size.y = density.base_height();
     style.spacing.button_padding.y = ((style.spacing.interact_size.y - style.spacing.icon_width) * 0.5).max(0.0);
     // Stroke changes must never expand a field, chevron or neighboring widget.
     for visuals in [&mut style.visuals.widgets.inactive, &mut style.visuals.widgets.hovered,
@@ -36,7 +33,7 @@ mod tests {
 
     #[test]
     fn inputs_combos_color_triggers_and_menu_rows_share_density_in_both_themes() {
-        for density in [UiControlDensity::Compact, UiControlDensity::Comfortable] {
+        for density in UiControlDensity::ALL {
             for dark in [false, true] {
                 for scale in [1.0, 1.25, 1.5, 2.0] {
                     for font_size in [12.0, 14.0, 20.0] {

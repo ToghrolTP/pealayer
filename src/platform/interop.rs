@@ -2439,6 +2439,7 @@ pub fn live_config_revision() -> u64 {
 #[derive(Clone)]
 pub struct LiveFrameConfig {
     pub web_enabled: bool,
+    pub binary_udp_enabled: bool,
     pub web_sync_interval_ms: u32,
     pub remote_folder_auto_next: bool,
     pub remote_folder_thumbnails: bool,
@@ -2449,6 +2450,7 @@ impl LiveFrameConfig {
     fn from_config(config: &crate::config::AppConfig, dark: bool) -> Self {
         Self {
             web_enabled: crate::config::resolved_web_enabled(config),
+            binary_udp_enabled: config.binary_udp.enabled,
             web_sync_interval_ms: config.web_sync_interval_ms,
             remote_folder_auto_next: config.remote_folder_auto_next,
             remote_folder_thumbnails: config.remote_folder_thumbnails,
@@ -2769,6 +2771,9 @@ fn dispatch_local_payload(
     expected_session_id: Option<u32>,
 ) -> String {
     if let Some(response) = crate::downloads::rpc_payload(payload, false) { return response; }
+    if let Some(response) = crate::server::discovery::rpc_payload(payload) { return response; }
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(payload)
+        && let Some(response) = crate::server::binary_udp::rpc(&value, true) { return response.to_string(); }
     let (id, command) = match parse_interop_request(payload) {
         Ok(parsed) => parsed,
         Err(error) => return format_interop_error(None, -32600, &error),
@@ -3186,9 +3191,9 @@ fn controller_subscription_params() -> Value {
     serde_json::json!({
         "topics":["state","events","status","opcodes"],
         "interval_ms":500,
-        // Display/PWM frames must reach the repaint path at screen cadence;
-        // the independent slow status sample remains at 500 ms.
-        "state_interval_ms":16,
+        // Changed display edges must not be decimated against RGB/PWM frames.
+        // egui merges repaint requests; slow telemetry remains at 500 ms.
+        "state_interval_ms":0,
         "after_id":0
     })
 }
@@ -3358,13 +3363,16 @@ pub fn spawn_pccontroller_action_bridge(
                 continue;
             };
             let mut connected_once = false;
-            if let Err(error) = run_pccontroller_action_bridge(
+            let result = if endpoint.starts_with("udp://") {
+                run_pccontroller_udp_bridge(&tx,&egui_ctx,&push_target,&endpoint,&mut connected_once)
+            } else { run_pccontroller_action_bridge(
                 &tx,
                 &egui_ctx,
                 &push_target,
                 &endpoint,
                 &mut connected_once,
-            ) {
+            ) };
+            if let Err(error) = result {
                 log::warn!(
                     "[PCController] {error}; retrying push transport in {} ms",
                     retry_delay.as_millis()
@@ -3388,6 +3396,45 @@ pub fn spawn_pccontroller_action_bridge(
         }
     });
     rx
+}
+
+fn run_pccontroller_udp_bridge(
+    tx:&std::sync::mpsc::Sender<ControllerDelivery>,ctx:&eframe::egui::Context,
+    target:&crate::four_d::engine::ControllerPushTarget,endpoint:&str,connected:&mut bool,
+)->Result<(),String>{
+    use std::collections::{HashSet,VecDeque};
+    use std::time::{Duration,Instant};
+    let address=endpoint.strip_prefix("udp://").ok_or("Invalid UDP endpoint")?;
+    let mut client=crate::server::udp_client::Client::connect(address,Duration::from_secs(3))?;
+    let call=|client:&mut crate::server::udp_client::Client,method:&str,params:Value|->Result<Value,String>{
+        let response=client.call(&serde_json::json!({"jsonrpc":"2.0","id":1,"method":method,"params":params}),None)?;
+        if let Some(error)=response.get("error").filter(|e|!e.is_null()){return Err(crate::four_d::controller::controller_json_rpc_error(error).message);}Ok(response["result"].clone())
+    };
+    let snapshot=call(&mut client,"controller.snapshot",serde_json::json!({}))?;
+    let host=snapshot["host_instance_id"].as_str().or_else(||snapshot.pointer("/host/instance_id").and_then(Value::as_str)).unwrap_or_default().to_string();
+    if !target.matches_source_instance(&host){return Err("UDP/RPC coordinator identity is not yet authoritative".into());}
+    let instance=controller_instance_id();
+    call(&mut client,"controller.app.instance.report",controller_instance_identity(&instance,&crate::config::resolved_app_name(&get_live_config())))?;
+    client.subscribe()?;*connected=true;
+    if target.apply_notification("controller.snapshot",&snapshot){ctx.request_repaint();}
+    let (ack_tx,ack_rx)=channel();let mut receipts=HashSet::new();let mut order=VecDeque::new();
+    let mut lease=Instant::now();let mut heartbeat=Instant::now();
+    while target.is_alive()&&target.websocket_endpoint().as_deref()==Some(endpoint){
+        if !target.matches_source_instance(&host){return Err("UDP coordinator changed; reconnect required".into());}
+        while let Ok(ack)=ack_rx.try_recv(){call(&mut client,"controller.app.action.ack",ack)?;}
+        if lease.elapsed()>=Duration::from_secs(10){client.subscribe()?;lease=Instant::now();}
+        if heartbeat.elapsed()>=Duration::from_secs(2){call(&mut client,"controller.ping",serde_json::json!({}))?;heartbeat=Instant::now();}
+        let Some(message)=client.event(Duration::from_millis(100))?else{continue;};
+        let Some(method)=message["method"].as_str()else{continue;};let params=&message["params"];
+        if target.apply_notification(method,params){ctx.request_repaint();}
+        if !matches!(method,"controller.event"|"controller.state"){continue;}
+        let Some(action)=controller_action_from_event(params,&instance)else{continue;};
+        if receipts.insert(action.receipt_key.clone()){
+            order.push_back(action.receipt_key.clone());if order.len()>256{if let Some(old)=order.pop_front(){receipts.remove(&old);}}
+            if let Some(command)=action.command{tx.send(ControllerDelivery{command,acknowledgement:action.acknowledgement,acknowledgement_tx:ack_tx.clone()}).map_err(|e|e.to_string())?;ctx.request_repaint();}
+            else{call(&mut client,"controller.app.action.ack",action.acknowledgement)?;}
+        }
+    }Ok(())
 }
 
 #[cfg(test)]
@@ -3440,10 +3487,10 @@ mod tests {
     }
 
     #[test]
-    fn controller_subscription_keeps_edges_immediate_and_bounds_continuous_frames() {
+    fn controller_subscription_keeps_changed_frames_immediate_and_bounds_telemetry() {
         let params = controller_subscription_params();
         assert_eq!(params["interval_ms"], 500);
-        assert_eq!(params["state_interval_ms"], 16);
+        assert_eq!(params["state_interval_ms"], 0);
         assert!(params["topics"]
             .as_array()
             .unwrap()

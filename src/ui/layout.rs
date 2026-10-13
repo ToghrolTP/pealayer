@@ -7320,6 +7320,38 @@ fn hardware_header_widget<R>(
         .inner
 }
 
+fn hardware_card_header<R>(ui: &mut egui::Ui, compact: bool, render: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    // Reserve the final row height before the first icon/caption is allocated.
+    // A later comfortable-density button cannot retroactively center siblings.
+    let height = crate::ui::control_density::height(ui)
+        .max(ui.text_style_height(&egui::TextStyle::Body))
+        .max(ui.text_style_height(&egui::TextStyle::Monospace))
+        .max(if compact { 26.0 } else { 24.0 });
+    ui.allocate_ui_with_layout(egui::vec2(ui.available_width(), height),
+        egui::Layout::left_to_right(egui::Align::Center), render).inner
+}
+
+fn hardware_action_button(ui: &egui::Ui, label: impl Into<String>, verb: &str,
+    selected: bool, enabled: bool) -> egui::Button<'static> {
+    let label = label.into();
+    let tone = match verb.to_ascii_lowercase().as_str() {
+        "on" => Some(if ui.visuals().dark_mode { egui::Color32::from_rgb(52, 211, 153) }
+            else { egui::Color32::from_rgb(21, 128, 61) }),
+        "off" => Some(if ui.visuals().dark_mode { egui::Color32::from_rgb(248, 113, 113) }
+            else { egui::Color32::from_rgb(185, 28, 28) }),
+        _ => None,
+    };
+    let Some(tone) = tone else { return egui::Button::new(label).truncate().selected(selected); };
+    if !enabled {
+        return egui::Button::new(egui::RichText::new(label).color(ui.visuals().weak_text_color()))
+            .truncate().fill(ui.visuals().widgets.noninteractive.weak_bg_fill)
+            .stroke(ui.visuals().widgets.noninteractive.bg_stroke);
+    }
+    egui::Button::new(egui::RichText::new(label).color(tone)).truncate().selected(selected)
+        .fill(tone.gamma_multiply(if selected { 0.20 } else { 0.07 }))
+        .stroke(egui::Stroke::new(1.0, tone.gamma_multiply(if selected { 0.8 } else { 0.45 })))
+}
+
 /// Keep transformable card layers attached to their workspace panel rather
 /// than as independent Middle windows that can paint over floating dialogs.
 fn hardware_card_layer(ui: &egui::Ui, key: &str) -> egui::LayerId {
@@ -7370,7 +7402,7 @@ fn draw_compact_control_card(
         .show(ui, |ui| {
             configure_hardware_card_controls(ui);
             ui.set_width(card_content_width);
-            ui.horizontal(|ui| {
+            hardware_card_header(ui, true, |ui| {
                 draw_control_icon_picker(app, ui, capabilities, control, 17.0);
                 let indicator = draw_control_indicator(
                     app,
@@ -7539,10 +7571,13 @@ fn draw_compact_control_card(
                     let ordered = card_control_actions(control);
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         for action in ordered.into_iter().rev() {
+                            let enabled = !app.estop_active && !control.locked && !app.hardware_programming_blocked();
+                            let selected = (action.verb.eq_ignore_ascii_case("on") && indicator_state == ControlIndicatorState::Active)
+                                || (action.verb.eq_ignore_ascii_case("off") && indicator_state == ControlIndicatorState::Inactive);
                             let response = ui
                                 .add_enabled(
-                                    !app.estop_active && !control.locked && !app.hardware_programming_blocked(),
-                                    egui::Button::new(crate::ui::icons::action(&action.verb))
+                                    enabled,
+                                    hardware_action_button(ui, crate::ui::icons::action(&action.verb), &action.verb, selected, enabled)
                                         .min_size(egui::vec2(28.0, 26.0)),
                                 )
                                 .on_hover_text(crate::ui::i18n::visual_text(
@@ -7584,10 +7619,12 @@ fn draw_compact_control_card(
                             (false, crate::ui::icons::STOP_CIRCLE, app.tr("OFF")),
                             (true, crate::ui::icons::LIGHTNING, app.tr("ON")),
                         ] {
+                            let enabled = !app.estop_active && !control.locked && !app.hardware_programming_blocked();
                             let response = ui
                                 .add_enabled(
-                                    !app.estop_active && !control.locked && !app.hardware_programming_blocked(),
-                                    egui::Button::new(icon).min_size(egui::vec2(28.0, 26.0)),
+                                    enabled,
+                                    hardware_action_button(ui, icon, if state { "on" } else { "off" }, false, enabled)
+                                        .min_size(egui::vec2(28.0, 26.0)),
                                 )
                                 .on_hover_text(label);
                             if hardware_control_activated(app, ui, &response) {
@@ -7668,7 +7705,7 @@ fn draw_control_card(
                     ui.set_width(card_content_width);
                     let mut editing =
                         ui.data_mut(|data| data.get_temp::<bool>(edit_id).unwrap_or(false));
-                    ui.horizontal(|ui| {
+                    hardware_card_header(ui, false, |ui| {
                         draw_control_icon_picker(app, ui, capabilities, control, 18.0);
                         let indicator = draw_control_indicator(
                             app,
@@ -7919,19 +7956,11 @@ fn draw_control_card(
                                                 || (verb == "off"
                                                     && indicator_state
                                                         == ControlIndicatorState::Inactive));
-                                        let mut button =
-                                            egui::Button::new(label).truncate().selected(selected);
-                                        if selected && verb == "on" {
-                                            button = button
-                                                .fill(egui::Color32::from_rgb(22, 163, 74))
-                                                .stroke(egui::Stroke::new(
-                                                    1.0_f32,
-                                                    egui::Color32::from_rgb(34, 197, 94),
-                                                ));
-                                        }
+                                        let enabled = !app.estop_active && !control.locked && !app.hardware_programming_blocked();
+                                        let button = hardware_action_button(ui, label, &verb, selected, enabled);
                                         let response = ui
                                             .add_enabled_ui(
-                                                !app.estop_active && !control.locked && !app.hardware_programming_blocked(),
+                                                enabled,
                                                 |ui| {
                                                     ui.add_sized(
                                                         [ui.available_width(), 28.0],
@@ -8322,6 +8351,50 @@ fn draw_control_card_grid(
 #[cfg(test)]
 mod timeline_row_tests {
     use super::*;
+
+    #[test]
+    fn hardware_header_centers_caption_and_rename_in_the_same_slot() {
+        for compact in [false, true] {
+            for density in crate::config::UiControlDensity::ALL {
+                for body_size in [13.0, 24.0] {
+                    let context = egui::Context::default();
+                    context.all_styles_mut(|style| {
+                        crate::ui::control_density::configure(style, density);
+                        style.text_styles.insert(egui::TextStyle::Body, egui::FontId::proportional(body_size));
+                        style.text_styles.insert(egui::TextStyle::Button, egui::FontId::proportional(body_size));
+                        style.text_styles.insert(egui::TextStyle::Monospace, egui::FontId::monospace(body_size));
+                    });
+                    let mut display_rect = None;
+                    for editing in [false, true] {
+                        let mut name = "Relay 5".to_owned();
+                        let mut caption_rect = egui::Rect::NOTHING;
+                        let mut icon_rect = egui::Rect::NOTHING;
+                        let mut button_rect = egui::Rect::NOTHING;
+                        let _ = context.run_ui(egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(500.0, 300.0))),
+                            ..Default::default()
+                        }, |ui| {
+                            ui.set_width(400.0);
+                            hardware_card_header(ui, compact, |ui| {
+                                icon_rect = ui.allocate_exact_size(egui::vec2(24.0, 24.0), egui::Sense::hover()).0;
+                                caption_rect = if editing {
+                                    crate::ui::dialog::inline_caption_edit(ui, egui::Id::new("relay-rename-geometry"), &mut name,
+                                        egui::vec2(180.0, 24.0), egui::FontId::proportional(13.0), egui::Align::Min).rect
+                                } else {
+                                    aligned_click_label(ui, &name, 180.0, 24.0, 13.0, egui::Align::Min).rect
+                                };
+                                button_rect = ui.add(hardware_action_button(ui, "OFF", "off", true, true)).rect;
+                            });
+                        });
+                        assert!((caption_rect.center().y - icon_rect.center().y).abs() < 0.01);
+                        assert!((caption_rect.center().y - button_rect.center().y).abs() < 0.01);
+                        if let Some(previous) = display_rect { assert_eq!(caption_rect, previous); }
+                        display_rect = Some(caption_rect);
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn timeline_track_state_semantics_have_distinct_colors_and_opacity() {
@@ -11549,8 +11622,7 @@ mod timeline_row_tests {
         let _guard = crate::app::tests::lock_app_tests();
         for dark in [false, true] {
             for scale in [1.0, 1.25, 1.5, 2.0] {
-                for density in [crate::config::UiControlDensity::Compact,
-                    crate::config::UiControlDensity::Comfortable] {
+                for density in crate::config::UiControlDensity::ALL {
                     for width in [220.0, 360.0, 540.0] {
                         let mut app = PealayerApp::default();
                         let context = egui::Context::default();
@@ -11873,8 +11945,7 @@ mod timeline_row_tests {
 
     #[test]
     fn no_cue_selected_icon_tile_is_square_beside_two_line_caption() {
-        for density in [crate::config::UiControlDensity::Compact,
-            crate::config::UiControlDensity::Comfortable] {
+        for density in crate::config::UiControlDensity::ALL {
             for dark in [false, true] {
                 for scale in [1.0, 1.25, 1.5, 2.0] {
                     for font_size in [12.0, 20.0] {

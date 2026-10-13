@@ -41,5 +41,47 @@ sample: local Pealayer was paused, connected, prepared at revision 46 with zero
 steps, no error and a fresh decoder observation. That does not disprove an
 intermittent physical fault. Fixtures and paused runtime checks do not establish
 physical movement, sustained deadline acceptance or production readiness.
-Cafe source alignment and Cafe runtime rollout remain separate; the existing
-Cafe GUI smoke-launch denial is not bypassed.
+The initial Cafe GUI smoke-launch denial was not bypassed. The later
+[paired deployment receipt](paired-peer-deployment.md) supersedes that historical
+rollout blocker; installation still does not establish physical timing acceptance.
+
+## Live recheck, 13 October 2026
+
+Read-only process-local API checks verified Cafe source
+`d42cfeb8d08d1c662aea9683f27cca326bdd9b39`, clean, player digest
+`26bbc3fc5ffb9af1569f229bc8ff3008af466b89ed8da7d1f0d676f220773630`.
+The preparation recovery merge `62773b13` is an ancestor, and the installed
+source's `media_timeline.rs` and `media_sync.rs` match the current source. Thus
+the known preparation/retry fixes are installed, not merely waiting in a PR.
+
+Three initial paused samples reported a connected board, no latched timing
+fault, and `Hardware waiting`: standalone strip streaming owned the conflicting
+resource. A subsequent sample reported `Hardware preparation blocked` with a
+coordinator pause/read timeout. This is an actionable live blocker, not evidence
+that all physical playback faults are resolved.
+
+After the user authorized stopping that strip stream only, one bounded stop RPC
+timed out. Its outcome is unknown; it was not replayed. A later inventory found
+no controller process or listener on Cafe port 8787; both IPv4/IPv6 loopback
+health probes failed. This does not establish why the controller exited.
+Pealayer remained paused; no Play, cue, motion, relay or firmware/reset command
+was issued. The user separately authorized restarting PCController only. Before
+starting the existing `PCControllerVerifiedRecovery` interactive launcher, the
+installed executable digest matched the verified host package, no controller
+process/listener existed, and Pealayer had neither live nor pending Play intent.
+
+After restart, controller PID 76904 served a healthy IPC endpoint. Read-back
+reported strip `running=false`, `id=0`. Three samples at 01:39:04--01:39:09 UTC
+reported connected hardware, `Hardware timeline`, desired/prepared/clock ACK
+revision **67**, epoch **26**, ready zero-step timeline, no error/deferred reason,
+no retry latch and no pending Play. Clock updates advanced 6404 to 6408; failures
+remained at the historical count 16, with current round trips 4--10 ms. Idle ACK
+age may exceed 250 ms because paused clocks publish once per second; explicit
+Play still requires its own fresh matching ACK before resume.
+
+The current live preparation blocker is resolved, and the earlier fixes are
+installed. This is paused empty-plan recovery, not sustained output scheduling,
+physical cue execution or production timing acceptance. Pealayer was not
+restarted/replaced and no authored timeline was overwritten. Genuine timing
+faults must remain visible and fail-closed; future standalone streams can still
+legitimately block conflicting media preparation.

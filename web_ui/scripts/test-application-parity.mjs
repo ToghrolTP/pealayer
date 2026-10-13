@@ -33,6 +33,10 @@ const contracts = [
   [app.includes('appearance?.ui_control_density') && app.includes('controlHeightSM: controlHeight') && app.includes('controlHeightLG: controlHeight')
     && css.includes('height: var(--control-height, 24px)') && read('src/appearance.ts').includes('ui_control_density: appearance.ui_control_density'),
     'Inputs, selectors and color menu rows follow one shared appearance density'],
+  [preferences.includes("control.kind === 'choice_slider'") && preferences.includes('max={options.length - 1} step={1}')
+    && preferences.includes('onChangeComplete={position =>') && app.includes('controlDensityHeight(controlDensity)')
+    && ['regular', 'comfortable', 'spacious'].every(choice => read('src/appearance.ts').includes(`case '${choice}': return`)),
+    'Density uses discrete semantic choices, shared four-level sizing and release-only Web persistence'],
   [hardware.includes('disabled={!state.hardware_connected || !details.buzzer?.playing}'), 'Buzzer stop follows authoritative activity, not connection alone'],
   [studio.includes('<ControlBar') && remote.includes('<ControlBar') && controlBar.includes('<VolumeControl') && volumeControl.includes("sendCmd('set_volume'") && controlBar.includes("sendCmd('set_mute'") && volumeControl.includes('aria-label={tr(locale, \'Volume\')}'), 'Simple and NLE share accessible horizontal volume and mute controls using session commands'],
   [css.includes('.control-bar { width: 100%; min-width: 0; display: flex; flex-wrap: wrap;') && css.includes('.control-bar__volume.media-volume') && controlBar.indexOf('{group(true)}') < controlBar.indexOf('<VolumeControl'), 'the monitor wraps bounded groups with trailing selectors before volume'],

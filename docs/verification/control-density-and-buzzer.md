@@ -1,7 +1,12 @@
 # Shared control density and contextual buzzer actions
 
-Preferences / Appearance / Control density owns Compact (24 points) and
-Comfortable (32 points). Native inputs, ordinary and custom/color selectors,
+Preferences / Appearance / Control density uses a four-step slider: Compact
+(24 points), Regular (28), Comfortable (32), and Spacious (36). Configuration
+stores the semantic choice, not a slider index; existing Compact/Comfortable
+settings retain their sizing. Web commits the choice on release or keyboard
+completion rather than persisting every drag update. Native edits preview in
+the existing Preferences draft and follow its Save/Discard behavior.
+Native inputs, ordinary and custom/color selectors,
 and single-line menu choices use `ui::control_density`; large fonts can grow
 them together. Web follows the same shared appearance setting through Ant
 Design tokens and the custom color menu's shared height variable. Saving,
@@ -35,10 +40,13 @@ not proof of owned melody/tone playback.
 ## Verification and delivery boundary
 
 Rendered tests compare input/ComboBox/color-trigger/color-field/menu heights in
-both densities, both themes, four scales and 12/14/20-point fonts. Hover/selected
+all four densities, both themes, four scales and 12/14/20-point fonts. Hover/selected
 and focused loop states retain exact caption and neighbor geometry. Existing
 rename, dropdown keyboard, Custom expansion, swatches and cancellation coverage
 is retained. Native tests use inert fixtures; Web guards verify the shared policy.
+The four-choice contract/serialization and geometry coverage is updated;
+tests and CI were not run for this iteration at the user's request. Compiler
+checks are source validation, not installed UI or screenshot acceptance.
 
 The current authoring process is deliberately not restarted while user readiness
 is pending. Runtime delivery and a current installed-build screenshot are not

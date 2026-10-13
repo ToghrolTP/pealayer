@@ -1799,7 +1799,7 @@ impl eframe::App for PealayerApp {
             crate::platform::interop::set_live_status(status_resp.clone());
             let web_enabled = self.web_only || web_config.web_enabled;
             let has_peer = crate::peer::client().is_some();
-            if web_enabled || has_peer {
+            if web_enabled || has_peer || web_config.binary_udp_enabled {
                 let authoritative = crate::peer::client()
                     .and_then(|client| client.snapshot())
                     .map(|value| value.session.status.to_string())

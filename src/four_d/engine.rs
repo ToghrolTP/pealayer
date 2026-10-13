@@ -682,6 +682,7 @@ impl ControllerPushTarget {
             return None;
         }
         let endpoint = self.serial_port.upgrade()?.lock().ok()?.clone();
+        if endpoint.starts_with("udp://") {return Some(endpoint);}
         if !crate::four_d::controller::is_controller_endpoint(&endpoint) {
             return None;
         }

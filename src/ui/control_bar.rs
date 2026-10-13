@@ -790,10 +790,7 @@ mod tests {
         let _lock = crate::app::tests::lock_app_tests();
         for hidden in [true, false] {
             for rtl in [false, true] {
-                for density in [
-                    crate::config::UiControlDensity::Compact,
-                    crate::config::UiControlDensity::Comfortable,
-                ] {
+                for density in crate::config::UiControlDensity::ALL {
                     let ctx = egui::Context::default();
                     ctx.all_styles_mut(|style| {
                         super::super::control_density::configure(style, density)

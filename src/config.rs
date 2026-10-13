@@ -824,7 +824,19 @@ pub enum UiAnimationMode { #[default] System, Enabled, Disabled }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum UiControlDensity { #[default] Compact, Comfortable }
+pub enum UiControlDensity { #[default] Compact, Regular, Comfortable, Spacious }
+impl UiControlDensity {
+    pub const ALL: [Self; 4] = [Self::Compact, Self::Regular, Self::Comfortable, Self::Spacious];
+
+    pub const fn base_height(self) -> f32 {
+        match self {
+            Self::Compact => 24.0,
+            Self::Regular => 28.0,
+            Self::Comfortable => 32.0,
+            Self::Spacious => 36.0,
+        }
+    }
+}
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -1089,6 +1101,7 @@ pub struct AppConfig {
     /// every interface; concrete values are populated from real NIC discovery.
     pub web_listen_addresses: Vec<String>,
     pub web_port: u16,
+    pub binary_udp: crate::server::binary_udp::Config,
     /// Accept state-changing player, window, OSD, and hardware commands from
     /// HTTP/WebSocket clients. Read-only status remains available.
     pub web_allow_control: bool,
@@ -1271,6 +1284,7 @@ impl Default for AppConfig {
             web_enabled: true,
             web_listen_addresses: vec!["127.0.0.1".to_string()],
             web_port: 8080,
+            binary_udp: Default::default(),
             web_allow_control: true,
             web_allow_configuration: true,
             web_allow_file_access: true,
@@ -2103,6 +2117,7 @@ impl AppConfig {
         if self.web_port == 0 {
             return Err("web_port must be between 1 and 65535".to_string());
         }
+        self.binary_udp.validate()?;
         crate::network::parse_bind_addresses(&self.web_listen_addresses)?;
         if !(16..=5_000).contains(&self.web_sync_interval_ms) {
             return Err("web_sync_interval_ms must be between 16 and 5000".to_string());
