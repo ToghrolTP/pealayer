@@ -10,6 +10,12 @@ statements are not the present product state.
 
 ## Delivered source and deployment
 
+- Appearance control density is a four-step slider (Compact, Regular,
+  Comfortable, Spacious), shared by native/Web inputs, selectors and menu rows.
+  [Sizing and verification boundary](control-density-and-buzzer.md) preserves
+  existing choices and Save/Discard behavior. Source compiler checks pass;
+  this iteration skips tests/CI and is not yet installed.
+
 - Relay ON/OFF controls retain semantic green/red in native/Web/mobile, and
   card header layout centers captions with their unchanged inline-editor slots.
   [Cause, geometry contract and delivery gates](relay-card-semantics-and-centering.md)

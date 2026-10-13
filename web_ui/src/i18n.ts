@@ -300,6 +300,8 @@ const fa: Record<string, string> = {
   'Control density': 'تراکم کنترل‌ها',
   'Compact': 'فشرده',
   'Comfortable': 'آزاد',
+  'Regular': 'معمولی',
+  'Spacious': 'جاداتر',
   'Add melody': 'افزودن ملودی',
   'No configured melodies': 'ملودی پیکربندی‌شده‌ای نیست',
   'New group': 'گروه جدید',

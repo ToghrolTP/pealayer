@@ -27,7 +27,7 @@ import { useWebPlatform } from './webPlatform';
 import './styles.css';
 import './shared-toasts.css';
 import palettes from '../../assets/themes/palettes.json';
-import { accentForeground, mergeAppearance, paletteName as resolvePaletteName, resolvedAccent, resolvedAppearanceTheme, uiFontCss, monoFontCss } from './appearance';
+import { accentForeground, controlDensityHeight, mergeAppearance, paletteName as resolvePaletteName, resolvedAccent, resolvedAppearanceTheme, uiFontCss, monoFontCss } from './appearance';
 
 const { Sider, Content } = Layout;
 const RemoteControlTab = React.lazy(() => import('./components/RemoteControlTab').then((module) => ({ default: module.RemoteControlTab })));
@@ -146,7 +146,7 @@ const App: React.FC = () => {
   const motionMode = appearance?.ui_animation_mode ?? appConfig?.ui_animation_mode ?? 'system';
   const animationsEnabled = motionMode === 'enabled' || (motionMode === 'system' && !systemReducedMotion);
   const controlDensity = appearance?.ui_control_density ?? appConfig?.ui_control_density ?? 'compact';
-  const controlHeight = controlDensity === 'compact' ? 24 : 32;
+  const controlHeight = controlDensityHeight(controlDensity);
   const uiFont = uiFontCss(appearance?.ui_font_family ?? appConfig?.ui_font_family ?? 'system');
   const monoFont = monoFontCss(appearance?.monospace_font_family ?? appConfig?.monospace_font_family ?? 'bundled');
   useEffect(() => {

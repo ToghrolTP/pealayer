@@ -8355,7 +8355,7 @@ mod timeline_row_tests {
     #[test]
     fn hardware_header_centers_caption_and_rename_in_the_same_slot() {
         for compact in [false, true] {
-            for density in [crate::config::UiControlDensity::Compact, crate::config::UiControlDensity::Comfortable] {
+            for density in crate::config::UiControlDensity::ALL {
                 for body_size in [13.0, 24.0] {
                     let context = egui::Context::default();
                     context.all_styles_mut(|style| {
@@ -11622,8 +11622,7 @@ mod timeline_row_tests {
         let _guard = crate::app::tests::lock_app_tests();
         for dark in [false, true] {
             for scale in [1.0, 1.25, 1.5, 2.0] {
-                for density in [crate::config::UiControlDensity::Compact,
-                    crate::config::UiControlDensity::Comfortable] {
+                for density in crate::config::UiControlDensity::ALL {
                     for width in [220.0, 360.0, 540.0] {
                         let mut app = PealayerApp::default();
                         let context = egui::Context::default();
@@ -11946,8 +11945,7 @@ mod timeline_row_tests {
 
     #[test]
     fn no_cue_selected_icon_tile_is_square_beside_two_line_caption() {
-        for density in [crate::config::UiControlDensity::Compact,
-            crate::config::UiControlDensity::Comfortable] {
+        for density in crate::config::UiControlDensity::ALL {
             for dark in [false, true] {
                 for scale in [1.0, 1.25, 1.5, 2.0] {
                     for font_size in [12.0, 20.0] {

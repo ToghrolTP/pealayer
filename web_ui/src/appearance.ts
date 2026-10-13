@@ -1,6 +1,16 @@
+export type ControlDensity = 'compact' | 'regular' | 'comfortable' | 'spacious';
+export const controlDensityHeight = (choice: string): number => {
+  switch (choice) {
+    case 'regular': return 28;
+    case 'comfortable': return 32;
+    case 'spacious': return 36;
+    default: return 24;
+  }
+};
+
 export interface AppearanceState {
   ui_animation_mode: 'system' | 'enabled' | 'disabled';
-  ui_control_density: 'compact' | 'comfortable';
+  ui_control_density: ControlDensity;
   ui_font_family: 'system' | 'bundled' | 'vazirmatn';
   monospace_font_family: 'system' | 'bundled';
   theme: 'system' | 'light' | 'dark';

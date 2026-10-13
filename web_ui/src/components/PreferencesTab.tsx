@@ -8,6 +8,7 @@ import {
   Collapse,
   Input,
   Select,
+  Slider,
   Switch,
   Typography,
   Tooltip,
@@ -80,7 +81,7 @@ interface PreferenceControl {
   section: string;
   group: string;
   label: string;
-  kind: 'accent' | 'color' | 'boolean' | 'file' | 'multi_select' | 'number' | 'replacement_list' | 'select' | 'text';
+  kind: 'accent' | 'color' | 'boolean' | 'file' | 'multi_select' | 'number' | 'replacement_list' | 'select' | 'choice_slider' | 'text';
   icon: string;
   description?: string;
   options?: PreferenceOption[];
@@ -188,6 +189,27 @@ function valueWithPath(root: JsonObject, path: string, value: any): JsonObject {
 function patchForPath(values: JsonObject, path: string): JsonObject {
   const root = path.split('.')[0];
   return { [root]: values[root] };
+}
+
+function ChoiceSlider({ options, value, label, locale, disabled, onCommit }: {
+  options: PreferenceOption[]; value: unknown; label: string; locale: 'en' | 'fa';
+  disabled: boolean; onCommit: (value: PreferenceOption['value']) => void;
+}) {
+  const selected = Math.max(0, options.findIndex(option => option.value === value));
+  const [index, setIndex] = useState(selected);
+  useEffect(() => setIndex(selected), [selected]);
+  if (!options.length) return null;
+  return <div className="preference-choice-slider">
+    <Slider min={0} max={options.length - 1} step={1} value={index} disabled={disabled}
+      ariaLabelForHandle={tr(locale, label)}
+      ariaValueTextFormatterForHandle={position => tr(locale, options[position]?.label ?? '')}
+      marks={Object.fromEntries(options.map((_, position) => [position, '']))}
+      tooltip={{ formatter: position => tr(locale, options[position ?? index]?.label ?? '') }}
+      onChange={setIndex} onChangeComplete={position => {
+        if (options[position].value !== value) onCommit(options[position].value);
+      }} />
+    <span className="preference-choice-slider__value">{tr(locale, options[index]?.label ?? '')}</span>
+  </div>;
 }
 
 export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, locale, appearance, timelineWheelPreferences, onConfigChange }) => {
@@ -388,6 +410,13 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
           />
         </label>
       );
+    }
+    if (control.kind === 'choice_slider') {
+      return <div className="preference-control" key={control.key}>
+        {commonLabel}
+        <ChoiceSlider options={control.options ?? []} value={value} label={control.label} locale={locale}
+          disabled={saving === control.key} onCommit={next => void update(control, next)} />
+      </div>;
     }
     if (control.kind === 'select') {
       return (

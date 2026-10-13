@@ -3856,7 +3856,7 @@ mod tests {
     #[test]
     fn designer_group_dividers_keep_start_caption_end_count_and_card_width() {
         for dark in [false, true] {
-            for density in [crate::config::UiControlDensity::Compact, crate::config::UiControlDensity::Comfortable] {
+            for density in crate::config::UiControlDensity::ALL {
                 for scale in [1.0, 1.25, 1.5, 2.0] {
                     for width in [160.0, 220.0, 340.0] {
                         let ctx = egui::Context::default();
