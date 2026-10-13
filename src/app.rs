@@ -3934,6 +3934,9 @@ impl PealayerApp {
                 continue;
             }
             if result.operation.starts_with("rf-") {
+                if result.result.is_err() {
+                    self.rf.error_detail = result.error_detail.unwrap_or(serde_json::Value::Null);
+                }
                 if self.rf.complete(&result.operation, result.result) {
                     if let Err(error) = self.request_rf("catalog", serde_json::json!({"read_board":true})) { self.rf.error = error; }
                 }

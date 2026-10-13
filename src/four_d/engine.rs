@@ -397,6 +397,7 @@ impl CompiledDirectPwmCue {
 pub struct ControllerCallResult {
     pub operation: String,
     pub result: Result<serde_json::Value, String>,
+    pub error_detail: Option<serde_json::Value>,
 }
 
 #[derive(Debug)]
@@ -1450,7 +1451,12 @@ pub fn spawn_engine() -> EngineHandle {
                             engine_catalog_refresh_requested.store(true, Ordering::Relaxed);
                         }
                         if let Ok(mut results) = engine_controller_call_results.lock() {
-                            results.push_back(ControllerCallResult { operation, result: result.map_err(|error|error.message) });
+                            let error_detail = result.as_ref().err().map(|error| serde_json::json!({
+                                "message":error.message,"kind":error.kind,"resource":error.resource,
+                                "retryable":error.retryable,"retry_after_ms":error.retry_after_ms,
+                                "transport_failed":error.transport_failed
+                            }));
+                            results.push_back(ControllerCallResult { operation, error_detail, result: result.map_err(|error|error.message) });
                         }
                     }
                     EngineMessage::CoalescedControllerIntent {
@@ -2194,7 +2200,7 @@ fn spawn_peer_engine() -> EngineHandle {
                     match message {
                         EngineMessage::TrackedControllerCall {operation,method,params}=>{
                             let result=call(method,params);
-                            if let Ok(mut values)=results.lock(){values.push_back(ControllerCallResult {operation,result});}
+                            if let Ok(mut values)=results.lock(){values.push_back(ControllerCallResult {operation,result,error_detail:None});}
                             notify_state_change(&notifier);
                         }
                         EngineMessage::ReplyControllerCall {method,params,reply}=>{let _=reply.send(call(method,params));}
