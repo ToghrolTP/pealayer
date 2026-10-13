@@ -3191,9 +3191,9 @@ fn controller_subscription_params() -> Value {
     serde_json::json!({
         "topics":["state","events","status","opcodes"],
         "interval_ms":500,
-        // Display/PWM frames must reach the repaint path at screen cadence;
-        // the independent slow status sample remains at 500 ms.
-        "state_interval_ms":16,
+        // Changed display edges must not be decimated against RGB/PWM frames.
+        // egui merges repaint requests; slow telemetry remains at 500 ms.
+        "state_interval_ms":0,
         "after_id":0
     })
 }
@@ -3487,10 +3487,10 @@ mod tests {
     }
 
     #[test]
-    fn controller_subscription_keeps_edges_immediate_and_bounds_continuous_frames() {
+    fn controller_subscription_keeps_changed_frames_immediate_and_bounds_telemetry() {
         let params = controller_subscription_params();
         assert_eq!(params["interval_ms"], 500);
-        assert_eq!(params["state_interval_ms"], 16);
+        assert_eq!(params["state_interval_ms"], 0);
         assert!(params["topics"]
             .as_array()
             .unwrap()

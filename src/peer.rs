@@ -227,6 +227,7 @@ pub fn take_gui_requests() -> Vec<GuiRequest> {
 struct ServerResources {
     engine: mpsc::Sender<crate::four_d::engine::EngineMessage>,
     capabilities: Arc<Mutex<Option<crate::four_d::controller::HardwareCapabilities>>>,
+    hardware_revision: Arc<AtomicU64>,
     media_playback: Arc<Mutex<crate::four_d::media_sync::PlaybackSample>>,
     media_clock_owned: Arc<std::sync::atomic::AtomicBool>,
     prepared_timeline: Arc<Mutex<crate::four_d::media_timeline::PreparedTimeline>>,
@@ -241,6 +242,7 @@ pub fn register_server(
     let _ = SERVER.set(ServerResources {
         engine: engine.sender.clone(),
         capabilities: engine.hardware_capabilities.clone(),
+        hardware_revision: engine.hardware_revision.clone(),
         media_playback: engine.media_playback.clone(),
         media_clock_owned: engine.media_clock_owned.clone(),
         prepared_timeline: engine.prepared_timeline.clone(),
@@ -364,6 +366,14 @@ pub fn server_session() -> Result<Session, String> {
 
 /// Reuse the complete typed catalog/state contract without touching mpv,
 /// workspace layout, config persistence, or the UI request dispatcher.
+pub fn hardware_revision() -> Result<u64, String> {
+    if let Some(client) = client() {
+        return Ok(client.hardware_generation.load(Ordering::Acquire));
+    }
+    Ok(SERVER.get().ok_or("Pealayer hardware session is initializing")?
+        .hardware_revision.load(Ordering::Acquire))
+}
+
 pub fn hardware_snapshot() -> Result<Value, String> {
     if let Some(client) = client() {
         let snapshot = client.snapshot().ok_or("Remote hardware snapshot unavailable")?;

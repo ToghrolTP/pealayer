@@ -1,0 +1,28 @@
+# Front-panel mirror fidelity
+
+The controller's old WebSocket limiter used one timestamp for RGB, PWM and
+seven-segment frames. A just-delivered RGB frame could cause a digit or blink
+edge to be discarded. Pealayer's 16 ms subscription requested that decimation.
+Its separate peer hardware relay also sampled only every 100 ms, potentially
+losing intermediate display states before a remote Pealayer could paint them.
+
+Pealayer now requests immediate changed-state events, preserving the independent
+500 ms telemetry sample. PCController additionally exempts changed segment edges
+and keeps continuous frame budgets independent. Peer hardware delivery checks
+the existing atomic hardware revision in its WebSocket loop and serializes only
+when the revision changes. It no longer waits for a 100 ms hardware sample.
+Unchanged idle hardware is not repeatedly cloned/serialized; disabled Web sync
+and configuration access still prevent transmission, including re-enable refresh.
+
+Native rendering still paints authoritative latest state at the available screen
+cadence. No invented intermediate frames, stale-animation replay, extra board
+polling or per-frame persistence is added. A screen cannot display every physical
+transition occurring faster than its own refresh. The general Web status cadence
+remains separately configurable; this pass fixes direct native/peer state paths.
+
+Offline cargo check passed with existing warnings. The subscription regression
+was updated; tests and CI were not executed at the user's request. Local Pealayer
+was not running at inspection. Cafe/Erfan replacement and human visual acceptance
+remain separate delivery gates; preserve host-specific libmpv and authoring state
+and use the approved updater. Paired Linux short-note recovery is documented in
+PCController's `docs/verification/buzzer-mirror-jitter.md`.

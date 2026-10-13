@@ -10,6 +10,11 @@ statements are not the present product state.
 
 ## Delivered source and deployment
 
+- Seven-segment changed-state subscriptions no longer request decimation, and
+  peer hardware delivery follows revisions instead of 100 ms samples.
+  [Cause, current contract and delivery gates](panel-mirror-fidelity.md) retain
+  screen-refresh, Web status cadence and installed visual acceptance limits.
+
 - Binary UDP now has paired host RPC, source-target identity, automatic mutual
   discovery, leased pushes and shared native/Web configuration. The native
   controller endpoint accepts `udp://IP:port`. [Source and loopback evidence](binary-udp.md)

@@ -552,17 +552,24 @@ fn handle_websocket(stream: TcpStream, state: ControlState) {
     let _ = websocket.get_mut().set_nonblocking(true);
     let mut hardware_subscribed = false;
     let mut last_hardware = None;
-    let mut next_hardware_sample = std::time::Instant::now();
+    let mut last_hardware_revision = None;
     loop {
-        if hardware_subscribed && std::time::Instant::now() >= next_hardware_sample {
-            next_hardware_sample = std::time::Instant::now() + Duration::from_millis(100);
+        if hardware_subscribed {
             let config = crate::platform::interop::get_live_config();
             if config.web_sync_state && config.web_allow_configuration
+                && let Ok(revision) = crate::peer::hardware_revision()
+                && last_hardware_revision != Some(revision)
                 && let Ok(hardware) = crate::peer::hardware_snapshot()
-                && last_hardware.as_ref() != Some(&hardware) {
-                let notification = serde_json::json!({"jsonrpc":"2.0", "method":"peer.hardware", "params":hardware});
-                if websocket.send(tungstenite::Message::Text(notification.to_string().into())).is_err() { break; }
-                last_hardware = Some(hardware);
+            {
+                last_hardware_revision = Some(revision);
+                if last_hardware.as_ref() != Some(&hardware) {
+                    let notification = serde_json::json!({"jsonrpc":"2.0", "method":"peer.hardware", "params":hardware});
+                    if websocket.send(tungstenite::Message::Text(notification.to_string().into())).is_err() { break; }
+                    last_hardware = Some(hardware);
+                }
+            } else if !config.web_sync_state || !config.web_allow_configuration {
+                last_hardware_revision = None;
+                last_hardware = None;
             }
         }
         if let Ok(text) = client_rx.try_recv() {
