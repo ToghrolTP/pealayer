@@ -10,6 +10,11 @@ statements are not the present product state.
 
 ## Delivered source and deployment
 
+- Native video now isolates libmpv from egui blending/window clipping and renders
+  before sampling the shared texture. [Ghosting cause and delivery gates](video-ghosting.md)
+  document cross-workspace persistence, scoped restoration and render-error
+  validity. Compiler check passed; moving-video acceptance needs an installed build.
+
 - Appearance control density is a four-step slider (Compact, Regular,
   Comfortable, Spacious), shared by native/Web inputs, selectors and menu rows.
   [Sizing and verification boundary](control-density-and-buzzer.md) preserves
