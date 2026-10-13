@@ -15,6 +15,7 @@ pub mod messaging;
 pub mod mpv;
 pub mod network;
 pub mod peer;
+pub mod performance;
 pub mod process_control;
 pub mod platform;
 pub mod preferences_contract;

@@ -839,6 +839,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let callback = egui::PaintCallback {
         rect,
         callback: Arc::new(eframe::egui_glow::CallbackFn::new(move |_info, painter| {
+            let _timing = crate::performance::span(crate::performance::Phase::Video);
+            unsafe { crate::performance::observe_renderer(painter.gl()); }
             // Check the configured native policy at paint time as well as the
             // egui-sampled drag flag. WM_ENTERSIZEMOVE can arrive after this
             // frame was assembled; live mode must still present it, while the
@@ -852,6 +854,16 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     (rtt.video_fbo, rtt.video_texture, render_context.try_lock())
                 {
                     if let Some(ref rc) = *rc_guard {
+                        let needs_resize = rtt.texture_width != target_phys_w as u32
+                            || rtt.texture_height != target_phys_h as u32;
+                        let update_pending = rc.1.take();
+                        // A board/hover repaint is not a decoder update. Reuse
+                        // the valid texture without entering MPV or querying,
+                        // resetting and restoring GL state on every such frame.
+                        if !update_pending && !needs_resize && rtt.has_rendered_frame {
+                            MPV_RENDER_SKIPPED_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            return;
+                        }
                         unsafe {
                             use eframe::glow::HasContext;
 
@@ -860,8 +872,6 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             let gl_state = crate::mpv::render::MpvGlStateGuard::enter(gl);
 
                             // Dynamic resizing of texture if physical dimensions changed
-                            let needs_resize = rtt.texture_width != target_phys_w as u32
-                                || rtt.texture_height != target_phys_h as u32;
                             if needs_resize {
                                 gl.bind_texture(eframe::glow::TEXTURE_2D, Some(tex));
                                 gl.tex_image_2d(
@@ -1179,6 +1189,8 @@ mod tests {
     fn video_early_returns_and_failed_render_keep_guarded_state_and_validity() {
         let source = include_str!("video.rs").split("#[cfg(test)]").next().unwrap();
         let boundary = source.find("MpvGlStateGuard::enter(gl)").unwrap();
+        let pending = source.find("let update_pending = rc.1.take()").unwrap();
+        let idle_reuse = source.find("if !update_pending && !needs_resize && rtt.has_rendered_frame").unwrap();
         let update = source.find("let has_new_frame = match rc.0.update()").unwrap();
         let reuse = source.find("if !needs_resize && !has_new_frame && rtt.has_rendered_frame").unwrap();
         let clear = source.find("gl_state.begin_frame(video_fbo, target_phys_w, target_phys_h)").unwrap();
@@ -1186,6 +1198,9 @@ mod tests {
         let failure = source.find("if let Err(error) = render_result").unwrap();
         let valid = source.find("rtt.has_rendered_frame = true").unwrap();
         assert!(boundary < update && update < reuse && reuse < clear && clear < render && render < failure && failure < valid);
+        assert!(pending < idle_reuse && idle_reuse < boundary);
+        assert!(source[idle_reuse..boundary].contains("return;"));
+        assert!(!source[idle_reuse..boundary].contains("gl."));
         assert!(source[failure..valid].contains("rtt.has_rendered_frame = false"));
         assert!(source[failure..valid].contains("return;"));
     }

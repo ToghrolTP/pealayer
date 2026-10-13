@@ -888,7 +888,7 @@ pub struct PealayerApp {
     pub(crate) last_web_broadcast: Option<std::time::Instant>,
     pub(crate) last_web_hardware: Option<crate::four_d::controller::HardwareCapabilities>,
     pub(crate) last_web_hardware_revision: u64,
-    pub(crate) cached_hardware_capabilities: Mutex<(u64, Option<crate::four_d::controller::HardwareCapabilities>)>,
+    pub(crate) cached_hardware_capabilities: Mutex<(u64, Option<Arc<crate::four_d::controller::HardwareCapabilities>>)>,
     pub(crate) media_controls: Option<crate::platform::media_controls::MediaControlsManager>,
     pub(crate) media_cmd_tx: std::sync::mpsc::Sender<crate::platform::media_controls::NativeMediaEvent>,
     pub(crate) media_cmd_rx: std::sync::mpsc::Receiver<crate::platform::media_controls::NativeMediaEvent>,
@@ -1016,6 +1016,7 @@ pub struct MediaTrackInfo {
 
 impl eframe::App for PealayerApp {
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        let _timing = crate::performance::span(crate::performance::Phase::Logic);
         self.flush_timeline_toolbar_save(ctx);
         self.flush_status_bar_save(ctx);
         self.flush_control_bar_save(ctx);
@@ -1812,6 +1813,7 @@ impl eframe::App for PealayerApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let _timing = crate::performance::span(crate::performance::Phase::Ui);
         let is_fullscreen = ui.input(|input| input.viewport().fullscreen.unwrap_or(false));
         if let Some(winit_window) = frame.winit_window() {
             if let Some(monitor) = winit_window.current_monitor() {
@@ -3064,10 +3066,16 @@ impl PealayerApp {
     }
 
     pub fn hardware_programming_blocked(&self) -> bool {
-        self.is_connected && self.advertised_hardware().is_some_and(|caps| caps.programming_blocked())
+        self.is_connected && self.advertised_hardware_shared().is_some_and(|caps| caps.programming_blocked())
     }
 
     pub fn advertised_hardware(&self) -> Option<crate::four_d::controller::HardwareCapabilities> {
+        self.advertised_hardware_shared().map(|snapshot| (*snapshot).clone())
+    }
+
+    /// Read-only projections share one immutable revision, including its full
+    /// effect catalog. A button safety check must not deep-copy that catalog.
+    pub(crate) fn advertised_hardware_shared(&self) -> Option<Arc<crate::four_d::controller::HardwareCapabilities>> {
         let rev = self.engine_handle.hardware_revision.load(Ordering::Acquire);
         if let Ok(mut cache) = self.cached_hardware_capabilities.lock() {
             if cache.0 == rev && rev > 0 {
@@ -3077,7 +3085,7 @@ impl PealayerApp {
                 .hardware_capabilities
                 .lock()
                 .ok()
-                .and_then(|capabilities| capabilities.clone());
+                .and_then(|capabilities| capabilities.as_ref().map(|value| Arc::new(value.clone())));
             cache.0 = rev;
             cache.1 = fresh.clone();
             fresh
@@ -3086,7 +3094,7 @@ impl PealayerApp {
                 .hardware_capabilities
                 .lock()
                 .ok()
-                .and_then(|capabilities| capabilities.clone())
+                .and_then(|capabilities| capabilities.as_ref().map(|value| Arc::new(value.clone())))
         }
     }
 
@@ -11622,6 +11630,11 @@ pub(crate) mod tests {
         let fetched = app.advertised_hardware();
         assert!(fetched.is_some());
         assert_eq!(fetched.as_ref().unwrap().board_name, "TestBoard");
+        let shared = app.advertised_hardware_shared().unwrap();
+        let again = app.advertised_hardware_shared().unwrap();
+        assert!(Arc::ptr_eq(&shared, &again), "read-only safety projections copied the catalog");
+        let _ = app.hardware_programming_blocked();
+        assert!(Arc::ptr_eq(&shared, &app.advertised_hardware_shared().unwrap()));
 
         // Mutate engine capabilities without bumping revision: cache should still return cached copy
         caps.board_name = "MutatedBoard".to_string();
@@ -11633,5 +11646,7 @@ pub(crate) mod tests {
         app.engine_handle.hardware_revision.fetch_add(1, Ordering::Release);
         let updated = app.advertised_hardware();
         assert_eq!(updated.as_ref().unwrap().board_name, "MutatedBoard");
+        assert!(!Arc::ptr_eq(&shared, &app.advertised_hardware_shared().unwrap()));
+        assert_eq!(shared.board_name, "TestBoard", "a newer revision mutated an existing read-only view");
     }
 }

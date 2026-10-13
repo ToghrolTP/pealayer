@@ -1065,6 +1065,7 @@ fn draw_group(app: &mut PealayerApp, ui: &mut egui::Ui, end: bool, hardware: Opt
     }
 }
 pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    let _timing = crate::performance::span(crate::performance::Phase::Status);
     if ui.input(|i| i.viewport().fullscreen.unwrap_or(false)) { return; }
     let hardware = app.advertised_hardware();
     let progress = active_operations(hardware.as_ref());

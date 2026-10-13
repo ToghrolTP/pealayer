@@ -183,6 +183,7 @@ fn top_menu_button<R>(
 }
 
 pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    let _timing = crate::performance::span(crate::performance::Phase::Menu);
     let ctx = ui.ctx().clone();
     let language = app.language;
     let rtl = app.rtl;
