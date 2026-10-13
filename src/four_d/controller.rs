@@ -1,6 +1,6 @@
 use std::io::{BufRead, BufReader, Write};
 use std::net::{TcpStream, ToSocketAddrs};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use serde_json::{Value, json};
 
@@ -1385,6 +1385,28 @@ fn same_coordinator_epoch(current: &Value, selected: &Value) -> bool {
     }
 }
 
+fn read_controller_response(reader: &mut BufReader<TcpStream>, id: u64, deadline: Instant) -> Result<Value, ControllerRpcError> {
+    loop {
+        let remaining = deadline.checked_duration_since(Instant::now())
+            .filter(|remaining| !remaining.is_zero())
+            .ok_or_else(|| ControllerRpcError::transport("read PCController JSON-RPC response: request deadline exceeded".into()))?;
+        reader.get_ref().set_read_timeout(Some(remaining))
+            .map_err(|error| ControllerRpcError::transport(format!("configure PCController read timeout: {error}")))?;
+        let mut line = String::new();
+        let read = reader.read_line(&mut line)
+            .map_err(|error| ControllerRpcError::transport(format!("read PCController JSON-RPC response: {error}")))?;
+        if read == 0 {
+            return Err(ControllerRpcError::transport("PCController closed the JSON-RPC connection".into()));
+        }
+        let response: Value = serde_json::from_str(line.trim())
+            .map_err(|error| ControllerRpcError::transport(format!("decode PCController JSON-RPC response: {error}")))?;
+        if response.get("id").and_then(Value::as_u64) == Some(id) {
+            return Ok(response);
+        }
+        // Late/unrelated replies do not extend this request's deadline.
+    }
+}
+
 impl ControllerClient {
     /// A listener/tunnel can take over an address during a coordinator restart.
     /// Compare the persistent command stream with a new connection to the
@@ -1549,10 +1571,14 @@ impl ControllerClient {
 
         // Preparation may compile many frames, but only while playback is
         // paused. It must not weaken the short clock-feedback deadline.
-        let previous_timeout = reader.get_ref().read_timeout().ok().flatten();
-        if method == "controller.media.timeline.prepare" {
-            let _ = reader.get_ref().set_read_timeout(Some(Duration::from_secs(15)));
-        }
+        let previous_timeout = reader.get_ref().read_timeout()
+            .map_err(|error| ControllerRpcError::transport(format!("configure PCController read timeout: {error}")))?;
+        let budget = if method == "controller.media.timeline.prepare" {
+            Duration::from_secs(15)
+        } else {
+            previous_timeout.unwrap_or(Duration::from_secs(3))
+        };
+        let deadline = Instant::now() + budget;
 
         let id = *next_id;
         *next_id = next_id.wrapping_add(1).max(1);
@@ -1563,34 +1589,26 @@ impl ControllerClient {
             "params": params,
             "client_id": self.registered_id.as_deref(),
         });
-        serde_json::to_writer(&mut *writer, &request)
-            .map_err(|error| ControllerRpcError::transport(format!("encode PCController JSON-RPC request: {error}")))?;
-        writer
-            .write_all(b"\n")
-            .and_then(|_| writer.flush())
-            .map_err(|error| ControllerRpcError::transport(format!("write PCController JSON-RPC request: {error}")))?;
+        let result = (|| {
+            serde_json::to_writer(&mut *writer, &request)
+                .map_err(|error| ControllerRpcError::transport(format!("encode PCController JSON-RPC request: {error}")))?;
+            writer
+                .write_all(b"\n")
+                .and_then(|_| writer.flush())
+                .map_err(|error| ControllerRpcError::transport(format!("write PCController JSON-RPC request: {error}")))?;
 
-        loop {
-            let mut line = String::new();
-            let read = reader
-                .read_line(&mut line)
-                .map_err(|error| ControllerRpcError::transport(format!("read PCController JSON-RPC response: {error}")))?;
-            if read == 0 {
-                return Err(ControllerRpcError::transport("PCController closed the JSON-RPC connection".into()));
-            }
-            let response: Value = serde_json::from_str(line.trim())
-                .map_err(|error| ControllerRpcError::transport(format!("decode PCController JSON-RPC response: {error}")))?;
-            if response.get("id").and_then(Value::as_u64) != Some(id) {
-                continue;
-            }
+            let response = read_controller_response(reader, id, deadline)?;
             if let Some(error) = response.get("error").filter(|value| !value.is_null()) {
-                let _ = reader.get_ref().set_read_timeout(previous_timeout);
                 return Err(controller_json_rpc_error(error));
             }
-            let _ = reader.get_ref().set_read_timeout(previous_timeout);
-            if let Some(id) = reported_id { self.registered_id = Some(id); }
-            return Ok(response.get("result").cloned().unwrap_or(Value::Null));
-        }
+            Ok(response.get("result").cloned().unwrap_or(Value::Null))
+        })();
+        // Restore on every exit, including write/decode/EOF/timeout failures.
+        // A failed preparation must not leave later controls on a 15s budget.
+        reader.get_ref().set_read_timeout(previous_timeout)
+            .map_err(|error| ControllerRpcError::transport(format!("restore PCController read timeout: {error}")))?;
+        if result.is_ok() && let Some(id) = reported_id { self.registered_id = Some(id); }
+        result
     }
 
     pub fn transport_description(&self) -> String {
@@ -3093,6 +3111,44 @@ mod tests {
     }
     use std::net::TcpListener;
     use std::thread;
+
+    #[test]
+    fn failed_preparation_restores_control_socket_deadline() {
+        for reply in ["", "not-json\n"] {
+            let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+            let address = listener.local_addr().unwrap();
+            let server = thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                stream.set_read_timeout(Some(Duration::from_secs(1))).unwrap();
+                let mut request = String::new();
+                BufReader::new(stream.try_clone().unwrap()).read_line(&mut request).unwrap();
+                stream.write_all(reply.as_bytes()).unwrap();
+            });
+            let writer = TcpStream::connect(address).unwrap();
+            let original = Some(Duration::from_millis(80));
+            writer.set_read_timeout(original).unwrap();
+            let reader = BufReader::new(writer.try_clone().unwrap());
+            let mut client = ControllerClient {
+                endpoint: address.to_string(), registered_id: Some("fixture".into()),
+                backend: ControllerBackend::Tcp { writer, reader, next_id: 1 },
+            };
+            let error = client.call_detailed("controller.media.timeline.prepare", json!({})).unwrap_err();
+            assert!(error.transport_failed);
+            if let ControllerBackend::Tcp { reader, .. } = &client.backend {
+                assert_eq!(reader.get_ref().read_timeout().unwrap(), original);
+            }
+            server.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn acknowledged_pwm_readback_failure_is_not_a_broken_transport() {
+        let error = controller_json_rpc_error(&json!({"code":-32010,"message":"PWM change acknowledged, but readback was not received.",
+            "data":{"kind":"confirmation_unavailable","resource":"pwm","write_acknowledged":true,"retryable":false}}));
+        assert!(!error.transport_failed);
+        assert!(!error.retryable);
+        assert_eq!(error.kind.as_deref(), Some("confirmation_unavailable"));
+    }
 
     #[test]
     fn json_rpc_errors_expose_the_human_message_without_the_raw_envelope() {
