@@ -3924,6 +3924,10 @@ impl PealayerApp {
             .map(|mut queue| queue.drain(..).collect::<Vec<_>>())
             .unwrap_or_default();
         for result in results {
+            if result.operation=="rf-received" {
+                if let Ok(event)=result.result {self.rf.receive(event);}
+                continue;
+            }
             if result.operation=="hardware-authority" {
                 if let Err(error)=result.result {
                     let _=crate::messaging::publish(crate::messaging::ToastRequest {

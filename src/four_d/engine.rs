@@ -561,6 +561,7 @@ pub struct ControllerPushTarget {
     hardware_revision: std::sync::Weak<AtomicU64>,
     catalog_refresh_requested: std::sync::Weak<AtomicBool>,
     rf_catalog_refresh_requested: std::sync::Weak<AtomicBool>,
+    controller_call_results: std::sync::Weak<Mutex<std::collections::VecDeque<ControllerCallResult>>>,
     connection_error: std::sync::Weak<Mutex<Option<String>>>,
 }
 
@@ -606,6 +607,7 @@ impl EngineHandle {
             hardware_revision: Arc::downgrade(&self.hardware_revision),
             catalog_refresh_requested: Arc::downgrade(&self.catalog_refresh_requested),
             rf_catalog_refresh_requested: Arc::downgrade(&self.rf_catalog_refresh_requested),
+            controller_call_results: Arc::downgrade(&self.controller_call_results),
         }
     }
 
@@ -709,6 +711,27 @@ impl ControllerPushTarget {
     }
 
     pub(crate) fn apply_notification(&self, method: &str, params: &serde_json::Value) -> bool {
+        if matches!(method,"controller.state"|"controller.event")
+            && params["kind"]=="rf.receive" && params["source"]=="board"
+            && params["rf_code"].as_u64().is_some_and(|code|code>0 && code<=u32::MAX as u64)
+            && params["rf_bits"].as_u64().is_some_and(|bits|(1..=32).contains(&bits))
+            && params["rf_protocol"].as_u64().is_some_and(|protocol|(1..=12).contains(&protocol))
+            && params["time"].as_str().is_some_and(|time|time.parse::<jiff::Timestamp>().is_ok())
+        {
+            if let Some(results)=self.controller_call_results.upgrade() && let Ok(mut queue)=results.lock() {
+                // Bound and coalesce reception metadata separately from command results.
+                // No RPC/UART query or config write is issued for repeated packets.
+                let matches=|result:&ControllerCallResult| result.operation=="rf-received" && result.result.as_ref().is_ok_and(|old|
+                    ["rf_code","rf_bits","rf_protocol"].iter().all(|key|old[*key]==params[*key]));
+                if queue.iter().filter(|result|matches(result)).any(|result|result.result.as_ref().is_ok_and(|old|
+                    old["time"].as_str().and_then(|time|time.parse::<jiff::Timestamp>().ok()) > params["time"].as_str().and_then(|time|time.parse::<jiff::Timestamp>().ok()))) {return false;}
+                queue.retain(|result|!matches(result));
+                if queue.iter().filter(|result|result.operation=="rf-received").count()>=32
+                    && let Some(index)=queue.iter().position(|result|result.operation=="rf-received") {queue.remove(index);}
+                queue.push_back(ControllerCallResult {operation:"rf-received".into(),result:Ok(params.clone()),error_detail:None});
+                return true;
+            }
+        }
         if matches!(method, "controller.state" | "controller.event")
             && params.get("kind").and_then(serde_json::Value::as_str) == Some("emergency_stop")
         {
@@ -3198,6 +3221,24 @@ mod tests {
             }),
         ));
         assert!(handle.catalog_refresh_requested.load(Ordering::Relaxed));
+    }
+
+    #[test]
+    fn rf_receive_metadata_is_coalesced_bounded_and_never_requests_uart_refresh() {
+        let handle=memory_only_test_engine();
+        let target=handle.controller_push_target();
+        let mut event=serde_json::json!({"kind":"rf.receive","source":"board","rf_code":42,"rf_bits":24,"rf_protocol":1,"time":"2026-10-13T10:00:00Z"});
+        for _ in 0..50 {assert!(target.apply_notification("controller.event",&event));}
+        assert_eq!(handle.controller_call_results.lock().unwrap().len(),1);
+        assert!(!handle.take_rf_catalog_refresh_request());
+        assert!(!handle.catalog_refresh_requested.load(Ordering::Relaxed));
+        event["time"]=serde_json::json!("2026-10-13T09:00:00Z");
+        assert!(!target.apply_notification("controller.event",&event));
+        event["source"]=serde_json::json!("bridge");
+        assert!(!target.apply_notification("controller.event",&event));
+        event["source"]=serde_json::json!("board");
+        for code in 1..=100 {event["rf_code"]=serde_json::json!(code);target.apply_notification("controller.event",&event);}
+        assert_eq!(handle.controller_call_results.lock().unwrap().len(),32);
     }
 
     #[test]

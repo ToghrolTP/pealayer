@@ -74,6 +74,43 @@ impl Default for RfState {
 }
 
 impl RfState {
+    pub(crate) fn receive(&mut self, event: Value) {
+        if event["kind"] != "rf.receive" || event["source"] != "board" {
+            return;
+        }
+        let Some(time) = event["time"]
+            .as_str()
+            .and_then(|time| time.parse::<jiff::Timestamp>().ok())
+        else {
+            return;
+        };
+        if let Some(entries) = self.catalog["entries"].as_array_mut() {
+            for entry in entries {
+                if entry["code"] == event["rf_code"]
+                    && entry["bits"] == event["rf_bits"]
+                    && entry["protocol"] == event["rf_protocol"]
+                    && entry["last_seen"]
+                        .as_str()
+                        .and_then(|value| value.parse::<jiff::Timestamp>().ok())
+                        .is_none_or(|old| time >= old)
+                {
+                    entry["last_seen"] = event["time"].clone();
+                }
+            }
+        }
+        if !self.catalog["activity"].is_array() {
+            self.catalog["activity"] = json!([]);
+        }
+        let activity = self.catalog["activity"].as_array_mut().unwrap();
+        activity.retain(|old| {
+            !(old["kind"] == "rf.receive"
+                && ["rf_code", "rf_bits", "rf_protocol"]
+                    .iter()
+                    .all(|key| old[*key] == event[*key]))
+        });
+        activity.insert(0, event);
+        activity.truncate(32);
+    }
     pub fn snapshot(&self) -> Value {
         json!({"catalog":self.catalog,"pending":self.pending,"error":self.error,"error_detail":self.error_detail,"last_result":self.last_result,"last_operation":self.last_operation})
     }
@@ -83,6 +120,25 @@ impl RfState {
         {
             value["entries"] = self.catalog["entries"].clone();
             value["entries_sampled"] = self.catalog["entries_sampled"].clone();
+        }
+        if value["hostname"] == self.catalog["hostname"]
+            && let Some(entries) = value["entries"].as_array_mut()
+        {
+            for entry in entries {
+                if let Some(old) = array(&self.catalog["entries"]).into_iter().find(|old| {
+                    old["code"] == entry["code"]
+                        && old["bits"] == entry["bits"]
+                        && old["protocol"] == entry["protocol"]
+                }) && old["last_seen"]
+                    .as_str()
+                    .and_then(|time| time.parse::<jiff::Timestamp>().ok())
+                    > entry["last_seen"]
+                        .as_str()
+                        .and_then(|time| time.parse::<jiff::Timestamp>().ok())
+                {
+                    entry["last_seen"] = old["last_seen"].clone();
+                }
+            }
         }
         self.catalog = value;
     }
@@ -884,6 +940,30 @@ mod tests {
 
         assert_eq!(state.catalog["entries"].as_array().map(Vec::len), Some(1));
         assert_eq!(state.catalog["entries"][0]["code"], 99);
+    }
+
+    #[test]
+    fn genuine_receive_updates_matching_signal_without_mutation_or_date_regression() {
+        let mut state = RfState::default();
+        state.apply_catalog(json!({"connected":true,"entries_sampled":true,"entries":[
+            {"id":0,"code":42,"bits":24,"protocol":1},
+            {"id":1,"code":42,"bits":16,"protocol":1}
+        ]}));
+        let event = json!({"id":1,"kind":"rf.receive","source":"board","rf_code":42,"rf_bits":24,"rf_protocol":1,"time":"2026-10-13T10:00:00Z"});
+        state.receive(event.clone());
+        assert_eq!(state.catalog["entries"][0]["last_seen"], event["time"]);
+        assert!(state.catalog["entries"][1]["last_seen"].is_null());
+        let mut older = event.clone();
+        older["time"] = json!("2026-10-13T09:00:00Z");
+        state.receive(older);
+        assert_eq!(state.catalog["entries"][0]["last_seen"], event["time"]);
+        let mut tx = event.clone();
+        tx["kind"] = json!("rf.transmit");
+        tx["time"] = json!("2026-10-13T11:00:00Z");
+        state.receive(tx);
+        assert_eq!(state.catalog["entries"][0]["last_seen"], event["time"]);
+        assert!(!state.pending);
+        assert!(state.last_result.is_null());
     }
 
     #[test]
