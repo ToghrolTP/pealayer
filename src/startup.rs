@@ -417,8 +417,13 @@ pub fn run() -> eframe::Result {
                 .expect("Failed creating render context");
 
             let egui_ctx = cc.egui_ctx.clone();
+            let video_update_pending = crate::mpv::render::VideoUpdateSignal::default();
+            let callback_pending = video_update_pending.clone();
             crate::remote_location::install_context(&egui_ctx);
             render_context.set_update_callback(move || {
+                // Remember decoder/configuration work even when window-move
+                // pacing defers its repaint. No MPV/GL API runs in this callback.
+                callback_pending.mark();
                 // Outside a native move, the decoder remains the most efficient
                 // repaint clock. During WM_ENTERSIZEMOVE, the dedicated DWM
                 // pump presents the newest decoded frame at compositor cadence;
@@ -654,7 +659,7 @@ pub fn run() -> eframe::Result {
                 external_seek_revision: 0,
                 pending_external_media: None,
                 pending_external_pause: false,
-                render_context: Arc::new(Mutex::new(Some(RenderContextWrapper(render_context)))),
+                render_context: Arc::new(Mutex::new(Some(RenderContextWrapper(render_context, video_update_pending)))),
                 playback_time: 0.0,
                 duration: 0.0,
                 is_seekable: false,

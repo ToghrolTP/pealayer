@@ -10,9 +10,22 @@ pub fn mpv_get_proc_address(ctx: &GetProcAddress, name: &str) -> *mut std::ffi::
     }
 }
 
-pub struct RenderContextWrapper(pub libmpv2::render::RenderContext<'static>);
+pub struct RenderContextWrapper(
+    pub libmpv2::render::RenderContext<'static>,
+    pub VideoUpdateSignal,
+);
 unsafe impl Send for RenderContextWrapper {}
 unsafe impl Sync for RenderContextWrapper {}
+
+#[derive(Clone)]
+pub struct VideoUpdateSignal(Arc<std::sync::atomic::AtomicBool>);
+impl Default for VideoUpdateSignal {
+    fn default() -> Self { Self(Arc::new(std::sync::atomic::AtomicBool::new(true))) }
+}
+impl VideoUpdateSignal {
+    pub fn mark(&self) { self.0.store(true, std::sync::atomic::Ordering::Release); }
+    pub fn take(&self) -> bool { self.0.swap(false, std::sync::atomic::Ordering::AcqRel) }
+}
 
 /// Isolate libmpv from egui's premultiplied blending and window-space clip.
 /// libmpv requires standard GL defaults, including disabled BLEND/SCISSOR_TEST.
@@ -126,6 +139,19 @@ impl Drop for MpvGlStateGuard<'_> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn decoder_update_signal_coalesces_work_without_losing_the_next_edge() {
+        let signal = super::VideoUpdateSignal::default();
+        assert!(signal.take()); // First frame always requires initialization.
+        assert!(!signal.take());
+        let callback = signal.clone();
+        std::thread::spawn(move || { callback.mark(); callback.mark(); }).join().unwrap();
+        assert!(signal.take());
+        assert!(!signal.take());
+        signal.mark(); // Callback arriving after the previous consumption.
+        assert!(signal.take());
+    }
+
     #[test]
     fn mpv_boundary_disables_ui_compositing_and_restores_independent_targets() {
         // Inspect the production boundary, not a test that requires GPU/driver

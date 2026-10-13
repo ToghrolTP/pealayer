@@ -1016,6 +1016,7 @@ pub struct MediaTrackInfo {
 
 impl eframe::App for PealayerApp {
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
+        let _timing = crate::performance::span(crate::performance::Phase::Logic);
         self.flush_timeline_toolbar_save(ctx);
         self.flush_status_bar_save(ctx);
         self.flush_control_bar_save(ctx);
@@ -1812,6 +1813,7 @@ impl eframe::App for PealayerApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
+        let _timing = crate::performance::span(crate::performance::Phase::Ui);
         let is_fullscreen = ui.input(|input| input.viewport().fullscreen.unwrap_or(false));
         if let Some(winit_window) = frame.winit_window() {
             if let Some(monitor) = winit_window.current_monitor() {

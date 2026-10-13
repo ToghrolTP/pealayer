@@ -455,6 +455,11 @@ fn handle_connection(mut stream: TcpStream, state: ControlState) {
             Ok(request) if !browser_origin_allowed(&request.headers, stream.local_addr().ok()) => {
                 HttpResponse::text(403, "Forbidden", "Browser origin is not permitted")
             }
+            Ok(request) if request.method == "GET" && request.target == "/api/diagnostics/performance" => {
+                if stream.peer_addr().is_ok_and(|address| address.ip().is_loopback()) {
+                    HttpResponse::json(200, "OK", crate::performance::snapshot().to_string())
+                } else { HttpResponse::text(403, "Forbidden", "Native performance diagnostics require a local caller") }
+            }
             Ok(request) if request.method == "POST" && (request.target == "/api/udp" ||
                 (request.target == "/api/rpc" && serde_json::from_slice::<serde_json::Value>(&request.body).ok()
                     .is_some_and(|v| v["method"].as_str().is_some_and(|m|m.starts_with("pealayer.udp."))))) => {
