@@ -10,6 +10,12 @@ statements are not the present product state.
 
 ## Delivered source and deployment
 
+- Cafe's preparation recovery fixes are installed. A live standalone-strip wait
+  and subsequent coordinator outage were resolved with the user's scoped stop
+  and PCController restart approvals. [Live preparation recheck](hardware-preparation-recovery.md)
+  verified paused ready revision/prepare/clock ACK 67 with no errors; actual cue
+  deadline/physical playback acceptance remains separate.
+
 - Native video now isolates libmpv from egui blending/window clipping and renders
   before sampling the shared texture. [Ghosting cause and delivery gates](video-ghosting.md)
   document cross-workspace persistence, scoped restoration and render-error
