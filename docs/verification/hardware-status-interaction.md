@@ -75,3 +75,32 @@ fixtures retain display/inline-editor and trailing-anchor checks.
 Package/installed identities and live visual verification are recorded separately
 after publication. Neither static checks nor VirtualBoard results establish the
 physical latency, sustained load, moving-video or audio acceptance gates of #80.
+
+## Package and activation checkpoint
+
+The Windows package completed on 13 October against clean application source
+`2bf892e4ea53319dae2a771bfbd9fcdd9a194d62`. Release compilation took 2m09s;
+the executable SHA-256 is
+`6d21043fa72e590951895c3b495f13130f68268afb07f9d64efb8ae7050d6db3`.
+Web/PWA integrity, Windows resources and libmpv smoke passed; tests/CI stayed
+skipped. David's retained libmpv remains
+`e56ce67cd00f06a59dc7ed5b97a49a9182a381554c755dc4570a52af1ef30e65`.
+
+The approved local peer-updater CLI launch was rejected by execution policy
+before running. No alternate tool, launch path, manual executable replacement
+or policy bypass was attempted. The current local Pealayer remains source
+`3dc99788972519f1f81050a79e93cd6a4231ee06`, PID101304, paused/connected and
+without a requested Play. Cafe Pealayer remains closed by the user's prior
+request; no Cafe launch or foreign-runtime deployment was attempted. Local and
+Cafe delivery of this package are **not complete**.
+
+Windows computer-use capture initialized and selected the actual local window,
+but capture failed twice, including a fresh selection, with
+`IGraphicsCaptureItemInterop.CreateForMonitor ... 0x8007041D`. No current or
+after screenshot was produced. This does not establish visual acceptance.
+
+Source PR [#179](https://github.com/ToghrolTP/pealayer/pull/179) is stacked on
+the paired live-value PR #178. PCController's related Web/TUI change is in
+[#662](https://github.com/atomicdeploy/PCController/pull/662), preserving mobile
+#661 and WS #660. Both attempted chat attachments were rejected by the chat's
+100-artifact limit; GitHub source refs and PR links are intact.

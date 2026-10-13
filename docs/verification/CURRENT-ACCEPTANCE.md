@@ -10,6 +10,16 @@ statements are not the present product state.
 
 ## Fresh audit: 13 October 2026
 
+[Hardware/status interaction progress](hardware-status-interaction.md) records
+observed-state relay colors, ordered relay clicks and prompt input dispatch,
+configurable connection icon/mode, stable prefixed Workspace, richer status
+actions, the full native/Web icon catalog, density notches and square melody
+refresh. Clean-source Windows packaging and source compilation passed with tests
+and CI skipped. The approved local updater launch was policy-denied before
+running; this wave is not installed, Cafe remains closed and no after screenshot
+or physical-edge measurement passed. The local effect working draft was cleared
+after private backup at the user's request. #80 remains open.
+
 [The current #80 audit](issue80-current-audit.md) records Cafe's actual running
 source, staged-not-installed #176, delivered controller timeout fixes and a
 reproduced high paused-CPU result in two separated samples. It supersedes older
