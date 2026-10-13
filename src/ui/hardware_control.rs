@@ -517,11 +517,7 @@ fn open_detail(
         .pwm_channels
         .iter()
         .find(|channel| channel.key == control.key)
-        .and_then(|channel| {
-            (capabilities.telemetry.pwm_channel == Some(channel.id))
-                .then_some(capabilities.telemetry.pwm_value.unwrap_or(0))
-        })
-        .map(|value| f64::from(value) * 100.0 / 4095.0)
+        .and_then(|channel| capabilities.observed_pwm_percent(channel.id))
         .unwrap_or(0.0);
 }
 
@@ -750,7 +746,7 @@ pub(crate) fn draw_timeline_live_control(
             .unwrap_or(0);
         let mut percent = ui
             .data_mut(|data| data.get_temp::<f64>(value_id))
-            .unwrap_or_else(|| f64::from(telemetry_raw) * 100.0 / 4095.0);
+            .unwrap_or_else(|| capabilities.pwm_percent(channel, telemetry_raw));
         let response = crate::ui::layout::draw_pwm_editor_row(
             ui,
             &mut percent,

@@ -2097,6 +2097,35 @@ pub(crate) struct PwmEditorResponse {
     dragging: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default)]
+struct PwmEditorSession {
+    draft: Option<f64>,
+    editing: bool,
+    dirty: bool,
+}
+
+impl PwmEditorSession {
+    fn begin(&self, observed: f64) -> f64 {
+        if self.editing {
+            self.draft.unwrap_or(observed)
+        } else {
+            observed
+        }
+    }
+
+    fn finish(&mut self, percent: f64, changed: bool, editing: bool,
+        dragging: bool, commit: bool, cancel: bool) -> PwmEditorResponse {
+        self.dirty |= changed;
+        let committed = self.dirty && commit && !cancel;
+        self.draft = Some(percent);
+        self.editing = editing && !cancel;
+        if committed || cancel {
+            self.dirty = false;
+        }
+        PwmEditorResponse { changed: changed && !cancel, committed, dragging }
+    }
+}
+
 fn pwm_editor_widths(row_width: f32, gap: f32) -> (f32, f32) {
     let number_width = 76.0_f32.min((row_width - gap - 56.0).max(52.0));
     let slider_width = (row_width - number_width - gap).max(1.0);
@@ -2167,6 +2196,11 @@ fn draw_pwm_editor_row_sized(
         egui::vec2(row_width, 26.0),
         egui::Layout::left_to_right(egui::Align::Center),
         |ui| {
+            let session_id = ui.make_persistent_id("pwm_editor_session");
+            let mut session = ui.data_mut(|data| {
+                data.get_temp::<PwmEditorSession>(session_id).unwrap_or_default()
+            });
+            *percent = session.begin(*percent);
             let gap = ui.spacing().item_spacing.x;
             let (slider_width, number_width) = pwm_editor_widths(row_width, gap);
             let slider = ui
@@ -2184,6 +2218,9 @@ fn draw_pwm_editor_row_sized(
                     ui.add_enabled(
                         enabled,
                         egui::Slider::new(percent, 0.0..=100.0)
+                            // Always-clamping rounds incoming telemetry to our
+                            // step and reports changed even without user input.
+                            .clamping(egui::SliderClamping::Edits)
                             .show_value(false)
                             .step_by(0.1),
                     )
@@ -2197,12 +2234,14 @@ fn draw_pwm_editor_row_sized(
             if wheel_steps != 0.0 {
                 *percent = (*percent + wheel_steps).clamp(0.0, 100.0);
             }
+            let before_number = *percent;
             let value = ui
                 .add_enabled_ui(enabled, |ui| {
                     ui.add_sized(
                         [number_width, 24.0],
                         egui::DragValue::new(percent)
                             .range(0.0..=100.0)
+                            .clamp_existing_to_range(false)
                             .speed(0.1)
                             .fixed_decimals(1)
                             .suffix("%")
@@ -2210,12 +2249,24 @@ fn draw_pwm_editor_row_sized(
                     )
                 })
                 .inner;
-            outcome.changed = slider.changed() || value.changed() || wheel_steps != 0.0;
-            outcome.dragging = slider.dragged();
-            outcome.committed = slider.drag_stopped()
-                || value.lost_focus()
-                || (value.changed() && ui.input(|input| input.key_pressed(egui::Key::Enter)))
-                || wheel_steps != 0.0;
+            let (enter, escape) = ui.input(|input| (
+                input.key_pressed(egui::Key::Enter), input.key_pressed(egui::Key::Escape)
+            ));
+            // DragValue can parse its rounded display text on an unchanged
+            // blur. That is presentation, not permission to write hardware.
+            let numeric_changed = value.changed()
+                && (!value.lost_focus() || session.dirty || enter);
+            if value.changed() && !numeric_changed {
+                *percent = before_number;
+            }
+            let dragging = slider.dragged() || value.dragged();
+            let changed = slider.changed() || numeric_changed || wheel_steps != 0.0;
+            let commit = slider.drag_stopped() || value.drag_stopped()
+                || value.lost_focus() || enter || wheel_steps != 0.0
+                || (slider.changed() && !slider.dragged());
+            outcome = session.finish(*percent, changed,
+                value.has_focus() || dragging, dragging, commit, escape);
+            ui.data_mut(|data| data.insert_temp(session_id, session));
         },
     );
     outcome
@@ -6100,18 +6151,7 @@ fn open_control_dialog(
         .pwm_channels
         .iter()
         .find(|channel| channel.key == control.key)
-        .and_then(|channel| {
-            (capabilities.telemetry.pwm_channel == Some(channel.id))
-                .then_some(capabilities.telemetry.pwm_value.unwrap_or(0))
-        })
-        .map(|raw| {
-            let channel = control
-                .key
-                .strip_prefix("pwm.")
-                .and_then(|value| value.parse().ok())
-                .unwrap_or_default();
-            capabilities.pwm_percent(channel, raw)
-        })
+        .and_then(|channel| capabilities.observed_pwm_percent(channel.id))
         .unwrap_or(0.0);
 }
 
@@ -10900,6 +10940,52 @@ mod timeline_row_tests {
         assert_eq!(pwm_raw(0.0), 0);
         assert_eq!(pwm_raw(100.0), 4095);
         assert_eq!(pwm_raw(12.5), 512);
+    }
+
+    #[test]
+    fn pwm_idle_render_never_normalizes_telemetry_into_hardware_writes() {
+        let context = egui::Context::default();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        for observed in [50.013, 24.007, 99.997, 100.0, 0.0] {
+            let mut percent = observed;
+            let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+                let response = draw_pwm_editor_row(ui, &mut percent, true);
+                assert_eq!(response, PwmEditorResponse::default());
+                transmit_pwm_editor_response_with(&sender, true, ui, 1, pwm_raw(percent), response);
+            });
+            output.textures_delta.clear();
+            assert_eq!(percent, observed, "drawing a rounded label must not edit telemetry");
+        }
+        assert!(receiver.try_recv().is_err(), "idle frames must never dispatch PWM");
+    }
+
+    #[test]
+    fn pwm_unchanged_blur_after_full_intensity_never_sends_zero_or_duplicates() {
+        let mut session = PwmEditorSession::default();
+        let first = session.finish(100.0, true, false, false, true, false);
+        assert!(first.committed);
+        let focus = session.finish(100.0, false, true, false, false, false);
+        assert!(!focus.changed && !focus.committed);
+        assert_eq!(session.begin(0.0), 100.0, "retain the focused draft across stale telemetry");
+        let blur = session.finish(100.0, false, false, false, true, false);
+        assert!(!blur.changed && !blur.committed);
+        assert!(!pwm_transmit_due(blur, true, None, true));
+        assert!(!pwm_transmit_due(blur, false, None, true));
+    }
+
+    #[test]
+    fn pwm_positive_edit_survives_telemetry_until_one_commit_and_escape_cancels() {
+        let mut session = PwmEditorSession::default();
+        let edit = session.finish(75.0, true, true, false, false, false);
+        assert!(edit.changed && !edit.committed);
+        assert_eq!(session.begin(0.0), 75.0);
+        let blur = session.finish(session.begin(0.0), false, false, false, true, false);
+        assert!(blur.committed);
+        assert!(!session.finish(75.0, false, false, false, true, false).committed);
+        session.finish(25.0, true, true, false, false, false);
+        let cancel = session.finish(25.0, false, false, false, true, true);
+        assert!(!cancel.changed && !cancel.committed);
+        assert_eq!(session.begin(100.0), 100.0);
     }
 
     #[test]

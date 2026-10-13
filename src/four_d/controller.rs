@@ -244,6 +244,17 @@ pub struct HardwareEffectGroup {
 }
 
 impl HardwareCapabilities {
+    pub(crate) fn observed_pwm_percent(&self, channel: u8) -> Option<f64> {
+        if let Some(value) = self.telemetry.pwm_logical_percent_milli
+            .get(usize::from(channel)).copied().flatten() {
+            return Some(f64::from(value) / 1000.0);
+        }
+        self.telemetry.pwm_values.get(usize::from(channel)).copied().flatten()
+            .or_else(|| (self.telemetry.pwm_channel == Some(channel))
+                .then_some(self.telemetry.pwm_value).flatten())
+            .map(|raw| self.pwm_percent(channel, raw))
+    }
+
     pub(crate) fn apply_pwm_push(&mut self, values: &Value) -> bool {
         let Some(revision) = values.get("revision").and_then(Value::as_u64) else { return false; };
         if !self.board_connected || values["host_instance_id"].as_str() != Some(self.host_instance_id.as_str())
@@ -4443,6 +4454,20 @@ mod tests {
         assert_eq!(telemetry.pwm_logical_percent_milli[1], Some(1_000));
         assert_eq!(telemetry.pwm_logical_percent_milli[2], Some(5_000));
         assert_eq!(telemetry.pwm_logical_percent_milli[3], Some(100_000));
+    }
+
+    #[test]
+    fn pwm_channel_two_selection_uses_full_vector_and_logical_percent() {
+        let mut capabilities = HardwareCapabilities::default();
+        capabilities.telemetry.pwm_channel = Some(15);
+        capabilities.telemetry.pwm_value = Some(4095);
+        capabilities.telemetry.pwm_values = vec![Some(0), Some(984)];
+        capabilities.telemetry.pwm_logical_percent_milli = vec![Some(0), Some(50_013)];
+        assert_eq!(capabilities.observed_pwm_percent(1), Some(50.013));
+        capabilities.telemetry.pwm_logical_percent_milli[1] = None;
+        assert_eq!(capabilities.observed_pwm_percent(1), Some(984.0 * 100.0 / 4095.0));
+        assert_eq!(capabilities.observed_pwm_percent(2), None, "unknown is not a fabricated zero");
+        assert_eq!(capabilities.observed_pwm_percent(15), Some(100.0));
     }
 
     #[test]
