@@ -38,6 +38,45 @@ pub struct HardwarePWMChannelConfig {
     pub icon: String,
     pub curve: String,
     pub gamma_milli: u16,
+    pub on_behavior: Option<PwmOnBehavior>,
+    pub remembered_raw: Option<u16>,
+    pub remembered_percent_milli: Option<u32>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PwmOnBehavior { Full, Restore }
+
+impl PwmOnBehavior {
+    pub fn as_str(self) -> &'static str { match self { Self::Full => "full", Self::Restore => "restore" } }
+    fn from_value(value: &Value) -> Option<Self> {
+        match value.as_str()? { "full" => Some(Self::Full), "restore" => Some(Self::Restore), _ => None }
+    }
+}
+
+impl HardwarePWMChannelConfig {
+    fn apply_policy_metadata(&mut self, channel: &Value) -> bool {
+        let mut changed = false;
+        if let Some(policy) = PwmOnBehavior::from_value(&channel["config"]["on_behavior"])
+            && self.on_behavior != Some(policy) {
+            self.on_behavior = Some(policy); changed = true;
+        }
+        let memory = match channel["remembered_known"].as_bool() {
+            Some(false) => Some((None, None)),
+            Some(true) => channel["remembered_raw"].as_u64().filter(|raw| (1..=4095).contains(raw))
+                .zip(channel["remembered_percent"].as_f64().filter(|value|
+                    value.is_finite() && (0.0..=100.0).contains(value)))
+                .map(|(raw, percent)| (Some(raw as u16), Some((percent * 1000.0).round() as u32))),
+            None => None,
+        };
+        // Missing/malformed metadata is not permission to fabricate or erase
+        // remembered brightness. A fenced authoritative unknown explicitly is.
+        if let Some((raw, percent)) = memory {
+            changed |= self.remembered_raw != raw || self.remembered_percent_milli != percent;
+            self.remembered_raw = raw; self.remembered_percent_milli = percent;
+        }
+        changed
+    }
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
@@ -270,12 +309,19 @@ impl HardwareCapabilities {
                 || !channel["logical_percent"].as_f64().is_some_and(|value|value.is_finite() && (0.0..=100.0).contains(&value)) { return false; }
             if raw[channel["channel"].as_u64().unwrap() as usize] != channel["raw_value"] { return false; }
         }
+        let mut policy_changed = false;
+        for channel in channels {
+            let index = channel["channel"].as_u64().unwrap() as u8;
+            if let Some(config) = self.pwm_channel_config.get_mut(&index) {
+                policy_changed |= config.apply_policy_metadata(channel);
+            }
+        }
         self.pwm_revision = revision;
         let available = values["available"].as_bool().unwrap();
         let availability_changed = self.telemetry.pwm_available != Some(available);
         self.telemetry.pwm_available = Some(available);
-        if !available { return availability_changed; }
-        apply_pwm_values(&mut self.telemetry,values) || availability_changed
+        if !available { return availability_changed || policy_changed; }
+        apply_pwm_values(&mut self.telemetry,values) || availability_changed || policy_changed
     }
 
     pub(crate) fn apply_snapshot_values(&mut self, snapshot: &Value) -> bool {
@@ -2659,6 +2705,9 @@ fn parse_hardware_capabilities_with_front_panel(
                             .filter(|value| value.is_finite())
                             .map(|value| (value.clamp(0.1, 5.0) * 1000.0).round() as u16)
                             .unwrap_or(1000),
+                        on_behavior: PwmOnBehavior::from_value(&entry["on_behavior"]),
+                        remembered_raw: None,
+                        remembered_percent_milli: None,
                     },
                 ))
             })
@@ -3044,7 +3093,7 @@ fn parse_hardware_capabilities_with_front_panel(
             .to_string(),
     };
 
-    HardwareCapabilities {
+    let mut capabilities = HardwareCapabilities {
         board_connected,
         programming,
         connection_generation: snapshot.get("connection_generation").and_then(Value::as_u64).unwrap_or(0),
@@ -3106,7 +3155,9 @@ fn parse_hardware_capabilities_with_front_panel(
             .unwrap_or_default(),
         effect_recording,
         operations: Vec::new(),
-    }
+    };
+    let _ = capabilities.apply_pwm_push(&snapshot["pwm_values"]);
+    capabilities
 }
 
 pub fn normalize_endpoint(endpoint: &str) -> Result<&str, String> {
@@ -3147,6 +3198,44 @@ pub fn direct_serial_name(endpoint: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn shared_pwm_policy_and_memory_follow_only_fenced_complete_metadata() {
+        use super::*;
+        let mut capabilities = HardwareCapabilities { board_connected: true,
+            host_instance_id: "owner".into(), connection_generation: 7, ..Default::default() };
+        capabilities.pwm_channel_config.insert(1, HardwarePWMChannelConfig {
+            on_behavior: Some(PwmOnBehavior::Full), ..Default::default()
+        });
+        let mut values = serde_json::json!({"host_instance_id":"owner","connection_generation":7,
+            "revision":1,"time":"2026-10-14T00:00:00Z","available":true,"values":vec![0;16],
+            "channels":(0..16).map(|channel| serde_json::json!({"channel":channel,"raw_value":0,
+                "logical_percent":0,"config":{"on_behavior":"restore"},"remembered_known":false,
+                "remembered_raw":0,"remembered_percent":0})).collect::<Vec<_>>()});
+        values["channels"][1]["remembered_known"] = serde_json::json!(true);
+        values["channels"][1]["remembered_raw"] = serde_json::json!(512);
+        values["channels"][1]["remembered_percent"] = serde_json::json!(50.123);
+        assert!(capabilities.apply_pwm_push(&values));
+        let expected = capabilities.pwm_channel_config[&1].clone();
+        assert_eq!(expected.on_behavior, Some(PwmOnBehavior::Restore));
+        assert_eq!(expected.remembered_raw, Some(512));
+        assert_eq!(expected.remembered_percent_milli, Some(50_123));
+        values["revision"] = serde_json::json!(2);
+        values["host_instance_id"] = serde_json::json!("foreign");
+        values["channels"][1]["remembered_known"] = serde_json::json!(false);
+        assert!(!capabilities.apply_pwm_push(&values));
+        assert_eq!(capabilities.pwm_channel_config[&1], expected);
+        values["host_instance_id"] = serde_json::json!("owner");
+        values["channels"][1]["remembered_known"] = serde_json::json!(true);
+        values["channels"][1]["remembered_raw"] = serde_json::json!(4096);
+        values["channels"][1]["config"]["on_behavior"] = serde_json::json!("invalid");
+        let _ = capabilities.apply_pwm_push(&values);
+        assert_eq!(capabilities.pwm_channel_config[&1], expected, "malformed fields retain last good values");
+        values["revision"] = serde_json::json!(3);
+        values["channels"][1]["remembered_known"] = serde_json::json!(false);
+        assert!(capabilities.apply_pwm_push(&values));
+        assert_eq!(capabilities.pwm_channel_config[&1].remembered_raw, None);
+        assert_eq!(capabilities.pwm_channel_config[&1].remembered_percent_milli, None);
+    }
     #[test]
     fn current_capture_contract_is_numeric_explicit_and_preserves_step_repetition() {
         let selection: super::HardwareCaptureSelection = serde_json::from_value(serde_json::json!({

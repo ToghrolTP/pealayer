@@ -9,9 +9,10 @@
     "build:bundle": "tsc && vite build && node scripts/finalize-pwa.mjs && node scripts/verify-pwa.mjs",
     "test:rf": "node scripts/test-rf-presentation.mjs",
     "test:pwm-card": "node scripts/test-pwm-card.mjs",
+    "test:pwm-policy": "node scripts/test-pwm-policy.mjs",
     "test:folders": "node scripts/test-channel-folders.mjs",
     "test:locations": "node scripts/test-file-locations.mjs",
-    "prebuild": "node scripts/test-pwm-card.mjs && node scripts/test-rf-presentation.mjs && node scripts/test-os-media-session.mjs && node scripts/test-hardware-availability.mjs && node scripts/test-seek-preview.mjs && node scripts/test-media-controls.mjs && node scripts/test-control-bars.mjs && node scripts/test-status-widgets.mjs && node scripts/test-channel-folders.mjs && node scripts/test-cue-authoring.mjs",
+    "prebuild": "node scripts/test-rf-binding-names.mjs && node scripts/test-pwm-policy.mjs && node scripts/test-pwm-card.mjs && node scripts/test-rf-presentation.mjs && node scripts/test-os-media-session.mjs && node scripts/test-hardware-availability.mjs && node scripts/test-seek-preview.mjs && node scripts/test-media-controls.mjs && node scripts/test-control-bars.mjs && node scripts/test-status-widgets.mjs && node scripts/test-channel-folders.mjs && node scripts/test-cue-authoring.mjs",
     "verify:pwa": "node scripts/verify-pwa.mjs",
     "preview": "vite preview"
   },

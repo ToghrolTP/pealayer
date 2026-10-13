@@ -49,6 +49,30 @@ fn new_binding() -> Value {
         "actions":[{"type":"control","action_id":""}]})
 }
 
+fn utf8_prefix(value: &str, max_bytes: usize) -> String {
+    value.chars().scan(0, |bytes, character| {
+        *bytes += character.len_utf8(); (*bytes <= max_bytes).then_some(character)
+    }).collect()
+}
+
+fn unique_binding_name(preferred: &str, catalog: &Value) -> String {
+    let base = if preferred.trim().is_empty() { "RF assignment" } else { preferred.trim() };
+    let names = array(&catalog["bindings"]).into_iter().filter_map(|binding|
+        binding["name"].as_str().map(|name| name.trim().to_lowercase())).collect::<std::collections::BTreeSet<_>>();
+    for index in 0..=names.len() + 1 {
+        let suffix = if index == 0 { String::new() } else { format!(" {}", index + 1) };
+        let candidate = format!("{}{}", utf8_prefix(base, 64 - suffix.len()).trim_end(), suffix);
+        if !names.contains(&candidate.to_lowercase()) { return candidate; }
+    }
+    unreachable!("more candidates than existing names")
+}
+
+fn binding_name_conflicts(name: &str, previous_name: &str, catalog: &Value) -> bool {
+    array(&catalog["bindings"]).iter().any(|binding| binding["name"].as_str().is_some_and(|existing|
+        existing.to_lowercase() == name.trim().to_lowercase()
+            && (previous_name.is_empty() || existing.to_lowercase() != previous_name.to_lowercase())))
+}
+
 impl Default for RfState {
     fn default() -> Self {
         Self {
@@ -84,7 +108,7 @@ impl RfState {
         self.open = true;
         self.tab = 0;
         self.draft = new_binding();
-        self.draft["name"] = json!(name);
+        self.draft["name"] = json!(unique_binding_name(name, &self.catalog));
         self.previous_name.clear();
         self.assignment_control = Some(key.to_owned());
         self.raise_on_open = true;
@@ -198,6 +222,9 @@ impl RfState {
                 }
                 if operation == "rf-binding.remove" && self.previous_name == self.pending_name {
                     self.previous_name.clear();
+                }
+                if matches!(operation, "rf-binding.put" | "rf-binding.remove") && value.is_array() {
+                    self.catalog["bindings"] = value.clone();
                 }
                 self.last_operation = operation.into();
                 self.last_result = value;
@@ -866,7 +893,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         for binding in array(&catalog["bindings"]) {
                             ui.push_id(binding["name"].as_str().unwrap_or_default(),|ui| { egui::Frame::group(ui.style()).show(ui,|ui| { ui.horizontal(|ui| {
                                 let mut enabled=binding["enabled"].as_bool().unwrap_or(false);
-                                if ui.checkbox(&mut enabled,"").changed() { let mut updated=binding.clone(); updated["enabled"]=json!(enabled); request(app,"binding.put",json!({"binding":updated})); }
+                                if ui.checkbox(&mut enabled,"").changed() { let mut updated=binding.clone(); updated["enabled"]=json!(enabled); request(app,"binding.put",json!({"binding":updated,"previous_name":binding["name"]})); }
                                 if ui.dropdown_choice(app.rf.previous_name==binding["name"].as_str().unwrap_or_default(),binding["name"].as_str().unwrap_or("Assignment")).clicked() { app.rf.draft=binding.clone(); app.rf.previous_name=binding["name"].as_str().unwrap_or_default().into(); app.rf.assignment_control=None; }
                                 ui.label(egui::RichText::new(format!("{} · {}",binding["match"]["rf_code"],binding["match"]["gesture"].as_str().unwrap_or_default())).weak());
                             });
@@ -906,7 +933,9 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         }
                         ui.separator();
                         ui.horizontal(|ui| {
-                            if ui.add_enabled(!app.rf.pending && !app.rf.draft["name"].as_str().unwrap_or_default().trim().is_empty() && app.rf.draft["match"]["rf_code"].as_u64().unwrap_or(0)>0 && !array(&app.rf.draft["actions"]).is_empty() && array(&app.rf.draft["actions"]).iter().all(|action|action_ready(action,&catalog)),egui::Button::new(format!("{} Save assignment",crate::ui::icons::FLOPPY_DISK))).clicked() {
+                            let conflict = binding_name_conflicts(app.rf.draft["name"].as_str().unwrap_or_default(), &app.rf.previous_name, &catalog);
+                            if conflict { ui.colored_label(ui.visuals().warn_fg_color, app.tr("An RF assignment with this name already exists. Choose another name.")); }
+                            if ui.add_enabled(!conflict && !app.rf.pending && !app.rf.draft["name"].as_str().unwrap_or_default().trim().is_empty() && app.rf.draft["match"]["rf_code"].as_u64().unwrap_or(0)>0 && !array(&app.rf.draft["actions"]).is_empty() && array(&app.rf.draft["actions"]).iter().all(|action|action_ready(action,&catalog)),egui::Button::new(format!("{} Save assignment",crate::ui::icons::FLOPPY_DISK))).clicked() {
                                 request(app,"binding.put",json!({"binding":app.rf.draft,"previous_name":app.rf.previous_name,"allow_keyboard":app.rf.allow_keyboard}));
                             }
                             if !app.rf.previous_name.is_empty() && ui.add_enabled(!app.rf.pending,egui::Button::new(format!("{} Remove",crate::ui::icons::TRASH))).clicked() { request(app,"binding.remove",json!({"name":app.rf.previous_name})); }
@@ -1024,6 +1053,27 @@ fn actions_len_button(ui: &mut egui::Ui) -> egui::Response {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn fresh_rf_assignments_have_unique_bounded_names_and_edits_are_explicit() {
+        let mut catalog = json!({"bindings":[]});
+        for _ in 0..4 {
+            let name = unique_binding_name("Light", &catalog);
+            assert!(!binding_name_conflicts(&name, "", &catalog));
+            catalog["bindings"].as_array_mut().unwrap().push(json!({"name":name}));
+        }
+        assert_eq!(catalog["bindings"][3]["name"], "Light 4");
+        assert!(binding_name_conflicts("light", "", &catalog));
+        assert!(!binding_name_conflicts("light", "Light", &catalog));
+        assert!(binding_name_conflicts("Light 2", "Light", &catalog));
+        let preferred = "چراغ".repeat(30);
+        let name = unique_binding_name(&preferred, &catalog);
+        assert!(name.len() <= 64);
+        catalog["bindings"].as_array_mut().unwrap().push(json!({"name":name}));
+        let next = unique_binding_name(&preferred, &catalog);
+        assert!(next.len() <= 64);
+        assert!(!binding_name_conflicts(&next, "", &catalog));
+    }
 
     #[test]
     fn card_assignment_opens_an_unbound_scoped_draft_without_mutating_catalog() {

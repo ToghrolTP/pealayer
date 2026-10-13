@@ -124,6 +124,8 @@ export interface PlayerState {
       key: string; kind: string; order: number; name: string; default_name: string;
       control: string; icon: string; color: string; group: string; hidden: boolean;
       up_color?: string; down_color?: string; indicator_color?: string;
+      pwm_config?: { on_behavior?: 'full' | 'restore' | null; remembered_raw?: number | null;
+        remembered_percent?: number | null } | null;
       direction?: 'up' | 'down' | 'stop' | null;
       locked: boolean; channel?: number | null; active?: boolean | null; percent?: number | null;
       actions: Array<{ id: string; verb: string; name: string; icon: string }>;

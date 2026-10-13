@@ -342,6 +342,10 @@ pub enum InteropCommand {
         channel: u8,
         percent: f64,
     },
+    SetHardwarePwmPolicy {
+        channel: u8,
+        on_behavior: crate::four_d::controller::PwmOnBehavior,
+    },
     RefreshHardwareCatalog,
     HardwareAuthority {
         operation: String,
@@ -594,6 +598,9 @@ impl InteropCommand {
                 if !percent.is_finite() || !(0.0..=100.0).contains(percent) =>
             {
                 Err("PWM percent must be a finite value from 0 to 100".to_string())
+            }
+            Self::SetHardwarePwmPolicy { channel, .. } if *channel >= 16 => {
+                Err("PWM policy channel must be from 0 to 15".to_string())
             }
             Self::PlayHardwareMelody { name, repeats }
                 if name.trim().is_empty() || name.len() > 64 || *repeats > 20 =>
@@ -2188,6 +2195,14 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
                 percent: number(&["percent", "value"])?,
             })
         }
+        "hardware.pwm.policy.set" => {
+            let channel = request.params.get("channel").and_then(Value::as_u64)
+                .filter(|channel| *channel < 16).map(|channel| channel as u8)
+                .ok_or_else(|| "missing valid PWM channel".to_string())?;
+            let on_behavior = serde_json::from_value(request.params["on_behavior"].clone())
+                .map_err(|_| "on_behavior must be full or restore".to_string())?;
+            Some(InteropCommand::SetHardwarePwmPolicy { channel, on_behavior })
+        }
         "hardware.catalog.refresh" | "pealayer.hardware.catalog.refresh" => {
             Some(InteropCommand::RefreshHardwareCatalog)
         }
@@ -3439,6 +3454,22 @@ fn run_pccontroller_udp_bridge(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pwm_policy_rpc_requires_an_explicit_channel_and_known_policy() {
+        for policy in ["full", "restore"] {
+            let request: JsonRpcRequest = serde_json::from_value(serde_json::json!({"jsonrpc":"2.0",
+                "id":1,"method":"hardware.pwm.policy.set","params":{"channel":1,"on_behavior":policy}})).unwrap();
+            let command = command_from_json_rpc(&request).unwrap().unwrap();
+            assert!(matches!(command, InteropCommand::SetHardwarePwmPolicy { channel:1, .. }));
+        }
+        for params in [serde_json::json!({"on_behavior":"restore"}),
+            serde_json::json!({"channel":16,"on_behavior":"restore"}),
+            serde_json::json!({"channel":1,"on_behavior":"toggle"})] {
+            let request: JsonRpcRequest = serde_json::from_value(serde_json::json!({"jsonrpc":"2.0",
+                "id":1,"method":"hardware.pwm.policy.set","params":params})).unwrap();
+            assert!(command_from_json_rpc(&request).is_err());
+        }
+    }
     use super::*;
 
     #[test]
