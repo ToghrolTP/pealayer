@@ -2,9 +2,11 @@
 //! widget, log clipboard contents, open media automatically, or read images.
 use std::sync::{Mutex, OnceLock};
 static PENDING: Mutex<Option<String>> = Mutex::new(None);
+static STARTED: OnceLock<()> = OnceLock::new();
+#[cfg(test)]
+pub(crate) fn initialized_for_test() -> bool { STARTED.get().is_some() }
 
 pub fn take(ctx: &eframe::egui::Context) -> Option<String> {
-    static STARTED: OnceLock<()> = OnceLock::new();
     STARTED.get_or_init(|| {
         let ctx = ctx.clone();
         std::thread::spawn(move || {

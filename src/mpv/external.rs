@@ -166,6 +166,8 @@ struct Bridge {
     settings: Mutex<Option<Settings>>,
 }
 static BRIDGE: OnceLock<Bridge> = OnceLock::new();
+#[cfg(test)]
+pub(crate) fn initialized_for_test() -> bool { BRIDGE.get().is_some() }
 pub fn configure(mpv: &'static libmpv2::Mpv, ctx: &eframe::egui::Context, mut settings: Settings) {
     // A Pealayer consumer controls the server's external player, never launches
     // another local playback/hardware authority from mirrored preferences.

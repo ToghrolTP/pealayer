@@ -638,6 +638,7 @@ pub fn run() -> eframe::Result {
             ));
 
             let mut app = PealayerApp {
+                native_service_policy: crate::app::NativeServicePolicy::Production,
                 web_only: cli_options.web_only,
                 app_name: app_name.clone(),
                 app_publisher: crate::config::resolved_app_publisher(&loaded_config),
