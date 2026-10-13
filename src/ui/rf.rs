@@ -790,6 +790,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         .constrain_to(geometry.bounds).resizable(true).collapsible(false).order(egui::Order::Foreground)
         .frame(crate::ui::dialog::opaque_window_frame(ui)).show(ui.ctx(),|ui| {
             // Keep hover paint inside allocated bounds, including closed selectors.
+            ui.style_mut().interaction.selectable_labels=false;
             ui.visuals_mut().widgets.inactive.expansion=0.0;
             ui.visuals_mut().widgets.hovered.expansion=0.0;
             ui.visuals_mut().widgets.active.expansion=0.0;
@@ -936,6 +937,16 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         }
                     },
                     2=> {
+                        crate::ui::dropdown::ComboBox::from_id_salt("transmit_learned_signal").selected_text("Use a learned signal…").width(field_width(ui)).show_ui(ui,|ui| {
+                            for entry in array(&catalog["entries"]) {
+                                if ui.dropdown_choice(false,format!("RF {} · {}",entry["id"],entry["code_display"].as_str().unwrap_or_default())).clicked() {
+                                    app.rf.code=entry["code"].to_string();
+                                    app.rf.bits=entry["bits"].as_u64().unwrap_or(24) as u8;
+                                    app.rf.protocol=entry["protocol"].as_u64().unwrap_or(1) as u8;
+                                    app.rf.pulse_us=entry["pulse_us"].as_u64().unwrap_or(0) as u16;
+                                }
+                            }
+                        });
                         egui::Grid::new("rf_tx").num_columns(2).spacing([16.0,8.0]).show(ui,|ui| {
                             ui.label("Code (hex or decimal)"); ui.text_edit_singleline(&mut app.rf.code); ui.end_row();
                             ui.label("Bits"); ui.add(egui::DragValue::new(&mut app.rf.bits).range(1..=32)); ui.end_row();
@@ -1068,7 +1079,7 @@ mod tests {
         let mut action = json!({"type":"app","app_target":"peer","app_kind":"peer.choose","app_value":"kept exactly"});
         let catalog = json!({"action_types":["app"],"applications":[{"id":"peer","surface":"peer","values":{"app_actions":"peer.choose"}}]});
         for width in [480.0, 820.0] {
-            let _ = context.run(
+            let _ = context.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
@@ -1076,10 +1087,8 @@ mod tests {
                     )),
                     ..Default::default()
                 },
-                |ctx| {
-                    egui::CentralPanel::default().show(ctx, |ui| {
-                        action_editor(ui, &mut action, &catalog);
-                    });
+                |ui| {
+                    action_editor(ui, &mut action, &catalog);
                 },
             );
             assert_eq!(action["app_value"], "kept exactly");
