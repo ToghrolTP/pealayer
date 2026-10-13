@@ -28,6 +28,24 @@ and expired hidden-editor drafts.
 Tests and compilation are hosted-only for this pass. Source checks are not
 installed native or physical MOSFET acceptance.
 
+## Independent channel editing
+
+The dirty-session regression introduced at `f3b8fba` used
+`make_persistent_id("pwm_editor_session")` inside an unnamed child UI. egui's
+unnamed sibling UIs share their persistent ID, even though their automatic
+widget IDs differ. Multiple channel cards could therefore share a focused
+draft and dirty state. The next card could display that draft and dispatch it
+using its own channel ID, explaining linked sliders and physical outputs.
+
+Each shared editor now keys its session from its unique automatic row identity.
+Hardware cards additionally give the entire PWM editor an explicit channel-key
+identity, keeping its pointer/focus state independent of row and folder order.
+The sibling-editor fixture retains Loostr's dirty draft while rendering Lantern
+with a different observed value, checks independent session IDs, and requires
+no outgoing controller intent. Existing mappings, firmware and output values
+are not rewritten by this fix. Deployment and human physical confirmation must
+be recorded separately from this source regression.
+
 This is a confirmed Pealayer input/feedback defect, not a claim about electrical
 behavior at full duty. Concurrent writes were also observed after Pealayer was
 quit, so the coordinator and other clients require independent investigation.
