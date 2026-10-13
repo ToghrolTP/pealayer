@@ -240,7 +240,7 @@ fn request(app: &mut PealayerApp, operation: &str, params: Value) {
 }
 
 fn text(ui: &mut egui::Ui, label: &str, value: &mut Value, field: &str) {
-    ui.label(label);
+    field_label(ui,label);
     let mut current = value[field].as_str().unwrap_or_default().to_string();
     if ui
         .add(
@@ -261,7 +261,7 @@ fn choices(
     field: &str,
     options: &[(String, String)],
 ) {
-    ui.label(label);
+    field_label(ui,label);
     let mut selected = value[field].as_str().unwrap_or_default().to_string();
     let caption = options
         .iter()
@@ -293,6 +293,11 @@ fn array(value: &Value) -> Vec<Value> {
 }
 fn field_width(ui: &egui::Ui) -> f32 {
     (ui.max_rect().width() - 155.0).clamp(80.0, 420.0)
+}
+
+fn field_label(ui:&mut egui::Ui,label:&str) {
+    let height=crate::ui::control_density::height(ui);
+    ui.add_sized(egui::vec2(130.0,height),egui::Label::new(label).truncate()).on_hover_text(label);
 }
 
 fn signal_matches(binding: &Value, entry: &Value) -> bool {
@@ -521,7 +526,7 @@ fn draw_error(ui: &mut egui::Ui, message: &str, detail: &Value) {
 }
 
 fn learned_selector(ui: &mut egui::Ui, signal: &mut Value, catalog: &Value) {
-    ui.label("Learned button");
+    field_label(ui,"Learned button");
     let entries = array(&catalog["entries"]);
     let caption = entries
         .iter()
@@ -578,7 +583,7 @@ fn options(value: &Value) -> Vec<(String, String)> {
         .collect()
 }
 fn number(ui: &mut egui::Ui, label: &str, value: &mut Value, field: &str, min: u64, max: u64) {
-    ui.label(label);
+    field_label(ui,label);
     let mut n = value[field].as_u64().unwrap_or(min);
     if ui
         .add(egui::DragValue::new(&mut n).range(min..=max))
