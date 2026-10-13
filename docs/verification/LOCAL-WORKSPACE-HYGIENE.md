@@ -5,6 +5,19 @@ executables, and reduced unnecessary SSD writes on 2026-10-08.
 
 ## Working locations
 
+For acceptance packaging, `-SkipTests` skips both native and Web regression
+suites. `build:bundle` still compiles TypeScript, bundles the app and checks PWA
+artifact integrity; the normal `build` retains its regression pipeline. Package
+manifests distinguish skipped regression tests from verified bundle integrity.
+This does not waive #80's physical, audio, human or release acceptance gates.
+
+The pre-existing 42 tracked and seven untracked generated Web changes were
+preserved in named Git stash `ea48f533b547be712a9f980df17c0808ed5629b8`
+before acceptance packaging. All 49 saved blob hashes matched their originals.
+Keep this preservation ref until its owner explicitly approves disposal; it is
+not authored source for publication and must not be reapplied over a new bundle.
+No user source was reset and no new worktree or dependency cache was created.
+
 - Canonical source: `%LOCALAPPDATA%\Programs\Pealayer\source\Pealayer`.
 - Installed application: `%LOCALAPPDATA%\Programs\Pealayer\bin`.
 - Shared Windows Cargo cache: `build-cache\cargo-target` under that program

@@ -137,7 +137,11 @@ if (Test-Path -LiteralPath $webUiPackage -PathType Leaf) {
     if (-not $npm) { throw 'npm is required to build the Pealayer Web UI.' }
     Push-Location -LiteralPath $webUiDirectory
     try {
-        & $npm.Source run build
+        # npm's prebuild/build scripts include regression suites. A user opting
+        # out of tests still needs compilation and PWA artifact integrity, not
+        # a silently executed second test pipeline.
+        $webBuildScript = if ($SkipTests) { 'build:bundle' } else { 'build' }
+        & $npm.Source run $webBuildScript
         if ($LASTEXITCODE -ne 0) { throw "Web UI build failed with exit code $LASTEXITCODE" }
     } finally {
         Pop-Location
@@ -278,6 +282,8 @@ $manifest = [ordered]@{
     }
     validation = [ordered]@{
         tests = if ($SkipTests) { 'skipped' } else { 'passed' }
+        web_regression_tests = if ($SkipTests) { 'skipped' } else { 'passed' }
+        web_bundle_integrity = 'verified'
         windows_resources = 'verified'
         quick_action_icons = 'verified'
         libmpv_smoke = 'passed'

@@ -31,5 +31,8 @@ The final Linux receiver has now been installed, restarted and hash-verified,
 with Cafe connected and native mirroring enabled; this does not install the
 Pealayer fix or establish acoustic fidelity. `scripts/package-windows.ps1`
 requires a clean source checkout. Its existing generated `web_ui/dist` changes
-were preserved rather than overwritten/reset to force packaging. They need a
-preservation/reconciliation step before an approved native package can be made.
+were preserved rather than overwritten/reset to force packaging. The #80 follow-up
+now hash-verified all 49 files in a named preservation stash (see
+[workspace hygiene](LOCAL-WORKSPACE-HYGIENE.md)), clearing that source-cleanliness
+blocker. Package creation, approved host updates and visual/audio acceptance
+remain separate steps; this preservation does not install the fix.
