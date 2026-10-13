@@ -3,6 +3,7 @@ import { hardwareAvailability, hardwareLabels, hardwareOutputsAvailable } from '
 import { reconcilePWMDrafts } from '../pwmDrafts';
 import { defaultPwmCard, pwmActionVisible, pwmIndicatorAction, pwmRowActions } from '../pwmCard';
 import { RfManager } from './RfManager';
+import { PwmPolicyEditor } from './PwmPolicyEditor';
 import { PublishingAuthority } from './PublishingAuthority';
 import { ColorPicker } from './ColorPicker';
 import {
@@ -525,6 +526,9 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
           <div><dt>{tr(locale, 'Stable key')}</dt><dd><code>{control.key}</code></dd></div>
         </dl>
         {/pwm|mosfet/i.test(control.kind) && pwmEditor(control)}
+        {/pwm|mosfet/i.test(control.kind) && <PwmPolicyEditor key={`${pwmOwner}:${control.key}`}
+          config={control.pwm_config} channel={control.channel} locale={locale}
+          disabled={!outputAvailable} sendCmd={sendCmd} />}
         <Space wrap>{visibleActions(control).map((action) => <Button key={action.id} disabled={control.locked || !outputAvailable || (state.estop_active && action.verb !== 'stop')} {...actionInputProps(control, action)}>{action.name || action.verb}</Button>)}</Space>
       </div>) : <>
         <div className="channel-manager__summary">

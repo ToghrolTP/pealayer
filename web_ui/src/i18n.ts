@@ -1,6 +1,13 @@
 export type UiLocale = 'en' | 'fa';
 
 const fa: Record<string, string> = {
+  'Shared On behavior':'رفتار مشترکِ روشن‌کردن', 'Full brightness (100%)':'روشنایی کامل (۱۰۰٪)',
+  'Restore last brightness':'بازیابی آخرین روشنایی', 'Apply policy':'اعمال سیاست',
+  'Applies to all connected PCController clients':'برای تمام کلاینت‌های متصل به PCController اعمال می‌شود',
+  'Remembered brightness':'روشنایی به‌یادسپرده‌شده',
+  'Unknown brightness falls back to 100%':'روشنایی نامعلوم به ۱۰۰٪ برمی‌گردد',
+  'Brightness memory resets when PCController restarts or the board reconnects':'حافظهٔ روشنایی با راه‌اندازی مجدد PCController یا اتصال دوبارهٔ برد پاک می‌شود',
+  'Shared On policy is not advertised for this channel':'سیاست مشترک روشن‌کردن برای این کانال اعلام نشده است',
   'MOSFET cards':'کارت‌های ماسفت', 'Show On button':'نمایش دکمهٔ روشن',
   'Show Off button':'نمایش دکمهٔ خاموش', 'Show Decrease button':'نمایش دکمهٔ کاهش',
   'Show Increase button':'نمایش دکمهٔ افزایش', 'Show other action buttons':'نمایش سایر دکمه‌های فرمان',

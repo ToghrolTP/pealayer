@@ -8,6 +8,11 @@ retroactively attributed to an older download.
 
 ### 🎛️ Hardware controls
 
+- Channel Settings exposes the coordinator's shared Full/Restore On policy and
+  confirmed remembered brightness, with explicit Apply and live event updates.
+  Restart/reconnect unknown-memory limits remain visible; absolute setters and
+  existing autonomous RF/motion mappings are unchanged.
+
 - MOSFET cards put distinct minus/plus actions beside the slider. Hardware
   preferences independently hide action buttons and choose Toggle/On/Off for
   the indicator; these dispatch shared coordinator actions, not guessed values.

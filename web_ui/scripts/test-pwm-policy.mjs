@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { pwmPolicyPayload } from '../src/pwmPolicy.ts';
+assert.deepEqual(pwmPolicyPayload(1,'restore'),{channel:1,on_behavior:'restore'});
+assert.deepEqual(pwmPolicyPayload(1,'full'),{channel:1,on_behavior:'full'});
+const source=readFileSync(new URL('../src/components/PwmPolicyEditor.tsx',import.meta.url),'utf8');
+const effect=source.match(/useEffect\(\(\) => \{(.*?)\}, \[current\]\)/)?.[1];
+assert.ok(effect,'Authoritative updates must reconcile the selection');
+assert.doesNotMatch(effect,/sendCmd/,'Opening/rendering must never configure or actuate');
+assert.match(source,/onClick=\{\(\) => \{[\s\S]*sendCmd\('hardware.pwm.policy.set'/);
+assert.match(source,/if \(!current \|\| channel == null\) return/,'Only advertised policy enables writes');
+console.log('Shared PWM policy: explicit partial payload, event reconciliation and non-mutating opening passed.');

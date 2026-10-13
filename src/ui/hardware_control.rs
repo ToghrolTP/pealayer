@@ -2613,6 +2613,9 @@ fn draw_channel_detail_page(
                         crate::ui::rf::open_control_assignment(app, control);
                     }
 
+                    if let Some(channel) = pwm_channel(capabilities, &control.key) {
+                        crate::ui::pwm_policy::draw(app, ui, capabilities, channel);
+                    }
                     let board_name =
                         crate::ui::i18n::visual_text(app.language, &capabilities.board_name);
                     let kind_name = channel_kind_label(app, &control.kind);

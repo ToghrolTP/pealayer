@@ -4982,6 +4982,11 @@ impl PealayerApp {
                     false,
                 );
             }
+            InteropCommand::SetHardwarePwmPolicy { channel, on_behavior } => {
+                let result = self.advertised_hardware().ok_or_else(|| self.tr("No board is connected or advertising live controls"))
+                    .and_then(|capabilities| crate::ui::pwm_policy::configure(self, &capabilities, channel, on_behavior));
+                if let Err(error) = result { self.set_osd(error); }
+            }
             InteropCommand::RefreshHardwareCatalog => {
                 self.engine_handle.request_catalog_refresh();
             }
@@ -9019,6 +9024,12 @@ fn web_hardware_details(
                 "channel": relay_id.or(pwm_channel),
                 "active": active,
                 "percent": pwm_percent,
+                "pwm_config": pwm_channel.and_then(|channel| capabilities.pwm_channel_config.get(&channel))
+                    .map(|config| serde_json::json!({
+                        "on_behavior": config.on_behavior,
+                        "remembered_raw": config.remembered_raw,
+                        "remembered_percent": config.remembered_percent_milli.map(|value| f64::from(value) / 1000.0),
+                    })),
                 "actions": control.actions.iter().map(|action| serde_json::json!({
                     "id": action.id,
                     "verb": action.verb,
