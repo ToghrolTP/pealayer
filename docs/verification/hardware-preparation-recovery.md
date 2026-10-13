@@ -85,3 +85,9 @@ physical cue execution or production timing acceptance. Pealayer was not
 restarted/replaced and no authored timeline was overwritten. Genuine timing
 faults must remain visible and fail-closed; future standalone streams can still
 legitimately block conflicting media preparation.
+
+The [later paired update](issue80-native-delivery.md) installed the newer player
+and PCController sender through their owned updaters. After the coordinator
+restart, Cafe remained paused and connected at matching desired/prepared/clock
+ACK **72**, without an error or retry latch. This is fresh paused recovery
+evidence, not permission to actuate outputs or physical deadline acceptance.

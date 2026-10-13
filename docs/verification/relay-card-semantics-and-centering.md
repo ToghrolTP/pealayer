@@ -32,3 +32,7 @@ tone was used for styling verification. Native installation remains gated by
 the preserved generated Web distribution and approved host/runtime packaging.
 Mobile source is handed to the active Flutter owner for one combined next APK;
 the existing Android delivery receipt is not proof of these new changes.
+
+The subsequent [issue 80 receipt](issue80-native-delivery.md) verifies Cafe native
+installation of these changes and preservation of its draft/session. That
+supersedes the native packaging gate above, not live visual/interaction acceptance.

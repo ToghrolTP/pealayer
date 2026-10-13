@@ -1,5 +1,9 @@
 # Cafe authority and Erfan consumer delivery
 
+The newer [issue 80 receipt](issue80-native-delivery.md) supersedes this Cafe
+executable/source observation. The Erfan candidate and manual command recorded
+below are historical, **not the latest package**; refresh before activating.
+
 ## Observed 13 October 2026 (Tehran time)
 
 The user requested current PCController/Pealayer on both machines, with Cafe

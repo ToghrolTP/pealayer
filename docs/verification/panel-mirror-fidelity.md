@@ -20,6 +20,8 @@ polling or per-frame persistence is added. A screen cannot display every physica
 transition occurring faster than its own refresh. The general Web status cadence
 remains separately configurable; this pass fixes direct native/peer state paths.
 
+## Source verification and historical packaging gate
+
 Offline cargo check passed with existing warnings. The subscription regression
 was updated; tests and CI were not executed at the user's request. Local Pealayer
 was not running at inspection. Cafe/Erfan replacement and human visual acceptance
@@ -36,3 +38,11 @@ now hash-verified all 49 files in a named preservation stash (see
 [workspace hygiene](LOCAL-WORKSPACE-HYGIENE.md)), clearing that source-cleanliness
 blocker. Package creation, approved host updates and visual/audio acceptance
 remain separate steps; this preservation does not install the fix.
+
+## Current delivery
+
+The subsequent [issue 80 receipt](issue80-native-delivery.md) verifies the new
+Pealayer and paired PCController sender on Cafe, with its original libmpv and
+authoring state retained. This supersedes the older Cafe packaging/install gate
+above. Screen/physical display fidelity and Linux acoustic fidelity still require
+live observation; latest local/Erfan activation is not verified.

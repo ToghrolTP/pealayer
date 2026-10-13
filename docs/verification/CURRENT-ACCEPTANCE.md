@@ -10,6 +10,13 @@ statements are not the present product state.
 
 ## Delivered source and deployment
 
+- The latest native paired Cafe update is installed, preserved and verified;
+  PR #174 is merged. [Issue 80 delivery receipt](issue80-native-delivery.md)
+  records current executable/runtime identities and ready matching ACK 72.
+  It supersedes older Cafe installation/readiness statements below. Local and
+  Erfan latest activation, usable native captures and the physical/audio/UI/soak
+  acceptance ledger remain unverified; #80 is not a completed milestone.
+
 - Cafe's preparation recovery fixes are installed. A live standalone-strip wait
   and subsequent coordinator outage were resolved with the user's scoped stop
   and PCController restart approvals. [Live preparation recheck](hardware-preparation-recovery.md)

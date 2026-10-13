@@ -48,7 +48,8 @@ The four-choice contract/serialization and geometry coverage is updated;
 tests and CI were not run for this iteration at the user's request. Compiler
 checks are source validation, not installed UI or screenshot acceptance.
 
-The current authoring process is deliberately not restarted while user readiness
-is pending. Runtime delivery and a current installed-build screenshot are not
-established by these source/render tests. Cafe GUI smoke-launch remains denied;
-source alignment alone is not Cafe runtime delivery. No physical buzzer was used.
+The later user confirmation that drafts were saved allowed Cafe's approved
+native update, documented in the [issue 80 delivery receipt](issue80-native-delivery.md).
+The four-step density changes are installed there, with authoring state and its
+own runtime preserved. No physical buzzer was used. Actual control interaction,
+usable installed-UI capture and local/Erfan latest activation remain open.

@@ -63,3 +63,8 @@ to NLE and back, pause/resume, seek/scrub, fullscreen, and taskbar preview. Watc
 for retained pixels, one-paint lag, black regions, GL errors and excessive idle
 work. A static screenshot alone cannot prove temporal ghosting is gone. Do not
 replace Cafe's libmpv with another host's runtime to perform this check.
+
+The later [issue 80 native delivery](issue80-native-delivery.md) cleared the
+generated-bundle gate and installed this fix on Cafe through the approved updater
+with Cafe's retained runtime. The moving-video matrix above is still open;
+neither a smoke probe nor the unusable white-area capture establishes it.
