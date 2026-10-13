@@ -763,7 +763,8 @@ body {
 .hardware-power-action.ant-btn:not(:disabled):hover { border-color: var(--hardware-power-tone); background: color-mix(in srgb, var(--hardware-power-tone) 14%, var(--surface-2)); }
 .hardware-power-action.ant-btn:not(:disabled):focus-visible { outline-color: var(--hardware-power-tone); }
 .hardware-power-action.ant-btn:disabled { color: var(--muted); background: var(--surface-2); border-color: var(--line); }
-.hardware-control__pwm { min-width: 130px; display: flex; align-items: center; gap: 8px; }
+.hardware-control__pwm { grid-column: 1 / -1; min-width: 0; display: flex; align-items: center; gap: 8px; }
+.hardware-control__pwm + .hardware-control__actions { grid-column: 1 / -1; }
 .hardware-control__pwm .ant-slider, .hardware-control__pwm-unknown { flex: 1; min-width: 40px; }
 .hardware-control__pwm .ant-btn { flex: none; }
 .hardware-control__pwm output { flex: none; min-width: 48px; }
