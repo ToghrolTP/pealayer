@@ -928,6 +928,7 @@ pub fn run() -> eframe::Result {
                 non_user_control_visibility: loaded_config.non_user_control_visibility,
                 prefix_relay_identifiers: loaded_config.prefix_relay_identifiers,
                 live_pwm_updates: loaded_config.live_pwm_updates,
+                pwm_card: loaded_config.pwm_card.clone(),
                 hardware_actions_on_press: loaded_config.hardware_actions_on_press,
                 single_instance: loaded_config.single_instance,
                 window_magnetic_snap: loaded_config.window_magnetic_snap,

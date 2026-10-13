@@ -2427,6 +2427,11 @@ fn draw_channel_live_control(
     capabilities: &HardwareCapabilities,
     control: &HardwareControl,
 ) {
+    if let Some(channel) = capabilities.pwm_channels.iter().find(|channel| channel.key == control.key) {
+        crate::ui::layout::draw_pwm_card_editor(app, ui, capabilities, control, channel, ui.available_width());
+        crate::ui::layout::draw_pwm_power_actions(app, ui, control);
+        return;
+    }
     if !control.actions.is_empty() {
         let columns = if ui.available_width() >= 520.0 { 3 } else { 1 };
         let is_motion = crate::ui::layout::is_motion_control(control);
@@ -2602,6 +2607,11 @@ fn draw_channel_detail_page(
                             });
                         });
                     ui.add_space(9.0);
+
+                    if !control.actions.is_empty() && ui.button(format!("{} {}", crate::ui::icons::RADIO,
+                        app.tr("Assign RF code…"))).clicked() {
+                        crate::ui::rf::open_control_assignment(app, control);
+                    }
 
                     let board_name =
                         crate::ui::i18n::visual_text(app.language, &capabilities.board_name);

@@ -6,6 +6,14 @@ retroactively attributed to an older download.
 
 ## Next milestone · unreleased
 
+### 🎛️ Hardware controls
+
+- MOSFET cards put distinct minus/plus actions beside the slider. Hardware
+  preferences independently hide action buttons and choose Toggle/On/Off for
+  the indicator; these dispatch shared coordinator actions, not guessed values.
+- Start an RF assignment directly from a channel card's context menu or its
+  detail page, choosing the learned signal and action before saving.
+
 ### 🎬 Playback and audio
 
 - Publish factual OS media metadata and contextual transport/timeline state;

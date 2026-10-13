@@ -1,6 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { hardwareAvailability, hardwareLabels, hardwareOutputsAvailable } from '../hardwareAvailability';
 import { reconcilePWMDrafts } from '../pwmDrafts';
+import { hardwareControlIdentity } from '../hardwareIdentity';
+import { defaultPwmCard, pwmActionVisible, pwmIndicatorAction, pwmRowActions } from '../pwmCard';
 import { RfManager } from './RfManager';
 import { PublishingAuthority } from './PublishingAuthority';
 import { ColorPicker } from './ColorPicker';
@@ -35,6 +37,8 @@ import {
   ExperimentOutlined,
   MenuOutlined,
   MoreOutlined,
+  MinusOutlined,
+  PlusOutlined,
   EyeInvisibleOutlined,
   EyeOutlined,
   LockOutlined,
@@ -108,14 +112,7 @@ const controlCaption = (
 
 const controlIdentity = (
   control: NonNullable<PlayerState['hardware_details']>['controls'][number],
-) => {
-  if (/relay/i.test(control.kind) && control.channel != null) return `R${control.channel}`;
-  if (/pwm|mosfet/i.test(control.kind) && control.channel != null) return `CH${control.channel}`;
-  if (control.key === 'seat.a') return 'A';
-  if (control.key === 'seat.b') return 'B';
-  const parts = control.key.split('.');
-  return parts[parts.length - 1]?.toUpperCase() || control.key;
-};
+) => hardwareControlIdentity(control);
 
 const telemetryValue = (value: number | boolean | null | undefined, unit = '') => {
   if (value === null || value === undefined) return '—';
@@ -150,6 +147,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
   }, [details]);
   const [managerOpen, setManagerOpen] = useState(false);
   const [detailKey, setDetailKey] = useState<string | null>(null);
+  const [rfAssignment, setRfAssignment] = useState<{ key: string; name: string; nonce: number }>();
   const [renamingKey, setRenamingKey] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
   const [dragKey, setDragKey] = useState<string | null>(null);
@@ -262,9 +260,44 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
       onClick: (event: React.MouseEvent<HTMLElement>) => event.preventDefault(),
     };
   };
-  const visibleActions = (control: HardwareControl) => control.actions.filter(
-    (action) => !isStopAction(action) || displayedActive(control),
-  );
+  const pwmPreferences = details?.pwm_card ?? defaultPwmCard;
+  const visibleActions = (control: HardwareControl) => /pwm|mosfet/i.test(control.kind)
+    ? pwmRowActions(pwmPreferences, control.actions)
+    : control.actions.filter((action) => !isStopAction(action) || displayedActive(control));
+  const indicatorAction = (control: HardwareControl) => /pwm|mosfet/i.test(control.kind)
+    ? pwmIndicatorAction(pwmPreferences, control.actions, control.percent == null ? undefined : control.percent > 0)
+    : toggleAction(control);
+  const pwmEditor = (control: HardwareControl) => {
+    const value = pwmDrafts[control.key] ?? control.percent;
+    const disabled = control.locked || !outputAvailable || Boolean(state.estop_active)
+      || details?.pwm_available === false || control.percent == null;
+    const step = (verb: 'decrease' | 'increase') => {
+      const action = control.actions.find(action => action.verb.toLowerCase() === verb);
+      return action && pwmActionVisible(pwmPreferences, verb) ? <Tooltip title={tr(locale, action.name || action.verb)}>
+        <Button aria-label={tr(locale, verb === 'decrease' ? 'Decrease' : 'Increase')}
+          icon={verb === 'decrease' ? <MinusOutlined /> : <PlusOutlined />}
+          disabled={disabled} {...actionInputProps(control, action)} />
+      </Tooltip> : null;
+    };
+    return <div className="hardware-control__pwm">
+      {step('decrease')}
+      {value == null ? <span className="hardware-control__pwm-unknown">—</span> : <Slider
+        min={0} max={100} step={0.1} value={value} disabled={disabled}
+        onChange={(percent) => {
+          pwmEditing.current.add(control.key);
+          pwmSentAt.current[control.key] = details?.pwm_revision ?? 0;
+          setPwmDrafts(current => ({ ...current, [control.key]: percent }));
+          if (control.channel != null) sendCmd('hardware.pwm.set', { channel: control.channel, percent });
+        }}
+        onChangeComplete={() => {
+          pwmEditing.current.delete(control.key);
+          setPwmDrafts(current => reconcilePWMDrafts(current, pwmEditing.current, pwmSentAt.current,
+            details?.pwm_revision ?? 0, details?.controls ?? []));
+        }} />}
+      {step('increase')}
+      <output>{value == null ? '—' : `${value.toFixed(1)}%`}</output>
+    </div>;
+  };
   const moveControl = (key: string, delta: number) => {
     const source = controls.find((control) => control.key === key);
     if (!source) return;
@@ -297,12 +330,12 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
           {!channelFolders.closed.has(`${folder.kind}:${folder.raw ? 'raw' : folder.name}`) && <div className="hardware-control-grid">
         {folder.controls.map((control) => {
           const isPwm = /pwm|mosfet/i.test(control.kind);
-          const value = pwmDrafts[control.key] ?? control.percent;
           const active = displayedActive(control);
-          const immediateToggle = !isPwm ? toggleAction(control) : undefined;
+          const immediateToggle = indicatorAction(control);
           const contextItems = [
             { key: 'manage', label: tr(locale, 'Manage'), icon: <ToolOutlined /> },
             { key: 'rename', label: tr(locale, 'Rename'), icon: <ExperimentOutlined /> },
+            { key: 'assign-rf', label: tr(locale, 'Assign RF code…'), disabled: !control.actions.length },
             ...channelFolders.moveItems(control),
             immediateToggle ? { key: 'toggle', label: tr(locale, active ? 'Off' : 'On'), icon: <PoweroffOutlined /> } : null,
             { type: 'divider' as const },
@@ -316,6 +349,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
               items: contextItems,
               onClick: ({ key }) => {
                 if (key === 'manage') { setDetailKey(control.key); setManagerOpen(true); }
+                if (key === 'assign-rf') setRfAssignment({ key: control.key, name: control.name, nonce: Date.now() });
                 if (key === 'rename') { setRenamingKey(control.key); setRenameDraft(control.name || control.default_name); setManagerOpen(true); }
                 if (key === 'toggle' && immediateToggle) void invokeAction(control, immediateToggle);
                 if (key === 'visibility') updatePresentation(control.key, { hidden: !control.hidden });
@@ -363,36 +397,16 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
               <strong>{control.name || control.default_name}</strong>
               <span>{controlCaption(control, locale)}</span>
             </div>
-            {isPwm ? <div className="hardware-control__pwm">
-              {value == null ? <span style={{minHeight:44,display:'inline-flex',alignItems:'center'}}>—</span> : <Slider
-                min={0}
-                max={100}
-                step={0.1}
-                value={value}
-                disabled={control.locked || !outputAvailable || details?.pwm_available === false || control.percent == null}
-                onChange={(percent) => {
-                  pwmEditing.current.add(control.key);
-                  pwmSentAt.current[control.key] = details?.pwm_revision ?? 0;
-                  setPwmDrafts((current) => ({ ...current, [control.key]: percent }));
-                  if (control.channel !== null && control.channel !== undefined) {
-                    sendCmd('hardware.pwm.set', { channel: control.channel, percent });
-                  }
-                }}
-                onChangeComplete={() => {
-                  pwmEditing.current.delete(control.key);
-                  setPwmDrafts(current => reconcilePWMDrafts(current,pwmEditing.current,pwmSentAt.current,details?.pwm_revision ?? 0,details?.controls ?? []));
-                }}
-              />}
-              <output>{value == null ? '—' : `${value.toFixed(1)}%`}</output>
-            </div> : <button
+            <button
               type="button"
               className={`hardware-control__indicator ${active ? 'is-on' : ''}`}
               style={{ '--indicator-color': control.indicator_color || control.color || 'var(--green)' } as React.CSSProperties}
               aria-label={tr(locale, isMotionControl(control) ? control.direction === 'up' ? 'Up' : control.direction === 'down' ? 'Down' : control.direction === 'stop' ? 'Stopped' : 'State unavailable from the board' : active ? 'On' : 'Off')}
-              title={tr(locale, isMotionControl(control) ? control.direction === 'up' ? 'Up' : control.direction === 'down' ? 'Down' : control.direction === 'stop' ? 'Stopped' : 'State unavailable from the board' : active ? 'Turn off' : 'Turn on')}
+              title={tr(locale, immediateToggle?.name || (active ? 'Off' : 'On'))}
               disabled={!immediateToggle || control.locked || !outputAvailable || Boolean(state.estop_active)}
               {...(immediateToggle ? actionInputProps(control, immediateToggle) : {})}
-            />}
+            />
+            {isPwm && pwmEditor(control)}
             <Space.Compact className="hardware-control__actions">
               {visibleActions(control).map((action) => <Tooltip title={action.name || action.verb} key={action.id}>
                 <Button
@@ -495,6 +509,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
     >
       {detailKey ? controls.filter((control) => control.key === detailKey).map((control) => <div className="channel-detail" key={control.key}>
         <div className="channel-detail__identity"><span>{controlIcon(control.kind, control.icon)}</span><div><strong>{control.name || control.default_name}</strong><code>{controlIdentity(control)}</code></div></div>
+        <Button disabled={!control.actions.length} onClick={() => setRfAssignment({ key: control.key, name: control.name, nonce: Date.now() })}>{tr(locale, 'Assign RF code…')}</Button>
         <label><span>{tr(locale, 'Name')}</span><Input defaultValue={control.name || control.default_name} onPressEnter={(event) => updatePresentation(control.key, { name: event.currentTarget.value.trim() })} /></label>
         <label><span>{tr(locale, 'Group')}</span><GroupSelect value={control.group ?? ''} groups={channelFolders.folders.filter((folder) => folder.kind === channelFolderKind(control.kind)).map((folder) => folder.name)} locale={locale} onChange={(group) => !isRawSeatRelay(control) && updatePresentation(control.key, { group })} /></label>
         <dl className="detail-list">
@@ -503,7 +518,8 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
           <div><dt>{tr(locale, 'Control')}</dt><dd>{control.control}</dd></div>
           <div><dt>{tr(locale, 'Stable key')}</dt><dd><code>{control.key}</code></dd></div>
         </dl>
-        <Space wrap>{visibleActions(control).map((action) => <Button key={action.id} disabled={control.locked || (state.estop_active && action.verb !== 'stop')} {...actionInputProps(control, action)}>{action.name || action.verb}</Button>)}</Space>
+        {/pwm|mosfet/i.test(control.kind) && pwmEditor(control)}
+        <Space wrap>{visibleActions(control).map((action) => <Button key={action.id} disabled={control.locked || !outputAvailable || (state.estop_active && action.verb !== 'stop')} {...actionInputProps(control, action)}>{action.name || action.verb}</Button>)}</Space>
       </div>) : <>
         <div className="channel-manager__summary">
           <strong>{details.board_name || tr(locale, 'PCController')}</strong>
@@ -669,7 +685,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
 
     <Collapse className="hardware-sections" defaultActiveKey={grouped.map((item) => item.key)} items={grouped} />
     {channelFolders.dialogs}
-    <RfManager key="rf-manager" rf={state.rf} hardwareConnected={state.hardware_connected} sendCmd={sendCmd} />
+    <RfManager key="rf-manager" rf={state.rf} hardwareConnected={state.hardware_connected} sendCmd={sendCmd} assignment={rfAssignment} />
 
     <Card
       className={`surface-card buzzer-control${details.buzzer?.playing ? ' is-playing' : ''}`}

@@ -2201,6 +2201,51 @@ fn draw_pwm_editor_row_sized(
     enabled: bool,
     row_width: f32,
 ) -> PwmEditorResponse {
+    draw_pwm_editor_row_with_buttons(ui, percent, enabled, row_width, None)
+}
+
+pub(crate) fn draw_pwm_control_editor(
+    app: &PealayerApp,
+    ui: &mut egui::Ui,
+    control: &crate::four_d::controller::HardwareControl,
+    percent: &mut f64,
+    row_width: f32,
+) -> PwmEditorResponse {
+    draw_pwm_editor_row_with_buttons(ui, percent,
+        !app.estop_active && !control.locked && !app.hardware_programming_blocked(),
+        row_width, Some((app, control)))
+}
+
+fn pwm_step_action<'a>(
+    app: &PealayerApp,
+    control: &'a crate::four_d::controller::HardwareControl,
+    verb: &str,
+) -> Option<&'a crate::four_d::controller::HardwareAction> {
+    app.pwm_card.shows(verb).then(|| control.actions.iter()
+        .find(|action| action.verb.eq_ignore_ascii_case(verb))).flatten()
+}
+
+fn draw_pwm_step_button(
+    ui: &mut egui::Ui, app: &PealayerApp,
+    control: &crate::four_d::controller::HardwareControl,
+    action: &crate::four_d::controller::HardwareAction, enabled: bool,
+) {
+    let size = ui.spacing().interact_size.y;
+    let response = ui.add_enabled(enabled, egui::Button::new(crate::ui::icons::action(&action.verb))
+        .min_size(egui::vec2(size, size)))
+        .on_hover_text(crate::ui::i18n::visual_text(app.language, &action.name));
+    if hardware_control_activated(app, ui, &response) {
+        crate::ui::hardware_control::invoke_action(app, control, action);
+    }
+}
+
+fn draw_pwm_editor_row_with_buttons(
+    ui: &mut egui::Ui,
+    percent: &mut f64,
+    enabled: bool,
+    row_width: f32,
+    buttons: Option<(&PealayerApp, &crate::four_d::controller::HardwareControl)>,
+) -> PwmEditorResponse {
     // Unnamed sibling UIs share their persistent `id()`, even when their
     // widgets have different auto IDs. Never share a dirty hardware draft
     // through `make_persistent_id("pwm_editor_session")` across those siblings.
@@ -2216,7 +2261,15 @@ fn draw_pwm_editor_row_sized(
             session.at_frame(ui.ctx().cumulative_frame_nr());
             *percent = session.begin(*percent);
             let gap = ui.spacing().item_spacing.x;
-            let (slider_width, number_width) = pwm_editor_widths(row_width, gap);
+            let decrease = buttons.and_then(|(app, control)| pwm_step_action(app, control, "decrease"));
+            let increase = buttons.and_then(|(app, control)| pwm_step_action(app, control, "increase"));
+            let reserved = (usize::from(decrease.is_some()) + usize::from(increase.is_some())) as f32
+                * (ui.spacing().interact_size.y + gap);
+            let (slider_width, number_width) = pwm_editor_widths((row_width - reserved).max(60.0), gap);
+            if let Some(action) = decrease {
+                let (app, control) = buttons.expect("action has a source");
+                draw_pwm_step_button(ui, app, control, action, enabled);
+            }
             let slider = ui
                 .scope(|ui| {
                     // `Slider` uses the style's slider width even when wrapped in
@@ -2240,6 +2293,10 @@ fn draw_pwm_editor_row_sized(
                     )
                 })
                 .inner;
+            if let Some(action) = increase {
+                let (app, control) = buttons.expect("action has a source");
+                draw_pwm_step_button(ui, app, control, action, enabled);
+            }
             let wheel_steps = if enabled {
                 pwm_wheel_steps(ui, &slider)
             } else {
@@ -2402,7 +2459,7 @@ fn transmit_pwm_editor_response_with(
     }
 }
 
-fn draw_pwm_card_editor(
+pub(crate) fn draw_pwm_card_editor(
     app: &PealayerApp,
     ui: &mut egui::Ui,
     capabilities: &crate::four_d::controller::HardwareCapabilities,
@@ -2443,7 +2500,7 @@ fn draw_pwm_card_editor(
     // the actual channel, independent of its row, folder, or sibling actions.
     let editor_id = ui.make_persistent_id(("pwm-card-editor", control.key.as_str(), channel.id));
     let response = ui.scope_builder(egui::UiBuilder::new().id(editor_id), |ui| {
-        draw_pwm_editor_row_sized(ui, &mut percent, !control.locked, row_width)
+        draw_pwm_control_editor(app, ui, control, &mut percent, row_width)
     }).inner;
     let raw = pwm_raw(percent);
     ui.data_mut(|data| data.insert_temp(value_id, raw));
@@ -5291,6 +5348,7 @@ fn draw_control_indicator(
     interactive: bool,
     color: egui::Color32,
     intensity: Option<f32>,
+    click_label: Option<&str>,
 ) -> egui::Response {
     let neutral = ui
         .visuals()
@@ -5339,7 +5397,8 @@ fn draw_control_indicator(
         (ControlIndicatorState::Inactive, None) => app.tr("Board reports OFF"),
     };
     response.on_hover_text(if interactive {
-        format!("{status} · {}", app.tr("Click to toggle"))
+        format!("{status} · {}", click_label.map(|label| crate::ui::i18n::visual_text(app.language, label))
+            .unwrap_or_else(|| app.tr("Click to toggle")))
     } else {
         status
     })
@@ -6027,6 +6086,60 @@ fn card_control_actions<'a>(
         .collect()
 }
 
+pub(crate) fn pwm_card_actions<'a>(
+    preferences: &crate::config::PwmCardPreferences,
+    control: &'a crate::four_d::controller::HardwareControl,
+) -> Vec<&'a crate::four_d::controller::HardwareAction> {
+    control.actions.iter().filter(|action| {
+        !matches!(action.verb.to_ascii_lowercase().as_str(), "increase" | "decrease")
+            && preferences.shows(&action.verb)
+    }).collect()
+}
+
+pub(crate) fn pwm_indicator_action<'a>(
+    preferences: &crate::config::PwmCardPreferences,
+    control: &'a crate::four_d::controller::HardwareControl,
+    active: Option<bool>,
+) -> Option<&'a crate::four_d::controller::HardwareAction> {
+    use crate::config::PwmIndicatorAction;
+    let find = |verb: &str| control.actions.iter().find(|action| action.verb.eq_ignore_ascii_case(verb));
+    match preferences.indicator_action {
+        PwmIndicatorAction::On => find("on"),
+        PwmIndicatorAction::Off => find("off"),
+        PwmIndicatorAction::Toggle => find("toggle").or_else(|| active.and_then(|active|
+            find(if active { "off" } else { "on" }))),
+    }
+}
+
+fn hardware_indicator_action<'a>(
+    app: &PealayerApp, control: &'a crate::four_d::controller::HardwareControl,
+    state: ControlIndicatorState,
+) -> Option<&'a crate::four_d::controller::HardwareAction> {
+    is_pwm_control(control).then(|| pwm_indicator_action(&app.pwm_card, control,
+        match state { ControlIndicatorState::Active => Some(true),
+            ControlIndicatorState::Inactive => Some(false), _ => None })).flatten()
+}
+
+pub(crate) fn draw_pwm_power_actions(
+    app: &PealayerApp, ui: &mut egui::Ui,
+    control: &crate::four_d::controller::HardwareControl,
+) {
+    let actions = pwm_card_actions(&app.pwm_card, control);
+    if actions.is_empty() { return; }
+    let enabled = !app.estop_active && !control.locked && !app.hardware_programming_blocked();
+    ui.horizontal_wrapped(|ui| {
+        for action in actions {
+            let label = format!("{} {}", crate::ui::icons::action(&action.verb),
+                crate::ui::i18n::visual_text(app.language, &action.name));
+            let response = ui.add_enabled(enabled,
+                hardware_action_button(ui, label, &action.verb, false, enabled));
+            if hardware_control_activated(app, ui, &response) {
+                crate::ui::hardware_control::invoke_action(app, control, action);
+            }
+        }
+    });
+}
+
 pub(crate) fn contextual_stop_action<'a>(
     capabilities: &crate::four_d::controller::HardwareCapabilities,
     control: &'a crate::four_d::controller::HardwareControl,
@@ -6205,6 +6318,12 @@ fn draw_control_context_menu(
         .clicked()
     {
         open_control_dialog(app, capabilities, control);
+        ui.close();
+    }
+
+    if !control.actions.is_empty() && ui.button(format!("{} {}", crate::ui::icons::RADIO,
+        app.tr("Assign RF code…"))).clicked() {
+        crate::ui::rf::open_control_assignment(app, control);
         ui.close();
     }
 
@@ -7477,15 +7596,20 @@ fn draw_compact_control_card(
                     app,
                     ui,
                     indicator_state,
-                    relay_id.is_some() && !control.locked,
+                    (relay_id.is_some() || hardware_indicator_action(app, control, indicator_state).is_some())
+                        && !control.locked && !app.estop_active && !app.hardware_programming_blocked(),
                     active_control_indicator_color(capabilities, control),
                     indicator_intensity,
+                    hardware_indicator_action(app, control, indicator_state).map(|action| action.name.as_str()),
                 );
                 if hardware_control_activated(app, ui, &indicator)
                     && !control.locked
-                    && let Some(id) = relay_id
                 {
-                    crate::ui::hardware_control::toggle_relay(app, id);
+                    if let Some(action) = hardware_indicator_action(app, control, indicator_state) {
+                        crate::ui::hardware_control::invoke_action(app, control, action);
+                    } else if let Some(id) = relay_id {
+                        crate::ui::hardware_control::toggle_relay(app, id);
+                    }
                 }
                 if app.prefix_relay_identifiers && let Some(id) = relay_id {
                     ui.label(
@@ -7562,7 +7686,7 @@ fn draw_compact_control_card(
                     let is_motion = is_motion_control(control);
                     let stop_visible = contextual_stop_action(capabilities, control).is_some();
                     let reserved = if is_pwm_control(control) {
-                        150.0
+                        8.0
                     } else if !control.actions.is_empty() {
                         (card_control_actions(control).len().min(3) as f32 * 34.0)
                             + if is_motion { 34.0 } else { 0.0 }
@@ -7615,22 +7739,7 @@ fn draw_compact_control_card(
                     }
                 }
 
-                if is_pwm_control(control) {
-                    if let Some(channel) = capabilities
-                        .pwm_channels
-                        .iter()
-                        .find(|channel| channel.key == control.key)
-                    {
-                        draw_pwm_card_editor(
-                            app,
-                            ui,
-                            capabilities,
-                            control,
-                            channel,
-                            ui.available_width(),
-                        );
-                    }
-                } else if !control.actions.is_empty() {
+                if !is_pwm_control(control) && !control.actions.is_empty() {
                     let is_motion = is_motion_control(control);
                     let stop = control
                         .actions
@@ -7702,6 +7811,11 @@ fn draw_compact_control_card(
                     });
                 }
             });
+            if is_pwm_control(control) && let Some(channel) = capabilities.pwm_channels.iter()
+                .find(|channel| channel.key == control.key) {
+                draw_pwm_card_editor(app, ui, capabilities, control, channel, card_content_width);
+                draw_pwm_power_actions(app, ui, control);
+            }
         })
     }).inner;
 
@@ -7779,16 +7893,21 @@ fn draw_control_card(
                             app,
                             ui,
                             indicator_state,
-                            relay_id.is_some() && !control.locked,
+                            (relay_id.is_some() || hardware_indicator_action(app, control, indicator_state).is_some())
+                                && !control.locked && !app.estop_active && !app.hardware_programming_blocked(),
                             active_control_indicator_color(capabilities, control),
                             indicator_intensity,
+                            hardware_indicator_action(app, control, indicator_state).map(|action| action.name.as_str()),
                         );
                         if hardware_control_activated(app, ui, &indicator)
                             && !control.locked
-                            && let Some(id) = relay_id
                         {
-                            let turn_on = indicator_state != ControlIndicatorState::Active;
-                            crate::ui::hardware_control::set_relay(app, id, turn_on);
+                            if let Some(action) = hardware_indicator_action(app, control, indicator_state) {
+                                crate::ui::hardware_control::invoke_action(app, control, action);
+                            } else if let Some(id) = relay_id {
+                                let turn_on = indicator_state != ControlIndicatorState::Active;
+                                crate::ui::hardware_control::set_relay(app, id, turn_on);
+                            }
                         }
                         if app.prefix_relay_identifiers
                             && let Some(id) = relay_id
@@ -7990,7 +8109,9 @@ fn draw_control_card(
                         }
                     }
 
-                    if !control.actions.is_empty() {
+                    if is_pwm_control(control) {
+                        draw_pwm_power_actions(app, ui, control);
+                    } else if !control.actions.is_empty() {
                         ui.add_space(if app.compact_hardware_controls {
                             3.0
                         } else {
@@ -8419,6 +8540,77 @@ fn draw_control_card_grid(
 #[cfg(test)]
 mod timeline_row_tests {
     use super::*;
+
+    #[test]
+    fn pwm_card_actions_have_distinct_icons_and_independent_visibility() {
+        let control = crate::four_d::controller::HardwareControl {
+            key: "pwm.1".into(), kind: "mosfet".into(),
+            actions: ["on", "off", "increase", "decrease", "toggle"].into_iter().map(|verb|
+                crate::four_d::controller::HardwareAction {
+                    id: format!("pwm.1.{verb}"), verb: verb.into(), ..Default::default()
+                }).collect(), ..Default::default()
+        };
+        let mut preferences = crate::config::PwmCardPreferences::default();
+        assert_ne!(crate::ui::icons::action("increase"), crate::ui::icons::action("decrease"));
+        assert_eq!(pwm_card_actions(&preferences, &control).iter().map(|action| action.verb.as_str())
+            .collect::<Vec<_>>(), ["on", "off", "toggle"]);
+        preferences.show_on = false;
+        preferences.show_other = false;
+        assert_eq!(pwm_card_actions(&preferences, &control).iter().map(|action| action.verb.as_str())
+            .collect::<Vec<_>>(), ["off"]);
+        let serialized = serde_json::to_value(&preferences).unwrap();
+        assert_eq!(serde_json::from_value::<crate::config::PwmCardPreferences>(serialized).unwrap(), preferences);
+        assert!(serde_json::from_value::<crate::config::PwmCardPreferences>(serde_json::json!({})).unwrap().show_decrease);
+    }
+
+    #[test]
+    fn pwm_indicator_uses_advertised_identity_not_a_guessed_absolute_value() {
+        use crate::config::{PwmCardPreferences, PwmIndicatorAction};
+        let mut control = crate::four_d::controller::HardwareControl {
+            actions: ["on", "off", "toggle"].into_iter().map(|verb|
+                crate::four_d::controller::HardwareAction { id: format!("real.{verb}"), verb: verb.into(), ..Default::default() }
+            ).collect(), ..Default::default()
+        };
+        let mut preferences = PwmCardPreferences::default();
+        assert_eq!(pwm_indicator_action(&preferences, &control, None).unwrap().id, "real.toggle");
+        preferences.indicator_action = PwmIndicatorAction::On;
+        assert_eq!(pwm_indicator_action(&preferences, &control, Some(true)).unwrap().id, "real.on");
+        preferences.indicator_action = PwmIndicatorAction::Off;
+        assert_eq!(pwm_indicator_action(&preferences, &control, Some(false)).unwrap().id, "real.off");
+        preferences.indicator_action = PwmIndicatorAction::Toggle;
+        control.actions.pop();
+        assert!(pwm_indicator_action(&preferences, &control, None).is_none());
+        assert_eq!(pwm_indicator_action(&preferences, &control, Some(true)).unwrap().id, "real.off");
+    }
+
+    #[test]
+    fn pwm_inline_controls_fit_density_and_idle_render_keeps_observed_value() {
+        let app = PealayerApp::default();
+        let control = crate::four_d::controller::HardwareControl {
+            key: "pwm.1".into(), kind: "mosfet".into(),
+            actions: ["decrease", "increase"].into_iter().map(|verb|
+                crate::four_d::controller::HardwareAction { id: format!("pwm.1.{verb}"), verb: verb.into(), ..Default::default() }
+            ).collect(), ..Default::default()
+        };
+        for width in [180.0, 216.0, 300.0, 420.0] {
+            for height in [24.0, 28.0, 32.0, 36.0] {
+                let context = egui::Context::default();
+                let (sender, receiver) = std::sync::mpsc::channel();
+                let mut percent = 24.007;
+                let output = context.run_ui(egui::RawInput::default(), |ui| {
+                    ui.set_width(width);
+                    ui.spacing_mut().interact_size.y = height;
+                    let response = draw_pwm_control_editor(&app, ui, &control, &mut percent, width);
+                    assert_eq!(response, PwmEditorResponse::default());
+                    assert!(ui.min_rect().width() <= width + 2.0, "width={width}, height={height}: {:?}", ui.min_rect());
+                    transmit_pwm_editor_response_with(&sender, true, ui, 1, pwm_raw(percent), response);
+                });
+                discard_ui_output(output);
+                assert_eq!(percent, 24.007);
+                assert!(receiver.try_recv().is_err());
+            }
+        }
+    }
 
     #[test]
     fn hardware_header_centers_caption_and_rename_in_the_same_slot() {

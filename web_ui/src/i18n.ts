@@ -1,6 +1,10 @@
 export type UiLocale = 'en' | 'fa';
 
 const fa: Record<string, string> = {
+  'MOSFET cards':'کارت‌های ماسفت', 'Show On button':'نمایش دکمهٔ روشن',
+  'Show Off button':'نمایش دکمهٔ خاموش', 'Show Decrease button':'نمایش دکمهٔ کاهش',
+  'Show Increase button':'نمایش دکمهٔ افزایش', 'Show other action buttons':'نمایش سایر دکمه‌های فرمان',
+  'Indicator click action':'عملکرد کلیک روی نشانگر', 'Assign RF code…':'تخصیص کد ریموت…',
   'Connection icon':'نماد اتصال', 'Connection mode':'نوع اتصال', 'Circle':'دایره',
   'Show in chart':'نمایش در نمودار', 'Pause chart logging':'توقف ثبت نمودار', 'Copy chart history':'کپی تاریخچه نمودار',
   'Chandelier':'لوستر', 'Loostr':'لوستر', 'Stage light':'نور صحنه', 'Garden':'باغ',

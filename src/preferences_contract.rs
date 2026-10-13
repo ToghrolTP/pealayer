@@ -864,6 +864,13 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "Output controls",
             "Update PWM outputs while dragging",
         ),
+        PreferenceControl::boolean("pwm_card.show_on", "hardware", "MOSFET cards", "Show On button"),
+        PreferenceControl::boolean("pwm_card.show_off", "hardware", "MOSFET cards", "Show Off button"),
+        PreferenceControl::boolean("pwm_card.show_decrease", "hardware", "MOSFET cards", "Show Decrease button"),
+        PreferenceControl::boolean("pwm_card.show_increase", "hardware", "MOSFET cards", "Show Increase button"),
+        PreferenceControl::boolean("pwm_card.show_other", "hardware", "MOSFET cards", "Show other action buttons"),
+        PreferenceControl::select("pwm_card.indicator_action", "hardware", "MOSFET cards", "Indicator click action",
+            &[("toggle", "Toggle"), ("on", "On"), ("off", "Off")]),
         PreferenceControl::boolean(
             "hardware_actions_on_press",
             "hardware",

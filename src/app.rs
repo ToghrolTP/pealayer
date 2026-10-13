@@ -860,6 +860,7 @@ pub struct PealayerApp {
     pub(crate) non_user_control_visibility: crate::config::NonUserControlVisibility,
     pub(crate) prefix_relay_identifiers: bool,
     pub(crate) live_pwm_updates: bool,
+    pub(crate) pwm_card: crate::config::PwmCardPreferences,
     pub(crate) hardware_actions_on_press: bool,
     pub(crate) single_instance: bool,
     pub(crate) window_magnetic_snap: bool,
@@ -1431,6 +1432,7 @@ impl eframe::App for PealayerApp {
                 .as_ref()
                 .map(|capabilities| {
                     let mut details = web_hardware_details(capabilities, self.motion_control_mode);
+                    details["pwm_card"] = serde_json::json!(self.pwm_card);
                     details["folder_update"] = serde_json::json!({ "pending": self.channel_folder_pending, "error": self.channel_folder_error, "sequence": self.channel_folder_sequence });
                     details
                 });
@@ -2133,8 +2135,10 @@ impl eframe::App for PealayerApp {
                 }
                 crate::ui::effects_library::draw_editor(self, ui);
                 crate::ui::board_info::draw(self, ui);
-                crate::ui::rf::draw(self, ui);
                 crate::ui::hardware_control::draw(self, ui);
+                // RF assignment can be opened from a channel detail window;
+                // draw it afterwards so the originating window cannot cover it.
+                crate::ui::rf::draw(self, ui);
                 crate::ui::media_track_properties::draw(self, ui);
                 crate::ui::workspace_profiles::draw(self, ui);
 
@@ -7080,6 +7084,7 @@ impl PealayerApp {
         cfg.non_user_control_visibility = self.non_user_control_visibility;
         cfg.prefix_relay_identifiers = self.prefix_relay_identifiers;
         cfg.live_pwm_updates = self.live_pwm_updates;
+        cfg.pwm_card = self.pwm_card.clone();
         cfg.hardware_actions_on_press = self.hardware_actions_on_press;
         cfg.keyboard_shortcuts_enabled = self.keyboard_shortcuts_enabled;
         cfg.media_keys_enabled = self.media_keys_enabled;
@@ -7450,6 +7455,7 @@ impl PealayerApp {
         self.non_user_control_visibility = config.non_user_control_visibility;
         self.prefix_relay_identifiers = config.prefix_relay_identifiers;
         self.live_pwm_updates = config.live_pwm_updates;
+        self.pwm_card = config.pwm_card.clone();
         self.hardware_actions_on_press = config.hardware_actions_on_press;
         if self.hardware_key_bindings != config.hardware_key_bindings
             || self.keyboard_shortcuts_enabled != config.keyboard_shortcuts_enabled
@@ -8987,18 +8993,7 @@ fn web_hardware_details(
                 if let Some(value) = status_component {
                     return Some(f64::from(value) * 100.0 / 255.0);
                 }
-                capabilities
-                    .telemetry
-                    .pwm_values
-                    .get(usize::from(channel))
-                    .copied()
-                    .flatten()
-                    .or_else(|| {
-                        (capabilities.telemetry.pwm_channel == Some(channel))
-                            .then_some(capabilities.telemetry.pwm_value)
-                            .flatten()
-                    })
-                    .map(|value| f64::from(value) * 100.0 / 4095.0)
+                capabilities.observed_pwm_percent(channel)
             });
             serde_json::json!({
                 "key": control.key,
@@ -9560,6 +9555,7 @@ impl Default for PealayerApp {
             non_user_control_visibility: crate::config::NonUserControlVisibility::Dimmed,
             prefix_relay_identifiers: true,
             live_pwm_updates: true,
+            pwm_card: crate::config::PwmCardPreferences::default(),
             hardware_actions_on_press: true,
             single_instance: true,
             window_magnetic_snap: false,
@@ -11125,6 +11121,12 @@ pub(crate) mod tests {
         assert_eq!(details["buzzer"]["playing"], true);
         assert_eq!(details["buzzer"]["melody_id"], 42);
         assert_eq!(details["buzzer"]["melody_name"], "attention");
+
+        capabilities.telemetry.pwm_logical_percent_milli = vec![None, None, None, Some(75_123)];
+        let logical = web_hardware_details(&capabilities, Default::default());
+        assert_eq!(logical["controls"][0]["percent"].as_f64(), Some(75.123),
+            "Web indicators and sliders must use coordinator logical percent, not gamma/PWM raw");
+        capabilities.telemetry.pwm_logical_percent_milli.clear();
 
         capabilities.controls[0].key = "pwm.15".to_string();
         capabilities.pwm_channels[0] = crate::four_d::controller::HardwareOutput {

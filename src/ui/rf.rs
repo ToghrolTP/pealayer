@@ -38,6 +38,9 @@ pub struct RfState {
     repeats: u8,
     board_map: Value,
     manual_signal: bool,
+    assignment_control: Option<String>,
+    raise_on_open: bool,
+    assignment_sequence: u64,
 }
 
 fn new_binding() -> Value {
@@ -69,11 +72,24 @@ impl Default for RfState {
             repeats: 1,
             board_map: json!({"id":null,"action":""}),
             manual_signal: false,
+            assignment_control: None,
+            raise_on_open: false,
+            assignment_sequence: 0,
         }
     }
 }
 
 impl RfState {
+    fn begin_control_assignment(&mut self, key: &str, name: &str) {
+        self.open = true;
+        self.tab = 0;
+        self.draft = new_binding();
+        self.draft["name"] = json!(name);
+        self.previous_name.clear();
+        self.assignment_control = Some(key.to_owned());
+        self.raise_on_open = true;
+        self.assignment_sequence = self.assignment_sequence.wrapping_add(1);
+    }
     pub(crate) fn receive(&mut self, event: Value) {
         if event["kind"] != "rf.receive" || event["source"] != "board" {
             return;
@@ -774,6 +790,21 @@ fn action_editor(ui: &mut egui::Ui, action: &mut Value, catalog: &Value) {
         });
 }
 
+pub(crate) fn open_control_assignment(app: &mut PealayerApp, control: &crate::four_d::controller::HardwareControl) {
+    app.rf.begin_control_assignment(&control.key, &control.name);
+    if let Err(error) = app.request_rf("catalog", json!({"read_board": true})) { app.set_osd(error); }
+}
+
+fn scoped_action_catalog(catalog: &Value, key: Option<&str>) -> Value {
+    let mut scoped = catalog.clone();
+    if let Some(key) = key {
+        scoped["peripherals"]["controls"] = json!(array(&catalog["peripherals"]["controls"])
+            .into_iter().filter(|control| control["key"] == key).collect::<Vec<_>>());
+        scoped["action_types"] = json!(["control"]);
+    }
+    scoped
+}
+
 pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     if !app.rf.open {
         return;
@@ -794,7 +825,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     );
     let mut open = true;
     let catalog = app.rf.catalog.clone();
-    egui::Window::new(format!("{} RF controls",crate::ui::icons::RADIO)).id(egui::Id::new("rf_manager"))
+    let window = egui::Window::new(format!("{} RF controls",crate::ui::icons::RADIO)).id(egui::Id::new("rf_manager"))
         .title_bar(false).default_rect(geometry.default_rect).min_size(geometry.min_size).max_size(geometry.max_size)
         .constrain_to(geometry.bounds).resizable(true).collapsible(false).order(egui::Order::Foreground)
         .frame(crate::ui::dialog::opaque_window_frame(ui)).show(ui.ctx(),|ui| {
@@ -820,7 +851,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             ui.separator();
             draw_error(ui,&app.rf.error,&app.rf.error_detail);
             if let Some(error)=catalog["board_error"].as_str() { ui.colored_label(ui.visuals().warn_fg_color,error); }
-            egui::ScrollArea::vertical().id_salt("rf_body").auto_shrink([false,false]).show(ui,|ui| {
+            egui::ScrollArea::vertical().id_salt(("rf_body",app.rf.assignment_sequence)).auto_shrink([false,false]).show(ui,|ui| {
                 ui.set_min_width(ui.available_width());
                 match app.rf.tab {
                     0=> {
@@ -836,7 +867,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             ui.push_id(binding["name"].as_str().unwrap_or_default(),|ui| { egui::Frame::group(ui.style()).show(ui,|ui| { ui.horizontal(|ui| {
                                 let mut enabled=binding["enabled"].as_bool().unwrap_or(false);
                                 if ui.checkbox(&mut enabled,"").changed() { let mut updated=binding.clone(); updated["enabled"]=json!(enabled); request(app,"binding.put",json!({"binding":updated})); }
-                                if ui.dropdown_choice(app.rf.previous_name==binding["name"].as_str().unwrap_or_default(),binding["name"].as_str().unwrap_or("Assignment")).clicked() { app.rf.draft=binding.clone(); app.rf.previous_name=binding["name"].as_str().unwrap_or_default().into(); }
+                                if ui.dropdown_choice(app.rf.previous_name==binding["name"].as_str().unwrap_or_default(),binding["name"].as_str().unwrap_or("Assignment")).clicked() { app.rf.draft=binding.clone(); app.rf.previous_name=binding["name"].as_str().unwrap_or_default().into(); app.rf.assignment_control=None; }
                                 ui.label(egui::RichText::new(format!("{} · {}",binding["match"]["rf_code"],binding["match"]["gesture"].as_str().unwrap_or_default())).weak());
                             });
                             for action in array(&binding["actions"]) {ui.label(action_summary(&action,&catalog));}
@@ -860,7 +891,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 ui.push_id(i,|ui| {
                                     egui::Frame::group(ui.style()).inner_margin(10.0).show(ui,|ui| {
                                         ui.horizontal(|ui| { ui.strong(format!("Action {}",i+1)); if actions_len_button(ui).clicked() { remove=Some(i); } });
-                                        action_editor(ui,action,&catalog);
+                                        action_editor(ui,action,&scoped_action_catalog(&catalog,app.rf.assignment_control.as_deref()));
                                     });
                                 }); ui.add_space(6.0);
                             }
@@ -903,6 +934,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                         app.rf.previous_name=existing.as_ref().and_then(|binding|binding["name"].as_str()).unwrap_or_default().into();
                                         app.rf.draft=existing.unwrap_or_else(|| { let mut binding=new_binding(); binding["name"]=json!(format!("RF {}",entry["id"])); binding["match"]["rf_code"]=entry["code"].clone(); binding["match"]["rf_bits"]=entry["bits"].clone(); binding["match"]["rf_protocol"]=entry["protocol"].clone(); binding });
                                         app.rf.tab=0;
+                                        app.rf.assignment_control=None;
                                     }
                                     if ui.add_enabled(!app.rf.pending,egui::Button::new("Transmit")).clicked() { request(app,"transmit",json!({"code":entry["code"],"bits":entry["bits"],"protocol":entry["protocol"],"pulse_us":entry["pulse_us"],"repeats":1})); }
                                     ui.menu_button(crate::ui::icons::DOTS_THREE,|ui| {
@@ -972,7 +1004,12 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 }
             });
         });
+    if app.rf.raise_on_open {
+        if let Some(window) = window { ui.ctx().move_to_top(window.response.layer_id); }
+        app.rf.raise_on_open = false;
+    }
     app.rf.open = open;
+    if !open { app.rf.assignment_control = None; }
 }
 
 fn actions_len_button(ui: &mut egui::Ui) -> egui::Response {
@@ -987,6 +1024,26 @@ fn actions_len_button(ui: &mut egui::Ui) -> egui::Response {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn card_assignment_opens_an_unbound_scoped_draft_without_mutating_catalog() {
+        let mut state = RfState::default();
+        state.catalog = json!({"bindings":[{"name":"Existing motion","actions":[{"action_id":"seat.a.down"}]}],
+            "peripherals":{"controls":[{"key":"seat.a","actions":[{"id":"seat.a.down"}]},
+                {"key":"pwm.1","actions":[{"id":"pwm.1.on"}]}]}});
+        let previous = state.catalog.clone();
+        state.begin_control_assignment("pwm.1", "Light");
+        assert!(state.open);
+        assert_eq!(state.draft["name"], "Light");
+        assert_eq!(state.draft["actions"][0]["action_id"], "");
+        assert_eq!(state.draft["match"]["rf_code"], 0);
+        assert_eq!(state.catalog, previous);
+        let scoped = scoped_action_catalog(&state.catalog, state.assignment_control.as_deref());
+        assert_eq!(control_options(&scoped).len(), 1);
+        assert_eq!(control_options(&scoped)[0].0, "pwm.1.on");
+        assert_eq!(state.catalog, previous);
+        assert!(control_options(&scoped_action_catalog(&state.catalog, Some("missing"))).is_empty());
+    }
 
     #[test]
     fn shallow_catalog_refresh_preserves_authoritative_board_entries() {
