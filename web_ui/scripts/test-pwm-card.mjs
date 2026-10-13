@@ -1,7 +1,14 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import { hardwareControlIdentity } from '../src/hardwareIdentity.ts';
 import { defaultPwmCard, pwmActionVisible, pwmIndicatorAction, pwmRowActions } from '../src/pwmCard.ts';
 const actions = ['on', 'off', 'increase', 'decrease', 'toggle'].map(verb => ({ verb, id: `pwm.1.${verb}` }));
+assert.equal(hardwareControlIdentity({key:'pwm.1',kind:'mosfet',channel:1}),'CH2');
+assert.equal(hardwareControlIdentity({key:'relay.5',kind:'relay',channel:5}),'R5');
+assert.equal(hardwareControlIdentity({key:'seat.a',kind:'motion'}),'A');
+const rf = readFileSync(new URL('../src/components/RfManager.tsx',import.meta.url),'utf8');
+assert.match(rf, /<Modal key=\{assignment\?\.nonce \?\? 'rf-general'\} zIndex=\{1200\}/,
+  'A reused RF portal must be above channel detail, with a fresh body for each explicit assignment.');
 assert.deepEqual(pwmRowActions(defaultPwmCard, actions).map(a => a.verb), ['on','off','toggle']);
 assert.deepEqual(pwmRowActions({...defaultPwmCard, show_on:false, show_other:false}, actions).map(a => a.verb), ['off']);
 assert.equal(pwmActionVisible({...defaultPwmCard,show_decrease:false}, 'decrease'),false);

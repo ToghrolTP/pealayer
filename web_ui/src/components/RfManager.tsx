@@ -69,7 +69,7 @@ export const RfManager: React.FC<Props> = ({ rf, hardwareConnected, sendCmd, ass
     <Card className="surface-card" title={<Space><ApiOutlined />RF controls</Space>} extra={<Button aria-label="Manage RF controls" icon={<EditOutlined />} onClick={() => { setAssignmentControl(undefined); setOpen(true); if(liveConnected) command('catalog', { read_board: true }); }}>Manage</Button>}>
       <Space wrap><Tag>{catalog.bindings?.length ?? 0} assignments</Tag>{catalog.learning?.active && <Tag color="processing">Learning buttons</Tag>}</Space>
     </Card>
-    <Modal className="rf-manager-modal" open={open} onCancel={() => setOpen(false)} footer={null} width={900} title={<Space><ApiOutlined />RF controls</Space>}>
+    <Modal key={assignment?.nonce ?? 'rf-general'} zIndex={1200} className="rf-manager-modal" open={open} onCancel={() => setOpen(false)} footer={null} width={900} title={<Space><ApiOutlined />RF controls</Space>}>
       <Space style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
         <Button disabled={!liveConnected} loading={rf?.pending} icon={<ReloadOutlined />} onClick={() => command('catalog', { read_board: true })}>Refresh</Button>
       </Space>
