@@ -790,6 +790,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         .constrain_to(geometry.bounds).resizable(true).collapsible(false).order(egui::Order::Foreground)
         .frame(crate::ui::dialog::opaque_window_frame(ui)).show(ui.ctx(),|ui| {
             // Keep hover paint inside allocated bounds, including closed selectors.
+            ui.style_mut().interaction.selectable_labels=false;
             ui.visuals_mut().widgets.inactive.expansion=0.0;
             ui.visuals_mut().widgets.hovered.expansion=0.0;
             ui.visuals_mut().widgets.active.expansion=0.0;
