@@ -32,7 +32,10 @@ export const ServerFilePicker: React.FC<Props> = ({ apiBaseUrl, locale, extensio
       if (controller.signal.aborted) return;
       setDirectory(value); setPath(value.current_path);
     } catch (reason) {
-      if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : String(reason));
+      if (!controller.signal.aborted) {
+        setDirectory(null);
+        setError(reason instanceof Error ? reason.message : String(reason));
+      }
     } finally { if (!controller.signal.aborted) setLoading(false); }
   };
   useEffect(() => {

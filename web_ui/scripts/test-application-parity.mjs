@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
+import { filesystemBreadcrumbs } from '../src/fileLocations.ts';
 
 const root = path.resolve(import.meta.dirname, '..');
 const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
@@ -74,7 +75,10 @@ const contracts = [
   [studio.includes("kind: 'pinch'") && studio.includes("event.button !== 1") && css.includes('.timeline-grid.is-panning'), 'timeline supports two-finger pinch/pan and middle-button panning'],
   [studio.includes("trigger={['contextMenu']}") && studio.includes("sendCmd('timeline.track.update'") && studio.includes("sendCmd('timeline.track.manage'"), 'timeline track menus use shared selection, routing and management commands'],
   [studio.includes('anyTimelineTrackSoloed') && studio.includes('is-solo-filtered') && css.includes('.timeline-row.is-muted') && css.includes('.timeline-row.is-soloed') && css.includes('.timeline-row.is-locked'), 'timeline tracks render semantic mute, solo-isolation, and lock states'],
-  [library.includes("replace(/^\\\\\\\\\\?\\\\/"), 'Windows namespace prefixes are removed from breadcrumbs'],
+  [library.includes('filesystemBreadcrumbs(data.current_path)')
+    && JSON.stringify(filesystemBreadcrumbs('\\\\?\\D:\\Films')) === JSON.stringify(filesystemBreadcrumbs('D:\\Films'))
+    && JSON.stringify(filesystemBreadcrumbs('\\\\?\\UNC\\server\\share\\Films')) === JSON.stringify(filesystemBreadcrumbs('\\\\server\\share\\Films')),
+    'Windows namespace prefixes are removed from breadcrumbs'],
   [library.includes("trigger={['contextMenu']}") && library.includes('Copy full path'), 'media entries expose application-style context actions'],
   [media.includes('state.osd') && css.includes('.media-osd--custom'), 'Web video surfaces render the native configurable OSD contract'],
   [app.includes('<ApplicationStatusBar') && statusBar.includes("trigger={['contextMenu']}") && statusBar.includes('status_rgb'), 'application footer renders live shared state and persisted context-menu visibility'],
