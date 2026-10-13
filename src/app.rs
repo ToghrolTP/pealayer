@@ -8991,18 +8991,7 @@ fn web_hardware_details(
                 if let Some(value) = status_component {
                     return Some(f64::from(value) * 100.0 / 255.0);
                 }
-                capabilities
-                    .telemetry
-                    .pwm_values
-                    .get(usize::from(channel))
-                    .copied()
-                    .flatten()
-                    .or_else(|| {
-                        (capabilities.telemetry.pwm_channel == Some(channel))
-                            .then_some(capabilities.telemetry.pwm_value)
-                            .flatten()
-                    })
-                    .map(|value| f64::from(value) * 100.0 / 4095.0)
+                capabilities.observed_pwm_percent(channel)
             });
             serde_json::json!({
                 "key": control.key,
@@ -11130,6 +11119,12 @@ pub(crate) mod tests {
         assert_eq!(details["buzzer"]["playing"], true);
         assert_eq!(details["buzzer"]["melody_id"], 42);
         assert_eq!(details["buzzer"]["melody_name"], "attention");
+
+        capabilities.telemetry.pwm_logical_percent_milli = vec![None, None, None, Some(75_123)];
+        let logical = web_hardware_details(&capabilities, Default::default());
+        assert_eq!(logical["controls"][0]["percent"].as_f64(), Some(75.123),
+            "Web indicators and sliders must use coordinator logical percent, not gamma/PWM raw");
+        capabilities.telemetry.pwm_logical_percent_milli.clear();
 
         capabilities.controls[0].key = "pwm.15".to_string();
         capabilities.pwm_channels[0] = crate::four_d::controller::HardwareOutput {
