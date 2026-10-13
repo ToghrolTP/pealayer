@@ -104,3 +104,21 @@ the paired live-value PR #178. PCController's related Web/TUI change is in
 [#662](https://github.com/atomicdeploy/PCController/pull/662), preserving mobile
 #661 and WS #660. Both attempted chat attachments were rejected by the chat's
 100-artifact limit; GitHub source refs and PR links are intact.
+
+## Required-check follow-up
+
+The user subsequently authorized required merge checks. The full Windows native
+suite exposed a real selected-relay geometry defect: overriding the atomic
+button frame's stroke width added two points to its height after the header
+siblings had already been centered. Semantic actions now recolor the existing
+theme stroke and explicitly retain the Button font. The display/rename geometry
+regression passes across all four densities and both tested font sizes. Its
+headless fixture now consumes the texture delta so a fixture cleanup panic does
+not hide a real assertion failure.
+
+The Web picker clears a previous listing when a subsequent browse fails; its
+parity check exercises the shared Windows/UNC breadcrumb helper directly.
+The Web build and its parity contracts pass. Fresh remote merge checks remain
+required before merging. Cafe was restored through its existing paused
+interactive launcher, but still runs its previous package. This is not delivery
+or CPU acceptance of the candidate.

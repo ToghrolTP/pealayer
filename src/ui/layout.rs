@@ -7346,14 +7346,16 @@ fn hardware_action_button(ui: &egui::Ui, label: impl Into<String>, verb: &str,
     };
     let Some(tone) = tone else { return egui::Button::new(label).truncate().selected(selected); };
     if !enabled {
-        return egui::Button::new(egui::RichText::new(label).color(ui.visuals().weak_text_color()))
+        return egui::Button::new(egui::RichText::new(label).font(egui::TextStyle::Button.resolve(ui.style())).color(ui.visuals().weak_text_color()))
             .truncate().fill(ui.visuals().widgets.noninteractive.weak_bg_fill)
             .stroke(ui.visuals().widgets.noninteractive.bg_stroke);
     }
     if !selected { return egui::Button::new(label).truncate(); }
-    egui::Button::new(egui::RichText::new(label).color(tone)).truncate().selected(true)
+    egui::Button::new(egui::RichText::new(label).font(egui::TextStyle::Button.resolve(ui.style())).color(tone)).truncate().selected(true)
         .fill(tone.gamma_multiply(0.20))
-        .stroke(egui::Stroke::new(1.0, tone.gamma_multiply(0.8)))
+        // egui's atomic button frame includes stroke width in its geometry.
+        // Recolor the theme's stroke without changing the selected row height.
+        .stroke(egui::Stroke::new(ui.visuals().widgets.inactive.bg_stroke.width, tone.gamma_multiply(0.8)))
 }
 
 /// Keep transformable card layers attached to their workspace panel rather
@@ -8373,7 +8375,7 @@ mod timeline_row_tests {
                         let mut caption_rect = egui::Rect::NOTHING;
                         let mut icon_rect = egui::Rect::NOTHING;
                         let mut button_rect = egui::Rect::NOTHING;
-                        let _ = context.run_ui(egui::RawInput {
+                        let mut output = context.run_ui(egui::RawInput {
                             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(500.0, 300.0))),
                             ..Default::default()
                         }, |ui| {
@@ -8389,8 +8391,10 @@ mod timeline_row_tests {
                                 button_rect = ui.add(hardware_action_button(ui, "OFF", "off", true, true)).rect;
                             });
                         });
+                        output.textures_delta.clear();
                         assert!((caption_rect.center().y - icon_rect.center().y).abs() < 0.01);
-                        assert!((caption_rect.center().y - button_rect.center().y).abs() < 0.01);
+                        assert!((caption_rect.center().y - button_rect.center().y).abs() < 0.01,
+                            "compact={compact}, density={density:?}, body={body_size}, caption={caption_rect:?}, button={button_rect:?}");
                         if let Some(previous) = display_rect { assert_eq!(caption_rect, previous); }
                         display_rect = Some(caption_rect);
                     }
