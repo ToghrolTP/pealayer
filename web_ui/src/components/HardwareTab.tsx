@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { hardwareAvailability, hardwareLabels, hardwareOutputsAvailable } from '../hardwareAvailability';
 import { reconcilePWMDrafts } from '../pwmDrafts';
+import { hardwareControlIdentity } from '../hardwareIdentity';
 import { defaultPwmCard, pwmActionVisible, pwmIndicatorAction, pwmRowActions } from '../pwmCard';
 import { RfManager } from './RfManager';
 import { PwmPolicyEditor } from './PwmPolicyEditor';
@@ -112,14 +113,7 @@ const controlCaption = (
 
 const controlIdentity = (
   control: NonNullable<PlayerState['hardware_details']>['controls'][number],
-) => {
-  if (/relay/i.test(control.kind) && control.channel != null) return `R${control.channel}`;
-  if (/pwm|mosfet/i.test(control.kind) && control.channel != null) return `CH${control.channel}`;
-  if (control.key === 'seat.a') return 'A';
-  if (control.key === 'seat.b') return 'B';
-  const parts = control.key.split('.');
-  return parts[parts.length - 1]?.toUpperCase() || control.key;
-};
+) => hardwareControlIdentity(control);
 
 const telemetryValue = (value: number | boolean | null | undefined, unit = '') => {
   if (value === null || value === undefined) return '—';

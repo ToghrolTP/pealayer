@@ -39,6 +39,8 @@ pub struct RfState {
     board_map: Value,
     manual_signal: bool,
     assignment_control: Option<String>,
+    raise_on_open: bool,
+    assignment_sequence: u64,
 }
 
 fn new_binding() -> Value {
@@ -71,6 +73,8 @@ impl Default for RfState {
             board_map: json!({"id":null,"action":""}),
             manual_signal: false,
             assignment_control: None,
+            raise_on_open: false,
+            assignment_sequence: 0,
         }
     }
 }
@@ -83,6 +87,8 @@ impl RfState {
         self.draft["name"] = json!(name);
         self.previous_name.clear();
         self.assignment_control = Some(key.to_owned());
+        self.raise_on_open = true;
+        self.assignment_sequence = self.assignment_sequence.wrapping_add(1);
     }
     pub(crate) fn receive(&mut self, event: Value) {
         if event["kind"] != "rf.receive" || event["source"] != "board" {
@@ -819,7 +825,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     );
     let mut open = true;
     let catalog = app.rf.catalog.clone();
-    egui::Window::new(format!("{} RF controls",crate::ui::icons::RADIO)).id(egui::Id::new("rf_manager"))
+    let window = egui::Window::new(format!("{} RF controls",crate::ui::icons::RADIO)).id(egui::Id::new("rf_manager"))
         .title_bar(false).default_rect(geometry.default_rect).min_size(geometry.min_size).max_size(geometry.max_size)
         .constrain_to(geometry.bounds).resizable(true).collapsible(false).order(egui::Order::Foreground)
         .frame(crate::ui::dialog::opaque_window_frame(ui)).show(ui.ctx(),|ui| {
@@ -845,7 +851,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             ui.separator();
             draw_error(ui,&app.rf.error,&app.rf.error_detail);
             if let Some(error)=catalog["board_error"].as_str() { ui.colored_label(ui.visuals().warn_fg_color,error); }
-            egui::ScrollArea::vertical().id_salt("rf_body").auto_shrink([false,false]).show(ui,|ui| {
+            egui::ScrollArea::vertical().id_salt(("rf_body",app.rf.assignment_sequence)).auto_shrink([false,false]).show(ui,|ui| {
                 ui.set_min_width(ui.available_width());
                 match app.rf.tab {
                     0=> {
@@ -998,6 +1004,10 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 }
             });
         });
+    if app.rf.raise_on_open {
+        if let Some(window) = window { ui.ctx().move_to_top(window.response.layer_id); }
+        app.rf.raise_on_open = false;
+    }
     app.rf.open = open;
     if !open { app.rf.assignment_control = None; }
 }
