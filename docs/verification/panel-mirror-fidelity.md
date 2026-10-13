@@ -26,3 +26,10 @@ was not running at inspection. Cafe/Erfan replacement and human visual acceptanc
 remain separate delivery gates; preserve host-specific libmpv and authoring state
 and use the approved updater. Paired Linux short-note recovery is documented in
 PCController's `docs/verification/buzzer-mirror-jitter.md`.
+
+The final Linux receiver has now been installed, restarted and hash-verified,
+with Cafe connected and native mirroring enabled; this does not install the
+Pealayer fix or establish acoustic fidelity. `scripts/package-windows.ps1`
+requires a clean source checkout. Its existing generated `web_ui/dist` changes
+were preserved rather than overwritten/reset to force packaging. They need a
+preservation/reconciliation step before an approved native package can be made.
