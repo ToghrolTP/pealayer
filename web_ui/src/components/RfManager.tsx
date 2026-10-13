@@ -12,13 +12,22 @@ type Application = { id: string; surface: string; values?: { app_actions?: strin
 type MappingOption = { action: string; targets: string[]; behaviors: string[]; behavior_labels?:Record<string,string> };
 type Catalog = { connected?: boolean; entries?: Entry[]; entries_sampled?: boolean; board_error?: string; bindings?: Binding[]; learning?: { active: boolean; remaining_ms: number; learned: number }; activity?: { id: number; text: string; time: string; rf_code: number; rf_bits: number; rf_protocol: number }[]; hostname?: string; action_types?: string[]; gestures?: string[]; applications?: Application[]; effects?: { name: string; reference: string }[]; peripherals?: { controls: RfControl[] }; board_mapping_options?: MappingOption[]; keyboard?: {allowed?: string[]} };
 export type RfSnapshot = { catalog?: Catalog; pending?: boolean; error?: string; error_detail?: {kind?: string; resource?: string; retryable?: boolean; retry_after_ms?: number}; last_result?: unknown; last_operation?: string };
-type Props = { rf?: RfSnapshot; hardwareConnected?: boolean; sendCmd: (command: string, payload?: Record<string, unknown>) => void };
+type Props = { rf?: RfSnapshot; hardwareConnected?: boolean; sendCmd: (command: string, payload?: Record<string, unknown>) => void;
+  assignment?: { key: string; name: string; nonce: number } };
 const blank = (): Binding => ({ name: '', enabled: true, cooldown_ms: 250, match: { kind: 'rf.gesture', source: 'rf', rf_code: 0, rf_bits: 24, rf_protocol: 1, gesture: 'down' }, actions: [{ type: 'control', action_id: '' }] });
 const labels: Record<string, string> = { app: 'Application', control: 'Controller hardware control', board: 'Controller command (advanced)', effect: 'Effect', rf: 'RF transmit', 'virtual-key': 'Controller host keyboard', host: 'External program', script: 'Script', emit: 'Event' };
 
-export const RfManager: React.FC<Props> = ({ rf, hardwareConnected, sendCmd }) => {
+export const RfManager: React.FC<Props> = ({ rf, hardwareConnected, sendCmd, assignment }) => {
   const [open, setOpen] = useState(false);
   const [tab, setTab] = useState('assignments');
+  const [assignmentControl, setAssignmentControl] = useState<string>();
+  useEffect(() => {
+    if (!assignment) return;
+    const draft = blank(); draft.name = assignment.name;
+    setDraft(draft); setPreviousName(''); setAssignmentControl(assignment.key);
+    setTab('assignments'); setOpen(true);
+    sendCmd('pealayer.rf', { operation: 'catalog', params: { read_board: true } });
+  }, [assignment?.nonce]);
   const [draft, setDraft] = useState<Binding>(blank);
   const [previousName, setPreviousName] = useState('');
   const [allowKeyboard, setAllowKeyboard] = useState(false);
@@ -57,7 +66,7 @@ export const RfManager: React.FC<Props> = ({ rf, hardwareConnected, sendCmd }) =
   const entryAssignments=(entry:Entry)=><Space direction="vertical" size={4}><Tag color="blue">On board · {entry.board_assignment?.label ?? 'Not reported'}</Tag>{(catalog.bindings ?? []).filter(binding=>sameSignal(binding.match,entry)).map(binding=><div key={binding.name}><strong>{binding.name} · {human(binding.match.gesture)}{!binding.enabled && ' · disabled'}</strong>{binding.actions.map((action,i)=><div key={i}>{summarize(action)}</div>)}<Typography.Text type="secondary">{executionLabel(binding.actions)}</Typography.Text></div>)}</Space>;
   const entryButtons=(entry:Entry)=><Space wrap><Button size="small" onClick={()=>editBoard(entry)}>On board…</Button><Button size="small" onClick={()=>assign(entry)}>On controller…</Button><Dropdown menu={{items:[{key:'transmit',label:'Transmit signal',disabled:rf?.pending||!liveConnected},{key:'board',label:'Edit board action'},{key:'unassign',label:'Unassign board action',disabled:rf?.pending||!liveConnected},{key:'remove',label:'Remove learned button',danger:true,disabled:rf?.pending||!liveConnected}],onClick:({key})=>{if(key==='board')editBoard(entry);if(key==='transmit')command('transmit',{code:entry.code,bits:entry.bits,protocol:entry.protocol,pulse_us:entry.pulse_us,repeats:1});if(key==='unassign')command('map',{id:entry.id,action:'none'});if(key==='remove')Modal.confirm({title:'Remove learned RF button?',onOk:()=>command('remove',{id:entry.id})});}}}><Button size="small" icon={<MoreOutlined/>} aria-label="RF button actions"/></Dropdown></Space>;
   return <>
-    <Card className="surface-card" title={<Space><ApiOutlined />RF controls</Space>} extra={<Button aria-label="Manage RF controls" icon={<EditOutlined />} onClick={() => { setOpen(true); if(liveConnected) command('catalog', { read_board: true }); }}>Manage</Button>}>
+    <Card className="surface-card" title={<Space><ApiOutlined />RF controls</Space>} extra={<Button aria-label="Manage RF controls" icon={<EditOutlined />} onClick={() => { setAssignmentControl(undefined); setOpen(true); if(liveConnected) command('catalog', { read_board: true }); }}>Manage</Button>}>
       <Space wrap><Tag>{catalog.bindings?.length ?? 0} assignments</Tag>{catalog.learning?.active && <Tag color="processing">Learning buttons</Tag>}</Space>
     </Card>
     <Modal className="rf-manager-modal" open={open} onCancel={() => setOpen(false)} footer={null} width={900} title={<Space><ApiOutlined />RF controls</Space>}>
@@ -77,7 +86,7 @@ export const RfManager: React.FC<Props> = ({ rf, hardwareConnected, sendCmd }) =
             { title: 'Enabled', width: 80, render: (_, binding) => <Checkbox checked={binding.enabled} onChange={e => command('binding.put', { binding: { ...binding, enabled: e.target.checked } })} /> },
             { title: 'Assignment', render: (_,binding) => <Space direction="vertical" size={2}><strong>{binding.name}</strong>{binding.actions.map((action,i) => <Typography.Text key={i}>{summarize(action)}</Typography.Text>)}<Typography.Text type="secondary">{executionLabel(binding.actions)}</Typography.Text></Space> },
             { title: 'Button', render: (_, binding) => <Typography.Text code>{`0x${binding.match.rf_code.toString(16).toUpperCase()} · ${human(binding.match.gesture)}`}</Typography.Text> },
-            { title: '', width: 80, render: (_, binding) => <Button size="small" icon={<EditOutlined />} onClick={() => { setDraft(structuredClone(binding)); setPreviousName(binding.name); }}>Edit</Button> },
+            { title: '', width: 80, render: (_, binding) => <Button size="small" icon={<EditOutlined />} onClick={() => { setAssignmentControl(undefined); setDraft(structuredClone(binding)); setPreviousName(binding.name); }}>Edit</Button> },
           ]} />
           <Form layout="vertical" style={{ marginTop: 18 }}>
             <div className="rf-form-grid">
@@ -96,13 +105,13 @@ export const RfManager: React.FC<Props> = ({ rf, hardwareConnected, sendCmd }) =
               const apps = catalog.applications?.filter(app => app.id === action.app_target || app.surface === action.app_target) ?? [];
               const commands = [...new Set(apps.flatMap(app => (app.values?.app_actions ?? '').split(',').filter(Boolean)))];
               return <Card key={index} size="small" title={`Action ${index + 1}`} extra={<Button size="small" icon={<DeleteOutlined />} aria-label="Remove action" onClick={() => setDraft({ ...draft, actions: draft.actions.filter((_, i) => i !== index) })} />} style={{ marginBottom: 10 }}>
-                <Form.Item label="Action"><Select aria-label="Action type" value={action.type} options={(catalog.action_types ?? []).map(value => ({ value, label: labels[value] ?? human(value) }))} onChange={type => setDraft(current=>({...current,actions:current.actions.map((old,i)=>i===index?{type}:old)}))} /></Form.Item>
+                <Form.Item label="Action"><Select aria-label="Action type" value={action.type} options={(assignmentControl ? ['control'] : catalog.action_types ?? []).map(value => ({ value, label: labels[value] ?? human(value) }))} onChange={type => setDraft(current=>({...current,actions:current.actions.map((old,i)=>i===index?{type}:old)}))} /></Form.Item>
                 {action.type === 'app' && <div className="rf-form-grid">
                   <Form.Item label="Application"><Select showSearch value={action.app_target} options={targetOptions} onChange={app_target => updateAction(index, { app_target, app_kind: '', app_value: '' })} /></Form.Item>
                   <Form.Item label="Command"><Select showSearch optionFilterProp="label" value={action.app_kind} options={commands.map(value => ({ value, label: human(value) }))} onChange={app_kind => updateAction(index, { app_kind, app_value: '' })} /></Form.Item>
                   {['pealayer.mute.set','pealayer.fullscreen.set'].includes(action.app_kind ?? '') ? <Form.Item label="Value"><Select value={action.app_value} options={[{value:'true',label:'On'},{value:'false',label:'Off'}]} onChange={app_value=>updateAction(index,{app_value})} /></Form.Item> : action.app_kind === 'pealayer.rate.set' ? <Form.Item label="Speed"><Select value={action.app_value} options={['0.5','0.75','1','1.25','1.5','2'].map(value=>({value,label:`${value}×`}))} onChange={app_value=>updateAction(index,{app_value})} /></Form.Item> : ['pealayer.volume.set','pealayer.seek','pealayer.seek_to','pealayer.seek_absolute','pealayer.chapter.set','pealayer.open','pealayer.command','pealayer.workspace.set'].includes(action.app_kind ?? '') && <Form.Item label="Value"><Input value={action.app_value} onChange={e => updateAction(index, { app_value: e.target.value })} placeholder={action.app_kind === 'pealayer.command' ? '{"command":"play"}' : undefined} /></Form.Item>}
                 </div>}
-                {action.type === 'control' && <Form.Item label="Controller hardware control" extra="Runs on PCController. Pealayer can be closed."><Select aria-label="Controller hardware control" showSearch optionFilterProp="label" value={action.action_id} options={controlOptions(controls)} onChange={action_id => updateAction(index, { action_id })} /></Form.Item>}
+                {action.type === 'control' && <Form.Item label="Controller hardware control" extra="Runs on PCController. Pealayer can be closed."><Select aria-label="Controller hardware control" showSearch optionFilterProp="label" value={action.action_id} options={controlOptions(assignmentControl ? controls.filter(control => control.key === assignmentControl) : controls)} onChange={action_id => updateAction(index, { action_id })} /></Form.Item>}
                 {(action.type === 'effect' || action.type === 'macro') && <Form.Item label="Effect"><Select showSearch value={action.macro} options={(catalog.effects ?? []).map(effect => ({ value: effect.reference, label: effect.name }))} onChange={macro => updateAction(index, { macro })} /></Form.Item>}
                 {action.type === 'board' && <Form.Item label="Controller command"><Input value={action.command} onChange={e => updateAction(index, { command: e.target.value })} /></Form.Item>}
                 {action.type === 'virtual-key' && <div className="rf-form-grid"><Form.Item label={`Keyboard on ${catalog.hostname || 'controller host'}`}><Select showSearch value={action.virtual_key} options={(catalog.keyboard?.allowed ?? []).map(value=>({value,label:value}))} onChange={virtual_key => updateAction(index, { virtual_key })} /></Form.Item><Form.Item label="Hold (ms)"><InputNumber min={10} max={1000} value={action.hold_ms ?? 50} onChange={hold_ms => updateAction(index, { hold_ms: hold_ms ?? 50 })} /></Form.Item></div>}

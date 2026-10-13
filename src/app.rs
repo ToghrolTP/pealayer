@@ -860,6 +860,7 @@ pub struct PealayerApp {
     pub(crate) non_user_control_visibility: crate::config::NonUserControlVisibility,
     pub(crate) prefix_relay_identifiers: bool,
     pub(crate) live_pwm_updates: bool,
+    pub(crate) pwm_card: crate::config::PwmCardPreferences,
     pub(crate) hardware_actions_on_press: bool,
     pub(crate) single_instance: bool,
     pub(crate) window_magnetic_snap: bool,
@@ -1431,6 +1432,7 @@ impl eframe::App for PealayerApp {
                 .as_ref()
                 .map(|capabilities| {
                     let mut details = web_hardware_details(capabilities, self.motion_control_mode);
+                    details["pwm_card"] = serde_json::json!(self.pwm_card);
                     details["folder_update"] = serde_json::json!({ "pending": self.channel_folder_pending, "error": self.channel_folder_error, "sequence": self.channel_folder_sequence });
                     details
                 });
@@ -7080,6 +7082,7 @@ impl PealayerApp {
         cfg.non_user_control_visibility = self.non_user_control_visibility;
         cfg.prefix_relay_identifiers = self.prefix_relay_identifiers;
         cfg.live_pwm_updates = self.live_pwm_updates;
+        cfg.pwm_card = self.pwm_card.clone();
         cfg.hardware_actions_on_press = self.hardware_actions_on_press;
         cfg.keyboard_shortcuts_enabled = self.keyboard_shortcuts_enabled;
         cfg.media_keys_enabled = self.media_keys_enabled;
@@ -7450,6 +7453,7 @@ impl PealayerApp {
         self.non_user_control_visibility = config.non_user_control_visibility;
         self.prefix_relay_identifiers = config.prefix_relay_identifiers;
         self.live_pwm_updates = config.live_pwm_updates;
+        self.pwm_card = config.pwm_card.clone();
         self.hardware_actions_on_press = config.hardware_actions_on_press;
         if self.hardware_key_bindings != config.hardware_key_bindings
             || self.keyboard_shortcuts_enabled != config.keyboard_shortcuts_enabled
@@ -9560,6 +9564,7 @@ impl Default for PealayerApp {
             non_user_control_visibility: crate::config::NonUserControlVisibility::Dimmed,
             prefix_relay_identifiers: true,
             live_pwm_updates: true,
+            pwm_card: crate::config::PwmCardPreferences::default(),
             hardware_actions_on_press: true,
             single_instance: true,
             window_magnetic_snap: false,

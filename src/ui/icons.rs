@@ -664,7 +664,10 @@ pub fn control(kind: &str, advertised: &str) -> &'static str {
 }
 
 pub fn action(verb: &str) -> &'static str {
-    match verb {
+    match verb.to_ascii_lowercase().as_str() {
+        "increase" => PLUS,
+        "decrease" => MINUS,
+        "toggle" => POWER,
         "up" => ARROW_UP,
         "down" => ARROW_DOWN,
         "stop" | "off" => STOP_CIRCLE,

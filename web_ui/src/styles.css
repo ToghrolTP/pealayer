@@ -763,7 +763,10 @@ body {
 .hardware-power-action.ant-btn:not(:disabled):hover { border-color: var(--hardware-power-tone); background: color-mix(in srgb, var(--hardware-power-tone) 14%, var(--surface-2)); }
 .hardware-power-action.ant-btn:not(:disabled):focus-visible { outline-color: var(--hardware-power-tone); }
 .hardware-power-action.ant-btn:disabled { color: var(--muted); background: var(--surface-2); border-color: var(--line); }
-.hardware-control__pwm { min-width: 130px; display: grid; grid-template-columns: minmax(80px, 1fr) 48px; align-items: center; gap: 8px; }
+.hardware-control__pwm { min-width: 130px; display: flex; align-items: center; gap: 8px; }
+.hardware-control__pwm .ant-slider, .hardware-control__pwm-unknown { flex: 1; min-width: 40px; }
+.hardware-control__pwm .ant-btn { flex: none; }
+.hardware-control__pwm output { flex: none; min-width: 48px; }
 .hardware-control__pwm .ant-slider { margin: 0; }
 .hardware-control__pwm output { text-align: end; color: var(--text); font: 11px var(--font-mono); }
 .channel-manager-modal .ant-modal-content, .channel-manager-modal .ant-modal-container { padding: 18px; }
@@ -1222,7 +1225,7 @@ html[data-motion="disabled"] .app-statusbar .status-widget { transition: none; }
   .studio-suite--timeline > .timeline-panel-web { order: 2; }
   .program-viewer { aspect-ratio: 16 / 9; }
   .hardware-control { grid-template-columns: 34px 18px minmax(0, 1fr) auto; }
-  .hardware-control__pwm { grid-column: 1 / -1; min-width: 0; grid-template-columns: minmax(0, 1fr) 48px; padding-block: 6px; }
+  .hardware-control__pwm { grid-column: 1 / -1; min-width: 0; padding-block: 6px; }
   .surface-page__header > .ant-space { flex-wrap: wrap; }
   .surface-card > .ant-card-body { padding: 12px; }
   .info-surface .ant-descriptions-item-label, .info-surface .ant-descriptions-item-content { overflow-wrap: anywhere; padding: 8px !important; }

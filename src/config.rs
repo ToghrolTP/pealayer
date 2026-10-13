@@ -6,6 +6,47 @@ use std::sync::mpsc::{Receiver, channel};
 pub const DEFAULT_PLAYBACK_POSITION_HISTORY_LIMIT: u32 = 50;
 pub const MAX_PLAYBACK_POSITION_HISTORY_LIMIT: u32 = 500;
 
+/// Presentation only. Power/recall policy belongs to the shared coordinator.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PwmIndicatorAction {
+    #[default]
+    Toggle,
+    On,
+    Off,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct PwmCardPreferences {
+    pub show_on: bool,
+    pub show_off: bool,
+    pub show_increase: bool,
+    pub show_decrease: bool,
+    pub show_other: bool,
+    pub indicator_action: PwmIndicatorAction,
+}
+
+impl Default for PwmCardPreferences {
+    fn default() -> Self {
+        Self { show_on: true, show_off: true, show_increase: true,
+            show_decrease: true, show_other: true,
+            indicator_action: PwmIndicatorAction::Toggle }
+    }
+}
+
+impl PwmCardPreferences {
+    pub fn shows(&self, verb: &str) -> bool {
+        match verb.to_ascii_lowercase().as_str() {
+            "on" => self.show_on,
+            "off" => self.show_off,
+            "increase" => self.show_increase,
+            "decrease" => self.show_decrease,
+            _ => self.show_other,
+        }
+    }
+}
+
 /// Bundled application artwork; custom deployment/state icons take precedence.
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -1089,6 +1130,7 @@ pub struct AppConfig {
     pub non_user_control_visibility: NonUserControlVisibility,
     pub prefix_relay_identifiers: bool,
     pub live_pwm_updates: bool,
+    pub pwm_card: PwmCardPreferences,
     pub hardware_actions_on_press: bool,
     /// Master policy for built-in transport shortcuts and local hardware
     /// bindings while the Pealayer window has keyboard focus.
@@ -1280,6 +1322,7 @@ impl Default for AppConfig {
             non_user_control_visibility: NonUserControlVisibility::Dimmed,
             prefix_relay_identifiers: true,
             live_pwm_updates: true,
+            pwm_card: PwmCardPreferences::default(),
             hardware_actions_on_press: true,
             keyboard_shortcuts_enabled: true,
             media_keys_enabled: true,
