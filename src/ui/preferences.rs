@@ -1025,6 +1025,7 @@ fn render_contract_control(
                         ui.spacing_mut().slider_width = (width - label_width - ui.spacing().item_spacing.x).max(48.0);
                         let response = ui.add(egui::Slider::new(&mut index, 0..=control.options.len() - 1)
                             .step_by(1.0).show_value(false).text(selected_label));
+                        crate::ui::control_density::paint_choice_ticks(ui, response.rect, control.options.len(), index);
                         if response.changed() {
                             replacement = Some(control.options[index].value.clone());
                         }

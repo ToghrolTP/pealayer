@@ -1097,12 +1097,15 @@ html[data-motion="disabled"] *, html[data-motion="disabled"] *::before, html[dat
 .app-statusbar .status-widget--warnings { width: 150px; }
 .app-statusbar .status-widget--hot { width: 160px; }
 .app-statusbar .status-widget--estop { width: 130px; }
-.app-statusbar .status-widget--workspace { width: 130px; justify-content: flex-end; font-weight: 600; }
+.app-statusbar .status-widget--workspace { width: 190px; justify-content: flex-end; font-weight: 600; }
 .status-workspace-selector { display: flex; align-items: center; gap: 5px; width: 100%; min-width: 0; height: 22px; padding: 0 3px; border: 0; border-radius: 4px; background: transparent; color: inherit; font: inherit; cursor: pointer; }
 .status-workspace-selector > .anticon { flex: 0 0 12px; }
-.status-workspace-selector > span:not(.anticon) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: end; }
+.status-workspace-selector > span:not(.anticon) { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: start; }
 .status-workspace-selector:enabled:hover, .status-workspace-selector:focus-visible { background: var(--surface-raised); outline: 1px solid var(--accent); outline-offset: -1px; }
 .status-workspace-selector:disabled { cursor: default; opacity: .55; }
+.status-connection-dot { flex: 0 0 8px; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
+@font-face { font-family: PealayerPhosphor; src: url('/api/icons/font') format('opentype'); font-display: block; }
+.phosphor-icon { font-family: PealayerPhosphor; display: inline-flex; align-items: center; justify-content: center; font-size: 1em; line-height: 1; }
 .status-widget--fps, .status-widget--hot, .status-widget--estop, .status-widget--warnings { font-weight: 600; }
 .status-widget--voltage, .status-widget--current, .status-widget--temperature { font-size: 11px; font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
 .app-statusbar .status-widget.is-monospace, .status-widget.is-monospace .app-statusbar__fps { font-family: var(--mono-font, monospace); }

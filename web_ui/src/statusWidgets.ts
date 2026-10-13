@@ -4,12 +4,14 @@ export type FpsMode = 'media' | 'ui' | 'auto';
 export type ChartMetric = 'voltage' | 'current' | 'temperature';
 export type StatusBarKey = 'media_rate' | 'hardware' | 'telemetry' | Exclude<StatusWidget, 'fps' | 'connection'>;
 export type StatusBarVisibility = Record<StatusBarKey, boolean> & { fps_mode: FpsMode; chart_metric: ChartMetric; order: StatusWidget[];
+  connection_icon: 'plug' | 'circle' | 'controller' | 'none'; connection_mode: boolean; chart_paused: boolean;
   dividers: boolean; semantic_colors: boolean; monospace: boolean[]; trailing: boolean[]; metric_limits: Array<[number | null, number | null]> };
 export const DEFAULT_VISIBILITY: StatusBarVisibility = {
   media_rate: true, hardware: true, telemetry: true, status_rgb: true, warnings: true, workspace: true,
   voltage: true, current: true, temperature: true, hot: true, estop: true, timeline: true, message: true,
   progress: true, chart: false, fps_mode: 'auto', chart_metric: 'voltage', order: [...WIDGETS],
   dividers: true, semantic_colors: false,
+  connection_icon: 'plug', connection_mode: false, chart_paused: false,
   monospace: WIDGETS.map((item) => ['fps', 'voltage', 'current', 'temperature'].includes(item)),
   trailing: WIDGETS.map((item) => item === 'workspace'), metric_limits: [[null, null], [null, null], [null, null]],
 };

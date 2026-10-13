@@ -930,7 +930,7 @@ pub(super) fn draw_dialogs(
                 &mut draft.icon,
                 crate::ui::icons::IconPickerConfig {
                     language: app.language,
-                    presets: crate::ui::icons::CONTROL_ICON_PRESETS,
+                    presets: crate::ui::icons::control_icon_catalog(),
                     fallback_glyph: crate::ui::icons::FOLDER_OPEN,
                     fallback_name: &default,
                     width: 300.0,

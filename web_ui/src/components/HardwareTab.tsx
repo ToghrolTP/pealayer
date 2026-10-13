@@ -76,7 +76,7 @@ const isStopAction = (action: HardwareAction) => action.verb.toLowerCase() === '
 
 const powerActionClass = (verb: string, selected: boolean) => {
   const power = verb.toLowerCase();
-  return power === 'on' || power === 'off'
+  return selected && (power === 'on' || power === 'off')
     ? `hardware-power-action hardware-power-action--${power}${selected ? ' is-selected' : ''}`
     : '';
 };

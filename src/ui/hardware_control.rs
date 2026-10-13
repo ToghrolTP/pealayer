@@ -166,6 +166,13 @@ pub(crate) fn set_relay(app: &PealayerApp, relay: u8, on: bool) {
     );
 }
 
+pub(crate) fn toggle_relay(app: &PealayerApp, relay: u8) {
+    // Resolve on the coordinator after the preceding edge has completed,
+    // never from a stale rendered indicator or an invented optimistic state.
+    let _ = app.engine_handle.queue_controller_intent(format!("relay.{relay}"),
+        "controller.command.execute", serde_json::json!({"command": format!("relay {relay} toggle")}), false);
+}
+
 pub(crate) fn set_pwm(app: &PealayerApp, channel: u8, percent: f64) {
     let _ = app.engine_handle.queue_controller_intent(
         format!("pwm.{channel}"),
@@ -2698,7 +2705,7 @@ fn draw_channel_detail_page(
                                         &mut app.hardware_control_icon_draft,
                                         crate::ui::icons::IconPickerConfig {
                                             language: app.language,
-                                            presets: crate::ui::icons::CONTROL_ICON_PRESETS,
+                                            presets: crate::ui::icons::control_icon_catalog(),
                                             fallback_glyph: crate::ui::icons::control(
                                                 &control.kind,
                                                 "",
