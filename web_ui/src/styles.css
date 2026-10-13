@@ -300,6 +300,13 @@ body {
 .preference-control__file > .ant-input { flex: 1; min-width: 0; }
 .preference-control__file > .ant-btn { flex: 0 0 auto; }
 .server-file-picker__navigation { display: flex; align-items: center; gap: 8px; margin-bottom: 12px; }
+.file-location-select { display: flex; align-items: center; gap: 4px; min-width: 0; }
+.file-location-select__input { width: 200px; max-width: 100%; }
+.file-location-select__label { display: flex; align-items: center; gap: 8px; max-width: min(480px, 85vw); }
+.file-location-select__label > span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.media-library__location-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.media-library__location-bar > .ant-input { flex: 1 1 220px; min-width: 0; }
+.server-file-picker .file-location-select { margin-bottom: 8px; }
 .server-file-picker__navigation > .ant-input { flex: 1; min-width: 0; }
 .server-file-picker__files { margin-top: 12px; }
 .server-file-picker__files .ant-table-row { cursor: pointer; }
