@@ -599,6 +599,9 @@ impl InteropCommand {
             {
                 Err("PWM percent must be a finite value from 0 to 100".to_string())
             }
+            Self::SetHardwarePwmPolicy { channel, .. } if *channel >= 16 => {
+                Err("PWM policy channel must be from 0 to 15".to_string())
+            }
             Self::PlayHardwareMelody { name, repeats }
                 if name.trim().is_empty() || name.len() > 64 || *repeats > 20 =>
             {

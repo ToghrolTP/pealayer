@@ -57,3 +57,34 @@ pub(crate) fn draw(app: &mut PealayerApp, ui: &mut egui::Ui,
     });
     ui.data_mut(|data| data.insert_temp(id, (current, draft)));
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn native_policy_opening_is_read_only_and_explicit_apply_preserves_other_config() {
+        let mut app = PealayerApp::default();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        app.engine_handle.sender = sender;
+        let mut capabilities = HardwareCapabilities { board_connected: true, ..Default::default() };
+        capabilities.pwm_channel_config.insert(1, crate::four_d::controller::HardwarePWMChannelConfig {
+            on_behavior: Some(PwmOnBehavior::Full), ..Default::default()
+        });
+        let context = egui::Context::default();
+        let mut output = context.run_ui(egui::RawInput::default(), |ui| draw(&mut app, ui, &capabilities, 1));
+        output.textures_delta.clear();
+        assert!(receiver.try_recv().is_err(), "opening/rendering must never configure or actuate");
+        configure(&app, &capabilities, 1, PwmOnBehavior::Restore).unwrap();
+        match receiver.try_recv().unwrap() {
+            crate::four_d::engine::EngineMessage::CoalescedControllerIntent { method, params, refresh_catalog, .. } => {
+                assert_eq!(method, "controller.pwm.channel.configure");
+                assert_eq!(params, serde_json::json!({"channel":1,"on_behavior":"restore"}));
+                assert!(refresh_catalog);
+            }
+            _ => panic!("policy must not become an output command"),
+        }
+        capabilities.pwm_channel_config.get_mut(&1).unwrap().on_behavior = None;
+        assert!(configure(&app, &capabilities, 1, PwmOnBehavior::Restore).is_err());
+        assert!(receiver.try_recv().is_err(), "unadvertised policy must not be submitted");
+    }
+}
