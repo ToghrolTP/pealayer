@@ -1,7 +1,15 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { hardwareControlIdentity } from '../src/hardwareIdentity.ts';
-import { defaultPwmCard, guardHardwarePointerStart, pwmActionVisible, pwmIndicatorAction, pwmRowActions } from '../src/pwmCard.ts';
+import { defaultPwmCard, guardHardwarePointerStart, observedControlActive, powerActionSelected, pwmActionVisible, pwmIndicatorAction, pwmRowActions } from '../src/pwmCard.ts';
+assert.equal(observedControlActive({active:true}),true);
+assert.equal(observedControlActive({active:false}),false);
+for(const active of [undefined,null,'true',1]) assert.equal(observedControlActive({active}),undefined);
+assert(powerActionSelected('on',true));
+assert(powerActionSelected('off',false));
+assert(!powerActionSelected('off',undefined),'Unknown must never select confirmed Off');
+assert(!powerActionSelected('on',undefined));
+assert(!powerActionSelected('off',true));
 for (const button of [1,2,3,4]) {
   let stopped = false; const commands = [];
   const event = {button,stopPropagation(){stopped=true;}};
@@ -14,6 +22,8 @@ let stopped = false;
 guardHardwarePointerStart({button:0,stopPropagation(){stopped=true;}});
 assert.equal(stopped,false,'Primary drag remains available; keyboard is not intercepted');
 const hardwareSource=readFileSync(new URL('../src/components/HardwareTab.tsx',import.meta.url),'utf8');
+assert.doesNotMatch(hardwareSource,/Boolean\(control.active\)|control.percent > 0/,'One authoritative nullable power state must drive all surfaces');
+assert.match(hardwareSource,/!\/pwm\|mosfet\/i.test\(control.kind\) && \['on', 'off', 'toggle'\]/,'Queued PWM intent must not replace observed power with optimistic status');
 assert.match(hardwareSource, /className="hardware-control__pwm"\s+onMouseDownCapture=\{guardHardwarePointerStart\} onPointerDownCapture=\{guardHardwarePointerStart\}/,
   'Both card/detail share the capture barrier before the third-party slider');
 const guardSource=readFileSync(new URL('../src/pwmCard.ts',import.meta.url),'utf8');

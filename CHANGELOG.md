@@ -8,6 +8,9 @@ retroactively attributed to an older download.
 
 ### 🎛️ Hardware controls
 
+- PWM indicators and On/Off selection share confirmed power state. Unknown or
+  unavailable samples stay neutral; queued requests no longer fake PWM status.
+
 - RF transport errors show a concise translated timeout/connection headline;
   original diagnostics remain under Details. Connection-loss toasts and OSD
   stay actionable rather than displaying nested operating-system paragraphs.

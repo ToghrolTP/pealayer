@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { hardwareAvailability, hardwareLabels, hardwareOutputsAvailable } from '../hardwareAvailability';
 import { reconcilePWMDrafts } from '../pwmDrafts';
 import { hardwareControlIdentity } from '../hardwareIdentity';
-import { defaultPwmCard, guardHardwarePointerStart, pwmActionVisible, pwmIndicatorAction, pwmRowActions } from '../pwmCard';
+import { defaultPwmCard, guardHardwarePointerStart, observedControlActive, powerActionSelected, pwmActionVisible, pwmIndicatorAction, pwmRowActions } from '../pwmCard';
 import { RfManager } from './RfManager';
 import { PwmPolicyEditor } from './PwmPolicyEditor';
 import { PublishingAuthority } from './PublishingAuthority';
@@ -167,9 +167,10 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
     : melodies[0]?.name ?? '';
   const updatePresentation = (key: string, fields: Record<string, unknown>) =>
     sendCmd('hardware.presentation.update', { key, fields });
-  const displayedActive = (control: HardwareControl) => optimisticActive[control.key]?.value ?? Boolean(control.active);
+  const displayedActive = (control: HardwareControl) => /pwm|mosfet/i.test(control.kind)
+    ? observedControlActive(control) : optimisticActive[control.key]?.value ?? observedControlActive(control);
   useEffect(() => {
-    const authoritative = new Map((details?.controls ?? []).map((control) => [control.key, Boolean(control.active)]));
+    const authoritative = new Map((details?.controls ?? []).map((control) => [control.key, observedControlActive(control)]));
     const now = Date.now();
     setOptimisticActive((current) => {
       const next = { ...current };
@@ -185,7 +186,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
   }, [details]);
   const invokeAction = (control: HardwareControl, action: HardwareAction) => {
     const verb = action.verb.toLowerCase();
-    if (!isMotionControl(control) && ['on', 'off', 'toggle'].includes(verb)) {
+    if (!isMotionControl(control) && !/pwm|mosfet/i.test(control.kind) && ['on', 'off', 'toggle'].includes(verb)) {
       const value = verb === 'on' ? true : verb === 'off' ? false : !displayedActive(control);
       setOptimisticActive((current) => ({ ...current, [control.key]: { value, startedAt: Date.now() } }));
     }
@@ -201,6 +202,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
     });
   };
   const toggleAction = (control: HardwareControl) => {
+    if (displayedActive(control) === undefined) return control.actions.find((action) => action.verb.toLowerCase() === 'toggle');
     const wanted = displayedActive(control) ? 'off' : 'on';
     return control.actions.find((action) => action.verb.toLowerCase() === wanted)
       ?? control.actions.find((action) => action.verb.toLowerCase() === 'toggle');
@@ -266,7 +268,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
     ? pwmRowActions(pwmPreferences, control.actions)
     : control.actions.filter((action) => !isStopAction(action) || displayedActive(control));
   const indicatorAction = (control: HardwareControl) => /pwm|mosfet/i.test(control.kind)
-    ? pwmIndicatorAction(pwmPreferences, control.actions, control.percent == null ? undefined : control.percent > 0)
+    ? pwmIndicatorAction(pwmPreferences, control.actions, displayedActive(control))
     : toggleAction(control);
   const pwmEditor = (control: HardwareControl) => {
     const value = pwmDrafts[control.key] ?? control.percent;
@@ -339,7 +341,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
             { key: 'rename', label: tr(locale, 'Rename'), icon: <ExperimentOutlined /> },
             { key: 'assign-rf', label: tr(locale, 'Assign RF code…'), disabled: !control.actions.length },
             ...channelFolders.moveItems(control),
-            immediateToggle ? { key: 'toggle', label: tr(locale, active ? 'Off' : 'On'), icon: <PoweroffOutlined /> } : null,
+            immediateToggle ? { key: 'toggle', label: tr(locale, immediateToggle.name || immediateToggle.verb), icon: <PoweroffOutlined /> } : null,
             { type: 'divider' as const },
             { key: 'visibility', label: tr(locale, control.hidden ? 'Show in Hardware Monitor' : 'Hide from Hardware Monitor'), icon: control.hidden ? <EyeOutlined /> : <EyeInvisibleOutlined /> },
             { key: 'lock', label: tr(locale, control.locked ? 'Unlock' : 'Lock'), icon: control.locked ? <UnlockOutlined /> : <LockOutlined /> },
@@ -401,10 +403,10 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
             </div>
             <button
               type="button"
-              className={`hardware-control__indicator ${active ? 'is-on' : ''}`}
+              className={`hardware-control__indicator ${active ? 'is-on' : ''} ${active === undefined ? 'is-unknown' : ''}`}
               style={{ '--indicator-color': control.indicator_color || control.color || 'var(--green)' } as React.CSSProperties}
-              aria-label={tr(locale, isMotionControl(control) ? control.direction === 'up' ? 'Up' : control.direction === 'down' ? 'Down' : control.direction === 'stop' ? 'Stopped' : 'State unavailable from the board' : active ? 'On' : 'Off')}
-              title={tr(locale, immediateToggle?.name || (active ? 'Off' : 'On'))}
+              aria-label={tr(locale, isMotionControl(control) ? control.direction === 'up' ? 'Up' : control.direction === 'down' ? 'Down' : control.direction === 'stop' ? 'Stopped' : 'State unavailable from the board' : active === undefined ? 'State unavailable from the board' : active ? 'On' : 'Off')}
+              title={tr(locale, immediateToggle?.name || (active === undefined ? 'State unavailable from the board' : active ? 'Off' : 'On'))}
               disabled={!immediateToggle || control.locked || !outputAvailable || Boolean(state.estop_active)}
               {...(immediateToggle ? actionInputProps(control, immediateToggle) : {})}
             />
@@ -414,8 +416,8 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
                 <Button
                   disabled={control.locked || !outputAvailable || (state.estop_active && action.verb !== 'stop')}
                   danger={action.verb === 'stop'}
-                  className={powerActionClass(action.verb, (action.verb.toLowerCase() === 'on' && active) || (action.verb.toLowerCase() === 'off' && !active))}
-                  type={(action.verb.toLowerCase() === 'on' && active) || (action.verb.toLowerCase() === 'off' && !active) ? 'primary' : 'default'}
+                  className={powerActionClass(action.verb, powerActionSelected(action.verb, active))}
+                  type={powerActionSelected(action.verb, active) ? 'primary' : 'default'}
                   {...actionInputProps(control, action)}
                 >
                   {action.name || action.verb}
@@ -573,7 +575,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
                       setDropKey(null);
                     }}
                   >
-                    <span className={`hardware-control__indicator ${active ? 'is-on' : ''}`} style={{ '--indicator-color': control.indicator_color || control.color || 'var(--green)' } as React.CSSProperties} />
+                    <span className={`hardware-control__indicator ${active ? 'is-on' : ''} ${active === undefined ? 'is-unknown' : ''}`} style={{ '--indicator-color': control.indicator_color || control.color || 'var(--green)' } as React.CSSProperties} />
                     <span
                       className="channel-manager__drag"
                       draggable={!isRawSeatRelay(control)}
@@ -621,7 +623,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
                     <Space.Compact className="channel-manager__live">
                       {liveActions.map((action) => {
                         const verb = action.verb.toLowerCase();
-                        const selected = (verb === 'on' && active) || (verb === 'off' && !active);
+                        const selected = powerActionSelected(verb, active);
                         const icon = /up/.test(verb) ? <ArrowUpOutlined /> : /down/.test(verb) ? <ArrowDownOutlined /> : verb === 'on' ? <ThunderboltOutlined /> : <PoweroffOutlined />;
                         const label = verb === 'on' ? tr(locale, 'On') : verb === 'off' ? tr(locale, 'Off') : action.name || action.verb;
                         return <Tooltip title={action.name || action.verb} key={action.id}><Button size="small" icon={icon} className={powerActionClass(verb, selected)} type={selected ? 'primary' : 'default'} danger={verb === 'stop'} disabled={control.locked || (state.estop_active && verb !== 'stop')} {...actionInputProps(control, action)}>{label}</Button></Tooltip>;

@@ -8984,8 +8984,7 @@ fn web_hardware_details(
                         crate::ui::layout::MotionDirectionState::Unknown => None,
                     }
                 });
-            let pwm_percent = pwm_channel.and_then(|channel| {
-                let status_component = capabilities.status_led.as_ref().and_then(|status| {
+            let status_component = pwm_channel.and_then(|channel| capabilities.status_led.as_ref().and_then(|status| {
                     let role = capabilities
                         .pwm_channels
                         .iter()
@@ -9000,12 +8999,20 @@ fn web_hardware_details(
                     } else {
                         None
                     }
-                });
+                }));
+            let pwm_percent = pwm_channel.and_then(|channel| {
                 if let Some(value) = status_component {
                     return Some(f64::from(value) * 100.0 / 255.0);
                 }
                 capabilities.observed_pwm_percent(channel)
             });
+            // Ordinary PWM is not a relay or seat. Raw nonzero stays On even
+            // when logical display rounds to 0.0%; unavailable stays unknown.
+            let active = if let Some(channel) = pwm_channel {
+                if capabilities.board_connected && capabilities.telemetry.pwm_available == Some(true) {
+                    status_component.map(|value| value > 0).or_else(|| capabilities.observed_pwm_active(channel))
+                } else { None }
+            } else { active };
             serde_json::json!({
                 "key": control.key,
                 "kind": control.kind,
@@ -11102,7 +11109,8 @@ pub(crate) mod tests {
 
     #[test]
     fn web_hardware_details_publish_every_sampled_pwm_channel() {
-        let mut capabilities = crate::four_d::controller::HardwareCapabilities::default();
+        let mut capabilities = crate::four_d::controller::HardwareCapabilities { board_connected: true, ..Default::default() };
+        capabilities.telemetry.pwm_available = Some(true);
         capabilities.melodies = vec![crate::four_d::controller::HardwareMelody {
             name: "attention".to_string(),
             notes: vec![crate::four_d::controller::HardwareMelodyNote {
@@ -11134,6 +11142,7 @@ pub(crate) mod tests {
             web_hardware_details(&capabilities, crate::config::MotionControlMode::default());
         let percent = details["controls"][0]["percent"].as_f64().unwrap();
         assert!((percent - (2048.0 * 100.0 / 4095.0)).abs() < f64::EPSILON);
+        assert_eq!(details["controls"][0]["active"], true, "ordinary nonzero PWM must not project null/Off");
         assert_eq!(details["melodies"][0]["name"], "attention");
         assert_eq!(details["melodies"][0]["duration_ms"], 125);
         assert_eq!(details["buzzer"]["playing"], true);
@@ -11145,6 +11154,19 @@ pub(crate) mod tests {
         assert_eq!(logical["controls"][0]["percent"].as_f64(), Some(75.123),
             "Web indicators and sliders must use coordinator logical percent, not gamma/PWM raw");
         capabilities.telemetry.pwm_logical_percent_milli.clear();
+        capabilities.telemetry.pwm_values[3] = Some(1);
+        capabilities.telemetry.pwm_logical_percent_milli = vec![None, None, None, Some(0)];
+        let quantum = web_hardware_details(&capabilities, Default::default());
+        assert_eq!(quantum["controls"][0]["active"], true, "nonzero raw quantum is On even at rounded logical zero");
+        capabilities.telemetry.pwm_values[3] = Some(0);
+        assert_eq!(web_hardware_details(&capabilities, Default::default())["controls"][0]["active"], false);
+        capabilities.telemetry.pwm_values[3] = None;
+        capabilities.telemetry.pwm_logical_percent_milli.clear();
+        assert!(web_hardware_details(&capabilities, Default::default())["controls"][0]["active"].is_null());
+        capabilities.telemetry.pwm_values[3] = Some(2048);
+        capabilities.telemetry.pwm_available = Some(false);
+        assert!(web_hardware_details(&capabilities, Default::default())["controls"][0]["active"].is_null(), "retained samples are not current power when provider is unavailable");
+        capabilities.telemetry.pwm_available = Some(true);
 
         capabilities.controls[0].key = "pwm.15".to_string();
         capabilities.pwm_channels[0] = crate::four_d::controller::HardwareOutput {
@@ -11164,6 +11186,7 @@ pub(crate) mod tests {
             web_hardware_details(&capabilities, crate::config::MotionControlMode::default());
         let percent = details["controls"][0]["percent"].as_f64().unwrap();
         assert!((percent - (160.0 * 100.0 / 255.0)).abs() < f64::EPSILON);
+        assert_eq!(details["controls"][0]["active"], true, "status RGB uses its actual role component, not an unrelated raw zero");
     }
 
     #[test]
