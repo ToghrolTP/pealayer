@@ -53,6 +53,8 @@ pub struct Toast {
     pub id: String,
     pub title: String,
     pub message: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub details: Option<String>,
     pub severity: Severity,
     pub source: String,
     pub created_at_ms: u64,
@@ -84,6 +86,13 @@ impl MessageHub {
         source: &str,
         now: u64,
     ) -> Result<String, String> {
+        self.publish_with_details(request, source, now, None)
+    }
+    fn publish_with_details(&mut self, request: ToastRequest, source: &str, now: u64,
+        details: Option<String>) -> Result<String, String> {
+        if details.as_ref().is_some_and(|text| text.chars().count() > 8192) {
+            return Err("notification details exceed 8192 characters".into());
+        }
         request.validate()?;
         self.expire(now);
         let id = request
@@ -97,6 +106,7 @@ impl MessageHub {
             id: id.clone(),
             title: request.title,
             message: request.message,
+            details,
             severity: request.severity,
             source: source.into(),
             created_at_ms: now,
@@ -143,6 +153,10 @@ pub fn publish(request: ToastRequest, source: &str) -> Result<String, String> {
         .map_err(|_| "message service unavailable".to_string())?
         .publish(request, source, now_ms())
 }
+pub fn publish_detailed(request: ToastRequest, source: &str, details: String) -> Result<String, String> {
+    hub().lock().map_err(|_| "message service unavailable".to_string())?
+        .publish_with_details(request, source, now_ms(), Some(details))
+}
 pub fn dismiss(id: &str) {
     if let Ok(mut hub) = hub().lock() {
         hub.dismiss(id);
@@ -166,6 +180,16 @@ mod tests {
             severity: Severity::Success,
             timeout_ms: 1000,
         }
+    }
+    #[test]
+    fn concise_notification_retains_bounded_original_diagnostics() {
+        let mut hub = MessageHub::default();
+        hub.publish_with_details(request("connection"), "hardware", 10, Some("original transport diagnostic".into())).unwrap();
+        let state = hub.snapshot(20);
+        assert_eq!(state.toasts[0].message, "Ready");
+        assert_eq!(state.toasts[0].details.as_deref(), Some("original transport diagnostic"));
+        assert!(hub.publish_with_details(request("connection"), "hardware", 30, Some("x".repeat(8193))).is_err());
+        assert_eq!(hub.snapshot(40).toasts[0].details, state.toasts[0].details, "rejected details cannot erase last-good toast");
     }
     #[test]
     fn upsert_dismiss_and_expire_are_shared() {
