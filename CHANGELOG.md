@@ -11,6 +11,8 @@ retroactively attributed to an older download.
 - RF transport errors show a concise translated timeout/connection headline;
   original diagnostics remain under Details. Connection-loss toasts and OSD
   stay actionable rather than displaying nested operating-system paragraphs.
+- Secondary clicks over native and Web MOSFET sliders open the card menu without changing
+  brightness or starting a drag. Primary dragging and keyboard edits remain available.
 
 - Channel Settings exposes the coordinator's shared Full/Restore On policy and
   confirmed remembered brightness, with explicit Apply and live event updates.

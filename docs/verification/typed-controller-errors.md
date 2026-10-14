@@ -36,9 +36,9 @@ native/Web source wiring. Tests touching configuration inherit the isolated
 PEALAYER_CONFIG_FILE from CI. No local compilation/tests or production socket,
 runtime, output, policy or RF writes are performed by this source lane.
 
-This branch starts at merged191, while urgent safety192 is frozen separately.
-Before merging/delivering, integrate the normally merged safety fix and require
-the exact resulting hosted gates. Runtime owner alone deploys the verified package
+This branch integrates normally merged safety192 with a merge commit preserving
+both changes. Require the exact resulting hosted gates before merging/delivering.
+Runtime owner alone deploys the verified package
 against the validated destination DLL and checks real UI/error disclosure, health,
 RPC, PCController connectivity, real media and crash events. This does not prove
 that the underlying intermittent controller timeout or native capture problem is
