@@ -1,4 +1,4 @@
-# Compact saved RF rules · integration WIP
+# Compact saved RF rules · source and live Web verification
 
 Owner: [#187](https://github.com/ToghrolTP/pealayer/issues/187).
 Shared RF source owner: [PR194](https://github.com/ToghrolTP/pealayer/pull/194).
@@ -21,7 +21,7 @@ uses the existing documented Vite SSR loader with real React/Antd, translation a
 CSS modules, middleware-only/no HTTP or WebSocket listener/no watchers, and closes
 the fixture in finally. No compiler-version fallback or skipped assertion is added.
 
-**Integrated source; not deployed or visually accepted.** The live coordinator
+**Integrated source with bounded live Web acceptance; native and physical gates remain open.** The live coordinator
 superseded the former blanket shared-file hold: reversible work proceeds on our
 independent PR197 branch, without editing/replacing PR194's branch or history.
 RfManager now selects the renderer only in its existing compact layout. Desktop
@@ -42,3 +42,47 @@ checks as verification of this new parent integration.
 No local tests/builds or runtime/physical actions. Production screenshots/values
 remain local, not committed. Native visual/smoke and physical verification remain
 independent gates; a compiled unused renderer is not application acceptance.
+
+## Live Web acceptance (2026-10-14)
+
+This supersedes the pre-deployment checkpoint above. The runtime owner installed
+the exact successful Windows artifact from tested commit
+`f88a29a530c1be1e2c2e043ee12b8c26ef3ab82f`, whose complete tree matches the normal
+merge `96fc6c2459d540eddf5d94502f3552853cb81264`. The running executable reports
+the literal tested commit; it is not relabelled as a merged-head package. The
+application's executable-only updater preserved the destination's validated
+libmpv pair and a private configuration backup. Current health/RPC respond,
+real media remains loaded and paused, and no new relevant Application Error/WER
+event was observed during the bounded verification.
+
+Actual Computer Use verified both card right-click Assign RF code and Manage
+dialog Assign RF code, correct selected-channel scope and disabled incomplete
+Save. At a 325px viewport, the former 520px table in a 220px container is now
+four 220px cards. Summary/ID client and scroll widths are both 198px; every Edit
+button's right edge is 254px, inside the visible pane. All four gesture summaries
+and Edit controls are visible in the private current screenshot. At 1100x780,
+the existing desktop table is 811px wide inside a 900px dialog; the temporary
+viewport override was reset after checking.
+
+Edit was exercised on Tap in the compact layout and Hold in the desktop layout.
+Both opened the correct existing identity, signal, gesture and command. The
+verification did not Save, enable/disable a rule, learn/transmit, change policy
+or dispatch an actuator action. Controller ownership/generation, the selected
+output, its saved recall and reset/error counters remained unchanged across the
+UI check. Existing internal gesture rules are preserved. Persian Piper guidance
+was played, and the selected-channel form remains available for the human.
+
+Native and physical acceptance remain open. Windows Computer Use capture failed
+with FrameArrived/window-capture timeout after one refreshed recovery. The
+maintained passive occluded capture was black and its foreground capture showed
+another application; neither is evidence of the current native Pealayer UI.
+Private captures stay local. The current standalone smoke-test has not been
+confirmed after automatic launch review returned `blocked by policy`; it was not
+retried through another launcher. The reported physical MOSFET blackout at full
+brightness is not declared resolved by these software indicators or by SSR.
+
+No project compilation or test runner ran on the production host. Source tests
+and packaging passed on hosted CI; this bounded live Web result complements
+those checks. Further physical/controller-runtime work requires coordinated
+ownership and independent installed-package provenance, while native capture
+and smoke validation retain their explicit verification limits.
