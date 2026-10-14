@@ -675,7 +675,7 @@ const App: React.FC = () => {
         },
       }}
     >
-      <SharedToasts snapshot={state.messages} connected={connected} dismiss={id => sendCmd('pealayer.toast.dismiss', { id })} />
+      <SharedToasts snapshot={state.messages} connected={connected} locale={runtime?.locale || 'en'} dismiss={id => sendCmd('pealayer.toast.dismiss', { id })} />
       <PublishingAuthority state={state} sendCmd={sendCmd} locale={runtime?.locale ?? 'en'} />
       <RemoteLocationDialog state={state.remote_browser} connected={connected} base={apiBaseUrl} sendCmd={sendCmd} autoInspect={appConfig?.open_url_fetch_remote_info !== false} />
       <Layout className="app-shell">

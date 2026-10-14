@@ -8,6 +8,7 @@ import { uniqueRfBindingName, rfBindingNameConflicts } from '../rfBindingNames';
 import { tr, type UiLocale } from '../i18n';
 import { rfKey, rfPresent, RfReceptionSession } from '../rf-reception';
 import type { RfLearnPreferences, RfReception, RfSignal } from '../rf-reception';
+import { controllerErrorCaption } from '../controllerErrors';
 
 type Action = { type: string; app_kind?: string; app_target?: string; app_value?: string; action_id?: string; command?: string; macro?: string; virtual_key?: string; hold_ms?: number; executable?: string; script?: string; detached?: boolean; args?: string[]; event?: string; rf?: Waveform };
 type Waveform = { code: number; bits: number; protocol: number; pulse_us: number; repeats?: number };
@@ -16,7 +17,7 @@ type Entry = Waveform & { id: number; name?: string; code_display: string; actio
 type Application = { id: string; surface: string; values?: { app_actions?: string } };
 type MappingOption = { action: string; targets: string[]; behaviors: string[]; behavior_labels?:Record<string,string> };
 type Catalog = { receptions?: RfReception[]; preferences?: RfLearnPreferences; host_instance_id?:string; connection_generation?:number; connected?: boolean; entries?: Entry[]; entries_sampled?: boolean; board_error?: string; bindings?: Binding[]; learning?: { active: boolean; remaining_ms: number; learned: number }; activity?: { id: number; text: string; time: string; rf_code: number; rf_bits: number; rf_protocol: number }[]; hostname?: string; action_types?: string[]; gestures?: string[]; applications?: Application[]; effects?: { name: string; reference: string }[]; peripherals?: { controls: RfControl[] }; board_mapping_options?: MappingOption[]; keyboard?: {allowed?: string[]} };
-export type RfSnapshot = { catalog?: Catalog; pending?: boolean; error?: string; error_detail?: {kind?: string; resource?: string; retryable?: boolean; retry_after_ms?: number}; last_result?: unknown; last_operation?: string };
+export type RfSnapshot = { catalog?: Catalog; pending?: boolean; error?: string; error_detail?: {kind?: string; resource?: string; retryable?: boolean; retry_after_ms?: number; transport_failed?: boolean}; last_result?: unknown; last_operation?: string };
 type Props = { rf?: RfSnapshot; hardwareConnected?: boolean; locale?: UiLocale; sendCmd: (command: string, payload?: Record<string, unknown>) => void;
   assignment?: { key: string; name: string; nonce: number } };
 const blank = (): Binding => ({ name: '', enabled: true, cooldown_ms: 250, match: { kind: 'rf.gesture', source: 'rf', rf_code: 0, rf_bits: 24, rf_protocol: 1, gesture: 'down' }, actions: [{ type: 'control', action_id: '' }] });
@@ -104,7 +105,17 @@ export const RfManager: React.FC<Props> = ({ rf, hardwareConnected, sendCmd, ass
         <Button disabled={!liveConnected} loading={rf?.pending} icon={<ReloadOutlined />} onClick={() => command('catalog', { read_board: true })}>Refresh</Button>
       </Space>
       {!liveConnected && <Alert type="info" showIcon title="Showing last known RF buttons" description="Connect PCController to learn or save. Your current draft stays open." style={{marginBottom:12}} />}
-      {rf?.error && <Alert type="error" showIcon message={rf.error} description={rf.error_detail && <><div>{rf.error_detail.retryable ? 'You can retry when the controller is ready.' : ''}</div><details><summary>Details</summary>{rf.error_detail.kind && <div>Kind: {human(rf.error_detail.kind)}</div>}{rf.error_detail.resource && <div>Resource: {human(rf.error_detail.resource)}</div>}{rf.error_detail.retry_after_ms != null && <div>Retry after: {rf.error_detail.retry_after_ms} ms</div>}</details></>} style={{ marginBottom: 12 }} />}
+      {rf?.error && <Alert type="error" showIcon
+        message={controllerErrorCaption(rf.error_detail) ? tr(locale, controllerErrorCaption(rf.error_detail)!) : rf.error}
+        description={<>
+          <div>{rf.error_detail?.transport_failed ? tr(locale, 'Check the connection and current state before retrying')
+            : rf.error_detail?.retryable ? tr(locale, 'You can retry when the controller is ready.') : ''}</div>
+          <details><summary>{tr(locale, 'Details')}</summary><div style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>{rf.error}</div>
+            {rf.error_detail?.kind && <div>Kind: {human(rf.error_detail.kind)}</div>}
+            {rf.error_detail?.resource && <div>Resource: {human(rf.error_detail.resource)}</div>}
+            {rf.error_detail?.retry_after_ms != null && <div>Retry after: {rf.error_detail.retry_after_ms} ms</div>}
+          </details>
+        </>} style={{ marginBottom: 12 }} />}
       {catalog.board_error && <Alert type="warning" showIcon message={catalog.board_error} style={{ marginBottom: 12 }} />}
       <Tabs activeKey={tab} onChange={setTab} items={[
         { key: 'assignments', label: 'Assignments', children: <>

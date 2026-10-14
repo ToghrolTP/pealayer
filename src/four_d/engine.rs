@@ -181,7 +181,7 @@ impl HardwareTransport {
     ) -> Result<Option<crate::four_d::controller::HardwareCapabilities>, String> {
         match self {
             Self::Controller(client) => {
-                client.verify_selected_coordinator()?;
+                client.verify_selected_coordinator().map_err(|error| error.message)?;
                 client.isolated_hardware_capabilities().map(Some)
             }
             Self::DirectSerial { .. } => Ok(None),
@@ -202,7 +202,7 @@ impl HardwareTransport {
         match self {
             Self::Controller(client) => {
                 if method.starts_with("controller.rf.") {
-                    client.verify_selected_coordinator().map_err(super::controller::ControllerRpcError::transport)?;
+                    client.verify_selected_coordinator()?;
                 }
                 client.call_detailed(method, params)
             }

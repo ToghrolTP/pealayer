@@ -1465,6 +1465,17 @@ impl ControllerRpcError {
         Self { message, transport_failed: false, kind: None, resource: None, retryable: false, retry_after_ms: None }
     }
     pub(crate) fn transport(message: String) -> Self { Self { transport_failed: true, ..Self::from_message(message) } }
+    fn io(context: &str, error: std::io::Error) -> Self {
+        let kind = if matches!(error.kind(), std::io::ErrorKind::TimedOut | std::io::ErrorKind::WouldBlock) {
+            "timeout"
+        } else { "connection_unavailable" };
+        Self { transport_failed: true, kind: Some(kind.into()), resource: Some("pccontroller".into()),
+            retryable: true, ..Self::from_message(format!("{context}: {error}")) }
+    }
+    fn deadline() -> Self {
+        Self { transport_failed: true, kind: Some("timeout".into()), resource: Some("pccontroller".into()),
+            retryable: true, ..Self::from_message("read PCController JSON-RPC response: request deadline exceeded".into()) }
+    }
     pub(crate) fn is_resource_busy(&self, resource: &str) -> bool {
         self.kind.as_deref() == Some("resource_busy")
             && self.resource.as_deref() == Some(resource)
@@ -1518,12 +1529,12 @@ fn read_controller_response(reader: &mut BufReader<TcpStream>, id: u64, deadline
     loop {
         let remaining = deadline.checked_duration_since(Instant::now())
             .filter(|remaining| !remaining.is_zero())
-            .ok_or_else(|| ControllerRpcError::transport("read PCController JSON-RPC response: request deadline exceeded".into()))?;
+            .ok_or_else(ControllerRpcError::deadline)?;
         reader.get_ref().set_read_timeout(Some(remaining))
-            .map_err(|error| ControllerRpcError::transport(format!("configure PCController read timeout: {error}")))?;
+            .map_err(|error| ControllerRpcError::io("configure PCController read timeout", error))?;
         let mut line = String::new();
         let read = reader.read_line(&mut line)
-            .map_err(|error| ControllerRpcError::transport(format!("read PCController JSON-RPC response: {error}")))?;
+            .map_err(|error| ControllerRpcError::io("read PCController JSON-RPC response", error))?;
         if read == 0 {
             return Err(ControllerRpcError::transport("PCController closed the JSON-RPC connection".into()));
         }
@@ -1541,25 +1552,27 @@ impl ControllerClient {
     /// Compare the persistent command stream with a new connection to the
     /// selected endpoint before allowing RF commands. This is a read-only
     /// admission check, never a retry of an outcome-uncertain mutation.
-    pub fn verify_selected_coordinator(&mut self) -> Result<(), String> {
+    pub(crate) fn verify_selected_coordinator(&mut self) -> Result<(), ControllerRpcError> {
         if matches!(self.backend, ControllerBackend::Embedded(_)) {
             return Ok(());
         }
-        let current = self.call("controller.snapshot", json!({}))?;
-        let mut selected = Self::connect_playback_events(&self.endpoint)
-            .map_err(|error| format!("validate selected PCController: {error}"))?;
-        let selected = selected.call("controller.snapshot", json!({}))
-            .map_err(|error| format!("validate selected PCController: {error}"))?;
+        let current = self.call_detailed("controller.snapshot", json!({}))?;
+        let context = |mut error: ControllerRpcError| {
+            error.message = format!("validate selected PCController: {}", error.message); error
+        };
+        let mut selected = Self::connect_with_timeouts(&self.endpoint, Duration::from_millis(300), Duration::from_millis(500))
+            .map_err(context)?;
+        let selected = selected.call_detailed("controller.snapshot", json!({})).map_err(context)?;
         if !same_coordinator_epoch(&current, &selected) {
-            return Err("PCController coordinator identity changed; reconnecting the command stream".into());
+            return Err(ControllerRpcError::transport("PCController coordinator identity changed; reconnecting the command stream".into()));
         }
         Ok(())
     }
     pub fn connect_playback_events(endpoint: &str) -> Result<Self, String> {
-        Self::connect_with_timeouts(endpoint, Duration::from_millis(300), Duration::from_millis(500))
+        Self::connect_with_timeouts(endpoint, Duration::from_millis(300), Duration::from_millis(500)).map_err(|error| error.message)
     }
     pub fn connect(endpoint: &str) -> Result<Self, String> {
-        Self::connect_with_timeouts(endpoint, Duration::from_secs(2), Duration::from_secs(3))
+        Self::connect_with_timeouts(endpoint, Duration::from_secs(2), Duration::from_secs(3)).map_err(|error| error.message)
     }
 
     /// Prefer the packaged in-process Host for the canonical local endpoint.
@@ -1591,33 +1604,33 @@ impl ControllerClient {
         endpoint: &str,
         connect_timeout: Duration,
         io_timeout: Duration,
-    ) -> Result<Self, String> {
+    ) -> Result<Self, ControllerRpcError> {
         let address = normalize_endpoint(endpoint)?;
         if endpoint.starts_with("udp://") {
-            let mut backend=crate::server::udp_client::Client::connect(address,connect_timeout)?;backend.set_timeout(io_timeout);
+            let mut backend=crate::server::udp_client::Client::connect(address,connect_timeout).map_err(ControllerRpcError::transport)?;backend.set_timeout(io_timeout);
             let mut client=Self{endpoint:endpoint.into(),backend:ControllerBackend::Udp(backend),registered_id:None};
-            client.call("controller.ping",json!({}))?; return Ok(client);
+            client.call_detailed("controller.ping",json!({}))?; return Ok(client);
         }
         let socket = address
             .to_socket_addrs()
-            .map_err(|error| format!("resolve PCController endpoint {address}: {error}"))?
+            .map_err(|error| ControllerRpcError::io(&format!("resolve PCController endpoint {address}"), error))?
             .next()
-            .ok_or_else(|| format!("PCController endpoint {address} resolved to no address"))?;
+            .ok_or_else(|| ControllerRpcError::transport(format!("PCController endpoint {address} resolved to no address")))?;
         let writer = TcpStream::connect_timeout(&socket, connect_timeout)
-            .map_err(|error| format!("connect to PCController at {address}: {error}"))?;
+            .map_err(|error| ControllerRpcError::io(&format!("connect to PCController at {address}"), error))?;
         writer
             .set_read_timeout(Some(io_timeout))
-            .map_err(|error| format!("configure PCController read timeout: {error}"))?;
+            .map_err(|error| ControllerRpcError::io("configure PCController read timeout", error))?;
         writer
             .set_write_timeout(Some(io_timeout))
-            .map_err(|error| format!("configure PCController write timeout: {error}"))?;
+            .map_err(|error| ControllerRpcError::io("configure PCController write timeout", error))?;
         writer
             .set_nodelay(true)
-            .map_err(|error| format!("configure PCController TCP stream: {error}"))?;
+            .map_err(|error| ControllerRpcError::io("configure PCController TCP stream", error))?;
         let reader = BufReader::new(
             writer
                 .try_clone()
-                .map_err(|error| format!("clone PCController TCP stream: {error}"))?,
+                .map_err(|error| ControllerRpcError::io("clone PCController TCP stream", error))?,
         );
         let mut client = Self {
             endpoint: endpoint.to_string(),
@@ -1628,7 +1641,7 @@ impl ControllerClient {
                 next_id: 1,
             },
         };
-        client.call("controller.ping", json!({}))?;
+        client.call_detailed("controller.ping", json!({}))?;
         Ok(client)
     }
 
@@ -1701,7 +1714,7 @@ impl ControllerClient {
         // Preparation may compile many frames, but only while playback is
         // paused. It must not weaken the short clock-feedback deadline.
         let previous_timeout = reader.get_ref().read_timeout()
-            .map_err(|error| ControllerRpcError::transport(format!("configure PCController read timeout: {error}")))?;
+            .map_err(|error| ControllerRpcError::io("configure PCController read timeout", error))?;
         let budget = if method == "controller.media.timeline.prepare" {
             Duration::from_secs(15)
         } else {
@@ -1724,7 +1737,7 @@ impl ControllerClient {
             writer
                 .write_all(b"\n")
                 .and_then(|_| writer.flush())
-                .map_err(|error| ControllerRpcError::transport(format!("write PCController JSON-RPC request: {error}")))?;
+                .map_err(|error| ControllerRpcError::io("write PCController JSON-RPC request", error))?;
 
             let response = read_controller_response(reader, id, deadline)?;
             if let Some(error) = response.get("error").filter(|value| !value.is_null()) {
@@ -1735,7 +1748,7 @@ impl ControllerClient {
         // Restore on every exit, including write/decode/EOF/timeout failures.
         // A failed preparation must not leave later controls on a 15s budget.
         reader.get_ref().set_read_timeout(previous_timeout)
-            .map_err(|error| ControllerRpcError::transport(format!("restore PCController read timeout: {error}")))?;
+            .map_err(|error| ControllerRpcError::io("restore PCController read timeout", error))?;
         if result.is_ok() && let Some(id) = reported_id { self.registered_id = Some(id); }
         result
     }
@@ -3261,6 +3274,36 @@ mod tests {
         assert!(config.apply_policy_metadata(&serde_json::json!({"remembered_known":true,
             "remembered_raw":1024,"remembered_percent":60})));
         assert_eq!(config.remembered_persisted, None, "different raw duty cannot inherit an unconfirmed persistence flag");
+    }
+    #[test]
+    fn typed_transport_timeout_is_independent_of_human_error_prose() {
+        let timeout = super::ControllerRpcError::io("read", std::io::Error::new(std::io::ErrorKind::TimedOut, "علت محلی"));
+        assert_eq!(timeout.kind.as_deref(), Some("timeout"));
+        assert_eq!(timeout.resource.as_deref(), Some("pccontroller"));
+        assert!(timeout.transport_failed && timeout.retryable);
+        assert!(timeout.message.contains("علت محلی"));
+        let different = super::ControllerRpcError::io("read", std::io::Error::new(std::io::ErrorKind::InvalidData, "timed out (os error 10060)"));
+        assert_eq!(different.kind.as_deref(), Some("connection_unavailable"), "do not classify printed English/numeric prose");
+        assert_eq!(super::ControllerRpcError::deadline().kind.as_deref(), Some("timeout"));
+    }
+    #[test]
+    fn initial_controller_ping_retains_typed_timeout_without_replaying() {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("pccontroller://{}", listener.local_addr().unwrap());
+        let (release, hold_open) = std::sync::mpsc::channel();
+        let server = thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream);
+            let mut request = String::new(); reader.read_line(&mut request).unwrap();
+            assert_eq!(serde_json::from_str::<Value>(&request).unwrap()["method"], "controller.ping");
+            hold_open.recv_timeout(Duration::from_secs(2)).unwrap();
+        });
+        let result = ControllerClient::connect_with_timeouts(&endpoint, Duration::from_millis(100), Duration::from_millis(20));
+        let error = match result { Err(error) => error, Ok(_) => panic!("silent server must time out") };
+        assert_eq!(error.kind.as_deref(), Some("timeout"));
+        assert!(error.transport_failed);
+        release.send(()).unwrap();
+        server.join().unwrap();
     }
     #[test]
     fn current_capture_contract_is_numeric_explicit_and_preserves_step_repetition() {
