@@ -6,6 +6,7 @@ import type { BoardAssignment, RfControl } from '../rf-presentation';
 import { uniqueRfBindingName, rfBindingNameConflicts } from '../rfBindingNames';
 import { tr, type UiLocale } from '../i18n';
 import { controllerErrorCaption } from '../controllerErrors';
+import { RfSavedRuleCards } from './RfSavedRuleCards';
 
 type Action = { type: string; app_kind?: string; app_target?: string; app_value?: string; action_id?: string; command?: string; macro?: string; virtual_key?: string; hold_ms?: number; executable?: string; script?: string; detached?: boolean; args?: string[]; event?: string; rf?: Waveform };
 type Waveform = { code: number; bits: number; protocol: number; pulse_us: number; repeats?: number };
@@ -69,10 +70,24 @@ export const RfManager: React.FC<Props> = ({ rf, hardwareConnected, sendCmd, ass
   const targetOptions = [...new Set(catalog.applications?.map(app => app.surface))].map(surface => ({ value: surface, label: `${surface} (all)` })).concat((catalog.applications ?? []).map(app => ({ value: app.id, label: app.id })));
   const activeBoardAction = catalog.entries?.find(entry => entry.code === draft.match.rf_code && entry.bits === draft.match.rf_bits && entry.protocol === draft.match.rf_protocol && entry.action_kind !== 0);
   const assignmentGroups = groupRfBindings(catalog.bindings ?? [], controls, assignmentControl);
-  const assignmentsTable = (bindings: Binding[]) => <Table<Binding> size="small" pagination={false} rowKey="name" dataSource={bindings} scroll={{x:520}} columns={[
-    { title: 'Enabled', width: 80, render: (_, binding) => <Checkbox disabled={!liveConnected || rf?.pending} checked={binding.enabled} onChange={e => command('binding.put', { binding: { ...binding, enabled: e.target.checked }, previous_name: binding.name })} /> },
+  const editBinding = (binding: Binding) => {
+    setAssignmentControl(undefined); setDraft(structuredClone(binding)); setPreviousName(binding.name);
+    editorRef.current?.scrollIntoView({block:'start'});
+  };
+  const setBindingEnabled = (binding: Binding, enabled: boolean) => {
+    if (!liveConnected || rf?.pending) return;
+    command('binding.put', { binding: { ...binding, enabled }, previous_name: binding.name });
+  };
+  const assignmentsTable = (bindings: Binding[]) => compact ? <RfSavedRuleCards
+    rules={bindings.map(binding => ({name:binding.name,enabled:binding.enabled,
+      gestureLabel:human(binding.match.gesture),summaries:binding.actions.map(summarize)}))}
+    disabled={!liveConnected || Boolean(rf?.pending)} locale={locale}
+    onEdit={name => {const binding=bindings.find(binding=>binding.name===name);if(binding)editBinding(binding);}}
+    onEnabled={(name,enabled) => {const binding=bindings.find(binding=>binding.name===name);if(binding)setBindingEnabled(binding,enabled);}}
+  /> : <Table<Binding> size="small" pagination={false} rowKey="name" dataSource={bindings} scroll={{x:520}} columns={[
+    { title: 'Enabled', width: 80, render: (_, binding) => <Checkbox disabled={!liveConnected || rf?.pending} checked={binding.enabled} onChange={e => setBindingEnabled(binding, e.target.checked)} /> },
     { title: 'Assignment', render: (_,binding) => <Space direction="vertical" size={2}><strong>{human(binding.match.gesture)}</strong>{binding.actions.map((action,i) => <Typography.Text key={i}>{summarize(action)}</Typography.Text>)}<Typography.Text type="secondary">{binding.name}</Typography.Text></Space> },
-    { title: '', width: 80, render: (_, binding) => <Button size="small" icon={<EditOutlined />} onClick={() => { setAssignmentControl(undefined); setDraft(structuredClone(binding)); setPreviousName(binding.name); editorRef.current?.scrollIntoView({block:'start'}); }}>Edit</Button> },
+    { title: '', width: 80, render: (_, binding) => <Button size="small" icon={<EditOutlined />} onClick={() => editBinding(binding)}>Edit</Button> },
   ]} />;
   const entryAssignments=(entry:Entry)=><Space direction="vertical" size={4}><Tag color="blue">On board · {entry.board_assignment?.label ?? 'Not reported'}</Tag>{(catalog.bindings ?? []).filter(binding=>sameSignal(binding.match,entry)).map(binding=><div key={binding.name}><strong>{binding.name} · {human(binding.match.gesture)}{!binding.enabled && ' · disabled'}</strong>{binding.actions.map((action,i)=><div key={i}>{summarize(action)}</div>)}<Typography.Text type="secondary">{executionLabel(binding.actions)}</Typography.Text></div>)}</Space>;
   const entryButtons=(entry:Entry)=><Space wrap><Button size="small" onClick={()=>editBoard(entry)}>On board…</Button><Button size="small" onClick={()=>assign(entry)}>On controller…</Button><Dropdown menu={{items:[{key:'transmit',label:'Transmit signal',disabled:rf?.pending||!liveConnected},{key:'board',label:'Edit board action'},{key:'unassign',label:'Unassign board action',disabled:rf?.pending||!liveConnected},{key:'remove',label:'Remove learned button',danger:true,disabled:rf?.pending||!liveConnected}],onClick:({key})=>{if(key==='board')editBoard(entry);if(key==='transmit')command('transmit',{code:entry.code,bits:entry.bits,protocol:entry.protocol,pulse_us:entry.pulse_us,repeats:1});if(key==='unassign')command('map',{id:entry.id,action:'none'});if(key==='remove')Modal.confirm({title:'Remove learned RF button?',onOk:()=>command('remove',{id:entry.id})});}}}><Button size="small" icon={<MoreOutlined/>} aria-label="RF button actions"/></Dropdown></Space>;

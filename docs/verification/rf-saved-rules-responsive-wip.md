@@ -21,19 +21,23 @@ uses the existing documented Vite SSR loader with real React/Antd, translation a
 CSS modules, middleware-only/no HTTP or WebSocket listener/no watchers, and closes
 the fixture in finally. No compiler-version fallback or skipped assertion is added.
 
-**Not integrated or delivered.** The active PR194 author has not yet acknowledged
-the shared-file lane. RFManager/rf.rs and the author's branch are untouched. The
-component is intentionally not called by the application until that coordination
-is cleared. Installing this checkpoint alone will not fix the production table.
+**Integrated source; not deployed or visually accepted.** The live coordinator
+superseded the former blanket shared-file hold: reversible work proceeds on our
+independent PR197 branch, without editing/replacing PR194's branch or history.
+RfManager now selects the renderer only in its existing compact layout. Desktop
+Table, waveform groups and all other parent consumers remain unchanged. Both
+layouts reuse the existing draft clone, previous_name and editor scrolling;
+mutation callbacks retain pending/disconnected guards. Parent source-wiring
+contracts complement the actual component SSR, not a browser interaction test.
 
-Next: obtain owner acknowledgment/merged194 base; import the renderer only for the
-manager's existing compact layout, preserve desktop Table and grouped waveform
-headers/receipt indicators, and reuse the existing explicit Edit and enable
-callbacks (including previous_name and dirty-draft behavior). Do not reset modal
-reception baselines on resize/refresh, change learning preferences, autoSave, or
-replace mappings. Then require exact integrated hosted gates and normal merge,
-send tested tree/package receipt to the sole runtime owner and verify325px plus
-desktop rendering with real callbacks and no output/learning/binding mutations.
+Before merge: inspect Git merge-tree against exact PR194 head
+e55b857144c089be669f3a0b41e9f8fef5784097 and publish preservation/conflict evidence;
+require fresh exact integrated hosted gates and review, then normal merge. Do not
+reset modal reception baselines on resize/refresh, change learning preferences,
+autoSave, or replace mappings. Send tested tree/package receipt to the sole runtime
+owner and verify325px plus desktop rendering with real callbacks and no output,
+learning or binding mutations. Never treat the unintegrated checkpoint's green
+checks as verification of this new parent integration.
 
 No local tests/builds or runtime/physical actions. Production screenshots/values
 remain local, not committed. Native visual/smoke and physical verification remain
