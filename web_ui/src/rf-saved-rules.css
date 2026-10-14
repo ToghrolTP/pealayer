@@ -1,0 +1,10 @@
+.rf-saved-rule-list { display: grid; gap: 8px; min-width: 0; max-width: 100%; }
+.rf-saved-rule-card { min-width: 0; width: 100%; max-width: 100%; box-sizing: border-box; }
+.rf-saved-rule-card .ant-card-body { padding: 10px; min-width: 0; }
+.rf-saved-rule-header { display: grid; grid-template-columns: minmax(0, 1fr) auto; align-items: start; gap: 8px; }
+.rf-saved-rule-header .ant-checkbox-wrapper { min-width: 0; align-items: center; white-space: normal; margin-inline-end: 0; }
+.rf-saved-rule-caption { min-width: 0; overflow-wrap: anywhere; white-space: normal; }
+.rf-saved-rule-edit { justify-self: end; box-sizing: border-box; }
+.rf-saved-rule-details { display: grid; gap: 3px; min-width: 0; margin-top: 6px; }
+.rf-saved-rule-summary, .rf-saved-rule-id { display: block; min-width: 0; max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.rf-saved-rule-id { font-size: .82em; }
