@@ -291,6 +291,12 @@ pub struct HardwareEffectGroup {
 }
 
 impl HardwareCapabilities {
+    pub(crate) fn observed_pwm_active(&self, channel: u8) -> Option<bool> {
+        if !self.board_connected || self.telemetry.pwm_available != Some(true) { return None; }
+        self.telemetry.pwm_values.get(usize::from(channel)).copied().flatten()
+            .or_else(|| (self.telemetry.pwm_channel == Some(channel)).then_some(self.telemetry.pwm_value).flatten())
+            .filter(|raw| *raw <= 4095).map(|raw| raw > 0)
+    }
     pub(crate) fn observed_pwm_percent(&self, channel: u8) -> Option<f64> {
         if let Some(value) = self.telemetry.pwm_logical_percent_milli
             .get(usize::from(channel)).copied().flatten() {
@@ -3274,6 +3280,22 @@ mod tests {
         assert!(config.apply_policy_metadata(&serde_json::json!({"remembered_known":true,
             "remembered_raw":1024,"remembered_percent":60})));
         assert_eq!(config.remembered_persisted, None, "different raw duty cannot inherit an unconfirmed persistence flag");
+    }
+    #[test]
+    fn observed_pwm_power_is_known_raw_state_not_percent_or_recall() {
+        let mut capabilities = super::HardwareCapabilities { board_connected:true, ..Default::default() };
+        capabilities.telemetry.pwm_available = Some(true);
+        capabilities.telemetry.pwm_values = vec![Some(0),Some(1),None,Some(5000)];
+        capabilities.telemetry.pwm_logical_percent_milli = vec![None,Some(0)];
+        assert_eq!(capabilities.observed_pwm_active(0),Some(false));
+        assert_eq!(capabilities.observed_pwm_active(1),Some(true));
+        assert_eq!(capabilities.observed_pwm_active(2),None);
+        assert_eq!(capabilities.observed_pwm_active(3),None);
+        capabilities.telemetry.pwm_available = Some(false);
+        assert_eq!(capabilities.observed_pwm_active(1),None);
+        capabilities.telemetry.pwm_available = Some(true);
+        capabilities.board_connected = false;
+        assert_eq!(capabilities.observed_pwm_active(1),None);
     }
     #[test]
     fn typed_transport_timeout_is_independent_of_human_error_prose() {

@@ -1277,6 +1277,7 @@ html[data-motion="disabled"] .app-statusbar .status-widget { transition: none; }
   .ant-modal-header { flex: 0 0 auto; }
   .ant-modal-footer { flex: 0 0 auto; display: flex; align-items: center; flex-wrap: wrap; justify-content: flex-end; gap: 8px; }
 }
+.hardware-control__indicator.is-unknown { border-style: dashed; background: transparent; box-shadow: none; opacity: .55; }
 .rf-form-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 0 16px; }
 .cue-inspector { display: grid; gap: 10px; min-width: 0; }
 .cue-inspector__section { min-width: 0; padding: 12px; border: 1px solid var(--line); border-radius: 10px; background: var(--surface-1); }
