@@ -43,7 +43,6 @@ No local tests/builds or runtime/physical actions. Production screenshots/values
 remain local, not committed. Native visual/smoke and physical verification remain
 independent gates; a compiled unused renderer is not application acceptance.
 
-
 ## Live Web acceptance (2026-10-14)
 
 This supersedes the pre-deployment checkpoint above. The runtime owner installed
