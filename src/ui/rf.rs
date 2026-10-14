@@ -131,7 +131,7 @@ impl Default for RfState {
 impl RfState {
     fn assignment_dirty(&self) -> bool { self.draft != self.assignment_baseline }
     fn board_dirty(&self) -> bool { self.board_map != self.board_baseline }
-    fn dirty(&self) -> bool {
+    pub(crate) fn dirty(&self) -> bool {
         self.assignment_dirty() || self.board_dirty()
             || (self.preferences_draft.is_object() && self.catalog["preferences"].is_object()
                 && self.preferences_draft != self.catalog["preferences"])

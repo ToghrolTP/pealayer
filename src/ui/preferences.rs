@@ -64,7 +64,7 @@ impl PreferencesDraft {
         }
     }
 
-    fn is_dirty(&self) -> bool {
+    pub(crate) fn is_dirty(&self) -> bool {
         self.config != self.saved_config
     }
 

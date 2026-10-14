@@ -871,6 +871,10 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
         },
         ("GET", "/api/client/status")=>HttpResponse::json(200,"OK",crate::peer::diagnostics().to_string()),
         ("GET", "/api/process/status")=>HttpResponse::json(200,"OK",crate::process_control::status().to_string()),
+        ("GET", "/api/process/authoring") => match crate::authoring::inspect(&state.command_tx,&state.egui_ctx) {
+            Ok(value)=>HttpResponse::json(200,"OK",serde_json::to_string(&value).unwrap_or_default()),
+            Err(error)=>HttpResponse::json(503,"Service Unavailable",serde_json::json!({"state":"unknown","safe_to_replace_native":false,"error":error}).to_string()),
+        },
         ("POST", "/api/process/command") => {
             if !std::str::from_utf8(&request.body).ok()
                 .and_then(|payload|crate::platform::interop::parse_interop_request(payload).ok())

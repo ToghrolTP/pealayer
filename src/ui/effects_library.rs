@@ -15,6 +15,12 @@ pub(crate) fn presented_identity(app: &PealayerApp, reference: &str, name: &str,
 }
 
 fn original_draft_id() -> egui::Id { egui::Id::new("effects-designer-original-draft") }
+pub(crate) fn unsaved_designer(app:&PealayerApp,ctx:&egui::Context) -> Option<bool> {
+    if !app.show_effect_library_editor {return Some(false);}
+    let draft=&app.effect_library_draft;
+    if draft.is_new && (!draft.name.is_empty() || !draft.steps.is_empty() || !draft.program_json.is_empty()) {return Some(true);}
+    ctx.data(|data|data.get_temp::<ControllerEffectDraft>(original_draft_id())).map(|original|original!=*draft)
+}
 pub(crate) fn retain_original_draft(app: &PealayerApp, ctx: &egui::Context) {
     let original = ctx.data(|data| data.get_temp::<ControllerEffectDraft>(original_draft_id()));
     if original.is_none_or(|original| original.reference != app.effect_library_draft.reference) {

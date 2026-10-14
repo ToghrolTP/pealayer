@@ -122,6 +122,8 @@ impl LaunchReceiptCache {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum InteropCommand {
+    #[serde(skip)]
+    InspectAuthoring { request_id: u64 },
     RfControl { operation: String, #[serde(default)] params: Value },
     OpenRfManager,
     Launch {
@@ -539,7 +541,7 @@ fn valid_timeline_track_key(value: &str) -> bool {
 
 impl InteropCommand {
     pub fn is_process_local(&self) -> bool {
-        matches!(self, Self::QuitLocal | Self::GetProcessStatus | Self::ConnectPeer { .. })
+        matches!(self, Self::QuitLocal | Self::GetProcessStatus | Self::ConnectPeer { .. } | Self::InspectAuthoring { .. })
     }
 
     pub fn query_result(&self) -> Option<Value> {
@@ -859,7 +861,7 @@ pub fn command_catalog() -> Value {
     serde_json::json!({
         "contract": "pealayer.control",
         "transports": ["native", "http", "json-rpc", "websocket"],
-        "process": { "status": "/api/process/status", "command": "/api/process/command", "methods": ["pealayer.process.status", "pealayer.process.connect", "pealayer.process.quit"], "scope": "local process, never relayed to authority", "connect": "validated, idempotent, graceful restart; poll local status after reconnect" },
+        "process": { "status": "/api/process/status", "authoring": "/api/process/authoring", "command": "/api/process/command", "methods": ["pealayer.process.status", "pealayer.process.connect", "pealayer.process.quit"], "scope": "local process, never relayed to authority", "connect": "validated, idempotent, graceful restart; poll local status after reconnect" },
         "messaging": { "contract": "pealayer.messages.v1", "snapshot": "/api/messages", "subscription": "/ws", "publish": "pealayer.toast.show", "dismiss": "pealayer.toast.dismiss", "state": "pealayer.messages.state", "surfaces": ["egui", "web", "terminal"], "persistent_timeout_ms": 0 },
         "remote_folders": { "browse": "pealayer.remote.browse", "select": "pealayer.remote.select", "sort": "pealayer.remote.sort", "close": "pealayer.remote.close", "state": "/api/remote/state", "thumbnail": "/api/remote/thumbnail", "subscription": "/ws" },
         "commands": [

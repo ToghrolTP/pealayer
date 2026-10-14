@@ -4277,6 +4277,11 @@ impl PealayerApp {
         }
 
         match command {
+            InteropCommand::InspectAuthoring {request_id} => {
+                if crate::authoring::requested(request_id) {
+                    crate::authoring::complete(request_id,self.inspect_authoring(ctx));
+                }
+            },
             InteropCommand::OpenRfManager => { self.rf.open = true; let _ = self.request_rf("catalog", serde_json::json!({"read_board":true})); },
             InteropCommand::RfControl { operation, params } => { if let Err(error) = self.request_rf(&operation, params) { self.rf.error = error; } },
             InteropCommand::Launch { request } => {
@@ -7007,6 +7012,36 @@ impl PealayerApp {
         }
         self.set_osd("Video Closed".to_string());
         self.save_config();
+    }
+
+    pub(crate) fn inspect_authoring(&self,ctx:&egui::Context) -> crate::authoring::Inspection {
+        use crate::authoring::{Item,Inspection,State};
+        let dirty=|value:Option<bool>|match value {Some(true)=>State::Dirty,Some(false)=>State::Clean,None=>State::Unknown};
+        let mut items=vec![
+            Item {domain:"effect_designer".into(),state:dirty(crate::ui::effects_library::unsaved_designer(self,ctx))},
+            Item {domain:"cue_dialog".into(),state:dirty(crate::ui::layout::unsaved_cue(self,ctx))},
+            Item {domain:"preferences".into(),state:dirty(Some(self.preferences_draft.as_ref().is_some_and(|draft|draft.is_dirty())))},
+            Item {domain:"rf".into(),state:dirty(Some(self.rf.dirty()))},
+            Item {domain:"board_settings".into(),state:dirty(Some(self.board_settings_dirty))},
+        ];
+        // These editors don't expose complete saved baselines yet. Report that
+        // limit explicitly rather than equating an open editor with saved data.
+        for (domain,open) in [
+            ("inline_effect_identity",crate::ui::layout::inline_effect_edit_count(ctx)>0),
+            ("effect_group",self.effect_group_draft.is_some()),
+            ("channel_properties",self.hardware_control_dialog_key.is_some()),
+            ("hardware_binding",self.hardware_binding_draft.is_some()),
+            ("preferences_helper",self.native_preferences.is_some()),
+        ] {items.push(Item {domain:domain.into(),state:if open {State::Unknown} else {State::Clean}});}
+        for (domain,busy) in [
+            ("effect_publish",self.hardware_effect_authoring.pending_operation.is_some() || self.hardware_effect_authoring.pending_saved_macro_id.is_some()),
+            ("recording",self.is_recording || self.hardware_effect_authoring.active),
+            ("board_operation",self.board_operation.is_some()),
+            ("channel_folder",self.channel_folder_pending),
+            ("rf_operation",self.rf.pending),
+            ("audio_import",crate::mpv::sfx::importing()),
+        ] {items.push(Item {domain:domain.into(),state:if busy {State::Busy} else {State::Clean}});}
+        Inspection::new(items)
     }
 
     pub(crate) fn runtime_config_snapshot(&self) -> crate::config::AppConfig {
