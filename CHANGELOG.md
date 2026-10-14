@@ -8,6 +8,9 @@ retroactively attributed to an older download.
 
 ### 🎛️ Hardware controls
 
+- Secondary clicks over Web MOSFET sliders open the card menu without changing
+  brightness or starting a drag. Primary dragging and keyboard edits remain available.
+
 - Channel Settings exposes the coordinator's shared Full/Restore On policy and
   confirmed remembered brightness, with explicit Apply and live event updates.
   Unknown-memory fallback remains visible; absolute setters and

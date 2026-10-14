@@ -1,6 +1,11 @@
 export type PwmCardPreferences = { show_on: boolean; show_off: boolean; show_decrease: boolean;
   show_increase: boolean; show_other: boolean; indicator_action: 'toggle' | 'on' | 'off' };
 type Action = { id: string; verb: string };
+/** rc-slider starts changes on any mousedown. Stop non-primary starts in capture,
+ * before its rail/handle handlers, without cancelling the separate contextmenu. */
+export function guardHardwarePointerStart(event: {button:number;stopPropagation:()=>void}) {
+  if (event.button !== 0) event.stopPropagation();
+}
 export const defaultPwmCard: PwmCardPreferences = { show_on: true, show_off: true,
   show_decrease: true, show_increase: true, show_other: true, indicator_action: 'toggle' };
 export function pwmActionVisible(preferences: PwmCardPreferences, verb: string): boolean {

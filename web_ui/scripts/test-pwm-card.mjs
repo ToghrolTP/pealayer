@@ -1,7 +1,23 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { hardwareControlIdentity } from '../src/hardwareIdentity.ts';
-import { defaultPwmCard, pwmActionVisible, pwmIndicatorAction, pwmRowActions } from '../src/pwmCard.ts';
+import { defaultPwmCard, guardHardwarePointerStart, pwmActionVisible, pwmIndicatorAction, pwmRowActions } from '../src/pwmCard.ts';
+for (const button of [1,2,3,4]) {
+  let stopped = false; const commands = [];
+  const event = {button,stopPropagation(){stopped=true;}};
+  guardHardwarePointerStart(event);
+  // Capture must isolate both rc-slider's rail and handle start handlers.
+  if (!stopped) commands.push({percent:72.2});
+  assert.deepEqual(commands,[],`Button ${button} must never reach a slider mutation`);
+}
+let stopped = false;
+guardHardwarePointerStart({button:0,stopPropagation(){stopped=true;}});
+assert.equal(stopped,false,'Primary drag remains available; keyboard is not intercepted');
+const hardwareSource=readFileSync(new URL('../src/components/HardwareTab.tsx',import.meta.url),'utf8');
+assert.match(hardwareSource, /className="hardware-control__pwm"\s+onMouseDownCapture=\{guardHardwarePointerStart\} onPointerDownCapture=\{guardHardwarePointerStart\}/,
+  'Both card/detail share the capture barrier before the third-party slider');
+const guardSource=readFileSync(new URL('../src/pwmCard.ts',import.meta.url),'utf8');
+assert.doesNotMatch(guardSource,/preventDefault|onContextMenu/,'The independent card contextmenu must remain usable');
 const actions = ['on', 'off', 'increase', 'decrease', 'toggle'].map(verb => ({ verb, id: `pwm.1.${verb}` }));
 assert.equal(hardwareControlIdentity({key:'pwm.1',kind:'mosfet',channel:1}),'CH2');
 assert.equal(hardwareControlIdentity({key:'relay.5',kind:'relay',channel:5}),'R5');
