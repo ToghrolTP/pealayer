@@ -2250,6 +2250,16 @@ fn draw_pwm_editor_row_with_buttons(
     // widgets have different auto IDs. Never share a dirty hardware draft
     // through `make_persistent_id("pwm_editor_session")` across those siblings.
     let session_id = pwm_editor_session_id(ui);
+    // egui's drag sense can accept non-primary buttons too. A context-menu
+    // gesture must not edit the rail/number, finish a dirty draft or write PWM.
+    // Snapshot outside memory transactions; keep the event for the parent menu.
+    let non_primary_gesture = ui.input(|input| {
+        [egui::PointerButton::Secondary, egui::PointerButton::Middle,
+            egui::PointerButton::Extra1, egui::PointerButton::Extra2].into_iter().any(|button|
+                input.pointer.button_pressed(button) || input.pointer.button_down(button)
+                    || input.pointer.button_released(button))
+    });
+    let editable = enabled && !non_primary_gesture;
     let mut outcome = PwmEditorResponse::default();
     ui.allocate_ui_with_layout(
         egui::vec2(row_width, 26.0),
@@ -2260,6 +2270,7 @@ fn draw_pwm_editor_row_with_buttons(
             });
             session.at_frame(ui.ctx().cumulative_frame_nr());
             *percent = session.begin(*percent);
+            let before_controls = *percent;
             let gap = ui.spacing().item_spacing.x;
             let decrease = buttons.and_then(|(app, control)| pwm_step_action(app, control, "decrease"));
             let increase = buttons.and_then(|(app, control)| pwm_step_action(app, control, "increase"));
@@ -2268,7 +2279,7 @@ fn draw_pwm_editor_row_with_buttons(
             let (slider_width, number_width) = pwm_editor_widths((row_width - reserved).max(60.0), gap);
             if let Some(action) = decrease {
                 let (app, control) = buttons.expect("action has a source");
-                draw_pwm_step_button(ui, app, control, action, enabled);
+                draw_pwm_step_button(ui, app, control, action, editable);
             }
             let slider = ui
                 .scope(|ui| {
@@ -2283,7 +2294,7 @@ fn draw_pwm_editor_row_with_buttons(
                         visuals.widgets.active.bg_fill = egui::Color32::from_rgb(167, 177, 191);
                     }
                     ui.add_enabled(
-                        enabled,
+                        editable,
                         egui::Slider::new(percent, 0.0..=100.0)
                             // Always-clamping rounds incoming telemetry to our
                             // step and reports changed even without user input.
@@ -2295,9 +2306,9 @@ fn draw_pwm_editor_row_with_buttons(
                 .inner;
             if let Some(action) = increase {
                 let (app, control) = buttons.expect("action has a source");
-                draw_pwm_step_button(ui, app, control, action, enabled);
+                draw_pwm_step_button(ui, app, control, action, editable);
             }
-            let wheel_steps = if enabled {
+            let wheel_steps = if editable {
                 pwm_wheel_steps(ui, &slider)
             } else {
                 0.0
@@ -2307,7 +2318,7 @@ fn draw_pwm_editor_row_with_buttons(
             }
             let before_number = *percent;
             let value = ui
-                .add_enabled_ui(enabled, |ui| {
+                .add_enabled_ui(editable, |ui| {
                     ui.add_sized(
                         [number_width, 24.0],
                         egui::DragValue::new(percent)
@@ -2320,6 +2331,13 @@ fn draw_pwm_editor_row_with_buttons(
                     )
                 })
                 .inner;
+            if non_primary_gesture {
+                // Preserve unsent user intent; disabling a focused numeric
+                // widget can report lost_focus, which is not an Apply action.
+                *percent = before_controls;
+                ui.data_mut(|data| data.insert_temp(session_id, session));
+                return;
+            }
             let (enter, escape) = ui.input(|input| (
                 input.key_pressed(egui::Key::Enter), input.key_pressed(egui::Key::Escape)
             ));
@@ -11159,7 +11177,8 @@ mod timeline_row_tests {
 
     #[test]
     fn pwm_secondary_and_middle_gestures_never_edit_or_dispatch() {
-        for button in [egui::PointerButton::Secondary, egui::PointerButton::Middle, egui::PointerButton::Primary] {
+        for button in [egui::PointerButton::Secondary, egui::PointerButton::Middle,
+            egui::PointerButton::Extra1, egui::PointerButton::Extra2, egui::PointerButton::Primary] {
             let context = egui::Context::default();
             let (sender, receiver) = std::sync::mpsc::channel();
             let mut percent = 0.0;

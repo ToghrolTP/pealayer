@@ -15,6 +15,13 @@ Primary mouse/touch edits and keyboard input are not intercepted. No dependency
 source is patched, no version-specific branch is added and no PWM setter semantics
 or RF/motion mappings change.
 
+The new actual native pointer regression exposed the same class of bug in egui:
+a non-primary drag could produce a changed PWM response. Native rail, numeric and
+step editors now reject secondary/middle/extra-button press, held and release
+frames without consuming the parent's event. They retain dirty numeric intent
+without turning a secondary-triggered blur into Apply. There is no context-lock
+recursion, fabricated telemetry normalization or output retry.
+
 Hosted regressions cover all non-primary button IDs, primary pass-through, capture
 wiring and preserved contextmenu events. Native egui regressions send actual
 secondary/middle press, movement and release frames through the editor/dispatch
