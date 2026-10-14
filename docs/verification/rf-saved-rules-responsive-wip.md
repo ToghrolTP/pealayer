@@ -15,6 +15,11 @@ only presentation strings and explicit callbacks; it does not own waveform,
 catalog, draft, reception counters, preferences or RPCs. SSR tests render the actual
 component, check all four complete rows/Edit labels and zero callback side effects;
 CSS contract tests cover shrinking columns and wrapping without hidden content.
+The first hosted harness failed before assertions because the current TypeScript
+dependency does not expose the old compiler JavaScript API. The repaired harness
+uses the existing documented Vite SSR loader with real React/Antd, translation and
+CSS modules, middleware-only/no HTTP or WebSocket listener/no watchers, and closes
+the fixture in finally. No compiler-version fallback or skipped assertion is added.
 
 **Not integrated or delivered.** The active PR194 author has not yet acknowledged
 the shared-file lane. RFManager/rf.rs and the author's branch are untouched. The
