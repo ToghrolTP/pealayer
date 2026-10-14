@@ -11158,6 +11158,40 @@ mod timeline_row_tests {
     }
 
     #[test]
+    fn pwm_secondary_and_middle_gestures_never_edit_or_dispatch() {
+        for button in [egui::PointerButton::Secondary, egui::PointerButton::Middle, egui::PointerButton::Primary] {
+            let context = egui::Context::default();
+            let (sender, receiver) = std::sync::mpsc::channel();
+            let mut percent = 0.0;
+            let mut start = egui::Pos2::ZERO;
+            let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+                start = ui.cursor().min + egui::vec2(120.0, 8.0);
+                draw_pwm_editor_row_sized(ui, &mut percent, true, 300.0);
+            });
+            output.textures_delta.clear();
+            let end = start + egui::vec2(40.0, 0.0);
+            for events in [vec![egui::Event::PointerMoved(start), egui::Event::PointerButton {
+                pos:start,button,pressed:true,modifiers:egui::Modifiers::NONE}],
+                vec![egui::Event::PointerMoved(end)], vec![egui::Event::PointerButton {
+                pos:end,button,pressed:false,modifiers:egui::Modifiers::NONE}]] {
+                let mut output = context.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
+                    let response = draw_pwm_editor_row_sized(ui, &mut percent, true, 300.0);
+                    if button != egui::PointerButton::Primary {
+                        assert_eq!(response, PwmEditorResponse::default(), "non-primary pointer must not edit or commit");
+                    }
+                    transmit_pwm_editor_response_with(&sender, true, ui, 1, pwm_raw(percent), response);
+                });
+                output.textures_delta.clear();
+                if button != egui::PointerButton::Primary { assert_eq!(percent, 0.0); }
+            }
+            if button == egui::PointerButton::Primary {
+                assert!(percent > 0.0 && receiver.try_recv().is_ok(), "positive control must hit the actual interactive slider");
+            } else {
+                assert!(receiver.try_recv().is_err(), "a context-menu gesture must never write PWM");
+            }
+        }
+    }
+    #[test]
     fn pwm_sibling_editors_do_not_share_dirty_drafts_or_dispatch() {
         let context = egui::Context::default();
         let (sender, receiver) = std::sync::mpsc::channel();
