@@ -3,6 +3,7 @@ use crate::ui::dropdown::DropdownUiExt;
 use eframe::egui;
 use serde_json::{Value, json};
 use std::time::Duration;
+use std::collections::BTreeMap;
 
 pub const OPERATIONS: &[&str] = &[
     "catalog",
@@ -15,6 +16,8 @@ pub const OPERATIONS: &[&str] = &[
     "transmit",
     "binding.put",
     "binding.remove",
+    "preferences.set",
+    "observed.add",
 ];
 
 pub struct RfState {
@@ -41,6 +44,9 @@ pub struct RfState {
     assignment_control: Option<String>,
     raise_on_open: bool,
     assignment_sequence: u64,
+    session_open: bool,
+    reception_baseline: BTreeMap<String,u64>,
+    preferences_draft: Value,
 }
 
 fn new_binding() -> Value {
@@ -99,11 +105,22 @@ impl Default for RfState {
             assignment_control: None,
             raise_on_open: false,
             assignment_sequence: 0,
+            session_open: false,
+            reception_baseline: BTreeMap::new(),
+            preferences_draft: Value::Null,
         }
     }
 }
 
 impl RfState {
+    fn begin_reception_session(&mut self) {
+        if self.session_open { return; }
+        self.session_open = true;
+        self.reception_baseline.clear();
+        for receipt in array(&self.catalog["receptions"]) {
+            self.reception_baseline.insert(signal_key(&receipt),receipt["received_count"].as_u64().unwrap_or_default());
+        }
+    }
     fn begin_control_assignment(&mut self, key: &str, name: &str) {
         self.open = true;
         self.tab = 0;
@@ -124,6 +141,14 @@ impl RfState {
         else {
             return;
         };
+        if self.open { self.begin_reception_session(); }
+        if let Some(generation)=event["metadata"]["connection_generation"].as_str().and_then(|v|v.parse::<u64>().ok()) {
+            if let Some(previous)=self.catalog["connection_generation"].as_u64() {
+                if generation<previous { return; }
+                if generation!=previous { self.catalog["receptions"]=json!([]);self.reception_baseline.clear(); }
+            }
+            self.catalog["connection_generation"]=json!(generation);
+        }
         if array(&self.catalog["activity"]).iter().any(|old| {
             old["kind"] == "rf.receive"
                 && ["rf_code", "rf_bits", "rf_protocol"]
@@ -136,6 +161,14 @@ impl RfState {
         }) {
             return;
         }
+        let receipt = json!({"code":event["rf_code"],"bits":event["rf_bits"],"protocol":event["rf_protocol"],
+            "pulse_us":event["rf_pulse_us"],"last_seen":event["time"],
+            "received_count":event["metadata"]["received_count"].as_str().and_then(|v|v.parse::<u64>().ok()).unwrap_or_default(),
+            "connection_generation":event["metadata"]["connection_generation"].as_str().and_then(|v|v.parse::<u64>().ok()).unwrap_or_default()});
+        if !self.catalog["receptions"].is_array() { self.catalog["receptions"]=json!([]); }
+        let receipts=self.catalog["receptions"].as_array_mut().unwrap();
+        if let Some(old)=receipts.iter_mut().find(|old|signal_key(old)==signal_key(&receipt)) { *old=receipt; }
+        else {receipts.insert(0,receipt);receipts.truncate(256);}
         if let Some(entries) = self.catalog["entries"].as_array_mut() {
             for entry in entries {
                 if entry["code"] == event["rf_code"]
@@ -174,6 +207,18 @@ impl RfState {
         json!({"catalog":self.catalog,"pending":self.pending,"error":self.error,"error_detail":self.error_detail,"last_result":self.last_result,"last_operation":self.last_operation})
     }
     pub fn apply_catalog(&mut self, mut value: Value) {
+        let replaced=(self.catalog["host_instance_id"].as_str().is_some() && value["host_instance_id"].as_str().is_some() && value["host_instance_id"]!=self.catalog["host_instance_id"])
+            || (self.catalog["connection_generation"].as_u64().is_some() && value["connection_generation"].as_u64().is_some() && value["connection_generation"]!=self.catalog["connection_generation"]);
+        if replaced {
+            self.reception_baseline.clear();
+        } else if let Some(receipts)=value["receptions"].as_array_mut() {
+            for old in array(&self.catalog["receptions"]) {
+                if let Some(receipt)=receipts.iter_mut().find(|r|signal_key(r)==signal_key(&old)) {
+                    if old["received_count"].as_u64() > receipt["received_count"].as_u64() { *receipt=old; }
+                } else {receipts.push(old);}
+            }
+        }
+        if self.preferences_draft.is_null() || self.preferences_draft==self.catalog["preferences"] { self.preferences_draft=value["preferences"].clone(); }
         if value["connected"].as_bool() == Some(true)
             && value["entries_sampled"].as_bool() != Some(true)
         {
@@ -228,6 +273,7 @@ impl RfState {
                 }
                 self.last_operation = operation.into();
                 self.last_result = value;
+                if operation=="rf-preferences.set" { self.preferences_draft=self.last_result.clone(); }
                 true
             }
             Err(error) => {
@@ -237,6 +283,44 @@ impl RfState {
             }
         }
     }
+}
+
+fn signal_key(entry: &Value) -> String {format!("{}:{}:{}",entry["code"],entry["bits"],entry["protocol"])}
+
+fn known_signals(catalog: &Value) -> Vec<Value> {
+    let mut rows=array(&catalog["entries"]);
+    for receipt in array(&catalog["receptions"]) {
+        if !rows.iter().any(|entry|signal_key(entry)==signal_key(&receipt)) {
+            let mut row=receipt;row["code_display"]=json!(format!("0x{:08X}",row["code"].as_u64().unwrap_or_default()));rows.push(row);
+        }
+    }
+    for binding in array(&catalog["bindings"]) {
+        let signal=json!({"code":binding["match"]["rf_code"],"bits":binding["match"]["rf_bits"],"protocol":binding["match"]["rf_protocol"]});
+        if !rows.iter().any(|entry|signal_key(entry)==signal_key(&signal)) {
+            let mut row=signal;row["code_display"]=json!(format!("0x{:08X}",row["code"].as_u64().unwrap_or_default()));rows.push(row);
+        }
+    }
+    rows
+}
+
+fn reception_status(state: &RfState, entry: &Value, connected: bool) -> (bool,u64,Option<Duration>) {
+    let receipt=array(&state.catalog["receptions"]).into_iter().find(|r|signal_key(r)==signal_key(entry));
+    let Some(receipt)=receipt else{return(false,0,None)};
+    let count=receipt["received_count"].as_u64().unwrap_or_default().saturating_sub(*state.reception_baseline.get(&signal_key(entry)).unwrap_or(&0));
+    let age=receipt["last_seen"].as_str().and_then(|v|v.parse::<jiff::Timestamp>().ok())
+        .map(|seen|(jiff::Timestamp::now().as_millisecond()-seen.as_millisecond()).max(0) as u64);
+    let remaining=age.filter(|age|*age<250 && connected).map(|age|Duration::from_millis(250-age));
+    (remaining.is_some(),count,remaining)
+}
+
+fn draw_reception(state: &RfState, ui: &mut egui::Ui, entry: &Value, connected: bool) {
+    let (active,count,remaining)=reception_status(state,entry,connected);
+    let color=if active {egui::Color32::from_rgb(45,190,100)} else {ui.visuals().weak_text_color()};
+    let (rect,response)=ui.allocate_exact_size(egui::vec2(14.0,14.0),egui::Sense::hover());
+    ui.painter().circle_filled(rect.center(),4.0,color);
+    response.on_hover_text(if active {"Receiving"} else {"Not receiving"});
+    ui.label(egui::RichText::new(format!("×{count}")).monospace().small().weak()).on_hover_text("Receptions since this dialog opened");
+    if let Some(remaining)=remaining {ui.ctx().request_repaint_after(remaining);}
 }
 
 impl PealayerApp {
@@ -474,8 +558,12 @@ fn draw_saved_assignments(app: &mut PealayerApp, ui: &mut egui::Ui, catalog: &Va
     for (index, group) in groups.into_iter().enumerate() {
         let binding = &group[0];
         let signal = format!("{} · {} bits · Protocol {}", binding["match"]["rf_code"], binding["match"]["rf_bits"], binding["match"]["rf_protocol"]);
+        let waveform=json!({"code":binding["match"]["rf_code"],"bits":binding["match"]["rf_bits"],"protocol":binding["match"]["rf_protocol"]});
         ui.push_id((index, &signal), |ui| {
-            ui.collapsing(format!("{signal} · {} gesture rules", group.len()), |ui| {
+            let id=ui.make_persistent_id("rf_signal_group");
+            egui::collapsing_header::CollapsingState::load_with_default_open(ui.ctx(),id,false)
+                .show_header(ui,|ui| {draw_reception(&app.rf,ui,&waveform,live_connected);ui.label(format!("{signal} · {} gesture rules",group.len()));})
+                .body(|ui| {
                 for binding in group {
                     ui.push_id(binding["name"].as_str().unwrap_or_default(), |ui| {
                         egui::Frame::group(ui.style()).show(ui, |ui| {
@@ -658,8 +746,8 @@ fn draw_error(app: &PealayerApp, ui: &mut egui::Ui, message: &str, detail: &Valu
 }
 
 fn learned_selector(ui: &mut egui::Ui, signal: &mut Value, catalog: &Value) {
-    field_label(ui,"Learned button");
-    let entries = array(&catalog["entries"]);
+    field_label(ui,"RF code");
+    let entries = known_signals(catalog);
     let caption = entries
         .iter()
         .find(|entry| {
@@ -669,12 +757,12 @@ fn learned_selector(ui: &mut egui::Ui, signal: &mut Value, catalog: &Value) {
         })
         .map(|entry| {
             format!(
-                "RF {} · {}",
-                entry["id"],
+                "{} · {}",
+                entry["name"].as_str().filter(|v|!v.is_empty()).unwrap_or("RF"),
                 entry["code_display"].as_str().unwrap_or_default()
             )
         })
-        .unwrap_or_else(|| "Choose a learned button…".into());
+        .unwrap_or_else(|| "Choose an RF code…".into());
     crate::ui::dropdown::ComboBox::from_id_salt((ui.id(), "learned_button"))
         .selected_text(caption)
         .width(field_width(ui))
@@ -688,8 +776,8 @@ fn learned_selector(ui: &mut egui::Ui, signal: &mut Value, catalog: &Value) {
                     .dropdown_choice(
                         selected,
                         format!(
-                            "RF {} · {}",
-                            entry["id"],
+                            "{} · {}",
+                            entry["name"].as_str().filter(|v|!v.is_empty()).unwrap_or("RF"),
                             entry["code_display"].as_str().unwrap_or_default()
                         ),
                     )
@@ -923,8 +1011,10 @@ fn scoped_action_catalog(catalog: &Value, key: Option<&str>) -> Value {
 
 pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     if !app.rf.open {
+        app.rf.session_open=false;
         return;
     }
+    app.rf.begin_reception_session();
     let live_connected = app
         .engine_handle
         .is_connected
@@ -958,7 +1048,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 });
             });
             ui.horizontal(|ui| {
-                for (i,caption) in ["Assignments","Remotes","Transmit","Activity"].iter().enumerate() { ui.dropdown_value(&mut app.rf.tab,i,*caption); }
+                for (i,caption) in ["Assignments","Remotes","Transmit","Activity","Settings"].iter().enumerate() { ui.dropdown_value(&mut app.rf.tab,i,*caption); }
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui| {
                     if ui.add_enabled(!app.rf.pending,egui::Button::new(crate::ui::icons::ARROW_CLOCKWISE)).on_hover_text("Refresh learned buttons").clicked() { request(app,"catalog",json!({"read_board":true})); }
                     if app.rf.pending { ui.spinner(); }
@@ -1024,34 +1114,37 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         ui.horizontal(|ui| {
                             let learning=catalog["learning"]["active"].as_bool().unwrap_or(false);
                             if learning { ui.colored_label(ui.visuals().selection.bg_fill,"Learning…"); if ui.button("Stop learning").clicked() { request(app,"learn.cancel",json!({})); } }
-                            else if ui.add_enabled(catalog["connected"]==true && live_connected && !app.rf.pending,egui::Button::new(format!("{} Learn buttons",crate::ui::icons::PLUS))).clicked() { request(app,"learn.start",json!({"mode":"timer","timeout_ms":30000})); }
+                            else if ui.add_enabled(catalog["connected"]==true && live_connected && !app.rf.pending,egui::Button::new(format!("{} Learn buttons",crate::ui::icons::PLUS))).clicked() { request(app,"learn.start",json!({})); }
                         });
                         if array(&catalog["entries"]).is_empty() {
                             ui.label(egui::RichText::new("No learned RF buttons. Refresh to read the board or learn a new button.").weak());
                         }
-                        let mut entries=array(&catalog["entries"]);
+                        let mut entries=known_signals(&catalog);
                         entries.sort_by_key(|entry|std::cmp::Reverse(entry["last_seen"].as_str().and_then(|time|time.parse::<jiff::Timestamp>().ok())));
                         for entry in entries {
-                            ui.push_id(entry["id"].as_u64().unwrap_or_default(),|ui| { egui::Frame::group(ui.style()).show(ui,|ui| {
+                            ui.push_id(signal_key(&entry),|ui| { egui::Frame::group(ui.style()).show(ui,|ui| {
                                 ui.horizontal_wrapped(|ui| {
-                                    ui.strong(entry["name"].as_str().filter(|s|!s.is_empty()).unwrap_or("RF button"));
-                                    ui.monospace(entry["code_display"].as_str().unwrap_or_default());
-                                    if ui.button("On board…").on_hover_text("Runs without Pealayer or PCController for supported board actions").clicked() {app.rf.board_map=edit_board_map(&entry);}
+                                    draw_reception(&app.rf,ui,&entry,live_connected);
+                                    let learned=entry["id"].as_u64().is_some();
+                                    ui.label(egui::RichText::new(entry["name"].as_str().filter(|s|!s.is_empty()).unwrap_or("RF button")).color(if learned {ui.visuals().text_color()} else {ui.visuals().weak_text_color()}));
+                                    ui.label(egui::RichText::new(entry["code_display"].as_str().unwrap_or_default()).monospace().color(if learned {ui.visuals().text_color()} else {ui.visuals().weak_text_color()}));
+                                    if learned && ui.button("On board…").on_hover_text("Runs without Pealayer or PCController for supported board actions").clicked() {app.rf.board_map=edit_board_map(&entry);}
+                                    if !learned && ui.add_enabled(live_connected && !app.rf.pending && array(&catalog["receptions"]).iter().any(|r|signal_key(r)==signal_key(&entry)),egui::Button::new("Add")).clicked() {request(app,"observed.add",json!({"code":entry["code"],"bits":entry["bits"],"protocol":entry["protocol"]}));}
                                     if ui.button("On controller…").on_hover_text("Percent, gesture, effect and application assignments").clicked() {
                                         let existing=array(&catalog["bindings"]).into_iter().find(|binding| binding["match"]["rf_code"]==entry["code"] && binding["match"]["rf_bits"]==entry["bits"] && binding["match"]["rf_protocol"]==entry["protocol"] && binding["match"]["gesture"]=="down");
                                         app.rf.previous_name=existing.as_ref().and_then(|binding|binding["name"].as_str()).unwrap_or_default().into();
-                                        app.rf.draft=existing.unwrap_or_else(|| { let mut binding=new_binding(); binding["name"]=json!(format!("RF {}",entry["id"])); binding["match"]["rf_code"]=entry["code"].clone(); binding["match"]["rf_bits"]=entry["bits"].clone(); binding["match"]["rf_protocol"]=entry["protocol"].clone(); binding });
+                                        app.rf.draft=existing.unwrap_or_else(|| { let mut binding=new_binding(); binding["name"]=json!(unique_binding_name(&format!("RF {}",entry["code_display"].as_str().unwrap_or_default()),&catalog)); binding["match"]["rf_code"]=entry["code"].clone(); binding["match"]["rf_bits"]=entry["bits"].clone(); binding["match"]["rf_protocol"]=entry["protocol"].clone(); binding });
                                         app.rf.tab=0;
                                         app.rf.assignment_control=None;
                                     }
                                     if ui.add_enabled(!app.rf.pending,egui::Button::new("Transmit")).clicked() { request(app,"transmit",json!({"code":entry["code"],"bits":entry["bits"],"protocol":entry["protocol"],"pulse_us":entry["pulse_us"],"repeats":1})); }
-                                    ui.menu_button(crate::ui::icons::DOTS_THREE,|ui| {
+                                    if learned { ui.menu_button(crate::ui::icons::DOTS_THREE,|ui| {
                                         if ui.button("Unassign board action").clicked() { request(app,"map",json!({"id":entry["id"],"action":"none"})); ui.close(); }
                                         if ui.button("Edit board action…").clicked() { app.rf.board_map=edit_board_map(&entry); ui.close(); }
                                         if ui.button("Remove learned button").clicked() { request(app,"remove",json!({"id":entry["id"]})); ui.close(); }
-                                    });
+                                    }); }
                                 });
-                                ui.label(format!("On board · {}",board_assignment(&entry)));
+                                if entry["id"].as_u64().is_some() { ui.label(format!("On board · {}",board_assignment(&entry))); }
                                 for binding in array(&catalog["bindings"]).iter().filter(|binding|signal_matches(binding,&entry)) {
                                     let enabled=if binding["enabled"]==false {" · disabled"} else {""};
                                     ui.label(format!("{} · {}{enabled}",binding["name"].as_str().unwrap_or("Assignment"),binding["match"]["gesture"].as_str().unwrap_or_default()));
@@ -1106,8 +1199,24 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         let code=app.rf.code.trim(); let parsed=code.strip_prefix("0x").or_else(||code.strip_prefix("0X")).map(|s|u32::from_str_radix(s,16)).unwrap_or_else(||code.parse::<u32>()).ok().filter(|v|*v!=0);
                         if ui.add_enabled(parsed.is_some() && !app.rf.pending && catalog["connected"]==true && live_connected,egui::Button::new(format!("{} Transmit",crate::ui::icons::PAPER_PLANE_TILT))).clicked() { request(app,"transmit",json!({"code":parsed,"bits":app.rf.bits,"protocol":app.rf.protocol,"pulse_us":app.rf.pulse_us,"repeats":app.rf.repeats})); }
                     },
-                    _=> {
+                    3=> {
                         for event in array(&catalog["activity"]) { ui.label(event["text"].as_str().unwrap_or_default()); ui.label(egui::RichText::new(event["time"].as_str().unwrap_or_default()).small().weak()); ui.separator(); }
+                    },
+                    _=> {
+                        let labels=[app.tr("Timed learning"),app.tr("Timeout"),app.tr("Continuously learn buttons"),app.tr("Save settings")];
+                        let draft=&mut app.rf.preferences_draft;
+                        let mut timed=draft["timed"].as_bool().unwrap_or(false);
+                        let mut seconds=draft["timeout_seconds"].as_u64().unwrap_or(60);
+                        let mut continuous=draft["continuous"].as_bool().unwrap_or(false);
+                        ui.add_enabled_ui(!app.rf.pending,|ui| {
+                            ui.checkbox(&mut timed,&labels[0]);
+                            ui.horizontal(|ui| {ui.label(&labels[1]);ui.add(egui::DragValue::new(&mut seconds).range(1..=120).suffix(" s"));});
+                            ui.checkbox(&mut continuous,&labels[2]);
+                        });
+                        *draft=json!({"timed":timed,"timeout_seconds":seconds,"continuous":continuous});
+                        if ui.add_enabled(!app.rf.pending && live_connected && catalog["preferences"].is_object() && *draft!=catalog["preferences"],egui::Button::new(&labels[3])).clicked() {
+                            let value=draft.clone();request(app,"preferences.set",value);
+                        }
                     }
                 }
             });
@@ -1117,7 +1226,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         app.rf.raise_on_open = false;
     }
     app.rf.open = open;
-    if !open { app.rf.assignment_control = None; }
+    if !open { app.rf.assignment_control = None; app.rf.session_open=false; }
 }
 
 fn actions_len_button(ui: &mut egui::Ui) -> egui::Response {
@@ -1130,6 +1239,25 @@ fn actions_len_button(ui: &mut egui::Ui) -> egui::Response {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn reception_counter_resets_on_open_not_refresh_and_includes_unlearned_signals() {
+        let mut state=super::RfState::default();
+        let time=jiff::Timestamp::now().to_string();
+        let receipt=serde_json::json!({"code":42,"bits":24,"protocol":1,"received_count":100,"last_seen":time});
+        state.apply_catalog(serde_json::json!({"receptions":[receipt.clone()],"entries":[]}));
+        state.begin_reception_session();
+        assert_eq!(super::reception_status(&state,&receipt,true).1,0);
+        let mut updated=state.catalog.clone();updated["receptions"][0]["received_count"]=serde_json::json!(109);
+        state.apply_catalog(updated.clone());
+        assert_eq!(super::reception_status(&state,&receipt,true).1,9);
+        state.apply_catalog(updated);
+        assert_eq!(super::reception_status(&state,&receipt,true).1,9);
+        assert_eq!(super::known_signals(&state.catalog).len(),1);
+        assert!(super::known_signals(&state.catalog)[0]["id"].is_null());
+        state.session_open=false;state.begin_reception_session();
+        assert_eq!(super::reception_status(&state,&receipt,true).1,0);
+        assert!(!super::reception_status(&state,&receipt,false).0);
+    }
     #[test]
     fn rf_error_headline_uses_metadata_not_human_prose() {
         assert_eq!(super::error_caption(&serde_json::json!({"kind":"timeout"})), Some("PCController request timed out"));

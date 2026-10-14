@@ -1,6 +1,9 @@
 export type UiLocale = 'en' | 'fa';
 
 const fa: Record<string, string> = {
+  'Timed learning':'یادگیری زمان‌دار', 'Continuously learn buttons':'یادگیری پیوستهٔ دکمه‌ها',
+  'Save settings':'ذخیرهٔ تنظیمات', 'Receiving':'در حال دریافت', 'Not receiving':'دریافت نمی‌شود',
+  'Receptions since this dialog opened':'دریافت‌ها از باز شدن این گفتگو',
   'An RF assignment with this name already exists. Choose another name.':'تخصیص ریموتی با این نام وجود دارد؛ نام دیگری انتخاب کنید.',
   'Shared On behavior':'رفتار مشترکِ روشن‌کردن', 'Full brightness (100%)':'روشنایی کامل (۱۰۰٪)',
   'Restore last brightness':'بازیابی آخرین روشنایی', 'Apply policy':'اعمال سیاست',

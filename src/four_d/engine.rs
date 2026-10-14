@@ -297,7 +297,7 @@ fn controller_call_allowed_during_estop(method: &str, params: &serde_json::Value
     if matches!(method, "controller.peripheral.presentation.update" | "controller.peripheral.folder.update") {
         return true;
     }
-    if matches!(method,"controller.rf.catalog" | "controller.rf.binding.put" | "controller.rf.binding.remove" | "controller.rf.list" | "controller.rf.learn.status" | "controller.rf.learn.cancel" | "controller.rf.remove") { return true; }
+    if matches!(method,"controller.rf.catalog" | "controller.rf.binding.put" | "controller.rf.binding.remove" | "controller.rf.preferences.set" | "controller.rf.observed.add" | "controller.rf.list" | "controller.rf.learn.status" | "controller.rf.learn.cancel" | "controller.rf.remove") { return true; }
     if method == "controller.rf.map" && params.get("action").and_then(serde_json::Value::as_str) == Some("none") { return true; }
     if method == "controller.estop.set" {
         return params
@@ -782,7 +782,7 @@ impl ControllerPushTarget {
             && params
                 .get("kind")
                 .and_then(serde_json::Value::as_str)
-                .is_some_and(|kind| kind.starts_with("rf.learn."))
+                .is_some_and(|kind| kind.starts_with("rf.learn.") || kind=="rf.preferences.changed")
         {
             // PCController publishes RF learning lifecycle/capture events.
             // Consume those edges in the app loop and fetch one authoritative

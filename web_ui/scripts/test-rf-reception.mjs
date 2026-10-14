@@ -1,0 +1,10 @@
+import assert from 'node:assert/strict';
+import { RfReceptionSession,rfPresent } from '../src/rf-reception.ts';
+const session=new RfReceptionSession();
+const receipt={code:42,bits:24,protocol:1,received_count:10,last_seen:'2026-01-01T00:00:00Z'};
+session.open([receipt]);assert.equal(session.count(receipt),0);
+const received={...receipt,received_count:18};assert.equal(session.count(received),8);assert.equal(session.count(received),8);
+session.open([received]);assert.equal(session.count(received),0);
+const time=Date.parse(receipt.last_seen);
+assert.equal(rfPresent(receipt,true,time+249),true);assert.equal(rfPresent(receipt,true,time+250),false);assert.equal(rfPresent(receipt,false,time+1),false);
+console.log('RF modal reception counts and presence passed');
