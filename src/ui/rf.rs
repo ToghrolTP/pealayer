@@ -625,17 +625,28 @@ fn seen_label(entry: &Value) -> String {
         .unwrap_or_else(|| "Not seen in this controller session".into())
 }
 
-fn draw_error(ui: &mut egui::Ui, message: &str, detail: &Value) {
+fn error_caption(detail: &Value) -> Option<&'static str> {
+    if detail["kind"] == "timeout" { Some("PCController request timed out") }
+    else if detail["kind"] == "connection_unavailable" || detail["transport_failed"] == true {
+        Some("PCController connection is unavailable")
+    } else { None }
+}
+
+fn draw_error(app: &PealayerApp, ui: &mut egui::Ui, message: &str, detail: &Value) {
     if message.is_empty() {
         return;
     }
     egui::Frame::group(ui.style()).show(ui, |ui| {
-        ui.colored_label(ui.visuals().error_fg_color, message);
-        if detail["retryable"] == true {
-            ui.label("You can retry when the controller is ready.");
+        let headline = error_caption(detail).map(|caption| app.tr(caption)).unwrap_or_else(|| message.into());
+        ui.colored_label(ui.visuals().error_fg_color, headline);
+        if detail["transport_failed"] == true {
+            ui.label(app.tr("Check the connection and current state before retrying"));
+        } else if detail["retryable"] == true {
+            ui.label(app.tr("You can retry when the controller is ready."));
         }
         if detail.is_object() {
-            ui.collapsing("Details", |ui| {
+            ui.collapsing(app.tr("Details"), |ui| {
+                ui.add(egui::Label::new(message).wrap());
                 for key in ["kind", "resource", "retry_after_ms"] {
                     if !detail[key].is_null() {
                         ui.label(format!("{}: {}", key.replace('_', " "), detail[key]));
@@ -954,7 +965,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 });
             });
             ui.separator();
-            draw_error(ui,&app.rf.error,&app.rf.error_detail);
+            draw_error(app,ui,&app.rf.error,&app.rf.error_detail);
             if let Some(error)=catalog["board_error"].as_str() { ui.colored_label(ui.visuals().warn_fg_color,error); }
             egui::ScrollArea::vertical().id_salt(("rf_body",app.rf.assignment_sequence)).auto_shrink([false,false]).show(ui,|ui| {
                 ui.set_min_width(ui.available_width());
@@ -1119,6 +1130,13 @@ fn actions_len_button(ui: &mut egui::Ui) -> egui::Response {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn rf_error_headline_uses_metadata_not_human_prose() {
+        assert_eq!(super::error_caption(&serde_json::json!({"kind":"timeout"})), Some("PCController request timed out"));
+        assert_eq!(super::error_caption(&serde_json::json!({"transport_failed":true})), Some("PCController connection is unavailable"));
+        assert_eq!(super::error_caption(&serde_json::json!({"kind":"authority_conflict","message":"timed out (os error 10060)"})), None);
+        assert_eq!(super::error_caption(&serde_json::json!("timed out")), None);
+    }
     #[test]
     fn saved_rf_rules_group_by_complete_waveform_and_authoritative_channel_without_mutation() {
         let rules = ["tap", "hold", "repeat", "hold-end"].map(|gesture| serde_json::json!({

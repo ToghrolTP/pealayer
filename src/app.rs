@@ -1254,16 +1254,22 @@ impl eframe::App for PealayerApp {
                 } else {
                     "PCController reports that the board is unavailable.".into()
                 });
+            let detail = if detail.chars().nth(8192).is_some() {
+                format!("{}…\n{}", detail.chars().take(8000).collect::<String>(), self.tr("Diagnostics truncated"))
+            } else { detail };
+            let summary = self.tr(if !connected_now {
+                "PCController connection is unavailable"
+            } else { "PCController reports that the board is unavailable." });
             let message = if self.pause_on_hardware_disconnect {
                 self.pause();
-                format!("{detail} Playback paused.")
+                format!("{summary} {}", self.tr("Playback paused."))
             } else {
-                detail
+                summary
             };
-            let _ = crate::messaging::publish(crate::messaging::ToastRequest {
-                id: Some("hardware.connection".into()), title: title.into(), message: message.clone(),
+            let _ = crate::messaging::publish_detailed(crate::messaging::ToastRequest {
+                id: Some("hardware.connection".into()), title: self.tr(title), message: message.clone(),
                 severity: crate::messaging::Severity::Warning, timeout_ms: 8000,
-            }, "hardware");
+            }, "hardware", detail);
             self.set_osd(message.clone());
             if let Some(hwnd) = self.window_handle {
                 let _ = crate::platform::windows::show_system_notification(
@@ -2226,7 +2232,7 @@ impl eframe::App for PealayerApp {
                 }
             });
         crate::four_d::authority::draw_warning(self,ui.ctx());
-        crate::ui::toasts::draw(ui.ctx());
+        crate::ui::toasts::draw(ui.ctx(), &self.tr("Details"));
         crate::ui::remote_location::draw(self, ui.ctx());
     }
 
