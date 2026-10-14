@@ -3158,6 +3158,24 @@ mod tests {
     }
 
     #[test]
+    fn peer_host_update_push_invalidates_status_without_catalog_polling() {
+        let handle = memory_only_test_engine();
+        install_hardware_snapshot(&handle.hardware_capabilities,&handle.hardware_revision,
+            Some(super::super::controller::HardwareCapabilities::default()));
+        let revision = handle.hardware_revision.load(Ordering::Relaxed);
+        let event = serde_json::json!({"kind":"peer-update.transferring","metadata":{
+            "operation_id":"host-update", "kind":"host", "state":"transferring", "stage":"transferring",
+            "progress_known":"true", "progress_percent":"35", "updated_at":"2026-10-14T01:00:00Z"
+        }});
+        let target = handle.controller_push_target();
+        assert!(target.apply_notification("controller.event",&event));
+        assert_eq!(handle.hardware_revision.load(Ordering::Relaxed),revision+1);
+        assert!(!handle.catalog_refresh_requested.load(Ordering::Relaxed));
+        assert!(!target.apply_notification("controller.event",&event));
+        assert_eq!(handle.hardware_revision.load(Ordering::Relaxed),revision+1);
+    }
+
+    #[test]
     fn melody_change_notification_requests_authoritative_catalog_refresh() {
         let handle = spawn_engine();
         let target = handle.controller_push_target();
