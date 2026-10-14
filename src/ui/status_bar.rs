@@ -57,6 +57,49 @@ pub struct StatusProgress {
     pub detail: String,
 }
 
+fn controller_operations(capabilities: &HardwareCapabilities) -> Vec<StatusProgress> {
+    let mut operations: Vec<_> = capabilities.operations.iter().filter(|operation| operation.active()).collect();
+    operations.sort_by(|left, right| right.updated_at.parse::<jiff::Timestamp>().ok()
+        .cmp(&left.updated_at.parse::<jiff::Timestamp>().ok()));
+    operations.into_iter().map(|operation| {
+        let (source, label) = match operation.kind.as_str() {
+            "host" => ("controller-host", "PCController update"),
+            "firmware" | "flash-restore" => ("controller-board", "Board firmware"),
+            "eeprom" => ("controller-board", "Board EEPROM"),
+            "device-capture" => ("controller-board", "Board readback"),
+            "firmware-build" => ("controller-board", "Firmware build"),
+            "artifact-upload" => ("controller-transfer", "Receiving update"),
+            "artifact-fetch" => ("controller-transfer", "Downloading update"),
+            _ => ("controller", operation.kind.as_str()),
+        };
+        StatusProgress {
+            id: operation.id.clone(), source: source.into(), label: label.into(),
+            phase: if operation.stage.is_empty() {operation.state.clone()} else {operation.stage.clone()},
+            fraction: operation.progress_percent.filter(|percent| *percent <= 100).map(|value| f32::from(value) / 100.0),
+            detail: operation.detail.clone(),
+        }
+    }).collect()
+}
+
+fn progress_color(ui: &egui::Ui, source: &str) -> egui::Color32 {
+    match source {
+        "controller-host" => egui::Color32::from_rgb(75, 155, 230),
+        "controller-board" => ui.visuals().warn_fg_color,
+        "controller-transfer" => egui::Color32::from_rgb(60, 175, 155),
+        _ => ui.visuals().selection.bg_fill,
+    }
+}
+
+fn progress_label(app: &PealayerApp, operation: &StatusProgress) -> String {
+    let key = match operation.label.as_str() {
+        "PCController update" => "PCController update", "Board firmware" => "Board firmware",
+        "Board EEPROM" => "Board EEPROM", "Board readback" => "Board readback",
+        "Firmware build" => "Firmware build", "Receiving update" => "Receiving update",
+        "Downloading update" => "Downloading update", _ => return operation.label.clone(),
+    };
+    app.tr(key)
+}
+
 pub fn active_operations(capabilities: Option<&HardwareCapabilities>) -> Vec<StatusProgress> {
     if let Some(snapshot) = crate::peer::client().and_then(|client| client.snapshot()) {
         return snapshot
@@ -67,7 +110,7 @@ pub fn active_operations(capabilities: Option<&HardwareCapabilities>) -> Vec<Sta
             .and_then(|value| serde_json::from_value(value).ok())
             .unwrap_or_default();
     }
-    let mut result = Vec::new();
+    let mut result = capabilities.map(controller_operations).unwrap_or_default();
     let update = crate::update::manager().status();
     if update.active() {
         let fraction = update.progress_percent().map(|value| value as f32 / 100.0);
@@ -79,24 +122,6 @@ pub fn active_operations(capabilities: Option<&HardwareCapabilities>) -> Vec<Sta
             fraction,
             detail: update.message,
         });
-    }
-    if let Some(capabilities) = capabilities {
-        for operation in capabilities
-            .operations
-            .iter()
-            .filter(|operation| operation.active())
-        {
-            result.push(StatusProgress {
-                id: operation.id.clone(),
-                source: "controller".into(),
-                label: operation.kind.clone(),
-                phase: operation.stage.clone(),
-                fraction: operation
-                    .progress_percent
-                    .map(|value| f32::from(value) / 100.0),
-                detail: operation.detail.clone(),
-            });
-        }
     }
     if let Some(downloads) = crate::downloads::progress_if_initialized() {
         for job in downloads {
@@ -605,9 +630,10 @@ fn render_widget(
         Widget::Workspace => return None,
         Widget::Progress => {
             let operation = progress.first()?;
+            let tint = progress_color(ui, &operation.source);
             let text = format!(
                 "{} · {}{}",
-                operation.label,
+                progress_label(app, operation),
                 operation.phase,
                 operation
                     .fraction
@@ -625,27 +651,32 @@ fn render_widget(
                         egui::vec2(rect.width() * fraction, 3.0),
                     ),
                     1.0,
-                    ui.visuals().selection.bg_fill,
+                    tint,
                 );
             } else {
                 ui.put(
                     egui::Rect::from_min_size(rect.left_top(), egui::vec2(14.0, 14.0)),
-                    egui::Spinner::new().size(12.0),
+                    egui::Spinner::new().size(12.0).color(tint),
                 );
             }
-            ui.painter().with_clip_rect(rect).text(
-                rect.center(),
-                egui::Align2::CENTER_CENTER,
-                &text,
-                egui::FontId::proportional(11.0),
-                color,
-            );
+            let foreground = if operation.source.starts_with("controller-") {tint} else {color};
+            let label_left = rect.left() + if operation.fraction.is_none() {17.0} else {3.0};
+            let label_rect = egui::Rect::from_min_max(egui::pos2(label_left, rect.top()), rect.right_bottom() - egui::vec2(34.0,0.0));
+            let mut job = egui::text::LayoutJob::simple(format!("{} · {}", progress_label(app, operation),operation.phase),
+                egui::FontId::proportional(11.0),foreground,label_rect.width());
+            job.wrap.max_rows = 1;
+            job.wrap.break_anywhere = true;
+            let galley = ui.fonts_mut(|fonts|fonts.layout_job(job));
+            ui.painter().with_clip_rect(label_rect).galley(egui::pos2(label_rect.left(),label_rect.center().y-galley.size().y/2.0),galley,foreground);
+            ui.painter().with_clip_rect(rect).text(rect.right_center()-egui::vec2(3.0,0.0),egui::Align2::RIGHT_CENTER,
+                operation.fraction.map(|value|format!("{:.0}%",value*100.0)).unwrap_or_else(||"…".into()),
+                egui::FontId::monospace(11.0),foreground);
             let tooltip = progress
                 .iter()
                 .map(|operation| {
                     format!(
                         "{} · {}\n{}",
-                        operation.label, operation.phase, operation.detail
+                        progress_label(app, operation), operation.phase, operation.detail
                     )
                 })
                 .collect::<Vec<_>>()
@@ -980,6 +1011,8 @@ fn click_item(app: &mut PealayerApp, ui: &mut egui::Ui, item: Widget, progress: 
         Widget::Fps => { app.status_bar.fps_mode = app.status_bar.fps_mode.next(); app.request_status_bar_save(ui.ctx()); }
         Widget::Estop => app.request_emergency_stop_change(false),
         Widget::Progress if progress.first().is_some_and(|p| p.source == "download") => crate::downloads::open(ui.ctx()),
+        Widget::Progress if progress.first().is_some_and(|p| p.source.starts_with("controller")) =>
+            app.open_or_focus_tab(crate::ui::layout::PealayerTab::HardwareMonitor),
         Widget::Timeline => app.open_or_focus_tab(crate::ui::layout::PealayerTab::Timeline),
         Widget::Connection | Widget::Voltage | Widget::Current | Widget::Temperature | Widget::StatusRgb
             | Widget::Warnings | Widget::Hot =>
@@ -1105,6 +1138,46 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn controller_update_operations_keep_host_and_board_identity_and_newest_progress() {
+        use crate::four_d::controller::HardwareOperation;
+        let mut hardware = HardwareCapabilities::default();
+        let operation = |id:&str,kind:&str,time:&str| HardwareOperation {
+            id:id.into(),kind:kind.into(),state:"running".into(),stage:"writing".into(),progress_percent:Some(42),updated_at:time.into(),..Default::default()
+        };
+        hardware.operations = vec![operation("board","firmware","2026-10-14T01:00:00Z"),operation("host","host","2026-10-14T01:00:00.001Z")];
+        let progress = controller_operations(&hardware);
+        assert_eq!(progress[0].source,"controller-host");
+        assert_eq!(progress[0].label,"PCController update");
+        assert_eq!(progress[0].fraction,Some(0.42));
+        assert_eq!(progress[1].source,"controller-board");
+        assert_eq!(progress[1].label,"Board firmware");
+        hardware.operations[1].state="completed".into();
+        assert_eq!(controller_operations(&hardware).len(),1);
+        hardware.operations[0].state="failed".into();
+        assert!(controller_operations(&hardware).is_empty());
+    }
+
+    #[test]
+    fn controller_progress_colors_and_width_do_not_change_with_percentage() {
+        let _lock=crate::app::tests::lock_app_tests();
+        let context=egui::Context::default();
+        let mut app=PealayerApp::default();
+        app.engine_handle=crate::four_d::engine::memory_only_test_engine();
+        let mut output=context.run_ui(egui::RawInput::default(),|ui| {
+            assert_ne!(progress_color(ui,"controller-host"),progress_color(ui,"controller-board"));
+            for source in ["controller-host","controller-board"] {
+                for fraction in [None,Some(0.01),Some(0.99)] {
+                    let progress=StatusProgress{id:"op".into(),source:source.into(),label:"PCController update".into(),phase:"health-checking".into(),fraction,detail:"".into()};
+                    let response=render_widget(&app,ui,Widget::Progress,None,&TelemetryLog::default(),&[progress]).unwrap().0;
+                    assert_eq!(response.rect.size(),egui::vec2(168.0,ITEM_HEIGHT));
+                }
+            }
+        });
+        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,egui::Shape::Text(text) if text.galley.text()=="99%")));
+        output.textures_delta.clear();
+    }
 
     #[test]
     fn programming_latch_status_is_painted_without_a_disconnected_claim() {

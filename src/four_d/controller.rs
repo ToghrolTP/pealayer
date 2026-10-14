@@ -275,7 +275,7 @@ impl HardwareOperation {
             id, kind, state, stage: string("stage"), detail: string("detail"),
             progress_percent: value.get("progress_known").and_then(value_as_bool)
                 .filter(|known| *known).and_then(|_| value.get("progress_percent").and_then(value_as_u64))
-                .map(|percent| percent.min(100) as u8),
+                .filter(|percent| *percent <= 100).map(|percent| percent as u8),
             bytes_done: value.get("bytes_done").and_then(value_as_u64),
             bytes_total: value.get("bytes_total").and_then(value_as_u64).filter(|total| *total > 0),
             updated_at: string("updated_at"),
@@ -930,8 +930,11 @@ impl HardwareCapabilities {
     pub(crate) fn apply_state_notification(&mut self, event: &Value) -> bool {
         if event.pointer("/metadata/connection_generation").and_then(value_as_u64)
             .is_some_and(|generation| generation != self.connection_generation) { return false; }
-        if event.get("kind").and_then(Value::as_str).is_some_and(|kind| kind.starts_with("update.")) {
-            let Some(value) = event.get("metadata").and_then(|value| HardwareOperation::parse(value, true)) else { return false; };
+        if event.get("kind").and_then(Value::as_str).is_some_and(|kind| kind.starts_with("update.") || kind.starts_with("peer-update.")) {
+            let Some(mut value) = event.get("metadata").and_then(|value| HardwareOperation::parse(value, true)) else { return false; };
+            if value.detail.is_empty() {
+                value.detail = event.get("text").and_then(Value::as_str).unwrap_or_default().to_owned();
+            }
             if let Some(previous) = self.operations.iter_mut().find(|item| item.id == value.id) {
                 if *previous == value || !value.at_least_as_new_as(previous) { return false; }
                 *previous = value;
@@ -3914,6 +3917,27 @@ mod tests {
         stale.host_instance_id = "other-host".into(); hardware.host_instance_id = "current-host".into();
         stale.operations.clear(); stale.preserve_newer_live_state_from(&hardware);
         assert!(stale.operations.is_empty(), "do not retain another host's operations");
+    }
+
+    #[test]
+    fn peer_host_update_progress_is_ordered_measured_and_cleared_on_completion() {
+        let mut hardware = HardwareCapabilities::default();
+        let event = |state, known, percent, timestamp| json!({"kind":format!("peer-update.{state}"),"text":"Host transfer progress","metadata":{
+            "operation_id":"peer-host", "kind":"host", "state":state, "stage":state,
+            "progress_known":known, "progress_percent":percent, "updated_at":timestamp
+        }});
+        assert!(hardware.apply_state_notification(&event("transferring","true","42","2026-10-14T01:00:00Z")));
+        assert_eq!(hardware.operations[0].progress_percent,Some(42));
+        assert_eq!(hardware.operations[0].detail,"Host transfer progress");
+        assert!(!hardware.apply_state_notification(&event("transferring","true","10","2026-10-14T00:59:59Z")));
+        assert!(hardware.apply_state_notification(&event("reconnecting","false","100","2026-10-14T01:00:01Z")));
+        assert_eq!(hardware.operations[0].progress_percent,None,"restart has no measurable percentage");
+        assert!(hardware.operations[0].active());
+        assert!(hardware.apply_state_notification(&event("health-checking","true","101","2026-10-14T01:00:02Z")));
+        assert_eq!(hardware.operations[0].progress_percent,None,"invalid percentage is not completed progress");
+        assert!(hardware.apply_state_notification(&event("completed","true","100","2026-10-14T01:00:03Z")));
+        assert!(!hardware.operations[0].active());
+        assert!(!hardware.apply_state_notification(&event("transferring","true","90","2026-10-14T01:00:02Z")));
     }
 
     #[test]

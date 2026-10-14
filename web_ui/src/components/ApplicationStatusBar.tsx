@@ -5,7 +5,7 @@ import type { MenuProps } from 'antd';
 import { ApiOutlined, BgColorsOutlined, ClockCircleOutlined, DashboardOutlined, DownOutlined, EyeInvisibleOutlined, LineChartOutlined, VideoCameraOutlined, WarningOutlined, ThunderboltOutlined, SyncOutlined } from '@ant-design/icons';
 import type { PlayerState } from './RemoteControlTab';
 import { tr, UiLocale } from '../i18n';
-import { DEFAULT_VISIBILITY, WIDGETS, orderedWidgets, displayedWidgets, widgetVisible, setWidgetVisible, reorderWidgets, nextFpsMode, screenRateSelected, numericTelemetry, appendSample, chartPaths } from '../statusWidgets';
+import { DEFAULT_VISIBILITY, WIDGETS, orderedWidgets, displayedWidgets, widgetVisible, setWidgetVisible, reorderWidgets, nextFpsMode, screenRateSelected, numericTelemetry, appendSample, chartPaths, operationTone, operationDestination } from '../statusWidgets';
 import type { StatusWidget, StatusBarVisibility, FpsMode, ChartMetric, ChartSample } from '../statusWidgets';
 import { workspaceGlyph } from '../workspacePresentation';
 import { selectedWorkspace } from '../workspaces';
@@ -107,7 +107,7 @@ export const ApplicationStatusBar: React.FC<ApplicationStatusBarProps> = ({ stat
       else if(key==='manage-workspaces') onNavigate('preferences');
       else if(key==='hardware') onNavigate('hardware');
       else if(key==='timeline') onNavigate('studio');
-      else if(key==='operations') onNavigate(operations[0]?.source==='download'?'downloads':'preferences');
+      else if(key==='operations') onNavigate(operationDestination(operations[0]?.source));
       else if(key==='start' || key==='end') place(widget,key==='end');
       else if(key==='mono') onVisibilityChange({...config,monospace:config.monospace.map((value,index)=>index===WIDGETS.indexOf(widget)?!value:value)});
       else if(key==='colors') onVisibilityChange({...config,semantic_colors:!config.semantic_colors});
@@ -137,9 +137,9 @@ export const ApplicationStatusBar: React.FC<ApplicationStatusBarProps> = ({ stat
       case 'timeline': return connected && state.controller_connected && state.hardware_sync && (state.hardware_sync.revision !== state.hardware_sync.prepared_revision || state.hardware_sync.play_requested || (state.hardware_sync.timeline?.step_count ?? 0) > 0 || state.hardware_sync.error) ? <span title={state.hardware_sync.error ?? state.hardware_sync.label}><ClockCircleOutlined />{tr(locale, state.hardware_sync.label)}</span> : null;
       case 'progress': { const op = operations[0]; if (!op) return null;
         const fraction = typeof op.fraction === 'number' && Number.isFinite(op.fraction) ? Math.max(0, Math.min(1, op.fraction)) : undefined;
-        return <span className="status-progress" role="progressbar" aria-label={`${op.label} · ${op.phase}`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={fraction === undefined ? undefined : Math.round(fraction * 100)}
+        return <span className={`status-progress status-progress--${operationTone(op.source)}`} role="progressbar" aria-label={`${tr(locale,op.label)} · ${op.phase}`} aria-valuemin={0} aria-valuemax={100} aria-valuenow={fraction === undefined ? undefined : Math.round(fraction * 100)}
           title={operations.map((operation) => `${operation.label} · ${operation.phase}\n${operation.detail}`).join('\n')}>
-          {op.label} · {op.phase}{fraction === undefined ? ' …' : ` · ${(fraction * 100).toFixed(0)}%`}<i style={{ width: fraction === undefined ? '100%' : `${fraction * 100}%` }} className={fraction === undefined ? 'is-indeterminate' : ''} /></span>;
+          <span className="status-progress__label">{tr(locale,op.label)} · {op.phase}</span><span className="status-progress__value">{fraction === undefined ? '…' : `${(fraction * 100).toFixed(0)}%`}</span><i style={{ width: fraction === undefined ? '100%' : `${fraction * 100}%` }} className={fraction === undefined ? 'is-indeterminate' : ''} /></span>;
       }
       case 'chart': return <svg className="status-chart" width="100" height="20" viewBox="0 0 100 20" role="img" aria-label={chartTitle}><title>{chartTitle}</title>
         {metricValues.length ? chartPaths(samples, metricIndex, 100, 20).map((path, index) => <path key={index} d={path} fill="none" stroke="currentColor" strokeWidth="1.5" />) : <text x="50" y="14" textAnchor="middle">—</text>}</svg>;
@@ -172,7 +172,7 @@ export const ApplicationStatusBar: React.FC<ApplicationStatusBarProps> = ({ stat
           data-status-widget={widget} title={label(widget)} draggable onContextMenu={(event) => event.stopPropagation()}
           onClick={()=>{ if(['connection','voltage','current','temperature','status_rgb','hot','warnings'].includes(widget)) onNavigate('hardware');
             else if(widget==='timeline') onNavigate('studio');
-            else if(widget==='progress') onNavigate(operations[0]?.source==='download'?'downloads':'preferences');
+            else if(widget==='progress') onNavigate(operationDestination(operations[0]?.source));
             else if(widget==='estop') sendCmd('set_emergency_stop',{active:false}); }}
           onDragStart={(event) => { const rect = event.currentTarget.getBoundingClientRect(); event.dataTransfer.setData('application/x-pealayer-status-widget', widget); event.dataTransfer.effectAllowed = 'move'; event.dataTransfer.setDragImage(event.currentTarget, event.clientX - rect.left, event.clientY - rect.top); setDragged(widget); }}
           onDragOver={(event) => { if (!dragged || dragged === widget) return; event.preventDefault(); event.stopPropagation(); event.dataTransfer.dropEffect = 'move'; const rect = event.currentTarget.getBoundingClientRect(); setDropTarget({ widget, after: (event.clientX > rect.left + rect.width / 2) !== (getComputedStyle(event.currentTarget).direction === 'rtl') }); }}

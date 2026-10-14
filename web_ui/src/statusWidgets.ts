@@ -40,6 +40,9 @@ export function reorderWidgets(order: readonly string[], source: StatusWidget, t
 export const nextFpsMode = (mode: FpsMode): FpsMode => mode === 'media' ? 'ui' : mode === 'ui' ? 'auto' : 'media';
 export const screenRateSelected = (mode: FpsMode, playing: boolean, loaded: boolean): boolean => mode === 'ui' || (mode === 'auto' && (!playing || !loaded));
 export const numericTelemetry = (value: unknown): number | undefined => typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+export const operationTone = (source: string): 'host' | 'board' | 'transfer' | 'app' =>
+  source === 'controller-host' ? 'host' : source === 'controller-board' ? 'board' : source === 'controller-transfer' ? 'transfer' : 'app';
+export const operationDestination = (source?: string): string => source?.startsWith('controller') ? 'hardware' : source === 'download' ? 'downloads' : 'preferences';
 export type ChartSample = { time: number; values: (number | undefined)[] };
 export function appendSample(samples: readonly ChartSample[], sample: ChartSample): ChartSample[] {
   if (samples.length && sample.time - samples[samples.length - 1].time < 500) return [...samples];
