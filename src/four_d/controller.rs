@@ -3290,17 +3290,19 @@ mod tests {
     fn initial_controller_ping_retains_typed_timeout_without_replaying() {
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
         let endpoint = format!("pccontroller://{}", listener.local_addr().unwrap());
+        let (release, hold_open) = std::sync::mpsc::channel();
         let server = thread::spawn(move || {
             let (stream, _) = listener.accept().unwrap();
             let mut reader = BufReader::new(stream);
             let mut request = String::new(); reader.read_line(&mut request).unwrap();
             assert_eq!(serde_json::from_str::<Value>(&request).unwrap()["method"], "controller.ping");
-            thread::sleep(Duration::from_millis(100));
+            hold_open.recv_timeout(Duration::from_secs(2)).unwrap();
         });
         let result = ControllerClient::connect_with_timeouts(&endpoint, Duration::from_millis(100), Duration::from_millis(20));
         let error = match result { Err(error) => error, Ok(_) => panic!("silent server must time out") };
         assert_eq!(error.kind.as_deref(), Some("timeout"));
         assert!(error.transport_failed);
+        release.send(()).unwrap();
         server.join().unwrap();
     }
     #[test]
