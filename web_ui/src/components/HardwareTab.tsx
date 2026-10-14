@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { hardwareAvailability, hardwareLabels, hardwareOutputsAvailable } from '../hardwareAvailability';
 import { reconcilePWMDrafts } from '../pwmDrafts';
 import { hardwareControlIdentity } from '../hardwareIdentity';
-import { defaultPwmCard, pwmActionVisible, pwmIndicatorAction, pwmRowActions } from '../pwmCard';
+import { defaultPwmCard, guardHardwarePointerStart, pwmActionVisible, pwmIndicatorAction, pwmRowActions } from '../pwmCard';
 import { RfManager } from './RfManager';
 import { PwmPolicyEditor } from './PwmPolicyEditor';
 import { PublishingAuthority } from './PublishingAuthority';
@@ -280,7 +280,8 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
           disabled={disabled} {...actionInputProps(control, action)} />
       </Tooltip> : null;
     };
-    return <div className="hardware-control__pwm">
+    return <div className="hardware-control__pwm"
+      onMouseDownCapture={guardHardwarePointerStart} onPointerDownCapture={guardHardwarePointerStart}>
       {step('decrease')}
       {value == null ? <span className="hardware-control__pwm-unknown">—</span> : <Slider
         min={0} max={100} step={0.1} value={value} disabled={disabled}
