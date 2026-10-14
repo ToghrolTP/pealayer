@@ -3724,6 +3724,17 @@ struct CueDialogSession {
     confirm_dismiss: bool,
 }
 
+pub(crate) fn unsaved_cue(app:&PealayerApp,ctx:&egui::Context) -> Option<bool> {
+    let state=ctx.data(|data|data.get_temp::<TimelineCueDialogState>(timeline_cue_dialog_id()));
+    let Some(state)=state else {return Some(false)};
+    let session=ctx.data(|data|data.get_temp::<CueDialogSession>(timeline_cue_dialog_id().with(state.instance_id)));
+    session.map(|session|*session.baseline!=app.snapshot_timeline() || state.discard_on_cancel)
+}
+
+pub(crate) fn inline_effect_edit_count(ctx:&egui::Context) -> usize {
+    ctx.data(|data|data.count::<InlineEffectIdentityEdit>())
+}
+
 fn cue_dialog_columns(width: f32, docked: bool) -> Option<(f32, f32)> {
     // Both columns must remain useful for unit-aware inputs and translated titles.
     (!docked && width >= 680.0).then(|| {
