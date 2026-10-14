@@ -2,6 +2,20 @@ use crate::ui::dropdown::DropdownUiExt;
 use crate::app::PealayerApp;
 use eframe::egui;
 
+const HEADER_ENDPOINT_WIDTH: f32 = 154.0;
+
+fn header_endpoint_combo<R>(ui: &mut egui::Ui, selected_text: String,
+    body: impl FnOnce(&mut egui::Ui) -> R) -> egui::InnerResponse<egui::InnerResponse<Option<R>>> {
+    ui.allocate_ui_with_layout(egui::vec2(HEADER_ENDPOINT_WIDTH, crate::ui::control_density::height(ui)),
+        egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            // ComboBox::width is a minimum. Extend would let the endpoint and
+            // chevron paint into the already-allocated Disconnect control.
+            crate::ui::dropdown::ComboBox::from_id_salt("hardware_endpoint_select")
+                .selected_text(selected_text).width(HEADER_ENDPOINT_WIDTH).truncate().height(240.0)
+                .show_ui(ui, |ui| { ui.set_min_width(240.0); body(ui) })
+        })
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct TrackMenuState {
     submenu_enabled: bool,
@@ -660,13 +674,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     // paths are valid even when they are not visible to the local enumerator.
                     let mut endpoint_changed = false;
                     ui.add_enabled_ui(!app.is_connected && !connection_requested, |ui| {
-                        ui.allocate_ui_with_layout(egui::vec2(154.0, crate::ui::control_density::height(ui)),
-                            egui::Layout::left_to_right(egui::Align::Center), |ui| {
-                            crate::ui::dropdown::ComboBox::from_id_salt("hardware_endpoint_select")
-                                .selected_text(&app.serial_port)
-                                .width(154.0)
-                                .height(240.0)
-                                .show_ui(ui, |ui| {
+                        header_endpoint_combo(ui, app.serial_port.clone(), |ui| {
                                     for endpoint in crate::four_d::controller::available_endpoints()
                                         .into_iter().chain(crate::server::binary_udp::discovered_controllers())
                                     {
@@ -694,7 +702,6 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                             "Enter a PCController endpoint or an OS hardware path.",
                                         ))
                                         .changed();
-                                });
                         });
                     });
                     if endpoint_changed {
@@ -762,6 +769,77 @@ pub fn format_track_label(id: i64, lang: Option<&str>, title: Option<&str>) -> S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn header_endpoint_chevron_stays_clear_of_disconnect_across_density_and_fonts() {
+        for density in crate::config::UiControlDensity::ALL {
+            for font in [12.0, 14.0, 20.0, 24.0] {
+                for scale in [1.0, 1.25, 2.0] {
+                    let context=egui::Context::default();
+                    context.set_pixels_per_point(scale);
+                    context.all_styles_mut(|style| {
+                        crate::ui::control_density::configure(style,density);
+                        style.text_styles.insert(egui::TextStyle::Button,egui::FontId::proportional(font));
+                    });
+                    let mut endpoint_rect=egui::Rect::NOTHING;
+                    let mut disconnect_rect=egui::Rect::NOTHING;
+                    for (enabled,hovered) in [(true,false),(true,true),(false,false),(false,true)] {
+                        let mut output=context.run_ui(egui::RawInput{
+                            screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(600.0,180.0))),
+                            events:if hovered {vec![egui::Event::PointerMoved(endpoint_rect.right_center()-egui::vec2(10.0,0.0))]} else {vec![]},
+                            ..Default::default()
+                        },|ui| {
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui| {
+                                disconnect_rect=ui.button("Disconnect").rect;
+                                endpoint_rect=ui.add_enabled_ui(enabled,|ui|
+                                    header_endpoint_combo(ui,"pccontroller://very-long-cinema-controller-host:8787".into(),|_|{}).inner.response.rect).inner;
+                            });
+                        });
+                        output.textures_delta.clear();
+                        assert!((endpoint_rect.width()-HEADER_ENDPOINT_WIDTH).abs()<0.01,"{density:?} font={font} rect={endpoint_rect:?}");
+                        assert!(endpoint_rect.right()<disconnect_rect.left(),"overlapping trigger hit targets: {endpoint_rect:?} {disconnect_rect:?}");
+                        for shape in &output.shapes {
+                            if let egui::Shape::Path(path)=&shape.shape {
+                                if path.points.len()==3 && (path.stroke.width-1.5).abs()<0.01 {
+                                    assert!(path.points.iter().all(|point|endpoint_rect.contains(*point)),"chevron leaves trigger");
+                                    assert!(!shape.clip_rect.intersects(disconnect_rect),"chevron painter can bleed into Disconnect");
+                                }
+                            }
+                        }
+                        output.textures_delta.clear();
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn header_endpoint_popup_keeps_its_own_full_width_clip() {
+        let context=egui::Context::default();
+        let mut trigger=egui::Rect::NOTHING;
+        let mut popup_choice=egui::Rect::NOTHING;
+        let mut choice_clip=egui::Rect::NOTHING;
+        for pass in 0..3 {
+            let mut output=context.run_ui(egui::RawInput{
+                screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(600.0,300.0))),
+                events:if pass==1 {vec![egui::Event::PointerMoved(trigger.center()),
+                    egui::Event::PointerButton{pos:trigger.center(),button:egui::PointerButton::Primary,pressed:true,modifiers:egui::Modifiers::NONE},
+                    egui::Event::PointerButton{pos:trigger.center(),button:egui::PointerButton::Primary,pressed:false,modifiers:egui::Modifiers::NONE}]} else {vec![]},
+                ..Default::default()
+            },|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui| {
+                    let _=ui.button("Disconnect");
+                    trigger=header_endpoint_combo(ui,"pccontroller://127.0.0.1:8787".into(),|ui| {
+                        popup_choice=ui.add_sized([240.0,crate::ui::control_density::height(ui)],egui::Button::new("A wide endpoint choice")).rect;
+                        choice_clip=ui.clip_rect();
+                    }).inner.response.rect;
+                });
+            });
+            output.textures_delta.clear();
+        }
+        assert!(popup_choice.width()>=240.0);
+        assert!(choice_clip.contains_rect(popup_choice),"closed trigger clipping must not constrain the popup: choice={popup_choice:?}, clip={choice_clip:?}");
+    }
 
     #[test]
     fn track_menu_is_contextual_to_media_and_discovered_tracks() {

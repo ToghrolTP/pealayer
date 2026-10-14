@@ -22,7 +22,7 @@ pub fn height(ui: &egui::Ui) -> f32 {
 pub fn paint_chevron(ui: &egui::Ui, rect: egui::Rect, color: egui::Color32) {
     // An open chevron, rather than mixing a filled triangle and a font glyph.
     let center = rect.center();
-    ui.painter().add(egui::Shape::line(vec![
+    ui.painter().with_clip_rect(ui.clip_rect().intersect(rect)).add(egui::Shape::line(vec![
         center + egui::vec2(-4.0, -2.0), center + egui::vec2(0.0, 2.0), center + egui::vec2(4.0, -2.0),
     ], egui::Stroke::new(1.5, color)));
 }
