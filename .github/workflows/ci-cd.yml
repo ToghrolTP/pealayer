@@ -46,7 +46,7 @@ jobs:
           fetch-depth: 2
           persist-credentials: false
       - name: "🟢 Install Node.js"
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: "24"
           cache: npm
@@ -75,7 +75,7 @@ jobs:
       - name: "🧹 Check whitespace"
         run: git diff --check HEAD^ HEAD -- .
       - name: "⬆️ Upload verified web application"
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: web-ui-${{ github.sha }}
           path: web_ui/dist
@@ -114,7 +114,7 @@ jobs:
         with:
           persist-credentials: false
       - name: "⬇️ Download verified web application"
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           name: web-ui-${{ github.sha }}
           path: web_ui/dist
@@ -301,7 +301,7 @@ jobs:
           $size = (Get-Item $archive).Length
           @('## ${{ matrix.icon }} ${{ matrix.label }}', '| Property | Result |', '|---|---|', '| Tests | ✅ passed |', '| Release build | ✅ passed |', '| Smoke test | ${{ runner.os == 'Linux' && '— build-only' || '✅ passed' }} |', '| Archive | `${{ steps.package.outputs.archive_name }}` |', "| Size | $size bytes |", "| SHA-256 | ``$hash`` |") | Add-Content $env:GITHUB_STEP_SUMMARY
       - name: "⬆️ Upload installable bundle"
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: Pealayer-${{ matrix.platform }}-${{ steps.package.outputs.safe_ref }}-${{ steps.package.outputs.short_sha }}
           path: dist/${{ matrix.platform }}/**
@@ -309,7 +309,7 @@ jobs:
           retention-days: ${{ github.event_name == 'pull_request' && 14 || 90 }}
       - name: "⬆️ Stage release archive"
         if: startsWith(github.ref, 'refs/tags/') || (github.event_name == 'workflow_dispatch' && inputs.publish_release)
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: release-${{ matrix.platform }}-${{ steps.package.outputs.safe_ref }}-${{ steps.package.outputs.short_sha }}
           path: ${{ steps.package.outputs.archive_path }}
@@ -333,7 +333,7 @@ jobs:
         with:
           persist-credentials: false
       - name: "⬇️ Download release packages"
-        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           pattern: release-*
           merge-multiple: true
