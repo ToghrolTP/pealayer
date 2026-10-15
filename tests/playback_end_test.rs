@@ -241,11 +241,20 @@ fn test_23fps_media_playback_decoupled_framerate_and_zero_timing_offset() {
     assert!(app.duration > 0.0);
     assert!(app.is_active_playback());
 
-    // Pacing delegates to hardware VSync when opengl_vsync is true (default)
+    // Pacing delegates to hardware VSync when opengl_vsync is true (default) on non-Wayland sessions
     assert_eq!(
-        app.playback_repaint_pacing(),
+        app.playback_repaint_pacing_resolved(false),
         Some(pealayer::app::PlaybackRepaintPacing::VSync)
     );
+
+    // On Wayland sessions, hardware swap wait is disabled to prevent occlusion deadlocks
+    match app.playback_repaint_pacing_resolved(true) {
+        Some(pealayer::app::PlaybackRepaintPacing::Paced(dur)) => {
+            let ms = dur.as_secs_f64() * 1000.0;
+            assert!((ms - 16.666).abs() < 0.1);
+        }
+        other => panic!("Expected paced delay on Wayland session, got {other:?}"),
+    }
 
     // When opengl_vsync is disabled, pacing adapts to display refresh rate (e.g. 144Hz)
     app.opengl_vsync = false;
