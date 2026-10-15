@@ -285,6 +285,10 @@ pub fn run() -> eframe::Result {
         viewport = viewport.with_icon(icon);
     }
 
+    let effective_vsync = crate::platform::linux::resolve_effective_opengl_vsync(
+        launch_config.opengl_vsync,
+        crate::platform::linux::is_wayland_session(),
+    );
     let options = eframe::NativeOptions {
         viewport,
         renderer: eframe::Renderer::Glow,
@@ -293,7 +297,7 @@ pub fn run() -> eframe::Result {
             crate::config::AppConfig::get_config_path().with_file_name("workspace-state.ron"),
         ),
         glow_options: eframe::egui_glow::GlowConfiguration {
-            vsync: launch_config.opengl_vsync,
+            vsync: effective_vsync,
             ..Default::default()
         },
         ..Default::default()
