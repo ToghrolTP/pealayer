@@ -2,6 +2,7 @@ pub mod association;
 pub mod clipboard_urls;
 pub mod associations;
 pub mod interop;
+pub mod linux;
 pub mod media_controls;
 #[cfg(target_os = "windows")]
 mod windows_media_session;

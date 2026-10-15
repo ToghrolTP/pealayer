@@ -467,6 +467,10 @@ pub(crate) fn run_native_preferences(owner_hwnd: isize) -> eframe::Result {
         "{} — {app_name}",
         crate::ui::i18n::tr(language, "Preferences")
     );
+    let effective_vsync = crate::platform::linux::resolve_effective_opengl_vsync(
+        config.opengl_vsync,
+        crate::platform::linux::is_wayland_session(),
+    );
     let options = eframe::NativeOptions {
         viewport: native_preferences_viewport(title.clone()),
         renderer: eframe::Renderer::Glow,
@@ -474,7 +478,7 @@ pub(crate) fn run_native_preferences(owner_hwnd: isize) -> eframe::Result {
             AppConfig::get_config_path().with_file_name("preferences-window-state.ron"),
         ),
         glow_options: eframe::egui_glow::GlowConfiguration {
-            vsync: config.opengl_vsync,
+            vsync: effective_vsync,
             ..Default::default()
         },
         ..Default::default()

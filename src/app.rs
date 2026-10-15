@@ -5614,13 +5614,26 @@ impl PealayerApp {
         self.current_video_path.is_some() && !self.is_paused && !self.is_playback_finished()
     }
 
+    /// Returns whether hardware OpenGL VSync is effectively active at runtime.
+    pub fn effective_opengl_vsync(&self) -> bool {
+        crate::platform::linux::resolve_effective_opengl_vsync(
+            self.opengl_vsync,
+            crate::platform::linux::is_wayland_session(),
+        )
+    }
+
     /// Determines the presentation repaint pacing for the UI during playback.
     /// Returns None when playback is inactive (idle, paused, finished, or no media).
     pub fn playback_repaint_pacing(&self) -> Option<PlaybackRepaintPacing> {
+        self.playback_repaint_pacing_resolved(crate::platform::linux::is_wayland_session())
+    }
+
+    /// Resolves presentation repaint pacing given explicit Wayland session state.
+    pub fn playback_repaint_pacing_resolved(&self, is_wayland: bool) -> Option<PlaybackRepaintPacing> {
         if !self.is_active_playback() {
             return None;
         }
-        if self.opengl_vsync {
+        if crate::platform::linux::resolve_effective_opengl_vsync(self.opengl_vsync, is_wayland) {
             Some(PlaybackRepaintPacing::VSync)
         } else {
             let target_hz = self.display_refresh_rate.clamp(20.0, 360.0);
@@ -11267,8 +11280,17 @@ pub(crate) mod tests {
         app.playback_time = 10.0;
         assert!(app.is_active_playback(), "Unpaused loaded media must be active playback");
 
-        // When opengl_vsync is enabled (default), playback pacing delegates directly to hardware VSync
-        assert_eq!(app.playback_repaint_pacing(), Some(PlaybackRepaintPacing::VSync));
+        // When opengl_vsync is enabled (default) on non-Wayland platforms, playback pacing delegates directly to hardware VSync
+        assert_eq!(app.playback_repaint_pacing_resolved(false), Some(PlaybackRepaintPacing::VSync));
+
+        // On native Wayland, blocking swap wait is disabled to prevent occlusion ANR deadlocks; pacing adapts to display refresh rate
+        match app.playback_repaint_pacing_resolved(true) {
+            Some(PlaybackRepaintPacing::Paced(dur)) => {
+                let ms = dur.as_secs_f64() * 1000.0;
+                assert!((ms - (1000.0 / 60.0)).abs() < 0.1, "Expected ~16.67ms on Wayland, got {ms}ms");
+            }
+            other => panic!("Expected Paced duration on Wayland, got {other:?}"),
+        }
 
         // When opengl_vsync is disabled, playback pacing adapts to the desktop display refresh rate
         app.opengl_vsync = false;
@@ -11403,8 +11425,11 @@ pub(crate) mod tests {
         app.is_paused = false;
         app.is_eof = false;
 
-        // VSync pacing when opengl_vsync is true (default)
-        assert_eq!(app.playback_repaint_pacing(), Some(PlaybackRepaintPacing::VSync));
+        // VSync pacing when opengl_vsync is true (default) on non-Wayland platforms
+        assert_eq!(app.playback_repaint_pacing_resolved(false), Some(PlaybackRepaintPacing::VSync));
+
+        // On native Wayland, pacing adapts to display refresh rate
+        assert!(matches!(app.playback_repaint_pacing_resolved(true), Some(PlaybackRepaintPacing::Paced(_))));
 
         // When VSync is disabled, desktop pacing adapts to display refresh rate
         app.opengl_vsync = false;
@@ -11429,6 +11454,33 @@ pub(crate) mod tests {
                 assert!((ms - (1000.0 / 60.0)).abs() < 0.1, "Expected ~16.67ms, got {ms}ms");
             }
             PlaybackRepaintPacing::VSync => panic!("Expected paced interval matching 60Hz"),
+        }
+    }
+
+    #[test]
+    fn test_playback_repaint_pacing_on_wayland() {
+        let _lock = lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.current_video_path = Some(std::path::PathBuf::from("test.mp4"));
+        app.is_paused = false;
+        app.is_eof = false;
+        app.opengl_vsync = true;
+        app.display_refresh_rate = 60.0;
+
+        // When simulating non-Wayland host, configured VSync is honored:
+        assert_eq!(
+            app.playback_repaint_pacing_resolved(false),
+            Some(PlaybackRepaintPacing::VSync)
+        );
+
+        // When simulating Wayland host, hardware swap wait is disabled to prevent occlusion deadlocks;
+        // pacing adapts cleanly to the desktop display refresh rate:
+        match app.playback_repaint_pacing_resolved(true) {
+            Some(PlaybackRepaintPacing::Paced(delay)) => {
+                let ms = delay.as_secs_f64() * 1000.0;
+                assert!((ms - 16.666).abs() < 0.1, "Expected ~16.67ms, got {ms}ms");
+            }
+            other => panic!("Expected Paced delay, got {other:?}"),
         }
     }
 
