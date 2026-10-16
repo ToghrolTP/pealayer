@@ -8,6 +8,11 @@ use crate::four_d::embedded_host::EmbeddedHost;
 use crate::four_d::protocol::Command;
 
 pub const DEFAULT_ENDPOINT: &str = "pccontroller://127.0.0.1:8787";
+pub const DEMO_ENDPOINT: &str = "demo://virtual-board";
+
+pub fn is_demo_endpoint(endpoint: &str) -> bool {
+    endpoint.trim() == DEMO_ENDPOINT
+}
 const CAPABILITY_INA219: u32 = 1 << 0;
 const CAPABILITY_TEMPERATURES: u32 = 1 << 1;
 const CAPABILITY_PWM: u32 = 1 << 2;
@@ -1430,7 +1435,7 @@ fn telemetry_from_status(status: &Value, board_connected: bool) -> HardwareTelem
 /// Returns the coordinator plus serial ports reported by the current operating
 /// system. No example or cross-platform placeholder device is synthesized.
 pub fn available_endpoints() -> Vec<String> {
-    let mut endpoints = vec![DEFAULT_ENDPOINT.to_string()];
+    let mut endpoints = vec![DEMO_ENDPOINT.to_string(), DEFAULT_ENDPOINT.to_string()];
     if let Ok(ports) = serialport::available_ports() {
         let mut direct = ports
             .into_iter()
@@ -3206,7 +3211,8 @@ pub fn normalize_endpoint(endpoint: &str) -> Result<&str, String> {
 
 pub fn is_controller_endpoint(endpoint: &str) -> bool {
     let endpoint = endpoint.trim();
-    endpoint.starts_with("pccontroller://")
+    endpoint == DEMO_ENDPOINT
+        || endpoint.starts_with("pccontroller://")
         || endpoint.starts_with("udp://")
         || endpoint.starts_with("tcp://")
         // Accept the natural host:port form entered into the custom endpoint
