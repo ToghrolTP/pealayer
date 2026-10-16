@@ -33,6 +33,30 @@ impl VirtualBoardSession {
                 }
             }
         }
+        if let Ok(cwd) = std::env::current_dir() {
+            let candidates = [
+                cwd.join("bin").join("virtual_board"),
+                cwd.join("bin").join("virtual_board.exe"),
+                cwd.join("virtual_board"),
+                cwd.join("virtual_board.exe"),
+            ];
+            for candidate in candidates {
+                if candidate.is_file() {
+                    return Some(candidate);
+                }
+            }
+        }
+        #[cfg(target_os = "windows")]
+        if let Some(local_app_data) = std::env::var_os("LOCALAPPDATA") {
+            let candidate = PathBuf::from(local_app_data)
+                .join("Programs")
+                .join("Pealayer")
+                .join("bin")
+                .join("virtual_board.exe");
+            if candidate.is_file() {
+                return Some(candidate);
+            }
+        }
         let dev_candidates = [
             PathBuf::from("scratch/PCController/Tools/VirtualBoard/.build/release/bin/virtual_board"),
             PathBuf::from("scratch/PCController/Tools/VirtualBoard/.build/release/bin/virtual_board.exe"),

@@ -1,4 +1,4 @@
-use pealayer::four_d::controller::{is_controller_endpoint, is_demo_endpoint, available_endpoints, DEMO_ENDPOINT};
+use pealayer::four_d::controller::{is_controller_endpoint, is_demo_endpoint, DEMO_ENDPOINT};
 
 #[test]
 fn test_demo_endpoint_recognition() {

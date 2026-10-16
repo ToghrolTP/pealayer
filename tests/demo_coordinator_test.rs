@@ -2,9 +2,10 @@ use pealayer::four_d::demo_coordinator::DemoCoordinatorSession;
 
 #[test]
 fn test_demo_coordinator_session_connects_and_provisions_profile() {
-    if std::env::var_os("PEALAYER_PCCONTROLLER_LIBRARY").is_none() &&
+    if pealayer::four_d::demo_coordinator::resolve_controller_binary().is_none() &&
+       std::env::var_os("PEALAYER_PCCONTROLLER_LIBRARY").is_none() &&
        pealayer::four_d::embedded_host::library_candidates().is_empty() {
-        eprintln!("Skipping test: pccontroller library candidate not available");
+        eprintln!("Skipping test: pccontroller coordinator or library candidate not available");
         return;
     }
     if pealayer::four_d::virtual_board::VirtualBoardSession::resolve_binary_path().is_none() {

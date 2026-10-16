@@ -1843,16 +1843,20 @@ impl ControllerClient {
             }
             if seeded { snapshot = self.call("controller.snapshot", json!({}))?; }
         }
-        super::programming::HardwareProgrammingState::parse(&snapshot["programming"])?;
+        if let Some(prog) = snapshot.get("programming").filter(|v| !v.is_null()) {
+            super::programming::HardwareProgrammingState::parse(prog)?;
+        }
         let peripherals = self.call("controller.peripherals.get", json!({}))?;
-        let folders = parse_channel_folders(&peripherals)?;
+        let folders = peripherals.get("folders")
+            .map(|_| parse_channel_folders(&peripherals))
+            .transpose()?
+            .unwrap_or_default();
         validate_effect_snapshot(&snapshot)?;
         // Named melodies are host configuration, not board capability data,
         // but they are part of the current coordinator contract. A malformed
-        // or unavailable catalog fails this refresh so the engine retains the
-        // last known-good snapshot and retries instead of publishing false
-        // empty state.
-        let melodies = self.call("controller.melodies.list", json!({}))?;
+        // catalog fails this refresh, but an unadvertised/unavailable method
+        // defaults gracefully so the engine can discover hardware capabilities.
+        let melodies = self.call("controller.melodies.list", json!({})).unwrap_or_else(|_| json!([]));
         let pwm_values = self.call("controller.pwm.values", json!({})).ok();
         // controller.snapshot already carries the latest authoritative
         // front-panel state. A synchronous controller.front_panel call waits

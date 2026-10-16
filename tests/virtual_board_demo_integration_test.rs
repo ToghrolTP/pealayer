@@ -4,9 +4,10 @@ use pealayer::four_d::demo_timeline::build_demo_showcase_timeline;
 
 #[test]
 fn test_virtual_board_demo_full_lifecycle() {
-    if std::env::var_os("PEALAYER_PCCONTROLLER_LIBRARY").is_none() &&
+    if pealayer::four_d::demo_coordinator::resolve_controller_binary().is_none() &&
+       std::env::var_os("PEALAYER_PCCONTROLLER_LIBRARY").is_none() &&
        pealayer::four_d::embedded_host::library_candidates().is_empty() {
-        eprintln!("Skipping integration test: PCController library candidate not found");
+        eprintln!("Skipping integration test: PCController coordinator binary or library candidate not found");
         return;
     }
     if pealayer::four_d::virtual_board::VirtualBoardSession::resolve_binary_path().is_none() {
