@@ -6,6 +6,6 @@ fn test_demo_endpoint_recognition() {
     assert!(is_demo_endpoint(DEMO_ENDPOINT));
     assert!(is_controller_endpoint(DEMO_ENDPOINT));
 
-    let endpoints = available_endpoints();
-    assert!(endpoints.iter().any(|ep| ep == DEMO_ENDPOINT), "available_endpoints must include DEMO_ENDPOINT");
+    assert!(!is_demo_endpoint("pccontroller://127.0.0.1:8787"));
+    assert!(!is_demo_endpoint("direct:/dev/ttyACM0"));
 }

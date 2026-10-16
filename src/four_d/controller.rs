@@ -1435,7 +1435,7 @@ fn telemetry_from_status(status: &Value, board_connected: bool) -> HardwareTelem
 /// Returns the coordinator plus serial ports reported by the current operating
 /// system. No example or cross-platform placeholder device is synthesized.
 pub fn available_endpoints() -> Vec<String> {
-    let mut endpoints = vec![DEMO_ENDPOINT.to_string(), DEFAULT_ENDPOINT.to_string()];
+    let mut endpoints = vec![DEFAULT_ENDPOINT.to_string()];
     if let Ok(ports) = serialport::available_ports() {
         let mut direct = ports
             .into_iter()

@@ -684,8 +684,9 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             app.serial_port.clone()
                         };
                         header_endpoint_combo(ui, selected_display, |ui| {
-                                    for endpoint in crate::four_d::controller::available_endpoints()
-                                        .into_iter().chain(crate::server::binary_udp::discovered_controllers())
+                                    for endpoint in std::iter::once(crate::four_d::controller::DEMO_ENDPOINT.to_string())
+                                        .chain(crate::four_d::controller::available_endpoints())
+                                        .chain(crate::server::binary_udp::discovered_controllers())
                                     {
                                         let item_label = if crate::four_d::controller::is_demo_endpoint(&endpoint) {
                                             format!("{} Virtual Board (Demo Simulation)", crate::ui::icons::LIGHTNING)

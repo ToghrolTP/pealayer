@@ -51,7 +51,7 @@ impl DemoCoordinatorSession {
             }
         }
 
-        let mut host = loaded_host.ok_or_else(|| {
+        let host = loaded_host.ok_or_else(|| {
             format!("could not start packaged PCController host for demo mode: {}", errors.join("; "))
         })?;
 
