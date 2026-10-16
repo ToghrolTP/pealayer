@@ -3215,14 +3215,14 @@ pub fn normalize_endpoint(endpoint: &str) -> Result<&str, String> {
 
 pub fn is_controller_endpoint(endpoint: &str) -> bool {
     let endpoint = endpoint.trim();
-    endpoint == DEMO_ENDPOINT
-        || endpoint.starts_with("pccontroller://")
+    endpoint.starts_with("pccontroller://")
         || endpoint.starts_with("udp://")
         || endpoint.starts_with("tcp://")
         // Accept the natural host:port form entered into the custom endpoint
         // field while keeping explicit direct paths and OS filesystem paths on
         // the direct-diagnostic transport.
         || (!endpoint.starts_with("direct:")
+            && !endpoint.starts_with("demo:")
             && !endpoint.contains('/')
             && !endpoint.contains('\\')
             && normalize_endpoint(endpoint).is_ok())

@@ -16,6 +16,7 @@ fn test_virtual_board_demo_full_lifecycle() {
     }
 
     assert!(is_demo_endpoint(DEMO_ENDPOINT));
+    assert!(!pealayer::four_d::controller::is_controller_endpoint(DEMO_ENDPOINT));
 
     // 1. Start Demo coordinator session
     let mut session = DemoCoordinatorSession::start().expect("start demo session");
@@ -39,6 +40,11 @@ fn test_virtual_board_demo_full_lifecycle() {
     let pwm_res = session.client.call("controller.pwm.set", serde_json::json!({"channel": 0, "raw_value": 2048}));
     assert!(pwm_res.is_ok(), "PWM set execution must succeed");
 
-    // 5. Clean teardown
+    // 5. Verify engine does not block playback with coordinator timeline requirement
+    let engine = pealayer::four_d::engine::spawn_engine();
+    *engine.serial_port.lock().unwrap() = DEMO_ENDPOINT.to_string();
+    assert!(!engine.request_prepared_play(), "Demo mode must not require prepared coordinator timeline arming");
+
+    // 6. Clean teardown
     drop(session);
 }

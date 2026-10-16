@@ -710,6 +710,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                                 }
                                                 if app.timeline.instances.is_empty() {
                                                     app.timeline = crate::four_d::demo_timeline::build_demo_showcase_timeline();
+                                                    app.sync_timeline_engine();
                                                 }
                                             }
                                         }

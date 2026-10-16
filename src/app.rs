@@ -6971,6 +6971,7 @@ impl PealayerApp {
         }
         if self.timeline.instances.is_empty() {
             self.timeline = crate::four_d::demo_timeline::build_demo_showcase_timeline();
+            self.sync_timeline_engine();
         }
         self.request_hardware_connection();
         self.save_config();

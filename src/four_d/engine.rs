@@ -1206,7 +1206,7 @@ pub fn spawn_engine() -> EngineHandle {
             } else if !requested && active_transport.is_some() {
                 // Graceful disconnect: send AllOff
                 if let Some(ref mut transport) = active_transport
-                    && (transport.is_direct_serial() || engine_prepared_timeline.lock().is_ok_and(|plan|plan.may_publish())) {
+                    && (transport.is_direct_serial() || matches!(transport, HardwareTransport::Demo(_)) || engine_prepared_timeline.lock().is_ok_and(|plan|plan.may_publish())) {
                     let _ = transport.call_controller(
                         "controller.command.execute",
                         serde_json::json!({"command": "effect cancel"}),
@@ -1257,7 +1257,7 @@ pub fn spawn_engine() -> EngineHandle {
             // Check for new messages (non-blocking)
             // Evaluate after connection changes, including the first connect.
             let coordinator_timeline = active_transport.as_ref()
-                .is_some_and(|transport| !transport.is_direct_serial());
+                .is_some_and(|transport| matches!(transport, HardwareTransport::Controller(_)));
             let mut channel_disconnected = false;
             loop {
                 let msg = match awakened_message.take().map(Ok).unwrap_or_else(|| rx.try_recv()) {
