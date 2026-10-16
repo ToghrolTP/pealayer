@@ -6947,6 +6947,36 @@ impl PealayerApp {
         }
     }
 
+    pub fn request_hardware_connection(&mut self) {
+        let endpoint = self.serial_port.trim().to_owned();
+        if !endpoint.is_empty() {
+            if let Ok(mut selected) = self.engine_handle.serial_port.lock() {
+                *selected = endpoint;
+            }
+            self.connection_notice = None;
+            self.engine_handle.connection_requested.store(
+                true,
+                std::sync::atomic::Ordering::Relaxed,
+            );
+            self.save_config();
+        }
+    }
+
+    pub fn start_virtual_board_demo(&mut self) {
+        self.serial_port = crate::four_d::controller::DEMO_ENDPOINT.to_string();
+        if self.current_video_path.is_none() {
+            if let Some(media) = crate::four_d::demo_timeline::demo_media_target() {
+                self.load_media_target(&media.to_string_lossy());
+            }
+        }
+        if self.timeline.instances.is_empty() {
+            self.timeline = crate::four_d::demo_timeline::build_demo_showcase_timeline();
+            self.sync_timeline_engine();
+        }
+        self.request_hardware_connection();
+        self.save_config();
+    }
+
     fn remote_neighbor(&self, direction: i32, automatic: bool) -> Option<crate::remote_location::Playback> {
         crate::remote_location::step(self.current_video_path.as_ref()?.to_str()?, direction, automatic)
     }
