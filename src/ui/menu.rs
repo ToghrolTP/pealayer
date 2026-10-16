@@ -220,6 +220,10 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         let _ = crate::remote_location::request("", None, false, ui.ctx());
                         ui.close();
                     }
+                    if ui.button(format!("{} Start Virtual Board Demo", crate::ui::icons::LIGHTNING)).clicked() {
+                        ui.close();
+                        app.start_virtual_board_demo();
+                    }
 
                     crate::ui::icons::submenu(ui, app.tr("Open Recent"), |ui| {
                         if app.recent_media.is_empty() {
@@ -674,17 +678,40 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     // paths are valid even when they are not visible to the local enumerator.
                     let mut endpoint_changed = false;
                     ui.add_enabled_ui(!app.is_connected && !connection_requested, |ui| {
-                        header_endpoint_combo(ui, app.serial_port.clone(), |ui| {
+                        let selected_display = if crate::four_d::controller::is_demo_endpoint(&app.serial_port) {
+                            format!("{} Virtual Board (Demo)", crate::ui::icons::LIGHTNING)
+                        } else {
+                            app.serial_port.clone()
+                        };
+                        header_endpoint_combo(ui, selected_display, |ui| {
                                     for endpoint in crate::four_d::controller::available_endpoints()
                                         .into_iter().chain(crate::server::binary_udp::discovered_controllers())
                                     {
-                                        endpoint_changed |= ui
+                                        let item_label = if crate::four_d::controller::is_demo_endpoint(&endpoint) {
+                                            format!("{} Virtual Board (Demo Simulation)", crate::ui::icons::LIGHTNING)
+                                        } else {
+                                            endpoint.clone()
+                                        };
+                                        if ui
                                             .dropdown_value(
                                                 &mut app.serial_port,
                                                 endpoint.clone(),
-                                                endpoint,
+                                                item_label,
                                             )
-                                            .changed();
+                                            .changed()
+                                        {
+                                            endpoint_changed = true;
+                                            if crate::four_d::controller::is_demo_endpoint(&endpoint) {
+                                                if app.current_video_path.is_none() {
+                                                    if let Some(media) = crate::four_d::demo_timeline::demo_media_target() {
+                                                        app.load_media_target(&media.to_string_lossy());
+                                                    }
+                                                }
+                                                if app.timeline.instances.is_empty() {
+                                                    app.timeline = crate::four_d::demo_timeline::build_demo_showcase_timeline();
+                                                }
+                                            }
+                                        }
                                     }
 
                                     ui.separator();
@@ -705,6 +732,9 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         });
                     });
                     if endpoint_changed {
+                        if let Ok(mut selected) = app.engine_handle.serial_port.lock() {
+                            *selected = app.serial_port.clone();
+                        }
                         app.save_config();
                     }
 
@@ -727,7 +757,9 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     let status_lbl = if app.is_connected && matches!(availability, crate::four_d::programming::HardwareAvailability::Programming | crate::four_d::programming::HardwareAvailability::ProgrammingLatch | crate::four_d::programming::HardwareAvailability::ProgrammingRecovery) {
                         app.tr(availability.label())
                     } else if app.is_connected {
-                        if crate::four_d::controller::is_controller_endpoint(&app.serial_port) {
+                        if crate::four_d::controller::is_demo_endpoint(&app.serial_port) {
+                            format!("{} Virtual Board (Demo)", crate::ui::icons::LIGHTNING)
+                        } else if crate::four_d::controller::is_controller_endpoint(&app.serial_port) {
                             app.advertised_hardware()
                                 .filter(|capabilities| capabilities.board_connected)
                                 .map(|capabilities| app.display_text(&capabilities.board_name))
