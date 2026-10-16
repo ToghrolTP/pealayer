@@ -12,4 +12,5 @@ pub mod media_sync;
 pub mod media_timeline;
 pub mod patterns;
 pub mod protocol;
+pub mod demo_timeline;
 pub mod virtual_board;
