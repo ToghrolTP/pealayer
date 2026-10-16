@@ -41,7 +41,7 @@
   }
   ```
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/virtual_board_session_test.rs`:
 ```rust
@@ -67,12 +67,12 @@ fn test_virtual_board_binary_resolution_and_session_spawn() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cargo test --test virtual_board_session_test`
 Expected: FAIL with "unresolved import `pealayer::four_d::virtual_board`"
 
-- [ ] **Step 3: Implement `VirtualBoardSession`**
+- [x] **Step 3: Implement `VirtualBoardSession`**
 
 Create `src/four_d/virtual_board.rs`:
 ```rust
@@ -188,12 +188,12 @@ Register module in `src/four_d/mod.rs`:
 pub mod virtual_board;
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cargo test --test virtual_board_session_test`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/four_d/virtual_board.rs src/four_d/mod.rs tests/virtual_board_session_test.rs
@@ -216,7 +216,7 @@ git commit -m "feat(four_d): add VirtualBoardSession supervisor for demo hardwar
   pub fn demo_media_target() -> Option<std::path::PathBuf>;
   ```
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/demo_timeline_test.rs`:
 ```rust
@@ -240,12 +240,12 @@ fn test_demo_showcase_timeline_structure() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cargo test --test demo_timeline_test`
 Expected: FAIL with "unresolved import `pealayer::four_d::demo_timeline`"
 
-- [ ] **Step 3: Implement `demo_timeline.rs`**
+- [x] **Step 3: Implement `demo_timeline.rs`**
 
 Create `src/four_d/demo_timeline.rs`:
 ```rust
@@ -360,12 +360,12 @@ Register module in `src/four_d/mod.rs`:
 pub mod demo_timeline;
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cargo test --test demo_timeline_test`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/four_d/demo_timeline.rs src/four_d/mod.rs tests/demo_timeline_test.rs
@@ -398,7 +398,7 @@ git commit -m "feat(four_d): add demo showcase timeline and media resolver"
   }
   ```
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/demo_coordinator_test.rs`:
 ```rust
@@ -424,12 +424,12 @@ fn test_demo_coordinator_session_connects_and_provisions_profile() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cargo test --test demo_coordinator_test`
 Expected: FAIL with "unresolved import `pealayer::four_d::demo_coordinator`"
 
-- [ ] **Step 3: Implement `demo_coordinator.rs`**
+- [x] **Step 3: Implement `demo_coordinator.rs`**
 
 Create `src/four_d/demo_coordinator.rs`:
 ```rust
@@ -532,12 +532,12 @@ Register module in `src/four_d/mod.rs`:
 pub mod demo_coordinator;
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cargo test --test demo_coordinator_test`
 Expected: PASS (or graceful skip if library missing)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/four_d/demo_coordinator.rs src/four_d/mod.rs tests/demo_coordinator_test.rs
@@ -557,7 +557,7 @@ git commit -m "feat(four_d): add DemoCoordinatorSession for virtual board and pr
 - Consumes: `DemoCoordinatorSession` (from Task 3)
 - Produces: Constant `DEMO_ENDPOINT: &str = "demo://virtual-board";` recognized by `is_controller_endpoint` and `available_endpoints`.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/demo_endpoint_test.rs`:
 ```rust
@@ -574,12 +574,12 @@ fn test_demo_endpoint_recognition() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `cargo test --test demo_endpoint_test`
 Expected: FAIL with "cannot find function `is_demo_endpoint` in `pealayer::four_d::controller`"
 
-- [ ] **Step 3: Update `controller.rs` and `engine.rs`**
+- [x] **Step 3: Update `controller.rs` and `engine.rs`**
 
 In `src/four_d/controller.rs`:
 Add:
@@ -646,12 +646,12 @@ let transport = if crate::four_d::controller::is_demo_endpoint(&endpoint) {
 } else { ... }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `cargo test --test demo_endpoint_test`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/four_d/controller.rs src/four_d/engine.rs tests/demo_endpoint_test.rs
@@ -671,7 +671,7 @@ git commit -m "feat(engine): add DEMO_ENDPOINT support and engine session bootst
 - Consumes: `DEMO_ENDPOINT` (from Task 4) & `build_demo_showcase_timeline` (from Task 2)
 - Produces: Visual dropdown entry with label `⚡ Virtual Board (Demo Simulation)`, menu item "Start Virtual Board Demo", and auto-loading of the showcase project upon connecting to demo.
 
-- [ ] **Step 1: Write the failing test**
+- [x] **Step 1: Write the failing test**
 
 Create `tests/ui_demo_menu_test.rs`:
 ```rust
@@ -683,7 +683,7 @@ fn test_demo_endpoint_formatting_and_identity() {
 }
 ```
 
-- [ ] **Step 2: Update `src/ui/menu.rs` and `src/app.rs`**
+- [x] **Step 2: Update `src/ui/menu.rs` and `src/app.rs`**
 
 In `src/ui/menu.rs`:
 In `header_endpoint_combo`:
@@ -743,12 +743,12 @@ pub fn start_virtual_board_demo(&mut self) {
 }
 ```
 
-- [ ] **Step 3: Run test and verify app compiles**
+- [x] **Step 3: Run test and verify app compiles**
 
 Run: `cargo test --test ui_demo_menu_test`
 Expected: PASS
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add src/ui/menu.rs src/app.rs tests/ui_demo_menu_test.rs
@@ -762,7 +762,7 @@ git commit -m "feat(ui): add Virtual Board Demo option to header combo and menu"
 **Files:**
 - Create: `tests/virtual_board_demo_integration_test.rs`
 
-- [ ] **Step 1: Write the end-to-end integration test**
+- [x] **Step 1: Write the end-to-end integration test**
 
 Create `tests/virtual_board_demo_integration_test.rs`:
 ```rust
@@ -811,12 +811,12 @@ fn test_virtual_board_demo_full_lifecycle() {
 }
 ```
 
-- [ ] **Step 2: Run the integration test**
+- [x] **Step 2: Run the integration test**
 
 Run: `cargo test --test virtual_board_demo_integration_test -- --nocapture`
 Expected: PASS
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add tests/virtual_board_demo_integration_test.rs
