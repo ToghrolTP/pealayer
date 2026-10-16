@@ -57,12 +57,12 @@ fn test_virtual_board_binary_resolution_and_session_spawn() {
     }
     let session = VirtualBoardSession::spawn().expect("spawn virtual board session");
     assert!(session.port > 0, "session must bind to a positive loopback port");
-    
+
     // Verify TCP socket accepts connections
     let stream = TcpStream::connect(("127.0.0.1", session.port));
     assert!(stream.is_ok(), "TCP connection to virtual board must succeed");
     drop(stream);
-    
+
     drop(session);
 }
 ```
@@ -228,7 +228,7 @@ fn test_demo_showcase_timeline_structure() {
     assert!(!timeline.instances.is_empty(), "timeline must contain effect instances");
     assert!(!timeline.templates.is_empty(), "timeline must contain template definitions");
     assert!(!timeline.analog_tracks.is_empty(), "timeline must contain analog fan curves");
-    
+
     // Check that seat motion cues exist
     let has_seat_motion = timeline.instances.iter().any(|inst| {
         inst.effect_id.contains("seat") || inst.effect_id.contains("motion")
@@ -568,7 +568,7 @@ fn test_demo_endpoint_recognition() {
     assert_eq!(DEMO_ENDPOINT, "demo://virtual-board");
     assert!(is_demo_endpoint(DEMO_ENDPOINT));
     assert!(is_controller_endpoint(DEMO_ENDPOINT));
-    
+
     let endpoints = available_endpoints();
     assert!(endpoints.iter().any(|ep| ep == DEMO_ENDPOINT), "available_endpoints must include DEMO_ENDPOINT");
 }
@@ -786,7 +786,7 @@ fn test_virtual_board_demo_full_lifecycle() {
 
     // 1. Start Demo coordinator session
     let mut session = DemoCoordinatorSession::start().expect("start demo session");
-    
+
     // 2. Reconcile capabilities
     let caps = session.client.hardware_capabilities().expect("hardware capabilities");
     assert!(caps.board_connected);
