@@ -380,7 +380,11 @@ pub fn draw_simulation_controls(app: &mut PealayerApp, ui: &mut egui::Ui) {
             .fill(door_color.gamma_multiply(0.2))
             .stroke(egui::Stroke::new(1.0, door_color));
 
-            if ui.add(door_btn).on_hover_text("Toggle virtual enclosure door switch").clicked() {
+            if ui
+                .add(door_btn)
+                .on_hover_text(app.tr("Toggle virtual enclosure door switch"))
+                .clicked()
+            {
                 let _ = app.send_virtual_board_command("door toggle");
             }
 
@@ -389,9 +393,15 @@ pub fn draw_simulation_controls(app: &mut PealayerApp, ui: &mut egui::Ui) {
             // Tactile Front Panel Buttons K1..K4
             for key in 1..=4 {
                 let key_label = format!("K{key}");
+                let key_tip = match key {
+                    1 => app.tr("Click front-panel Key 1"),
+                    2 => app.tr("Click front-panel Key 2"),
+                    3 => app.tr("Click front-panel Key 3"),
+                    _ => app.tr("Click front-panel Key 4"),
+                };
                 if ui
                     .button(egui::RichText::new(&key_label).size(11.0).strong())
-                    .on_hover_text(format!("Click front-panel Key {key}"))
+                    .on_hover_text(key_tip)
                     .clicked()
                 {
                     let _ = app.send_virtual_board_command(&format!("key {key} click"));
@@ -402,10 +412,18 @@ pub fn draw_simulation_controls(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
             // RF Remote Injection
             let rf_btn = egui::Button::new(
-                egui::RichText::new(format!("{} Inject RF Cue", crate::ui::icons::RADIO))
-                    .size(11.0),
+                egui::RichText::new(format!(
+                    "{} {}",
+                    crate::ui::icons::RADIO,
+                    app.tr("Inject RF Cue")
+                ))
+                .size(11.0),
             );
-            if ui.add(rf_btn).on_hover_text("Simulate 24-bit RF remote key packet").clicked() {
+            if ui
+                .add(rf_btn)
+                .on_hover_text(app.tr("Simulate 24-bit RF remote key packet"))
+                .clicked()
+            {
                 let _ = app.send_virtual_board_command("rfrecv 0x4D2A 24 1 350");
             }
         });
@@ -437,8 +455,9 @@ pub fn draw_digital_twin_card(app: &mut PealayerApp, ui: &mut egui::Ui) {
         ui.horizontal(|ui| {
             ui.heading(
                 egui::RichText::new(format!(
-                    "{} Virtual Board Digital Twin",
-                    crate::ui::icons::GAUGE
+                    "{} {}",
+                    crate::ui::icons::GAUGE,
+                    app.tr("Virtual Board Digital Twin")
                 ))
                 .size(14.5),
             );
@@ -450,9 +469,9 @@ pub fn draw_digital_twin_card(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     crate::ui::icons::ARROW_SQUARE_OUT
                 };
                 let float_tooltip = if app.show_digital_twin_window {
-                    "Close floating digital twin window"
+                    app.tr("Close floating digital twin window")
                 } else {
-                    "Pop out digital twin to floating window"
+                    app.tr("Pop out digital twin to floating window")
                 };
 
                 if ui
@@ -505,7 +524,7 @@ pub fn draw_digital_twin_window(app: &mut PealayerApp, ctx: &egui::Context) {
     egui::Window::new(format!(
         "{} {}",
         crate::ui::icons::GAUGE,
-        "Virtual Board Digital Twin"
+        app.tr("Virtual Board Digital Twin")
     ))
     .id(egui::Id::new("digital_twin_floating_window"))
     .default_rect(geometry.default_rect)
@@ -539,5 +558,121 @@ pub fn draw_digital_twin_window(app: &mut PealayerApp, ctx: &egui::Context) {
 
     if !open {
         app.show_digital_twin_window = false;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::app::PealayerApp;
+    use crate::four_d::controller::{
+        HardwareCapabilities, HardwareFrontPanel, HardwareMotionSide, HardwareMotionState,
+        HardwareStatusLed, DEMO_ENDPOINT,
+    };
+
+    #[test]
+    fn test_digital_twin_app_integration() {
+        let mut app = PealayerApp::default();
+        app.engine_handle = crate::four_d::engine::memory_only_test_engine();
+        app.serial_port = DEMO_ENDPOINT.to_string();
+        app.is_connected = true;
+
+        let capabilities = HardwareCapabilities {
+            board_connected: true,
+            board_name: "Virtual 4D Cinema Board".to_string(),
+            front_panel: Some(HardwareFrontPanel {
+                schema: 1,
+                raw_segments: vec![0x3F, 0x06, 0x5B, 0x4F],
+                brightness: 7,
+                blink: false,
+                segments_active: true,
+                pressed_keys: 0,
+                menu_page: 0,
+                program_mode: 0,
+                host_captured: false,
+                lcd_available: true,
+                lcd_address: 0x27,
+                lcd_line_1: "Pealayer Cinema".into(),
+                lcd_line_2: "Ready 4D Demo".into(),
+            }),
+            status_led: Some(HardwareStatusLed {
+                red: 0,
+                green: 255,
+                blue: 128,
+                brightness: 255,
+                effect: 0,
+                condition: 0,
+            }),
+            motion: Some(HardwareMotionState {
+                left: HardwareMotionSide {
+                    requested: "up".into(),
+                    applied: "up".into(),
+                    transitioning: false,
+                    revision: 1,
+                },
+                right: HardwareMotionSide {
+                    requested: "down".into(),
+                    applied: "down".into(),
+                    transitioning: false,
+                    revision: 1,
+                },
+            }),
+            ..Default::default()
+        };
+        app.update_hardware_capabilities(Some(capabilities));
+
+        let ctx = egui::Context::default();
+
+        fn discard_ui_output(mut output: egui::FullOutput) {
+            output.textures_delta.clear();
+        }
+
+        // 1. Verify card rendering in egui pass
+        discard_ui_output(ctx.run_ui(egui::RawInput::default(), |ui| {
+            draw_digital_twin_card(&mut app, ui);
+        }));
+
+        // 2. Verify floating window rendering
+        assert!(!app.show_digital_twin_window);
+        app.show_digital_twin_window = true;
+        discard_ui_output(ctx.run_ui(egui::RawInput::default(), |ui| {
+            draw_digital_twin_window(&mut app, ui.ctx());
+        }));
+
+        // 3. Verify send_virtual_board_command dispatches to engine handle
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.engine_handle.sender = tx;
+        assert!(app.send_virtual_board_command("door toggle").is_ok());
+        assert!(app.send_virtual_board_command("key 1 click").is_ok());
+
+        match rx.try_recv() {
+            Ok(crate::four_d::engine::EngineMessage::VirtualBoardCommand(cmd)) => {
+                assert_eq!(cmd, "door toggle");
+            }
+            _ => panic!("Expected VirtualBoardCommand('door toggle')"),
+        }
+        match rx.try_recv() {
+            Ok(crate::four_d::engine::EngineMessage::VirtualBoardCommand(cmd)) => {
+                assert_eq!(cmd, "key 1 click");
+            }
+            _ => panic!("Expected VirtualBoardCommand('key 1 click')"),
+        }
+
+        // 4. Verify tick_virtual_board_kinematics advances strokes
+        app.seat_kinematics.left_stroke = 0.5;
+        app.seat_kinematics.right_stroke = 0.5;
+
+        // Simulate frame tick with mock stable_dt
+        let mut raw_input = egui::RawInput::default();
+        raw_input.predicted_dt = 0.05;
+        discard_ui_output(ctx.run_ui(raw_input, |_| {}));
+        app.tick_virtual_board_kinematics(&ctx);
+
+        // 5. Verify floating window close toggle
+        app.show_digital_twin_window = false;
+        discard_ui_output(ctx.run_ui(egui::RawInput::default(), |ui| {
+            draw_digital_twin_window(&mut app, ui.ctx());
+        }));
+        assert!(!app.show_digital_twin_window);
     }
 }

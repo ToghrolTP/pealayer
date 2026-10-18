@@ -1181,6 +1181,7 @@ impl eframe::App for PealayerApp {
         if crate::peer::active(){crate::peer::mirror(||self.process_events());}else{self.process_events();}
         if crate::peer::active(){self.poll_peer_session(ctx);}
         self.sync_window_level(ctx);
+        self.tick_virtual_board_kinematics(ctx);
 
         if self.is_scrubbing || self.pending_scrub_commit.is_some() {
             // A paused libmpv surface still needs paint opportunities while a
@@ -2152,6 +2153,7 @@ impl eframe::App for PealayerApp {
 
                 crate::ui::open_url::draw(self, ui);
                 crate::downloads::draw(self, ui);
+                crate::ui::digital_twin::draw_digital_twin_window(self, ui.ctx());
 
                 if self.show_shortcuts_dialog {
                     let language = self.language;
@@ -2933,6 +2935,61 @@ impl PealayerApp {
                 command.to_string(),
             ))
             .map_err(|e| e.to_string())
+    }
+
+    pub(crate) fn tick_virtual_board_kinematics(&mut self, ctx: &egui::Context) {
+        let dt = ctx.input(|i| i.stable_dt);
+        if dt <= 0.0 {
+            return;
+        }
+
+        let (left_dir, right_dir, door_open) = if let Some(caps) = self.advertised_hardware() {
+            let (l, r) = if let Some(ref m) = caps.motion {
+                let l_val = match m.left.applied.as_str() {
+                    "up" => 1.0,
+                    "down" => -1.0,
+                    _ => 0.0,
+                };
+                let r_val = match m.right.applied.as_str() {
+                    "up" => 1.0,
+                    "down" => -1.0,
+                    _ => 0.0,
+                };
+                (l_val, r_val)
+            } else {
+                let l = if caps.active_relays.contains(&1) {
+                    1.0
+                } else if caps.active_relays.contains(&2) {
+                    -1.0
+                } else {
+                    0.0
+                };
+                let r = if caps.active_relays.contains(&3) {
+                    1.0
+                } else if caps.active_relays.contains(&4) {
+                    -1.0
+                } else {
+                    0.0
+                };
+                (l, r)
+            };
+            let door = caps.telemetry.door_open.unwrap_or(false);
+            (l, r, door)
+        } else {
+            (0.0, 0.0, false)
+        };
+
+        let interlock = door_open || self.estop_active;
+        self.seat_kinematics.update(dt, left_dir, right_dir, interlock);
+
+        if !interlock && (
+            (left_dir > 0.0 && self.seat_kinematics.left_stroke < 1.0)
+            || (left_dir < 0.0 && self.seat_kinematics.left_stroke > 0.0)
+            || (right_dir > 0.0 && self.seat_kinematics.right_stroke < 1.0)
+            || (right_dir < 0.0 && self.seat_kinematics.right_stroke > 0.0)
+        ) {
+            ctx.request_repaint();
+        }
     }
 
     fn process_shell_commands(&mut self, ctx: &egui::Context) {
