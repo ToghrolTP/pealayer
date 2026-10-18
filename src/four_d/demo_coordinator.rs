@@ -1,6 +1,6 @@
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -8,10 +8,11 @@ use serde_json::json;
 
 use crate::four_d::controller::ControllerClient;
 use crate::four_d::embedded_host::{EmbeddedHost, EmbeddedHostOptions, library_candidates};
+use crate::four_d::process_supervisor::ManagedChild;
 use crate::four_d::virtual_board::VirtualBoardSession;
 
 pub enum CoordinatorSupervisor {
-    Process(Child),
+    Process(ManagedChild),
     Host(EmbeddedHost),
 }
 
@@ -102,19 +103,20 @@ impl DemoCoordinatorSession {
                 .port();
             drop(listener);
 
-            let mut child = Command::new(&binary)
-                .args([
-                    "ipc",
-                    "serve",
-                    "--listen",
-                    &format!("127.0.0.1:{coordinator_port}"),
-                    "--no-connect",
-                ])
-                .env("PCCONTROLLER_DATA_DIR", &temp_root)
-                .env("PCCONTROLLER_CONFIG_DIR", &temp_root)
-                .stdout(Stdio::null())
-                .stderr(Stdio::null())
-                .spawn()
+            let mut cmd = Command::new(&binary);
+            cmd.args([
+                "ipc",
+                "serve",
+                "--listen",
+                &format!("127.0.0.1:{coordinator_port}"),
+                "--no-connect",
+            ])
+            .env("PCCONTROLLER_DATA_DIR", &temp_root)
+            .env("PCCONTROLLER_CONFIG_DIR", &temp_root)
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
+
+            let mut child = ManagedChild::spawn(cmd)
                 .map_err(|e| format!("spawn PCController coordinator process ({}): {e}", binary.display()))?;
 
             let deadline = Instant::now() + Duration::from_secs(4);

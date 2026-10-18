@@ -1,11 +1,13 @@
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::process::{Child, Command, Stdio};
+use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use crate::four_d::process_supervisor::ManagedChild;
+
 pub struct VirtualBoardSession {
-    child: Child,
+    child: ManagedChild,
     pub port: u16,
     temp_eeprom: Option<PathBuf>,
 }
@@ -89,20 +91,21 @@ impl VirtualBoardSession {
             .as_nanos();
         let temp_eeprom = std::env::temp_dir().join(format!("virtual-mcu-eeprom-{}-{run_id}.bin", std::process::id()));
 
-        let child = Command::new(&binary)
-            .args([
-                "--bind",
-                "127.0.0.1",
-                "--port",
-                &port.to_string(),
-                "--eeprom",
-                &temp_eeprom.to_string_lossy(),
-                "--no-stdin",
-                "--quiet",
-            ])
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .spawn()
+        let mut cmd = Command::new(&binary);
+        cmd.args([
+            "--bind",
+            "127.0.0.1",
+            "--port",
+            &port.to_string(),
+            "--eeprom",
+            &temp_eeprom.to_string_lossy(),
+            "--no-stdin",
+            "--quiet",
+        ])
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+
+        let child = ManagedChild::spawn(cmd)
             .map_err(|e| format!("spawn virtual_board child process ({}): {e}", binary.display()))?;
 
         let mut session = Self { child, port, temp_eeprom: Some(temp_eeprom) };

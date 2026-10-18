@@ -14,4 +14,5 @@ pub mod patterns;
 pub mod protocol;
 pub mod demo_coordinator;
 pub mod demo_timeline;
+pub mod process_supervisor;
 pub mod virtual_board;
