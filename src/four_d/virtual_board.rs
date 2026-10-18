@@ -73,64 +73,101 @@ impl VirtualBoardSession {
     }
 
     pub fn spawn() -> Result<Self, String> {
+        Self::spawn_with_retries(3)
+    }
+
+    pub fn spawn_with_retries(max_retries: usize) -> Result<Self, String> {
         crate::four_d::demo_cleanup::cleanup_stale_demo_resources();
 
         let binary = Self::resolve_binary_path().ok_or_else(|| {
             "virtual_board binary could not be found. Check bin/virtual_board or set PEALAYER_VIRTUAL_BOARD_BINARY.".to_string()
         })?;
 
-        let listener = TcpListener::bind(("127.0.0.1", 0))
-            .map_err(|e| format!("reserve ephemeral loopback port for virtual board: {e}"))?;
-        let port = listener
-            .local_addr()
-            .map_err(|e| format!("resolve reserved loopback port: {e}"))?
-            .port();
-        drop(listener);
+        let mut last_error = String::new();
+        let retries = max_retries.max(1);
 
-        let run_id = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .unwrap_or_default()
-            .as_nanos();
-        let temp_eeprom = std::env::temp_dir().join(format!("virtual-mcu-eeprom-{}-{run_id}.bin", std::process::id()));
+        for attempt in 1..=retries {
+            let listener = match TcpListener::bind(("127.0.0.1", 0)) {
+                Ok(l) => l,
+                Err(e) => {
+                    last_error = format!("reserve ephemeral loopback port for virtual board: {e}");
+                    thread::sleep(Duration::from_millis(50));
+                    continue;
+                }
+            };
+            let port = match listener.local_addr() {
+                Ok(addr) => addr.port(),
+                Err(e) => {
+                    last_error = format!("resolve reserved loopback port: {e}");
+                    thread::sleep(Duration::from_millis(50));
+                    continue;
+                }
+            };
+            drop(listener);
 
-        let mut cmd = Command::new(&binary);
-        cmd.args([
-            "--bind",
-            "127.0.0.1",
-            "--port",
-            &port.to_string(),
-            "--eeprom",
-            &temp_eeprom.to_string_lossy(),
-            "--no-stdin",
-            "--quiet",
-        ])
-        .stdout(Stdio::null())
-        .stderr(Stdio::null());
+            let run_id = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            let temp_eeprom = std::env::temp_dir().join(format!(
+                "virtual-mcu-eeprom-{}-{}-{run_id}.bin",
+                std::process::id(),
+                attempt
+            ));
 
-        let child = ManagedChild::spawn(cmd)
-            .map_err(|e| format!("spawn virtual_board child process ({}): {e}", binary.display()))?;
+            let mut cmd = Command::new(&binary);
+            cmd.args([
+                "--bind",
+                "127.0.0.1",
+                "--port",
+                &port.to_string(),
+                "--eeprom",
+                &temp_eeprom.to_string_lossy(),
+                "--no-stdin",
+                "--quiet",
+            ])
+            .stdout(Stdio::null())
+            .stderr(Stdio::null());
 
-        let mut session = Self { child, port, temp_eeprom: Some(temp_eeprom) };
-        let deadline = Instant::now() + Duration::from_secs(3);
-        let mut ready = false;
-        while Instant::now() < deadline {
-            if TcpStream::connect(("127.0.0.1", port)).is_ok() {
-                ready = true;
-                break;
+            let child = match ManagedChild::spawn(cmd) {
+                Ok(c) => c,
+                Err(e) => {
+                    last_error = format!("spawn virtual_board child process ({}): {e}", binary.display());
+                    let _ = std::fs::remove_file(&temp_eeprom);
+                    thread::sleep(Duration::from_millis(50));
+                    continue;
+                }
+            };
+
+            let mut session = Self {
+                child,
+                port,
+                temp_eeprom: Some(temp_eeprom),
+            };
+            let deadline = Instant::now() + Duration::from_secs(3);
+            let mut ready = false;
+            while Instant::now() < deadline {
+                if TcpStream::connect(("127.0.0.1", port)).is_ok() {
+                    ready = true;
+                    break;
+                }
+                if let Ok(Some(status)) = session.child.try_wait() {
+                    last_error = format!("virtual_board exited prematurely with status: {status}");
+                    break;
+                }
+                thread::sleep(Duration::from_millis(20));
             }
-            if let Ok(Some(status)) = session.child.try_wait() {
-                return Err(format!("virtual_board exited prematurely with status: {status}"));
+
+            if ready {
+                return Ok(session);
             }
-            thread::sleep(Duration::from_millis(20));
+
+            // Cleanup attempt before retrying
+            drop(session);
+            thread::sleep(Duration::from_millis(50 * attempt as u64));
         }
 
-        if !ready {
-            let _ = session.child.kill();
-            let _ = session.child.wait();
-            return Err("virtual_board did not start listening within 3 seconds".to_string());
-        }
-
-        Ok(session)
+        Err(format!("virtual_board failed to start after {retries} attempts: {last_error}"))
     }
 }
 

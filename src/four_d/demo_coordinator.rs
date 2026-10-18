@@ -97,50 +97,74 @@ impl DemoCoordinatorSession {
         std::fs::create_dir_all(&temp_root).map_err(|e| format!("create demo coordinator temp root: {e}"))?;
 
         let (supervisor, address) = if let Some(binary) = resolve_controller_binary() {
-            let listener = TcpListener::bind(("127.0.0.1", 0))
-                .map_err(|e| format!("reserve ephemeral loopback port for coordinator: {e}"))?;
-            let coordinator_port = listener
-                .local_addr()
-                .map_err(|e| format!("resolve reserved coordinator port: {e}"))?
-                .port();
-            drop(listener);
+            let mut last_err = String::new();
+            let mut started = None;
 
-            let mut cmd = Command::new(&binary);
-            cmd.args([
-                "ipc",
-                "serve",
-                "--listen",
-                &format!("127.0.0.1:{coordinator_port}"),
-                "--no-connect",
-            ])
-            .env("PCCONTROLLER_DATA_DIR", &temp_root)
-            .env("PCCONTROLLER_CONFIG_DIR", &temp_root)
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
+            for attempt in 1..=3 {
+                let listener = match TcpListener::bind(("127.0.0.1", 0)) {
+                    Ok(l) => l,
+                    Err(e) => {
+                        last_err = format!("reserve ephemeral loopback port for coordinator: {e}");
+                        thread::sleep(Duration::from_millis(50));
+                        continue;
+                    }
+                };
+                let coordinator_port = match listener.local_addr() {
+                    Ok(addr) => addr.port(),
+                    Err(e) => {
+                        last_err = format!("resolve reserved coordinator port: {e}");
+                        thread::sleep(Duration::from_millis(50));
+                        continue;
+                    }
+                };
+                drop(listener);
 
-            let mut child = ManagedChild::spawn(cmd)
-                .map_err(|e| format!("spawn PCController coordinator process ({}): {e}", binary.display()))?;
+                let mut cmd = Command::new(&binary);
+                cmd.args([
+                    "ipc",
+                    "serve",
+                    "--listen",
+                    &format!("127.0.0.1:{coordinator_port}"),
+                    "--no-connect",
+                ])
+                .env("PCCONTROLLER_DATA_DIR", &temp_root)
+                .env("PCCONTROLLER_CONFIG_DIR", &temp_root)
+                .stdout(Stdio::null())
+                .stderr(Stdio::null());
 
-            let deadline = Instant::now() + Duration::from_secs(4);
-            let mut ready = false;
-            while Instant::now() < deadline {
-                if TcpStream::connect(("127.0.0.1", coordinator_port)).is_ok() {
-                    ready = true;
+                let mut child = match ManagedChild::spawn(cmd) {
+                    Ok(c) => c,
+                    Err(e) => {
+                        last_err = format!("spawn PCController coordinator process ({}): {e}", binary.display());
+                        thread::sleep(Duration::from_millis(50));
+                        continue;
+                    }
+                };
+
+                let deadline = Instant::now() + Duration::from_secs(4);
+                let mut ready = false;
+                while Instant::now() < deadline {
+                    if TcpStream::connect(("127.0.0.1", coordinator_port)).is_ok() {
+                        ready = true;
+                        break;
+                    }
+                    if let Ok(Some(status)) = child.try_wait() {
+                        last_err = format!("PCController coordinator exited prematurely with status: {status}");
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(20));
+                }
+
+                if ready {
+                    started = Some((CoordinatorSupervisor::Process(child), format!("127.0.0.1:{coordinator_port}")));
                     break;
                 }
-                if let Ok(Some(status)) = child.try_wait() {
-                    return Err(format!("PCController coordinator exited prematurely with status: {status}"));
-                }
-                thread::sleep(Duration::from_millis(20));
+
+                drop(child);
+                thread::sleep(Duration::from_millis(50 * attempt as u64));
             }
 
-            if !ready {
-                let _ = child.kill();
-                let _ = child.wait();
-                return Err("PCController coordinator did not start listening within 4 seconds".to_string());
-            }
-
-            (CoordinatorSupervisor::Process(child), format!("127.0.0.1:{coordinator_port}"))
+            started.ok_or_else(|| format!("PCController coordinator did not start after 3 attempts: {last_err}"))?
         } else {
             let candidates = library_candidates();
             if candidates.is_empty() {
