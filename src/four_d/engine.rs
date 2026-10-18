@@ -9,6 +9,7 @@ use crate::four_d::protocol::Command;
 
 enum HardwareTransport {
     Controller(crate::four_d::controller::ControllerClient),
+    Demo(crate::four_d::demo_coordinator::DemoCoordinatorSession),
     DirectSerial {
         port: Box<dyn serialport::SerialPort>,
         sequence: u8,
@@ -92,6 +93,7 @@ impl HardwareTransport {
         }
         match self {
             Self::Controller(client) => client.send_command(command),
+            Self::Demo(session) => session.client.send_command(command),
             Self::DirectSerial { port, sequence } => {
                 let request_sequence = *sequence;
                 let frame = command.to_pccontroller_frame(request_sequence);
@@ -172,6 +174,7 @@ impl HardwareTransport {
     fn description(&self) -> String {
         match self {
             Self::Controller(client) => client.transport_description(),
+            Self::Demo(session) => format!("demo:virtual_board:{}", session.virtual_board.port),
             Self::DirectSerial { .. } => "direct:serial-diagnostic".to_string(),
         }
     }
@@ -184,6 +187,7 @@ impl HardwareTransport {
                 client.verify_selected_coordinator().map_err(|error| error.message)?;
                 client.isolated_hardware_capabilities().map(Some)
             }
+            Self::Demo(session) => session.client.isolated_hardware_capabilities().map(Some),
             Self::DirectSerial { .. } => Ok(None),
         }
     }
@@ -206,6 +210,7 @@ impl HardwareTransport {
                 }
                 client.call_detailed(method, params)
             }
+            Self::Demo(session) => session.client.call_detailed(method, params),
             Self::DirectSerial { .. } => {
                 Err("this hardware action requires the PCController coordinator".to_string().into())
             }
@@ -248,7 +253,7 @@ const EMERGENCY_STOP_CONTROLLER_COMMANDS: [&str; 5] = [
 fn enforce_emergency_stop(transport: &mut HardwareTransport) -> Result<(), super::controller::ControllerRpcError> {
     let mut errors = Vec::new();
     let mut transport_failed = false;
-    if matches!(transport, HardwareTransport::Controller(_)) {
+    if matches!(transport, HardwareTransport::Controller(_) | HardwareTransport::Demo(_)) {
         if let Err(error) = transport.call_controller_detailed(
             "controller.estop.set",
             serde_json::json!({
@@ -265,7 +270,7 @@ fn enforce_emergency_stop(transport: &mut HardwareTransport) -> Result<(), super
         transport_failed |= error.transport_failed;
         errors.push(format!("initial output release: {error}"));
     }
-    if matches!(transport, HardwareTransport::Controller(_)) {
+    if matches!(transport, HardwareTransport::Controller(_) | HardwareTransport::Demo(_)) {
         for command in EMERGENCY_STOP_CONTROLLER_COMMANDS {
             if let Err(error) = transport.call_controller_detailed(
                 "controller.command.execute",
@@ -514,6 +519,7 @@ pub enum EngineMessage {
         params: serde_json::Value,
         refresh_catalog: bool,
     },
+    VirtualBoardCommand(String),
 }
 
 pub(super) type StateNotifier = Arc<dyn Fn() + Send + Sync>;
@@ -1045,7 +1051,21 @@ pub fn spawn_engine() -> EngineHandle {
                     let guard = engine_port.lock().unwrap();
                     guard.clone()
                 };
-                let transport = if crate::four_d::controller::is_controller_endpoint(&endpoint) {
+                let transport = if crate::four_d::controller::is_demo_endpoint(&endpoint) {
+                    match crate::four_d::demo_coordinator::DemoCoordinatorSession::start() {
+                        Ok(session) => Ok(HardwareTransport::Demo(session)),
+                        Err(err) => {
+                            let _ = crate::messaging::publish(crate::messaging::ToastRequest {
+                                id: Some("demo.error".into()),
+                                title: "Virtual Board Demo Failed".into(),
+                                message: err.clone(),
+                                severity: crate::messaging::Severity::Warning,
+                                timeout_ms: 8000,
+                            }, "hardware");
+                            Err(err)
+                        }
+                    }
+                } else if crate::four_d::controller::is_controller_endpoint(&endpoint) {
                     crate::four_d::controller::ControllerClient::connect_preferred(&endpoint)
                         .map(HardwareTransport::Controller)
                 } else {
@@ -1104,7 +1124,7 @@ pub fn spawn_engine() -> EngineHandle {
                             }
                             // Connecting a monitor is read-only. Cancellation
                             // belongs to explicit stop/handoff, not reconnection.
-                            if matches!(transport, HardwareTransport::Controller(_)) {
+                            if matches!(transport, HardwareTransport::Controller(_) | HardwareTransport::Demo(_)) {
                                 let local_active = engine_estop.load(Ordering::SeqCst);
                                 match transport
                                     .call_controller("controller.estop.get", serde_json::json!({}))
@@ -1187,7 +1207,7 @@ pub fn spawn_engine() -> EngineHandle {
             } else if !requested && active_transport.is_some() {
                 // Graceful disconnect: send AllOff
                 if let Some(ref mut transport) = active_transport
-                    && (transport.is_direct_serial() || engine_prepared_timeline.lock().is_ok_and(|plan|plan.may_publish())) {
+                    && (transport.is_direct_serial() || matches!(transport, HardwareTransport::Demo(_)) || engine_prepared_timeline.lock().is_ok_and(|plan|plan.may_publish())) {
                     let _ = transport.call_controller(
                         "controller.command.execute",
                         serde_json::json!({"command": "effect cancel"}),
@@ -1238,7 +1258,7 @@ pub fn spawn_engine() -> EngineHandle {
             // Check for new messages (non-blocking)
             // Evaluate after connection changes, including the first connect.
             let coordinator_timeline = active_transport.as_ref()
-                .is_some_and(|transport| !transport.is_direct_serial());
+                .is_some_and(|transport| matches!(transport, HardwareTransport::Controller(_)));
             let mut channel_disconnected = false;
             loop {
                 let msg = match awakened_message.take().map(Ok).unwrap_or_else(|| rx.try_recv()) {
@@ -1496,6 +1516,11 @@ pub fn spawn_engine() -> EngineHandle {
                             refresh_catalog,
                             created,
                         ) && let Ok(mut guard) = engine_conn_error.lock() { *guard = Some(error); }
+                    }
+                    EngineMessage::VirtualBoardCommand(command) => {
+                        if let Some(HardwareTransport::Demo(session)) = active_transport.as_mut() {
+                            let _ = session.virtual_board.send_command(&command);
+                        }
                     }
                 }
             }
@@ -2238,7 +2263,7 @@ fn spawn_peer_engine() -> EngineHandle {
                         EngineMessage::LiveActuatorOverride {channel,value}=>{let _=client.queue("/api/peer/hardware",serde_json::to_value(Command::PwmSet {channel,value}).unwrap_or_default());}
                         // Only the authority schedules outputs. Local cue edits
                         // are sent through the shared timeline session endpoint.
-                        EngineMessage::UpdateQueue(_) | EngineMessage::UpdateMotionQueue(_) | EngineMessage::UpdateControllerMacros(_) | EngineMessage::UpdateControllerStripEffects(_) | EngineMessage::UpdateAnalogTracks(_) | EngineMessage::UpdateDirectPwmCues(_) | EngineMessage::Seek(_) | EngineMessage::ReconfigureEndpoint {..}=>{}
+                        EngineMessage::UpdateQueue(_) | EngineMessage::UpdateMotionQueue(_) | EngineMessage::UpdateControllerMacros(_) | EngineMessage::UpdateControllerStripEffects(_) | EngineMessage::UpdateAnalogTracks(_) | EngineMessage::UpdateDirectPwmCues(_) | EngineMessage::Seek(_) | EngineMessage::ReconfigureEndpoint {..} | EngineMessage::VirtualBoardCommand(_)=>{}
                     }
             }
             if !connected.load(Ordering::Relaxed){pending.clear();}

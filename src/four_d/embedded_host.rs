@@ -287,6 +287,8 @@ pub fn library_candidates() -> Vec<PathBuf> {
     if let Ok(directory) = std::env::current_dir() {
         candidates.push(directory.join(platform_library_name()));
         candidates.push(directory.join("bin").join(platform_library_name()));
+        candidates.push(directory.join("scratch/PCController/Tools/Controller/bin").join(platform_library_name()));
+        candidates.push(directory.join("scratch/PCController/Tools/Controller/.build/bin").join(platform_library_name()));
     }
 
     let mut seen = HashSet::new();
