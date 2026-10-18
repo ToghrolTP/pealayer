@@ -101,6 +101,11 @@ impl ManagedChild {
     pub fn try_wait(&mut self) -> io::Result<Option<ExitStatus>> {
         self.child.try_wait()
     }
+
+    #[inline]
+    pub fn take_stdin(&mut self) -> Option<std::process::ChildStdin> {
+        self.child.stdin.take()
+    }
 }
 
 impl Drop for ManagedChild {

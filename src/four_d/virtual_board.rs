@@ -1,6 +1,7 @@
 use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
-use std::process::{Command, Stdio};
+use std::process::{ChildStdin, Command, Stdio};
+use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -10,6 +11,7 @@ pub struct VirtualBoardSession {
     child: ManagedChild,
     pub port: u16,
     temp_eeprom: Option<PathBuf>,
+    stdin: Arc<Mutex<Option<ChildStdin>>>,
 }
 
 impl VirtualBoardSession {
@@ -123,13 +125,13 @@ impl VirtualBoardSession {
                 &port.to_string(),
                 "--eeprom",
                 &temp_eeprom.to_string_lossy(),
-                "--no-stdin",
                 "--quiet",
             ])
+            .stdin(Stdio::piped())
             .stdout(Stdio::null())
             .stderr(Stdio::null());
 
-            let child = match ManagedChild::spawn(cmd) {
+            let mut child = match ManagedChild::spawn(cmd) {
                 Ok(c) => c,
                 Err(e) => {
                     last_error = format!("spawn virtual_board child process ({}): {e}", binary.display());
@@ -139,10 +141,13 @@ impl VirtualBoardSession {
                 }
             };
 
+            let stdin = Arc::new(Mutex::new(child.take_stdin()));
+
             let mut session = Self {
                 child,
                 port,
                 temp_eeprom: Some(temp_eeprom),
+                stdin,
             };
             let deadline = Instant::now() + Duration::from_secs(3);
             let mut ready = false;
@@ -168,6 +173,19 @@ impl VirtualBoardSession {
         }
 
         Err(format!("virtual_board failed to start after {retries} attempts: {last_error}"))
+    }
+
+    /// Sends a line-oriented simulation command to the virtual board over stdin.
+    pub fn send_command(&self, command: &str) -> Result<(), String> {
+        let mut guard = self.stdin.lock().map_err(|e| e.to_string())?;
+        if let Some(stdin) = guard.as_mut() {
+            use std::io::Write;
+            writeln!(stdin, "{command}").map_err(|e| e.to_string())?;
+            stdin.flush().map_err(|e| e.to_string())?;
+            Ok(())
+        } else {
+            Err("virtual board stdin is unavailable".to_string())
+        }
     }
 }
 
