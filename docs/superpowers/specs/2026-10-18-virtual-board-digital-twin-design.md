@@ -1,9 +1,9 @@
 # Virtual Board Digital Twin & In-App Observability (Option B) Design Specification
 
-**Status:** Approved  
-**Author:** Antigravity Engineering & David  
-**Target:** Pealayer 4D Cinema Engine & PCController Ecosystem  
-**Date:** 2026-10-18  
+**Status:** Approved
+**Author:** Antigravity Engineering & David
+**Target:** Pealayer 4D Cinema Engine & PCController Ecosystem
+**Date:** 2026-10-18
 
 ---
 

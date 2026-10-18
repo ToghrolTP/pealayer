@@ -6,6 +6,7 @@ pub mod control_density;
 mod monitor_controls;
 pub mod color_picker;
 pub mod motion;
+pub mod digital_twin;
 pub mod dialog;
 pub mod dropdown;
 pub mod effects_library;

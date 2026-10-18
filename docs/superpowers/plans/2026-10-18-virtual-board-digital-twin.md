@@ -4,7 +4,7 @@
 
 **Goal:** Implement Option B (Observability & Digital Twin UI) in Pealayer, providing a real-time virtual front panel (LCD/7-segment/RGB), a 2D cinema seat attitude kinematic visualizer, interactive simulation controls (door switch, tactile keys, RF cue injection), and an optional floating inspector window.
 
-**Architecture:** 
+**Architecture:**
 1. Upgrade `VirtualBoardSession` to retain a piped stdin handle for line-oriented simulation command dispatch (`send_command`).
 2. Implement `CinemaSeatKinematics` continuous numerical integrator that drives realistic dual-cylinder stroke extension and Pitch/Roll angle estimation.
 3. Build `src/ui/digital_twin.rs` with front-panel cluster, vector 2D seat wireframe, and simulation control pills.

@@ -725,6 +725,8 @@ pub struct PealayerApp {
     pub(crate) confirm_estop_release: bool,
     pub(crate) show_estop_release_dialog: bool,
     pub(crate) skip_estop_release_confirmation_draft: bool,
+    pub seat_kinematics: crate::four_d::seat_kinematics::CinemaSeatKinematics,
+    pub show_digital_twin_window: bool,
     pub(crate) serial_port: String,
     pub(crate) is_connected: bool,
     pub(crate) lasso_origin: Option<egui::Pos2>,
@@ -2922,6 +2924,15 @@ impl PealayerApp {
         }
         ctx.request_repaint();
         Ok(())
+    }
+
+    pub fn send_virtual_board_command(&self, command: &str) -> Result<(), String> {
+        self.engine_handle
+            .sender
+            .send(crate::four_d::engine::EngineMessage::VirtualBoardCommand(
+                command.to_string(),
+            ))
+            .map_err(|e| e.to_string())
     }
 
     fn process_shell_commands(&mut self, ctx: &egui::Context) {
@@ -9516,6 +9527,8 @@ impl Default for PealayerApp {
             confirm_estop_release: true,
             show_estop_release_dialog: false,
             skip_estop_release_confirmation_draft: false,
+            seat_kinematics: crate::four_d::seat_kinematics::CinemaSeatKinematics::default(),
+            show_digital_twin_window: false,
             serial_port: String::new(),
             is_connected: false,
             lasso_origin: None,

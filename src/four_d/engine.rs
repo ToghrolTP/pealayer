@@ -519,6 +519,7 @@ pub enum EngineMessage {
         params: serde_json::Value,
         refresh_catalog: bool,
     },
+    VirtualBoardCommand(String),
 }
 
 pub(super) type StateNotifier = Arc<dyn Fn() + Send + Sync>;
@@ -1516,6 +1517,11 @@ pub fn spawn_engine() -> EngineHandle {
                             created,
                         ) && let Ok(mut guard) = engine_conn_error.lock() { *guard = Some(error); }
                     }
+                    EngineMessage::VirtualBoardCommand(command) => {
+                        if let Some(HardwareTransport::Demo(session)) = active_transport.as_mut() {
+                            let _ = session.virtual_board.send_command(&command);
+                        }
+                    }
                 }
             }
             if channel_disconnected {
@@ -2257,7 +2263,7 @@ fn spawn_peer_engine() -> EngineHandle {
                         EngineMessage::LiveActuatorOverride {channel,value}=>{let _=client.queue("/api/peer/hardware",serde_json::to_value(Command::PwmSet {channel,value}).unwrap_or_default());}
                         // Only the authority schedules outputs. Local cue edits
                         // are sent through the shared timeline session endpoint.
-                        EngineMessage::UpdateQueue(_) | EngineMessage::UpdateMotionQueue(_) | EngineMessage::UpdateControllerMacros(_) | EngineMessage::UpdateControllerStripEffects(_) | EngineMessage::UpdateAnalogTracks(_) | EngineMessage::UpdateDirectPwmCues(_) | EngineMessage::Seek(_) | EngineMessage::ReconfigureEndpoint {..}=>{}
+                        EngineMessage::UpdateQueue(_) | EngineMessage::UpdateMotionQueue(_) | EngineMessage::UpdateControllerMacros(_) | EngineMessage::UpdateControllerStripEffects(_) | EngineMessage::UpdateAnalogTracks(_) | EngineMessage::UpdateDirectPwmCues(_) | EngineMessage::Seek(_) | EngineMessage::ReconfigureEndpoint {..} | EngineMessage::VirtualBoardCommand(_)=>{}
                     }
             }
             if !connected.load(Ordering::Relaxed){pending.clear();}
