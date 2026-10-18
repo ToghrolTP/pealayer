@@ -12,6 +12,7 @@ pub mod media_sync;
 pub mod media_timeline;
 pub mod patterns;
 pub mod protocol;
+pub mod demo_cleanup;
 pub mod demo_coordinator;
 pub mod demo_timeline;
 pub mod process_supervisor;

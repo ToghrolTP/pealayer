@@ -85,6 +85,8 @@ pub fn resolve_controller_binary() -> Option<PathBuf> {
 
 impl DemoCoordinatorSession {
     pub fn start() -> Result<Self, String> {
+        crate::four_d::demo_cleanup::cleanup_stale_demo_resources();
+
         let vb = VirtualBoardSession::spawn()?;
 
         let run_id = std::time::SystemTime::now()

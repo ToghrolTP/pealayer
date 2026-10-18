@@ -73,6 +73,8 @@ impl VirtualBoardSession {
     }
 
     pub fn spawn() -> Result<Self, String> {
+        crate::four_d::demo_cleanup::cleanup_stale_demo_resources();
+
         let binary = Self::resolve_binary_path().ok_or_else(|| {
             "virtual_board binary could not be found. Check bin/virtual_board or set PEALAYER_VIRTUAL_BOARD_BINARY.".to_string()
         })?;
