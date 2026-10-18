@@ -17,3 +17,4 @@ pub mod demo_coordinator;
 pub mod demo_timeline;
 pub mod process_supervisor;
 pub mod virtual_board;
+pub mod seat_kinematics;
