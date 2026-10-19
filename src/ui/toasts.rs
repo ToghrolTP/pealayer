@@ -35,7 +35,10 @@ pub fn draw(ctx: &egui::Context, details_label: &str) -> Option<InteropCommand> 
                                         Severity::Error | Severity::Warning => crate::ui::icons::WARNING,
                                         Severity::Info => crate::ui::icons::INFO,
                                     };
-                                    ui.strong(format!("{} {}", icon, toast.title));
+                                    let role = match toast.severity { Severity::Success => "green", Severity::Warning => "amber", Severity::Error => "red", Severity::Info => "blue" };
+                                    let palette = crate::platform::interop::get_live_config().color_palette;
+                                    ui.label(egui::RichText::new(format!("{} {}", icon, toast.title)).strong()
+                                        .color(crate::ui::palette::color(palette, ui.visuals().dark_mode, role)));
                                     let clickable = toast.default_action.is_some() || toast.severity == Severity::Error || toast.details.is_some();
                                     let response = ui.add(egui::Label::new(&toast.message).wrap().sense(if clickable { egui::Sense::click() } else { egui::Sense::hover() }));
                                     if response.clicked() {
