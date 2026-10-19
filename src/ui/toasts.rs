@@ -40,7 +40,9 @@ pub fn draw(ctx: &egui::Context, details_label: &str) -> Option<InteropCommand> 
                                     ui.label(egui::RichText::new(format!("{} {}", icon, toast.title)).strong()
                                         .color(crate::ui::palette::color(palette, ui.visuals().dark_mode, role)));
                                     let clickable = toast.default_action.is_some() || toast.severity == Severity::Error || toast.details.is_some();
-                                    let response = ui.add(egui::Label::new(&toast.message).wrap().sense(if clickable { egui::Sense::click() } else { egui::Sense::hover() }));
+                                    let response = egui::ScrollArea::vertical().id_salt("message").max_height(140.0)
+                                        .show(ui, |ui| ui.add(egui::Label::new(&toast.message).wrap()
+                                            .sense(if clickable { egui::Sense::click() } else { egui::Sense::hover() }))).inner;
                                     if response.clicked() {
                                         if let Some(id) = &toast.default_action {
                                             activation = Some(invoke(toast, id));
@@ -62,7 +64,7 @@ pub fn draw(ctx: &egui::Context, details_label: &str) -> Option<InteropCommand> 
                                                     let focus = ui.memory(|memory| memory.has_focus(button_id));
                                                     if !hovered && !focus && !response.has_focus() { ui.set_opacity(0.0); }
                                                     let button = ui.button(icon).on_hover_text(label);
-                                                    if button.has_focus() { ctx.request_repaint(); }
+                                                    if button.gained_focus() { ctx.request_repaint(); }
                                                     if button.clicked() {
                                                         if copy { ctx.copy_text(diagnostic(toast)); }
                                                         else { detail = Some(toast.clone()); }

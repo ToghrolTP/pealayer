@@ -20,6 +20,10 @@ export function SharedToasts({ snapshot, connected, dismiss, invoke, locale = 'e
     const timer = window.setTimeout(() => setNow(Date.now()), Math.max(1, Math.min(...expiries) - Date.now()));
     return () => window.clearTimeout(timer);
   }, [snapshot, now]);
+  useEffect(() => {
+    const live = new Set((snapshot?.toasts || []).map(t => `${t.id}:${t.created_at_ms}`));
+    for (const key of activated.current) if (!live.has(key)) activated.current.delete(key);
+  }, [snapshot]);
   const activate = (t: Toast, action: string) => {
     const key = `${t.id}:${t.created_at_ms}`;
     if (!connected || activated.current.has(key)) return;
