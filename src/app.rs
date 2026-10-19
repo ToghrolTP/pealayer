@@ -1266,7 +1266,7 @@ impl eframe::App for PealayerApp {
             } else {
                 summary
             };
-            let _ = crate::messaging::publish_detailed(crate::messaging::ToastRequest {
+            let _ = crate::messaging::publish_detailed(crate::messaging::ToastRequest { actions: Vec::new(), default_action: None, details: None,
                 id: Some("hardware.connection".into()), title: self.tr(title), message: message.clone(),
                 severity: crate::messaging::Severity::Warning, timeout_ms: 8000,
             }, "hardware", detail);
@@ -2232,7 +2232,9 @@ impl eframe::App for PealayerApp {
                 }
             });
         crate::four_d::authority::draw_warning(self,ui.ctx());
-        crate::ui::toasts::draw(ui.ctx(), &self.tr("Details"));
+        if let Some(command) = crate::ui::toasts::draw(ui.ctx(), &self.tr("Details")) {
+            self.apply_interop_command(ui.ctx(), command, "Notification");
+        }
         crate::ui::remote_location::draw(self, ui.ctx());
     }
 
@@ -2941,7 +2943,7 @@ impl PealayerApp {
                     if let Some(hwnd) = self.window_handle {
                         let _ = crate::platform::windows::show_system_notification(hwnd, &self.app_name, &error);
                     }
-                    let _ = crate::messaging::publish(crate::messaging::ToastRequest {
+                    let _ = crate::messaging::publish(crate::messaging::ToastRequest { actions: Vec::new(), default_action: None, details: None,
                         id: Some("hardware.tray".into()), title: self.tr("PCController tray action"),
                         message: error, severity: crate::messaging::Severity::Warning, timeout_ms: 8000,
                     }, "hardware");
@@ -3957,7 +3959,7 @@ impl PealayerApp {
             }
             if result.operation=="hardware-authority" {
                 if let Err(error)=result.result {
-                    let _=crate::messaging::publish(crate::messaging::ToastRequest {
+                    let _=crate::messaging::publish(crate::messaging::ToastRequest { actions: Vec::new(), default_action: None, details: None,
                         id:Some("hardware.authority".into()),title:"Publishing authority".into(),message:error,
                         severity:crate::messaging::Severity::Warning,timeout_ms:8000,
                     },"hardware");
@@ -4497,13 +4499,20 @@ impl PealayerApp {
                 if let Err(error) = crate::messaging::publish(toast, source) { self.set_osd(error); }
                 ctx.request_repaint(); return;
             }
+            InteropCommand::InvokeToastAction { id, created_at_ms, action_id } => {
+                match crate::messaging::take_action(&id, created_at_ms, &action_id) {
+                    Ok(command) => self.apply_interop_command(ctx, command, source),
+                    Err(error) => self.set_osd(error),
+                }
+                ctx.request_repaint(); return;
+            }
             InteropCommand::DismissToast { id } => {
                 crate::messaging::dismiss(&id); ctx.request_repaint(); return;
             }
             InteropCommand::ConnectPeer { request } => {
                 if let Err(error) = crate::process_control::connect(request, ctx.clone(),
                     self.engine_handle.is_connected.clone(), self.engine_handle.serial_port.clone(), self.mpv.0) {
-                    let _ = crate::messaging::publish(crate::messaging::ToastRequest {
+                    let _ = crate::messaging::publish(crate::messaging::ToastRequest { actions: Vec::new(), default_action: None, details: None,
                         id:Some("peer.connect".into()), title:"Remote connection change failed".into(),
                         message:error,severity:crate::messaging::Severity::Error,timeout_ms:10000,
                     },source);
@@ -7265,7 +7274,7 @@ impl PealayerApp {
                 self.status_bar = crate::peer::client().and_then(|client| client.snapshot()).map(|snapshot|snapshot.session.config.status_bar)
                     .unwrap_or_else(||crate::platform::interop::get_live_config().status_bar);
                 self.config_status = error.clone();
-                let _ = crate::messaging::publish(crate::messaging::ToastRequest {id:Some("status_bar.save".into()),
+                let _ = crate::messaging::publish(crate::messaging::ToastRequest { actions: Vec::new(), default_action: None, details: None,id:Some("status_bar.save".into()),
                     title:"Status bar change could not be saved".into(), message:error, severity:crate::messaging::Severity::Warning, timeout_ms:8000}, "status_bar");
             }
         }
@@ -7294,7 +7303,7 @@ impl PealayerApp {
                 self.control_bars=crate::peer::client().and_then(|c|c.snapshot()).map(|s|s.session.config.control_bars)
                     .unwrap_or_else(||crate::platform::interop::get_live_config().control_bars);
                 self.config_status=error.clone();
-                let _=crate::messaging::publish(crate::messaging::ToastRequest {id:Some("control_bars.save".into()),
+                let _=crate::messaging::publish(crate::messaging::ToastRequest { actions: Vec::new(), default_action: None, details: None,id:Some("control_bars.save".into()),
                     title:"Control bar change could not be saved".into(),message:error,severity:crate::messaging::Severity::Warning,timeout_ms:8000},"control_bar");
             }
         }
@@ -7362,7 +7371,7 @@ impl PealayerApp {
                     .unwrap_or_else(crate::platform::interop::get_live_config);
                 self.apply_timeline_toolbar_preferences(&crate::config::TimelineToolbarPreferences::from_config(&config));
                 self.config_status = error.clone();
-                let _ = crate::messaging::publish(crate::messaging::ToastRequest {
+                let _ = crate::messaging::publish(crate::messaging::ToastRequest { actions: Vec::new(), default_action: None, details: None,
                     id: Some("timeline.toolbar.save".into()), title: "Toolbar change could not be saved".into(),
                     message: error, severity: crate::messaging::Severity::Warning, timeout_ms: 8000,
                 }, "timeline");
@@ -7840,7 +7849,7 @@ impl PealayerApp {
                 .unwrap_or_else(|| "No fresh state received from the remote Pealayer for two seconds.".into());
             self.connection_notice=Some(detail.clone());
             if link_lost {
-                let _ = crate::messaging::publish(crate::messaging::ToastRequest {
+                let _ = crate::messaging::publish(crate::messaging::ToastRequest { actions: Vec::new(), default_action: None, details: None,
                     id: Some("peer.connection".into()), title: "Remote Pealayer link interrupted".into(),
                     message: format!("{detail} Local preview and controls are suspended; the remote board connection is unknown."),
                     severity: crate::messaging::Severity::Warning, timeout_ms: 8000,

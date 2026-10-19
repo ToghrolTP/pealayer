@@ -200,6 +200,8 @@ pub enum InteropCommand {
         toast: crate::messaging::ToastRequest,
     },
     DismissToast { id: String },
+    InvokeToastAction { id: String, created_at_ms: u64, action_id: String },
+    InvokeToastAction { id: String, created_at_ms: u64, action_id: String },
     ShowOsd {
         message: String,
         #[serde(default)]
@@ -823,6 +825,8 @@ impl InteropCommand {
             }
             Self::ShowOsd { options, .. } => options.validate(),
             Self::PublishToast { toast } => toast.validate(),
+            Self::InvokeToastAction { id, action_id, .. } if !crate::messaging::valid_id(id) || !crate::messaging::valid_id(action_id) => Err("invalid notification action identity".into()),
+            Self::InvokeToastAction { id, action_id, .. } if !crate::messaging::valid_id(id) || !crate::messaging::valid_id(action_id) => Err("invalid notification action identity".into()),
             Self::BrowseRemote { target, .. } if !target.is_empty() => crate::remote_location::normalize(target).map(|_| ()),
             Self::SelectRemote { target, .. } => crate::remote_location::normalize(target).map(|_| ()),
             Self::DismissToast { id } if !crate::messaging::valid_id(id) => Err("invalid toast ID".into()),
@@ -999,7 +1003,7 @@ pub fn parse_text_command(input: &str) -> Result<InteropCommand, String> {
         "message" | "show_message" | "show-message" => InteropCommand::ShowMessage {
             message: argument.to_string(),
         },
-        "toast" => InteropCommand::PublishToast { toast: crate::messaging::ToastRequest {
+        "toast" => InteropCommand::PublishToast { toast: crate::messaging::ToastRequest { actions: Vec::new(), default_action: None, details: None,
             id: None, title: String::new(), message: argument.to_string(),
             severity: crate::messaging::Severity::Info, timeout_ms: 5000,
         } },
@@ -1884,6 +1888,14 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         }
         "publish_toast" | "toast.show" | "pealayer.toast.show" => Some(InteropCommand::PublishToast {
             toast: serde_json::from_value(request.params.clone()).map_err(|e| format!("invalid toast: {e}"))?,
+        }),
+        "pealayer.toast.invoke" => Some(InteropCommand::InvokeToastAction {
+            id: string(&["id"])?, action_id: string(&["action_id"])?,
+            created_at_ms: request.params.get("created_at_ms").and_then(Value::as_u64).ok_or("created_at_ms is required")?,
+        }),
+        "pealayer.toast.invoke" => Some(InteropCommand::InvokeToastAction {
+            id: string(&["id"])?, action_id: string(&["action_id"])?,
+            created_at_ms: request.params.get("created_at_ms").and_then(Value::as_u64).ok_or("created_at_ms is required")?,
         }),
         "dismiss_toast" | "toast.dismiss" | "pealayer.toast.dismiss" => Some(InteropCommand::DismissToast { id: string(&["id"])? }),
         "message" | "show_message" | "pealayer.message.show" => Some(InteropCommand::ShowMessage {

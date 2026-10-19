@@ -13,6 +13,14 @@ pub enum Severity {
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
+pub struct ToastAction {
+    pub id: String,
+    pub label: String,
+    /// Existing Pealayer text command, dispatched only after an explicit click.
+    pub command: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 pub struct ToastRequest {
     #[serde(default)]
     pub id: Option<String>,
@@ -23,6 +31,12 @@ pub struct ToastRequest {
     pub severity: Severity,
     #[serde(default = "default_timeout")]
     pub timeout_ms: u64,
+    #[serde(default)]
+    pub actions: Vec<ToastAction>,
+    #[serde(default)]
+    pub default_action: Option<String>,
+    #[serde(default)]
+    pub details: Option<String>,
 }
 fn default_timeout() -> u64 {
     5000
@@ -45,8 +59,31 @@ impl ToastRequest {
         {
             return Err("toast requires text (1..2048 characters), title <=120, valid ID, and timeout 0 or 500..300000 ms".into());
         }
+        if self.actions.len() > 4 || self.details.as_ref().is_some_and(|v| v.chars().count() > 8192) {
+            return Err("notification supports up to four actions and 8192 diagnostic characters".into());
+        }
+        let mut ids = std::collections::HashSet::new();
+        for action in &self.actions {
+            if !valid_id(&action.id) || !ids.insert(&action.id) || action.label.trim().is_empty()
+                || action.label.chars().count() > 80 || action.command.len() > 2048 {
+                return Err("invalid notification action".into());
+            }
+            action_command(action)?;
+        }
+        if self.default_action.as_ref().is_some_and(|id| !ids.contains(id)) {
+            return Err("default action must identify a bound notification action".into());
+        }
         Ok(())
     }
+}
+fn action_command(action: &ToastAction) -> Result<crate::platform::interop::InteropCommand, String> {
+    use crate::platform::interop::InteropCommand;
+    let command = crate::platform::interop::parse_text_command(&action.command)?;
+    if matches!(command, InteropCommand::PublishToast { .. } | InteropCommand::InvokeToastAction { .. }) {
+        return Err("notification actions cannot publish or invoke another notification".into());
+    }
+    command.validate()?;
+    Ok(command)
 }
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Toast {
@@ -56,6 +93,8 @@ pub struct Toast {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub details: Option<String>,
     pub severity: Severity,
+    pub actions: Vec<ToastAction>,
+    pub default_action: Option<String>,
     pub source: String,
     pub created_at_ms: u64,
     pub expires_at_ms: Option<u64>,
@@ -98,6 +137,8 @@ impl MessageHub {
         let id = request
             .id
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
+        let created_at = self.state.toasts.iter().find(|toast| toast.id == id)
+            .map_or(now, |toast| now.max(toast.created_at_ms.saturating_add(1)));
         self.state.toasts.retain(|toast| toast.id != id);
         if self.state.toasts.len() >= 32 {
             self.state.toasts.remove(0);
@@ -106,15 +147,27 @@ impl MessageHub {
             id: id.clone(),
             title: request.title,
             message: request.message,
-            details,
+            details: details.or(request.details),
+            actions: request.actions,
+            default_action: request.default_action,
             severity: request.severity,
             source: source.into(),
-            created_at_ms: now,
+            created_at_ms: created_at,
             expires_at_ms: (request.timeout_ms != 0)
                 .then(|| now.saturating_add(request.timeout_ms)),
         });
         self.state.revision += 1;
         Ok(id)
+    }
+    pub fn take_action(&mut self, id: &str, created_at_ms: u64, action_id: &str, now: u64)
+        -> Result<crate::platform::interop::InteropCommand, String> {
+        self.expire(now);
+        let toast = self.state.toasts.iter().find(|t| t.id == id && t.created_at_ms == created_at_ms)
+            .ok_or("notification expired or was replaced")?;
+        let action = toast.actions.iter().find(|a| a.id == action_id).ok_or("unknown notification action")?;
+        let command = action_command(action)?;
+        self.dismiss(id); // One activation; duplicate clicks cannot replay a hardware command.
+        Ok(command)
     }
     pub fn dismiss(&mut self, id: &str) {
         let before = self.state.toasts.len();
@@ -157,6 +210,11 @@ pub fn publish_detailed(request: ToastRequest, source: &str, details: String) ->
     hub().lock().map_err(|_| "message service unavailable".to_string())?
         .publish_with_details(request, source, now_ms(), Some(details))
 }
+pub fn take_action(id: &str, created_at_ms: u64, action_id: &str)
+    -> Result<crate::platform::interop::InteropCommand, String> {
+    hub().lock().map_err(|_| "message service unavailable".to_string())?
+        .take_action(id, created_at_ms, action_id, now_ms())
+}
 pub fn dismiss(id: &str) {
     if let Ok(mut hub) = hub().lock() {
         hub.dismiss(id);
@@ -173,13 +231,31 @@ pub fn snapshot() -> MessageSnapshot {
 mod tests {
     use super::*;
     fn request(id: &str) -> ToastRequest {
-        ToastRequest {
+        ToastRequest { actions: Vec::new(), default_action: None, details: None,
             id: Some(id.into()),
             title: "".into(),
             message: "Ready".into(),
             severity: Severity::Success,
             timeout_ms: 1000,
         }
+    }
+    #[test]
+    fn bound_actions_are_validated_fenced_and_consumed_once() {
+        let mut hub = MessageHub::default();
+        let mut r = request("test");
+        r.actions.push(ToastAction { id: "inspect".into(), label: "Inspect".into(), command: "preferences".into() });
+        r.default_action = Some("missing".into());
+        assert!(r.validate().is_err());
+        r.default_action = Some("inspect".into());
+        hub.publish(r.clone(), "test", 10).unwrap();
+        hub.publish(r.clone(), "test", 10).unwrap();
+        assert!(hub.take_action("test", 10, "inspect", 20).is_err());
+        assert!(hub.take_action("test", 11, "inspect", 20).is_ok());
+        assert!(hub.take_action("test", 11, "inspect", 20).is_err());
+        hub.publish(r.clone(), "test", 30).unwrap();
+        assert!(hub.take_action("test", 30, "inspect", 1030).is_err());
+        r.actions.push(r.actions[0].clone());
+        assert!(r.validate().is_err());
     }
     #[test]
     fn concise_notification_retains_bounded_original_diagnostics() {

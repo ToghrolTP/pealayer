@@ -1,7 +1,7 @@
 export interface ToastSnapshot {
   instance_id: string;
   revision: number;
-  toasts: Array<{ id: string; title: string; message: string; details?: string; severity: 'info' | 'success' | 'warning' | 'error'; source: string; created_at_ms: number; expires_at_ms: number | null }>;
+  toasts: Array<{ id: string; title: string; message: string; details?: string; actions?: Array<{id: string; label: string; command: string}>; default_action?: string | null; severity: 'info' | 'success' | 'warning' | 'error'; source: string; created_at_ms: number; expires_at_ms: number | null }>;
 }
 // A snapshot replaces the active set, never appends/replays an event history.
 export function visibleToasts(snapshot: ToastSnapshot | undefined, now: number, connected: boolean) {
