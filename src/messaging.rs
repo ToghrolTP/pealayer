@@ -107,10 +107,12 @@ pub struct MessageSnapshot {
 }
 pub struct MessageHub {
     state: MessageSnapshot,
+    last_created_at_ms: u64,
 }
 impl Default for MessageHub {
     fn default() -> Self {
         Self {
+            last_created_at_ms: 0,
             state: MessageSnapshot {
                 instance_id: uuid::Uuid::new_v4().to_string(),
                 ..Default::default()
@@ -137,8 +139,8 @@ impl MessageHub {
         let id = request
             .id
             .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
-        let created_at = self.state.toasts.iter().find(|toast| toast.id == id)
-            .map_or(now, |toast| now.max(toast.created_at_ms.saturating_add(1)));
+        let created_at = now.max(self.last_created_at_ms.saturating_add(1));
+        self.last_created_at_ms = created_at;
         self.state.toasts.retain(|toast| toast.id != id);
         if self.state.toasts.len() >= 32 {
             self.state.toasts.remove(0);
@@ -252,6 +254,9 @@ mod tests {
         assert!(hub.take_action("test", 10, "inspect", 20).is_err());
         assert!(hub.take_action("test", 11, "inspect", 20).is_ok());
         assert!(hub.take_action("test", 11, "inspect", 20).is_err());
+        hub.publish(r.clone(), "test", 10).unwrap();
+        assert!(hub.take_action("test", 11, "inspect", 20).is_err(), "reused ID cannot replay an old action");
+        assert!(hub.take_action("test", 12, "inspect", 20).is_ok());
         hub.publish(r.clone(), "test", 30).unwrap();
         assert!(hub.take_action("test", 30, "inspect", 1030).is_err());
         r.actions.push(r.actions[0].clone());
