@@ -8,3 +8,9 @@
 .shared-toast-error .shared-toast-icon { color: var(--red); }
 .shared-toast button { align-self: start; border: 0; border-radius: 6px; background: transparent; color: inherit; padding: 6px; cursor: pointer; }
 .shared-toast button:hover, .shared-toast button:focus-visible { background: var(--surface-2); outline: 1px solid var(--line); }
+.shared-toast .toast-body { text-align: start; padding: 0; width: 100%; }
+.toast-error-actions { opacity: 0; display: flex; gap: 4px; }
+.shared-toast:hover .toast-error-actions, .shared-toast:focus-within .toast-error-actions { opacity: 1; }
+.toast-bound-actions { display: flex; flex-wrap: wrap; gap: 4px; }
+.toast-diagnostic { white-space: pre-wrap; overflow-wrap: anywhere; max-height: 60vh; overflow: auto; user-select: text; }
+@media (hover: none) { .toast-error-actions { opacity: 1; } }

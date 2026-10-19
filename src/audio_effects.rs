@@ -130,7 +130,7 @@ impl PealayerApp {
                 }
                 Completion::Error(error) => {
                     let _ = crate::messaging::publish(
-                        crate::messaging::ToastRequest {
+                        crate::messaging::ToastRequest { actions: Vec::new(), default_action: None, details: None,
                             id: Some("sfx.error".into()),
                             title: "Audio effect".into(),
                             message: error.clone(),
