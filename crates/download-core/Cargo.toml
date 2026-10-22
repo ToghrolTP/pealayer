@@ -16,7 +16,7 @@ uuid = { version = "1.26.1", features = ["v4", "serde"] }
 url = "2.5.8"
 percent-encoding = "2.3"
 tokio = { version = "1.53", features = ["rt", "time", "net"] }
-egui = { version = "0.36.2", optional = true }
+egui = { version = "0.37.0", optional = true }
 egui-phosphor = { version = "0.14.0", default-features = false, features = ["regular"], optional = true }
 
 [target.'cfg(windows)'.dependencies]
