@@ -5,6 +5,7 @@ pub mod controls;
 pub mod control_density;
 mod monitor_controls;
 pub mod color_picker;
+pub mod craft_theme;
 pub mod motion;
 pub mod digital_twin;
 pub mod dialog;
@@ -210,6 +211,12 @@ pub fn configure_native_visuals(ctx: &eframe::egui::Context, config: &crate::con
     ctx.set_visuals_of(Theme::Light, light);
     ctx.all_styles_mut(configure_interaction_style);
     ctx.all_styles_mut(|style| control_density::configure(style, config.ui_control_density));
+    let tokens = craft_theme::Tokens::for_kind(match config.theme {
+        crate::config::AppTheme::Light => craft_theme::ThemeKind::Light,
+        _ => craft_theme::ThemeKind::Dark,
+    })
+    .with_appearance(Some([red, green, blue]), false);
+    craft_theme::set_current(ctx, tokens);
     elegance_theme::set_source_palette(ctx, config.color_palette);
     motion::configure(ctx, config.ui_animation_mode);
 }

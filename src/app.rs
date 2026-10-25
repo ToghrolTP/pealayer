@@ -2008,6 +2008,8 @@ impl eframe::App for PealayerApp {
                         let mut dock_state =
                             std::mem::replace(&mut self.dock_state, egui_dock::DockState::new(vec![]));
                         let mut dock_style = egui_dock::Style::from_egui(ui.style().as_ref());
+                        let craft_tokens = crate::ui::craft_theme::current(ui.ctx());
+                        crate::ui::craft_theme::apply_dock_style(&mut dock_style, &craft_tokens);
                         let dock_tab_bar_height = dock_style.tab_bar.height;
                         // egui_dock paints legacy solid triangles for leaf disclosure.
                         // Keep its hit target and behavior, but let Pealayer paint the
@@ -2040,6 +2042,13 @@ impl eframe::App for PealayerApp {
                             &self.dock_state,
                             dock_tab_bar_height,
                         );
+                        if let Some(path) = self.dock_state.focused_leaf() {
+                            if let Some(rect) = self.dock_state[path].rect() {
+                                if rect.is_positive() {
+                                    crate::ui::craft_theme::paint_active_panel_outline(ui.painter(), rect, &craft_tokens);
+                                }
+                            }
+                        }
 
                         let tab_rects = ui.ctx().data_mut(|data| {
                             data.get_temp::<Vec<egui::Rect>>(workspace_tab_rects_id)

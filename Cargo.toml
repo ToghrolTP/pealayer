@@ -13,6 +13,7 @@ resolver = "3"
 
 [dependencies]
 pealayer-downloads = { path = "crates/download-core", features = ["ui"] }
+craft-ui = { git = "https://github.com/storytold/craft-libs.git", features = ["serde"] }
 eframe = { version = "0.37", features = ["glow", "persistence"] }
 egui-elegance = "=0.17.0"
 winit = { version = "0.30", default-features = false }

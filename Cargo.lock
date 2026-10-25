@@ -957,6 +957,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "craft-ui"
+version = "0.1.0"
+source = "git+https://github.com/storytold/craft-libs.git#495e5971bc024aa96e6ed318cb6e7cd3a0103184"
+dependencies = [
+ "egui",
+ "log",
+ "objc2 0.6.4",
+ "objc2-app-kit 0.3.2",
+ "objc2-foundation 0.3.2",
+ "serde",
+]
+
+[[package]]
 name = "crc32fast"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3613,6 +3626,7 @@ version = "0.2.0"
 dependencies = [
  "ab_glyph",
  "arboard",
+ "craft-ui",
  "eframe",
  "egui-elegance",
  "egui-phosphor",
