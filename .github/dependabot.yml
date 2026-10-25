@@ -17,6 +17,13 @@ updates:
       cargo-dependencies:
         patterns:
           - "*"
+    ignore:
+      - dependency-name: "eframe"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "egui"
+        update-types: ["version-update:semver-minor"]
+      - dependency-name: "egui-elegance"
+        update-types: ["version-update:semver-minor"]
 
   - package-ecosystem: "npm"
     directory: "/web_ui"
