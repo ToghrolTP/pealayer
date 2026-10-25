@@ -32,7 +32,7 @@
 - Consumes: `Tokens`, `craft_ui::theme::WidgetPalette`, `UiControlDensity`
 - Produces: `pub fn build_visuals(t: &Tokens) -> egui::Visuals`, `pub fn apply_to_style(style: &mut egui::Style, t: &Tokens, density: UiControlDensity)`
 
-- [ ] **Step 1: Write failing unit test in `src/ui/craft_theme.rs`**
+- [x] **Step 1: Write failing unit test in `src/ui/craft_theme.rs`**
 
 ```rust
 #[test]
@@ -50,21 +50,21 @@ fn build_visuals_applies_filmcraft_widget_palette_and_focus() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `PEALAYER_CONFIG_FILE=$(mktemp) cargo test --lib ui::craft_theme::tests::build_visuals_applies_filmcraft_widget_palette_and_focus`
 Expected: FAIL with "cannot find function `build_visuals` in module"
 
-- [ ] **Step 3: Write minimal implementation in `src/ui/craft_theme.rs`**
+- [x] **Step 3: Write minimal implementation in `src/ui/craft_theme.rs`**
 
 Implement `build_visuals(t: &Tokens) -> egui::Visuals` applying the `widget_palette`, field borders, selection fill, and subtle corner radius.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `PEALAYER_CONFIG_FILE=$(mktemp) cargo test --lib ui::craft_theme::tests::build_visuals_applies_filmcraft_widget_palette_and_focus`
 Expected: PASS (ok)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/ui/craft_theme.rs
@@ -83,7 +83,7 @@ git commit -m "feat(ui): add build_visuals helper to craft_theme matching FilmCr
 - Consumes: `craft_theme::Tokens`, `craft_theme::build_visuals`
 - Produces: `configure_native_visuals(&egui::Context, &AppConfig)` with FilmCraft default widget fills and borders
 
-- [ ] **Step 1: Write failing regression test in `src/ui/mod.rs`**
+- [x] **Step 1: Write failing regression test in `src/ui/mod.rs`**
 
 ```rust
 #[test]
@@ -102,21 +102,21 @@ fn native_visuals_use_craft_theme_tokens_and_widget_palette() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `PEALAYER_CONFIG_FILE=$(mktemp) cargo test --lib ui::tests::native_visuals_use_craft_theme_tokens_and_widget_palette`
 Expected: FAIL
 
-- [ ] **Step 3: Write minimal implementation in `src/ui/mod.rs`**
+- [x] **Step 3: Write minimal implementation in `src/ui/mod.rs`**
 
 Integrate `craft_theme::Tokens` into `configure_native_visuals`, setting the widget interaction fills, strokes, and context tokens while maintaining palette contrast assertions.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `PEALAYER_CONFIG_FILE=$(mktemp) cargo test --lib ui::tests`
 Expected: PASS (all tests pass, including contrast and density checks)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/ui/mod.rs
@@ -135,7 +135,7 @@ git commit -m "feat(ui): wire craft_theme widget palette into configure_native_v
 - Consumes: `craft_theme::current(ctx)`
 - Produces: Monitor transport button hover, pressed, and pill toggle styling aligned with FilmCraft tokens
 
-- [ ] **Step 1: Write failing test in `src/ui/monitor_controls.rs`**
+- [x] **Step 1: Write failing test in `src/ui/monitor_controls.rs`**
 
 ```rust
 #[test]
@@ -149,21 +149,21 @@ fn monitor_transport_buttons_use_craft_theme_pill_and_hover_tokens() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `PEALAYER_CONFIG_FILE=$(mktemp) cargo test --lib ui::monitor_controls::tests`
 Expected: Verify test fails if conditions are unmet.
 
-- [ ] **Step 3: Write minimal implementation in `src/ui/monitor_controls.rs`**
+- [x] **Step 3: Write minimal implementation in `src/ui/monitor_controls.rs`**
 
 Ensure monitor controls retrieve `craft_theme::current(ui.ctx())` for active pill toggles and icon tints.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `PEALAYER_CONFIG_FILE=$(mktemp) cargo test --lib ui::monitor_controls::tests`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/ui/monitor_controls.rs
@@ -182,7 +182,7 @@ git commit -m "feat(ui): align monitor controls styling with Craft UI tokens"
 - Consumes: `craft_theme::current(ctx)`
 - Produces: Timeline track fills, ruler background, and playhead colors from FilmCraft tokens
 
-- [ ] **Step 1: Write failing test in `src/ui/layout.rs`**
+- [x] **Step 1: Write failing test in `src/ui/layout.rs`**
 
 ```rust
 #[test]
@@ -197,21 +197,21 @@ fn timeline_ruler_inherits_craft_theme_ruler_tokens() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `PEALAYER_CONFIG_FILE=$(mktemp) cargo test --lib ui::layout::timeline_row_tests::timeline_ruler_inherits_craft_theme_ruler_tokens`
 Expected: FAIL
 
-- [ ] **Step 3: Write minimal implementation in `src/ui/layout.rs`**
+- [x] **Step 3: Write minimal implementation in `src/ui/layout.rs`**
 
 Reference `craft_theme::current(ui.ctx())` for timeline background and ruler painting.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `PEALAYER_CONFIG_FILE=$(mktemp) cargo test --lib ui::layout::timeline_row_tests`
 Expected: PASS
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/ui/layout.rs
@@ -225,17 +225,17 @@ git commit -m "feat(ui): connect timeline track and ruler painting to craft_them
 **Files:**
 - Test: entire crate test suite
 
-- [ ] **Step 1: Run full unit test suite**
+- [x] **Step 1: Run full unit test suite**
 
 Run: `PEALAYER_CONFIG_FILE=$(mktemp) cargo test --lib`
 Expected: All 937+ tests PASS with 0 failures.
 
-- [ ] **Step 2: Run downloader crate tests**
+- [x] **Step 2: Run downloader crate tests**
 
 Run: `cargo test -p pealayer-downloader`
 Expected: PASS with 0 failures.
 
-- [ ] **Step 3: Run compiler checks across all targets**
+- [x] **Step 3: Run compiler checks across all targets**
 
 Run: `cargo check --lib --bins`
 Expected: Clean exit 0 with 0 errors.
