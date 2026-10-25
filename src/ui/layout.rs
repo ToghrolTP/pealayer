@@ -14501,6 +14501,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                         ui.add_space(8.0);
 
                         hardware_monitor_scroll(ui, |ui| {
+                        if crate::four_d::controller::is_demo_endpoint(&self.app.serial_port)
+                            || self.app.advertised_hardware().as_ref().is_some_and(|c| c.board_name.contains("Virtual"))
+                        {
+                            crate::ui::digital_twin::draw_digital_twin_card(self.app, ui);
+                            ui.add_space(10.0);
+                        }
                         if self.app.advertised_hardware().is_some_and(|caps| caps.supports_rf_transmit) {
                             if ui.button(format!("{} {}",crate::ui::icons::RADIO,self.app.tr("RF controls…"))).clicked() {
                                 self.app.rf.open = true;

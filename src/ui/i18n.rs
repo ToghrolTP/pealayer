@@ -1515,6 +1515,17 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Timeline Ruler\nClick or drag to scrub playhead. Scroll to zoom time." => {
             "خط‌کش خط زمانی\nبرای پیمایش کلیک یا درگ کنید؛ برای بزرگ‌نمایی چرخ ماوس را بچرخانید."
         }
+        "Virtual Board Digital Twin" => "دوقلوی دیجیتال برد شبیه‌ساز",
+        "Pop out digital twin to floating window" => "انتقال دوقلوی دیجیتال به پنجره شناور",
+        "Close floating digital twin window" => "بستن پنجره شناور دوقلوی دیجیتال",
+        "Toggle virtual enclosure door switch" => "تغییر وضعیت کلید درب محفظه",
+        "Click front-panel Key 1" => "فشردن کلید ۱ پنل جلویی",
+        "Click front-panel Key 2" => "فشردن کلید ۲ پنل جلویی",
+        "Click front-panel Key 3" => "فشردن کلید ۳ پنل جلویی",
+        "Click front-panel Key 4" => "فشردن کلید ۴ پنل جلویی",
+        "Inject RF Cue" => "تزریق سیگنال رادیویی (RF)",
+        "Simulate 24-bit RF remote key packet" => "شبیه‌سازی بستهٔ ۲۴ بیتی ریموت رادیویی",
+        "INTERLOCK ACTIVE" => "قفل ایمنی فعال",
         _ => english,
     };
     visual_text(language, translated)

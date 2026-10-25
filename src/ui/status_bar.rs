@@ -594,7 +594,7 @@ fn render_widget(
             ));
         }
         Widget::Timeline => {
-            if !app.is_connected {
+            if !app.is_connected || !crate::four_d::controller::is_controller_endpoint(&app.serial_port) {
                 return None;
             }
             let plan = app.engine_handle.prepared_timeline.try_lock().ok()?;
@@ -962,8 +962,10 @@ fn present(app: &PealayerApp, item: Widget, hardware: Option<&HardwareCapabiliti
         Widget::Hot => live.is_some_and(|h| h.telemetry.hot == Some(true)),
         Widget::Estop => app.estop_active, Widget::Warnings => hardware.is_some_and(|h| !h.warnings.is_empty()),
         Widget::Progress => !progress.is_empty(), Widget::Message => current_status_message(app).is_some(),
-        Widget::Timeline => app.is_connected && app.engine_handle.prepared_timeline.try_lock().ok().is_some_and(|p|
-            p.has_items() || p.play_requested || p.error.is_some() || p.deferred_reason.is_some()),
+        Widget::Timeline => app.is_connected
+            && crate::four_d::controller::is_controller_endpoint(&app.serial_port)
+            && app.engine_handle.prepared_timeline.try_lock().ok().is_some_and(|p|
+                p.has_items() || p.play_requested || p.error.is_some() || p.deferred_reason.is_some()),
         _ => true,
     }
 }
@@ -1733,5 +1735,36 @@ mod tests {
             app.status_bar.workspace,
             "item menu must not toggle the background's other widgets"
         );
+    }
+
+    #[test]
+    fn timeline_widget_hidden_for_demo_and_direct_endpoints() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.engine_handle = crate::four_d::engine::memory_only_test_engine();
+        app.is_connected = true;
+        app.engine_handle.is_connected.store(true, std::sync::atomic::Ordering::Relaxed);
+
+        if let Ok(mut plan) = app.engine_handle.prepared_timeline.lock() {
+            plan.replace(Ok(serde_json::json!({"cues": [{"time_ms": 100}]})));
+            assert!(plan.has_items());
+            assert_eq!(plan.presentation_label(), "Preparing hardware");
+        }
+
+        let context = egui::Context::default();
+        let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+            // For Demo endpoint, Widget::Timeline must return None (no "Preparing hardware")
+            app.serial_port = crate::four_d::controller::DEMO_ENDPOINT.to_string();
+            assert!(render_widget(&app, ui, Widget::Timeline, None, &TelemetryLog::default(), &[]).is_none());
+
+            // For direct serial, Widget::Timeline must also return None
+            app.serial_port = "direct:COM3".to_string();
+            assert!(render_widget(&app, ui, Widget::Timeline, None, &TelemetryLog::default(), &[]).is_none());
+
+            // For controller endpoint, Widget::Timeline renders the coordinator timeline status
+            app.serial_port = "pccontroller://127.0.0.1:8787".to_string();
+            assert!(render_widget(&app, ui, Widget::Timeline, None, &TelemetryLog::default(), &[]).is_some());
+        });
+        output.textures_delta.clear();
     }
 }

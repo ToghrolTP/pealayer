@@ -775,6 +775,8 @@ pub fn run() -> eframe::Result {
                 confirm_estop_release: loaded_config.confirm_estop_release,
                 show_estop_release_dialog: false,
                 skip_estop_release_confirmation_draft: false,
+                seat_kinematics: crate::four_d::seat_kinematics::CinemaSeatKinematics::default(),
+                show_digital_twin_window: false,
                 serial_port: loaded_config
                     .hardware_endpoint
                     .clone()
