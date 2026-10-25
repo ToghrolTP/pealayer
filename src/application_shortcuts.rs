@@ -92,7 +92,7 @@ pub fn parse_shortcut(value: &str) -> Result<Option<KeyChord>, String> {
         control: hotkey.mods.contains(Modifiers::CONTROL),
         shift: hotkey.mods.contains(Modifiers::SHIFT),
         alt: hotkey.mods.contains(Modifiers::ALT),
-        super_key: hotkey.mods.contains(Modifiers::SUPER),
+        super_key: hotkey.mods.contains(Modifiers::META),
     }))
 }
 
