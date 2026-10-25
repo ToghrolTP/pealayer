@@ -19,7 +19,7 @@ enum HardwareTransport {
 fn publish_controller_rejection(method: &str, error: &super::controller::ControllerRpcError) {
     if error.transport_failed { return; } // Connection lifecycle emits the transport toast once.
     let authority = error.resource.as_deref() == Some("media_authority");
-    let _ = crate::messaging::publish(crate::messaging::ToastRequest {
+    let _ = crate::messaging::publish(crate::messaging::ToastRequest { actions: Vec::new(), default_action: None, details: None,
         id: Some(if authority { "hardware.authority".into() } else { format!("hardware.command:{method}") }),
         title: if authority { "Publishing authority" } else { "Hardware command rejected" }.into(),
         message: error.message.clone(), severity: crate::messaging::Severity::Warning, timeout_ms: 8000,
@@ -872,7 +872,7 @@ impl ControllerPushTarget {
                         let changed = slot.as_deref() != Some(message);
                         *slot = Some(message.into());
                         if changed && params.get("board_connected").and_then(serde_json::Value::as_bool) != Some(false) {
-                            let _ = crate::messaging::publish(crate::messaging::ToastRequest {
+                            let _ = crate::messaging::publish(crate::messaging::ToastRequest { actions: Vec::new(), default_action: None, details: None,
                                 id:Some("hardware.status".into()),title:"Board status update failed".into(),message:message.into(),
                                 severity:crate::messaging::Severity::Warning,timeout_ms:8000,
                             },"hardware");
@@ -1056,6 +1056,9 @@ pub fn spawn_engine() -> EngineHandle {
                         Ok(session) => Ok(HardwareTransport::Demo(session)),
                         Err(err) => {
                             let _ = crate::messaging::publish(crate::messaging::ToastRequest {
+                                actions: Vec::new(),
+                                default_action: None,
+                                details: None,
                                 id: Some("demo.error".into()),
                                 title: "Virtual Board Demo Failed".into(),
                                 message: err.clone(),

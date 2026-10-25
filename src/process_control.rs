@@ -181,7 +181,7 @@ pub fn connect(
             if let Err(error) = result {
                 finish("failed", Some(error.clone()));
                 let _ = crate::messaging::publish(
-                    crate::messaging::ToastRequest {
+                    crate::messaging::ToastRequest { actions: Vec::new(), default_action: None, details: None,
                         id: Some("peer.connect".into()),
                         title: "Remote connection change failed".into(),
                         message: error,
