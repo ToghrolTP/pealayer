@@ -799,14 +799,14 @@ pub fn spawn(
                                         if let Ok(mut plan) = timeline.lock() { plan.update_authority(status); }
                                         previous = None;
                                         authority_at = Instant::now() - Duration::from_secs(2);
-                                        let _ = crate::messaging::publish(crate::messaging::ToastRequest {
+                                        let _ = crate::messaging::publish(crate::messaging::ToastRequest { actions: Vec::new(), default_action: None, details: None,
                                             id: Some("hardware.authority".into()), title: "Publishing handoff completed".into(),
                                             message: format!("Playback paused. {} now owns hardware publishing.", claim.label),
                                             severity: crate::messaging::Severity::Info, timeout_ms: 6000,
                                         }, "hardware");
                                     }
                                     Err(error) => {
-                                        let _ = crate::messaging::publish(crate::messaging::ToastRequest {
+                                        let _ = crate::messaging::publish(crate::messaging::ToastRequest { actions: Vec::new(), default_action: None, details: None,
                                             id: Some("hardware.authority".into()), title: "Unattended handoff failed".into(),
                                             message: format!("{error}. Playback remains paused; review the handoff manually."),
                                             severity: crate::messaging::Severity::Error, timeout_ms: 10000,

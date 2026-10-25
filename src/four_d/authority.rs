@@ -65,7 +65,7 @@ pub fn request(app: &mut crate::app::PealayerApp, operation: &str, requester_id:
         params,
     ) {
         let _ = crate::messaging::publish(
-            crate::messaging::ToastRequest {
+            crate::messaging::ToastRequest { actions: Vec::new(), default_action: None, details: None,
                 id: Some("hardware.authority".into()),
                 title: "Publishing authority".into(),
                 message: error,
