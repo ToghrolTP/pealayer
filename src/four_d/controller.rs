@@ -8,6 +8,11 @@ use crate::four_d::embedded_host::EmbeddedHost;
 use crate::four_d::protocol::Command;
 
 pub const DEFAULT_ENDPOINT: &str = "pccontroller://127.0.0.1:8787";
+pub const DEMO_ENDPOINT: &str = "demo://virtual-board";
+
+pub fn is_demo_endpoint(endpoint: &str) -> bool {
+    endpoint.trim() == DEMO_ENDPOINT
+}
 const CAPABILITY_INA219: u32 = 1 << 0;
 const CAPABILITY_TEMPERATURES: u32 = 1 << 1;
 const CAPABILITY_PWM: u32 = 1 << 2;
@@ -1838,16 +1843,20 @@ impl ControllerClient {
             }
             if seeded { snapshot = self.call("controller.snapshot", json!({}))?; }
         }
-        super::programming::HardwareProgrammingState::parse(&snapshot["programming"])?;
+        if let Some(prog) = snapshot.get("programming").filter(|v| !v.is_null()) {
+            super::programming::HardwareProgrammingState::parse(prog)?;
+        }
         let peripherals = self.call("controller.peripherals.get", json!({}))?;
-        let folders = parse_channel_folders(&peripherals)?;
+        let folders = peripherals.get("folders")
+            .map(|_| parse_channel_folders(&peripherals))
+            .transpose()?
+            .unwrap_or_default();
         validate_effect_snapshot(&snapshot)?;
         // Named melodies are host configuration, not board capability data,
         // but they are part of the current coordinator contract. A malformed
-        // or unavailable catalog fails this refresh so the engine retains the
-        // last known-good snapshot and retries instead of publishing false
-        // empty state.
-        let melodies = self.call("controller.melodies.list", json!({}))?;
+        // catalog fails this refresh, but an unadvertised/unavailable method
+        // defaults gracefully so the engine can discover hardware capabilities.
+        let melodies = self.call("controller.melodies.list", json!({})).unwrap_or_else(|_| json!([]));
         let pwm_values = self.call("controller.pwm.values", json!({})).ok();
         // controller.snapshot already carries the latest authoritative
         // front-panel state. A synchronous controller.front_panel call waits
@@ -3213,6 +3222,7 @@ pub fn is_controller_endpoint(endpoint: &str) -> bool {
         // field while keeping explicit direct paths and OS filesystem paths on
         // the direct-diagnostic transport.
         || (!endpoint.starts_with("direct:")
+            && !endpoint.starts_with("demo:")
             && !endpoint.contains('/')
             && !endpoint.contains('\\')
             && normalize_endpoint(endpoint).is_ok())
