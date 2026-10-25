@@ -1056,6 +1056,9 @@ pub fn spawn_engine() -> EngineHandle {
                         Ok(session) => Ok(HardwareTransport::Demo(session)),
                         Err(err) => {
                             let _ = crate::messaging::publish(crate::messaging::ToastRequest {
+                                actions: Vec::new(),
+                                default_action: None,
+                                details: None,
                                 id: Some("demo.error".into()),
                                 title: "Virtual Board Demo Failed".into(),
                                 message: err.clone(),
