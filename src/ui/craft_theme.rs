@@ -493,11 +493,9 @@ pub const TAB_PADDING: f32 = 24.0;
 pub const TITLE_HEIGHT: f32 = 14.0;
 pub const RESIZE_BAND: f32 = 4.0;
 
-/// Applies FilmCraft visuals and spacing tokens to the egui context.
-pub fn apply_visuals(ctx: &egui::Context, t: &Tokens, density: crate::config::UiControlDensity) {
+/// Constructs FilmCraft visuals from design tokens.
+pub fn build_visuals(t: &Tokens) -> Visuals {
     let light = t.kind == ThemeKind::Light;
-    ctx.set_theme(if light { egui::Theme::Light } else { egui::Theme::Dark });
-
     let mut v = if light { Visuals::light() } else { Visuals::dark() };
     v.panel_fill = t.panel_bg;
     v.window_fill = t.panel_bg;
@@ -532,7 +530,15 @@ pub fn apply_visuals(ctx: &egui::Context, t: &Tokens, density: crate::config::Ui
     v.widgets.hovered.bg_stroke = Stroke::new(1.0, t.field_border);
     v.widgets.hovered.fg_stroke = Stroke::new(1.0, t.tab_text_active);
     v.widgets.active.fg_stroke = Stroke::new(1.0, t.tab_text_active);
+    v
+}
 
+/// Applies FilmCraft visuals and spacing tokens to the egui context.
+pub fn apply_visuals(ctx: &egui::Context, t: &Tokens, density: crate::config::UiControlDensity) {
+    let light = t.kind == ThemeKind::Light;
+    ctx.set_theme(if light { egui::Theme::Light } else { egui::Theme::Dark });
+
+    let v = build_visuals(t);
     ctx.set_visuals(v);
 
     // Store active tokens in context data for fast component access
@@ -713,5 +719,19 @@ mod tests {
         assert_eq!(dock.tab_height, 32.0);
         assert_eq!(dock.background, dark.panel_bg);
         assert_eq!(dock.tab_background, dark.tab_bg);
+    }
+
+    #[test]
+    fn build_visuals_applies_filmcraft_widget_palette_and_focus() {
+        let dark = Tokens::for_kind(ThemeKind::Dark);
+        let visuals = build_visuals(&dark);
+
+        assert_eq!(visuals.panel_fill, dark.panel_bg);
+        assert_eq!(visuals.extreme_bg_color, dark.field_bg);
+        assert_eq!(visuals.widgets.inactive.bg_stroke.color, dark.field_border);
+        assert_eq!(visuals.widgets.hovered.bg_stroke.color, dark.field_border);
+        assert_eq!(visuals.widgets.hovered.bg_fill, dark.hover);
+        assert_eq!(visuals.widgets.active.bg_fill, dark.pressed);
+        assert_eq!(visuals.selection.bg_fill, dark.accent);
     }
 }
