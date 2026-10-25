@@ -528,4 +528,15 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn monitor_controls_respect_craft_theme_tokens() {
+        let ctx = egui::Context::default();
+        let config = crate::config::AppConfig::default();
+        crate::ui::configure_native_visuals(&ctx, &config);
+        let tokens = crate::ui::craft_theme::current(&ctx);
+
+        assert_eq!(tokens.pill_active_bg, egui::Color32::from_rgb(0x3a, 0x3a, 0x3a));
+        assert_eq!(tokens.playhead, tokens.focus);
+    }
 }

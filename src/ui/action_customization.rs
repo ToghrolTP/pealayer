@@ -105,8 +105,9 @@ pub(crate) fn control(
         id.with("action-hover"),
         response.hovered() || response.has_focus(),
     );
+    let tokens = super::craft_theme::current(ui.ctx());
     let fill = if selected {
-        ui.visuals().selection.bg_fill
+        tokens.pill_active_bg
     } else if frame {
         ui.visuals()
             .widgets
@@ -116,7 +117,9 @@ pub(crate) fn control(
     } else {
         visuals.weak_bg_fill.gamma_multiply(hover)
     };
-    let stroke = if selected || !frame {
+    let stroke = if selected {
+        egui::Stroke::new(1.0, tokens.accent)
+    } else if !frame {
         outline(
             ui.visuals(),
             selected,
