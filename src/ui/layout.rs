@@ -9040,6 +9040,18 @@ mod timeline_row_tests {
     }
 
     #[test]
+    fn timeline_ruler_inherits_craft_theme_ruler_tokens() {
+        let ctx = egui::Context::default();
+        let config = crate::config::AppConfig::default();
+        crate::ui::configure_native_visuals(&ctx, &config);
+        let tokens = crate::ui::craft_theme::current(&ctx);
+
+        assert_eq!(tokens.tl_ruler_bg, egui::Color32::from_rgb(0x1d, 0x1d, 0x1d));
+        assert_eq!(tokens.tl_ruler_tick, egui::Color32::from_rgb(0x8d, 0x8d, 0x8d));
+        assert_eq!(tokens.tl_ruler_text, egui::Color32::from_rgb(0xb0, 0xb0, 0xb0));
+    }
+
+    #[test]
     fn middle_pan_axis_modifiers_preserve_free_and_constrained_modes() {
         let delta = egui::vec2(15.0, -9.0);
         assert_eq!(constrain_middle_pan_delta(delta, false, false, true), delta);
@@ -16378,6 +16390,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         );
 
                                         let viewport_clip = ui.clip_rect();
+                                        let craft_tokens = crate::ui::craft_theme::current(ui.ctx());
                                         let mut ruler_rect = timeline_frozen_ruler_rect(rect, viewport);
                                         // Anchor the band to the viewport, not the cancellation
                                         // of fractional content/scroll offsets. Keep pan ticks
@@ -16399,7 +16412,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         let visible_end_i = (visible_end_sec.ceil() as i32).min(total_seconds.ceil() as i32);
 
                                         // Draw timeline tracks background
-                                        painter.rect_filled(rect, 0.0, ui.visuals().panel_fill);
+                                        painter.rect_filled(rect, 0.0, craft_tokens.tl_track_bg);
 
                                         let tracks_top = rect.min.y + TIMELINE_RULER_HEIGHT;
 
@@ -18159,10 +18172,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         }
 
                                         // Render Dedicated Time Ruler Bar Header
-                                        ruler_painter.rect_filled(ruler_rect, 0.0, ui.visuals().panel_fill);
+                                        ruler_painter.rect_filled(ruler_rect, 0.0, craft_tokens.tl_ruler_bg);
                                         ruler_painter.line_segment(
                                             [egui::pos2(ruler_rect.min.x, ruler_rect.max.y), egui::pos2(ruler_rect.max.x, ruler_rect.max.y)],
-                                            egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(50, 50, 50)),
+                                            egui::Stroke::new(1.0_f32, craft_tokens.separator),
                                         );
 
                                         let label_step: i32 = if zoom < 30.0 {
@@ -18177,7 +18190,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         let longest_label = ruler_painter.layout_no_wrap(
                                             crate::duration::format_timeline_time_ms(total_seconds.ceil().max(0.0) as u64 * 1_000, false),
                                             egui::FontId::monospace(9.0),
-                                            egui::Color32::from_rgb(140, 140, 140),
+                                            craft_tokens.tl_ruler_text,
                                         );
                                         let label_step = label_step.max(((longest_label.size().x + 10.0) / zoom).ceil().max(1.0) as i32);
 
@@ -18187,7 +18200,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 // Major second tick
                                                 ruler_painter.line_segment(
                                                     [egui::pos2(grid_x, ruler_rect.max.y - 8.0), egui::pos2(grid_x, ruler_rect.max.y)],
-                                                    egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(100, 100, 100)),
+                                                    egui::Stroke::new(1.0_f32, craft_tokens.tl_ruler_tick),
                                                 );
                                                 // Sub-second frame notches
                                                 if zoom >= 50.0 {
@@ -18197,7 +18210,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                             let notch_h = if sub == 5 { 5.0 } else { 3.0 };
                                                             ruler_painter.line_segment(
                                                                 [egui::pos2(sub_x, ruler_rect.max.y - notch_h), egui::pos2(sub_x, ruler_rect.max.y)],
-                                                                egui::Stroke::new(1.0_f32, egui::Color32::from_rgb(60, 60, 60)),
+                                                                egui::Stroke::new(1.0_f32, craft_tokens.tl_ruler_tick.gamma_multiply(0.6)),
                                                             );
                                                         }
                                                     }
@@ -18207,13 +18220,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                     let label = ruler_painter.layout_no_wrap(
                                                         crate::duration::format_timeline_time_ms(i as u64 * 1_000, false),
                                                         egui::FontId::monospace(9.0),
-                                                        egui::Color32::from_rgb(140, 140, 140),
+                                                        craft_tokens.tl_ruler_text,
                                                     );
                                                     if grid_x + 4.0 + label.size().x <= rect.max.x - 8.0 {
                                                         ruler_painter.galley(
                                                             egui::pos2(grid_x + 4.0, ruler_rect.min.y + 13.0 - label.size().y / 2.0),
                                                             label,
-                                                            egui::Color32::from_rgb(140, 140, 140),
+                                                            craft_tokens.tl_ruler_text,
                                                         );
                                                     }
                                                 }
