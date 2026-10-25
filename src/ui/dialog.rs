@@ -137,9 +137,16 @@ pub fn singleline_text_edit<'a>(ui: &egui::Ui, text: &'a mut dyn egui::TextBuffe
 /// that slot instead of letting a TextEdit frame move its baseline by a pixel.
 pub fn inline_caption_edit(ui: &mut egui::Ui, id: egui::Id, text: &mut String,
     size: egui::Vec2, font: egui::FontId, alignment: egui::Align) -> egui::Response {
+    let prev_interact = ui.spacing().interact_size;
+    if size.y < prev_interact.y {
+        ui.spacing_mut().interact_size.y = size.y;
+    }
     let response = ui.add_sized(size, singleline_text_edit(ui, text).min_size(egui::vec2(0.0, size.y)).id(id).font(font)
         .text_color(ui.visuals().strong_text_color()).horizontal_align(alignment)
         .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 0))).char_limit(64));
+    if size.y < prev_interact.y {
+        ui.spacing_mut().interact_size = prev_interact;
+    }
     let visuals = ui.style().interact(&response);
     let stroke = if visuals.bg_stroke.width > 0.0 { visuals.bg_stroke }
         else { egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.fg_stroke.color) };
@@ -819,14 +826,14 @@ mod tests {
                             numeric_slider_wheel(ui, &response, value, 0.0..=130.0, crate::config::NumericInputSteps::for_step(1.0));
                             ui.add_space(600.0);
                         });
-                        offset = result.state.offset.y;
+                        offset = result.state.offset().y;
                     });
                     output.textures_delta.clear();
                     slider_rect
                 };
                 render(vec![], &mut value);
                 let point = render(vec![], &mut value).left_center() + egui::vec2(20.0, 0.0);
-                let wheel = |delta| egui::Event::MouseWheel { unit, delta: egui::vec2(0.0, delta), modifiers, phase: egui::TouchPhase::Move };
+                let wheel = |delta| egui::Event::MouseWheel { unit, delta: egui::vec2(0.0, delta), modifiers, phase: egui::TouchPhase::Move, source: egui::MouseWheelSource::Wheel };
                 render(vec![egui::Event::PointerMoved(point), wheel(1.0)], &mut value);
                 assert!((value - (50.0 + increment)).abs() < 1e-8, "wrong increment: {modifiers:?}/{unit:?}");
                 for _ in 0..12 { render(vec![], &mut value); }
@@ -855,7 +862,7 @@ mod tests {
             (response_rect, changed)
         };
         let point = render(vec![], true, &mut value).0.left_center() + egui::vec2(20.0, 0.0);
-        let wheel = |delta| egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, delta), modifiers: egui::Modifiers::NONE, phase: egui::TouchPhase::Move };
+        let wheel = |delta| egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, delta), modifiers: egui::Modifiers::NONE, phase: egui::TouchPhase::Move, source: egui::MouseWheelSource::Wheel };
         assert!(!render(vec![egui::Event::PointerMoved(point), wheel(10.0)], true, &mut value).1);
         assert_eq!(value, 130.0);
         render(vec![egui::Event::PointerMoved(point + egui::vec2(0.0, 100.0)), wheel(-10.0)], true, &mut value);

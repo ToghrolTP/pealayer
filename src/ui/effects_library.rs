@@ -583,7 +583,7 @@ fn designer_navigation_group<R>(
             .right_text(egui::RichText::new(group.references.len().to_string()).small().strong()).frame(false)
             .wrap_mode(egui::TextWrapMode::Truncate));
     if response.clicked() { state.toggle(ui); }
-    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::CollapsingHeader,
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::DisclosureTriangle,
         ui.is_enabled(), state.is_open(), format!("{name} ({})", group.references.len())));
     ui.painter().hline(response.rect.x_range(), response.rect.bottom(), ui.visuals().widgets.noninteractive.bg_stroke);
     let body = state.show_body_unindented(ui, contents);
@@ -2003,15 +2003,17 @@ fn draw_sequence_timeline(
                     });
                 });
             if let Some((action, pointer_x)) = pending_wheel {
-                (zoom, scroll.state.offset) = sequence_wheel_navigation(zoom, scroll.state.offset,
+                let (new_zoom, new_offset) = sequence_wheel_navigation(zoom, scroll.state.offset(),
                     scroll.inner_rect, scroll.content_size, label_width, duration_ms, action, pointer_x);
+                zoom = new_zoom;
+                crate::ui::layout::set_scroll_offset(&mut scroll.state, new_offset);
                 scroll.state.store(ui.ctx(), scroll.id);
                 ui.data_mut(|data| data.insert_persisted(zoom_id, zoom));
                 ui.ctx().request_repaint();
             }
             #[cfg(test)]
             ui.data_mut(|data| data.insert_temp(egui::Id::new((state_prefix.clone(), "viewport-fixture")),
-                (scroll.inner_rect, scroll.state.offset, scroll.content_size)));
+                (scroll.inner_rect, scroll.state.offset(), scroll.content_size)));
 
             let shortcut_enabled = ui.is_enabled() && !egui::Popup::is_any_open(ui.ctx())
                 && (cue_has_focus || (!ui.ctx().egui_wants_keyboard_input() && ui.rect_contains_pointer(ui.max_rect())));
@@ -4088,7 +4090,7 @@ mod tests {
             // Negative wheel pans forwards; positive zoom increases the scale.
             let delta = if expect_zoom { 60.0 } else { -60.0 };
             render(vec![egui::Event::PointerMoved(pointer), egui::Event::MouseWheel {
-                unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, delta), modifiers, phase: egui::TouchPhase::Move,
+                unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, delta), modifiers, phase: egui::TouchPhase::Move, source: egui::MouseWheelSource::Wheel,
             }], &mut draft, &mut selected);
             let (_, after, _) = context.data(|data| data.get_temp::<(egui::Rect, egui::Vec2, egui::Vec2)>(fixture_id).unwrap());
             let zoom = context.data_mut(|data| data.get_persisted::<f32>(zoom_id).unwrap());
@@ -4104,7 +4106,7 @@ mod tests {
             assert_eq!(draft.steps, original, "navigation must not edit cues");
             // Wheel above the canvas belongs to controls/the outer dialog.
             render(vec![egui::Event::PointerMoved(egui::pos2(viewport.center().x, 15.0)), egui::Event::MouseWheel {
-                unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, 30.0), modifiers: egui::Modifiers::CTRL, phase: egui::TouchPhase::Move,
+                unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, 30.0), modifiers: egui::Modifiers::CTRL, phase: egui::TouchPhase::Move, source: egui::MouseWheelSource::Wheel,
             }], &mut draft, &mut selected);
             assert_eq!(context.data_mut(|data| data.get_persisted::<f32>(zoom_id).unwrap()), zoom);
         }

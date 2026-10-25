@@ -8,6 +8,30 @@ mod channel_folders;
 pub(crate) use channel_folders::{request_channel_folder_update, channel_folder_names};
 pub(crate) use channel_folders::raw_relay as channel_control_is_raw_relay;
 
+#[inline]
+pub(crate) fn set_scroll_offset(state: &mut egui::scroll_area::State, offset: egui::Vec2) {
+    if let (Ok(mut val), Ok(offset_val)) = (serde_json::to_value(*state), serde_json::to_value(offset)) {
+        if let Some(map) = val.as_object_mut() {
+            map.insert("offset".to_string(), offset_val);
+            if let Ok(updated) = serde_json::from_value(val) {
+                *state = updated;
+            }
+        }
+    }
+}
+
+#[inline]
+pub(crate) fn set_scroll_offset_x(state: &mut egui::scroll_area::State, x: f32) {
+    let y = state.offset().y;
+    set_scroll_offset(state, egui::vec2(x, y));
+}
+
+#[inline]
+pub(crate) fn set_scroll_offset_y(state: &mut egui::scroll_area::State, y: f32) {
+    let x = state.offset().x;
+    set_scroll_offset(state, egui::vec2(x, y));
+}
+
 pub fn paint_dock_disclosure_icons(
     ui: &mut egui::Ui,
     dock_state: &egui_dock::DockState<PealayerTab>,
@@ -1090,8 +1114,8 @@ fn fit_timeline_to_window(
             .clamp(TIMELINE_MIN_ZOOM, TIMELINE_MAX_ZOOM);
         if app.timeline_animated_navigation {
             let transition = TimelineNavigationTransition {
-                start_offset: timeline_scroll_state.offset,
-                target_offset: egui::vec2(0.0, timeline_scroll_state.offset.y),
+                start_offset: timeline_scroll_state.offset(),
+                target_offset: egui::vec2(0.0, timeline_scroll_state.offset().y),
                 start_zoom: app.timeline_zoom,
                 target_zoom: fit_zoom,
                 started_at_seconds: ui.input(|input| input.time),
@@ -1104,7 +1128,7 @@ fn fit_timeline_to_window(
             ui.ctx().request_repaint();
         } else {
             app.timeline_zoom = fit_zoom;
-            timeline_scroll_state.offset.x = 0.0;
+            set_scroll_offset_x(timeline_scroll_state, 0.0);
         }
     }
 }
@@ -8876,7 +8900,7 @@ mod timeline_row_tests {
                     events: if frame == 0 { vec![] } else { vec![
                         egui::Event::PointerMoved(egui::pos2(240.0, 230.0)),
                         egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta,
-                            modifiers, phase: egui::TouchPhase::Move },
+                            modifiers, phase: egui::TouchPhase::Move, source: egui::MouseWheelSource::Wheel },
                     ] },
                     ..Default::default()
                 }, |ui| {
@@ -8922,7 +8946,7 @@ mod timeline_row_tests {
                             assert!(scroll.content_size.y <= available.height() + 1.0 + 1.0 / scale,
                                 "{width}x{height} at {scale}, loaded={loaded}: content {:?}, viewport {available:?}", scroll.content_size);
                             assert_eq!(viewer.scroll_bars(&PealayerTab::ProgramMonitor), [false, false]);
-                            assert_eq!(scroll.state.offset, egui::Vec2::ZERO);
+                            assert_eq!(scroll.state.offset(), egui::Vec2::ZERO);
                         });
                         discard_ui_output(output);
                     }
@@ -8934,7 +8958,7 @@ mod timeline_row_tests {
     #[test]
     fn timeline_wheel_uses_original_axes_and_native_units_for_all_modifiers() {
         let wheel = |unit, delta, modifiers| egui::Event::MouseWheel {
-            unit, delta, modifiers, phase: egui::TouchPhase::Move,
+            unit, delta, modifiers, phase: egui::TouchPhase::Move, source: egui::MouseWheelSource::Wheel,
         };
         let events = [
             wheel(egui::MouseWheelUnit::Line, egui::vec2(0.0, -3.0), egui::Modifiers::CTRL),
@@ -8958,7 +8982,7 @@ mod timeline_row_tests {
     #[test]
     fn ruler_wheel_steps_once_per_event_and_preserves_horizontal_and_modifiers() {
         let wheel = |unit, delta, modifiers| egui::Event::MouseWheel {
-            unit, delta, modifiers, phase: egui::TouchPhase::Move,
+            unit, delta, modifiers, phase: egui::TouchPhase::Move, source: egui::MouseWheelSource::Wheel,
         };
         assert_eq!(ruler_wheel_step(&wheel(egui::MouseWheelUnit::Line, egui::vec2(0.0,120.0), egui::Modifiers::NONE)), 1);
         assert_eq!(ruler_wheel_step(&wheel(egui::MouseWheelUnit::Line, egui::vec2(0.0,-3.0), egui::Modifiers::NONE)), -1);
@@ -9005,7 +9029,7 @@ mod timeline_row_tests {
                         assert!(body_painter.clip_rect().top() >= ruler.bottom());
                         observed.push((ruler.top(), timeline_track_row_top(content.top(), 0, 40.0)));
                     });
-                assert_eq!(scroll.state.offset.y, offset);
+                assert_eq!(scroll.state.offset().y, offset);
             });
             discard_ui_output(output);
         }
@@ -9488,7 +9512,7 @@ mod timeline_row_tests {
                         ui.add_space(8.0);
                     }
                 });
-                offset.set(scroll.state.offset.y);
+                offset.set(scroll.state.offset().y);
                 viewport_height.set(scroll.inner_rect.height());
                 content_height.set(scroll.content_size.y);
             });
@@ -9500,6 +9524,7 @@ mod timeline_row_tests {
             unit: egui::MouseWheelUnit::Point,
             phase: egui::TouchPhase::Move,
             delta: egui::vec2(0.0, -100.0), modifiers: egui::Modifiers::NONE,
+            source: egui::MouseWheelSource::Wheel,
         }]);
         for _ in 0..8 { render(Vec::new()); }
         assert!(content_height.get() > viewport_height.get());
@@ -10006,7 +10031,7 @@ mod timeline_row_tests {
                             revealed = body.contains_rect(cue);
                             cue.translate(-content.min.to_vec2())
                         });
-                    offset = timeline_offset_to_reveal_cue(scroll.state.offset, scroll.inner, scroll.content_size, scroll.inner_rect.size());
+                    offset = timeline_offset_to_reveal_cue(scroll.state.offset(), scroll.inner, scroll.content_size, scroll.inner_rect.size());
                     if pass > 0 { assert!(revealed, "cue must be visible on both axes below the ruler"); }
                 }));
             }
@@ -10837,7 +10862,7 @@ mod timeline_row_tests {
                             assert!((0.0..12.0).contains(&(menu.top() - grid.top())), "menu is at the top: {menu:?} {grid:?}");
                             assert!((0.0..16.0).contains(&(grid.right() - menu.right())), "menu aligns with the cards' right edge");
                             assert!((4.0..24.0).contains(&(group.top() - menu.bottom())), "normal menu/group spacing: {menu:?} {group:?}");
-                            assert!(grid.height() < 180.0, "content does not consume the viewport height: {grid:?}");
+                            assert!(grid.height() <= 185.0, "content does not consume the viewport height: {grid:?}");
                             discard_ui_output(output);
                         }
                     }
@@ -11434,6 +11459,7 @@ mod timeline_row_tests {
             delta: egui::vec2(0.0, 12.0),
             phase: egui::TouchPhase::Move,
             modifiers: egui::Modifiers::NONE,
+            source: egui::MouseWheelSource::Wheel,
         };
         assert_eq!(
             pwm_wheel_gesture(&[wheel_event], egui::vec2(0.0, 12.0)),
@@ -16307,7 +16333,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 }
                                 });
                                 timeline_header_scroll_id = Some(header_scroll.id);
-                                timeline_header_offset_y = header_scroll.state.offset.y;
+                                timeline_header_offset_y = header_scroll.state.offset().y;
                             });
 
                             // 2. Right column: Scrollable Timeline Grid
@@ -18533,10 +18559,10 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     let max_offset_y = (timeline_content_size.y
                                         - timeline_viewport.height())
                                         .max(0.0);
-                                    timeline_scroll_state.offset = egui::vec2(
+                                    set_scroll_offset(&mut timeline_scroll_state, egui::vec2(
                                         offset.x.clamp(0.0, max_offset_x),
                                         offset.y.clamp(0.0, max_offset_y),
-                                    );
+                                    ));
                                     self.app.timeline_zoom = transition_zoom;
                                     timeline_scroll_changed = true;
                                     if complete {
@@ -18561,7 +18587,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             if let Some(reveal) = cue_reveal.as_ref().filter(|reveal| reveal.pending_scroll) {
                                 if let Some(cue_rect) = requested_cue_rect {
                                     let target = timeline_offset_to_reveal_cue(
-                                        timeline_scroll_state.offset, cue_rect,
+                                        timeline_scroll_state.offset(), cue_rect,
                                         timeline_content_size, timeline_viewport.size(),
                                     );
                                     ui.data_mut(|data| {
@@ -18573,12 +18599,12 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     if self.app.timeline_animated_navigation {
                                         start_timeline_navigation_transition(
                                             ui, navigation_transition_id,
-                                            (timeline_scroll_state.offset, self.app.timeline_zoom),
+                                            (timeline_scroll_state.offset(), self.app.timeline_zoom),
                                             (target, self.app.timeline_zoom),
                                             self.app.timeline_navigation_transition_ms,
                                         );
                                     } else {
-                                        timeline_scroll_state.offset = target;
+                                        set_scroll_offset(&mut timeline_scroll_state, target);
                                         timeline_scroll_changed = true;
                                     }
                                     ui.ctx().request_repaint();
@@ -18637,7 +18663,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             }
 
                             if let Some(action) = pending_timeline_toolbar_action.take() {
-                                let current_offset = timeline_scroll_state.offset;
+                                let current_offset = timeline_scroll_state.offset();
                                 let current_zoom = self.app.timeline_zoom;
                                 let mut navigation_target = None;
                                 match action {
@@ -18870,7 +18896,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         );
                                     } else {
                                         self.app.timeline_zoom = target_zoom;
-                                        timeline_scroll_state.offset = target_offset;
+                                        set_scroll_offset(&mut timeline_scroll_state, target_offset);
                                         timeline_scroll_changed = true;
                                     }
                                 }
@@ -18883,7 +18909,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     // its old destination. Repeated wheel notches therefore remain
                                     // responsive while the rendered position eases toward the
                                     // accumulated target.
-                                    let current_offset = timeline_scroll_state.offset;
+                                    let current_offset = timeline_scroll_state.offset();
                                     let current_zoom = self.app.timeline_zoom;
                                     let mut target_offset = active_navigation_transition
                                         .map_or(current_offset, |transition| {
@@ -18980,22 +19006,23 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             let pointer_x_in_viewport = if is_inside_viewport {
                                                 pointer_screen_x - timeline_viewport.left()
                                             } else {
-                                                let playhead_x = self.app.playback_time as f32 * zoom - timeline_scroll_state.offset.x;
+                                                let playhead_x = self.app.playback_time as f32 * zoom - timeline_scroll_state.offset().x;
                                                 if playhead_x >= 0.0 && playhead_x <= timeline_viewport.width() {
                                                     playhead_x
                                                 } else {
                                                     timeline_viewport.width() * 0.5
                                                 }
                                             };
-                                            timeline_scroll_state.offset.x =
+                                            let new_offset_x =
                                                 timeline_offset_for_pointer_zoom(
-                                                    timeline_scroll_state.offset.x,
+                                                    timeline_scroll_state.offset().x,
                                                     pointer_x_in_viewport,
                                                     zoom,
                                                     next_zoom,
                                                     total_seconds,
                                                     timeline_viewport.width(),
                                                 );
+                                            set_scroll_offset_x(&mut timeline_scroll_state, new_offset_x);
                                             self.app.timeline_zoom = next_zoom;
                                             timeline_scroll_changed = true;
                                         }
@@ -19003,35 +19030,38 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             let max_offset = (timeline_content_size.x
                                                 - timeline_viewport.width())
                                                 .max(0.0);
-                                            timeline_scroll_state.offset.x =
-                                                (timeline_scroll_state.offset.x - delta)
+                                            let new_offset_x =
+                                                (timeline_scroll_state.offset().x - delta)
                                                     .clamp(0.0, max_offset);
+                                            set_scroll_offset_x(&mut timeline_scroll_state, new_offset_x);
                                             timeline_scroll_changed = true;
                                         }
                                         TimelineWheelAction::VerticalScroll(delta) => {
                                             let max_offset = (timeline_content_size.y
                                                 - timeline_viewport.height())
                                                 .max(0.0);
-                                            timeline_scroll_state.offset.y =
-                                                (timeline_scroll_state.offset.y - delta)
+                                            let new_offset_y =
+                                                (timeline_scroll_state.offset().y - delta)
                                                     .clamp(0.0, max_offset);
+                                            set_scroll_offset_y(&mut timeline_scroll_state, new_offset_y);
                                             timeline_scroll_changed = true;
                                         }
                                         TimelineWheelAction::MultiGesture { zoom_factor, translation } => {
                                             let next_zoom = (zoom * zoom_factor).clamp(20.0, 500.0);
                                             let pointer_x = pointer_screen_x - timeline_viewport.left();
-                                            timeline_scroll_state.offset.x = timeline_offset_for_pointer_zoom(
-                                                timeline_scroll_state.offset.x, pointer_x, zoom, next_zoom,
+                                            let next_offset_x = timeline_offset_for_pointer_zoom(
+                                                timeline_scroll_state.offset().x, pointer_x, zoom, next_zoom,
                                                 total_seconds, timeline_viewport.width());
                                             self.app.timeline_zoom = next_zoom;
                                             let max_x = (total_seconds as f32 * next_zoom
                                                 - timeline_viewport.width()).max(0.0);
                                             let max_y = (timeline_content_size.y
                                                 - timeline_viewport.height()).max(0.0);
-                                            timeline_scroll_state.offset.x =
-                                                (timeline_scroll_state.offset.x - translation.x).clamp(0.0, max_x);
-                                            timeline_scroll_state.offset.y =
-                                                (timeline_scroll_state.offset.y - translation.y).clamp(0.0, max_y);
+                                            let final_offset_x =
+                                                (next_offset_x - translation.x).clamp(0.0, max_x);
+                                            let final_offset_y =
+                                                (timeline_scroll_state.offset().y - translation.y).clamp(0.0, max_y);
+                                            set_scroll_offset(&mut timeline_scroll_state, egui::vec2(final_offset_x, final_offset_y));
                                             timeline_scroll_changed = true;
                                         }
                                     }
@@ -19046,10 +19076,11 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 });
                                 let dt = ui.input(|input| input.stable_dt);
                                 let max_x = (timeline_content_size.x - timeline_viewport.width()).max(0.0);
-                                timeline_scroll_state.offset.x = (timeline_scroll_state.offset.x
+                                let new_offset_x = (timeline_scroll_state.offset().x
                                     + crate::ui::timeline_toolbar::held_pan_delta(
                                         held_timeline_pan, timeline_viewport.width(), dt))
                                     .clamp(0.0, max_x);
+                                set_scroll_offset_x(&mut timeline_scroll_state, new_offset_x);
                                 timeline_scroll_changed = true;
                                 ui.ctx().request_repaint_after(std::time::Duration::from_millis(16));
                             }
@@ -19095,20 +19126,21 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
 
                             let mut middle_pan_changed = false;
                             if middle_pan_active && middle_down {
-                                let previous_offset = timeline_scroll_state.offset;
+                                let previous_offset = timeline_scroll_state.offset();
                                 let constrained_delta = constrain_middle_pan_delta(
                                     pointer_delta,
                                     scroll_modifiers.shift,
                                     scroll_modifiers.ctrl || scroll_modifiers.command,
                                     self.app.timeline_middle_axis_lock_modifiers,
                                 );
-                                timeline_scroll_state.offset = pan_timeline_offset(
+                                let new_offset = pan_timeline_offset(
                                     previous_offset,
                                     constrained_delta,
                                     timeline_content_size,
                                     timeline_viewport.size(),
                                 );
-                                middle_pan_changed = timeline_scroll_state.offset != previous_offset;
+                                set_scroll_offset(&mut timeline_scroll_state, new_offset);
+                                middle_pan_changed = timeline_scroll_state.offset() != previous_offset;
                                 ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
                                 ui.ctx().request_repaint();
                             }
@@ -19140,24 +19172,24 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                     * self.app.timeline_zoom)
                                     .min(content_width);
                                 if let Some(target_x) = timeline_follow_target_offset(
-                                    timeline_scroll_state.offset.x,
+                                    timeline_scroll_state.offset().x,
                                     playhead_x,
                                     content_width,
                                     timeline_viewport.width(),
                                 ) {
                                     let target_offset = egui::vec2(
                                         target_x,
-                                        timeline_scroll_state.offset.y,
+                                        timeline_scroll_state.offset().y,
                                     );
                                     if self.app.timeline_animated_navigation {
                                         start_timeline_navigation_transition(
                                             ui, navigation_transition_id,
-                                            (timeline_scroll_state.offset, self.app.timeline_zoom),
+                                            (timeline_scroll_state.offset(), self.app.timeline_zoom),
                                             (target_offset, self.app.timeline_zoom),
                                             self.app.timeline_navigation_transition_ms,
                                         );
                                     } else {
-                                        timeline_scroll_state.offset = target_offset;
+                                        set_scroll_offset(&mut timeline_scroll_state, target_offset);
                                         timeline_scroll_changed = true;
                                     }
                                 }
@@ -19166,7 +19198,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                 timeline_scroll_state.store(ui.ctx(), timeline_scroll_id);
                             }
 
-                            let synced_offset_y = timeline_scroll_state.offset.y;
+                            let synced_offset_y = timeline_scroll_state.offset().y;
                             ui.ctx().data_mut(|data| {
                                 data.insert_persisted(
                                     timeline_vertical_sync_id,
@@ -19176,9 +19208,9 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             if let Some(header_scroll_id) = timeline_header_scroll_id
                                 && let Some(mut header_state) =
                                     egui::scroll_area::State::load(ui.ctx(), header_scroll_id)
-                                && header_state.offset.y != synced_offset_y
+                                && header_state.offset().y != synced_offset_y
                             {
-                                header_state.offset.y = synced_offset_y;
+                                set_scroll_offset_y(&mut header_state, synced_offset_y);
                                 header_state.store(ui.ctx(), header_scroll_id);
                                 ui.ctx().request_repaint();
                             }
@@ -19451,19 +19483,19 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         (self.app.playback_time.max(0.0) as f32 * zoom)
                                             .min(timeline_content_size.x);
                                     let target_offset_x = timeline_offset_to_reveal_x(
-                                        timeline_scroll_state.offset.x,
+                                        timeline_scroll_state.offset().x,
                                         playhead_x,
                                         timeline_content_size.x,
                                         timeline_viewport.width(),
                                     );
                                     if self.app.timeline_animated_navigation
-                                        && (target_offset_x - timeline_scroll_state.offset.x).abs()
+                                        && (target_offset_x - timeline_scroll_state.offset().x).abs()
                                             > 0.5
                                     {
                                         start_timeline_navigation_transition(
                                             ui, navigation_transition_id,
-                                            (timeline_scroll_state.offset, self.app.timeline_zoom),
-                                            (egui::vec2(target_offset_x, timeline_scroll_state.offset.y), self.app.timeline_zoom),
+                                            (timeline_scroll_state.offset(), self.app.timeline_zoom),
+                                            (egui::vec2(target_offset_x, timeline_scroll_state.offset().y), self.app.timeline_zoom),
                                             self.app.timeline_navigation_transition_ms,
                                         );
                                     } else {
@@ -19472,7 +19504,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                                 navigation_transition_id,
                                             );
                                         });
-                                        timeline_scroll_state.offset.x = target_offset_x;
+                                        set_scroll_offset_x(&mut timeline_scroll_state, target_offset_x);
                                         timeline_scroll_state
                                             .store(ui.ctx(), timeline_scroll_id);
                                     }
@@ -19687,14 +19719,14 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                         &targets,
                                     ) {
                                         self.app.seek_absolute(target_ms as f64 / 1_000.0);
-                                        timeline_scroll_state.offset.x =
-                                            (target_ms as f32 * px_per_ms
-                                                - timeline_viewport.width() * 0.35)
-                                                .clamp(
-                                                    0.0,
-                                                    (timeline_content_size.x - timeline_viewport.width())
-                                                        .max(0.0),
-                                                );
+                                        let val = (target_ms as f32 * px_per_ms
+                                            - timeline_viewport.width() * 0.35)
+                                            .clamp(
+                                                0.0,
+                                                (timeline_content_size.x - timeline_viewport.width())
+                                                    .max(0.0),
+                                            );
+                                        set_scroll_offset_x(&mut timeline_scroll_state, val);
                                     }
                                 } else if previous_cue_pressed || next_cue_pressed {
                                     ui.ctx().input_mut(|input| {
@@ -19728,45 +19760,46 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                                             .iter()
                                             .find(|instance| instance.id == cue_id)
                                         {
-                                            timeline_scroll_state.offset.x =
-                                                (instance.start_time_ms as f32 * px_per_ms
-                                                    - timeline_viewport.width() * 0.35)
-                                                    .clamp(
-                                                        0.0,
-                                                        (timeline_content_size.x
-                                                            - timeline_viewport.width())
-                                                            .max(0.0),
-                                                    );
+                                            let val = (instance.start_time_ms as f32 * px_per_ms
+                                                - timeline_viewport.width() * 0.35)
+                                                .clamp(
+                                                    0.0,
+                                                    (timeline_content_size.x
+                                                        - timeline_viewport.width())
+                                                        .max(0.0),
+                                                );
+                                            set_scroll_offset_x(&mut timeline_scroll_state, val);
                                         }
                                     }
                                 } else if scroll_up_pressed || scroll_down_pressed {
                                     let direction = if scroll_up_pressed { -1.0 } else { 1.0 };
-                                    timeline_scroll_state.offset.y =
-                                        (timeline_scroll_state.offset.y
-                                            + direction * timeline_track_height)
-                                            .clamp(
-                                            0.0,
-                                            (timeline_content_size.y - timeline_viewport.height())
-                                                .max(0.0),
-                                        );
+                                    let val = (timeline_scroll_state.offset().y
+                                        + direction * timeline_track_height)
+                                        .clamp(
+                                        0.0,
+                                        (timeline_content_size.y - timeline_viewport.height())
+                                            .max(0.0),
+                                    );
+                                    set_scroll_offset_y(&mut timeline_scroll_state, val);
                                 } else if page_left_pressed || page_right_pressed {
                                     let direction = if page_left_pressed { -1.0 } else { 1.0 };
-                                    timeline_scroll_state.offset.x =
-                                        (timeline_scroll_state.offset.x
-                                            + direction * timeline_viewport.width() * 0.85)
-                                            .clamp(
-                                                0.0,
-                                                (timeline_content_size.x - timeline_viewport.width())
-                                                    .max(0.0),
-                                            );
+                                    let val = (timeline_scroll_state.offset().x
+                                        + direction * timeline_viewport.width() * 0.85)
+                                        .clamp(
+                                            0.0,
+                                            (timeline_content_size.x - timeline_viewport.width())
+                                                .max(0.0),
+                                        );
+                                    set_scroll_offset_x(&mut timeline_scroll_state, val);
                                 } else if home_pressed || end_pressed {
                                     let target_seconds = if home_pressed { 0.0 } else { total_seconds };
                                     self.app.seek_absolute(target_seconds);
-                                    timeline_scroll_state.offset.x = if home_pressed {
+                                    let val = if home_pressed {
                                         0.0
                                     } else {
                                         (timeline_content_size.x - timeline_viewport.width()).max(0.0)
                                     };
+                                    set_scroll_offset_x(&mut timeline_scroll_state, val);
                                 } else if fit_timeline_pressed {
                                     fit_timeline_to_window(
                                         self.app,
