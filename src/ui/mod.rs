@@ -207,15 +207,34 @@ pub fn configure_native_visuals(ctx: &eframe::egui::Context, config: &crate::con
 
     palette::apply(&mut dark, config.color_palette);
     palette::apply(&mut light, config.color_palette);
+
+    let tokens_dark = craft_theme::Tokens::for_kind(craft_theme::ThemeKind::Dark)
+        .with_appearance(Some([red, green, blue]), false);
+    let tokens_light = craft_theme::Tokens::for_kind(craft_theme::ThemeKind::Light)
+        .with_appearance(Some([red, green, blue]), false);
+
+    // Apply FilmCraft widget interaction fills, strokes, and borders
+    dark.widgets.hovered.bg_fill = tokens_dark.hover;
+    dark.widgets.active.bg_fill = tokens_dark.pressed;
+    dark.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, tokens_dark.field_border);
+    dark.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, tokens_dark.field_border);
+    dark.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, tokens_dark.separator);
+    dark.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, tokens_dark.tab_text_active);
+    dark.widgets.active.fg_stroke = Stroke::new(1.0_f32, tokens_dark.tab_text_active);
+
+    light.widgets.hovered.bg_fill = tokens_light.hover;
+    light.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, tokens_light.field_border);
+    light.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, tokens_light.field_border);
+    light.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, tokens_light.separator);
+
     ctx.set_visuals_of(Theme::Dark, dark);
     ctx.set_visuals_of(Theme::Light, light);
     ctx.all_styles_mut(configure_interaction_style);
     ctx.all_styles_mut(|style| control_density::configure(style, config.ui_control_density));
-    let tokens = craft_theme::Tokens::for_kind(match config.theme {
-        crate::config::AppTheme::Light => craft_theme::ThemeKind::Light,
-        _ => craft_theme::ThemeKind::Dark,
-    })
-    .with_appearance(Some([red, green, blue]), false);
+    let tokens = match config.theme {
+        crate::config::AppTheme::Light => tokens_light,
+        _ => tokens_dark,
+    };
     craft_theme::set_current(ctx, tokens);
     elegance_theme::set_source_palette(ctx, config.color_palette);
     motion::configure(ctx, config.ui_animation_mode);
@@ -438,5 +457,21 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn native_visuals_use_craft_theme_tokens_and_widget_palette() {
+        let ctx = eframe::egui::Context::default();
+        let config = crate::config::AppConfig {
+            theme: crate::config::AppTheme::Dark,
+            ..Default::default()
+        };
+        super::configure_native_visuals(&ctx, &config);
+        let dark_style = ctx.style_of(eframe::egui::Theme::Dark);
+        let tokens = super::craft_theme::current(&ctx);
+
+        assert_eq!(dark_style.visuals.widgets.hovered.bg_fill, tokens.hover);
+        assert_eq!(dark_style.visuals.widgets.active.bg_fill, tokens.pressed);
+        assert_eq!(dark_style.visuals.widgets.inactive.bg_stroke.color, tokens.field_border);
     }
 }
