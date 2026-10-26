@@ -193,17 +193,17 @@ git commit -m "feat(ui): integrate craft_ui fit_toolbar in control_bar"
 **Files:**
 - Test: entire crate test suite
 
-- [ ] **Step 1: Run full unit test suite**
+- [x] **Step 1: Run full unit test suite**
 
 Run: `PEALAYER_CONFIG_FILE=$(mktemp) cargo test --lib`
 Expected: All 944+ tests PASS with 0 failures.
 
-- [ ] **Step 2: Run downloader crate tests**
+- [x] **Step 2: Run downloader crate tests**
 
 Run: `cargo test -p pealayer-downloader`
 Expected: PASS with 0 failures.
 
-- [ ] **Step 3: Run compiler checks across all targets**
+- [x] **Step 3: Run compiler checks across all targets**
 
 Run: `cargo check --lib --bins`
 Expected: Clean exit 0 with 0 errors.

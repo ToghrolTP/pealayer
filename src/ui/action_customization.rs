@@ -76,6 +76,7 @@ pub(crate) fn owner(surface: crate::config::ControlBarSurface) -> Id {
 }
 
 /// Disabled actions remain customizable; invocation is separately capability-gated.
+#[allow(dead_code)]
 pub(crate) fn outline(visuals: &egui::Visuals, selected: bool, pressed: bool) -> egui::Stroke {
     egui::Stroke::new(
         1.0,
