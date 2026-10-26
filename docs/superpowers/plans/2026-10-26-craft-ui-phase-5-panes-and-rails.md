@@ -226,7 +226,7 @@ git commit -m "feat(ui): add SidebarPane model and PaneContent implementation"
   - `pub struct SidebarRailState { pub open: Option<SidebarPane>, pub width: f32, pub enabled: bool }`
   - `pub fn show_sidebar_rail(app: &mut PealayerApp, ui: &mut egui::Ui, state: &mut SidebarRailState) -> (Option<RailRequest<SidebarPane>>, Option<PaneOutput<SidebarPane>>)`
 
-- [ ] **Step 1: Write failing tests for `SidebarRailState` and `show_sidebar_rail`**
+- [x] **Step 1: Write failing tests for `SidebarRailState` and `show_sidebar_rail`**
 
 In `src/ui/sidebar_rail.rs`:
 ```rust
@@ -252,12 +252,12 @@ fn sidebar_rail_state_request_updates() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `PEALAYER_CONFIG_FILE=$(mktemp) cargo test --lib sidebar_rail_state_request_updates`
 Expected: FAIL with unresolved methods on `SidebarRailState`.
 
-- [ ] **Step 3: Implement `SidebarRailState` and `show_sidebar_rail`**
+- [x] **Step 3: Implement `SidebarRailState` and `show_sidebar_rail`**
 
 In `src/ui/sidebar_rail.rs`:
 ```rust
@@ -348,12 +348,12 @@ pub fn show_sidebar_rail(
 }
 ```
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `PEALAYER_CONFIG_FILE=$(mktemp) cargo test --lib ui::sidebar_rail`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/ui/sidebar_rail.rs
