@@ -19990,6 +19990,127 @@ impl<'a> craft_ui::docking::DockContent<PealayerTab> for PealayerTabViewer<'a> {
     }
 }
 
+/// Helper function to build the initial declarative Craft UI Workspace layout
+pub fn create_initial_workspace_layout() -> craft_ui::docking::Workspace<PealayerTab> {
+    use craft_ui::docking::{Layout, Node, Workspace};
+    use craft_ui::layout::{SplitAxis, SplitSize};
+
+    let left_tabs = Node::Tabs {
+        panels: vec![PealayerTab::EffectControls, PealayerTab::HardwareMonitor],
+        active: 0,
+    };
+    let center_tab = Node::Tabs {
+        panels: vec![PealayerTab::ProgramMonitor],
+        active: 0,
+    };
+    let right_tab = Node::Tabs {
+        panels: vec![PealayerTab::EffectsLibrary],
+        active: 0,
+    };
+    let center_right_split = Node::Split {
+        axis: SplitAxis::Horizontal,
+        size: SplitSize::Ratio(0.70),
+        first: Box::new(center_tab),
+        second: Box::new(right_tab),
+    };
+    let top_split = Node::Split {
+        axis: SplitAxis::Horizontal,
+        size: SplitSize::Ratio(0.25),
+        first: Box::new(left_tabs),
+        second: Box::new(center_right_split),
+    };
+    let bottom_tab = Node::Tabs {
+        panels: vec![PealayerTab::Timeline],
+        active: 0,
+    };
+    let root = Node::Split {
+        axis: SplitAxis::Vertical,
+        size: SplitSize::Ratio(0.70),
+        first: Box::new(top_split),
+        second: Box::new(bottom_tab),
+    };
+
+    let layout = Layout {
+        root: Some(root),
+        floating: Vec::new(),
+    };
+
+    let mut workspace = Workspace::new(layout);
+    // Hidden MediaInspector default location
+    workspace.hidden = vec![
+        (PealayerTab::MediaInspector, craft_ui::docking::Location {
+            floating: None,
+            anchor: Some(PealayerTab::EffectsLibrary),
+            placement: craft_ui::docking::Placement::Tab { before: None },
+            size: None,
+            stack: None,
+            sibling: Vec::new(),
+            group: None,
+        })
+    ];
+    workspace
+}
+
+/// Reveals and focuses a tab within a declarative Craft UI Workspace.
+pub fn reveal_and_focus_workspace_tab(
+    workspace: &mut craft_ui::docking::Workspace<PealayerTab>,
+    tab: PealayerTab,
+) -> bool {
+    let was_open = workspace.layout.contains(&tab);
+    let fallback = Some(PealayerTab::ProgramMonitor);
+    let _ = workspace.set_visible(tab, true, fallback, |_| craft_ui::docking::Permissions::default());
+    !was_open
+}
+
+/// Helper trait to allow `reveal_and_focus_tab` to operate transparently on both
+/// `egui_dock::DockState` and `craft_ui::docking::Workspace`.
+pub trait RevealFocusTarget {
+    fn reveal_and_focus(&mut self, tab: PealayerTab) -> bool;
+}
+
+impl RevealFocusTarget for egui_dock::DockState<PealayerTab> {
+    fn reveal_and_focus(&mut self, tab: PealayerTab) -> bool {
+        let was_open = self.find_tab(&tab).is_some();
+        if !was_open {
+            restore_tab_to_canonical_slot(self, tab);
+        }
+
+        let Some(path) = self.find_tab(&tab) else {
+            return false;
+        };
+
+        let node_path = path.node_path();
+        let mut layout_changed = !was_open;
+        let mut node = Some(node_path.node);
+        while let Some(node_index) = node {
+            let ancestor = egui_dock::NodePath::new(node_path.surface, node_index);
+            if let Ok(dock_node) = self.node_mut(ancestor) {
+                if dock_node.is_collapsed() {
+                    dock_node.set_collapsed(false);
+                    layout_changed = true;
+                }
+            }
+            node = node_index.parent();
+        }
+
+        if self
+            .leaf(node_path)
+            .is_ok_and(|leaf| leaf.active != path.tab)
+        {
+            layout_changed = true;
+        }
+        let _ = self.set_active_tab(path);
+        self.set_focused_node_and_surface(node_path);
+        layout_changed
+    }
+}
+
+impl RevealFocusTarget for craft_ui::docking::Workspace<PealayerTab> {
+    fn reveal_and_focus(&mut self, tab: PealayerTab) -> bool {
+        reveal_and_focus_workspace_tab(self, tab)
+    }
+}
+
 /// Helper function to build the initial DockState layout
 pub fn create_initial_layout() -> egui_dock::DockState<PealayerTab> {
     use egui_dock::NodeIndex;
@@ -20181,45 +20302,12 @@ pub fn restore_tab_to_canonical_slot(
 }
 
 /// Makes a workspace tab visibly active and keyboard-focused, restoring it
-/// first when the user previously closed it. Activating a tab alone is not
-/// enough: its leaf (or one of its split ancestors) may still be collapsed,
-/// which made cue "Manage..." actions appear to do nothing.
-pub fn reveal_and_focus_tab(
-    dock_state: &mut egui_dock::DockState<PealayerTab>,
+/// first when the user previously closed it.
+pub fn reveal_and_focus_tab<T: RevealFocusTarget>(
+    workspace: &mut T,
     tab: PealayerTab,
 ) -> bool {
-    let was_open = dock_state.find_tab(&tab).is_some();
-    if !was_open {
-        restore_tab_to_canonical_slot(dock_state, tab);
-    }
-
-    let Some(path) = dock_state.find_tab(&tab) else {
-        return false;
-    };
-
-    let node_path = path.node_path();
-    let mut layout_changed = !was_open;
-    let mut node = Some(node_path.node);
-    while let Some(node_index) = node {
-        let ancestor = egui_dock::NodePath::new(node_path.surface, node_index);
-        if let Ok(dock_node) = dock_state.node_mut(ancestor) {
-            if dock_node.is_collapsed() {
-                dock_node.set_collapsed(false);
-                layout_changed = true;
-            }
-        }
-        node = node_index.parent();
-    }
-
-    if dock_state
-        .leaf(node_path)
-        .is_ok_and(|leaf| leaf.active != path.tab)
-    {
-        layout_changed = true;
-    }
-    let _ = dock_state.set_active_tab(path);
-    dock_state.set_focused_node_and_surface(node_path);
-    layout_changed
+    workspace.reveal_and_focus(tab)
 }
 
 fn format_timecode(t: f64) -> String {
@@ -20746,5 +20834,48 @@ mod dock_content_tests {
         assert!(permissions.movable);
         assert!(permissions.closable);
     }
+
+    #[test]
+    fn craft_workspace_initial_layout_hierarchy() {
+        let workspace = create_initial_workspace_layout();
+        assert!(workspace.validate().is_ok());
+        assert!(workspace.layout.contains(&PealayerTab::Timeline));
+        assert!(workspace.layout.contains(&PealayerTab::ProgramMonitor));
+        assert!(workspace.layout.contains(&PealayerTab::EffectControls));
+        assert!(workspace.layout.contains(&PealayerTab::HardwareMonitor));
+        assert!(workspace.layout.contains(&PealayerTab::EffectsLibrary));
+        assert!(!workspace.layout.contains(&PealayerTab::MediaInspector));
+    }
+
+    #[test]
+    fn craft_workspace_reveal_and_focus_tab() {
+        let mut workspace = create_initial_workspace_layout();
+        // Close EffectControls
+        let _ = workspace.set_visible(
+            PealayerTab::EffectControls,
+            false,
+            None,
+            |_| craft_ui::docking::Permissions::default(),
+        );
+        assert!(!workspace.layout.contains(&PealayerTab::EffectControls));
+
+        // Reveal and focus
+        let changed = reveal_and_focus_workspace_tab(&mut workspace, PealayerTab::EffectControls);
+        assert!(changed);
+        assert!(workspace.layout.contains(&PealayerTab::EffectControls));
+
+        // Close again and verify reveal_and_focus_tab generic helper also works
+        let _ = workspace.set_visible(
+            PealayerTab::EffectControls,
+            false,
+            None,
+            |_| craft_ui::docking::Permissions::default(),
+        );
+        assert!(!workspace.layout.contains(&PealayerTab::EffectControls));
+        let changed2 = reveal_and_focus_tab(&mut workspace, PealayerTab::EffectControls);
+        assert!(changed2);
+        assert!(workspace.layout.contains(&PealayerTab::EffectControls));
+    }
 }
+
 
