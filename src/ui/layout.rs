@@ -1526,10 +1526,11 @@ fn effect_card<R>(
     // Frame child feeds its margins back into egui's sizing pass, which made
     // cards grow on successive paints and resized the drag preview.
     ui.set_width(outer_width);
-    let stroke_color = ui.visuals().widgets.noninteractive.bg_stroke.color;
+    let tokens = crate::ui::craft_theme::current(ui.ctx());
     egui::Frame::group(ui.style())
+        .fill(tokens.card_bg)
         .inner_margin(egui::Margin::symmetric(EFFECT_CARD_HORIZONTAL_MARGIN, 7))
-        .stroke(egui::Stroke::new(EFFECT_CARD_STROKE_WIDTH, stroke_color))
+        .stroke(egui::Stroke::new(EFFECT_CARD_STROKE_WIDTH, tokens.separator))
         .corner_radius(8.0)
         .show(ui, |ui| {
             let content_width = effects_frame_content_width(outer_width);
@@ -1548,11 +1549,11 @@ fn effect_group_header<R>(
     // this separate from `effect_card` because the header has a lighter fill
     // and tighter vertical padding, not because it is a different width.
     ui.set_width(outer_width);
+    let tokens = crate::ui::craft_theme::current(ui.ctx());
     let fill = ui.visuals().widgets.inactive.weak_bg_fill;
-    let stroke_color = ui.visuals().widgets.noninteractive.bg_stroke.color;
     egui::Frame::new()
         .fill(fill)
-        .stroke(egui::Stroke::new(EFFECT_CARD_STROKE_WIDTH, stroke_color))
+        .stroke(egui::Stroke::new(EFFECT_CARD_STROKE_WIDTH, tokens.separator))
         .corner_radius(7.0)
         .inner_margin(egui::Margin::symmetric(EFFECT_CARD_HORIZONTAL_MARGIN, 6))
         .show(ui, |ui| {
@@ -6655,11 +6656,13 @@ fn parse_rf_code(value: &str) -> Option<u32> {
 fn board_tool_card(ui: &mut egui::Ui, icon: &str, title: &str, body: impl FnOnce(&mut egui::Ui)) {
     let outer_width = ui.available_width();
     ui.set_width(outer_width);
+    let tokens = crate::ui::craft_theme::current(ui.ctx());
     egui::Frame::group(ui.style())
+        .fill(tokens.card_bg)
         .inner_margin(egui::Margin::symmetric(12, 10))
         .stroke(egui::Stroke::new(
             HARDWARE_CARD_STROKE_WIDTH,
-            ui.visuals().widgets.noninteractive.bg_stroke.color,
+            tokens.separator,
         ))
         .corner_radius(9.0)
         .show(ui, |ui| {
@@ -7633,11 +7636,13 @@ fn draw_compact_control_card(
         if dragging_source {
             ui.set_opacity(0.58);
         }
+        let tokens = crate::ui::craft_theme::current(ui.ctx());
         egui::Frame::group(ui.style())
+        .fill(tokens.card_bg)
         .inner_margin(egui::Margin::symmetric(9, 6))
         .stroke(egui::Stroke::new(
             HARDWARE_CARD_STROKE_WIDTH,
-            ui.visuals().widgets.noninteractive.bg_stroke.color,
+            tokens.separator,
         ))
         .corner_radius(7.0)
         .show(ui, |ui| {
@@ -7928,11 +7933,13 @@ fn draw_control_card(
             if dragging_source {
                 ui.set_opacity(0.58);
             }
+            let tokens = crate::ui::craft_theme::current(ui.ctx());
             egui::Frame::group(ui.style())
+                .fill(tokens.card_bg)
                 .inner_margin(egui::Margin::symmetric(12, 10))
                 .stroke(egui::Stroke::new(
                     HARDWARE_CARD_STROKE_WIDTH,
-                    ui.visuals().widgets.noninteractive.bg_stroke.color,
+                    tokens.separator,
                 ))
                 .corner_radius(8.0)
                 .show(ui, |ui| {
@@ -8307,11 +8314,13 @@ fn draw_compact_relay_group(
     let mut pending_drop = None;
     let outer_width = ui.available_width();
     ui.set_width(outer_width);
+    let tokens = crate::ui::craft_theme::current(ui.ctx());
     egui::Frame::group(ui.style())
+        .fill(tokens.card_bg)
         .inner_margin(egui::Margin::symmetric(9, 6))
         .stroke(egui::Stroke::new(
             HARDWARE_CARD_STROKE_WIDTH,
-            ui.visuals().widgets.noninteractive.bg_stroke.color,
+            tokens.separator,
         ))
         .corner_radius(7.0)
         .show(ui, |ui| {
@@ -14630,11 +14639,13 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
                             );
                             let board_card_width = ui.available_width();
                             ui.set_width(board_card_width);
+                            let tokens = crate::ui::craft_theme::current(ui.ctx());
                             let board_card = egui::Frame::group(ui.style())
+                                .fill(tokens.card_bg)
                                 .inner_margin(egui::Margin::symmetric(14, 12))
                                 .stroke(egui::Stroke::new(
                                     HARDWARE_CARD_STROKE_WIDTH,
-                                    ui.visuals().widgets.noninteractive.bg_stroke.color,
+                                    tokens.separator,
                                 ))
                                 .corner_radius(10.0)
                                 .show(ui, |ui| {

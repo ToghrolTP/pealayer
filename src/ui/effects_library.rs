@@ -8,6 +8,14 @@ pub(crate) fn designer_tr(ui: &egui::Ui, key: &'static str) -> String {
 }
 use eframe::egui;
 
+pub(crate) fn effects_search_well_frame(tokens: &crate::ui::craft_theme::Tokens) -> egui::Frame {
+    egui::Frame::NONE
+        .fill(tokens.field_bg)
+        .stroke(egui::Stroke::new(1.0, tokens.field_border))
+        .corner_radius(4.0)
+        .inner_margin(egui::Margin::symmetric(4, 2))
+}
+
 pub(crate) fn presented_identity(app: &PealayerApp, reference: &str, name: &str, icon: &str) -> (String, String) {
     if app.show_effect_library_editor && app.effect_library_draft.reference == reference && !app.effect_library_draft.is_new {
         (app.effect_library_draft.name.clone(), app.effect_library_draft.icon.clone())
@@ -585,7 +593,8 @@ fn designer_navigation_group<R>(
     if response.clicked() { state.toggle(ui); }
     response.widget_info(|| egui::WidgetInfo::selected(egui::Role::DisclosureTriangle,
         ui.is_enabled(), state.is_open(), format!("{name} ({})", group.references.len())));
-    ui.painter().hline(response.rect.x_range(), response.rect.bottom(), ui.visuals().widgets.noninteractive.bg_stroke);
+    let tokens = crate::ui::craft_theme::current(ui.ctx());
+    ui.painter().hline(response.rect.x_range(), response.rect.bottom(), egui::Stroke::new(1.0, tokens.separator));
     let body = state.show_body_unindented(ui, contents);
     (response, body)
     }).inner
@@ -1508,7 +1517,10 @@ fn draw_sequence_timeline(
     let mut selected_lane = ui.data(|data| data.get_temp::<SequenceLaneSelection>(lane_selection_id(draft))).unwrap_or_default();
     let edit_request_id = egui::Id::new((state_prefix.clone(), "edit-request"));
 
+    let tokens = crate::ui::craft_theme::current(ui.ctx());
     egui::Frame::group(ui.style())
+        .fill(tokens.well_bg)
+        .stroke(egui::Stroke::new(1.0, tokens.separator))
         .inner_margin(egui::Margin::same(10))
         .show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
@@ -1629,13 +1641,14 @@ fn draw_sequence_timeline(
                     let painter = ui.painter_at(canvas);
                     let timeline_left = canvas.left() + label_width;
                     let visuals = ui.visuals().clone();
-                    painter.rect_filled(canvas, 7.0, visuals.extreme_bg_color);
+                    let tokens = crate::ui::craft_theme::current(ui.ctx());
+                    painter.rect_filled(canvas, 7.0, tokens.well_bg);
                     painter.line_segment(
                         [
                             egui::pos2(timeline_left, canvas.top()),
                             egui::pos2(timeline_left, canvas.bottom()),
                         ],
-                        visuals.widgets.noninteractive.bg_stroke,
+                        egui::Stroke::new(1.0, tokens.separator),
                     );
 
                     let major_ms = if zoom >= 180.0 {
@@ -1700,7 +1713,7 @@ fn draw_sequence_timeline(
                                 egui::pos2(canvas.left(), row.bottom()),
                                 egui::pos2(canvas.right(), row.bottom()),
                             ],
-                            egui::Stroke::new(1.0, visuals.widgets.noninteractive.bg_stroke.color),
+                            egui::Stroke::new(1.0, tokens.separator),
                         );
 
                         // Originals are painted last, keeping them reachable
@@ -2320,7 +2333,10 @@ fn draw_sequence_step_editor(
     ui.add_space(8.0);
 
     if draft.steps.is_empty() {
+        let tokens = crate::ui::craft_theme::current(ui.ctx());
         egui::Frame::group(ui.style())
+            .fill(tokens.well_bg)
+            .stroke(egui::Stroke::new(1.0, tokens.separator))
             .inner_margin(egui::Margin::same(12))
             .show(ui, |ui| {
                 ui.label(egui::RichText::new(designer_tr(ui, "This sequence has no actions yet.")).strong());
@@ -2359,7 +2375,10 @@ fn draw_sequence_step_editor(
     for index in selected_index..=selected_index {
         let step_count = draft.steps.len();
         let step = &mut draft.steps[index];
+        let tokens = crate::ui::craft_theme::current(ui.ctx());
         egui::Frame::group(ui.style())
+            .fill(tokens.well_bg)
+            .stroke(egui::Stroke::new(1.0, tokens.separator))
             .inner_margin(egui::Margin::same(10))
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
@@ -3545,7 +3564,12 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     &designer_tr(ui, "Sequence properties"),
                                     false,
                                 ) {
-                                    egui::Frame::group(ui.style()).inner_margin(egui::Margin::same(10)).show(ui, |ui| {
+                                    let tokens = crate::ui::craft_theme::current(ui.ctx());
+                                    egui::Frame::group(ui.style())
+                                        .fill(tokens.well_bg)
+                                        .stroke(egui::Stroke::new(1.0, tokens.separator))
+                                        .inner_margin(egui::Margin::same(10))
+                                        .show(ui, |ui| {
                                         if capture_locked { ui.disable(); }
                                         egui::Grid::new("effect_sequence_properties_grid")
                                             .num_columns(2)
@@ -4874,5 +4898,17 @@ mod tests {
         assert_eq!(motion_seat_name(Some(&capabilities), 0), "Saved Left");
         assert_eq!(motion_seat_name(None, 0), "seat.a");
         assert_eq!(motion_seat_name(None, 1), "seat.b");
+    }
+
+    #[test]
+    fn effects_library_search_well_uses_craft_theme_field_tokens() {
+        let ctx = egui::Context::default();
+        let config = crate::config::AppConfig::default();
+        crate::ui::configure_native_visuals(&ctx, &config);
+        let tokens = crate::ui::craft_theme::current(&ctx);
+
+        let frame = effects_search_well_frame(&tokens);
+        assert_eq!(frame.fill, tokens.field_bg);
+        assert_eq!(frame.stroke.color, tokens.field_border);
     }
 }
