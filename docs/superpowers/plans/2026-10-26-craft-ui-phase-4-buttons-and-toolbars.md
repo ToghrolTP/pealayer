@@ -94,7 +94,7 @@ git commit -m "feat(ui): add icon_button_style factory in craft_theme matching C
 - Consumes: `craft_theme::icon_button_style`, `craft_theme::current(ctx)`
 - Produces: `action_customization::control` styled using Craft UI button visuals and focus stroke.
 
-- [ ] **Step 1: Write failing regression test in `src/ui/action_customization.rs`**
+- [x] **Step 1: Write failing regression test in `src/ui/action_customization.rs`**
 
 ```rust
 #[test]
@@ -110,12 +110,12 @@ fn action_control_renders_with_craft_icon_button_visuals() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it compiles and runs**
+- [x] **Step 2: Run test to verify it compiles and runs**
 
 Run: `PEALAYER_CONFIG_FILE=$(mktemp) cargo test --lib ui::action_customization::tests::action_control_renders_with_craft_icon_button_visuals`
 Expected: PASS or compile check.
 
-- [ ] **Step 3: Refactor `control` in `src/ui/action_customization.rs`**
+- [x] **Step 3: Refactor `control` in `src/ui/action_customization.rs`**
 
 In `pub(crate) fn control(...) -> Response`:
 Query `let btn_style = super::craft_theme::icon_button_style(&tokens, frame);`
@@ -126,12 +126,12 @@ Use `btn_style` to provide fill, stroke, and focus indicators for the button:
 - Focus outline: when `response.has_focus()`, paint `btn_style.focus_stroke`.
 - Preserve `ui.interact(rect, id, Sense::click_and_drag())`, accessibility `WidgetInfo`, and font rendering.
 
-- [ ] **Step 4: Run all control bar and action tests to verify no regressions**
+- [x] **Step 4: Run all control bar and action tests to verify no regressions**
 
 Run: `PEALAYER_CONFIG_FILE=$(mktemp) cargo test --lib ui::control_bar::tests ui::timeline_toolbar::tests ui::monitor_controls::tests`
 Expected: PASS (all tests pass)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/ui/action_customization.rs
