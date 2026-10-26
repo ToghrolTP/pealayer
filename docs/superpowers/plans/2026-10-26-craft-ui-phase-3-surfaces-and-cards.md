@@ -90,7 +90,7 @@ git commit -m "feat(ui): style status bar panel with craft_theme well_bg and sep
 - Consumes: `craft_theme::current(ctx) -> Tokens`
 - Produces: `confirmation_modal` and dialog frame styled with `tokens.panel_bg`, `tokens.border_subtle`, and `tokens.modal_backdrop`.
 
-- [ ] **Step 1: Write failing unit test in `src/ui/dialog.rs`**
+- [x] **Step 1: Write failing unit test in `src/ui/dialog.rs`**
 
 ```rust
 #[test]
@@ -106,29 +106,29 @@ fn confirmation_modal_frame_uses_craft_theme_tokens() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `PEALAYER_CONFIG_FILE=$(mktemp) cargo test --lib ui::dialog::tests::confirmation_modal_frame_uses_craft_theme_tokens`
 Expected: FAIL with "cannot find function `confirmation_modal_frame`"
 
-- [ ] **Step 3: Write minimal implementation in `src/ui/dialog.rs`**
+- [x] **Step 3: Write minimal implementation in `src/ui/dialog.rs`**
 
 Implement `pub(crate) fn confirmation_modal_frame(tokens: &crate::ui::craft_theme::Tokens) -> egui::Frame` using `tokens.panel_bg` and `tokens.border_subtle`.
 In `confirmation_modal`:
 Use `confirmation_modal_frame(&tokens)` and set `.backdrop_color(tokens.modal_backdrop)`.
 Ensure `close_button` paint, geometry, and non-destructive escape logic remain completely untouched.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `PEALAYER_CONFIG_FILE=$(mktemp) cargo test --lib ui::dialog::tests::confirmation_modal_frame_uses_craft_theme_tokens`
 Expected: PASS (ok)
 
-- [ ] **Step 5: Run all dialog tests to verify no regressions**
+- [x] **Step 5: Run all dialog tests to verify no regressions**
 
 Run: `PEALAYER_CONFIG_FILE=$(mktemp) cargo test --lib ui::dialog::tests`
 Expected: PASS (all 20 passed)
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/ui/dialog.rs
