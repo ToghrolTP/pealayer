@@ -7677,6 +7677,10 @@ impl PealayerApp {
         self.status_bar = config.status_bar;
         self.control_bars = config.control_bars;
         self.sidebar_rail_state = config.ui.sidebar_rail;
+        self.sidebar_rail_state.width = self.sidebar_rail_state.width.clamp(
+            crate::ui::sidebar_rail::SidebarPaneContent::MIN_WIDTH,
+            crate::ui::sidebar_rail::SidebarPaneContent::MAX_WIDTH,
+        );
         self.workspace_profiles = config.workspace_profiles.clone();
         self.active_workspace_profile = config.active_workspace_profile.clone();
         self.effect_library_draft = config.effect_working_draft.clone().unwrap_or_default();

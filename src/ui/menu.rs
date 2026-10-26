@@ -520,7 +520,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     } else {
                                         crate::ui::icons::EYE_SLASH
                                     };
-                                    let label = format!("{visibility_icon}  {}", pane.title(app.language));
+                                    let tab_icon = crate::ui::layout::PealayerTab::from(pane).icon();
+                                    let label = format!("{visibility_icon}  {tab_icon}  {}", pane.title(app.language));
                                     if ui.checkbox(&mut open, label).changed() {
                                         if open {
                                             app.sidebar_rail_state.open = Some(pane);

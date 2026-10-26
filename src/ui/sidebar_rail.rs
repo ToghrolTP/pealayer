@@ -127,6 +127,7 @@ impl<'a> PaneContent<SidebarPane> for SidebarPaneContent<'a> {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct SidebarRailState {
     pub open: Option<SidebarPane>,
     pub width: f32,
