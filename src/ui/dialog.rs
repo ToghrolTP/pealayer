@@ -60,12 +60,21 @@ pub struct ConfirmationResponse {
     pub close: egui::Response,
 }
 
+pub(crate) fn confirmation_modal_frame(tokens: &crate::ui::craft_theme::Tokens) -> egui::Frame {
+    egui::Frame::new()
+        .fill(tokens.panel_bg)
+        .stroke(egui::Stroke::new(1.0, tokens.border_subtle))
+        .corner_radius(6.0)
+        .inner_margin(egui::Margin::same(12))
+}
+
 /// Shared unsaved-change chrome. Close/Escape mean Keep editing; the caller owns
 /// Save/Discard. Backdrop clicks never silently dispose of a dirty draft.
 pub fn confirmation_modal(ctx: &egui::Context, id: egui::Id, heading: &str,
     icon: &str, message: &str, close_label: &str, footer: impl FnOnce(&mut egui::Ui) -> bool) -> ConfirmationResponse {
     crate::ui::sync_elegance_theme(ctx);
     let theme = elegance::Theme::current(ctx);
+    let tokens = crate::ui::craft_theme::current(ctx);
     let focus_id = id.with("previous-focus");
     let first_frame = ctx.data(|data| data.get_temp::<Option<egui::Id>>(focus_id)).is_none();
     if first_frame {
@@ -73,11 +82,9 @@ pub fn confirmation_modal(ctx: &egui::Context, id: egui::Id, heading: &str,
         ctx.data_mut(|data| data.insert_temp(focus_id, previous));
     }
     let width = (ctx.content_rect().width() - 64.0).clamp(160.0, 440.0);
-    let frame = egui::Frame::new().fill(theme.palette.card)
-        .stroke(egui::Stroke::new(1.0, theme.palette.border))
-        .corner_radius(theme.card_radius).inner_margin(egui::Margin::same(12));
+    let frame = confirmation_modal_frame(&tokens);
     let modal = egui::Modal::new(id).frame(frame)
-        .backdrop_color(egui::Color32::from_black_alpha(150)).show(ctx, |ui| {
+        .backdrop_color(tokens.modal_backdrop).show(ctx, |ui| {
             ui.ctx().accesskit_node_builder(ui.unique_id(), |node| {
                 node.set_role(egui::accesskit::Role::AlertDialog);
                 node.set_label(heading);
@@ -595,6 +602,19 @@ mod tests {
             }
             assert!(!open, "Square Close must keep editing, without a footer action");
         }
+    }
+
+    #[test]
+    fn confirmation_modal_frame_uses_craft_theme_tokens() {
+        use super::*;
+        let ctx = egui::Context::default();
+        let config = crate::config::AppConfig::default();
+        crate::ui::configure_native_visuals(&ctx, &config);
+        let tokens = crate::ui::craft_theme::current(&ctx);
+
+        let frame = confirmation_modal_frame(&tokens);
+        assert_eq!(frame.fill, tokens.panel_bg);
+        assert_eq!(frame.stroke.color, tokens.border_subtle);
     }
 
     #[test]
