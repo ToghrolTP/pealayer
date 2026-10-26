@@ -75,6 +75,14 @@ pub struct Tokens {
     pub field_bg: Color32,
     pub field_border: Color32,
     pub separator: Color32,
+    /// Well background (recessed status bar, card container, search well).
+    pub well_bg: Color32,
+    /// Card background surface.
+    pub card_bg: Color32,
+    /// Subtle border stroke for modals, cards, and dividers.
+    pub border_subtle: Color32,
+    /// Modal overlay backdrop dimming fill.
+    pub modal_backdrop: Color32,
     pub row_alt: Color32,
     pub row_selected: Color32,
     /// Scrubby (hot-text) numeric value color.
@@ -178,7 +186,11 @@ impl Tokens {
             pressed: Color32::from_rgb(0x4b, 0x4b, 0x4b),
             field_bg: Color32::from_rgb(0x0e, 0x0e, 0x0e),
             field_border: Color32::from_rgb(0x30, 0x30, 0x30),
-            separator: Color32::from_rgb(0x30, 0x30, 0x30),
+            separator: Color32::from_rgb(0x24, 0x24, 0x24),
+            well_bg: Color32::from_rgb(0x18, 0x18, 0x18),
+            card_bg: Color32::from_rgb(0x24, 0x24, 0x24),
+            border_subtle: Color32::from_rgb(0x30, 0x30, 0x30),
+            modal_backdrop: Color32::from_rgba_premultiplied(0, 0, 0, 160),
             row_alt: Color32::from_rgb(0x21, 0x21, 0x21),
             row_selected: Color32::from_rgb(0x33, 0x33, 0x33),
             hot_text: Color32::from_rgb(0x40, 0x96, 0xf3),
@@ -265,6 +277,10 @@ impl Tokens {
                 monitor_bg: Color32::from_rgb(0x32, 0x32, 0x32),
                 row_alt: Color32::from_rgb(50, 50, 50),
                 hover: Color32::from_rgb(64, 64, 64),
+                separator: Color32::from_rgb(0x3a, 0x3a, 0x3a),
+                well_bg: Color32::from_rgb(0x28, 0x28, 0x28),
+                card_bg: Color32::from_rgb(0x38, 0x38, 0x38),
+                border_subtle: Color32::from_rgb(0x40, 0x40, 0x40),
                 ..dark
             },
             ThemeKind::Light => Tokens {
@@ -284,6 +300,10 @@ impl Tokens {
                 field_bg: Color32::from_rgb(250, 250, 250),
                 field_border: Color32::from_rgb(170, 170, 170),
                 separator: Color32::from_rgb(200, 200, 200),
+                well_bg: Color32::from_rgb(240, 240, 240),
+                card_bg: Color32::from_rgb(255, 255, 255),
+                border_subtle: Color32::from_rgb(210, 210, 210),
+                modal_backdrop: Color32::from_rgba_premultiplied(0, 0, 0, 100),
                 row_alt: Color32::from_rgb(224, 224, 224),
                 row_selected: Color32::from_rgb(170, 200, 240),
                 pill_active_bg: Color32::from_rgb(196, 196, 196),
@@ -374,6 +394,7 @@ impl Tokens {
                 self.tab_text = self.tab_text_active;
                 self.field_border = Color32::from_rgb(0x6a, 0x6a, 0x6a);
                 self.separator = Color32::from_rgb(0x50, 0x50, 0x50);
+                self.border_subtle = Color32::from_rgb(0x60, 0x60, 0x60);
             }
         }
         self

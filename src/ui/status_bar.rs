@@ -1099,9 +1099,18 @@ fn draw_group(app: &mut PealayerApp, ui: &mut egui::Ui, end: bool, hardware: Opt
         background.context_menu(|ui| group_menu(app,ui,end));
     }
 }
+
+pub(crate) fn status_bar_panel_frame(tokens: &crate::ui::craft_theme::Tokens) -> egui::Frame {
+    egui::Frame::NONE
+        .inner_margin(egui::Margin::symmetric(7, 1))
+        .fill(tokens.well_bg)
+        .stroke(egui::Stroke::new(1.0, tokens.separator))
+}
+
 pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let _timing = crate::performance::span(crate::performance::Phase::Status);
     if ui.input(|i| i.viewport().fullscreen.unwrap_or(false)) { return; }
+    let tokens = crate::ui::craft_theme::current(ui.ctx());
     let hardware = app.advertised_hardware();
     let progress = active_operations(hardware.as_ref());
     let log_id = egui::Id::new("status-bar-telemetry-log");
@@ -1110,7 +1119,9 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         if !app.status_bar.chart_paused { log.sample(now,hardware.as_ref()); } log.clone() });
     let payload = egui::DragAndDrop::payload::<Widget>(ui.ctx());
     let mut rects = Vec::new();
-    let panel = egui::Panel::bottom("status_bar").show_inside(ui, |ui| {
+    let panel = egui::Panel::bottom("status_bar")
+        .frame(status_bar_panel_frame(&tokens))
+        .show_inside(ui, |ui| {
         ui.spacing_mut().item_spacing.x=3.0;
         ui.with_layout(crate::ui::i18n::layout(app.rtl,egui::Align::Center), |ui| {
             let items=group_items(app,true,hardware.as_ref(),&progress);
@@ -1766,5 +1777,18 @@ mod tests {
             assert!(render_widget(&app, ui, Widget::Timeline, None, &TelemetryLog::default(), &[]).is_some());
         });
         output.textures_delta.clear();
+    }
+
+    #[test]
+    fn status_bar_uses_craft_theme_surface_and_separator_tokens() {
+        let ctx = egui::Context::default();
+        let config = crate::config::AppConfig::default();
+        crate::ui::configure_native_visuals(&ctx, &config);
+        let tokens = crate::ui::craft_theme::current(&ctx);
+
+        let frame = status_bar_panel_frame(&tokens);
+        assert_eq!(frame.fill, tokens.well_bg);
+        assert_eq!(frame.stroke.color, tokens.separator);
+        assert_eq!(frame.stroke.width, 1.0);
     }
 }
