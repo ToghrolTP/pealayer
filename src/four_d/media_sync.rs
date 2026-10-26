@@ -71,8 +71,12 @@ impl Default for PlaybackSample {
 }
 impl PlaybackSample {
     pub(crate) fn position_now(&self) -> u64 {
+        self.position_at(Instant::now())
+    }
+
+    fn position_at(&self, now: Instant) -> u64 {
         let advance = if self.playing {
-            self.sampled_at.elapsed().as_secs_f64() * 1000.0 * self.rate
+            now.saturating_duration_since(self.sampled_at).as_secs_f64() * 1000.0 * self.rate
         } else {
             0.0
         };
@@ -80,6 +84,23 @@ impl PlaybackSample {
         position
             .min(self.duration_ms.unwrap_or(u32::MAX as u64))
             .min(u32::MAX as u64)
+    }
+
+    /// A successful read refreshes observation freshness, but the decoder can
+    /// return the same position for several polls. Keep that position's original
+    /// anchor while playing, so repeated reads do not rewind the projected clock
+    /// before the next decoder update. Pauses, seeks and rate changes re-anchor.
+    pub(crate) fn observe_position_at(
+        &mut self, position_ms: u64, playing: bool, rate: f64,
+        rebase: bool, observed_at: Instant,
+    ) {
+        if rebase || !playing || !self.playing
+            || self.position_ms != position_ms || self.rate != rate
+        {
+            self.position_ms = position_ms;
+            self.sampled_at = observed_at;
+        }
+        self.observed_at = observed_at;
     }
     fn changed_from(&self, previous: &Self) -> bool {
         self.epoch != previous.epoch
@@ -1287,6 +1308,58 @@ mod tests {
         value.rate = 2.;
         value.duration_ms = Some(11_000);
         assert_eq!(value.position_now(), 11_000);
+    }
+
+    #[test]
+    fn repeated_decoder_positions_do_not_rewind_the_clock_before_a_cue() {
+        let at = Instant::now();
+        let mut sample = PlaybackSample {
+            position_ms: 112_960, playing: true, loaded: true,
+            sampled_at: at, observed_at: at, ..Default::default()
+        };
+        // A decoder position that changes every 160 ms is read every 20 ms.
+        // The 113100 ms cue must be crossed continuously, not by a 140 ms jump.
+        for millis in (20..160).step_by(20) {
+            let now = at + Duration::from_millis(millis);
+            sample.observe_position_at(112_960, true, 1., false, now);
+            assert_eq!(sample.position_at(now), 112_960 + millis);
+            assert_eq!(sample.observed_at, now);
+        }
+        let next = at + Duration::from_millis(160);
+        sample.observe_position_at(113_120, true, 1., false, next);
+        assert_eq!(sample.position_at(next), 113_120);
+    }
+
+    #[test]
+    fn decoder_clock_reanchors_on_pause_seek_rate_and_resume() {
+        let at = Instant::now();
+        let mut sample = PlaybackSample {
+            position_ms: 10_000, playing: true,
+            sampled_at: at, observed_at: at, ..Default::default()
+        };
+        for (playing, rate, rebase) in [(false, 1., false), (true, 2., false), (true, 1., true)] {
+            let next = at + Duration::from_millis(200);
+            sample.observe_position_at(10_000, playing, rate, rebase, next);
+            assert_eq!(sample.sampled_at, next);
+            sample.sampled_at = at;
+        }
+        sample.playing = false;
+        let resume = at + Duration::from_secs(3);
+        sample.observe_position_at(10_000, false, 1., false, resume);
+        sample.playing = true; // A matching fresh arm consumes explicit Play.
+        assert_eq!(sample.position_at(resume), 10_000);
+    }
+
+    #[test]
+    fn unchanged_decoder_still_exceeds_the_existing_stall_guard() {
+        let at = Instant::now();
+        let mut sample = PlaybackSample {
+            position_ms: 10_000, playing: true,
+            sampled_at: at, observed_at: at, ..Default::default()
+        };
+        let stalled = at + Duration::from_millis(260);
+        sample.observe_position_at(10_000, true, 1., false, stalled);
+        assert!(sample.position_at(stalled).abs_diff(10_000) > 250);
     }
 
     #[test]
