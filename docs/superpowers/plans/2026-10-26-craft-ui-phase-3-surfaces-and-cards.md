@@ -33,7 +33,7 @@
 - Consumes: `craft_theme::current(ctx) -> Tokens`
 - Produces: Bottom status bar panel styled with `tokens.well_bg` and a 1px top stroke with `tokens.separator`.
 
-- [ ] **Step 1: Write failing unit test in `src/ui/status_bar.rs`**
+- [x] **Step 1: Write failing unit test in `src/ui/status_bar.rs`**
 
 ```rust
 #[test]
@@ -50,28 +50,28 @@ fn status_bar_uses_craft_theme_surface_and_separator_tokens() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `PEALAYER_CONFIG_FILE=$(mktemp) cargo test --lib ui::status_bar::tests::status_bar_uses_craft_theme_surface_and_separator_tokens`
 Expected: FAIL with "cannot find function `status_bar_panel_frame`"
 
-- [ ] **Step 3: Write minimal implementation in `src/ui/status_bar.rs`**
+- [x] **Step 3: Write minimal implementation in `src/ui/status_bar.rs`**
 
 Implement `pub(crate) fn status_bar_panel_frame(tokens: &crate::ui::craft_theme::Tokens) -> egui::Frame` that returns `egui::Frame::none().fill(tokens.well_bg).stroke(egui::Stroke::new(1.0, tokens.separator))`.
 In `pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui)`:
 Replace the unstyled `egui::Panel::bottom("status_bar")` with `.frame(status_bar_panel_frame(&tokens))`.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `PEALAYER_CONFIG_FILE=$(mktemp) cargo test --lib ui::status_bar::tests::status_bar_uses_craft_theme_surface_and_separator_tokens`
 Expected: PASS (ok)
 
-- [ ] **Step 5: Run all status bar tests to verify no regressions**
+- [x] **Step 5: Run all status bar tests to verify no regressions**
 
 Run: `PEALAYER_CONFIG_FILE=$(mktemp) cargo test --lib ui::status_bar::tests`
 Expected: PASS (all 19 passed)
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/ui/status_bar.rs
