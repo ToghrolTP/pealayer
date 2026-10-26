@@ -147,7 +147,7 @@ git commit -m "feat(ui): align confirmation modal frame and backdrop with craft_
 - Consumes: `craft_theme::current(ui.ctx()) -> Tokens`
 - Produces: Effects library container and hardware cards styled with `tokens.well_bg`, `tokens.card_bg`, and `tokens.separator`.
 
-- [ ] **Step 1: Write failing test in `src/ui/effects_library.rs`**
+- [x] **Step 1: Write failing test in `src/ui/effects_library.rs`**
 
 ```rust
 #[test]
@@ -163,28 +163,28 @@ fn effects_library_search_well_uses_craft_theme_field_tokens() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `PEALAYER_CONFIG_FILE=$(mktemp) cargo test --lib ui::effects_library::tests::effects_library_search_well_uses_craft_theme_field_tokens`
 Expected: FAIL with "cannot find function `effects_search_well_frame`"
 
-- [ ] **Step 3: Write minimal implementation in `src/ui/effects_library.rs` and `src/ui/layout.rs`**
+- [x] **Step 3: Write minimal implementation in `src/ui/effects_library.rs` and `src/ui/layout.rs`**
 
 Implement `pub(crate) fn effects_search_well_frame(tokens: &crate::ui::craft_theme::Tokens) -> egui::Frame` using `tokens.field_bg` and `tokens.field_border`.
 In `effects_library.rs`, use `tokens.well_bg` for panel container background and `tokens.separator` for group divider strokes.
 In `layout.rs`, ensure hardware card containers use `tokens.separator` for card outlines.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `PEALAYER_CONFIG_FILE=$(mktemp) cargo test --lib ui::effects_library::tests::effects_library_search_well_uses_craft_theme_field_tokens`
 Expected: PASS (ok)
 
-- [ ] **Step 5: Run all effects library tests to verify no regressions**
+- [x] **Step 5: Run all effects library tests to verify no regressions**
 
 Run: `PEALAYER_CONFIG_FILE=$(mktemp) cargo test --lib ui::effects_library::tests`
 Expected: PASS (all 35 passed)
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/ui/effects_library.rs src/ui/layout.rs
