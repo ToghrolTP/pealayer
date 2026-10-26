@@ -20058,8 +20058,10 @@ pub fn reveal_and_focus_workspace_tab(
 ) -> bool {
     let was_open = workspace.layout.contains(&tab);
     let fallback = Some(PealayerTab::ProgramMonitor);
-    let _ = workspace.set_visible(tab, true, fallback, |_| craft_ui::docking::Permissions::default());
-    !was_open
+    let ok = workspace
+        .set_visible(tab, true, fallback, |_| craft_ui::docking::Permissions::default())
+        .is_ok();
+    ok && !was_open
 }
 
 /// Helper trait to allow `reveal_and_focus_tab` to operate transparently on both
