@@ -5,6 +5,11 @@ use eframe::egui;
 use serde_json::{Value, json};
 
 pub(crate) fn valid(program: &Value) -> bool {
+    if !program["dim_intensity"].is_null()
+        && !program["dim_intensity"].as_u64().is_some_and(|v| v <= 255)
+    {
+        return false;
+    }
     let Some(period) = program["period_ms"]
         .as_u64()
         .filter(|v| (50..=3_600_000).contains(v))
