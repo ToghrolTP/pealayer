@@ -2,7 +2,6 @@ use crate::ui::dropdown::DropdownUiExt;
 use crate::app::{EffectDragPayload, PealayerApp};
 use crate::config::TimelineToolbarAction;
 use eframe::egui;
-use egui_dock::TabViewer;
 
 mod channel_folders;
 pub(crate) use channel_folders::{request_channel_folder_update, channel_folder_names};
@@ -2894,7 +2893,7 @@ fn scroll_requested_timeline_track_into_view(
             .is_some_and(|requested| requested == key)
     });
     if requested {
-        // This row lives inside egui_dock's scrollable tab body. Scrolling the
+        // This row lives inside the workspace's scrollable tab body. Scrolling the
         // allocated row rectangle keeps the track caption and its canvas lane
         // aligned instead of guessing an offset from the item index.
         ui.scroll_to_rect(rect, Some(egui::Align::Center));
@@ -19885,33 +19884,8 @@ impl<'a> PealayerTabViewer<'a> {
             draw_timeline_cue_dialog(self.app, ui.ctx());
         }
     }
-}
 
-impl<'a> TabViewer for PealayerTabViewer<'a> {
-    type Tab = PealayerTab;
-
-    fn id(&mut self, tab: &mut Self::Tab) -> egui::Id {
-        egui::Id::new(*tab)
-    }
-
-    fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
-        format!("{} {}", tab.icon(), tab.title(self.app)).into()
-    }
-
-    fn context_menu(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab, _path: egui_dock::NodePath) {
-        self.draw_context_menu(ui, *tab);
-    }
-
-    fn on_tab_button(&mut self, _tab: &mut Self::Tab, response: &egui::Response) {
-        let id = egui::Id::new("workspace-tab-button-rects");
-        response.ctx.data_mut(|data| {
-            let mut rects = data.get_temp::<Vec<egui::Rect>>(id).unwrap_or_default();
-            rects.push(response.rect);
-            data.insert_temp(id, rects);
-        });
-    }
-
-    fn scroll_bars(&self, tab: &Self::Tab) -> [bool; 2] {
+    pub fn scroll_bars(&self, tab: &PealayerTab) -> [bool; 2] {
         match tab {
             // This is a fitted video viewport with a responsive footer, not a
             // document. The dock's pixel-rounded ScrollArea otherwise permits
@@ -19924,7 +19898,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
         }
     }
 
-    fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
+    pub fn ui(&mut self, ui: &mut egui::Ui, tab: &mut PealayerTab) {
         self.draw_tab_body(ui, *tab);
     }
 }
