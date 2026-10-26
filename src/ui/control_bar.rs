@@ -205,6 +205,22 @@ pub(crate) fn group_width(app: &PealayerApp, ui: &egui::Ui, surface: Surface, en
         })
     .max(super::control_density::height(ui))
 }
+/// Computes visible action groups versus overflowing actions for customizable control bars.
+///
+/// Uses `craft_ui::layout::fit_toolbar` to calculate visible vs overflowing actions.
+pub(crate) fn compute_toolbar_fit(
+    natural_widths: &[f32],
+    available: f32,
+    gap: f32,
+    overflow_width: f32,
+) -> craft_ui::layout::ToolbarFit {
+    craft_ui::layout::fit_toolbar(natural_widths, available, gap, overflow_width)
+        .unwrap_or_else(|| craft_ui::layout::ToolbarFit {
+            shown: Vec::new(),
+            overflow: (0..natural_widths.len()).collect(),
+            overflow_width,
+        })
+}
 fn menu(app: &mut PealayerApp, ui: &mut egui::Ui, surface: Surface, action: Option<Action>) {
     let mut layout = app.control_bars.layout(surface);
     let mut changed = false;
@@ -839,5 +855,28 @@ mod tests {
                 }
             }
         }
+    }
+    #[test]
+    fn control_bar_computes_fit_with_craft_toolbar_fit() {
+        let natural = [32.0, 32.0, 32.0];
+        let fit = craft_ui::layout::fit_toolbar(&natural, 80.0, 4.0, 32.0);
+        assert!(fit.is_some());
+        let fit = fit.unwrap();
+        assert_eq!(fit.shown.len(), 1);
+        assert_eq!(fit.overflow.len(), 2);
+
+        let computed = compute_toolbar_fit(&natural, 80.0, 4.0, 32.0);
+        assert_eq!(computed.shown.len(), 1);
+        assert_eq!(computed.overflow.len(), 2);
+        assert_eq!(computed.overflow_width, 32.0);
+
+        let tiny = compute_toolbar_fit(&natural, 20.0, 4.0, 32.0);
+        assert!(tiny.shown.is_empty());
+        assert_eq!(tiny.overflow.len(), 3);
+        assert_eq!(tiny.overflow_width, 32.0);
+
+        let exact = compute_toolbar_fit(&[20.0, 20.0], 50.0, 4.0, 20.0);
+        assert_eq!(exact.shown.len(), 2);
+        assert!(exact.overflow.is_empty());
     }
 }
