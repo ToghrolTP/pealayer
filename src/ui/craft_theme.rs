@@ -413,30 +413,7 @@ impl Tokens {
 
     /// Constructs an `IconButtonStyle` matching FilmCraft button tokens.
     pub fn icon_button_style(&self) -> craft_ui::buttons::IconButtonStyle {
-        craft_ui::buttons::IconButtonStyle {
-            normal: craft_ui::buttons::ButtonVisuals {
-                fill: Color32::TRANSPARENT,
-                stroke: Stroke::NONE,
-                icon: self.icon,
-            },
-            hovered: craft_ui::buttons::ButtonVisuals {
-                fill: self.hover,
-                stroke: Stroke::new(1.0, self.button_border),
-                icon: self.icon_active,
-            },
-            pressed: Some(craft_ui::buttons::ButtonVisuals {
-                fill: self.pressed,
-                stroke: Stroke::new(1.0, self.button_border),
-                icon: self.icon_active,
-            }),
-            selected: craft_ui::buttons::ButtonVisuals {
-                fill: self.pill_active_bg,
-                stroke: Stroke::new(1.0, self.accent),
-                icon: self.icon_active,
-            },
-            corner_radius: CornerRadius::same(self.radius_sm as u8),
-            focus_stroke: Stroke::new(1.5, self.focus),
-        }
+        icon_button_style(self, false)
     }
 
     /// Constructs a `ChromeStyle` matching FilmCraft floating and task pane chrome.
@@ -646,6 +623,34 @@ pub fn apply_dock_style(style: &mut egui_dock::Style, t: &Tokens) {
     style.buttons.close_tab_active_color = t.tab_text_active;
 }
 
+/// Constructs an `IconButtonStyle` matching FilmCraft button tokens.
+pub fn icon_button_style(tokens: &Tokens, frame: bool) -> craft_ui::buttons::IconButtonStyle {
+    craft_ui::buttons::IconButtonStyle {
+        normal: craft_ui::buttons::ButtonVisuals {
+            fill: if frame { tokens.panel_bg } else { Color32::TRANSPARENT },
+            stroke: if frame { Stroke::new(1.0, tokens.field_border) } else { Stroke::NONE },
+            icon: tokens.text_dim,
+        },
+        hovered: craft_ui::buttons::ButtonVisuals {
+            fill: tokens.hover,
+            stroke: if frame { Stroke::new(1.0, tokens.field_border) } else { Stroke::NONE },
+            icon: tokens.text,
+        },
+        pressed: Some(craft_ui::buttons::ButtonVisuals {
+            fill: tokens.pressed,
+            stroke: Stroke::new(1.0, tokens.accent),
+            icon: tokens.text,
+        }),
+        selected: craft_ui::buttons::ButtonVisuals {
+            fill: tokens.pill_active_bg,
+            stroke: Stroke::new(1.0, tokens.accent),
+            icon: tokens.accent,
+        },
+        corner_radius: CornerRadius::same(4),
+        focus_stroke: Stroke::new(1.0, tokens.focus),
+    }
+}
+
 /// Paints the FilmCraft active panel outline around the given rect.
 pub fn paint_active_panel_outline(painter: &egui::Painter, rect: egui::Rect, t: &Tokens) {
     painter.rect_stroke(rect, t.radius, Stroke::new(1.0, t.focus), StrokeKind::Inside);
@@ -754,5 +759,23 @@ mod tests {
         assert_eq!(visuals.widgets.hovered.bg_fill, dark.hover);
         assert_eq!(visuals.widgets.active.bg_fill, dark.pressed);
         assert_eq!(visuals.selection.bg_fill, dark.accent);
+    }
+
+    #[test]
+    fn icon_button_style_applies_filmcraft_pill_and_hover_tokens() {
+        let dark = Tokens::for_kind(ThemeKind::Dark);
+        let style = icon_button_style(&dark, false);
+
+        assert_eq!(style.normal.fill, egui::Color32::TRANSPARENT);
+        assert_eq!(style.hovered.fill, dark.hover);
+        assert_eq!(style.pressed.map(|p| p.fill), Some(dark.pressed));
+        assert_eq!(style.selected.fill, dark.pill_active_bg);
+        assert_eq!(style.selected.stroke.color, dark.accent);
+        assert_eq!(style.focus_stroke.color, dark.focus);
+
+        let framed = icon_button_style(&dark, true);
+        assert_eq!(framed.normal.fill, dark.panel_bg);
+        assert_eq!(framed.normal.stroke.color, dark.field_border);
+        assert_eq!(framed.hovered.stroke.color, dark.field_border);
     }
 }
