@@ -3563,7 +3563,7 @@ impl PealayerApp {
         }
         self.request_hardware_effect_command(
             "effect-preview",
-            format!("strip effect play {id} {pixels} {fps}"),
+            format!("effect play {id} {pixels} {fps}"),
         )
     }
 
