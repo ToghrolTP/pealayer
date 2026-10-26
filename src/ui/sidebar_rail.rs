@@ -1,7 +1,10 @@
 use std::ops::RangeInclusive;
 use eframe::egui::load::Bytes;
-use eframe::egui::{self, ImageSource, Ui};
-use craft_ui::panes::{Edge, PaneContent, PaneState};
+use eframe::egui::{Id, ImageSource, Ui};
+use craft_ui::panes::{
+    Edge, PaneContent, PaneHost, PaneOutput, PaneRequest, PaneState, Rail, RailItem,
+    RailRequest, SidePolicy,
+};
 use crate::app::PealayerApp;
 use crate::ui::layout::PealayerTab;
 
@@ -123,10 +126,118 @@ impl<'a> PaneContent<SidebarPane> for SidebarPaneContent<'a> {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct SidebarRailState {
+    pub open: Option<SidebarPane>,
+    pub width: f32,
+    pub enabled: bool,
+}
+
+impl Default for SidebarRailState {
+    fn default() -> Self {
+        Self {
+            open: None,
+            width: SidebarPaneContent::DEFAULT_WIDTH,
+            enabled: true,
+        }
+    }
+}
+
+impl SidebarRailState {
+    pub fn apply_rail_request(&mut self, request: RailRequest<SidebarPane>) {
+        match request {
+            RailRequest::Open(pane) => self.open = Some(pane),
+            RailRequest::Close(_) => self.open = None,
+            _ => {}
+        }
+    }
+
+    pub fn apply_pane_request(&mut self, request: PaneRequest<SidebarPane>) {
+        match request {
+            PaneRequest::Close(_) => self.open = None,
+            PaneRequest::Resize(_, size) => {
+                self.width = size.clamp(SidebarPaneContent::MIN_WIDTH, SidebarPaneContent::MAX_WIDTH)
+            }
+            _ => {}
+        }
+    }
+}
+
+pub fn show_sidebar_rail(
+    app: &mut PealayerApp,
+    ui: &mut Ui,
+    state: &mut SidebarRailState,
+) -> (Option<RailRequest<SidebarPane>>, Option<PaneOutput<SidebarPane>>) {
+    if !state.enabled {
+        return (None, None);
+    }
+
+    let items: Vec<RailItem<SidebarPane>> = SidebarPane::ALL
+        .iter()
+        .map(|pane| {
+            RailItem::new(*pane, icon_source(*pane), pane.title(app.language))
+        })
+        .collect();
+
+    let rail_out = Rail::new(Id::unique("pealayer-sidebar-rail"))
+        .edge(Edge::End)
+        .rtl(app.rtl)
+        .width(crate::ui::craft_theme::RAIL_WIDTH)
+        .button_size(crate::ui::craft_theme::RAIL_BUTTON)
+        .show(ui, &items, state.open.as_ref(), |_| {});
+
+    if let Some(ref req) = rail_out.request {
+        state.apply_rail_request(req.clone());
+    }
+
+    let pane_out = if let Some(pane) = state.open {
+        let open_panes = [pane];
+        let mut content = SidebarPaneContent { app };
+        let out = PaneHost::new(Id::unique("pealayer-sidebar-pane-host"))
+            .rtl(content.app.rtl)
+            .policy(SidePolicy::OneSlot)
+            .show(
+                ui,
+                &open_panes,
+                |_| Some(PaneState::docked(Edge::End, state.width)),
+                &mut content,
+            );
+        for req in &out.requests {
+            state.apply_pane_request(req.clone());
+        }
+        Some(out)
+    } else {
+        None
+    };
+
+    (rail_out.request, pane_out)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use craft_ui::panes::{Edge, PaneContent, Place};
+    use craft_ui::panes::{Edge, PaneContent, PaneRequest, Place, RailRequest};
+
+    #[test]
+    fn sidebar_rail_state_request_updates() {
+        let mut state = SidebarRailState::default();
+        assert_eq!(state.open, None);
+        assert_eq!(state.width, 300.0);
+        assert!(state.enabled);
+
+        state.apply_rail_request(RailRequest::Open(SidebarPane::HardwareMonitor));
+        assert_eq!(state.open, Some(SidebarPane::HardwareMonitor));
+
+        state.apply_rail_request(RailRequest::Close(SidebarPane::HardwareMonitor));
+        assert_eq!(state.open, None);
+
+        state.apply_pane_request(PaneRequest::Resize(SidebarPane::HardwareMonitor, 360.0));
+        assert_eq!(state.width, 360.0);
+
+        state.open = Some(SidebarPane::MediaInspector);
+        state.apply_pane_request(PaneRequest::Close(SidebarPane::MediaInspector));
+        assert_eq!(state.open, None);
+    }
 
     struct SidebarPaneContentMock;
 
@@ -168,7 +279,7 @@ mod tests {
         for pane in SidebarPane::ALL {
             let source = icon_source(pane);
             match source {
-                egui::ImageSource::Bytes { uri, bytes } => {
+                ImageSource::Bytes { uri, bytes } => {
                     assert!(uri.starts_with("bytes://pealayer/sidebar/"));
                     assert!(!bytes.is_empty());
                 }
@@ -207,5 +318,44 @@ mod tests {
             assert_eq!(*range.end(), 600.0);
             assert!(!content.title(&pane).is_empty());
         }
+    }
+
+    fn discard_ui_output(mut output: eframe::egui::FullOutput) {
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn show_sidebar_rail_disabled_returns_none() {
+        let mut app = PealayerApp::default();
+        let mut state = SidebarRailState {
+            open: Some(SidebarPane::HardwareMonitor),
+            width: 320.0,
+            enabled: false,
+        };
+        let ctx = eframe::egui::Context::default();
+        discard_ui_output(ctx.run_ui(eframe::egui::RawInput::default(), |ui| {
+            let (rail_req, pane_out) = show_sidebar_rail(&mut app, ui, &mut state);
+            assert!(rail_req.is_none());
+            assert!(pane_out.is_none());
+        }));
+    }
+
+    #[test]
+    fn show_sidebar_rail_renders_when_enabled() {
+        let mut app = PealayerApp::default();
+        let mut state = SidebarRailState::default();
+        let ctx = eframe::egui::Context::default();
+        discard_ui_output(ctx.run_ui(eframe::egui::RawInput::default(), |ui| {
+            let (rail_req, pane_out) = show_sidebar_rail(&mut app, ui, &mut state);
+            assert!(rail_req.is_none());
+            assert!(pane_out.is_none());
+        }));
+
+        state.open = Some(SidebarPane::HardwareMonitor);
+        discard_ui_output(ctx.run_ui(eframe::egui::RawInput::default(), |ui| {
+            let (rail_req, pane_out) = show_sidebar_rail(&mut app, ui, &mut state);
+            assert!(rail_req.is_none());
+            assert!(pane_out.is_some());
+        }));
     }
 }
