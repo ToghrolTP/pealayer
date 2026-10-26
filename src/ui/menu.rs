@@ -500,6 +500,38 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         format!("{} {}", crate::ui::icons::TABS, app.tr("Panels")),
                         |ui| crate::ui::layout::draw_workspace_tab_menu(app, ui),
                     );
+                    let mut sidebar_rail_enabled = app.sidebar_rail_state.enabled;
+                    if ui
+                        .checkbox(&mut sidebar_rail_enabled, app.tr("Sidebar Rail"))
+                        .changed()
+                    {
+                        app.sidebar_rail_state.enabled = sidebar_rail_enabled;
+                    }
+                    if app.sidebar_rail_state.enabled {
+                        crate::ui::icons::submenu(
+                            ui,
+                            format!("{} {}", crate::ui::icons::APP_WINDOW, app.tr("Sidebar Panes")),
+                            |ui| {
+                                for pane in crate::ui::sidebar_rail::SidebarPane::ALL {
+                                    let is_open = app.sidebar_rail_state.open == Some(pane);
+                                    let mut open = is_open;
+                                    let visibility_icon = if is_open {
+                                        crate::ui::icons::EYE
+                                    } else {
+                                        crate::ui::icons::EYE_SLASH
+                                    };
+                                    let label = format!("{visibility_icon}  {}", pane.title(app.language));
+                                    if ui.checkbox(&mut open, label).changed() {
+                                        if open {
+                                            app.sidebar_rail_state.open = Some(pane);
+                                        } else if is_open {
+                                            app.sidebar_rail_state.open = None;
+                                        }
+                                    }
+                                }
+                            },
+                        );
+                    }
                     ui.separator();
                     if ui
                         .button(format!(

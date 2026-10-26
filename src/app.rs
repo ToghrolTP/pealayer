@@ -701,6 +701,7 @@ pub struct PealayerApp {
     pub(crate) hardware_effect_authoring: HardwareEffectAuthoringState,
 
     // Phase 4 & 5 Selection/Override state
+    pub(crate) sidebar_rail_state: crate::ui::sidebar_rail::SidebarRailState,
     pub(crate) selected_instance_ids: std::collections::HashSet<uuid::Uuid>,
     pub selected_keyframes: std::collections::HashSet<(uuid::Uuid, usize)>,
     pub(crate) selected_timeline_keyframe: Option<uuid::Uuid>,
@@ -1980,6 +1981,12 @@ impl eframe::App for PealayerApp {
 
         // Handle Keyboard Shortcuts
         self.process_keyboard_shortcuts(&ctx);
+
+        if self.show_four_d_editor {
+            let mut rail_state = self.sidebar_rail_state;
+            crate::ui::sidebar_rail::show_sidebar_rail(self, ui, &mut rail_state);
+            self.sidebar_rail_state = rail_state;
+        }
 
         let mut frame = egui::Frame::central_panel(&ui.style());
         frame.inner_margin = egui::Margin::same(0);
@@ -7284,6 +7291,7 @@ impl PealayerApp {
         cfg.auto_reload_config = self.auto_reload_config;
         cfg.status_bar = self.status_bar;
         cfg.control_bars = self.control_bars;
+        cfg.ui.sidebar_rail = self.sidebar_rail_state;
         cfg.window_geometry = self.window_geometry;
         let mut dock_state = self.dock_state.clone();
         crate::ui::layout::sanitize_dock_rects(&mut dock_state);
@@ -7668,6 +7676,7 @@ impl PealayerApp {
         self.auto_reload_config = config.auto_reload_config;
         self.status_bar = config.status_bar;
         self.control_bars = config.control_bars;
+        self.sidebar_rail_state = config.ui.sidebar_rail;
         self.workspace_profiles = config.workspace_profiles.clone();
         self.active_workspace_profile = config.active_workspace_profile.clone();
         self.effect_library_draft = config.effect_working_draft.clone().unwrap_or_default();
@@ -9763,6 +9772,7 @@ impl Default for PealayerApp {
             native_preferences: None,
             status_bar: crate::config::StatusBarConfig::default(),
             control_bars: crate::config::ControlBarsConfig::default(),
+            sidebar_rail_state: crate::ui::sidebar_rail::SidebarRailState::default(),
             config_fingerprint: crate::config::AppConfig::fingerprint(
                 &crate::config::AppConfig::get_config_path(),
             )
@@ -9860,6 +9870,42 @@ pub(crate) mod tests {
         app.request_control_bar_save(&egui::Context::default());
         assert!(app.pending_control_bar_save.as_ref().unwrap().flight.is_none());
         assert_eq!(app.pending_control_bar_save.as_ref().unwrap().desired,app.control_bars);
+    }
+
+    #[test]
+    fn sidebar_rail_state_syncs_with_app_config() {
+        let _lock = lock_app_tests();
+        let mut app = PealayerApp::default();
+        assert!(app.sidebar_rail_state.enabled);
+        assert_eq!(app.sidebar_rail_state.open, None);
+
+        // Mutate sidebar rail state
+        app.sidebar_rail_state.width = 420.0;
+        app.sidebar_rail_state.open = Some(crate::ui::sidebar_rail::SidebarPane::EffectControls);
+
+        // Test runtime_config_snapshot reflects the changes
+        let config = app.runtime_config_snapshot();
+        assert_eq!(config.ui.sidebar_rail.width, 420.0);
+        assert_eq!(
+            config.ui.sidebar_rail.open,
+            Some(crate::ui::sidebar_rail::SidebarPane::EffectControls)
+        );
+
+        // Test apply_runtime_config updates the app's state
+        let mut new_config = crate::config::AppConfig::default();
+        new_config.ui.sidebar_rail.width = 350.0;
+        new_config.ui.sidebar_rail.open = Some(crate::ui::sidebar_rail::SidebarPane::MediaInspector);
+        new_config.ui.sidebar_rail.enabled = false;
+        let ctx = egui::Context::default();
+        app.apply_runtime_config(&ctx, new_config)
+            .expect("apply_runtime_config succeeds");
+
+        assert!(!app.sidebar_rail_state.enabled);
+        assert_eq!(app.sidebar_rail_state.width, 350.0);
+        assert_eq!(
+            app.sidebar_rail_state.open,
+            Some(crate::ui::sidebar_rail::SidebarPane::MediaInspector)
+        );
     }
 
     #[test]

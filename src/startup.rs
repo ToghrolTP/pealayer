@@ -740,6 +740,7 @@ pub fn run() -> eframe::Result {
                 hardware_effect_authoring: crate::app::HardwareEffectAuthoringState::default(),
                 recording_keys: std::collections::HashMap::new(),
                 dock_state,
+                sidebar_rail_state: loaded_config.ui.sidebar_rail,
                 rtt_state: Arc::new(Mutex::new(crate::app::RttState {
                     video_texture: None,
                     video_fbo: None,
