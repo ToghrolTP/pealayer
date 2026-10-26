@@ -8,6 +8,7 @@ pub(crate) fn designer_tr(ui: &egui::Ui, key: &'static str) -> String {
 }
 use eframe::egui;
 
+#[allow(dead_code)]
 pub(crate) fn effects_search_well_frame(tokens: &crate::ui::craft_theme::Tokens) -> egui::Frame {
     egui::Frame::NONE
         .fill(tokens.field_bg)
