@@ -574,53 +574,18 @@ pub fn set_current(ctx: &egui::Context, tokens: Tokens) {
     ctx.data_mut(|data| data.insert_temp(tokens_context_id(), tokens));
 }
 
-/// Applies FilmCraft styling to an `egui_dock::Style`.
-pub fn apply_dock_style(style: &mut egui_dock::Style, t: &Tokens) {
-    style.dock_area_padding = None;
-    style.main_surface_border_stroke = Stroke::NONE;
-    style.main_surface_border_rounding = CornerRadius::ZERO;
-
-    // Tab bar tokens
-    style.tab_bar.height = t.tab_h;
-    style.tab_bar.bg_fill = t.tab_bg;
-    style.tab_bar.hline_color = t.separator;
-
-    // Tab interaction tokens
-    style.tab.active.bg_fill = t.panel_bg;
-    style.tab.active.text_color = t.tab_text_active;
-    style.tab.active.outline_color = t.separator;
-    style.tab.active.corner_radius = CornerRadius::ZERO;
-
-    style.tab.inactive.bg_fill = t.tab_bg;
-    style.tab.inactive.text_color = t.tab_text;
-    style.tab.inactive.outline_color = Color32::TRANSPARENT;
-    style.tab.inactive.corner_radius = CornerRadius::ZERO;
-
-    // Focused tab gets the signature FilmCraft blue outline
-    style.tab.focused.bg_fill = t.panel_bg;
-    style.tab.focused.text_color = t.tab_text_active;
-    style.tab.focused.outline_color = t.focus;
-    style.tab.focused.corner_radius = CornerRadius::ZERO;
-
-    // Hovered tab
-    style.tab.hovered.bg_fill = t.hover;
-    style.tab.hovered.text_color = t.tab_text_active;
-    style.tab.hovered.corner_radius = CornerRadius::ZERO;
-
-    // Tab body
-    style.tab.tab_body.stroke = Stroke::new(1.0, t.separator);
-    style.tab.tab_body.corner_radius = CornerRadius::ZERO;
-
-    // Separators
-    style.separator.width = 1.0;
-    style.separator.color_idle = t.separator;
-    style.separator.color_hovered = t.focus;
-    style.separator.color_dragged = t.accent_hover;
-    style.separator.extra_interact_width = t.gap;
-
-    // Buttons
-    style.buttons.close_tab_color = t.icon;
-    style.buttons.close_tab_active_color = t.tab_text_active;
+/// Applies FilmCraft styling to a `craft_ui::docking::DockStyle`.
+pub fn apply_dock_style(style: &mut craft_ui::docking::DockStyle, t: &Tokens) {
+    style.tab_height = t.tab_h;
+    style.background = t.panel_bg;
+    style.tab_background = t.tab_bg;
+    style.active_background = t.panel_bg;
+    style.text = t.tab_text_active;
+    style.inactive_text = t.tab_text;
+    style.border = Stroke::new(1.0, t.separator);
+    style.accent = t.focus;
+    style.floating_background = t.panel_bg;
+    style.floating_stroke = Stroke::new(1.0, t.separator);
 }
 
 /// Constructs an `IconButtonStyle` matching FilmCraft button tokens.
@@ -714,12 +679,12 @@ mod tests {
     #[test]
     fn dock_style_inherits_filmcraft_panel_and_focus_tokens() {
         let dark = Tokens::for_kind(ThemeKind::Dark);
-        let mut dock_style = egui_dock::Style::default();
+        let mut dock_style = craft_ui::docking::DockStyle::default();
         apply_dock_style(&mut dock_style, &dark);
 
-        assert_eq!(dock_style.tab_bar.height, 32.0);
-        assert_eq!(dock_style.tab_bar.bg_fill, dark.tab_bg);
-        assert_eq!(dock_style.tab.focused.outline_color, dark.focus);
+        assert_eq!(dock_style.tab_height, 32.0);
+        assert_eq!(dock_style.tab_background, dark.tab_bg);
+        assert_eq!(dock_style.accent, dark.focus);
     }
 
     #[test]

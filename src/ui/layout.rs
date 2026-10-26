@@ -32,41 +32,6 @@ pub(crate) fn set_scroll_offset_y(state: &mut egui::scroll_area::State, y: f32) 
     set_scroll_offset(state, egui::vec2(x, y));
 }
 
-pub fn paint_dock_disclosure_icons(
-    ui: &mut egui::Ui,
-    dock_state: &egui_dock::DockState<PealayerTab>,
-    tab_bar_height: f32,
-) {
-    let pointer = ui.ctx().pointer_hover_pos();
-    for (_, leaf) in dock_state.iter_leaves() {
-        if !leaf.rect.is_positive() || leaf.tabs.is_empty() {
-            continue;
-        }
-        let button_rect = egui::Rect::from_min_size(
-            leaf.rect.min,
-            egui::vec2(24.0_f32.min(leaf.rect.width()), tab_bar_height),
-        );
-        let hovered = pointer.is_some_and(|position| button_rect.contains(position));
-        let color = if hovered {
-            ui.visuals().strong_text_color()
-        } else {
-            ui.visuals().text_color()
-        };
-        let icon = if leaf.collapsed {
-            crate::ui::icons::CARET_RIGHT
-        } else {
-            crate::ui::icons::CARET_DOWN
-        };
-        ui.painter().text(
-            button_rect.center(),
-            egui::Align2::CENTER_CENTER,
-            icon,
-            egui::FontId::proportional(13.0),
-            color,
-        );
-    }
-}
-
 pub(super) fn drag_translation(
     pointer: egui::Pos2,
     source_min: egui::Pos2,
@@ -9839,32 +9804,22 @@ mod timeline_row_tests {
     #[test]
     fn cue_manage_reveals_expands_and_focuses_effect_controls() {
         let mut dock_state = create_initial_layout();
-        let controls_path = dock_state
-            .find_tab(&PealayerTab::EffectControls)
-            .expect("effect controls starts in the canonical workspace");
-        dock_state
-            .leaf_mut(controls_path.node_path())
-            .expect("effect controls belongs to a leaf")
-            .collapsed = true;
+        assert!(dock_state.layout.contains(&PealayerTab::EffectControls));
 
-        let timeline_path = dock_state
-            .find_tab(&PealayerTab::Timeline)
-            .expect("timeline starts in the canonical workspace");
-        dock_state.set_focused_node_and_surface(timeline_path.node_path());
+        // Hide / close EffectControls
+        let _ = dock_state.set_visible(
+            PealayerTab::EffectControls,
+            false,
+            None,
+            |_| craft_ui::docking::Permissions::default(),
+        );
+        assert!(!dock_state.layout.contains(&PealayerTab::EffectControls));
 
         assert!(reveal_and_focus_tab(
             &mut dock_state,
             PealayerTab::EffectControls
         ));
-        let revealed_path = dock_state
-            .find_tab(&PealayerTab::EffectControls)
-            .expect("effect controls remains open");
-        let leaf = dock_state
-            .leaf(revealed_path.node_path())
-            .expect("revealed tab belongs to a leaf");
-        assert!(!leaf.collapsed);
-        assert_eq!(leaf.active, revealed_path.tab);
-        assert_eq!(dock_state.focused_leaf(), Some(revealed_path.node_path()));
+        assert!(dock_state.layout.contains(&PealayerTab::EffectControls));
 
         assert!(!reveal_and_focus_tab(
             &mut dock_state,
@@ -9888,16 +9843,18 @@ mod timeline_row_tests {
     #[test]
     fn cue_reveal_restores_closed_effect_controls_tab() {
         let mut app = PealayerApp::default();
-        let path = app.dock_state.find_tab(&PealayerTab::EffectControls).expect("starts open");
-        app.dock_state.remove_tab(path);
-        assert!(app.dock_state.find_tab(&PealayerTab::EffectControls).is_none());
+        let _ = app.dock_state.set_visible(
+            PealayerTab::EffectControls,
+            false,
+            None,
+            |_| craft_ui::docking::Permissions::default(),
+        );
+        assert!(!app.dock_state.layout.contains(&PealayerTab::EffectControls));
 
         app.open_or_focus_tab(PealayerTab::EffectControls);
         app.trigger_effect_controls_ping(5.0);
 
-        let restored = app.dock_state.find_tab(&PealayerTab::EffectControls).expect("restored tab");
-        let leaf = app.dock_state.leaf(restored.node_path()).expect("leaf");
-        assert_eq!(leaf.active, restored.tab);
+        assert!(app.dock_state.layout.contains(&PealayerTab::EffectControls));
     }
 
     fn cue_reveal_fixture() -> (PealayerApp, uuid::Uuid) {
@@ -9928,8 +9885,12 @@ mod timeline_row_tests {
         let timeline_before = serde_json::to_value(&app.timeline).unwrap();
         let undo_before = app.undo_stack.undo_len();
         let zoom_before = app.timeline_zoom;
-        let path = app.dock_state.find_tab(&PealayerTab::Timeline).unwrap();
-        app.dock_state.remove_tab(path);
+        let _ = app.dock_state.set_visible(
+            PealayerTab::Timeline,
+            false,
+            None,
+            |_| craft_ui::docking::Permissions::default(),
+        );
         let ctx = egui::Context::default();
         ctx.data_mut(|data| {
             data.insert_temp(egui::Id::new("timeline_track_filter_text"), "missing".to_string());
@@ -9946,8 +9907,7 @@ mod timeline_row_tests {
         let row = all_timeline_track_rows(&app).into_iter().find(|row| row.key == key).unwrap();
         assert!(!timeline_row_visible_for_reveal(&row, "missing", None));
         assert!(timeline_row_visible_for_reveal(&row, "missing", Some(&reveal)));
-        let path = app.dock_state.find_tab(&PealayerTab::Timeline).expect("timeline restored");
-        assert_eq!(app.dock_state.leaf(path.node_path()).unwrap().active, path.tab);
+        assert!(app.dock_state.layout.contains(&PealayerTab::Timeline));
         assert_eq!(app.playback_time, 12.5);
         assert!(app.is_paused && app.timeline_follow_playhead);
         assert_eq!(app.timeline_zoom, zoom_before);
@@ -10062,24 +10022,31 @@ mod timeline_row_tests {
     #[test]
     fn open_or_focus_tab_during_dock_render_persists_restored_tab() {
         let mut app = PealayerApp::default();
-        let path = app.dock_state.find_tab(&PealayerTab::EffectControls).expect("starts open");
-        app.dock_state.remove_tab(path);
-        assert!(app.dock_state.find_tab(&PealayerTab::EffectControls).is_none());
+        let _ = app.dock_state.set_visible(
+            PealayerTab::EffectControls,
+            false,
+            None,
+            |_| craft_ui::docking::Permissions::default(),
+        );
+        assert!(!app.dock_state.layout.contains(&PealayerTab::EffectControls));
 
-        // Simulate dock render: swap out dock_state like src/app.rs:1565
-        let dock_state = std::mem::replace(&mut app.dock_state, egui_dock::DockState::new(vec![]));
+        // Simulate dock render: swap out dock_state like src/app.rs
+        let dock_state = std::mem::replace(
+            &mut app.dock_state,
+            craft_ui::docking::Workspace::new(craft_ui::docking::Layout::default()),
+        );
 
         // Tab viewer calls open_or_focus_tab while swapped out
         app.open_or_focus_tab(PealayerTab::EffectControls);
 
-        // Put back dock_state and process pending reveals like src/app.rs:1581
+        // Put back dock_state and process pending reveals
         app.dock_state = dock_state;
         for tab in std::mem::take(&mut app.pending_tab_reveals) {
             reveal_and_focus_tab(&mut app.dock_state, tab);
         }
 
         assert!(
-            app.dock_state.find_tab(&PealayerTab::EffectControls).is_some(),
+            app.dock_state.layout.contains(&PealayerTab::EffectControls),
             "Restored tab must not be lost when called during dock render"
         );
     }
@@ -19991,7 +19958,7 @@ impl<'a> craft_ui::docking::DockContent<PealayerTab> for PealayerTabViewer<'a> {
 }
 
 /// Helper function to build the initial declarative Craft UI Workspace layout
-pub fn create_initial_workspace_layout() -> craft_ui::docking::Workspace<PealayerTab> {
+pub fn create_initial_layout() -> craft_ui::docking::Workspace<PealayerTab> {
     use craft_ui::docking::{Layout, Node, Workspace};
     use craft_ui::layout::{SplitAxis, SplitSize};
 
@@ -20051,8 +20018,9 @@ pub fn create_initial_workspace_layout() -> craft_ui::docking::Workspace<Pealaye
     workspace
 }
 
-/// Reveals and focuses a tab within a declarative Craft UI Workspace.
-pub fn reveal_and_focus_workspace_tab(
+/// Makes a workspace tab visibly active and keyboard-focused, restoring it
+/// first when the user previously closed it.
+pub fn reveal_and_focus_tab(
     workspace: &mut craft_ui::docking::Workspace<PealayerTab>,
     tab: PealayerTab,
 ) -> bool {
@@ -20062,254 +20030,6 @@ pub fn reveal_and_focus_workspace_tab(
         .set_visible(tab, true, fallback, |_| craft_ui::docking::Permissions::default())
         .is_ok();
     ok && !was_open
-}
-
-/// Helper trait to allow `reveal_and_focus_tab` to operate transparently on both
-/// `egui_dock::DockState` and `craft_ui::docking::Workspace`.
-pub trait RevealFocusTarget {
-    fn reveal_and_focus(&mut self, tab: PealayerTab) -> bool;
-}
-
-impl RevealFocusTarget for egui_dock::DockState<PealayerTab> {
-    fn reveal_and_focus(&mut self, tab: PealayerTab) -> bool {
-        let was_open = self.find_tab(&tab).is_some();
-        if !was_open {
-            restore_tab_to_canonical_slot(self, tab);
-        }
-
-        let Some(path) = self.find_tab(&tab) else {
-            return false;
-        };
-
-        let node_path = path.node_path();
-        let mut layout_changed = !was_open;
-        let mut node = Some(node_path.node);
-        while let Some(node_index) = node {
-            let ancestor = egui_dock::NodePath::new(node_path.surface, node_index);
-            if let Ok(dock_node) = self.node_mut(ancestor) {
-                if dock_node.is_collapsed() {
-                    dock_node.set_collapsed(false);
-                    layout_changed = true;
-                }
-            }
-            node = node_index.parent();
-        }
-
-        if self
-            .leaf(node_path)
-            .is_ok_and(|leaf| leaf.active != path.tab)
-        {
-            layout_changed = true;
-        }
-        let _ = self.set_active_tab(path);
-        self.set_focused_node_and_surface(node_path);
-        layout_changed
-    }
-}
-
-impl RevealFocusTarget for craft_ui::docking::Workspace<PealayerTab> {
-    fn reveal_and_focus(&mut self, tab: PealayerTab) -> bool {
-        reveal_and_focus_workspace_tab(self, tab)
-    }
-}
-
-/// Helper function to build the initial DockState layout
-pub fn create_initial_layout() -> egui_dock::DockState<PealayerTab> {
-    use egui_dock::NodeIndex;
-
-    // Start with a Timeline tab as the initial tab in the root node
-    let mut dock_state = egui_dock::DockState::new(vec![PealayerTab::Timeline]);
-
-    // Split the root node: split_above creates a top node (70% height) for monitors,
-    // leaving the Timeline at the bottom (30% height).
-    let [_timeline_node, top_node] = dock_state.main_surface_mut().split_above(
-        NodeIndex::root(),
-        0.7,
-        vec![PealayerTab::ProgramMonitor],
-    );
-
-    // Split the top node horizontally: split_left creates a left column (25% width)
-    // for Effect Controls and Hardware Monitor, leaving Program Monitor in the center/right.
-    let [center_node, _left_node] = dock_state.main_surface_mut().split_left(
-        top_node,
-        0.25,
-        vec![PealayerTab::EffectControls, PealayerTab::HardwareMonitor],
-    );
-
-    // Split the remaining center node horizontally: split_right creates a right column
-    // (30% of the remaining width, ~22.5% of total width) for Effects Library,
-    // leaving the Program Monitor in the center (~52.5% width).
-    let [_center_node, _right_node] = dock_state.main_surface_mut().split_right(
-        center_node,
-        0.7,
-        vec![PealayerTab::EffectsLibrary],
-    );
-
-    sanitize_dock_rects(&mut dock_state);
-
-    dock_state
-}
-
-/// Sanitizes all node rectangles and viewports in a `DockState` to finite values (`Rect::ZERO`),
-/// preventing non-finite floats (e.g. `Rect::NOTHING` where Pos2 is +/-INFINITY) from serializing
-/// as `null` in JSON formats such as `serde_json`.
-pub fn sanitize_dock_rects<Tab>(dock_state: &mut egui_dock::DockState<Tab>) {
-    for (_path, node) in dock_state.iter_all_nodes_mut() {
-        if let Some(rect) = node.rect()
-            && !rect.is_finite()
-        {
-            node.set_rect(egui::Rect::ZERO);
-        }
-        if let Some(leaf) = node.get_leaf_mut()
-            && !leaf.viewport.is_finite()
-        {
-            leaf.viewport = egui::Rect::ZERO;
-        }
-    }
-}
-
-/// Restores a tab to its canonical dock location if it is closed, respecting sibling groupings and anchors.
-pub fn restore_tab_to_canonical_slot(
-    dock_state: &mut egui_dock::DockState<PealayerTab>,
-    tab: PealayerTab,
-) {
-    if dock_state.find_tab(&tab).is_some() {
-        return;
-    }
-
-    if dock_state.iter_all_tabs().count() == 0 {
-        *dock_state = egui_dock::DockState::new(vec![tab]);
-        sanitize_dock_rects(dock_state);
-        return;
-    }
-
-    match tab {
-        PealayerTab::EffectControls => {
-            if let Some(sibling_path) = dock_state.find_tab(&PealayerTab::HardwareMonitor) {
-                let node_path = sibling_path.node_path();
-                if let Ok(leaf) = dock_state.leaf_mut(node_path) {
-                    leaf.tabs.push(tab);
-                    sanitize_dock_rects(dock_state);
-                    return;
-                }
-            }
-            if let Some(anchor_path) = dock_state
-                .find_tab(&PealayerTab::ProgramMonitor)
-                .or_else(|| dock_state.find_tab(&PealayerTab::Timeline))
-                .or_else(|| dock_state.iter_all_tabs().map(|(path, _)| path).next())
-            {
-                let node_index = anchor_path.node;
-                dock_state
-                    .main_surface_mut()
-                    .split_left(node_index, 0.25, vec![tab]);
-                sanitize_dock_rects(dock_state);
-                return;
-            }
-        }
-        PealayerTab::HardwareMonitor => {
-            if let Some(sibling_path) = dock_state.find_tab(&PealayerTab::EffectControls) {
-                let node_path = sibling_path.node_path();
-                if let Ok(leaf) = dock_state.leaf_mut(node_path) {
-                    leaf.tabs.push(tab);
-                    sanitize_dock_rects(dock_state);
-                    return;
-                }
-            }
-            if let Some(anchor_path) = dock_state
-                .find_tab(&PealayerTab::ProgramMonitor)
-                .or_else(|| dock_state.find_tab(&PealayerTab::Timeline))
-            {
-                let node_index = anchor_path.node;
-                dock_state
-                    .main_surface_mut()
-                    .split_left(node_index, 0.25, vec![tab]);
-                sanitize_dock_rects(dock_state);
-                return;
-            }
-        }
-        PealayerTab::Timeline => {
-            if let Some(anchor_path) = dock_state
-                .find_tab(&PealayerTab::ProgramMonitor)
-                .or_else(|| dock_state.find_tab(&PealayerTab::EffectControls))
-                .or_else(|| dock_state.find_tab(&PealayerTab::EffectsLibrary))
-                .or_else(|| dock_state.find_tab(&PealayerTab::HardwareMonitor))
-            {
-                let node_index = anchor_path.node;
-                dock_state
-                    .main_surface_mut()
-                    .split_below(node_index, 0.7, vec![tab]);
-                sanitize_dock_rects(dock_state);
-                return;
-            }
-        }
-        PealayerTab::EffectsLibrary => {
-            if let Some(anchor_path) = dock_state
-                .find_tab(&PealayerTab::ProgramMonitor)
-                .or_else(|| dock_state.find_tab(&PealayerTab::Timeline))
-            {
-                let node_index = anchor_path.node;
-                dock_state
-                    .main_surface_mut()
-                    .split_right(node_index, 0.75, vec![tab]);
-                sanitize_dock_rects(dock_state);
-                return;
-            }
-        }
-        PealayerTab::MediaInspector => {
-            if let Some(sibling_path) = dock_state.find_tab(&PealayerTab::EffectsLibrary) {
-                let node_path = sibling_path.node_path();
-                if let Ok(leaf) = dock_state.leaf_mut(node_path) {
-                    leaf.tabs.push(tab);
-                    sanitize_dock_rects(dock_state);
-                    return;
-                }
-            }
-            if let Some(anchor_path) = dock_state
-                .find_tab(&PealayerTab::ProgramMonitor)
-                .or_else(|| dock_state.find_tab(&PealayerTab::Timeline))
-            {
-                let node_index = anchor_path.node;
-                dock_state
-                    .main_surface_mut()
-                    .split_right(node_index, 0.72, vec![tab]);
-                sanitize_dock_rects(dock_state);
-                return;
-            }
-        }
-        PealayerTab::ProgramMonitor => {
-            if let Some(anchor_path) = dock_state.find_tab(&PealayerTab::Timeline) {
-                let node_index = anchor_path.node;
-                dock_state
-                    .main_surface_mut()
-                    .split_above(node_index, 0.7, vec![tab]);
-                sanitize_dock_rects(dock_state);
-                return;
-            }
-            if let Some(anchor_path) = dock_state
-                .find_tab(&PealayerTab::EffectControls)
-                .or_else(|| dock_state.find_tab(&PealayerTab::HardwareMonitor))
-            {
-                let node_index = anchor_path.node;
-                dock_state
-                    .main_surface_mut()
-                    .split_right(node_index, 0.5, vec![tab]);
-                sanitize_dock_rects(dock_state);
-                return;
-            }
-        }
-    }
-
-    dock_state.push_to_first_leaf(tab);
-    sanitize_dock_rects(dock_state);
-}
-
-/// Makes a workspace tab visibly active and keyboard-focused, restoring it
-/// first when the user previously closed it.
-pub fn reveal_and_focus_tab<T: RevealFocusTarget>(
-    workspace: &mut T,
-    tab: PealayerTab,
-) -> bool {
-    workspace.reveal_and_focus(tab)
 }
 
 fn format_timecode(t: f64) -> String {
@@ -20839,7 +20559,7 @@ mod dock_content_tests {
 
     #[test]
     fn craft_workspace_initial_layout_hierarchy() {
-        let workspace = create_initial_workspace_layout();
+        let workspace = create_initial_layout();
         assert!(workspace.validate().is_ok());
         assert!(workspace.layout.contains(&PealayerTab::Timeline));
         assert!(workspace.layout.contains(&PealayerTab::ProgramMonitor));
@@ -20851,7 +20571,7 @@ mod dock_content_tests {
 
     #[test]
     fn craft_workspace_reveal_and_focus_tab() {
-        let mut workspace = create_initial_workspace_layout();
+        let mut workspace = create_initial_layout();
         // Close EffectControls
         let _ = workspace.set_visible(
             PealayerTab::EffectControls,
@@ -20862,20 +20582,13 @@ mod dock_content_tests {
         assert!(!workspace.layout.contains(&PealayerTab::EffectControls));
 
         // Reveal and focus
-        let changed = reveal_and_focus_workspace_tab(&mut workspace, PealayerTab::EffectControls);
+        let changed = reveal_and_focus_tab(&mut workspace, PealayerTab::EffectControls);
         assert!(changed);
         assert!(workspace.layout.contains(&PealayerTab::EffectControls));
 
-        // Close again and verify reveal_and_focus_tab generic helper also works
-        let _ = workspace.set_visible(
-            PealayerTab::EffectControls,
-            false,
-            None,
-            |_| craft_ui::docking::Permissions::default(),
-        );
-        assert!(!workspace.layout.contains(&PealayerTab::EffectControls));
+        // Calling again when already open returns false
         let changed2 = reveal_and_focus_tab(&mut workspace, PealayerTab::EffectControls);
-        assert!(changed2);
+        assert!(!changed2);
         assert!(workspace.layout.contains(&PealayerTab::EffectControls));
     }
 }

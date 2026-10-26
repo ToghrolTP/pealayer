@@ -618,12 +618,14 @@ pub fn run() -> eframe::Result {
                 .as_deref()
                 .or(loaded_config.workspace_dock_layout.as_deref())
                 .and_then(|json| {
-                    let mut ds = serde_json::from_str::<
-                        egui_dock::DockState<crate::ui::layout::PealayerTab>,
+                    let ws = serde_json::from_str::<
+                        craft_ui::docking::Workspace<crate::ui::layout::PealayerTab>,
                     >(json)
                     .ok()?;
-                    crate::ui::layout::sanitize_dock_rects(&mut ds);
-                    Some(ds)
+                    if ws.validate().is_err() {
+                        return None;
+                    }
+                    Some(ws)
                 })
                 .unwrap_or_else(crate::ui::layout::create_initial_layout);
             let mut workspace_profiles = loaded_config.workspace_profiles.clone();
