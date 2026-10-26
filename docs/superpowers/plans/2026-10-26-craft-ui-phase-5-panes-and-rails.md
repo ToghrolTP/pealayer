@@ -377,7 +377,7 @@ git commit -m "feat(ui): add show_sidebar_rail component and request processing"
   - `app.sidebar_rail_state: SidebarRailState`
   - Workspace layout rendering with sidebar rail
 
-- [ ] **Step 1: Write failing tests for sidebar persistence**
+- [x] **Step 1: Write failing tests for sidebar persistence**
 
 In `src/config.rs` tests:
 ```rust
@@ -395,12 +395,12 @@ fn config_serializes_and_deserializes_sidebar_rail_state() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `PEALAYER_CONFIG_FILE=$(mktemp) cargo test --lib config_serializes_and_deserializes_sidebar_rail_state`
 Expected: FAIL with `sidebar_rail` field missing on `UiPreferences`.
 
-- [ ] **Step 3: Implement persistence and workspace integration**
+- [x] **Step 3: Implement persistence and workspace integration**
 
 1. In `src/config.rs`:
 Add `sidebar_rail: crate::ui::sidebar_rail::SidebarRailState` to `UiPreferences` with `#[serde(default)]`.
@@ -415,12 +415,12 @@ Invoke `crate::ui::sidebar_rail::show_sidebar_rail(self, ui, &mut self.sidebar_r
 4. In `src/ui/menu.rs` in the View / Workspace menu:
 Add a toggle `app.sidebar_rail_state.enabled` ("Sidebar Rail") and actions to quick-toggle any sidebar pane.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `PEALAYER_CONFIG_FILE=$(mktemp) cargo test --lib config_serializes_and_deserializes_sidebar_rail_state`
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/config.rs src/app.rs src/ui/menu.rs
