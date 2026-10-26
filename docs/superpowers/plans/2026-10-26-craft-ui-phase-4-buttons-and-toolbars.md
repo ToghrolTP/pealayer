@@ -150,7 +150,7 @@ git commit -m "feat(ui): refactor action_customization control to use craft_them
 - Consumes: `craft_ui::layout::toolbar::fit_toolbar`
 - Produces: Precise toolbar group fitting and overflow calculation.
 
-- [ ] **Step 1: Write failing test in `src/ui/control_bar.rs`**
+- [x] **Step 1: Write failing test in `src/ui/control_bar.rs`**
 
 ```rust
 #[test]
@@ -164,22 +164,22 @@ fn control_bar_computes_fit_with_craft_toolbar_fit() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it passes / checks integration**
+- [x] **Step 2: Run test to verify it passes / checks integration**
 
 Run: `PEALAYER_CONFIG_FILE=$(mktemp) cargo test --lib ui::control_bar::tests::control_bar_computes_fit_with_craft_toolbar_fit`
 Expected: PASS (or compile if missing module import)
 
-- [ ] **Step 3: Implement helper `compute_toolbar_fit` in `src/ui/control_bar.rs`**
+- [x] **Step 3: Implement helper `compute_toolbar_fit` in `src/ui/control_bar.rs`**
 
 Implement `pub(crate) fn compute_toolbar_fit(natural_widths: &[f32], available: f32, gap: f32, overflow_width: f32) -> craft_ui::layout::toolbar::ToolbarFit`.
 Use `craft_ui::layout::toolbar::fit_toolbar` to calculate visible vs overflowing actions for customizable control bars.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `PEALAYER_CONFIG_FILE=$(mktemp) cargo test --lib ui::control_bar::tests`
 Expected: PASS (all control bar tests pass)
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add src/ui/control_bar.rs
