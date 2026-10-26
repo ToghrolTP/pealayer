@@ -100,54 +100,43 @@ pub(crate) fn control(
     let response = ui.interact(rect, id, egui::Sense::click_and_drag());
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
     let visuals = ui.style().interact_selectable(&response, selected);
-    let hover = super::motion::hover_alpha(
-        ui,
-        id.with("action-hover"),
-        response.hovered() || response.has_focus(),
-    );
     let tokens = super::craft_theme::current(ui.ctx());
-    let fill = if selected {
-        tokens.pill_active_bg
-    } else if frame {
-        ui.visuals()
-            .widgets
-            .inactive
-            .weak_bg_fill
-            .lerp_to_gamma(visuals.weak_bg_fill, hover)
+    let btn_style = super::craft_theme::icon_button_style(&tokens, frame);
+
+    let pressed = enabled && response.is_pointer_button_down_on();
+    let hovered = enabled && response.hovered();
+    let (fill, stroke) = if selected {
+        (btn_style.selected.fill, btn_style.selected.stroke)
+    } else if pressed {
+        let p = btn_style.pressed.unwrap_or(btn_style.hovered);
+        (p.fill, p.stroke)
+    } else if hovered {
+        (btn_style.hovered.fill, btn_style.hovered.stroke)
     } else {
-        visuals.weak_bg_fill.gamma_multiply(hover)
+        (btn_style.normal.fill, btn_style.normal.stroke)
     };
-    let stroke = if selected {
-        egui::Stroke::new(1.0, tokens.accent)
-    } else if !frame {
-        outline(
-            ui.visuals(),
-            selected,
-            enabled && response.is_pointer_button_down_on(),
-        )
-    } else {
-        egui::Stroke::new(
-            1.0,
-            ui.visuals()
-                .widgets
-                .inactive
-                .bg_stroke
-                .color
-                .lerp_to_gamma(visuals.bg_stroke.color, hover),
-        )
-    };
+
     let color = if enabled {
         visuals.text_color()
     } else {
         ui.visuals().weak_text_color()
     };
+    let button_rect = rect.shrink(if frame { 0.5 } else { 2.0 });
     ui.painter().rect(
-        rect.shrink(if frame { 0.5 } else { 2.0 }),
-        4.0,
+        button_rect,
+        btn_style.corner_radius,
         fill,
         stroke,
         egui::StrokeKind::Inside,
     );
+    if response.has_focus() && !btn_style.focus_stroke.is_empty() {
+        ui.painter().rect_stroke(
+            button_rect,
+            btn_style.corner_radius,
+            btn_style.focus_stroke,
+            egui::StrokeKind::Inside,
+        );
+    }
     let mut font = egui::TextStyle::Button.resolve(ui.style());
     if !frame {
         font.size = 14.0;
@@ -165,3 +154,120 @@ pub(crate) fn control(
         egui::CursorIcon::Default
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn action_control_renders_with_craft_icon_button_visuals() {
+        let ctx = egui::Context::default();
+        let config = crate::config::AppConfig::default();
+        crate::ui::configure_native_visuals(&ctx, &config);
+        let tokens = crate::ui::craft_theme::current(&ctx);
+
+        let style = crate::ui::craft_theme::icon_button_style(&tokens, false);
+        assert_eq!(style.selected.fill, tokens.pill_active_bg);
+        assert_eq!(style.selected.stroke.color, tokens.accent);
+
+        // Verify normal unselected state
+        let rect = egui::Rect::from_min_size(egui::pos2(10.0, 10.0), egui::vec2(28.0, 28.0));
+        let mut normal_output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            control(
+                ui,
+                rect,
+                egui::Id::new("normal-btn"),
+                "A",
+                "Action A",
+                true,
+                false,
+                false,
+            );
+        });
+        normal_output.textures_delta.clear();
+        let normal_rect = normal_output
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::epaint::Shape::Rect(r) if r.rect == rect.shrink(2.0) => Some(r),
+                _ => None,
+            })
+            .expect("normal button rect shape");
+        assert_eq!(normal_rect.fill, style.normal.fill);
+        assert_eq!(normal_rect.stroke, style.normal.stroke);
+
+        // Verify selected state
+        let mut selected_output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            control(
+                ui,
+                rect,
+                egui::Id::new("selected-btn"),
+                "B",
+                "Action B",
+                true,
+                true,
+                false,
+            );
+        });
+        selected_output.textures_delta.clear();
+        let selected_rect = selected_output
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::epaint::Shape::Rect(r) if r.rect == rect.shrink(2.0) => Some(r),
+                _ => None,
+            })
+            .expect("selected button rect shape");
+        assert_eq!(selected_rect.fill, style.selected.fill);
+        assert_eq!(selected_rect.stroke, style.selected.stroke);
+
+        // Verify framed button visuals
+        let framed_style = crate::ui::craft_theme::icon_button_style(&tokens, true);
+        let mut framed_output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            control(
+                ui,
+                rect,
+                egui::Id::new("framed-btn"),
+                "C",
+                "Action C",
+                true,
+                false,
+                true,
+            );
+        });
+        framed_output.textures_delta.clear();
+        let framed_rect = framed_output
+            .shapes
+            .iter()
+            .find_map(|s| match &s.shape {
+                egui::epaint::Shape::Rect(r) if r.rect == rect.shrink(0.5) => Some(r),
+                _ => None,
+            })
+            .expect("framed button rect shape");
+        assert_eq!(framed_rect.fill, framed_style.normal.fill);
+        assert_eq!(framed_rect.stroke, framed_style.normal.stroke);
+
+        // Verify keyboard focus outline
+        let focus_id = egui::Id::new("focused-btn");
+        let mut focused_output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            ui.memory_mut(|m| m.request_focus(focus_id));
+            control(
+                ui,
+                rect,
+                focus_id,
+                "D",
+                "Action D",
+                true,
+                false,
+                false,
+            );
+        });
+        focused_output.textures_delta.clear();
+        let has_focus_stroke = focused_output.shapes.iter().any(|s| match &s.shape {
+            egui::epaint::Shape::Rect(r) => r.stroke == style.focus_stroke,
+            _ => false,
+        });
+        assert!(has_focus_stroke, "focused control must paint focus outline stroke");
+    }
+}
+
