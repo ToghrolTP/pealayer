@@ -208,6 +208,7 @@ pub(crate) fn group_width(app: &PealayerApp, ui: &egui::Ui, surface: Surface, en
 /// Computes visible action groups versus overflowing actions for customizable control bars.
 ///
 /// Uses `craft_ui::layout::fit_toolbar` to calculate visible vs overflowing actions.
+#[allow(dead_code)]
 pub(crate) fn compute_toolbar_fit(
     natural_widths: &[f32],
     available: f32,
