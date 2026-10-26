@@ -33,7 +33,7 @@
 - Consumes: `craft_theme::Tokens`, `craft_ui::buttons::{IconButtonStyle, ButtonVisuals}`
 - Produces: `pub fn icon_button_style(tokens: &Tokens, frame: bool) -> craft_ui::buttons::IconButtonStyle`
 
-- [ ] **Step 1: Write failing unit test in `src/ui/craft_theme.rs`**
+- [x] **Step 1: Write failing unit test in `src/ui/craft_theme.rs`**
 
 ```rust
 #[test]
@@ -50,12 +50,12 @@ fn icon_button_style_applies_filmcraft_pill_and_hover_tokens() {
 }
 ```
 
-- [ ] **Step 2: Run test to verify it fails**
+- [x] **Step 2: Run test to verify it fails**
 
 Run: `PEALAYER_CONFIG_FILE=$(mktemp) cargo test --lib ui::craft_theme::tests::icon_button_style_applies_filmcraft_pill_and_hover_tokens`
 Expected: FAIL with "cannot find function `icon_button_style`"
 
-- [ ] **Step 3: Write minimal implementation in `src/ui/craft_theme.rs`**
+- [x] **Step 3: Write minimal implementation in `src/ui/craft_theme.rs`**
 
 Implement `pub fn icon_button_style(tokens: &Tokens, frame: bool) -> craft_ui::buttons::IconButtonStyle` configuring:
 - normal: transparent fill (or `tokens.panel_bg` if frame), stroke `tokens.field_border` (if frame) or none, text color `tokens.text_muted`.
@@ -65,17 +65,17 @@ Implement `pub fn icon_button_style(tokens: &Tokens, frame: bool) -> craft_ui::b
 - corner_radius: `CornerRadius::same(4)`.
 - focus_stroke: `Stroke::new(1.0, tokens.focus)`.
 
-- [ ] **Step 4: Run test to verify it passes**
+- [x] **Step 4: Run test to verify it passes**
 
 Run: `PEALAYER_CONFIG_FILE=$(mktemp) cargo test --lib ui::craft_theme::tests::icon_button_style_applies_filmcraft_pill_and_hover_tokens`
 Expected: PASS (ok)
 
-- [ ] **Step 5: Run all craft_theme tests to verify no regressions**
+- [x] **Step 5: Run all craft_theme tests to verify no regressions**
 
 Run: `PEALAYER_CONFIG_FILE=$(mktemp) cargo test --lib ui::craft_theme::tests`
 Expected: PASS
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/ui/craft_theme.rs
