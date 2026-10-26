@@ -417,13 +417,11 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
                     }
                 }
                 previous_path = path;
-                clock.position_ms = next.round() as u64;
+                clock.observe_position_at(next.round() as u64, playing, rate, rebase, Instant::now());
                 clock.duration_ms = duration.map(|value| (value * 1000.0).round() as u64);
                 clock.loaded = loaded;
                 clock.buffering = buffering;
                 clock.rate = rate;
-                clock.sampled_at = Instant::now();
-                clock.observed_at = Instant::now();
                 if coordinator
                     && let Ok(mut prepared) = plan.lock()
                     && (prepared.has_items() || prepared.play_requested)
