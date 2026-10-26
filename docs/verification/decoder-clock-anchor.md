@@ -37,3 +37,14 @@ on hosted CI, not the production host. Delivery remains pending the exact-source
 Windows package, draft-safe peer update with the destination-validated libmpv,
 real-media replay across the cue, and separate human LED/motion observation.
 Private runtime snapshots and media references stay outside Git.
+
+## Hosted test fixture correction
+
+The combined candidate's pull-request quality job exposed an existing download
+fixture race: its timed response could complete before the test requested Pause,
+invalidating the asserted partial-cache precondition. The first fixture response
+now waits at a known partial prefix until Pause/Cancel is requested, then releases
+the blocked reader. Resume and progressive range requests remain ungated; all
+original byte, validator and partial-cache assertions are retained. Fixture Drop
+also releases the gate so a failed assertion cannot strand the response thread.
+This changes test synchronization only, not production download behavior.
