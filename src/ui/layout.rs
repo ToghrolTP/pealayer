@@ -13783,18 +13783,8 @@ pub struct PealayerTabViewer<'a> {
     pub app: &'a mut PealayerApp,
 }
 
-impl<'a> TabViewer for PealayerTabViewer<'a> {
-    type Tab = PealayerTab;
-
-    fn id(&mut self, tab: &mut Self::Tab) -> egui::Id {
-        egui::Id::new(*tab)
-    }
-
-    fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
-        format!("{} {}", tab.icon(), tab.title(self.app)).into()
-    }
-
-    fn context_menu(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab, _path: egui_dock::NodePath) {
+impl<'a> PealayerTabViewer<'a> {
+    pub fn draw_context_menu(&mut self, ui: &mut egui::Ui, tab: PealayerTab) {
         let title = tab.title(self.app);
         ui.label(egui::RichText::new(title).strong());
         ui.separator();
@@ -13893,29 +13883,7 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
         }
     }
 
-    fn on_tab_button(&mut self, _tab: &mut Self::Tab, response: &egui::Response) {
-        let id = egui::Id::new("workspace-tab-button-rects");
-        response.ctx.data_mut(|data| {
-            let mut rects = data.get_temp::<Vec<egui::Rect>>(id).unwrap_or_default();
-            rects.push(response.rect);
-            data.insert_temp(id, rects);
-        });
-    }
-
-    fn scroll_bars(&self, tab: &Self::Tab) -> [bool; 2] {
-        match tab {
-            // This is a fitted video viewport with a responsive footer, not a
-            // document. The dock's pixel-rounded ScrollArea otherwise permits
-            // fractional scrolling even when all content fits its logical size.
-            PealayerTab::ProgramMonitor
-            | PealayerTab::EffectsLibrary
-            | PealayerTab::HardwareMonitor
-            | PealayerTab::MediaInspector => [false, false],
-            _ => [true, true],
-        }
-    }
-
-    fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
+    pub fn draw_tab_body(&mut self, ui: &mut egui::Ui, tab: PealayerTab) {
         let _timing = crate::performance::span(match tab {
             PealayerTab::ProgramMonitor => crate::performance::Phase::Program,
             PealayerTab::MediaInspector => crate::performance::Phase::Inspector,
@@ -19952,6 +19920,76 @@ impl<'a> TabViewer for PealayerTabViewer<'a> {
     }
 }
 
+impl<'a> TabViewer for PealayerTabViewer<'a> {
+    type Tab = PealayerTab;
+
+    fn id(&mut self, tab: &mut Self::Tab) -> egui::Id {
+        egui::Id::new(*tab)
+    }
+
+    fn title(&mut self, tab: &mut Self::Tab) -> egui::WidgetText {
+        format!("{} {}", tab.icon(), tab.title(self.app)).into()
+    }
+
+    fn context_menu(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab, _path: egui_dock::NodePath) {
+        self.draw_context_menu(ui, *tab);
+    }
+
+    fn on_tab_button(&mut self, _tab: &mut Self::Tab, response: &egui::Response) {
+        let id = egui::Id::new("workspace-tab-button-rects");
+        response.ctx.data_mut(|data| {
+            let mut rects = data.get_temp::<Vec<egui::Rect>>(id).unwrap_or_default();
+            rects.push(response.rect);
+            data.insert_temp(id, rects);
+        });
+    }
+
+    fn scroll_bars(&self, tab: &Self::Tab) -> [bool; 2] {
+        match tab {
+            // This is a fitted video viewport with a responsive footer, not a
+            // document. The dock's pixel-rounded ScrollArea otherwise permits
+            // fractional scrolling even when all content fits its logical size.
+            PealayerTab::ProgramMonitor
+            | PealayerTab::EffectsLibrary
+            | PealayerTab::HardwareMonitor
+            | PealayerTab::MediaInspector => [false, false],
+            _ => [true, true],
+        }
+    }
+
+    fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Self::Tab) {
+        self.draw_tab_body(ui, *tab);
+    }
+}
+
+impl<'a> craft_ui::docking::DockContent<PealayerTab> for PealayerTabViewer<'a> {
+    fn body(&mut self, ui: &mut egui::Ui, panel: &PealayerTab) {
+        self.draw_tab_body(ui, *panel);
+    }
+
+    fn logical_label(&self, panel: &PealayerTab) -> String {
+        panel.title(self.app)
+    }
+
+    fn label(&mut self, _ui: &egui::Ui, panel: &PealayerTab, logical: &str, _font: &egui::FontId, _color: egui::Color32) -> egui::WidgetText {
+        format!("{} {logical}", panel.icon()).into()
+    }
+
+    fn permissions(&self, _panel: &PealayerTab) -> craft_ui::docking::Permissions {
+        craft_ui::docking::Permissions {
+            movable: true,
+            floatable: true,
+            closable: true,
+            accepts_tabs: true,
+            accepts_splits: true,
+        }
+    }
+
+    fn panel_menu(&mut self, ui: &mut egui::Ui, panel: &PealayerTab) {
+        self.draw_context_menu(ui, *panel);
+    }
+}
+
 /// Helper function to build the initial DockState layout
 pub fn create_initial_layout() -> egui_dock::DockState<PealayerTab> {
     use egui_dock::NodeIndex;
@@ -20690,3 +20728,23 @@ fn render_timeline_cue_label(
         .with_clip_rect(content_rect)
         .galley(position, galley, color);
 }
+
+#[cfg(test)]
+mod dock_content_tests {
+    use super::*;
+
+    #[test]
+    fn pealayer_tab_viewer_implements_dock_content() {
+        use craft_ui::docking::DockContent;
+        let mut app = PealayerApp::default();
+        let mut viewer = PealayerTabViewer { app: &mut app };
+
+        assert_eq!(viewer.logical_label(&PealayerTab::ProgramMonitor), "Program Monitor");
+        assert_eq!(viewer.logical_label(&PealayerTab::Timeline), "Timeline");
+
+        let permissions = viewer.permissions(&PealayerTab::ProgramMonitor);
+        assert!(permissions.movable);
+        assert!(permissions.closable);
+    }
+}
+

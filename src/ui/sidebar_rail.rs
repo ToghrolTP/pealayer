@@ -104,9 +104,9 @@ impl<'a> PaneContent<SidebarPane> for SidebarPaneContent<'a> {
     }
 
     fn body(&mut self, ui: &mut Ui, pane: &SidebarPane) {
-        let mut tab = PealayerTab::from(*pane);
+        let tab = PealayerTab::from(*pane);
         let mut viewer = crate::ui::layout::PealayerTabViewer { app: self.app };
-        egui_dock::TabViewer::ui(&mut viewer, ui, &mut tab);
+        craft_ui::docking::DockContent::body(&mut viewer, ui, &tab);
     }
 
     fn default_state(&self, pane: &SidebarPane) -> PaneState {
