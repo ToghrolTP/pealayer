@@ -20521,14 +20521,17 @@ mod dock_content_tests {
     fn pealayer_tab_viewer_implements_dock_content() {
         use craft_ui::docking::DockContent;
         let mut app = PealayerApp::default();
-        let mut viewer = PealayerTabViewer { app: &mut app };
+        let viewer = PealayerTabViewer { app: &mut app };
 
         assert_eq!(viewer.logical_label(&PealayerTab::ProgramMonitor), "Program Monitor");
         assert_eq!(viewer.logical_label(&PealayerTab::Timeline), "Timeline");
 
         let permissions = viewer.permissions(&PealayerTab::ProgramMonitor);
         assert!(permissions.movable);
+        assert!(permissions.floatable);
         assert!(permissions.closable);
+        assert!(permissions.accepts_tabs);
+        assert!(permissions.accepts_splits);
     }
 
     #[test]
