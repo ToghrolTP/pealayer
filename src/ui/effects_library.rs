@@ -62,6 +62,7 @@ fn draft_can_publish(draft: &ControllerEffectDraft) -> bool {
     let name = draft.name.trim();
     !name.is_empty() && name.chars().count() <= 64 && !name.chars().any(char::is_control)
         && if draft.kind == "sequence" { repeated_sequence_duration_ms(&draft.steps,draft.repeat_count,draft.repeat_interval_ms).is_ok() }
+        else if draft.kind == "strip-stream" { serde_json::from_str::<serde_json::Value>(&draft.program_json).is_ok_and(|program| super::strip_designer::valid(&program)) }
         else { serde_json::from_str::<serde_json::Value>(&draft.program_json).is_ok_and(|program| program.is_object()) }
 }
 
@@ -3613,6 +3614,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 }
                             } else {
                                 ui.add_space(8.0);
+                                crate::ui::strip_designer::draw(ui, &mut app.effect_library_draft);
                                 if crate::ui::icons::disclosure_header(ui, "effect-technical-program", &app.tr("Technical"), false) {
                                 ui.label(app.tr("Lighting program"));
                                 ui.add_sized(
