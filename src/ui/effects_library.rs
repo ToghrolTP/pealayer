@@ -3614,6 +3614,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 }
                             } else {
                                 ui.add_space(8.0);
+                                ui.add_enabled_ui(!capture_locked, |ui| {
                                 crate::ui::strip_designer::draw(ui, &mut app.effect_library_draft);
                                 if crate::ui::icons::disclosure_header(ui, "effect-technical-program", &app.tr("Technical"), false) {
                                 ui.label(app.tr("Lighting program"));
@@ -3640,6 +3641,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     .horizontal_align(description_align)
                                     .desired_rows(3),
                                 );
+                                });
                             }
                             ui.add_space(12.0);
                             let reference = app.effect_library_draft.reference.clone();

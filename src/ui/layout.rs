@@ -6954,9 +6954,9 @@ fn draw_addressable_strip_tool(
             .unwrap_or(strip.default_fps)
             .clamp(strip.minimum_fps, strip.maximum_fps)
     });
-    let available_modes = ["solid", "pixel", "frame", "rainbow", "effect"]
+    let available_modes = ["solid", "pixel", "diagnostic", "frame", "rainbow", "effect"]
         .into_iter()
-        .filter(|mode| strip.supports(mode))
+        .filter(|mode| strip.supports(if *mode == "diagnostic" {"frame"} else {mode}))
         .collect::<Vec<_>>();
     let mut mode = ui.data_mut(|data| {
         data.get_persisted::<String>(mode_id)
@@ -7064,6 +7064,7 @@ fn draw_addressable_strip_tool(
                         .selected_text(match mode.as_str() {
                             "solid" => app.tr("Solid color"),
                             "pixel" => app.tr("Single pixel"),
+                            "diagnostic" => app.tr("Pixel diagnostics"),
                             "frame" => app.tr("Color frame"),
                             "rainbow" => app.tr("Rainbow"),
                             "effect" => app.tr("Effect"),
@@ -7074,6 +7075,7 @@ fn draw_addressable_strip_tool(
                                 let label = match *advertised {
                                     "solid" => app.tr("Solid color"),
                                     "pixel" => app.tr("Single pixel"),
+                                    "diagnostic" => app.tr("Pixel diagnostics"),
                                     "frame" => app.tr("Color frame"),
                                     "rainbow" => app.tr("Rainbow"),
                                     "effect" => app.tr("Effect"),
@@ -7112,6 +7114,7 @@ fn draw_addressable_strip_tool(
                         }
                     }
                 }
+                "diagnostic" => crate::ui::pixel_diagnostic::draw(app, ui, capabilities, pixels),
                 "pixel" => {
                     pixel = pixel.min(pixels.saturating_sub(1));
                     ui.horizontal_wrapped(|ui| {

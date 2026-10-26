@@ -5,6 +5,11 @@ use eframe::egui;
 use serde_json::{Value, json};
 
 pub(crate) fn valid(program: &Value) -> bool {
+    if !program["dim_intensity"].is_null()
+        && !program["dim_intensity"].as_u64().is_some_and(|v| v <= 255)
+    {
+        return false;
+    }
     let Some(period) = program["period_ms"]
         .as_u64()
         .filter(|v| (50..=3_600_000).contains(v))
@@ -91,7 +96,7 @@ pub(crate) fn preview(program: &Value, count: usize, at: u64) -> Vec<egui::Color
         .map(|pixel| match program["primitive"].as_str().unwrap() {
             "alternating-zones" => {
                 let step = program["step_ms"].as_u64().unwrap();
-                let phase = time / step % (period / step).max(2);
+                let phase = at / step % (period / step).max(2);
                 let primary = (pixel < count.div_ceil(2))
                     == (phase < program["swap_after_steps"].as_u64().unwrap());
                 color(
@@ -341,6 +346,12 @@ mod tests {
             assert!(valid(&p));
             assert_eq!(preview(&p, 3, 1000).len(), 3);
         }
+    }
+    #[test]
+    fn flash_preview_matches_host_when_cycle_is_not_a_multiple_of_step() {
+        let mut p = preset(0);
+        p["period_ms"] = json!(850);
+        assert_eq!(preview(&p, 3, 900)[0], egui::Color32::from_rgb(36, 0, 0));
     }
     #[test]
     fn rejects_bad_envelope_without_normalizing() {
