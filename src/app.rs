@@ -5837,7 +5837,7 @@ impl PealayerApp {
 
     /// Pauses playback.
     pub fn pause(&mut self) {
-        if let Ok(mut plan)=self.engine_handle.prepared_timeline.lock(){plan.play_requested=false;}
+        if let Ok(mut plan)=self.engine_handle.prepared_timeline.lock(){plan.cancel_play();}
         if self.current_video_path.is_none() {
             return;
         }

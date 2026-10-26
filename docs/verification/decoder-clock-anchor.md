@@ -38,6 +38,41 @@ Windows package, draft-safe peer update with the destination-validated libmpv,
 real-media replay across the cue, and separate human LED/motion observation.
 Private runtime snapshots and media references stay outside Git.
 
+## Paused admission before Play
+
+The installed clock correction dispatched the first strip cue within 2.2 ms,
+but further live verification exposed competing serial transactions. A PWM
+readback held the request slot across the cue's ACK deadline. Blocking that
+readback alone exposed the internal playback-display writer competing with
+resume restoration. Priority cannot preempt a transaction already on the wire.
+
+The current coordinator contract therefore adds `prepare_play` to paused media
+updates and `play_ready` to timeline feedback. A pending Play first requests a
+reservation while libmpv is genuinely paused. The coordinator arms the matching
+revision/epoch, drains the prior transaction and reserves timeline/safety
+admission before acknowledging readiness, within the existing 250 ms budget.
+Only then may the native observer request unpause. It continues advertising a
+paused preparation intent until libmpv actually reports playback; it never
+fabricates a playing clock to acquire the reservation.
+
+Ordinary paused arming is distinct from readiness to Play. Nonempty plans need
+the explicit matching readiness acknowledgement; empty plans retain their
+clear/clock acknowledgement path. Missing current-contract readiness is an
+error, with no obsolete-coordinator fallback. Play/cancel intent revisions bind
+asynchronous replies to the current local request, so a delayed grant cannot
+authorize a later Play. A pending cancellation bypasses the idle heartbeat
+interval and revokes an unconsumed or not-yet-observed native start. Paused
+preparation/start intents publish at 100 ms, keeping the bounded reservation
+alive while the ordinary paused clock remains at its one-second idle interval.
+
+PCController services board-display/program-state presentation only in suitable
+cue-free gaps through the timeline owner and reports dense-playback deferral
+honestly. This preserves output
+deadlines; it does not establish continuous front-panel clock acceptance during
+dense effects. Pause cleanup, fault and disconnection release the reservation;
+safety commands retain admission. The 50 ms cue and 250 ms freshness guards
+remain unchanged. Final synchronized replay is required with both updated peers.
+
 ## Hosted test fixture correction
 
 The combined candidate's pull-request quality job exposed an existing download

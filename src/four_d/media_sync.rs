@@ -120,6 +120,14 @@ fn playback_publish_interval(sample: &PlaybackSample) -> Duration {
     }
 }
 
+fn playback_update_due(current: &PlaybackSample, previous: Option<&PlaybackSample>, elapsed: Duration,
+    prepare_play: bool, last_prepare_play: bool, intent_revision: u64, last_intent_revision: u64) -> bool {
+    let interval = if prepare_play { Duration::from_millis(100) } else { playback_publish_interval(current) };
+    previous.is_none_or(|old| current.changed_from(old))
+        || elapsed >= interval || prepare_play != last_prepare_play
+        || intent_revision != last_intent_revision
+}
+
 fn handoff_pause_acknowledged(sample: &PlaybackSample, valid_echo: bool) -> bool {
     valid_echo && !sample.playing && !sample.buffering
         && sample.observed_at.elapsed() < Duration::from_millis(250)
@@ -152,7 +160,7 @@ fn invalidate_coordinator_session(plan: &mut super::media_timeline::PreparedTime
     plan.clock_ack_epoch = 0;
     plan.last_ack = None;
     plan.feedback = serde_json::Value::Null;
-    plan.play_requested = false;
+    plan.cancel_play();
 }
 
 fn take_coordinator_session<T>(
@@ -237,7 +245,7 @@ fn acknowledge_pause_before_prepare(
     let revision = clock["plan_revision"].as_u64().ok_or("Invalid hardware clock revision")?;
     let remote_sequence = clock["sequence"].as_u64().ok_or("Invalid hardware clock sequence")?;
     *sequence = (*sequence).max(remote_sequence).checked_add(1).ok_or("Hardware clock sequence exhausted")?;
-    let pause = json!({"client_id":id,"sequence":*sequence,"playing":false,
+    let pause = json!({"client_id":id,"sequence":*sequence,"playing":false,"prepare_play":false,
         "position_ms":clock["position_ms"],"duration_ms":clock["duration_ms"],
         "loaded":clock["loaded"],"rate":clock["rate"],"epoch":epoch,"plan_revision":revision});
     let echo_matches = |echo: &serde_json::Value| {
@@ -416,6 +424,8 @@ pub fn spawn(
         let mut unattended_attempt: Option<(String, String)> = None;
         let mut previous_presentation = None;
         let mut last_clock_send: Option<(Instant, bool)> = None;
+        let mut last_prepare_play = false;
+        let mut last_intent_revision = 0;
         loop {
             notify_sync_change(&timeline, &notifier, &mut previous_presentation);
             let alive = lifecycle.strong_count() > 0;
@@ -427,7 +437,7 @@ pub fn spawn(
                 if let Some(mut old) = take_coordinator_session(&mut client, &timeline) {
                     sequence += 1;
                     let _ = old.call("controller.media.playback.update", json!({
-                        "client_id":id,"sequence":sequence,"position_ms":0,"loaded":false,"playing":false,"rate":1.0}));
+                        "client_id":id,"sequence":sequence,"position_ms":0,"loaded":false,"playing":false,"prepare_play":false,"rate":1.0}));
                     let _ = old.call("controller.app.instance.remove", json!({"id":id}));
                 }
                 previous = None;
@@ -465,6 +475,8 @@ pub fn spawn(
                         automatic_claim = AutomaticClaim::default();
                         reconcile_session = true;
                         last_clock_send = None;
+                        last_prepare_play = false;
+                        last_intent_revision = 0;
                     }
                     Err(error) => {
                         if error != last_error {
@@ -541,7 +553,7 @@ pub fn spawn(
                                     Err(error) => {
                                         if let Ok(mut plan)=timeline.lock() {
                                             plan.error=Some(format!("Publishing claim failed: {error}"));
-                                            plan.play_requested=false;
+                                            plan.cancel_play();
                                         }
                                         if error.transport_failed {
                                             // Claim outcome is unknown. Reconnect, read authority
@@ -621,11 +633,11 @@ pub fn spawn(
             // Registration, reconciliation or a prepare may have taken time.
             // Publish the newest decoder observation, not the loop's old copy.
             let current = sample.lock().map(|s| s.clone()).unwrap_or_default();
-            let interval = playback_publish_interval(&current);
-            let due = previous
-                .as_ref()
-                .is_none_or(|old| current.changed_from(old))
-                || sent_at.elapsed() >= interval;
+            let (prepare_play, intent_revision) = timeline.lock().map(|plan| {
+                (plan.prepare_play_intent(current.epoch, current.loaded, current.playing, current.buffering), plan.play_intent_revision)
+            }).unwrap_or((false, 0));
+            let due = playback_update_due(&current, previous.as_ref(), sent_at.elapsed(), prepare_play,
+                last_prepare_play, intent_revision, last_intent_revision);
             let pending = timeline.lock().ok().and_then(|plan| {
                 (plan.compilation_error.is_none()
                     && plan.revision != 0
@@ -646,7 +658,7 @@ pub fn spawn(
                     preparation_retry_at = Instant::now() + Duration::from_secs(5);
                     if let Ok(mut plan) = timeline.lock() {
                         plan.error = Some(format!("Hardware pause not acknowledged: {error}"));
-                        plan.play_requested = false;
+                        plan.cancel_play();
                     }
                     let _ = take_coordinator_session(&mut client, &timeline);
                     authority_ready = false;
@@ -659,6 +671,7 @@ pub fn spawn(
                 match rpc.call_detailed("controller.media.timeline.prepare", payload) {
                     Ok(feedback) => {
                         sequence += 1;
+                        let arm_intent = timeline.lock().map(|plan| plan.play_intent_revision).unwrap_or(0);
                         let arm_result = rpc.call(
                             "controller.media.playback.update",
                             json!({
@@ -667,6 +680,7 @@ pub fn spawn(
                                 "position_ms": current.position_now(),
                                 "duration_ms": current.duration_ms,
                                 "playing": false,
+                                "prepare_play": false,
                                 "loaded": current.loaded,
                                 "rate": current.rate,
                                 "epoch": current.epoch,
@@ -695,15 +709,12 @@ pub fn spawn(
                                     && arm_feedback["epoch"].as_u64() == Some(current.epoch)
                                     && arm_feedback["plan_revision"].as_u64() == Some(revision)
                                 {
-                                    plan.clock_ack_revision = revision;
-                                    plan.clock_ack_epoch = current.epoch;
-                                    plan.feedback = arm_feedback["timeline"].clone();
-                                    plan.last_ack = Some(Instant::now());
+                                    plan.observe_clock_ack(revision, current.epoch, arm_feedback["timeline"].clone(), arm_intent);
                                 } else {
                                     plan.feedback = feedback;
                                     plan.last_ack = None;
                                     plan.error = Some("Hardware arm acknowledgement mismatch; playback paused".into());
-                                    plan.play_requested = false;
+                                    plan.cancel_play();
                                 }
                             } else {
                                 plan.feedback = feedback;
@@ -723,7 +734,7 @@ pub fn spawn(
                                     plan.error = None;
                                 }
                                 plan.deferred_reason = Some(format!("Hardware timeline is waiting: {}", error.message));
-                                plan.play_requested = false;
+                                plan.cancel_play();
                             }
                             continue;
                         }
@@ -731,7 +742,7 @@ pub fn spawn(
                         if let Ok(mut plan) = timeline.lock() {
                             plan.deferred_reason = None;
                             plan.error = Some(format!("Hardware timeline not prepared: {}", error.message));
-                            plan.play_requested = false;
+                            plan.cancel_play();
                         }
                         if error.transport_failed {
                             let _ = take_coordinator_session(&mut client, &timeline);
@@ -764,7 +775,11 @@ pub fn spawn(
                         && plan.clock_ack_epoch == current.epoch
                         && plan.clock_ack_revision == revision
                         && plan.acknowledged_revision == revision
+                        && plan.ready_to_play(current.epoch)
                 });
+                let (prepare_play, intent_revision) = timeline.lock().map(|plan| {
+                    (plan.prepare_play_intent(current.epoch, current.loaded, current.playing, current.buffering), plan.play_intent_revision)
+                }).unwrap_or((false, 0));
                 let outgoing_playing = if has_hardware {
                     current.playing && is_armed_for_epoch
                 } else {
@@ -777,7 +792,7 @@ pub fn spawn(
                 last_clock_send = Some((started, outgoing_playing));
                 let result = rpc.call("controller.media.playback.update",json!({
                     "client_id":id,"sequence":sequence,"position_ms":current.position_now(),
-                    "duration_ms":current.duration_ms,"playing":outgoing_playing,"loaded":current.loaded,"rate":current.rate,"epoch":current.epoch,"plan_revision":revision}));
+                    "duration_ms":current.duration_ms,"playing":outgoing_playing,"prepare_play":prepare_play,"loaded":current.loaded,"rate":current.rate,"epoch":current.epoch,"plan_revision":revision}));
                 if let Ok(mut plan) = timeline.lock() {
                     plan.clock_transport.record_update(gap, started.elapsed(), observation_age, result.is_err());
                 }
@@ -791,12 +806,14 @@ pub fn spawn(
                             if !valid_echo {
                                 plan.error =
                                     Some("Hardware clock echo mismatch; playback paused".into());
-                                plan.play_requested = false;
+                                plan.cancel_play();
                             } else {
-                                plan.observe_clock_ack(revision, current.epoch, feedback["timeline"].clone());
+                                plan.observe_clock_ack(revision, current.epoch, feedback["timeline"].clone(), intent_revision);
                             }
                         }
                         previous = Some(current.clone());
+                        last_prepare_play = prepare_play;
+                        last_intent_revision = intent_revision;
                         sent_at = Instant::now();
                         last_error.clear();
                         // Owner consent is configured locally. A real observed pause
@@ -842,7 +859,7 @@ pub fn spawn(
                             if plan.has_items() {
                                 plan.error =
                                     Some(format!("Hardware clock acknowledgement failed: {error}"));
-                                plan.play_requested = false;
+                                plan.cancel_play();
                             }
                         }
                         if error != last_error {
@@ -865,6 +882,18 @@ fn identity(id: &str, name: &str) -> serde_json::Value {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn paused_play_and_cancel_intents_bypass_the_idle_publish_interval() {
+        let sample = super::PlaybackSample::default();
+        let elapsed = std::time::Duration::from_millis(10);
+        assert!(!super::playback_update_due(&sample, Some(&sample), elapsed, false, false, 0, 0));
+        assert!(super::playback_update_due(&sample, Some(&sample), elapsed, true, false, 1, 0));
+        assert!(super::playback_update_due(&sample, Some(&sample), elapsed, false, true, 2, 1));
+        // Cancel and a new Play can occur before the publisher observes false.
+        assert!(super::playback_update_due(&sample, Some(&sample), elapsed, true, true, 3, 1));
+        assert!(super::playback_update_due(&sample, Some(&sample), std::time::Duration::from_millis(100), true, true, 3, 3));
+        assert!(!super::playback_update_due(&sample, Some(&sample), std::time::Duration::from_millis(99), true, true, 3, 3));
+    }
     #[test]
     fn tcp_pause_handshake_precedes_plan_prepare_on_the_real_rpc_client() {
         use std::io::{BufRead, BufReader, Write};
