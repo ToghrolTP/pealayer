@@ -13726,6 +13726,7 @@ pub fn visible_workspace_tab_count(app: &PealayerApp) -> usize {
 
 pub fn draw_workspace_tab_menu(app: &mut PealayerApp, ui: &mut egui::Ui) {
     for tab in PealayerTab::ALL {
+        let is_sidebar_open = app.is_tab_open_in_sidebar(tab);
         let is_open = app.is_tab_open(tab);
         let mut visible = is_open;
         let visibility_icon = if is_open {
@@ -13733,7 +13734,15 @@ pub fn draw_workspace_tab_menu(app: &mut PealayerApp, ui: &mut egui::Ui) {
         } else {
             crate::ui::icons::EYE_SLASH
         };
-        let label = format!("{visibility_icon}  {}  {}", tab.icon(), tab.title(app));
+        let location_suffix = if is_sidebar_open {
+            match app.language {
+                crate::config::AppLanguage::Persian => " (نوار کناری)",
+                _ => " (Sidebar)",
+            }
+        } else {
+            ""
+        };
+        let label = format!("{visibility_icon}  {}  {}{location_suffix}", tab.icon(), tab.title(app));
         if ui.checkbox(&mut visible, label).changed() {
             if visible && !is_open {
                 app.open_or_focus_tab(tab);

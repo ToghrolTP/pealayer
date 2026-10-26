@@ -124,6 +124,19 @@ impl<'a> PaneContent<SidebarPane> for SidebarPaneContent<'a> {
     fn closable(&self, pane: &SidebarPane) -> bool {
         Self::pane_closable(pane)
     }
+
+    fn menu(&mut self, ui: &mut Ui, pane: &SidebarPane) {
+        let label = match self.app.language {
+            crate::config::AppLanguage::Persian => "انتقال به میز کار",
+            _ => "Dock to Workspace",
+        };
+        let icon = crate::ui::icons::GRID_FOUR;
+        if ui.button(format!("{icon}  {label}")).clicked() {
+            let tab = PealayerTab::from(*pane);
+            self.app.open_or_focus_tab(tab);
+            ui.close();
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -191,6 +204,22 @@ pub fn show_sidebar_rail(
         state.apply_rail_request(req.clone());
     }
 
+    // Mutual exclusivity: if a pane is open in the sidebar rail, close it from the dock grid
+    if let Some(pane) = state.open {
+        let tab = PealayerTab::from(pane);
+        if app.dock_state.layout.contains(&tab) {
+            let _ = app.dock_state.set_visible(
+                tab,
+                false,
+                Some(crate::ui::layout::PealayerTab::ProgramMonitor),
+                |_| craft_ui::docking::Permissions::default(),
+            );
+            app.save_dock_layout();
+        }
+    }
+
+    app.sidebar_rail_state = *state;
+
     let pane_out = if let Some(pane) = state.open {
         let open_panes = [pane];
         let mut content = SidebarPaneContent { app };
@@ -206,10 +235,15 @@ pub fn show_sidebar_rail(
         for req in &out.requests {
             state.apply_pane_request(req.clone());
         }
+        if app.sidebar_rail_state.open != state.open {
+            state.open = app.sidebar_rail_state.open;
+        }
         Some(out)
     } else {
         None
     };
+
+    app.sidebar_rail_state = *state;
 
     (rail_out.request, pane_out)
 }
@@ -357,6 +391,88 @@ mod tests {
             let (rail_req, pane_out) = show_sidebar_rail(&mut app, ui, &mut state);
             assert!(rail_req.is_none());
             assert!(pane_out.is_some());
+        }));
+    }
+
+    #[test]
+    fn mutual_exclusivity_between_dock_and_sidebar_rail() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let mut app = PealayerApp::default();
+
+        assert!(app.is_tab_open_in_dock(PealayerTab::HardwareMonitor));
+        assert!(!app.is_tab_open_in_sidebar(PealayerTab::HardwareMonitor));
+        assert!(app.is_tab_open(PealayerTab::HardwareMonitor));
+
+        let ctx = eframe::egui::Context::default();
+        let mut rail_state = SidebarRailState {
+            open: Some(SidebarPane::HardwareMonitor),
+            width: 300.0,
+            enabled: true,
+        };
+
+        discard_ui_output(ctx.run_ui(eframe::egui::RawInput::default(), |ui| {
+            let _ = show_sidebar_rail(&mut app, ui, &mut rail_state);
+        }));
+
+        assert!(!app.is_tab_open_in_dock(PealayerTab::HardwareMonitor));
+        assert!(app.is_tab_open_in_sidebar(PealayerTab::HardwareMonitor));
+        assert!(app.is_tab_open(PealayerTab::HardwareMonitor));
+
+        app.open_or_focus_tab(PealayerTab::HardwareMonitor);
+        assert!(app.is_tab_open_in_dock(PealayerTab::HardwareMonitor));
+        assert!(!app.is_tab_open_in_sidebar(PealayerTab::HardwareMonitor));
+        assert_eq!(app.sidebar_rail_state.open, None);
+    }
+
+    #[test]
+    fn toggle_tab_respects_mutual_exclusivity() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let mut app = PealayerApp::default();
+
+        // 1. Initial state: HardwareMonitor is in dock
+        assert!(app.is_tab_open_in_dock(PealayerTab::HardwareMonitor));
+        assert!(!app.is_tab_open_in_sidebar(PealayerTab::HardwareMonitor));
+
+        // 2. Toggle tab closes it from dock
+        app.toggle_tab(PealayerTab::HardwareMonitor);
+        assert!(!app.is_tab_open_in_dock(PealayerTab::HardwareMonitor));
+        assert!(!app.is_tab_open_in_sidebar(PealayerTab::HardwareMonitor));
+
+        // 3. Open in sidebar
+        app.sidebar_rail_state.open = Some(SidebarPane::HardwareMonitor);
+        assert!(!app.is_tab_open_in_dock(PealayerTab::HardwareMonitor));
+        assert!(app.is_tab_open_in_sidebar(PealayerTab::HardwareMonitor));
+
+        // 4. Toggle tab closes it from sidebar
+        app.toggle_tab(PealayerTab::HardwareMonitor);
+        assert!(!app.is_tab_open_in_dock(PealayerTab::HardwareMonitor));
+        assert!(!app.is_tab_open_in_sidebar(PealayerTab::HardwareMonitor));
+        assert_eq!(app.sidebar_rail_state.open, None);
+
+        // 5. Toggle tab opens it back in dock
+        app.toggle_tab(PealayerTab::HardwareMonitor);
+        assert!(app.is_tab_open_in_dock(PealayerTab::HardwareMonitor));
+        assert!(!app.is_tab_open_in_sidebar(PealayerTab::HardwareMonitor));
+    }
+
+    #[test]
+    fn sidebar_pane_menu_dock_to_workspace() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.sidebar_rail_state.open = Some(SidebarPane::HardwareMonitor);
+        let _ = app.dock_state.set_visible(
+            PealayerTab::HardwareMonitor,
+            false,
+            None,
+            |_| craft_ui::docking::Permissions::default(),
+        );
+        assert!(!app.is_tab_open_in_dock(PealayerTab::HardwareMonitor));
+        assert!(app.is_tab_open_in_sidebar(PealayerTab::HardwareMonitor));
+
+        let ctx = eframe::egui::Context::default();
+        discard_ui_output(ctx.run_ui(eframe::egui::RawInput::default(), |ui| {
+            let mut content = SidebarPaneContent { app: &mut app };
+            content.menu(ui, &SidebarPane::HardwareMonitor);
         }));
     }
 }

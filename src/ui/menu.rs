@@ -524,9 +524,21 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     let label = format!("{visibility_icon}  {tab_icon}  {}", pane.title(app.language));
                                     if ui.checkbox(&mut open, label).changed() {
                                         if open {
+                                            let tab = crate::ui::layout::PealayerTab::from(pane);
+                                            if app.dock_state.layout.contains(&tab) {
+                                                let _ = app.dock_state.set_visible(
+                                                    tab,
+                                                    false,
+                                                    Some(crate::ui::layout::PealayerTab::ProgramMonitor),
+                                                    |_| craft_ui::docking::Permissions::default(),
+                                                );
+                                                app.save_dock_layout();
+                                            }
                                             app.sidebar_rail_state.open = Some(pane);
+                                            app.save_config();
                                         } else if is_open {
                                             app.sidebar_rail_state.open = None;
+                                            app.save_config();
                                         }
                                     }
                                 }

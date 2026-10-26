@@ -333,6 +333,7 @@ pub fn run() -> eframe::Result {
             );
             crate::ui::configure_native_appearance(&cc.egui_ctx, &loaded_config);
             crate::ui::configure_main_window_style(&cc.egui_ctx);
+            egui_extras::install_image_loaders(&cc.egui_ctx);
 
             let get_proc = cc
                 .get_proc_address

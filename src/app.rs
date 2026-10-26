@@ -5868,11 +5868,27 @@ impl PealayerApp {
     }
 
     pub fn is_tab_open(&self, tab: crate::ui::layout::PealayerTab) -> bool {
+        self.is_tab_open_in_dock(tab) || self.is_tab_open_in_sidebar(tab)
+    }
+
+    pub fn is_tab_open_in_dock(&self, tab: crate::ui::layout::PealayerTab) -> bool {
         self.dock_state.layout.contains(&tab)
+    }
+
+    pub fn is_tab_open_in_sidebar(&self, tab: crate::ui::layout::PealayerTab) -> bool {
+        crate::ui::sidebar_rail::SidebarPane::try_from(tab)
+            .ok()
+            .is_some_and(|pane| self.sidebar_rail_state.open == Some(pane))
     }
 
     pub fn open_or_focus_tab(&mut self, tab: crate::ui::layout::PealayerTab) {
         self.show_four_d_editor = true;
+        if let Ok(pane) = crate::ui::sidebar_rail::SidebarPane::try_from(tab) {
+            if self.sidebar_rail_state.open == Some(pane) {
+                self.sidebar_rail_state.open = None;
+                self.save_config();
+            }
+        }
         if crate::ui::layout::reveal_and_focus_tab(&mut self.dock_state, tab) {
             self.save_dock_layout();
         }
@@ -5899,6 +5915,13 @@ impl PealayerApp {
     }
 
     pub fn toggle_tab(&mut self, tab: crate::ui::layout::PealayerTab) {
+        if let Ok(pane) = crate::ui::sidebar_rail::SidebarPane::try_from(tab) {
+            if self.sidebar_rail_state.open == Some(pane) {
+                self.sidebar_rail_state.open = None;
+                self.save_config();
+                return;
+            }
+        }
         let is_open = self.dock_state.layout.contains(&tab);
         let _ = self.dock_state.set_visible(
             tab,
