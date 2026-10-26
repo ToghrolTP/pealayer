@@ -672,6 +672,7 @@ pub fn spawn(
                     Ok(feedback) => {
                         sequence += 1;
                         let arm_intent = timeline.lock().map(|plan| plan.play_intent_revision).unwrap_or(0);
+                        let arm_started = Instant::now();
                         let arm_result = rpc.call(
                             "controller.media.playback.update",
                             json!({
@@ -709,7 +710,7 @@ pub fn spawn(
                                     && arm_feedback["epoch"].as_u64() == Some(current.epoch)
                                     && arm_feedback["plan_revision"].as_u64() == Some(revision)
                                 {
-                                    plan.observe_clock_ack(revision, current.epoch, arm_feedback["timeline"].clone(), arm_intent);
+                                    plan.observe_clock_ack(revision, current.epoch, arm_feedback["timeline"].clone(), arm_intent, arm_started);
                                 } else {
                                     plan.feedback = feedback;
                                     plan.last_ack = None;
@@ -808,7 +809,7 @@ pub fn spawn(
                                     Some("Hardware clock echo mismatch; playback paused".into());
                                 plan.cancel_play();
                             } else {
-                                plan.observe_clock_ack(revision, current.epoch, feedback["timeline"].clone(), intent_revision);
+                                plan.observe_clock_ack(revision, current.epoch, feedback["timeline"].clone(), intent_revision, started);
                             }
                         }
                         previous = Some(current.clone());

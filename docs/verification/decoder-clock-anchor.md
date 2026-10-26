@@ -64,6 +64,9 @@ authorize a later Play. A pending cancellation bypasses the idle heartbeat
 interval and revokes an unconsumed or not-yet-observed native start. Paused
 preparation/start intents publish at 100 ms, keeping the bounded reservation
 alive while the ordinary paused clock remains at its one-second idle interval.
+Readiness freshness is measured from request send time, so a reply delayed
+beyond 250 ms cannot become fresh merely by arriving. A fresh paused heartbeat
+may acquire a new acknowledgement while the media remains paused.
 
 PCController services board-display/program-state presentation only in suitable
 cue-free gaps through the timeline owner and reports dense-playback deferral

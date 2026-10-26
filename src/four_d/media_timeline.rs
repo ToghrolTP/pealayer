@@ -98,7 +98,8 @@ impl PreparedTimeline {
     }
     /// A heartbeat for an old plan cannot repair compilation or preparation of
     /// the desired plan. Timing faults also require explicit re-arming.
-    pub fn observe_clock_ack(&mut self, revision: u64, epoch: u64, feedback: Value, intent_revision: u64) {
+    pub fn observe_clock_ack(&mut self, revision: u64, epoch: u64, feedback: Value,
+        intent_revision: u64, sent_at: Instant) {
         if revision == self.revision && self.has_outputs() && !feedback["play_ready"].is_boolean() {
             self.error = Some("Invalid hardware acknowledgement: missing play readiness".into());
             self.requires_reprepare = true;
@@ -106,7 +107,8 @@ impl PreparedTimeline {
             self.cancel_play();
             return;
         }
-        self.last_ack = Some(Instant::now());
+        // Time spent waiting for a reply cannot renew an old readiness lease.
+        self.last_ack = Some(sent_at);
         self.clock_ack_revision = revision;
         self.clock_ack_epoch = epoch;
         self.play_ready_intent = (feedback["play_ready"] == true).then_some(intent_revision);
@@ -542,7 +544,7 @@ mod tests {
         plan.replace(Ok(json!({"cues":[],"actions":[{"id":"seat"}]})));
         plan.acknowledged_revision = plan.revision;
         plan.observe_clock_ack(plan.revision, 4,
-            json!({"state":"paused","armed_epoch":4,"play_ready":false}), plan.play_intent_revision);
+            json!({"state":"paused","armed_epoch":4,"play_ready":false}), plan.play_intent_revision, Instant::now());
         plan
     }
 
@@ -554,7 +556,7 @@ mod tests {
         assert!(plan.prepare_play_intent(4, true, false, false));
         assert!(!plan.consume_ready_play(4, true, false, false));
         plan.observe_clock_ack(plan.revision, 4,
-            json!({"state":"paused","armed_epoch":4,"play_ready":true}), plan.play_intent_revision);
+            json!({"state":"paused","armed_epoch":4,"play_ready":true}), plan.play_intent_revision, Instant::now());
         assert!(!plan.consume_ready_play(5, true, false, false));
         assert!(plan.consume_ready_play(4, true, false, false));
         assert!(plan.play_requested);
@@ -574,14 +576,14 @@ mod tests {
         let cancelled_intent = plan.play_intent_revision;
         plan.cancel_play();
         plan.observe_clock_ack(plan.revision, 4,
-            json!({"state":"paused","armed_epoch":4,"play_ready":true}), cancelled_intent);
+            json!({"state":"paused","armed_epoch":4,"play_ready":true}), cancelled_intent, Instant::now());
         assert!(!plan.consume_ready_play(4, true, false, false));
         assert!(!plan.prepare_play_intent(4, true, false, false));
         // Cancel an already consumed grant in the native unpause gap too.
         plan.request_play();
         assert!(!plan.consume_ready_play(4, true, false, false));
         plan.observe_clock_ack(plan.revision, 4,
-            json!({"state":"paused","armed_epoch":4,"play_ready":true}), plan.play_intent_revision);
+            json!({"state":"paused","armed_epoch":4,"play_ready":true}), plan.play_intent_revision, Instant::now());
         assert!(plan.consume_ready_play(4, true, false, false));
         plan.cancel_play();
         assert!(!plan.play_starting);
@@ -598,7 +600,7 @@ mod tests {
         plan.cancel_play();
         plan.request_play();
         plan.observe_clock_ack(plan.revision, 4,
-            json!({"state":"paused","armed_epoch":4,"play_ready":true}), old_intent);
+            json!({"state":"paused","armed_epoch":4,"play_ready":true}), old_intent, Instant::now());
         assert!(!plan.ready_to_play(4));
         assert!(!plan.consume_ready_play(4, true, false, false));
         assert!(plan.prepare_play_intent(4, true, false, false));
@@ -608,10 +610,25 @@ mod tests {
     fn missing_current_readiness_contract_fails_closed() {
         let mut plan = paused_output_plan();
         plan.request_play();
-        plan.observe_clock_ack(plan.revision, 4, json!({"state":"paused","armed_epoch":4}), plan.play_intent_revision);
+        plan.observe_clock_ack(plan.revision, 4, json!({"state":"paused","armed_epoch":4}), plan.play_intent_revision, Instant::now());
         assert!(plan.error.as_deref().unwrap().contains("missing play readiness"));
         assert!(!plan.play_requested);
         assert!(!plan.ready_to_play(4));
+    }
+
+    #[test]
+    fn delayed_reservation_reply_does_not_renew_readiness_on_arrival() {
+        let mut plan = paused_output_plan();
+        plan.request_play();
+        plan.observe_clock_ack(plan.revision, 4,
+            json!({"state":"paused","armed_epoch":4,"play_ready":true}),
+            plan.play_intent_revision, Instant::now() - Duration::from_millis(251));
+        assert!(!plan.consume_ready_play(4, true, false, false));
+        assert!(plan.prepare_play_intent(4, true, false, false));
+        plan.observe_clock_ack(plan.revision, 4,
+            json!({"state":"paused","armed_epoch":4,"play_ready":true}),
+            plan.play_intent_revision, Instant::now());
+        assert!(plan.consume_ready_play(4, true, false, false));
     }
     #[test]
     fn recovered_observer_diagnostic_clears_only_its_own_connection_error() {
@@ -630,7 +647,7 @@ mod tests {
         let mut plan = PreparedTimeline::default();
         plan.revision = 2;
         plan.acknowledged_revision = 2;
-        plan.observe_clock_ack(2, 3, json!({"revision":2,"state":"ready","step_count":0,"armed_epoch":0}), plan.play_intent_revision);
+        plan.observe_clock_ack(2, 3, json!({"revision":2,"state":"ready","step_count":0,"armed_epoch":0}), plan.play_intent_revision, Instant::now());
         plan
     }
     #[test]
@@ -674,11 +691,11 @@ mod tests {
         let mut plan = acknowledged_empty_plan();
         plan.revision = 3;
         plan.error = Some("new plan rejected".into());
-        plan.observe_clock_ack(2,3,json!({"state":"paused"}), plan.play_intent_revision);
+        plan.observe_clock_ack(2,3,json!({"state":"paused"}), plan.play_intent_revision, Instant::now());
         assert_eq!(plan.error.as_deref(), Some("new plan rejected"));
         assert_eq!(plan.presentation_label(), "Hardware preparation blocked");
         plan.replace(Err("invalid cue".into()));
-        plan.observe_clock_ack(2,3,json!({"state":"paused"}), plan.play_intent_revision);
+        plan.observe_clock_ack(2,3,json!({"state":"paused"}), plan.play_intent_revision, Instant::now());
         assert_eq!(plan.error.as_deref(), Some("invalid cue"));
         assert_eq!(plan.presentation_label(), "Hardware plan invalid");
     }
@@ -687,7 +704,7 @@ mod tests {
         let mut plan = acknowledged_empty_plan();
         plan.revision = 3;
         plan.play_requested = true;
-        plan.observe_clock_ack(2,3,json!({"state":"faulted","error":"old executor"}), plan.play_intent_revision);
+        plan.observe_clock_ack(2,3,json!({"state":"faulted","error":"old executor"}), plan.play_intent_revision, Instant::now());
         assert!(plan.play_requested);
         assert!(!plan.requires_reprepare);
         assert!(!plan.ready_for(3));
@@ -696,10 +713,10 @@ mod tests {
     fn genuine_fault_stays_latched_until_explicit_retry_not_a_healthy_heartbeat() {
         let mut plan = acknowledged_empty_plan();
         plan.play_requested = true;
-        plan.observe_clock_ack(2,3,json!({"state":"faulted","error":"late ACK"}), plan.play_intent_revision);
+        plan.observe_clock_ack(2,3,json!({"state":"faulted","error":"late ACK"}), plan.play_intent_revision, Instant::now());
         assert!(plan.requires_reprepare);
         assert!(!plan.play_requested);
-        plan.observe_clock_ack(2,3,json!({"revision":2,"state":"ready","step_count":0}), plan.play_intent_revision);
+        plan.observe_clock_ack(2,3,json!({"revision":2,"state":"ready","step_count":0}), plan.play_intent_revision, Instant::now());
         assert_eq!(plan.error.as_deref(), Some("late ACK"));
         assert!(!plan.ready_for(3));
         assert!(plan.request_play());
