@@ -421,8 +421,8 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
             let handoff_pause = plan.lock().is_ok_and(|plan| plan.authority.as_ref()
                 .is_some_and(|state| state.unattended_claim(&plan.authority_client_id, unattended).is_some()));
             // Read position after the other potentially blocking properties and
-            // locks. Its conservative timestamp is the start of this native
-            // read, never the later point at which the sample lock is acquired.
+            // locks. Keep separate position-anchor and freshness timestamps;
+            // neither is the later point at which the sample lock is acquired.
             let observed_at = Instant::now();
             let position = source
                 .get_property::<f64>("time-pos")
@@ -437,7 +437,7 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
                     .unwrap_or(clock.position_ms as f64 / 1000.)
                     .max(0.0)
                     * 1000.0;
-                let projected_ms = clock.position_at(observed_at);
+                let projected_ms = clock.position_at(read_finished_at);
                 let read_ms = read_finished_at.saturating_duration_since(observed_at).as_millis() as u64;
                 let apply_age_ms = observed_at.elapsed().as_millis() as u64;
                 clock.observation_timing.read_ms = read_ms;
@@ -445,25 +445,9 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
                 clock.observation_timing.max_read_ms = clock.observation_timing.max_read_ms.max(read_ms);
                 clock.observation_timing.max_apply_age_ms = clock.observation_timing.max_apply_age_ms.max(apply_age_ms);
                 clock.observation_timing.delta_at_read_ms = next.round() as i64 - projected_ms as i64;
-                let discontinuity = loaded && !buffering && clock.discontinuity_at(next.round() as u64, observed_at);
+                let discontinuity = loaded && !buffering && clock.discontinuity_at(next.round() as u64, read_finished_at);
+                let slow_read = playing && !super::media_sync::PlaybackSample::position_read_within_budget(observed_at, read_finished_at);
                 let rebase = path != previous_path || restarted;
-                // Clock drift/stalls are not deliberate seeks. Never clear a
-                // timing fault or skip past cues merely because the clock jumped.
-                if discontinuity
-                    && !rebase
-                    && coordinator
-                    && let Ok(mut prepared) = plan.lock()
-                    && prepared.has_items()
-                {
-                    clock.observation_timing.fault.get_or_insert(super::media_sync::ObservationFault {
-                        position_ms: next.round() as u64, projected_ms, read_ms, apply_age_ms,
-                    });
-                    prepared.error = Some(
-                        "Media clock discontinuity without a seek; hardware playback paused".into(),
-                    );
-                    prepared.requires_reprepare = true;
-                    prepared.cancel_play();
-                }
                 if rebase {
                     clock.observation_timing.fault = None;
                     clock.epoch = clock.epoch.saturating_add(1);
@@ -480,9 +464,28 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
                         prepared.play_requested |= playing;
                     }
                 }
+                // A deliberate seek permits a new position; it cannot make a
+                // slow native read precise. Neither case skips hardware cues.
+                if ((discontinuity && !rebase) || slow_read)
+                    && coordinator
+                    && let Ok(mut prepared) = plan.lock()
+                    && prepared.has_items()
+                {
+                    clock.observation_timing.fault.get_or_insert(super::media_sync::ObservationFault {
+                        reason: if slow_read { "native-read-budget" } else { "discontinuity" },
+                        position_ms: next.round() as u64, projected_ms, read_ms, apply_age_ms,
+                    });
+                    prepared.error = Some(if slow_read {
+                        "Media clock observation was delayed; hardware playback paused".into()
+                    } else {
+                        "Media clock discontinuity without a seek; hardware playback paused".into()
+                    });
+                    prepared.requires_reprepare = true;
+                    prepared.cancel_play();
+                }
                 previous_path = path;
                 if position.is_some() {
-                    clock.observe_position_at(next.round() as u64, playing, rate, rebase, observed_at);
+                    clock.observe_position_read(next.round() as u64, playing, rate, rebase, observed_at, read_finished_at);
                 }
                 clock.duration_ms = duration.map(|value| (value * 1000.0).round() as u64);
                 clock.loaded = loaded;

@@ -52,6 +52,7 @@ pub struct ObservationTiming {
 
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct ObservationFault {
+    pub reason: &'static str,
     pub position_ms: u64,
     pub projected_ms: u64,
     pub read_ms: u64,
@@ -108,6 +109,21 @@ impl PlaybackSample {
 
     pub(crate) fn discontinuity_at(&self, position_ms: u64, observed_at: Instant) -> bool {
         self.position_at(observed_at).abs_diff(position_ms) > 250
+    }
+
+    pub(crate) fn position_read_within_budget(started_at: Instant, finished_at: Instant) -> bool {
+        finished_at.saturating_duration_since(started_at) <= Duration::from_millis(50)
+    }
+
+    /// A native property read can return a position sampled anywhere in its
+    /// window. Anchor at completion so it cannot gain fictitious elapsed time;
+    /// freshness uses the earliest possible observation, independently.
+    pub(crate) fn observe_position_read(
+        &mut self, position_ms: u64, playing: bool, rate: f64, rebase: bool,
+        started_at: Instant, finished_at: Instant,
+    ) {
+        self.observe_position_at(position_ms, playing, rate, rebase, finished_at);
+        self.observed_at = started_at;
     }
 
     /// A successful read refreshes observation freshness, but the decoder can
@@ -1430,7 +1446,7 @@ mod tests {
         // Comparing it to the later projection falsely reports a 310 ms jump.
         assert!(sample.discontinuity_at(10_040, applied_at));
         assert!(!sample.discontinuity_at(10_040, read_at));
-        sample.observe_position_at(10_040, true, 1., false, read_at);
+        sample.observe_position_read(10_040, true, 1., false, read_at, read_at);
         assert_eq!(sample.position_at(applied_at), 10_350);
         assert_eq!(sample.observed_at, read_at);
         // This observation really is old: applying it cannot renew freshness.
@@ -1450,6 +1466,25 @@ mod tests {
         assert!(sample.discontinuity_at(10_451, read_at));
         assert!(sample.discontinuity_at(9_949, read_at));
         assert!(sample.discontinuity_at(10_000, at + Duration::from_millis(126)));
+    }
+
+    #[test]
+    fn slow_native_read_does_not_advance_returned_position_from_read_start() {
+        let at = Instant::now();
+        let started = at + Duration::from_millis(100);
+        let finished = at + Duration::from_millis(200);
+        for returned_position in [10_100, 10_200] {
+            let mut sample = PlaybackSample { playing: true, ..Default::default() };
+            sample.observe_position_read(returned_position, true, 1., false, started, finished);
+            assert_eq!(sample.position_at(finished), returned_position);
+            assert_eq!(sample.position_at(finished + Duration::from_millis(20)), returned_position + 20);
+            assert_eq!(sample.observed_at, started);
+            // The read's sampling instant is uncertain by 100 ms. Even if its
+            // PTS looks valid at completion, it cannot satisfy a 50 ms budget.
+            assert!(!PlaybackSample::position_read_within_budget(started, finished));
+        }
+        assert!(PlaybackSample::position_read_within_budget(started, started + Duration::from_millis(50)));
+        assert!(!PlaybackSample::position_read_within_budget(started, started + Duration::from_micros(50_001)));
     }
 
     #[test]

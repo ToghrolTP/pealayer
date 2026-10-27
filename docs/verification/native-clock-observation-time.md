@@ -7,12 +7,16 @@ later time. A delayed property bundle could therefore create a false clock
 discontinuity or conceal observation age.
 
 Read the metadata and coordinator state before position. Bracket the native
-position read and retain its conservative start timestamp for the drift
-comparison, decoder anchor and observation freshness. A delayed application is
-not a new observation. Failed position reads do not refresh observation time.
-The existing 250 ms drift/freshness and 50 ms execution limits remain unchanged;
-real stalls or stale reads still fail closed. Existing seek, pause, rate and
-media-boundary fences remain in force.
+position read. Use read completion for the position anchor and drift comparison,
+and retain read start separately as the conservative freshness lower bound.
+Anchoring returned PTS at read start could invent elapsed media time during a
+slow read. A read window wider than 50 ms while playing with hardware is an
+explicit timing fault, even during a legitimate seek; uncertain position is
+never published as precise. A delayed application is not a new observation.
+Failed position reads do not refresh observation time. The existing 250 ms
+drift/freshness and 50 ms execution limits remain unchanged; real stalls or stale
+reads still fail closed. Existing seek, pause, rate and media-boundary fences
+remain in force.
 
 `/api/process/status` exposes bounded numeric `playback_clock.observation_timing`
 diagnostics: native read duration, age at application, maxima, signed drift at
@@ -22,8 +26,10 @@ are added. The diagnostics do not establish physical chair movement.
 
 Regressions model a correct native position applied 310 ms late: it must match
 the projection at read time, keep that original anchor, and remain stale after
-250 ms. Separate cases retain both directions of the 250 ms jump boundary,
-real unchanged-position stalls, and playback-rate scaling.
+250 ms. Separate slow-read cases return positions sampled at either end of a
+100 ms read: neither gains fictitious time, and both fail the 50 ms uncertainty
+budget. Other cases retain both directions of the 250 ms jump boundary, real
+unchanged-position stalls, and playback-rate scaling.
 
 Live acceptance is pending. One chair-only replay on the preceding native build
 stopped on the discontinuity guard before its later motion cue; its controller
