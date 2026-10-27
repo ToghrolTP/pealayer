@@ -261,6 +261,7 @@ pub fn playback_clock_diagnostics() -> Value {
             "position_ms": sample.position_ms, "playing": sample.playing,
             "buffering": sample.buffering, "epoch": sample.epoch,
             "sample_age_ms": sample.observed_at.elapsed().as_millis() as u64,
+            "observation_timing": sample.observation_timing,
         }),
         Err(std::sync::TryLockError::WouldBlock) => serde_json::json!({"state":"busy"}),
         Err(std::sync::TryLockError::Poisoned(_)) => serde_json::json!({"state":"unavailable"}),

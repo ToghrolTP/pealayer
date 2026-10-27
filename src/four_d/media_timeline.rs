@@ -398,11 +398,6 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
                 seeking = source.get_property::<bool>("seeking").unwrap_or(false);
             }
             let path = source.get_property::<String>("path").unwrap_or_default();
-            let position = source
-                .get_property::<f64>("time-pos")
-                .ok()
-                .filter(|value| value.is_finite());
-            let loaded = !path.is_empty() && position.is_some();
             let paused = source.get_property::<bool>("pause").unwrap_or(true);
             let eof = source.get_property::<bool>("eof-reached").unwrap_or(false);
             let buffering = seeking
@@ -422,21 +417,35 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
                 && endpoint
                     .lock()
                     .is_ok_and(|value| super::controller::is_controller_endpoint(&value));
-            let mut playing = loaded
-                && !paused
-                && !eof
-                && !buffering
-                && !estop.load(std::sync::atomic::Ordering::Acquire);
             let mut set_pause = None;
             let handoff_pause = plan.lock().is_ok_and(|plan| plan.authority.as_ref()
                 .is_some_and(|state| state.unattended_claim(&plan.authority_client_id, unattended).is_some()));
+            // Read position after the other potentially blocking properties and
+            // locks. Its conservative timestamp is the start of this native
+            // read, never the later point at which the sample lock is acquired.
+            let observed_at = Instant::now();
+            let position = source
+                .get_property::<f64>("time-pos")
+                .ok()
+                .filter(|value| value.is_finite());
+            let read_finished_at = Instant::now();
+            let loaded = !path.is_empty() && position.is_some();
+            let mut playing = loaded && !paused && !eof && !buffering
+                && !estop.load(std::sync::atomic::Ordering::Acquire);
             if let Ok(mut clock) = sample.lock() {
                 let next = position
                     .unwrap_or(clock.position_ms as f64 / 1000.)
                     .max(0.0)
                     * 1000.0;
-                let discontinuity =
-                    loaded && !buffering && (next - clock.position_now() as f64).abs() > 250.0;
+                let projected_ms = clock.position_at(observed_at);
+                let read_ms = read_finished_at.saturating_duration_since(observed_at).as_millis() as u64;
+                let apply_age_ms = observed_at.elapsed().as_millis() as u64;
+                clock.observation_timing.read_ms = read_ms;
+                clock.observation_timing.apply_age_ms = apply_age_ms;
+                clock.observation_timing.max_read_ms = clock.observation_timing.max_read_ms.max(read_ms);
+                clock.observation_timing.max_apply_age_ms = clock.observation_timing.max_apply_age_ms.max(apply_age_ms);
+                clock.observation_timing.delta_at_read_ms = next.round() as i64 - projected_ms as i64;
+                let discontinuity = loaded && !buffering && clock.discontinuity_at(next.round() as u64, observed_at);
                 let rebase = path != previous_path || restarted;
                 // Clock drift/stalls are not deliberate seeks. Never clear a
                 // timing fault or skip past cues merely because the clock jumped.
@@ -446,6 +455,9 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
                     && let Ok(mut prepared) = plan.lock()
                     && prepared.has_items()
                 {
+                    clock.observation_timing.fault.get_or_insert(super::media_sync::ObservationFault {
+                        position_ms: next.round() as u64, projected_ms, read_ms, apply_age_ms,
+                    });
                     prepared.error = Some(
                         "Media clock discontinuity without a seek; hardware playback paused".into(),
                     );
@@ -453,6 +465,7 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
                     prepared.cancel_play();
                 }
                 if rebase {
+                    clock.observation_timing.fault = None;
                     clock.epoch = clock.epoch.saturating_add(1);
                     if coordinator
                         && let Ok(mut prepared) = plan.lock()
@@ -468,7 +481,9 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
                     }
                 }
                 previous_path = path;
-                clock.observe_position_at(next.round() as u64, playing, rate, rebase, Instant::now());
+                if position.is_some() {
+                    clock.observe_position_at(next.round() as u64, playing, rate, rebase, observed_at);
+                }
                 clock.duration_ms = duration.map(|value| (value * 1000.0).round() as u64);
                 clock.loaded = loaded;
                 clock.buffering = buffering;

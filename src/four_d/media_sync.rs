@@ -40,6 +40,24 @@ impl ClockTransportDiagnostics {
     }
 }
 
+#[derive(Clone, Debug, Default, serde::Serialize)]
+pub struct ObservationTiming {
+    pub read_ms: u64,
+    pub apply_age_ms: u64,
+    pub max_read_ms: u64,
+    pub max_apply_age_ms: u64,
+    pub delta_at_read_ms: i64,
+    pub fault: Option<ObservationFault>,
+}
+
+#[derive(Clone, Debug, serde::Serialize)]
+pub struct ObservationFault {
+    pub position_ms: u64,
+    pub projected_ms: u64,
+    pub read_ms: u64,
+    pub apply_age_ms: u64,
+}
+
 #[derive(Clone, Debug)]
 pub struct PlaybackSample {
     pub name: String,
@@ -52,6 +70,7 @@ pub struct PlaybackSample {
     pub sampled_at: Instant,
     pub observed_at: Instant,
     pub epoch: u64,
+    pub observation_timing: ObservationTiming,
 }
 impl Default for PlaybackSample {
     fn default() -> Self {
@@ -66,6 +85,7 @@ impl Default for PlaybackSample {
             sampled_at: Instant::now(),
             observed_at: Instant::now(),
             epoch: 1,
+            observation_timing: ObservationTiming::default(),
         }
     }
 }
@@ -74,7 +94,7 @@ impl PlaybackSample {
         self.position_at(Instant::now())
     }
 
-    fn position_at(&self, now: Instant) -> u64 {
+    pub(crate) fn position_at(&self, now: Instant) -> u64 {
         let advance = if self.playing {
             now.saturating_duration_since(self.sampled_at).as_secs_f64() * 1000.0 * self.rate
         } else {
@@ -84,6 +104,10 @@ impl PlaybackSample {
         position
             .min(self.duration_ms.unwrap_or(u32::MAX as u64))
             .min(u32::MAX as u64)
+    }
+
+    pub(crate) fn discontinuity_at(&self, position_ms: u64, observed_at: Instant) -> bool {
+        self.position_at(observed_at).abs_diff(position_ms) > 250
     }
 
     /// A successful read refreshes observation freshness, but the decoder can
@@ -1390,6 +1414,42 @@ mod tests {
         let stalled = at + Duration::from_millis(260);
         sample.observe_position_at(10_000, true, 1., false, stalled);
         assert!(sample.position_at(stalled).abs_diff(10_000) > 250);
+        assert!(sample.discontinuity_at(10_000, stalled));
+    }
+
+    #[test]
+    fn delayed_application_compares_position_at_its_native_read_time() {
+        let at = Instant::now();
+        let mut sample = PlaybackSample {
+            position_ms: 10_000, playing: true, loaded: true,
+            sampled_at: at, observed_at: at, ..Default::default()
+        };
+        let read_at = at + Duration::from_millis(40);
+        let applied_at = read_at + Duration::from_millis(310);
+        // A correct 10040 ms read can wait behind other work before application.
+        // Comparing it to the later projection falsely reports a 310 ms jump.
+        assert!(sample.discontinuity_at(10_040, applied_at));
+        assert!(!sample.discontinuity_at(10_040, read_at));
+        sample.observe_position_at(10_040, true, 1., false, read_at);
+        assert_eq!(sample.position_at(applied_at), 10_350);
+        assert_eq!(sample.observed_at, read_at);
+        // This observation really is old: applying it cannot renew freshness.
+        assert!(applied_at.duration_since(sample.observed_at) > Duration::from_millis(250));
+    }
+
+    #[test]
+    fn native_read_time_keeps_real_jump_stall_and_rate_guards() {
+        let at = Instant::now();
+        let sample = PlaybackSample {
+            position_ms: 10_000, playing: true, rate: 2.,
+            sampled_at: at, observed_at: at, ..Default::default()
+        };
+        let read_at = at + Duration::from_millis(100);
+        assert!(!sample.discontinuity_at(10_200, read_at));
+        assert!(!sample.discontinuity_at(10_450, read_at));
+        assert!(sample.discontinuity_at(10_451, read_at));
+        assert!(sample.discontinuity_at(9_949, read_at));
+        assert!(sample.discontinuity_at(10_000, at + Duration::from_millis(126)));
     }
 
     #[test]
