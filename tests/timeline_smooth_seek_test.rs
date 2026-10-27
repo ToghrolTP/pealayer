@@ -1,5 +1,5 @@
 use pealayer::mpv::frame_cache::{CachedFrame, FrameCache};
-use pealayer::mpv::seek::{ScrubResult, SeekBackend, SeekController, SeekMode};
+use pealayer::mpv::seek::{PendingSeek, ScrubResult, SeekBackend, SeekController, SeekMode};
 use pealayer::ui::controls::resolve_display_time;
 use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
@@ -12,11 +12,15 @@ struct MockSeekBackend {
 }
 
 impl SeekBackend for MockSeekBackend {
-    fn execute_seek(&self, target_time: f64, mode: SeekMode) {
+    fn execute_seek(&self, request: PendingSeek) -> bool {
         if let Some(delay) = self.delay {
             thread::sleep(delay);
         }
-        self.seeks.lock().unwrap().push((target_time, mode));
+        self.seeks
+            .lock()
+            .unwrap()
+            .push((request.target_time, request.mode));
+        true
     }
 }
 
@@ -51,7 +55,7 @@ fn test_seek_controller_scrub_and_commit() {
     thread::sleep(Duration::from_millis(50));
 
     // Request commit
-    let commit_id = controller.request_commit(15.0);
+    let commit_id = controller.request_commit(15.0).request_id;
     thread::sleep(Duration::from_millis(50));
 
     let executed = seeks.lock().unwrap().clone();
@@ -152,8 +156,10 @@ fn test_exact_cache_preview_still_moves_decoder_and_rejects_nearby_frames() {
 
     wait_for_seek_target(&seeks, 5.0);
 
-    assert!(matches!(controller.request_scrub(5.01), ScrubResult::Dispatched(_)),
-        "A nearby cached PTS must not masquerade as the requested frame");
+    assert!(
+        matches!(controller.request_scrub(5.01), ScrubResult::Dispatched(_)),
+        "A nearby cached PTS must not masquerade as the requested frame"
+    );
     wait_for_seek_target(&seeks, 5.01);
 
     // Scrub to uncached frame
