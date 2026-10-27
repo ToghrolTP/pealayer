@@ -30,10 +30,19 @@ seek revoke the old completion. Request tokens are process-wide to avoid reuse
 against test/window clients that outlive a controller. Pause also revokes implicit
 resume intent, so a delayed completion cannot restart playback after Pause.
 Already submitted decoder work may finish, but cannot settle another request.
+Native asynchronous submission and revoke/new-request share a tiny queue gate;
+ordinary synchronous backends never hold it. Cancellation therefore cannot
+return and then permit an obsolete native zero command to be submitted. Before
+the next zero command, old completion-client boundaries are drained after revoke
+and before the new epoch/request is queued.
 
 Pure regressions cover event ordering, stale IDs/epochs, matching errors,
 replacement/overflow, nonzero frame tolerance and truthful first-frame position.
 Controller tests retain coalescing coverage and explicit queue rejection.
+Deterministic dispatch barriers exercise cancellation before native submission;
+an isolated synthetic Y4M/libmpv fixture verifies the first zero seek after
+draining the file-load boundary. Test decoder clients live for the process so
+Windows asynchronous teardown cannot race another fixture.
 Rust syntax parsing and build-policy checks are local; native compilation/tests
 run on hosted CI. Keep the installed c48 runtime fixed during the companion
 controller comparison; deployment and real-media zero-seek validation remain

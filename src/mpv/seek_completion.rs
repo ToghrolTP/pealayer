@@ -257,4 +257,79 @@ mod tests {
             assert!(!fence.ready(3));
         }
     }
+
+    #[test]
+    fn first_zero_seek_after_load_drains_old_boundaries_and_observes_its_own_reply() {
+        // Keep these isolated test handles alive for the process, as with the
+        // app's shared test clients: Windows teardown must not race a new core.
+        static CORE: std::sync::OnceLock<libmpv2::Mpv> = std::sync::OnceLock::new();
+        static CLIENT: std::sync::OnceLock<NativeSeekClient> = std::sync::OnceLock::new();
+        let core = CORE.get_or_init(|| {
+            libmpv2::Mpv::with_initializer(|init| {
+                for (key, value) in [
+                    ("config", "no"),
+                    ("load-scripts", "no"),
+                    ("vo", "null"),
+                    ("ao", "null"),
+                    ("pause", "yes"),
+                    ("keep-open", "always"),
+                ] {
+                    init.set_option(key, value)?;
+                }
+                Ok(())
+            })
+            .unwrap()
+        });
+        let client = CLIENT.get_or_init(|| NativeSeekClient::new(core).unwrap());
+        let path =
+            std::env::temp_dir().join(format!("pealayer-zero-fence-{}.y4m", uuid::Uuid::new_v4()));
+        struct Cleanup(&'static libmpv2::Mpv, std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = self.0.command("stop", &[]);
+                for _ in 0..20 {
+                    if std::fs::remove_file(&self.1).is_ok() {
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+            }
+        }
+        let _cleanup = Cleanup(core, path.clone());
+        let mut video = b"YUV4MPEG2 W2 H2 F25:1 Ip A1:1 C420jpeg\n".to_vec();
+        for _ in 0..3 {
+            video.extend_from_slice(b"FRAME\n");
+            video.extend_from_slice(&[128; 6]);
+        }
+        std::fs::write(&path, video).unwrap();
+        core.command("loadfile", &[path.to_str().unwrap()]).unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while core.get_property::<f64>("time-pos").is_err()
+            || core.get_property::<bool>("seeking").unwrap_or(true)
+        {
+            assert!(std::time::Instant::now() < deadline, "fixture did not load");
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        let old_events = client.take_events();
+        assert!(old_events.contains(&NativeSeekEvent::MediaBoundary));
+        let request_id = 7;
+        assert!(client.queue_zero(request_id));
+        let mut fence = ZeroSeekFence::new(request_id, 1);
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        loop {
+            for event in client.take_events() {
+                assert_eq!(fence.observe(event, 1), None);
+            }
+            if fence.ready(1) && !core.get_property::<bool>("seeking").unwrap_or(true) {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "zero seek did not complete after old-boundary drain"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(1));
+        }
+        assert!(core.get_property::<f64>("time-pos").unwrap().is_finite());
+        client.finish();
+    }
 }

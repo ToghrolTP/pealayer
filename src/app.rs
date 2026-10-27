@@ -6541,6 +6541,14 @@ impl PealayerApp {
         }
 
         self.seek_pos = Some(clamped);
+        if clamped == 0.0 && !crate::peer::active() && !crate::mpv::external::active() {
+            // Revoke older submissions before draining this client's old file
+            // boundaries. Only events after the new command can settle it.
+            self.seek_controller.cancel_pending();
+            self.native_seek_client.finish();
+            let _ = self.native_seek_client.take_events();
+            self.seek_epoch = self.seek_epoch.wrapping_add(1);
+        }
         let request = self.seek_controller.request_commit(clamped);
         self.pending_scrub_commit = Some(PendingScrubCommit {
             request_id: request.request_id,

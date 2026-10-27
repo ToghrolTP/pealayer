@@ -120,6 +120,7 @@ pub struct SeekController {
     state: Arc<(Mutex<Option<PendingSeek>>, Condvar)>,
     completed: Arc<Mutex<VecDeque<CompletedSeek>>>,
     latest_request: Arc<AtomicU64>,
+    native_queue_gate: Arc<Mutex<()>>,
     is_running: Arc<AtomicBool>,
     worker_handle: Option<thread::JoinHandle<()>>,
     frame_cache: Option<Arc<RwLock<FrameCache>>>,
@@ -138,16 +139,26 @@ impl SeekController {
         backend: B,
         frame_cache: Option<Arc<RwLock<FrameCache>>>,
     ) -> Self {
+        Self::with_native_dispatch_hook(backend, frame_cache, || {})
+    }
+
+    fn with_native_dispatch_hook<B: SeekBackend, F: Fn() + Send + 'static>(
+        backend: B,
+        frame_cache: Option<Arc<RwLock<FrameCache>>>,
+        before_native_dispatch: F,
+    ) -> Self {
         let state: Arc<(Mutex<Option<PendingSeek>>, Condvar)> =
             Arc::new((Mutex::new(None), Condvar::new()));
         let is_running = Arc::new(AtomicBool::new(true));
         let latest_request = Arc::new(AtomicU64::new(0));
+        let native_queue_gate = Arc::new(Mutex::new(()));
         let completed = Arc::new(Mutex::new(VecDeque::new()));
 
         let state_clone = Arc::clone(&state);
         let is_running_clone = Arc::clone(&is_running);
         let completed_clone = Arc::clone(&completed);
         let latest_request_clone = Arc::clone(&latest_request);
+        let native_queue_gate_clone = Arc::clone(&native_queue_gate);
 
         let worker_handle = thread::spawn(move || {
             let (lock, cvar) = &*state_clone;
@@ -161,9 +172,20 @@ impl SeekController {
                 };
 
                 if let Some(req) = seek_req {
-                    let accepted = is_running_clone.load(Ordering::Acquire)
-                        && latest_request_clone.load(Ordering::Acquire) == req.request_id
-                        && backend.execute_seek(req);
+                    let accepted = if req.native_zero {
+                        before_native_dispatch();
+                        // Only the tiny asynchronous native submission shares
+                        // this gate with revoke/new-request. Ordinary synchronous
+                        // backends must never hold a UI cancellation lock.
+                        let _gate = native_queue_gate_clone.lock().unwrap();
+                        is_running_clone.load(Ordering::Acquire)
+                            && latest_request_clone.load(Ordering::Acquire) == req.request_id
+                            && backend.execute_seek(req)
+                    } else {
+                        is_running_clone.load(Ordering::Acquire)
+                            && latest_request_clone.load(Ordering::Acquire) == req.request_id
+                            && backend.execute_seek(req)
+                    };
                     completed_clone.lock().unwrap().push_back(CompletedSeek {
                         request_id: req.request_id,
                         target_time: req.target_time,
@@ -178,6 +200,7 @@ impl SeekController {
             state,
             completed,
             latest_request,
+            native_queue_gate,
             is_running,
             worker_handle: Some(worker_handle),
             frame_cache,
@@ -194,22 +217,24 @@ impl SeekController {
                 .and_then(|cache| cache.query_exact(target_time, 0.000_001))
         });
 
-        let request_id = NEXT_SEEK_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
-        let (lock, cvar) = &*self.state;
-        let mut guard = lock.lock().unwrap();
-        self.latest_request.store(request_id, Ordering::Release);
-        *guard = Some(PendingSeek {
-            request_id,
-            target_time,
-            mode: SeekMode::Scrub,
-            native_zero: false,
-        });
-        cvar.notify_one();
-        cached.map_or(ScrubResult::Dispatched(request_id), ScrubResult::Cached)
+        let request = self.enqueue(target_time, SeekMode::Scrub, false);
+        cached.map_or(
+            ScrubResult::Dispatched(request.request_id),
+            ScrubResult::Cached,
+        )
     }
 
     /// Submits a final commit seek request. Overwrites any pending scrub requests.
     pub fn request_commit(&self, target_time: f64) -> PendingSeek {
+        self.enqueue(
+            target_time,
+            SeekMode::Commit,
+            target_time == 0.0 && !crate::peer::active() && !crate::mpv::external::active(),
+        )
+    }
+
+    fn enqueue(&self, target_time: f64, mode: SeekMode, native_zero: bool) -> PendingSeek {
+        let _gate = self.native_queue_gate.lock().unwrap();
         let request_id = NEXT_SEEK_REQUEST_ID.fetch_add(1, Ordering::Relaxed);
         let (lock, cvar) = &*self.state;
         let mut guard = lock.lock().unwrap();
@@ -217,10 +242,8 @@ impl SeekController {
         let request = PendingSeek {
             request_id,
             target_time,
-            mode: SeekMode::Commit,
-            native_zero: target_time == 0.0
-                && !crate::peer::active()
-                && !crate::mpv::external::active(),
+            mode,
+            native_zero,
         };
         *guard = Some(request);
         cvar.notify_one();
@@ -230,6 +253,7 @@ impl SeekController {
     /// Revoke queued work. Already submitted decoder commands may still finish;
     /// their tokens cannot settle another request or media epoch.
     pub fn cancel_pending(&self) {
+        let _gate = self.native_queue_gate.lock().unwrap();
         if let Ok(mut pending) = self.state.0.lock() {
             self.latest_request.store(0, Ordering::Release);
             *pending = None;
@@ -246,6 +270,7 @@ impl Drop for SeekController {
     fn drop(&mut self) {
         let (lock, cvar) = &*self.state;
         {
+            let _gate = self.native_queue_gate.lock().unwrap();
             let mut guard = lock.lock().unwrap();
             self.is_running.store(false, Ordering::SeqCst);
             self.latest_request.store(0, Ordering::Release);
@@ -296,5 +321,137 @@ mod tests {
             assert!(std::time::Instant::now() < deadline);
             std::thread::sleep(std::time::Duration::from_millis(1));
         }
+    }
+
+    struct ReleaseOnDrop(std::sync::mpsc::Sender<()>);
+    impl Drop for ReleaseOnDrop {
+        fn drop(&mut self) {
+            let _ = self.0.send(());
+        }
+    }
+
+    #[test]
+    fn cancel_wins_before_native_submission_and_decoder_is_untouched() {
+        struct Recorder(Arc<AtomicU64>);
+        impl SeekBackend for Recorder {
+            fn execute_seek(&self, _: PendingSeek) -> bool {
+                self.0.fetch_add(1, Ordering::Relaxed);
+                true
+            }
+        }
+        let (arrived, arrival) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let calls = Arc::new(AtomicU64::new(0));
+        let controller = Arc::new(SeekController::with_native_dispatch_hook(
+            Recorder(calls.clone()),
+            None,
+            move || {
+                let _ = arrived.send(());
+                let _ = released.recv_timeout(std::time::Duration::from_secs(2));
+            },
+        ));
+        let release = ReleaseOnDrop(release);
+        controller.enqueue(0.0, SeekMode::Commit, true);
+        arrival
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        let (cancelled, cancellation) = std::sync::mpsc::channel();
+        let cancel_controller = controller.clone();
+        let cancel = std::thread::spawn(move || {
+            cancel_controller.cancel_pending();
+            let _ = cancelled.send(());
+        });
+        let cancelled_before_release = cancellation
+            .recv_timeout(std::time::Duration::from_secs(1))
+            .is_ok();
+        let _ = release.0.send(());
+        cancel.join().unwrap();
+        drop(controller);
+        assert!(
+            cancelled_before_release,
+            "cancellation waited for a not-yet-submitted command"
+        );
+        assert_eq!(
+            calls.load(Ordering::Relaxed),
+            0,
+            "revoked seek mutated the decoder"
+        );
+    }
+
+    fn dispatch_cancel_order(native_zero: bool) -> (bool, u64, u64) {
+        struct Queue {
+            entered: std::sync::mpsc::Sender<()>,
+            released: Mutex<std::sync::mpsc::Receiver<()>>,
+            sequence: Arc<AtomicU64>,
+            queued: Arc<AtomicU64>,
+        }
+        impl SeekBackend for Queue {
+            fn execute_seek(&self, _: PendingSeek) -> bool {
+                let _ = self.entered.send(());
+                let _ = self
+                    .released
+                    .lock()
+                    .unwrap()
+                    .recv_timeout(std::time::Duration::from_secs(2));
+                self.queued.store(
+                    self.sequence.fetch_add(1, Ordering::SeqCst),
+                    Ordering::SeqCst,
+                );
+                true
+            }
+        }
+        let (entered, entry) = std::sync::mpsc::channel();
+        let (release, released) = std::sync::mpsc::channel();
+        let sequence = Arc::new(AtomicU64::new(1));
+        let queued = Arc::new(AtomicU64::new(0));
+        let cancelled = Arc::new(AtomicU64::new(0));
+        let controller = Arc::new(SeekController::new(Queue {
+            entered,
+            released: Mutex::new(released),
+            sequence: sequence.clone(),
+            queued: queued.clone(),
+        }));
+        let release = ReleaseOnDrop(release);
+        controller.enqueue(
+            if native_zero { 0.0 } else { 1.0 },
+            SeekMode::Commit,
+            native_zero,
+        );
+        entry
+            .recv_timeout(std::time::Duration::from_secs(2))
+            .unwrap();
+        let (done, completion) = std::sync::mpsc::channel();
+        let cancel_controller = controller.clone();
+        let cancel_order = cancelled.clone();
+        let cancel = std::thread::spawn(move || {
+            cancel_controller.cancel_pending();
+            cancel_order.store(sequence.fetch_add(1, Ordering::SeqCst), Ordering::SeqCst);
+            let _ = done.send(());
+        });
+        let returned_before_release = completion
+            .recv_timeout(std::time::Duration::from_millis(100))
+            .is_ok();
+        let _ = release.0.send(());
+        cancel.join().unwrap();
+        drop(controller);
+        (
+            returned_before_release,
+            queued.load(Ordering::SeqCst),
+            cancelled.load(Ordering::SeqCst),
+        )
+    }
+
+    #[test]
+    fn native_queue_submission_cannot_happen_after_cancel_returns() {
+        let (returned_early, queued, cancelled) = dispatch_cancel_order(true);
+        assert!(!returned_early);
+        assert!(queued > 0 && queued < cancelled);
+    }
+
+    #[test]
+    fn ordinary_synchronous_backend_never_holds_the_cancel_gate() {
+        let (returned_early, queued, cancelled) = dispatch_cancel_order(false);
+        assert!(returned_early);
+        assert!(cancelled > 0 && cancelled < queued);
     }
 }
