@@ -169,8 +169,9 @@ impl PreparedTimeline {
                     && self.feedback["state"].as_str() == Some("ready")
             }
     }
-    pub fn consume_ready_play(&mut self, epoch: u64, loaded: bool, eof: bool, buffering: bool) -> bool {
+    pub fn consume_ready_play(&mut self, epoch: u64, loaded: bool, eof: bool, buffering: bool, observation_age: Duration) -> bool {
         if self.play_requested && !self.play_starting && loaded && !eof && !buffering && self.ready_to_play(epoch)
+            && observation_age < Duration::from_millis(250)
             && self.last_ack.is_some_and(|ack| ack.elapsed() < Duration::from_millis(250)) {
             self.play_starting = true;
             true
@@ -521,7 +522,7 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
                         set_pause = Some(true);
                         playing = false;
                     }
-                    if prepared.consume_ready_play(clock.epoch, loaded, eof, buffering) {
+                    if prepared.consume_ready_play(clock.epoch, loaded, eof, buffering, clock.observed_at.elapsed()) {
                         set_pause = Some(false);
                         // Publish a paused preparation intent until a later mpv
                         // observation confirms that the native command worked.
@@ -581,19 +582,38 @@ mod tests {
         plan.request_play();
         assert!(plan.ready_for(4));
         assert!(plan.prepare_play_intent(4, true, false, false));
-        assert!(!plan.consume_ready_play(4, true, false, false));
+        assert!(!plan.consume_ready_play(4, true, false, false, Duration::ZERO));
         plan.observe_clock_ack(plan.revision, 4,
             json!({"state":"paused","armed_epoch":4,"play_ready":true}), plan.play_intent_revision, Instant::now());
-        assert!(!plan.consume_ready_play(5, true, false, false));
-        assert!(plan.consume_ready_play(4, true, false, false));
+        assert!(!plan.consume_ready_play(5, true, false, false, Duration::ZERO));
+        assert!(plan.consume_ready_play(4, true, false, false, Duration::ZERO));
         assert!(plan.play_requested);
         assert!(plan.play_starting);
         assert!(plan.prepare_play_intent(4, true, false, false));
-        assert!(!plan.consume_ready_play(4, true, false, false));
+        assert!(!plan.consume_ready_play(4, true, false, false, Duration::ZERO));
         plan.observe_playing();
         assert!(!plan.play_requested);
         assert!(!plan.play_starting);
         assert!(!plan.prepare_play_intent(4, true, true, false));
+    }
+
+    #[test]
+    fn fresh_ack_cannot_consume_play_with_a_stale_native_observation() {
+        let mut plan = paused_output_plan();
+        plan.request_play();
+        plan.observe_clock_ack(plan.revision, 4,
+            json!({"state":"paused","armed_epoch":4,"play_ready":true}),
+            plan.play_intent_revision, Instant::now() - Duration::from_millis(40));
+        let intent = plan.play_intent_revision;
+        for age in [250, 300] {
+            assert!(!plan.consume_ready_play(4, true, false, false, Duration::from_millis(age)));
+            assert!(plan.play_requested);
+            assert!(!plan.play_starting);
+            assert_eq!(plan.play_intent_revision, intent);
+            assert!(plan.ready_to_play(4));
+        }
+        assert!(plan.consume_ready_play(4, true, false, false, Duration::from_millis(249)));
+        assert!(plan.play_starting);
     }
 
     #[test]
@@ -604,19 +624,19 @@ mod tests {
         plan.cancel_play();
         plan.observe_clock_ack(plan.revision, 4,
             json!({"state":"paused","armed_epoch":4,"play_ready":true}), cancelled_intent, Instant::now());
-        assert!(!plan.consume_ready_play(4, true, false, false));
+        assert!(!plan.consume_ready_play(4, true, false, false, Duration::ZERO));
         assert!(!plan.prepare_play_intent(4, true, false, false));
         // Cancel an already consumed grant in the native unpause gap too.
         plan.request_play();
-        assert!(!plan.consume_ready_play(4, true, false, false));
+        assert!(!plan.consume_ready_play(4, true, false, false, Duration::ZERO));
         plan.observe_clock_ack(plan.revision, 4,
             json!({"state":"paused","armed_epoch":4,"play_ready":true}), plan.play_intent_revision, Instant::now());
-        assert!(plan.consume_ready_play(4, true, false, false));
+        assert!(plan.consume_ready_play(4, true, false, false, Duration::ZERO));
         plan.cancel_play();
         assert!(!plan.play_starting);
         plan.request_play();
         assert!(!plan.ready_to_play(4));
-        assert!(!plan.consume_ready_play(4, true, false, false));
+        assert!(!plan.consume_ready_play(4, true, false, false, Duration::ZERO));
     }
 
     #[test]
@@ -629,7 +649,7 @@ mod tests {
         plan.observe_clock_ack(plan.revision, 4,
             json!({"state":"paused","armed_epoch":4,"play_ready":true}), old_intent, Instant::now());
         assert!(!plan.ready_to_play(4));
-        assert!(!plan.consume_ready_play(4, true, false, false));
+        assert!(!plan.consume_ready_play(4, true, false, false, Duration::ZERO));
         assert!(plan.prepare_play_intent(4, true, false, false));
     }
 
@@ -650,12 +670,12 @@ mod tests {
         plan.observe_clock_ack(plan.revision, 4,
             json!({"state":"paused","armed_epoch":4,"play_ready":true}),
             plan.play_intent_revision, Instant::now() - Duration::from_millis(251));
-        assert!(!plan.consume_ready_play(4, true, false, false));
+        assert!(!plan.consume_ready_play(4, true, false, false, Duration::ZERO));
         assert!(plan.prepare_play_intent(4, true, false, false));
         plan.observe_clock_ack(plan.revision, 4,
             json!({"state":"paused","armed_epoch":4,"play_ready":true}),
             plan.play_intent_revision, Instant::now());
-        assert!(plan.consume_ready_play(4, true, false, false));
+        assert!(plan.consume_ready_play(4, true, false, false, Duration::ZERO));
     }
     #[test]
     fn recovered_observer_diagnostic_clears_only_its_own_connection_error() {
@@ -682,8 +702,8 @@ mod tests {
         let mut plan = acknowledged_empty_plan();
         plan.play_requested = true;
         assert!(!plan.has_items());
-        assert!(plan.consume_ready_play(3, true, false, false));
-        assert!(!plan.consume_ready_play(3, true, false, false));
+        assert!(plan.consume_ready_play(3, true, false, false, Duration::ZERO));
+        assert!(!plan.consume_ready_play(3, true, false, false, Duration::ZERO));
     }
     #[test]
     fn empty_clear_still_requires_matching_revision_epoch_and_zero_steps() {
@@ -691,9 +711,9 @@ mod tests {
         plan.play_requested = true;
         plan.acknowledged_revision = 1;
         assert!(plan.has_items());
-        assert!(!plan.consume_ready_play(3, true, false, false));
+        assert!(!plan.consume_ready_play(3, true, false, false, Duration::ZERO));
         plan.acknowledged_revision = 2;
-        assert!(!plan.consume_ready_play(4, true, false, false));
+        assert!(!plan.consume_ready_play(4, true, false, false, Duration::ZERO));
         plan.feedback["revision"] = json!(1);
         assert!(!plan.ready_for(3));
         plan.feedback["revision"] = json!(2);
@@ -707,10 +727,10 @@ mod tests {
         let mut plan = acknowledged_empty_plan();
         plan.play_requested = true;
         for (loaded, eof, buffering) in [(false,false,false),(true,true,false),(true,false,true)] {
-            assert!(!plan.consume_ready_play(3, loaded, eof, buffering));
+            assert!(!plan.consume_ready_play(3, loaded, eof, buffering, Duration::ZERO));
         }
         plan.last_ack = Some(Instant::now() - Duration::from_millis(251));
-        assert!(!plan.consume_ready_play(3, true, false, false));
+        assert!(!plan.consume_ready_play(3, true, false, false, Duration::ZERO));
         assert!(plan.play_requested);
     }
     #[test]

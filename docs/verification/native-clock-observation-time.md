@@ -18,6 +18,11 @@ drift/freshness and 50 ms execution limits remain unchanged; real stalls or stal
 reads still fail closed. Existing seek, pause, rate and media-boundary fences
 remain in force.
 
+Native unpause additionally requires the current observation to be younger than
+250 ms, even when the most recent matching controller ACK is fresh. A stale
+observation leaves explicit Play pending rather than consuming or cancelling
+its intent. Boundary coverage checks 249 ms succeeds while 250/300 ms wait.
+
 `/api/process/status` exposes bounded numeric `playback_clock.observation_timing`
 diagnostics: native read duration, age at application, time spent on metadata
 and locks before the position read, observer cycle gap, maxima, signed drift at
