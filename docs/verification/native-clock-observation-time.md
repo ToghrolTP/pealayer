@@ -19,7 +19,8 @@ reads still fail closed. Existing seek, pause, rate and media-boundary fences
 remain in force.
 
 `/api/process/status` exposes bounded numeric `playback_clock.observation_timing`
-diagnostics: native read duration, age at application, maxima, signed drift at
+diagnostics: native read duration, age at application, time spent on metadata
+and locks before the position read, observer cycle gap, maxima, signed drift at
 read time and the first discontinuity's numeric context. A deliberate rebase
 clears that fault context. No media paths, frame images or per-poll event logs
 are added. The diagnostics do not establish physical chair movement.

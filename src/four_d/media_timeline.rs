@@ -376,7 +376,11 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
         let source = crate::mpv::player::Player(mpv);
         let mut external_seek_revision = 0;
         let mut reported_error = None;
+        let mut previous_cycle_at: Option<Instant> = None;
         while lifecycle.strong_count() > 0 {
+            let cycle_at = Instant::now();
+            let cycle_gap_ms = previous_cycle_at.map_or(0, |previous| cycle_at.saturating_duration_since(previous).as_millis() as u64);
+            previous_cycle_at = Some(cycle_at);
             let unattended = crate::platform::interop::allow_unattended_hardware_takeover();
             let mut restarted = false;
             let external = crate::mpv::external::active();
@@ -424,6 +428,7 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
             // locks. Keep separate position-anchor and freshness timestamps;
             // neither is the later point at which the sample lock is acquired.
             let observed_at = Instant::now();
+            let pre_read_ms = observed_at.saturating_duration_since(cycle_at).as_millis() as u64;
             let position = source
                 .get_property::<f64>("time-pos")
                 .ok()
@@ -440,6 +445,10 @@ pub fn observe_mpv(handle: &engine::EngineHandle, mpv: &'static libmpv2::Mpv) {
                 let projected_ms = clock.position_at(read_finished_at);
                 let read_ms = read_finished_at.saturating_duration_since(observed_at).as_millis() as u64;
                 let apply_age_ms = observed_at.elapsed().as_millis() as u64;
+                clock.observation_timing.pre_read_ms = pre_read_ms;
+                clock.observation_timing.cycle_gap_ms = cycle_gap_ms;
+                clock.observation_timing.max_pre_read_ms = clock.observation_timing.max_pre_read_ms.max(pre_read_ms);
+                clock.observation_timing.max_cycle_gap_ms = clock.observation_timing.max_cycle_gap_ms.max(cycle_gap_ms);
                 clock.observation_timing.read_ms = read_ms;
                 clock.observation_timing.apply_age_ms = apply_age_ms;
                 clock.observation_timing.max_read_ms = clock.observation_timing.max_read_ms.max(read_ms);

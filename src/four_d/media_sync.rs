@@ -42,6 +42,10 @@ impl ClockTransportDiagnostics {
 
 #[derive(Clone, Debug, Default, serde::Serialize)]
 pub struct ObservationTiming {
+    pub pre_read_ms: u64,
+    pub cycle_gap_ms: u64,
+    pub max_pre_read_ms: u64,
+    pub max_cycle_gap_ms: u64,
     pub read_ms: u64,
     pub apply_age_ms: u64,
     pub max_read_ms: u64,
