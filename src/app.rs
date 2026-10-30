@@ -2016,13 +2016,23 @@ impl eframe::App for PealayerApp {
                         let craft_tokens = crate::ui::craft_theme::current(ui.ctx());
                         crate::ui::craft_theme::apply_dock_style(&mut dock_style, &craft_tokens);
                         let locked = self.dock_state.locked;
+                        let dock_layer = ui.layer_id();
+                        let modal_blocked = !ui.ctx().memory(|memory| memory.is_above_modal_layer(dock_layer));
+                        let mut dock_view = crate::ui::layout::DockViewState::load(ui.ctx());
+                        let view_before = dock_view.clone();
                         let output = ui.scope(|ui| {
                             let mut tab_viewer = crate::ui::layout::PealayerTabViewer { app: self };
                             craft_ui::docking::DockArea::new(egui::Id::new("workspace_dock_area"))
                                 .locked(locked)
+                                .input_blocked(modal_blocked)
+                                .maximized(dock_view.maximized)
+                                .auto_collapse_iconic(dock_view.auto_collapse)
                                 .show_content(ui, &layout_snapshot, &dock_style, &mut tab_viewer)
                         }).inner;
                         self.workspace_rendering = false;
+                        if let Some(error) = &output.error {
+                            log::warn!("Workspace rendering rejected: {error:?}");
+                        }
                         if !output.actions.is_empty() {
                             let layout_before = self.dock_state.clone();
                             if let Err(error) = self.dock_state.apply_all(output.actions, |_| craft_ui::docking::Permissions::default()) {
@@ -2032,6 +2042,12 @@ impl eframe::App for PealayerApp {
                                 self.deferred_config_save = true;
                                 ui.ctx().request_repaint();
                             }
+                        }
+                        dock_view.apply(output.events, &self.dock_state);
+                        if dock_view != view_before {
+                            dock_view.store(ui.ctx());
+                            self.deferred_config_save = true;
+                            ui.ctx().request_repaint();
                         }
 
                         if !self.pending_tab_reveals.is_empty() {

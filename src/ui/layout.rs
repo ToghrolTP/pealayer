@@ -13827,6 +13827,47 @@ pub struct PealayerTabViewer<'a> {
     pub app: &'a mut PealayerApp,
 }
 
+/// Host-owned Craft menu events are not layout actions. Persist their local
+/// view state with egui memory, which workspace/session snapshots already own.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub(crate) struct DockViewState {
+    pub maximized: Option<PealayerTab>,
+    pub auto_collapse: bool,
+}
+
+impl Default for DockViewState {
+    fn default() -> Self { Self { maximized: None, auto_collapse: true } }
+}
+
+impl DockViewState {
+    pub fn load(ctx: &egui::Context) -> Self {
+        ctx.data_mut(|data| data.get_persisted(egui::Id::new("pealayer-dock-view")))
+            .unwrap_or_default()
+    }
+
+    pub fn apply(
+        &mut self,
+        events: impl IntoIterator<Item = craft_ui::docking::DockEvent<PealayerTab>>,
+        workspace: &craft_ui::docking::Workspace<PealayerTab>,
+    ) {
+        for event in events {
+            match event {
+                craft_ui::docking::DockEvent::ToggleMaximize { panel } => {
+                    self.maximized = (self.maximized != Some(panel)).then_some(panel);
+                }
+                craft_ui::docking::DockEvent::ToggleAutoCollapse => self.auto_collapse = !self.auto_collapse,
+                _ => {}
+            }
+        }
+        self.maximized = self.maximized.filter(|panel| workspace.layout.contains(panel));
+    }
+
+    pub fn store(&self, ctx: &egui::Context) {
+        ctx.data_mut(|data| data.insert_persisted(egui::Id::new("pealayer-dock-view"), self.clone()));
+    }
+}
+
 impl<'a> PealayerTabViewer<'a> {
     pub fn draw_context_menu(&mut self, ui: &mut egui::Ui, tab: PealayerTab) {
         let title = tab.title(self.app);
@@ -20012,6 +20053,16 @@ impl<'a> craft_ui::docking::DockContent<PealayerTab> for PealayerTabViewer<'a> {
     fn panel_menu(&mut self, ui: &mut egui::Ui, panel: &PealayerTab) {
         self.draw_context_menu(ui, *panel);
     }
+
+    fn group_header_width(&self, _panels: &[PealayerTab], _active: &PealayerTab, _floating: bool, strip_width: f32) -> f32 {
+        strip_width.min(28.0)
+    }
+
+    fn group_header(&mut self, ui: &mut egui::Ui, _panels: &[PealayerTab], active: &PealayerTab, _floating: bool) {
+        let response = ui.add_sized(ui.available_size(), egui::Button::new(crate::ui::icons::DOTS_THREE).frame(false))
+            .on_hover_text(self.app.tr("Panels"));
+        egui::Popup::menu(&response).show(|ui| self.draw_context_menu(ui, *active));
+    }
 }
 
 /// Helper function to build the initial declarative Craft UI Workspace layout
@@ -20599,6 +20650,52 @@ fn render_timeline_cue_label(
 #[cfg(test)]
 mod dock_content_tests {
     use super::*;
+
+    #[test]
+    fn host_owned_dock_events_roundtrip_and_closed_panels_clear_maximize() {
+        use craft_ui::docking::{DockEvent, Permissions};
+        let mut workspace = create_initial_layout();
+        let mut view = DockViewState::default();
+        view.apply([DockEvent::ToggleMaximize { panel: PealayerTab::Timeline }, DockEvent::ToggleAutoCollapse], &workspace);
+        assert_eq!(view.maximized, Some(PealayerTab::Timeline));
+        assert!(!view.auto_collapse);
+        let ctx = egui::Context::default();
+        view.store(&ctx);
+        assert_eq!(DockViewState::load(&ctx), view);
+        let encoded = serde_json::to_string(&view).unwrap();
+        assert_eq!(serde_json::from_str::<DockViewState>(&encoded).unwrap(), view);
+        workspace.set_visible(PealayerTab::Timeline, false, None, |_| Permissions::default()).unwrap();
+        view.apply([], &workspace);
+        assert_eq!(view.maximized, None);
+    }
+
+    #[test]
+    fn craft_dock_renders_valid_layouts_at_small_and_large_viewport_scales() {
+        struct Content;
+        impl craft_ui::docking::DockContent<PealayerTab> for Content {
+            fn body(&mut self, ui: &mut egui::Ui, panel: &PealayerTab) {
+                ui.label(panel.title_for_language(crate::config::AppLanguage::English));
+            }
+        }
+        for (width, height) in [(480.0, 320.0), (960.0, 600.0), (1440.0, 900.0)] {
+            for scale in [1.0, 1.5, 2.0] {
+                let ctx = egui::Context::default();
+                ctx.set_pixels_per_point(scale);
+                let workspace = create_initial_layout();
+                let mut content = Content;
+                let output = ctx.run_ui(egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, height))),
+                    ..Default::default()
+                }, |ui| {
+                    craft_ui::docking::DockArea::new(egui::Id::new("responsive-dock-fixture"))
+                        .show_content(ui, &workspace.layout, &craft_ui::docking::DockStyle::from_ui(ui), &mut content)
+                });
+                assert!(output.inner.error.is_none(), "{width}x{height} at {scale}: {:?}", output.inner.error);
+                assert!(workspace.validate().is_ok());
+                drop(output);
+            }
+        }
+    }
 
     #[test]
     fn pealayer_tab_viewer_implements_dock_content() {

@@ -32,9 +32,15 @@ This is a source-integration ledger, not an installation or physical acceptance 
   removing the docked panel, rather than rendering duplicate owners.
 - Adapt Craft surfaces/text to the selected Pealayer palette and select stored
   light/dark tokens from the active context theme, including live System changes.
+- Handle the host-owned Maximize and Auto-collapse menu events instead of dropping
+  them. Preserve their local state in the existing egui workspace/session memory,
+  clear maximization for closed panels and retain a compact per-group Panels menu.
+- Pass the existing modal-layer input shield into DockArea, including cancellation
+  of a pre-existing drag when a modal takes input ownership.
 
 New regressions cover pane Close versus stale state, Dock to Workspace with resize,
-disabled-rail ownership, existing-tab activation and palette/theme selection.
+disabled-rail ownership, existing-tab activation, palette/theme selection,
+host-owned menu-state round trips and nine viewport/scale render combinations.
 Rust parse, whitespace, generated-opcode and low-write policy checks passed locally.
 Offline native compilation could not start because the pinned egui fork is not in
 the shared cache; this is not a passing native test result. Hosted checks own that
