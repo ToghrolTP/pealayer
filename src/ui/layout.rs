@@ -20687,10 +20687,11 @@ mod dock_content_tests {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, height))),
                     ..Default::default()
                 }, |ui| {
-                    craft_ui::docking::DockArea::new(egui::Id::new("responsive-dock-fixture"))
-                        .show_content(ui, &workspace.layout, &craft_ui::docking::DockStyle::from_ui(ui), &mut content)
+                    let style = craft_ui::docking::DockStyle::from_ui(ui);
+                    let dock = craft_ui::docking::DockArea::new(egui::Id::new("responsive-dock-fixture"))
+                        .show_content(ui, &workspace.layout, &style, &mut content);
+                    assert!(dock.error.is_none(), "{width}x{height} at {scale}: {:?}", dock.error);
                 });
-                assert!(output.inner.error.is_none(), "{width}x{height} at {scale}: {:?}", output.inner.error);
                 assert!(workspace.validate().is_ok());
                 drop(output);
             }

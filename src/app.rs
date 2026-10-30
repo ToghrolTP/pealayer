@@ -2030,9 +2030,6 @@ impl eframe::App for PealayerApp {
                                 .show_content(ui, &layout_snapshot, &dock_style, &mut tab_viewer)
                         }).inner;
                         self.workspace_rendering = false;
-                        if let Some(error) = &output.error {
-                            log::warn!("Workspace rendering rejected: {error:?}");
-                        }
                         if !output.actions.is_empty() {
                             let layout_before = self.dock_state.clone();
                             if let Err(error) = self.dock_state.apply_all(output.actions, |_| craft_ui::docking::Permissions::default()) {
