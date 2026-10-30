@@ -9018,14 +9018,19 @@ mod timeline_row_tests {
 
     #[test]
     fn timeline_ruler_inherits_craft_theme_ruler_tokens() {
-        let ctx = egui::Context::default();
-        let config = crate::config::AppConfig::default();
-        crate::ui::configure_native_visuals(&ctx, &config);
-        let tokens = crate::ui::craft_theme::current(&ctx);
-
-        assert_eq!(tokens.tl_ruler_bg, egui::Color32::from_rgb(0x1d, 0x1d, 0x1d));
-        assert_eq!(tokens.tl_ruler_tick, egui::Color32::from_rgb(0x8d, 0x8d, 0x8d));
-        assert_eq!(tokens.tl_ruler_text, egui::Color32::from_rgb(0xb0, 0xb0, 0xb0));
+        for palette in [crate::config::ColorPalette::Native, crate::config::ColorPalette::Studio] {
+            for theme in [egui::Theme::Light, egui::Theme::Dark] {
+                let ctx = egui::Context::default();
+                ctx.set_theme(theme);
+                let config = crate::config::AppConfig { color_palette: palette, ..Default::default() };
+                crate::ui::configure_native_visuals(&ctx, &config);
+                let tokens = crate::ui::craft_theme::current(&ctx);
+                let style = ctx.style_of(theme);
+                assert_eq!(tokens.tl_ruler_bg, style.visuals.panel_fill);
+                assert_eq!(tokens.tl_ruler_tick, style.visuals.weak_text_color());
+                assert_eq!(tokens.tl_ruler_text, style.visuals.weak_text_color());
+            }
+        }
     }
 
     #[test]
@@ -9360,10 +9365,6 @@ mod timeline_row_tests {
                 TIMELINE_RULER_HEIGHT + 2.0 * track_height + analog_height
             );
         }
-    }
-
-    fn discard_ui_output(mut output: egui::FullOutput) {
-        output.textures_delta.clear();
     }
 
     #[test]
@@ -13825,6 +13826,12 @@ pub fn draw_workspace_tab_menu(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
 pub struct PealayerTabViewer<'a> {
     pub app: &'a mut PealayerApp,
+}
+
+#[cfg(test)]
+fn discard_ui_output(mut output: egui::FullOutput) {
+    // Headless fixtures deliberately do not upload font/image texture deltas.
+    output.textures_delta.clear();
 }
 
 /// Require the current application envelope. The upstream model's serde
@@ -20711,7 +20718,7 @@ mod dock_content_tests {
                     delta: egui::vec2(0.0, -100.0), modifiers: egui::Modifiers::NONE,
                     phase: egui::TouchPhase::Move, source: egui::MouseWheelSource::Wheel });
             }
-            drop(ctx.run_ui(egui::RawInput {
+            discard_ui_output(ctx.run_ui(egui::RawInput {
                 time: Some(time), events,
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 240.0))),
                 ..Default::default()
@@ -20769,7 +20776,7 @@ mod dock_content_tests {
                     assert!(dock.error.is_none(), "{width}x{height} at {scale}: {:?}", dock.error);
                 });
                 assert!(workspace.validate().is_ok());
-                drop(output);
+                discard_ui_output(output);
             }
         }
     }

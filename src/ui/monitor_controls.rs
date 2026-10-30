@@ -531,12 +531,20 @@ mod tests {
 
     #[test]
     fn monitor_controls_respect_craft_theme_tokens() {
-        let ctx = egui::Context::default();
-        let config = crate::config::AppConfig::default();
-        crate::ui::configure_native_visuals(&ctx, &config);
-        let tokens = crate::ui::craft_theme::current(&ctx);
-
-        assert_eq!(tokens.pill_active_bg, egui::Color32::from_rgb(0x3a, 0x3a, 0x3a));
-        assert_eq!(tokens.playhead, tokens.focus);
+        for palette in [crate::config::ColorPalette::Native, crate::config::ColorPalette::Studio] {
+            for theme in [egui::Theme::Light, egui::Theme::Dark] {
+                let ctx = egui::Context::default();
+                ctx.set_theme(theme);
+                let config = crate::config::AppConfig { color_palette: palette,
+                    accent_color: crate::config::AccentColor::PealayerGreen, ..Default::default() };
+                crate::ui::configure_native_visuals(&ctx, &config);
+                let tokens = crate::ui::craft_theme::current(&ctx);
+                let selected = super::super::craft_theme::icon_button_style(&tokens, false).selected;
+                assert_eq!(tokens.pill_active_bg, ctx.style_of(theme).visuals.selection.bg_fill);
+                assert_eq!(selected.icon, super::super::accent_foreground(tokens.pill_active_bg));
+                assert_ne!(selected.icon, selected.fill);
+                assert_eq!(tokens.playhead, tokens.focus);
+            }
+        }
     }
 }
