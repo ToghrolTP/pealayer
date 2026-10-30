@@ -20681,7 +20681,7 @@ mod dock_content_tests {
                 });
             }));
         }
-        assert!(egui::ScrollArea::load_state(&ctx, id.get()).unwrap().offset().y > 0.0);
+        assert!(egui::scroll_area::State::load(&ctx, id.get()).unwrap().offset().y > 0.0);
         assert_eq!(panel_scroll_axes(&PealayerTab::ProgramMonitor), [false, false]);
         assert_eq!(panel_scroll_axes(&PealayerTab::HardwareMonitor), [false, false]);
     }
