@@ -3,6 +3,25 @@ use pealayer::four_d::protocol::{
 };
 
 #[test]
+fn native_namespace_rejects_pakar_and_unknown_markers_before_dispatch() {
+    use pealayer::four_d::protocol::{encode_pccontroller_frame, decode_pccontroller_frame, crc8_atm};
+    let current = encode_pccontroller_frame(0x11, 7, &[1, 0, 0]);
+    let canonical = cobs_decode(&current[..current.len()-1]).unwrap();
+    for discriminator in 0..=255_u8 {
+        if discriminator == 1 { continue; }
+        let mut foreign = canonical.clone();
+        foreign[1] = discriminator;
+        let last = foreign.len()-1;
+        foreign[last] = crc8_atm(&foreign[..last]);
+        let encoded = cobs_encode(&foreign);
+        assert_eq!(decode_pccontroller_frame(&encoded), Err(ProtocolError::WrongProtocol));
+    }
+    assert_eq!(decode_pccontroller_frame(&current), Ok((0x11, 7, vec![1, 0, 0])));
+    let future = encode_pccontroller_frame(0xfc, 7, &[]);
+    assert_eq!(decode_pccontroller_frame(&future), Ok((0xfc, 7, vec![])));
+}
+
+#[test]
 fn test_crc8_known_vector() {
     let data = b"123456789";
     let checksum = crc8(data);
