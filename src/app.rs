@@ -691,7 +691,7 @@ pub struct PealayerApp {
 
     // 4D Cinema state
     pub(crate) show_four_d_editor: bool,
-    pub(crate) dock_state: egui_dock::DockState<crate::ui::layout::PealayerTab>,
+    pub(crate) dock_state: craft_ui::docking::Workspace<crate::ui::layout::PealayerTab>,
     pub timeline: crate::four_d::models::Timeline,
     pub(crate) engine_handle: crate::four_d::engine::EngineHandle,
 
@@ -701,6 +701,7 @@ pub struct PealayerApp {
     pub(crate) hardware_effect_authoring: HardwareEffectAuthoringState,
 
     // Phase 4 & 5 Selection/Override state
+    pub(crate) sidebar_rail_state: crate::ui::sidebar_rail::SidebarRailState,
     pub(crate) selected_instance_ids: std::collections::HashSet<uuid::Uuid>,
     pub selected_keyframes: std::collections::HashSet<(uuid::Uuid, usize)>,
     pub(crate) selected_timeline_keyframe: Option<uuid::Uuid>,
@@ -1031,7 +1032,10 @@ impl eframe::App for PealayerApp {
         self.flush_timeline_toolbar_save(ctx);
         self.flush_status_bar_save(ctx);
         self.flush_control_bar_save(ctx);
-        if std::mem::take(&mut self.deferred_config_save) {
+        // Layout resize/move actions can arrive on every pointer frame. Keep
+        // one pending save until the gesture ends rather than writing per pixel.
+        if self.deferred_config_save && !ctx.input(|input| input.pointer.any_down()) {
+            self.deferred_config_save = false;
             self.save_config();
         }
         // eframe calls logic even while minimized/occluded. Commands, device
@@ -1981,6 +1985,12 @@ impl eframe::App for PealayerApp {
         // Handle Keyboard Shortcuts
         self.process_keyboard_shortcuts(&ctx);
 
+        if self.show_four_d_editor {
+            let mut rail_state = self.sidebar_rail_state;
+            crate::ui::sidebar_rail::show_sidebar_rail(self, ui, &mut rail_state);
+            self.sidebar_rail_state = rail_state;
+        }
+
         let mut frame = egui::Frame::central_panel(&ui.style());
         frame.inner_margin = egui::Margin::same(0);
 
@@ -1988,7 +1998,7 @@ impl eframe::App for PealayerApp {
             .frame(frame)
             .show_inside(ui, |ui| {
                 if self.show_four_d_editor {
-                    if self.dock_state.iter_all_tabs().count() == 0 {
+                    if self.dock_state.layout.panels().is_empty() {
                         ui.centered_and_justified(|ui| {
                             ui.vertical_centered(|ui| {
                                 ui.label(egui::RichText::new(crate::ui::icons::TABS).size(36.0));
@@ -2000,29 +2010,43 @@ impl eframe::App for PealayerApp {
                             });
                         });
                     } else {
-                        let workspace_tab_rects_id = egui::Id::new("workspace-tab-button-rects");
-                        ui.ctx().data_mut(|data| {
-                            data.insert_temp(workspace_tab_rects_id, Vec::<egui::Rect>::new());
-                        });
                         self.workspace_rendering = true;
-                        let mut dock_state =
-                            std::mem::replace(&mut self.dock_state, egui_dock::DockState::new(vec![]));
-                        let mut dock_style = egui_dock::Style::from_egui(ui.style().as_ref());
-                        let dock_tab_bar_height = dock_style.tab_bar.height;
-                        // egui_dock paints legacy solid triangles for leaf disclosure.
-                        // Keep its hit target and behavior, but let Pealayer paint the
-                        // matching Phosphor caret from the application's icon vocabulary.
-                        dock_style.buttons.collapse_tabs_color = egui::Color32::TRANSPARENT;
-                        dock_style.buttons.collapse_tabs_active_color = egui::Color32::TRANSPARENT;
-                        let dock_response = ui.scope(|ui| {
+                        let layout_snapshot = self.dock_state.layout.clone();
+                        let mut dock_style = craft_ui::docking::DockStyle::from_ui(ui);
+                        let craft_tokens = crate::ui::craft_theme::current(ui.ctx());
+                        crate::ui::craft_theme::apply_dock_style(&mut dock_style, &craft_tokens);
+                        let locked = self.dock_state.locked;
+                        let dock_layer = ui.layer_id();
+                        let modal_blocked = !ui.ctx().memory(|memory| memory.is_above_modal_layer(dock_layer));
+                        let mut dock_view = crate::ui::layout::DockViewState::load(ui.ctx());
+                        let view_before = dock_view.clone();
+                        let output = ui.scope(|ui| {
                             let mut tab_viewer = crate::ui::layout::PealayerTabViewer { app: self };
-                            egui_dock::DockArea::new(&mut dock_state)
-                                .style(dock_style)
-                                .show_leaf_collapse_buttons(true)
-                                .show_inside(ui, &mut tab_viewer);
-                        });
-                        self.dock_state = dock_state;
+                            craft_ui::docking::DockArea::new(egui::Id::new("workspace_dock_area"))
+                                .locked(locked)
+                                .input_blocked(modal_blocked)
+                                .maximized(dock_view.maximized)
+                                .auto_collapse_iconic(dock_view.auto_collapse)
+                                .show_content(ui, &layout_snapshot, &dock_style, &mut tab_viewer)
+                        }).inner;
                         self.workspace_rendering = false;
+                        if !output.actions.is_empty() {
+                            let layout_before = self.dock_state.clone();
+                            if let Err(error) = self.dock_state.apply_all(output.actions, |_| craft_ui::docking::Permissions::default()) {
+                                log::warn!("Workspace action rejected: {error:?}");
+                            }
+                            if self.dock_state != layout_before {
+                                self.deferred_config_save = true;
+                                ui.ctx().request_repaint();
+                            }
+                        }
+                        dock_view.apply(output.events, &self.dock_state);
+                        if dock_view != view_before {
+                            dock_view.store(ui.ctx());
+                            self.deferred_config_save = true;
+                            ui.ctx().request_repaint();
+                        }
+
                         if !self.pending_tab_reveals.is_empty() {
                             let mut layout_changed = false;
                             for tab in std::mem::take(&mut self.pending_tab_reveals) {
@@ -2035,98 +2059,6 @@ impl eframe::App for PealayerApp {
                             }
                             ui.ctx().request_repaint();
                         }
-                        crate::ui::layout::paint_dock_disclosure_icons(
-                            ui,
-                            &self.dock_state,
-                            dock_tab_bar_height,
-                        );
-
-                        let tab_rects = ui.ctx().data_mut(|data| {
-                            data.get_temp::<Vec<egui::Rect>>(workspace_tab_rects_id)
-                                .unwrap_or_default()
-                        });
-                        let pointer = ui.ctx().pointer_hover_pos();
-                        let open_empty_tab_menu = ui.ctx().input(|input| {
-                            input.pointer.button_clicked(egui::PointerButton::Secondary)
-                        }) && pointer.is_some_and(|position| {
-                            dock_response.response.rect.contains(position)
-                                && tab_rects
-                                    .iter()
-                                    .any(|rect| rect.y_range().contains(position.y))
-                                && !tab_rects.iter().any(|rect| rect.contains(position))
-                        });
-                        let popup_anchor = ui.interact(
-                            dock_response.response.rect,
-                            egui::Id::new("workspace-empty-tabbar-context-anchor"),
-                            egui::Sense::hover(),
-                        );
-                        egui::Popup::menu(&popup_anchor)
-                            .id(egui::Id::new("workspace-empty-tabbar-context-menu"))
-                            .at_pointer_fixed()
-                            .open_memory(
-                                open_empty_tab_menu
-                                    .then_some(egui::SetOpenCommand::Bool(true)),
-                            )
-                            .show(|ui| {
-                                ui.strong(self.tr("Panels"));
-                                ui.separator();
-                                crate::ui::layout::draw_workspace_tab_menu(self, ui);
-                            });
-
-                        dock_response.response.context_menu(|ui| {
-                            ui.label(egui::RichText::new(self.tr("Workspace")).strong());
-                            ui.separator();
-                            crate::ui::layout::draw_workspace_tab_menu(self, ui);
-                            ui.separator();
-                            if ui
-                                .button(format!(
-                                    "{} {}",
-                                    crate::ui::icons::TABS,
-                                    self.tr("Reset workspace layout")
-                                ))
-                                .clicked()
-                            {
-                                self.dock_state = crate::ui::layout::create_initial_layout();
-                                self.save_dock_layout();
-                                ui.close();
-                            }
-                            crate::ui::icons::submenu(
-                                ui,
-                                format!("{} {}", crate::ui::icons::TABS, self.tr("Workspaces")),
-                                |ui| {
-                                    for (id, profile) in self.ordered_workspace_profiles() {
-                                        let active = self.active_workspace_profile.as_deref()
-                                            == Some(id.as_str());
-                                        if ui
-                                            .selectable_label(
-                                                active,
-                                                format!(
-                                                    "{}  {}",
-                                                    crate::ui::icons::workspace_icon(&profile.icon),
-                                                    profile.name
-                                                ),
-                                            )
-                                            .clicked()
-                                        {
-                                            self.restore_workspace_profile(ui.ctx(), &id);
-                                            ui.close();
-                                        }
-                                    }
-                                },
-                            );
-                            ui.separator();
-                            if ui
-                                .button(format!(
-                                    "{} {}",
-                                    crate::ui::icons::GEAR,
-                                    self.tr("Preferences...")
-                                ))
-                                .clicked()
-                            {
-                                crate::ui::preferences::open(self, ui.ctx());
-                                ui.close();
-                            }
-                        });
                     }
                 } else {
                     crate::ui::video::draw(self, ui);
@@ -5961,11 +5893,27 @@ impl PealayerApp {
     }
 
     pub fn is_tab_open(&self, tab: crate::ui::layout::PealayerTab) -> bool {
-        self.dock_state.find_tab(&tab).is_some()
+        self.is_tab_open_in_dock(tab) || self.is_tab_open_in_sidebar(tab)
+    }
+
+    pub fn is_tab_open_in_dock(&self, tab: crate::ui::layout::PealayerTab) -> bool {
+        self.dock_state.layout.contains(&tab)
+    }
+
+    pub fn is_tab_open_in_sidebar(&self, tab: crate::ui::layout::PealayerTab) -> bool {
+        self.sidebar_rail_state.enabled && crate::ui::sidebar_rail::SidebarPane::try_from(tab)
+            .ok()
+            .is_some_and(|pane| self.sidebar_rail_state.open == Some(pane))
     }
 
     pub fn open_or_focus_tab(&mut self, tab: crate::ui::layout::PealayerTab) {
         self.show_four_d_editor = true;
+        if let Ok(pane) = crate::ui::sidebar_rail::SidebarPane::try_from(tab) {
+            if self.sidebar_rail_state.open == Some(pane) {
+                self.sidebar_rail_state.open = None;
+                self.save_config();
+            }
+        }
         if crate::ui::layout::reveal_and_focus_tab(&mut self.dock_state, tab) {
             self.save_dock_layout();
         }
@@ -5992,16 +5940,26 @@ impl PealayerApp {
     }
 
     pub fn toggle_tab(&mut self, tab: crate::ui::layout::PealayerTab) {
-        if let Some(path) = self.dock_state.find_tab(&tab) {
-            self.dock_state.remove_tab(path);
-            self.save_dock_layout();
-        } else {
-            self.open_or_focus_tab(tab);
+        if let Ok(pane) = crate::ui::sidebar_rail::SidebarPane::try_from(tab) {
+            if self.sidebar_rail_state.open == Some(pane) {
+                self.sidebar_rail_state.open = None;
+                self.save_config();
+                if self.sidebar_rail_state.enabled {
+                    return;
+                }
+            }
         }
+        let is_open = self.dock_state.layout.contains(&tab);
+        let _ = self.dock_state.set_visible(
+            tab,
+            !is_open,
+            Some(crate::ui::layout::PealayerTab::ProgramMonitor),
+            |_| craft_ui::docking::Permissions::default(),
+        );
+        self.save_dock_layout();
     }
 
     pub fn save_dock_layout(&mut self) {
-        crate::ui::layout::sanitize_dock_rects(&mut self.dock_state);
         self.save_config();
     }
 
@@ -6013,8 +5971,7 @@ impl PealayerApp {
         &self,
         ctx: &egui::Context,
     ) -> crate::config::WorkspaceProfile {
-        let mut dock_state = self.dock_state.clone();
-        crate::ui::layout::sanitize_dock_rects(&mut dock_state);
+        let dock_state = self.dock_state.clone();
         crate::config::WorkspaceProfile {
             name: String::new(),
             icon: String::new(),
@@ -6052,10 +6009,7 @@ impl PealayerApp {
         let dock_state = profile
             .dock_layout
             .as_deref()
-            .map(|json| {
-                serde_json::from_str::<egui_dock::DockState<crate::ui::layout::PealayerTab>>(json)
-                    .map_err(|error| format!("Could not restore workspace layout: {error}"))
-            })
+            .map(crate::ui::layout::decode_workspace)
             .transpose()?;
         let memory = profile
             .egui_memory
@@ -6067,8 +6021,7 @@ impl PealayerApp {
             .transpose()?;
 
         self.show_four_d_editor = profile.nle;
-        if let Some(mut dock_state) = dock_state {
-            crate::ui::layout::sanitize_dock_rects(&mut dock_state);
+        if let Some(dock_state) = dock_state {
             self.dock_state = dock_state;
         }
         let dialogs = &profile.dialogs;
@@ -7275,9 +7228,9 @@ impl PealayerApp {
         cfg.auto_reload_config = self.auto_reload_config;
         cfg.status_bar = self.status_bar;
         cfg.control_bars = self.control_bars;
+        cfg.ui.sidebar_rail = self.sidebar_rail_state;
         cfg.window_geometry = self.window_geometry;
-        let mut dock_state = self.dock_state.clone();
-        crate::ui::layout::sanitize_dock_rects(&mut dock_state);
+        let dock_state = self.dock_state.clone();
         if let Ok(json) = serde_json::to_string(&dock_state) {
             cfg.workspace_dock_layout = Some(json);
         }
@@ -7518,6 +7471,8 @@ impl PealayerApp {
         config: crate::config::AppConfig,
     ) -> Result<(), String> {
         config.validate()?;
+        let dock_state = config.workspace_dock_layout.as_deref()
+            .map(crate::ui::layout::decode_workspace).transpose()?;
         let endpoint = config
             .hardware_endpoint
             .clone()
@@ -7659,6 +7614,11 @@ impl PealayerApp {
         self.auto_reload_config = config.auto_reload_config;
         self.status_bar = config.status_bar;
         self.control_bars = config.control_bars;
+        self.sidebar_rail_state = config.ui.sidebar_rail;
+        self.sidebar_rail_state.width = self.sidebar_rail_state.width.clamp(
+            crate::ui::sidebar_rail::SidebarPaneContent::MIN_WIDTH,
+            crate::ui::sidebar_rail::SidebarPaneContent::MAX_WIDTH,
+        );
         self.workspace_profiles = config.workspace_profiles.clone();
         self.active_workspace_profile = config.active_workspace_profile.clone();
         self.effect_library_draft = config.effect_working_draft.clone().unwrap_or_default();
@@ -7682,12 +7642,7 @@ impl PealayerApp {
                 self.windows_jump_list_quick_actions,
             );
         }
-        if let Some(layout_json) = config.workspace_dock_layout.as_deref()
-            && let Ok(mut dock_state) = serde_json::from_str::<
-                egui_dock::DockState<crate::ui::layout::PealayerTab>,
-            >(layout_json)
-        {
-            crate::ui::layout::sanitize_dock_rects(&mut dock_state);
+        if let Some(dock_state) = dock_state {
             self.dock_state = dock_state;
         }
 
@@ -9754,6 +9709,7 @@ impl Default for PealayerApp {
             native_preferences: None,
             status_bar: crate::config::StatusBarConfig::default(),
             control_bars: crate::config::ControlBarsConfig::default(),
+            sidebar_rail_state: crate::ui::sidebar_rail::SidebarRailState::default(),
             config_fingerprint: crate::config::AppConfig::fingerprint(
                 &crate::config::AppConfig::get_config_path(),
             )
@@ -9832,11 +9788,25 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn craft_app_workspace_profile_preserves_layout() {
+        let _lock = lock_app_tests();
+        let mut app = PealayerApp::default();
+        assert!(app.dock_state.validate().is_ok());
+        assert!(app.is_tab_open(crate::ui::layout::PealayerTab::Timeline));
+
+        app.toggle_tab(crate::ui::layout::PealayerTab::Timeline);
+        assert!(!app.is_tab_open(crate::ui::layout::PealayerTab::Timeline));
+
+        let profile = app.capture_workspace_profile(&egui::Context::default());
+        assert!(profile.dock_layout.is_some());
+    }
+
+    #[test]
     fn saves_during_dock_drawing_are_deferred_without_capturing_the_placeholder() {
         let _lock = lock_app_tests();
         let mut app = PealayerApp::default();
         app.workspace_rendering = true;
-        app.dock_state = egui_dock::DockState::new(vec![]);
+        app.dock_state = craft_ui::docking::Workspace::new(craft_ui::docking::Layout::default());
         app.save_config();
         assert!(app.deferred_config_save);
         assert!(app.pending_timeline_toolbar_save.is_none());
@@ -9851,6 +9821,70 @@ pub(crate) mod tests {
         app.request_control_bar_save(&egui::Context::default());
         assert!(app.pending_control_bar_save.as_ref().unwrap().flight.is_none());
         assert_eq!(app.pending_control_bar_save.as_ref().unwrap().desired,app.control_bars);
+    }
+
+    #[test]
+    fn sidebar_rail_state_syncs_with_app_config() {
+        let _lock = lock_app_tests();
+        let mut app = PealayerApp::default();
+        assert!(app.sidebar_rail_state.enabled);
+        assert_eq!(app.sidebar_rail_state.open, None);
+
+        // Mutate sidebar rail state
+        app.sidebar_rail_state.width = 420.0;
+        app.sidebar_rail_state.open = Some(crate::ui::sidebar_rail::SidebarPane::EffectControls);
+
+        // Test runtime_config_snapshot reflects the changes
+        let config = app.runtime_config_snapshot();
+        assert_eq!(config.ui.sidebar_rail.width, 420.0);
+        assert_eq!(
+            config.ui.sidebar_rail.open,
+            Some(crate::ui::sidebar_rail::SidebarPane::EffectControls)
+        );
+
+        // Test apply_runtime_config updates the app's state
+        let mut new_config = crate::config::AppConfig::default();
+        new_config.ui.sidebar_rail.width = 350.0;
+        new_config.ui.sidebar_rail.open = Some(crate::ui::sidebar_rail::SidebarPane::MediaInspector);
+        new_config.ui.sidebar_rail.enabled = false;
+        let ctx = egui::Context::default();
+        app.apply_runtime_config(&ctx, new_config)
+            .expect("apply_runtime_config succeeds");
+
+        assert!(!app.sidebar_rail_state.enabled);
+        assert_eq!(app.sidebar_rail_state.width, 350.0);
+        assert_eq!(
+            app.sidebar_rail_state.open,
+            Some(crate::ui::sidebar_rail::SidebarPane::MediaInspector)
+        );
+    }
+
+    #[test]
+    fn disabled_rail_does_not_claim_a_hidden_panel_or_swallow_its_open_request() {
+        let _lock = lock_app_tests();
+        let mut app = PealayerApp::default();
+        let tab = crate::ui::layout::PealayerTab::MediaInspector;
+        app.sidebar_rail_state.enabled = false;
+        app.sidebar_rail_state.open = Some(crate::ui::sidebar_rail::SidebarPane::MediaInspector);
+        assert!(!app.is_tab_open(tab));
+        app.toggle_tab(tab);
+        assert!(app.is_tab_open_in_dock(tab));
+        assert_eq!(app.sidebar_rail_state.open, None);
+    }
+
+    #[test]
+    fn malformed_runtime_layout_is_rejected_before_any_live_preferences_change() {
+        let _lock = lock_app_tests();
+        let mut app = PealayerApp::default();
+        let original = app.dock_state.clone();
+        let volume = app.volume;
+        let config = crate::config::AppConfig {
+            volume: volume + 1.0, workspace_dock_layout: Some("{}".into()),
+            ..Default::default()
+        };
+        assert!(app.apply_runtime_config(&egui::Context::default(), config).is_err());
+        assert_eq!(app.dock_state, original);
+        assert_eq!(app.volume, volume);
     }
 
     #[test]
@@ -10032,7 +10066,7 @@ pub(crate) mod tests {
         let ctx=egui::Context::default();
         let mut app=PealayerApp::default();
         app.workspace_rendering=true;
-        app.dock_state=egui_dock::DockState::new(vec![]);
+        app.dock_state=craft_ui::docking::Workspace::new(craft_ui::docking::Layout::default());
         app.control_bars.simple.hidden[crate::config::ControlBarAction::Mute as usize]=true;
         app.request_control_bar_save(&ctx);
         app.control_bars.monitor.end[crate::config::ControlBarAction::Stop as usize]=true;
@@ -11881,13 +11915,18 @@ pub(crate) mod tests {
             board_connected: true, host_instance_id: "fixture-host".into(), ..Default::default()
         }));
         app.show_four_d_editor = false;
-        app.dock_state = egui_dock::DockState::new(vec![crate::ui::layout::PealayerTab::ProgramMonitor]);
+        app.dock_state = craft_ui::docking::Workspace::new(craft_ui::docking::Layout {
+            root: Some(craft_ui::docking::Node::Tabs {
+                panels: vec![crate::ui::layout::PealayerTab::ProgramMonitor],
+                active: 0,
+            }),
+            floating: Vec::new(),
+        });
         let target = app.tray_board_menu().unwrap().target;
         app.process_board_tray_action(&egui::Context::default(),
             crate::platform::tray_board::BoardTrayAction::Monitor, Some(&target)).unwrap();
         assert!(app.show_four_d_editor);
-        let path = app.dock_state.find_tab(&crate::ui::layout::PealayerTab::HardwareMonitor).unwrap();
-        assert_eq!(app.dock_state.leaf(path.node_path()).unwrap().active, path.tab);
+        assert!(app.dock_state.layout.contains(&crate::ui::layout::PealayerTab::HardwareMonitor));
     }
 
     #[test]

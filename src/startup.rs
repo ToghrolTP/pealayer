@@ -333,6 +333,7 @@ pub fn run() -> eframe::Result {
             );
             crate::ui::configure_native_appearance(&cc.egui_ctx, &loaded_config);
             crate::ui::configure_main_window_style(&cc.egui_ctx);
+            egui_extras::install_image_loaders(&cc.egui_ctx);
 
             let get_proc = cc
                 .get_proc_address
@@ -618,12 +619,13 @@ pub fn run() -> eframe::Result {
                 .as_deref()
                 .or(loaded_config.workspace_dock_layout.as_deref())
                 .and_then(|json| {
-                    let mut ds = serde_json::from_str::<
-                        egui_dock::DockState<crate::ui::layout::PealayerTab>,
-                    >(json)
-                    .ok()?;
-                    crate::ui::layout::sanitize_dock_rects(&mut ds);
-                    Some(ds)
+                    match crate::ui::layout::decode_workspace(json) {
+                        Ok(workspace) => Some(workspace),
+                        Err(error) => {
+                            log::warn!("{error}; using the default workspace");
+                            None
+                        }
+                    }
                 })
                 .unwrap_or_else(crate::ui::layout::create_initial_layout);
             let mut workspace_profiles = loaded_config.workspace_profiles.clone();
@@ -740,6 +742,7 @@ pub fn run() -> eframe::Result {
                 hardware_effect_authoring: crate::app::HardwareEffectAuthoringState::default(),
                 recording_keys: std::collections::HashMap::new(),
                 dock_state,
+                sidebar_rail_state: loaded_config.ui.sidebar_rail,
                 rtt_state: Arc::new(Mutex::new(crate::app::RttState {
                     video_texture: None,
                     video_fbo: None,

@@ -21,11 +21,11 @@ fn active_id() -> egui::Id {
 }
 
 /// Keep egui's IDs, popup behavior and existing API; add an explicit focus owner.
-pub struct ComboBox {
-    inner: egui::ComboBox,
+pub struct ComboBox<'a> {
+    inner: egui::ComboBox<'a>,
     salt: egui::IdSalt,
 }
-impl ComboBox {
+impl<'a> ComboBox<'a> {
     pub fn from_id_salt(salt: impl egui::AsIdSalt) -> Self {
         let hashed_salt = egui::IdSalt::new(&salt);
         Self {
@@ -43,7 +43,7 @@ impl ComboBox {
         self.inner = self.inner.height(height);
         self
     }
-    pub fn selected_text(mut self, text: impl Into<egui::WidgetText>) -> Self {
+    pub fn selected_text(mut self, text: impl egui::IntoAtoms<'a>) -> Self {
         self.inner = self.inner.selected_text(text);
         self
     }
@@ -79,10 +79,16 @@ impl ComboBox {
         let previous_height = ui.spacing().interact_size.y;
         let height = crate::ui::control_density::height(ui);
         if height != previous_height { ui.spacing_mut().interact_size.y = height; }
+        let previous_body = ui.style().text_styles.get(&egui::TextStyle::Body).cloned();
+        let button_font = egui::TextStyle::Button.resolve(ui.style());
+        ui.style_mut().text_styles.insert(egui::TextStyle::Body, button_font);
         let result = self
             .inner
             .popup_style(egui::style::StyleModifier::new(dropdown_style))
             .show_ui(ui, |ui| menu_ui(ui, button, body));
+        if let Some(font) = previous_body {
+            ui.style_mut().text_styles.insert(egui::TextStyle::Body, font);
+        }
         if height != previous_height { ui.spacing_mut().interact_size.y = previous_height; }
         if result.inner.is_none() {
             clear_menu(ui.ctx(), button);
@@ -325,7 +331,7 @@ pub fn choice_with_close(ui: &mut egui::Ui, selected: bool, text: impl Into<egui
     let response = register_choice(ui, response, selected);
     response.widget_info(|| {
         egui::WidgetInfo::selected(
-            egui::WidgetType::SelectableLabel,
+            egui::Role::Button,
             ui.is_enabled(),
             selected,
             text.text(),

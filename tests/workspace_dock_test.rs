@@ -1,4 +1,4 @@
-use egui_dock::DockState;
+use craft_ui::docking::Workspace;
 use pealayer::config::{AppConfig, AppLanguage};
 use pealayer::ui::layout::{PealayerTab, create_initial_layout};
 
@@ -33,7 +33,7 @@ fn test_dock_state_serde_roundtrip() {
     let json_str = serde_json::to_string(&dock_state).expect("serialize dock state to JSON");
     assert!(!json_str.is_empty());
 
-    let deserialized: DockState<PealayerTab> =
+    let deserialized: Workspace<PealayerTab> =
         serde_json::from_str(&json_str).expect("deserialize dock state from JSON");
 
     for tab in PealayerTab::ALL
@@ -41,15 +41,15 @@ fn test_dock_state_serde_roundtrip() {
         .filter(|tab| *tab != PealayerTab::MediaInspector)
     {
         assert!(
-            deserialized.find_tab(&tab).is_some(),
+            deserialized.layout.contains(&tab),
             "tab {:?} should be present after round-trip",
             tab
         );
     }
     assert!(
-        deserialized
-            .find_tab(&PealayerTab::MediaInspector)
-            .is_none(),
+        !deserialized
+            .layout
+            .contains(&PealayerTab::MediaInspector),
         "the optional Media Inspector must remain hidden in the default workspace"
     );
 }
@@ -88,56 +88,65 @@ fn test_pealayer_tab_titles_and_icons() {
     );
 }
 
-use pealayer::ui::layout::restore_tab_to_canonical_slot;
+use pealayer::ui::layout::reveal_and_focus_tab;
 
 #[test]
 fn test_restore_timeline_to_canonical_slot() {
     let mut dock_state = create_initial_layout();
-    let path = dock_state
-        .find_tab(&PealayerTab::Timeline)
-        .expect("find timeline");
-    dock_state.remove_tab(path);
-    assert!(dock_state.find_tab(&PealayerTab::Timeline).is_none());
+    assert!(dock_state.layout.contains(&PealayerTab::Timeline));
+    let _ = dock_state.set_visible(
+        PealayerTab::Timeline,
+        false,
+        None,
+        |_| craft_ui::docking::Permissions::default(),
+    );
+    assert!(!dock_state.layout.contains(&PealayerTab::Timeline));
 
-    restore_tab_to_canonical_slot(&mut dock_state, PealayerTab::Timeline);
-    assert!(dock_state.find_tab(&PealayerTab::Timeline).is_some());
+    reveal_and_focus_tab(&mut dock_state, PealayerTab::Timeline);
+    assert!(dock_state.layout.contains(&PealayerTab::Timeline));
 }
 
 #[test]
 fn test_restore_controls_next_to_hardware_monitor() {
     let mut dock_state = create_initial_layout();
-    let path = dock_state
-        .find_tab(&PealayerTab::EffectControls)
-        .expect("find effect controls");
-    dock_state.remove_tab(path);
-    assert!(dock_state.find_tab(&PealayerTab::EffectControls).is_none());
+    assert!(dock_state.layout.contains(&PealayerTab::EffectControls));
+    let _ = dock_state.set_visible(
+        PealayerTab::EffectControls,
+        false,
+        None,
+        |_| craft_ui::docking::Permissions::default(),
+    );
+    assert!(!dock_state.layout.contains(&PealayerTab::EffectControls));
 
-    restore_tab_to_canonical_slot(&mut dock_state, PealayerTab::EffectControls);
-    assert!(dock_state.find_tab(&PealayerTab::EffectControls).is_some());
+    reveal_and_focus_tab(&mut dock_state, PealayerTab::EffectControls);
+    assert!(dock_state.layout.contains(&PealayerTab::EffectControls));
 }
 
 #[test]
 fn test_restore_optional_media_inspector() {
     let mut dock_state = create_initial_layout();
-    assert!(dock_state.find_tab(&PealayerTab::MediaInspector).is_none());
+    assert!(!dock_state.layout.contains(&PealayerTab::MediaInspector));
 
-    restore_tab_to_canonical_slot(&mut dock_state, PealayerTab::MediaInspector);
-    assert!(dock_state.find_tab(&PealayerTab::MediaInspector).is_some());
+    reveal_and_focus_tab(&mut dock_state, PealayerTab::MediaInspector);
+    assert!(dock_state.layout.contains(&PealayerTab::MediaInspector));
 }
 
 #[test]
 fn test_restore_into_empty_dock() {
     let mut dock_state = create_initial_layout();
     for tab in PealayerTab::ALL {
-        if let Some(path) = dock_state.find_tab(&tab) {
-            dock_state.remove_tab(path);
-        }
+        let _ = dock_state.set_visible(
+            tab,
+            false,
+            None,
+            |_| craft_ui::docking::Permissions::default(),
+        );
     }
-    assert_eq!(dock_state.iter_all_tabs().count(), 0);
+    assert_eq!(dock_state.layout.panels().len(), 0);
 
-    restore_tab_to_canonical_slot(&mut dock_state, PealayerTab::ProgramMonitor);
-    assert!(dock_state.find_tab(&PealayerTab::ProgramMonitor).is_some());
-    assert_eq!(dock_state.iter_all_tabs().count(), 1);
+    reveal_and_focus_tab(&mut dock_state, PealayerTab::ProgramMonitor);
+    assert!(dock_state.layout.contains(&PealayerTab::ProgramMonitor));
+    assert_eq!(dock_state.layout.panels().len(), 1);
 }
 
 static CONFIG_TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -177,16 +186,16 @@ fn test_pealayer_app_tab_toggle_and_focus() {
 #[test]
 fn test_corrupt_dock_json_fallback() {
     let invalid_json = "{ corrupted invalid json ...";
-    let fallback = serde_json::from_str::<DockState<PealayerTab>>(invalid_json)
+    let fallback = serde_json::from_str::<Workspace<PealayerTab>>(invalid_json)
         .unwrap_or_else(|_| create_initial_layout());
 
     for tab in PealayerTab::ALL
         .into_iter()
         .filter(|tab| *tab != PealayerTab::MediaInspector)
     {
-        assert!(fallback.find_tab(&tab).is_some());
+        assert!(fallback.layout.contains(&tab));
     }
-    assert!(fallback.find_tab(&PealayerTab::MediaInspector).is_none());
+    assert!(!fallback.layout.contains(&PealayerTab::MediaInspector));
 }
 
 #[test]
@@ -200,12 +209,12 @@ fn test_app_save_dock_layout_persists_to_config() {
     let cfg = pealayer::config::AppConfig::load();
     assert!(cfg.workspace_dock_layout.is_some());
     let layout_json = cfg.workspace_dock_layout.unwrap();
-    let deserialized: DockState<PealayerTab> =
+    let deserialized: Workspace<PealayerTab> =
         serde_json::from_str(&layout_json).expect("valid dock state JSON");
     assert!(
         deserialized
-            .find_tab(&PealayerTab::ProgramMonitor)
-            .is_some()
+            .layout
+            .contains(&PealayerTab::ProgramMonitor)
     );
 }
 
