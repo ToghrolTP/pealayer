@@ -619,14 +619,13 @@ pub fn run() -> eframe::Result {
                 .as_deref()
                 .or(loaded_config.workspace_dock_layout.as_deref())
                 .and_then(|json| {
-                    let ws = serde_json::from_str::<
-                        craft_ui::docking::Workspace<crate::ui::layout::PealayerTab>,
-                    >(json)
-                    .ok()?;
-                    if ws.validate().is_err() {
-                        return None;
+                    match crate::ui::layout::decode_workspace(json) {
+                        Ok(workspace) => Some(workspace),
+                        Err(error) => {
+                            log::warn!("{error}; using the default workspace");
+                            None
+                        }
                     }
-                    Some(ws)
                 })
                 .unwrap_or_else(crate::ui::layout::create_initial_layout);
             let mut workspace_profiles = loaded_config.workspace_profiles.clone();

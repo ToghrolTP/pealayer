@@ -40,6 +40,12 @@ This is a source-integration ledger, not an installation or physical acceptance 
 - Preserve document scrolling that the former docking engine supplied. Effect
   Controls keeps its wheel scroller; fitted video and independently scrolling
   Hardware Monitor/Effects Library/Media Inspector do not get a second scroller.
+- Require the current workspace envelope before deserializing. Upstream serde
+  defaults must not turn unrelated/malformed objects into an empty layout and
+  silently close every panel. Runtime reload rejects invalid layouts before
+  changing preferences, preserving the last valid workspace. No legacy adapter
+  or format migration is introduced; installation still needs private backup and
+  explicit workspace-format acceptance.
 
 New regressions cover pane Close versus stale state, Dock to Workspace with resize,
 disabled-rail ownership, existing-tab activation, palette/theme selection,

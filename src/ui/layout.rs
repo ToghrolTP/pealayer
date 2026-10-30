@@ -13827,6 +13827,31 @@ pub struct PealayerTabViewer<'a> {
     pub app: &'a mut PealayerApp,
 }
 
+/// Require the current application envelope. The upstream model's serde
+/// defaults otherwise turn an unrelated object into a valid, empty workspace.
+pub fn decode_workspace(json: &str) -> Result<craft_ui::docking::Workspace<PealayerTab>, String> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Envelope {
+        version: u32,
+        layout: craft_ui::docking::Layout<PealayerTab>,
+        hidden: Vec<(PealayerTab, craft_ui::docking::Location<PealayerTab>)>,
+        saved: Option<craft_ui::docking::Layout<PealayerTab>>,
+        locked: bool,
+    }
+    let parsed: Envelope = serde_json::from_str(json)
+        .map_err(|error| format!("Could not restore workspace layout: {error}"))?;
+    if parsed.version != craft_ui::docking::Workspace::<PealayerTab>::VERSION {
+        return Err("Unsupported workspace format; the saved layout was not applied".into());
+    }
+    let workspace = craft_ui::docking::Workspace {
+        version: parsed.version, layout: parsed.layout, hidden: parsed.hidden,
+        saved: parsed.saved, locked: parsed.locked,
+    };
+    workspace.validate().map_err(|error| format!("Invalid workspace layout: {error:?}"))?;
+    Ok(workspace)
+}
+
 fn panel_scroll_axes(tab: &PealayerTab) -> [bool; 2] {
     match tab {
         PealayerTab::ProgramMonitor | PealayerTab::EffectsLibrary
@@ -20659,6 +20684,21 @@ fn render_timeline_cue_label(
 #[cfg(test)]
 mod dock_content_tests {
     use super::*;
+
+    #[test]
+    fn malformed_workspace_objects_do_not_silently_close_every_panel() {
+        let original = create_initial_layout();
+        let json = serde_json::to_string(&original).unwrap();
+        assert_eq!(decode_workspace(&json).unwrap(), original);
+        assert!(decode_workspace("{}").is_err());
+        assert!(decode_workspace(r#"{"surfaces":[]}"#).is_err());
+        let mut missing: serde_json::Value = serde_json::from_str(&json).unwrap();
+        missing.as_object_mut().unwrap().remove("layout");
+        assert!(decode_workspace(&missing.to_string()).is_err());
+        let mut unsupported: serde_json::Value = serde_json::from_str(&json).unwrap();
+        unsupported["version"] = serde_json::json!(0);
+        assert!(decode_workspace(&unsupported.to_string()).is_err());
+    }
 
     #[test]
     fn tall_effect_controls_keep_their_real_wheel_scroller() {

@@ -6009,13 +6009,7 @@ impl PealayerApp {
         let dock_state = profile
             .dock_layout
             .as_deref()
-            .map(|json| -> Result<craft_ui::docking::Workspace<crate::ui::layout::PealayerTab>, String> {
-                let ws = serde_json::from_str::<craft_ui::docking::Workspace<crate::ui::layout::PealayerTab>>(json)
-                    .map_err(|error| format!("Could not restore workspace layout: {error}"))?;
-                ws.validate()
-                    .map_err(|error| format!("Invalid workspace layout: {error:?}"))?;
-                Ok(ws)
-            })
+            .map(crate::ui::layout::decode_workspace)
             .transpose()?;
         let memory = profile
             .egui_memory
@@ -7477,6 +7471,8 @@ impl PealayerApp {
         config: crate::config::AppConfig,
     ) -> Result<(), String> {
         config.validate()?;
+        let dock_state = config.workspace_dock_layout.as_deref()
+            .map(crate::ui::layout::decode_workspace).transpose()?;
         let endpoint = config
             .hardware_endpoint
             .clone()
@@ -7646,12 +7642,7 @@ impl PealayerApp {
                 self.windows_jump_list_quick_actions,
             );
         }
-        if let Some(layout_json) = config.workspace_dock_layout.as_deref()
-            && let Ok(dock_state) = serde_json::from_str::<
-                craft_ui::docking::Workspace<crate::ui::layout::PealayerTab>,
-            >(layout_json)
-            && dock_state.validate().is_ok()
-        {
+        if let Some(dock_state) = dock_state {
             self.dock_state = dock_state;
         }
 
@@ -9879,6 +9870,21 @@ pub(crate) mod tests {
         app.toggle_tab(tab);
         assert!(app.is_tab_open_in_dock(tab));
         assert_eq!(app.sidebar_rail_state.open, None);
+    }
+
+    #[test]
+    fn malformed_runtime_layout_is_rejected_before_any_live_preferences_change() {
+        let _lock = lock_app_tests();
+        let mut app = PealayerApp::default();
+        let original = app.dock_state.clone();
+        let volume = app.volume;
+        let config = crate::config::AppConfig {
+            volume: volume + 1.0, workspace_dock_layout: Some("{}".into()),
+            ..Default::default()
+        };
+        assert!(app.apply_runtime_config(&egui::Context::default(), config).is_err());
+        assert_eq!(app.dock_state, original);
+        assert_eq!(app.volume, volume);
     }
 
     #[test]
