@@ -51,6 +51,8 @@ jobs:
           node-version: "24"
           cache: npm
           cache-dependency-path: web_ui/package-lock.json
+      - name: "🔗 Verify canonical controller opcode bindings"
+        run: node interfaces/controller-wire/consumer.mjs --pealayer --check --upstream
       - name: "📦 Restore locked web dependencies"
         run: npm ci --prefix web_ui --ignore-scripts --no-audit --no-fund
       - name: "🌐 Type-check and build the web UI"

@@ -1,5 +1,10 @@
 # Pealayer alpha contract
 
+- Native controller opcodes come from the pinned PCController source owner in
+  interfaces/controller-wire. Run consumer.mjs --pealayer --check; do not recreate
+  numeric opcode tables or relax the fixed A5/1 native namespace check. Pakar A5/0
+  is a different command namespace, not a protocol version or a fallback target.
+
 - RF managers show a reception indicator and modal-opening packet-count baseline for every complete code/bits/protocol identity, including unassigned learned and dimmed unlearned observations. Use controller cumulative counts so presentation coalescing cannot lose repeats; refresh never resets a modal counter. Learning preferences are shared with PCController: timed learning off, saved duration 60 seconds, continuous learning off (stop after first confirmed capture). Hide hard-coded guided workflows until pattern profiles exist. See `docs/verification/rf-reception-and-learning.md`; observation/opening alone never learns, assigns or actuates hardware.
 
 - The shared Flutter controller's current basic design is rejected. Coordinate one compact, professional, activity-oriented PCController/Pealayer workspace rather than separate product tabs. Use contextual connection toggles, real capability-driven cards/charts, semantic icon actions/pills and responsive phone/tablet headers/dialogs. Omit unavailable-only cards, filler narration and dormant peer access-token fields; multi-step authentication/authorization is deferred, not simulated.
