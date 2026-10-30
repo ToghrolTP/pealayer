@@ -20708,7 +20708,8 @@ mod dock_content_tests {
             let mut events = vec![egui::Event::PointerMoved(egui::pos2(80.0, 80.0))];
             if wheel {
                 events.push(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point,
-                    delta: egui::vec2(0.0, -100.0), modifiers: egui::Modifiers::NONE });
+                    delta: egui::vec2(0.0, -100.0), modifiers: egui::Modifiers::NONE,
+                    phase: egui::TouchPhase::Move, source: egui::MouseWheelSource::Wheel });
             }
             drop(ctx.run_ui(egui::RawInput {
                 time: Some(time), events,
