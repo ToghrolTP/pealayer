@@ -13827,6 +13827,24 @@ pub struct PealayerTabViewer<'a> {
     pub app: &'a mut PealayerApp,
 }
 
+fn panel_scroll_axes(tab: &PealayerTab) -> [bool; 2] {
+    match tab {
+        PealayerTab::ProgramMonitor | PealayerTab::EffectsLibrary
+        | PealayerTab::HardwareMonitor | PealayerTab::MediaInspector => [false, false],
+        _ => [true, true],
+    }
+}
+
+fn panel_body<R>(ui: &mut egui::Ui, panel: &PealayerTab, body: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let axes = panel_scroll_axes(panel);
+    if axes == [false, false] {
+        body(ui)
+    } else {
+        egui::ScrollArea::new(axes).id_salt(("pealayer-panel-scroll", panel))
+            .auto_shrink([false, false]).show(ui, body).inner
+    }
+}
+
 /// Host-owned Craft menu events are not layout actions. Persist their local
 /// view state with egui memory, which workspace/session snapshots already own.
 #[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -20010,16 +20028,7 @@ impl<'a> PealayerTabViewer<'a> {
     }
 
     pub fn scroll_bars(&self, tab: &PealayerTab) -> [bool; 2] {
-        match tab {
-            // This is a fitted video viewport with a responsive footer, not a
-            // document. The dock's pixel-rounded ScrollArea otherwise permits
-            // fractional scrolling even when all content fits its logical size.
-            PealayerTab::ProgramMonitor
-            | PealayerTab::EffectsLibrary
-            | PealayerTab::HardwareMonitor
-            | PealayerTab::MediaInspector => [false, false],
-            _ => [true, true],
-        }
+        panel_scroll_axes(tab)
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, tab: &mut PealayerTab) {
@@ -20029,7 +20038,7 @@ impl<'a> PealayerTabViewer<'a> {
 
 impl<'a> craft_ui::docking::DockContent<PealayerTab> for PealayerTabViewer<'a> {
     fn body(&mut self, ui: &mut egui::Ui, panel: &PealayerTab) {
-        self.draw_tab_body(ui, *panel);
+        panel_body(ui, panel, |ui| self.draw_tab_body(ui, *panel));
     }
 
     fn logical_label(&self, panel: &PealayerTab) -> String {
@@ -20650,6 +20659,32 @@ fn render_timeline_cue_label(
 #[cfg(test)]
 mod dock_content_tests {
     use super::*;
+
+    #[test]
+    fn tall_effect_controls_keep_their_real_wheel_scroller() {
+        let ctx = egui::Context::default();
+        let id = std::cell::Cell::new(egui::Id::new("uninitialized-panel-scroll"));
+        for (time, wheel) in [(0.0, false), (0.01, false), (0.1, true), (0.2, false)] {
+            let mut events = vec![egui::Event::PointerMoved(egui::pos2(80.0, 80.0))];
+            if wheel {
+                events.push(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, -100.0), modifiers: egui::Modifiers::NONE });
+            }
+            drop(ctx.run_ui(egui::RawInput {
+                time: Some(time), events,
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 240.0))),
+                ..Default::default()
+            }, |ui| {
+                id.set(ui.make_persistent_id(("pealayer-panel-scroll", &PealayerTab::EffectControls)));
+                panel_body(ui, &PealayerTab::EffectControls, |ui| {
+                    ui.allocate_space(egui::vec2(100.0, 1000.0));
+                });
+            }));
+        }
+        assert!(egui::ScrollArea::load_state(&ctx, id.get()).unwrap().offset().y > 0.0);
+        assert_eq!(panel_scroll_axes(&PealayerTab::ProgramMonitor), [false, false]);
+        assert_eq!(panel_scroll_axes(&PealayerTab::HardwareMonitor), [false, false]);
+    }
 
     #[test]
     fn host_owned_dock_events_roundtrip_and_closed_panels_clear_maximize() {

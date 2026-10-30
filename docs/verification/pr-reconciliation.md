@@ -37,10 +37,15 @@ This is a source-integration ledger, not an installation or physical acceptance 
   clear maximization for closed panels and retain a compact per-group Panels menu.
 - Pass the existing modal-layer input shield into DockArea, including cancellation
   of a pre-existing drag when a modal takes input ownership.
+- Preserve document scrolling that the former docking engine supplied. Effect
+  Controls keeps its wheel scroller; fitted video and independently scrolling
+  Hardware Monitor/Effects Library/Media Inspector do not get a second scroller.
 
 New regressions cover pane Close versus stale state, Dock to Workspace with resize,
 disabled-rail ownership, existing-tab activation, palette/theme selection,
-host-owned menu-state round trips and nine viewport/scale render combinations.
+host-owned menu-state round trips, real tall-form wheel input and nine
+viewport/scale render combinations. Selected icons use contrast ink, not accent
+ink on an identical accent fill.
 Rust parse, whitespace, generated-opcode and low-write policy checks passed locally.
 Offline native compilation could not start because the pinned egui fork is not in
 the shared cache; this is not a passing native test result. Hosted checks own that
