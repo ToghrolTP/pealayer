@@ -666,7 +666,7 @@ pub fn icon_button_style(tokens: &Tokens, frame: bool) -> craft_ui::buttons::Ico
         selected: craft_ui::buttons::ButtonVisuals {
             fill: tokens.pill_active_bg,
             stroke: Stroke::new(1.0, tokens.accent),
-            icon: tokens.accent,
+            icon: super::accent_foreground(tokens.pill_active_bg),
         },
         corner_radius: CornerRadius::same(4),
         focus_stroke: Stroke::new(1.0, tokens.focus),
@@ -688,6 +688,15 @@ pub fn paint_widget_focus(painter: &egui::Painter, response: &egui::Response, t:
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn selected_craft_icons_contrast_with_bright_and_dark_fills() {
+        let mut tokens = Tokens::for_kind(ThemeKind::Dark);
+        tokens.pill_active_bg = Color32::from_rgb(56, 210, 122);
+        assert_eq!(icon_button_style(&tokens, false).selected.icon, Color32::from_rgb(20, 20, 20));
+        tokens.pill_active_bg = Color32::from_rgb(35, 45, 70);
+        assert_eq!(icon_button_style(&tokens, false).selected.icon, Color32::WHITE);
+    }
 
     #[test]
     fn tokens_kinds_match_filmcraft_palette_brightness_hierarchy() {
