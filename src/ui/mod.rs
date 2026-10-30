@@ -210,9 +210,9 @@ pub fn configure_native_visuals(ctx: &eframe::egui::Context, config: &crate::con
     palette::apply(&mut light, config.color_palette);
 
     let tokens_dark = craft_theme::Tokens::for_kind(craft_theme::ThemeKind::Dark)
-        .with_appearance(Some([red, green, blue]), false);
+        .with_appearance(Some([red, green, blue]), false).with_visuals(&dark);
     let tokens_light = craft_theme::Tokens::for_kind(craft_theme::ThemeKind::Light)
-        .with_appearance(Some([red, green, blue]), false);
+        .with_appearance(Some([red, green, blue]), false).with_visuals(&light);
 
     // Apply FilmCraft widget interaction fills, strokes, and borders
     dark.widgets.hovered.bg_fill = tokens_dark.hover;
@@ -232,11 +232,7 @@ pub fn configure_native_visuals(ctx: &eframe::egui::Context, config: &crate::con
     ctx.set_visuals_of(Theme::Light, light);
     ctx.all_styles_mut(configure_interaction_style);
     ctx.all_styles_mut(|style| control_density::configure(style, config.ui_control_density));
-    let tokens = match config.theme {
-        crate::config::AppTheme::Light => tokens_light,
-        _ => tokens_dark,
-    };
-    craft_theme::set_current(ctx, tokens);
+    craft_theme::set_themes(ctx, tokens_dark, tokens_light);
     elegance_theme::set_source_palette(ctx, config.color_palette);
     motion::configure(ctx, config.ui_animation_mode);
 }
@@ -456,6 +452,24 @@ mod tests {
                         );
                     }
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn craft_tokens_follow_active_theme_and_preserve_each_pealayer_palette() {
+        for palette in [crate::config::ColorPalette::Native, crate::config::ColorPalette::Studio] {
+            let ctx = eframe::egui::Context::default();
+            let config = crate::config::AppConfig { color_palette: palette, ..Default::default() };
+            super::configure_native_appearance(&ctx, &config);
+            for theme in [eframe::egui::Theme::Light, eframe::egui::Theme::Dark, eframe::egui::Theme::Light] {
+                ctx.set_theme(theme);
+                let tokens = super::craft_theme::current(&ctx);
+                let style = ctx.style_of(theme);
+                assert_eq!(tokens.kind == super::craft_theme::ThemeKind::Light, theme == eframe::egui::Theme::Light);
+                assert_eq!(tokens.panel_bg, style.visuals.panel_fill);
+                assert_eq!(tokens.card_bg, style.visuals.window_fill);
+                assert_eq!(tokens.text, style.visuals.text_color());
             }
         }
     }

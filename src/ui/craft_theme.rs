@@ -164,6 +164,48 @@ pub struct Tokens {
 }
 
 impl Tokens {
+    /// Craft supplies geometry and semantic roles, not a replacement for the
+    /// user's Pealayer palette. Derive its visible surfaces from that palette.
+    pub fn with_visuals(mut self, visuals: &egui::Visuals) -> Self {
+        self.app_bg = visuals.extreme_bg_color;
+        self.header_bg = visuals.panel_fill;
+        self.panel_bg = visuals.panel_fill;
+        self.tab_bg = visuals.widgets.inactive.weak_bg_fill;
+        self.text = visuals.text_color();
+        self.text_dim = visuals.weak_text_color();
+        self.text_faint = visuals.weak_text_color();
+        self.tab_text = self.text_dim;
+        self.tab_text_active = self.text;
+        self.icon = self.text_dim;
+        self.icon_active = self.text;
+        self.hover = visuals.widgets.hovered.bg_fill;
+        self.pressed = visuals.widgets.active.bg_fill;
+        self.field_bg = visuals.extreme_bg_color;
+        self.field_border = visuals.widgets.inactive.bg_stroke.color;
+        self.separator = visuals.widgets.noninteractive.bg_stroke.color;
+        self.well_bg = visuals.extreme_bg_color;
+        self.card_bg = visuals.window_fill;
+        self.border_subtle = visuals.window_stroke.color;
+        self.row_alt = visuals.faint_bg_color;
+        self.row_selected = visuals.selection.bg_fill;
+        self.pill_active_bg = visuals.selection.bg_fill;
+        self.clip_bar_bg = visuals.selection.bg_fill;
+        self.control_surface = visuals.widgets.inactive.bg_fill;
+        self.control_well = self.well_bg;
+        self.control_border = self.field_border;
+        self.button_hover = self.hover;
+        self.button_border = self.field_border;
+        self.tl_bg = visuals.panel_fill;
+        self.tl_track_bg = visuals.panel_fill;
+        self.tl_track_bg_alt = visuals.faint_bg_color;
+        self.tl_header_bg = visuals.panel_fill;
+        self.tl_ruler_bg = visuals.panel_fill;
+        self.tl_ruler_tick = self.text_dim;
+        self.tl_ruler_text = self.text_dim;
+        self.timecode = self.text;
+        self
+    }
+
     /// Premiere-style dark/medium/light tokens measured from FilmCraft design system.
     pub fn for_kind(kind: ThemeKind) -> Self {
         let dark = Tokens {
@@ -565,13 +607,28 @@ fn tokens_context_id() -> egui::Id {
 
 /// Retrieves the active `Tokens` stored in the egui context, or returns the default dark tokens.
 pub fn current(ctx: &egui::Context) -> Tokens {
-    ctx.data(|data| data.get_temp::<Tokens>(tokens_context_id()))
-        .unwrap_or_else(|| Tokens::for_kind(ThemeKind::Dark))
+    // Read the theme outside the context-data transaction (non-reentrant lock).
+    let light = ctx.theme() == egui::Theme::Light;
+    let (themes, explicit) = ctx.data(|data| (
+        data.get_temp::<(Tokens, Tokens)>(tokens_context_id().with("themes")),
+        data.get_temp::<Tokens>(tokens_context_id()),
+    ));
+    themes.map(|(dark, day)| if light { day } else { dark })
+        .or(explicit)
+        .unwrap_or_else(|| Tokens::for_kind(if light { ThemeKind::Light } else { ThemeKind::Dark }))
 }
 
 /// Stores the active `Tokens` in the egui context.
 pub fn set_current(ctx: &egui::Context, tokens: Tokens) {
-    ctx.data_mut(|data| data.insert_temp(tokens_context_id(), tokens));
+    ctx.data_mut(|data| {
+        data.remove::<(Tokens, Tokens)>(tokens_context_id().with("themes"));
+        data.insert_temp(tokens_context_id(), tokens);
+    });
+}
+
+/// Both palettes remain available when System delivers a live theme event.
+pub fn set_themes(ctx: &egui::Context, dark: Tokens, light: Tokens) {
+    ctx.data_mut(|data| data.insert_temp(tokens_context_id().with("themes"), (dark, light)));
 }
 
 /// Applies FilmCraft styling to a `craft_ui::docking::DockStyle`.

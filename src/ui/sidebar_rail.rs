@@ -158,6 +158,19 @@ impl Default for SidebarRailState {
 }
 
 impl SidebarRailState {
+    /// Content can dock itself, but a stale pre-render copy must not undo
+    /// close/resize actions requested by the pane chrome in this frame.
+    fn finish_pane_frame(
+        &mut self,
+        callback_open: Option<SidebarPane>,
+        requests: impl IntoIterator<Item = PaneRequest<SidebarPane>>,
+    ) {
+        self.open = callback_open;
+        for request in requests {
+            self.apply_pane_request(request);
+        }
+    }
+
     pub fn apply_rail_request(&mut self, request: RailRequest<SidebarPane>) {
         match request {
             RailRequest::Open(pane) => self.open = Some(pane),
@@ -186,6 +199,8 @@ pub fn show_sidebar_rail(
         return (None, None);
     }
 
+    let before = *state;
+    let mut dock_changed = false;
     let items: Vec<RailItem<SidebarPane>> = SidebarPane::ALL
         .iter()
         .map(|pane| {
@@ -208,13 +223,18 @@ pub fn show_sidebar_rail(
     if let Some(pane) = state.open {
         let tab = PealayerTab::from(pane);
         if app.dock_state.layout.contains(&tab) {
-            let _ = app.dock_state.set_visible(
+            match app.dock_state.set_visible(
                 tab,
                 false,
                 Some(crate::ui::layout::PealayerTab::ProgramMonitor),
                 |_| craft_ui::docking::Permissions::default(),
-            );
-            app.save_dock_layout();
+            ) {
+                Ok(()) => dock_changed = true,
+                Err(error) => {
+                    log::warn!("Cannot move panel into sidebar: {error:?}");
+                    state.open = None;
+                }
+            }
         }
     }
 
@@ -232,18 +252,18 @@ pub fn show_sidebar_rail(
                 |_| Some(PaneState::docked(Edge::End, state.width)),
                 &mut content,
             );
-        for req in &out.requests {
-            state.apply_pane_request(req.clone());
-        }
-        if app.sidebar_rail_state.open != state.open {
-            state.open = app.sidebar_rail_state.open;
-        }
+        state.finish_pane_frame(app.sidebar_rail_state.open, out.requests.iter().cloned());
         Some(out)
     } else {
         None
     };
 
     app.sidebar_rail_state = *state;
+
+    if dock_changed || *state != before {
+        app.deferred_config_save = true;
+        ui.ctx().request_repaint();
+    }
 
     (rail_out.request, pane_out)
 }
@@ -275,6 +295,18 @@ mod tests {
     }
 
     struct SidebarPaneContentMock;
+
+    #[test]
+    fn pane_close_and_dock_callbacks_do_not_restore_stale_open_state() {
+        let pane = SidebarPane::EffectControls;
+        let mut state = SidebarRailState { open: Some(pane), ..Default::default() };
+        state.finish_pane_frame(Some(pane), [PaneRequest::Close(pane)]);
+        assert_eq!(state.open, None);
+        state.open = Some(pane);
+        state.finish_pane_frame(None, [PaneRequest::Resize(pane, 420.0)]);
+        assert_eq!(state.open, None, "Dock to Workspace must not reopen the rail");
+        assert_eq!(state.width, 420.0);
+    }
 
     impl PaneContent<SidebarPane> for SidebarPaneContentMock {
         fn title(&self, pane: &SidebarPane) -> String {

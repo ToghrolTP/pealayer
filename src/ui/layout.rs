@@ -2592,6 +2592,10 @@ fn effect_drag_source<R>(
     effect_drag_source_with_action_gutter(ui, id, payload, 0.0, add_contents)
 }
 
+fn effect_card_manage_requested(response: &egui::Response, inline_editing: bool) -> bool {
+    !inline_editing && response.double_clicked_by(egui::PointerButton::Primary)
+}
+
 fn effect_drag_source_with_action_gutter<R>(
     ui: &mut egui::Ui,
     id: egui::Id,
@@ -2650,7 +2654,7 @@ fn effect_drag_source_with_action_gutter<R>(
         let mut drag_rect = response.response.rect;
         drag_rect.max.x = (drag_rect.max.x - action_gutter).max(drag_rect.min.x);
         let drag = ui
-            .interact(drag_rect, id, egui::Sense::drag())
+            .interact(drag_rect, id, egui::Sense::click_and_drag())
             .on_hover_cursor(egui::CursorIcon::Grab);
         if drag.drag_started_by(egui::PointerButton::Primary) {
             // Establish the payload in the same input frame in which egui
@@ -13159,6 +13163,71 @@ mod timeline_row_tests {
     }
 
     #[test]
+    fn effect_card_double_click_manages_only_the_primary_card_body() {
+        for (button, action_button, expected) in [
+            (egui::PointerButton::Primary, false, true),
+            (egui::PointerButton::Secondary, false, false),
+            (egui::PointerButton::Primary, true, false),
+        ] {
+            let context = egui::Context::default();
+            let payload = EffectDragPayload {
+                name: "Synthetic effect".into(), icon: String::new(), duration_ms: 750,
+                target: crate::four_d::models::HardwareTarget::ControllerMacro,
+                actions: Vec::new(),
+                controller_macro: Some(crate::four_d::models::ControllerMacroCue {
+                    id: 7, mode: "mcu".into(),
+                }),
+                controller_strip_effect: None,
+                controller_lane: Some(crate::four_d::models::ControllerEffectLane::Sequence),
+                audio_effect: None,
+            };
+            let card = std::cell::Cell::new(egui::Rect::NOTHING);
+            let action = std::cell::Cell::new(egui::Rect::NOTHING);
+            let requested = std::cell::Cell::new(false);
+            let editing_requested = std::cell::Cell::new(false);
+            let action_clicks = std::cell::Cell::new(0);
+            let render = |time, events| {
+                let output = context.run_ui(egui::RawInput {
+                    time: Some(time),
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(480.0, 240.0))),
+                    events, ..Default::default()
+                }, |ui| {
+                    let response = effect_drag_source_with_action_gutter(ui,
+                        egui::Id::new("double-click-effect-card"), payload.clone(), 48.0, |ui| {
+                        ui.set_width(228.0);
+                        ui.horizontal(|ui| {
+                            ui.add_sized([180.0, 40.0], egui::Label::new("Synthetic effect"));
+                            let button = ui.add_sized([40.0, 40.0], egui::Button::new("Run"));
+                            action.set(button.rect);
+                            if button.clicked() { action_clicks.set(action_clicks.get() + 1); }
+                        });
+                    });
+                    card.set(response.response.rect);
+                    requested.set(effect_card_manage_requested(&response.response, false));
+                    editing_requested.set(effect_card_manage_requested(&response.response, true));
+                });
+                discard_ui_output(output);
+            };
+            render(0.0, Vec::new());
+            render(0.01, Vec::new());
+            let point = if action_button { action.get().center() }
+                else { egui::pos2(card.get().left() + 40.0, card.get().center().y) };
+            let pointer = |pressed| egui::Event::PointerButton {
+                pos: point, button, pressed, modifiers: egui::Modifiers::NONE,
+            };
+            render(0.10, vec![egui::Event::PointerMoved(point), pointer(true)]);
+            render(0.12, vec![pointer(false)]);
+            assert!(!requested.get(), "A single click must not manage an effect");
+            render(0.20, vec![pointer(true)]);
+            render(0.22, vec![pointer(false)]);
+            assert_eq!(requested.get(), expected, "button={button:?}, action_button={action_button}");
+            assert!(!editing_requested.get(), "Double-clicking text during inline rename must not replace its draft");
+            assert_eq!(action_clicks.get(), if action_button { 2 } else { 0 });
+            assert!(egui::DragAndDrop::payload::<EffectDragPayload>(&context).is_none());
+        }
+    }
+
+    #[test]
     fn effect_card_completes_a_real_pointer_drag_and_drop_cycle() {
         let context = egui::Context::default();
         let payload = EffectDragPayload {
@@ -14267,6 +14336,9 @@ impl<'a> PealayerTabViewer<'a> {
                                                     self.app
                                                         .place_controller_effect_at_playhead(&payload);
                                                 }
+                                                let mut manage_effect = effect_card_manage_requested(
+                                                    &response.response, inline_editing,
+                                                );
                                                 let open_effect_menu = secondary_click_inside(
                                                     ui.ctx(),
                                                     response.response.rect,
@@ -14285,13 +14357,7 @@ impl<'a> PealayerTabViewer<'a> {
                                                     ui.label(egui::RichText::new(&reference).monospace().weak().small());
                                                     ui.separator();
                                                     if ui.button(format!("{} {}", crate::ui::icons::PENCIL_SIMPLE, self.app.tr("Manage"))).clicked() {
-                                                        if crate::ui::effects_library::select_advertised_effect(
-                                                            self.app,
-                                                            source,
-                                                            preset.effect.controller_strip_effect.as_ref().map(|value| value.id.as_str()),
-                                                        ).is_some() {
-                                                            self.app.show_effect_library_editor = true;
-                                                        }
+                                                        manage_effect = true;
                                                         ui.close();
                                                     }
                                                     crate::ui::effects_library::draw_saved_effect_preview_action(
@@ -14327,6 +14393,14 @@ impl<'a> PealayerTabViewer<'a> {
                                                         ui.close();
                                                     }
                                                 });
+                                                // Double-click and context-menu Manage share the same
+                                                // selection path for sequences, strips and audio effects.
+                                                if manage_effect && crate::ui::effects_library::select_advertised_effect(
+                                                    self.app, source,
+                                                    preset.effect.controller_strip_effect.as_ref().map(|value| value.id.as_str()),
+                                                ).is_some() {
+                                                    self.app.show_effect_library_editor = true;
+                                                }
                                                 ui.add_space(5.0);
                                             }
                                         }
@@ -20007,12 +20081,12 @@ pub fn reveal_and_focus_tab(
     workspace: &mut craft_ui::docking::Workspace<PealayerTab>,
     tab: PealayerTab,
 ) -> bool {
-    let was_open = workspace.layout.contains(&tab);
+    let before = workspace.layout.clone();
     let fallback = Some(PealayerTab::ProgramMonitor);
     let ok = workspace
         .set_visible(tab, true, fallback, |_| craft_ui::docking::Permissions::default())
         .is_ok();
-    ok && !was_open
+    ok && workspace.layout != before
 }
 
 fn format_timecode(t: f64) -> String {
@@ -20577,6 +20651,15 @@ mod dock_content_tests {
         assert!(!changed2);
         assert!(workspace.layout.contains(&PealayerTab::EffectControls));
     }
+
+    #[test]
+    fn revealing_an_existing_inactive_tab_reports_the_changed_selection() {
+        let mut workspace = create_initial_layout();
+        assert!(reveal_and_focus_tab(&mut workspace, PealayerTab::HardwareMonitor));
+        let hardware_active = workspace.layout.clone();
+        assert!(!reveal_and_focus_tab(&mut workspace, PealayerTab::HardwareMonitor));
+        assert!(reveal_and_focus_tab(&mut workspace, PealayerTab::EffectControls));
+        assert_ne!(workspace.layout, hardware_active);
+        assert!(workspace.validate().is_ok());
+    }
 }
-
-

@@ -506,6 +506,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         .changed()
                     {
                         app.sidebar_rail_state.enabled = sidebar_rail_enabled;
+                        app.save_config();
                     }
                     if app.sidebar_rail_state.enabled {
                         crate::ui::icons::submenu(

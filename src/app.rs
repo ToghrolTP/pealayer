@@ -1032,7 +1032,10 @@ impl eframe::App for PealayerApp {
         self.flush_timeline_toolbar_save(ctx);
         self.flush_status_bar_save(ctx);
         self.flush_control_bar_save(ctx);
-        if std::mem::take(&mut self.deferred_config_save) {
+        // Layout resize/move actions can arrive on every pointer frame. Keep
+        // one pending save until the gesture ends rather than writing per pixel.
+        if self.deferred_config_save && !ctx.input(|input| input.pointer.any_down()) {
+            self.deferred_config_save = false;
             self.save_config();
         }
         // eframe calls logic even while minimized/occluded. Commands, device
@@ -2019,8 +2022,17 @@ impl eframe::App for PealayerApp {
                                 .locked(locked)
                                 .show_content(ui, &layout_snapshot, &dock_style, &mut tab_viewer)
                         }).inner;
-                        let _ = self.dock_state.apply_all(output.actions, |_| craft_ui::docking::Permissions::default());
                         self.workspace_rendering = false;
+                        if !output.actions.is_empty() {
+                            let layout_before = self.dock_state.clone();
+                            if let Err(error) = self.dock_state.apply_all(output.actions, |_| craft_ui::docking::Permissions::default()) {
+                                log::warn!("Workspace action rejected: {error:?}");
+                            }
+                            if self.dock_state != layout_before {
+                                self.deferred_config_save = true;
+                                ui.ctx().request_repaint();
+                            }
+                        }
 
                         if !self.pending_tab_reveals.is_empty() {
                             let mut layout_changed = false;
@@ -5876,7 +5888,7 @@ impl PealayerApp {
     }
 
     pub fn is_tab_open_in_sidebar(&self, tab: crate::ui::layout::PealayerTab) -> bool {
-        crate::ui::sidebar_rail::SidebarPane::try_from(tab)
+        self.sidebar_rail_state.enabled && crate::ui::sidebar_rail::SidebarPane::try_from(tab)
             .ok()
             .is_some_and(|pane| self.sidebar_rail_state.open == Some(pane))
     }
@@ -5919,7 +5931,9 @@ impl PealayerApp {
             if self.sidebar_rail_state.open == Some(pane) {
                 self.sidebar_rail_state.open = None;
                 self.save_config();
-                return;
+                if self.sidebar_rail_state.enabled {
+                    return;
+                }
             }
         }
         let is_open = self.dock_state.layout.contains(&tab);
@@ -9839,6 +9853,19 @@ pub(crate) mod tests {
             app.sidebar_rail_state.open,
             Some(crate::ui::sidebar_rail::SidebarPane::MediaInspector)
         );
+    }
+
+    #[test]
+    fn disabled_rail_does_not_claim_a_hidden_panel_or_swallow_its_open_request() {
+        let _lock = lock_app_tests();
+        let mut app = PealayerApp::default();
+        let tab = crate::ui::layout::PealayerTab::MediaInspector;
+        app.sidebar_rail_state.enabled = false;
+        app.sidebar_rail_state.open = Some(crate::ui::sidebar_rail::SidebarPane::MediaInspector);
+        assert!(!app.is_tab_open(tab));
+        app.toggle_tab(tab);
+        assert!(app.is_tab_open_in_dock(tab));
+        assert_eq!(app.sidebar_rail_state.open, None);
     }
 
     #[test]

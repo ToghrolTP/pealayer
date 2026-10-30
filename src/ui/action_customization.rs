@@ -271,4 +271,3 @@ mod tests {
         assert!(has_focus_stroke, "focused control must paint focus outline stroke");
     }
 }
-
