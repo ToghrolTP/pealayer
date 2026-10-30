@@ -515,6 +515,25 @@ pub(crate) struct PendingScrubCommit {
     target_time: f64,
     dispatched: bool,
     playback_restarted: bool,
+    zero_fence: Option<crate::mpv::seek_completion::ZeroSeekFence>,
+}
+
+impl PendingScrubCommit {
+    fn decoded_target_ready(&self, actual: f64, fps: f64, epoch: u64) -> bool {
+        if let Some(fence) = self.zero_fence {
+            fence.ready(epoch) && actual.is_finite() && actual >= 0.0
+        } else {
+            self.playback_restarted && seek_target_reached(actual, self.target_time, fps)
+        }
+    }
+
+    fn settled_position(&self, actual: f64, was_playing: bool) -> (f64, bool) {
+        if self.zero_fence.is_some() {
+            (actual, false)
+        } else {
+            (settled_seek_position(actual, self.target_time, was_playing), !was_playing)
+        }
+    }
 }
 
 fn seek_target_reached(actual_time: f64, target_time: f64, media_fps: f64) -> bool {
@@ -613,6 +632,8 @@ pub struct PealayerApp {
     pub(crate) rtl: bool,
     pub(crate) mpv: crate::mpv::player::Player,
     pub(crate) mpv_client: Arc<libmpv2::Mpv>,
+    pub(crate) native_seek_client: Arc<crate::mpv::seek_completion::NativeSeekClient>,
+    pub(crate) seek_epoch: u64,
     pub(crate) external_catalog_revision: u64,
     pub(crate) external_seek_revision: u64,
     pub(crate) pending_external_media: Option<String>,
@@ -3563,7 +3584,7 @@ impl PealayerApp {
         }
         self.request_hardware_effect_command(
             "effect-preview",
-            format!("strip effect play {id} {pixels} {fps}"),
+            format!("effect play {id} {pixels} {fps}"),
         )
     }
 
@@ -5261,9 +5282,31 @@ impl PealayerApp {
                     .pending_scrub_commit
                     .as_ref()
                     .is_some_and(|pending| pending.request_id == completion.request_id)
-                && let Some(pending) = self.pending_scrub_commit.as_mut()
             {
-                pending.dispatched = true;
+                if completion.accepted {
+                    if let Some(pending) = self.pending_scrub_commit.as_mut() { pending.dispatched = true; }
+                } else {
+                    self.reset_scrub_state();
+                    self.show_error = Some(self.tr("Seek command failed"));
+                }
+            }
+        }
+        use crate::mpv::seek_completion::NativeSeekEvent;
+        for event in self.native_seek_client.take_events() {
+            if matches!(event, NativeSeekEvent::MediaBoundary | NativeSeekEvent::Overflow) {
+                if self.pending_scrub_commit.is_some_and(|pending| pending.zero_fence.is_some()) {
+                    self.reset_scrub_state();
+                    if event == NativeSeekEvent::Overflow { self.show_error = Some(self.tr("Seek completion events were lost")); }
+                }
+                continue;
+            }
+            if let Some(pending) = self.pending_scrub_commit.as_mut()
+                && let Some(fence) = pending.zero_fence.as_mut()
+                && let Some(error) = fence.observe(event, self.seek_epoch)
+            {
+                log::warn!("Native seek command failed: {error}");
+                self.reset_scrub_state();
+                self.show_error = Some(self.tr("Seek command failed"));
             }
         }
     }
@@ -5272,13 +5315,18 @@ impl PealayerApp {
         let Some(pending) = self.pending_scrub_commit else {
             return;
         };
-        if !pending.dispatched || !pending.playback_restarted
+        if pending.zero_fence.is_some() && (crate::peer::active() || crate::mpv::external::active()) {
+            self.reset_scrub_state();
+            self.show_error = Some(self.tr("Seek authority changed"));
+            return;
+        }
+        if !pending.dispatched
             || self.mpv.get_property::<bool>("seeking").unwrap_or(true) {
             return;
         }
 
         let Ok(actual_time) = self.mpv.get_property::<f64>("time-pos") else { return; };
-        if !seek_target_reached(actual_time, pending.target_time, self.media_fps) {
+        if !pending.decoded_target_ready(actual_time, self.media_fps, self.seek_epoch) {
             // A PlaybackRestart from an older preview seek can arrive after the
             // final commit was queued. Require the restart for the committed
             // target instead of allowing that stale event to release playback.
@@ -5288,15 +5336,13 @@ impl PealayerApp {
             return;
         }
 
-        let retain_exact_target = !self.was_playing_before_scrub;
-        let settled_time = settled_seek_position(
-            actual_time,
-            pending.target_time,
-            self.was_playing_before_scrub,
-        );
+        // A zero seek can land at a nonzero first frame. Keep target zero as
+        // intent, while publishing the actual observed decoder position.
+        let (settled_time, retain_exact_target) = pending.settled_position(actual_time, self.was_playing_before_scrub);
         self.playback_time = settled_time;
         self.seek_pos = retain_exact_target.then_some(pending.target_time);
         self.pending_scrub_commit = None;
+        self.native_seek_client.finish();
         self.active_pseudo_frame = None;
         self.settled_seek_revision = self.settled_seek_revision.wrapping_add(1);
         self.settled_seek_target = Some(pending.target_time);
@@ -5326,6 +5372,9 @@ impl PealayerApp {
     }
 
     fn reset_scrub_state(&mut self) {
+        self.seek_epoch = self.seek_epoch.wrapping_add(1);
+        self.native_seek_client.finish();
+        self.seek_controller.cancel_pending();
         self.seek_pos = None;
         self.is_scrubbing = false;
         self.was_playing_before_scrub = false;
@@ -5837,7 +5886,9 @@ impl PealayerApp {
 
     /// Pauses playback.
     pub fn pause(&mut self) {
-        if let Ok(mut plan)=self.engine_handle.prepared_timeline.lock(){plan.play_requested=false;}
+        // A late seek completion must not restore a superseded Play intent.
+        self.was_playing_before_scrub = false;
+        if let Ok(mut plan)=self.engine_handle.prepared_timeline.lock(){plan.cancel_play();}
         if self.current_video_path.is_none() {
             return;
         }
@@ -6454,6 +6505,8 @@ impl PealayerApp {
                 }
                 self.commit_recorded_samples();
             }
+            self.seek_epoch = self.seek_epoch.wrapping_add(1);
+            self.native_seek_client.finish();
         }
 
         if clamped < self.duration {
@@ -6488,12 +6541,21 @@ impl PealayerApp {
         }
 
         self.seek_pos = Some(clamped);
-        let request_id = self.seek_controller.request_commit(clamped);
+        if clamped == 0.0 && !crate::peer::active() && !crate::mpv::external::active() {
+            // Revoke older submissions before draining this client's old file
+            // boundaries. Only events after the new command can settle it.
+            self.seek_controller.cancel_pending();
+            self.native_seek_client.finish();
+            let _ = self.native_seek_client.take_events();
+            self.seek_epoch = self.seek_epoch.wrapping_add(1);
+        }
+        let request = self.seek_controller.request_commit(clamped);
         self.pending_scrub_commit = Some(PendingScrubCommit {
-            request_id,
+            request_id: request.request_id,
             target_time: clamped,
             dispatched: false,
             playback_restarted: false,
+            zero_fence: request.native_zero.then(|| crate::mpv::seek_completion::ZeroSeekFence::new(request.request_id, self.seek_epoch)),
         });
         self.commit_recorded_samples();
         // The gesture is over, but keep seek_pos authoritative until mpv emits
@@ -9430,6 +9492,17 @@ fn observe_default_mpv_client(mpv_client: &libmpv2::Mpv) {
 }
 
 static TEST_MPV_CLIENT: std::sync::OnceLock<Arc<libmpv2::Mpv>> = std::sync::OnceLock::new();
+static TEST_NATIVE_SEEK_CLIENT: std::sync::OnceLock<Arc<crate::mpv::seek_completion::NativeSeekClient>> = std::sync::OnceLock::new();
+
+fn shared_test_native_seek_client() -> Arc<crate::mpv::seek_completion::NativeSeekClient> {
+    let client = Arc::clone(TEST_NATIVE_SEEK_CLIENT.get_or_init(|| Arc::new(
+        crate::mpv::seek_completion::NativeSeekClient::new(get_shared_mpv())
+            .expect("Failed to create seek completion client"),
+    )));
+    client.finish();
+    let _ = client.take_events();
+    client
+}
 
 fn shared_test_mpv_client() -> Arc<libmpv2::Mpv> {
     Arc::clone(TEST_MPV_CLIENT.get_or_init(|| {
@@ -9459,6 +9532,7 @@ impl Default for PealayerApp {
         let mpv = get_shared_mpv();
         let _ = mpv.set_property("keep-open", "always");
         let mpv_client = default_mpv_client(mpv);
+        let native_seek_client = shared_test_native_seek_client();
         let (_interop_tx, interop_rx) = std::sync::mpsc::channel();
         let (_controller_cmd_tx, controller_cmd_rx) =
             std::sync::mpsc::channel::<crate::platform::interop::ControllerDelivery>();
@@ -9499,6 +9573,8 @@ impl Default for PealayerApp {
             pending_external_media: None,
             pending_external_pause: false,
             mpv_client,
+            native_seek_client: Arc::clone(&native_seek_client),
+            seek_epoch: 0,
             render_context: Arc::new(Mutex::new(None)),
             playback_time: 0.0,
             duration: 0.0,
@@ -9522,7 +9598,7 @@ impl Default for PealayerApp {
             video_surface_gesture: None,
             seek_pos: None,
             seek_controller: crate::mpv::seek::SeekController::with_cache(
-                crate::mpv::seek::MpvSeekBackend::new(mpv),
+                crate::mpv::seek::MpvSeekBackend::new(mpv, Arc::clone(&native_seek_client)),
                 frame_cache.clone(),
             ),
             frame_cache,
@@ -10348,6 +10424,37 @@ pub(crate) mod tests {
         assert!(seek_target_reached(48.04, 48.0, 24.0));
         assert!(!seek_target_reached(48.08, 48.0, 24.0));
         assert!(!seek_target_reached(48.03, 48.0, 60.0));
+    }
+
+    #[test]
+    fn native_zero_seek_requires_ordered_completion_and_publishes_first_pts() {
+        use crate::mpv::seek_completion::{NativeSeekEvent, ZeroSeekFence};
+        let mut pending = PendingScrubCommit { request_id: 42, target_time: 0.0,
+            dispatched: true, playback_restarted: true, zero_fence: Some(ZeroSeekFence::new(42, 7)) };
+        assert!(!pending.decoded_target_ready(0.08, 25.0, 7));
+        for event in [NativeSeekEvent::Reply { request_id: 41, error: 0 }, NativeSeekEvent::Seek, NativeSeekEvent::Restart] {
+            pending.zero_fence.as_mut().unwrap().observe(event, 7);
+        }
+        assert!(!pending.decoded_target_ready(0.08, 25.0, 7));
+        for event in [NativeSeekEvent::Reply { request_id: 42, error: 0 }, NativeSeekEvent::Seek, NativeSeekEvent::Restart] {
+            pending.zero_fence.as_mut().unwrap().observe(event, 7);
+        }
+        assert!(pending.decoded_target_ready(0.08, 25.0, 7));
+        assert!(!pending.decoded_target_ready(0.08, 25.0, 8));
+        assert!(!pending.decoded_target_ready(f64::NAN, 25.0, 7));
+        assert!(!pending.decoded_target_ready(-0.08, 25.0, 7));
+        assert_eq!(pending.target_time, 0.0);
+        assert_eq!(pending.settled_position(0.08, false), (0.08, false));
+    }
+
+    #[test]
+    fn ordinary_commit_retains_frame_guard_and_exact_paused_intent() {
+        let pending = PendingScrubCommit { request_id: 42, target_time: 48.0,
+            dispatched: true, playback_restarted: true, zero_fence: None };
+        assert!(!pending.decoded_target_ready(48.08, 25.0, 7));
+        assert!(pending.decoded_target_ready(48.03, 25.0, 7));
+        assert_eq!(pending.settled_position(48.03, false), (48.0, true));
+        assert_eq!(pending.settled_position(48.03, true), (48.03, false));
     }
 
     #[test]
