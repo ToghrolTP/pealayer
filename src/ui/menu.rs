@@ -267,7 +267,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         .clicked()
                     {
                         ui.close();
-                        app.close_video();
+                        app.request_close_video();
                     }
 
                     if ui.button(app.tr("Open Timeline Project...")).clicked() {
@@ -279,7 +279,19 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         {
                             match crate::four_d::models::Timeline::load_from_file(&path) {
                                 Ok(timeline) => {
+                                    app.track_muted = timeline.track_muted.clone();
+                                    app.track_soloed = timeline.track_soloed.clone();
+                                    app.track_locked = timeline.track_locked.clone();
+                                    if let Some(ref target) = timeline.media_target {
+                                        if app.current_video_path.is_none() {
+                                            let media_file = std::path::PathBuf::from(target);
+                                            if media_file.exists() {
+                                                app.load_video_file(media_file);
+                                            }
+                                        }
+                                    }
                                     app.timeline = timeline;
+                                    app.timeline_saved_baseline = Some(app.snapshot_timeline());
                                     let compiled = crate::four_d::engine::compile_timeline(
                                         &app.timeline,
                                         &app.track_muted,
@@ -302,16 +314,13 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     let save_enabled = app.current_video_path.as_ref().is_some_and(|path| {
                         !crate::media::is_remote_media_target(&path.to_string_lossy())
                     });
-                    let save_btn = egui::Button::new(app.tr("Save Timeline (Sidecar)"));
+                    let save_btn = egui::Button::new(app.tr("Save Timeline (Sidecar)"))
+                        .shortcut_text("Ctrl+S");
                     if ui.add_enabled(save_enabled, save_btn).clicked() {
                         ui.close();
                         if crate::peer::active(){crate::ui::peer_browser::open(&ctx,crate::ui::peer_browser::Purpose::TimelineSave,None);}
-                        else if let Some(ref video_path) = app.current_video_path {
-                            let mut sidecar = video_path.clone();
-                            sidecar.set_extension("4d.json");
-                            if let Err(e) = app.timeline.save_to_file(&sidecar) {
-                                app.show_error = Some(format!("Failed to save timeline: {}", e));
-                            }
+                        else if let Err(e) = app.save_current_timeline_sidecar() {
+                            app.show_error = Some(e);
                         }
                     }
 
@@ -322,8 +331,16 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             .add_filter("Pealayer Timeline", &["json"])
                             .save_file()
                         {
+                            app.timeline.track_muted = app.track_muted.clone();
+                            app.timeline.track_soloed = app.track_soloed.clone();
+                            app.timeline.track_locked = app.track_locked.clone();
+                            app.timeline.media_target = app.current_video_path.as_ref().map(|p| p.to_string_lossy().to_string());
                             if let Err(e) = app.timeline.save_to_file(&path) {
                                 app.show_error = Some(format!("Failed to save timeline: {}", e));
+                            } else {
+                                app.timeline_saved_baseline = Some(app.snapshot_timeline());
+                                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("timeline");
+                                app.set_osd(format!("{} {name}", app.tr("Timeline saved:")));
                             }
                         }
                     }
@@ -334,7 +351,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         ui.close();
                     }
                     if ui.button(app.tr("Quit")).clicked() {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        ui.close();
+                        app.request_quit(&ctx);
                     }
                 });
 

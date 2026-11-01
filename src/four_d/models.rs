@@ -495,6 +495,18 @@ pub struct Timeline {
     /// partially authored current project remains usable and self-correcting.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub track_states: std::collections::BTreeMap<String, TimelineTrackState>,
+    /// Hardware relay tracks temporarily muted during playback
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub track_muted: std::collections::BTreeSet<u8>,
+    /// Hardware relay tracks soloed during playback
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub track_soloed: std::collections::BTreeSet<u8>,
+    /// Hardware relay tracks locked against accidental edits
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub track_locked: std::collections::BTreeSet<u8>,
+    /// Associated media target (video filename or URL)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_target: Option<String>,
 }
 
 impl Default for Timeline {
@@ -509,6 +521,10 @@ impl Default for Timeline {
             analog_tracks: Vec::new(),
             keyframes: Vec::new(),
             track_states: std::collections::BTreeMap::new(),
+            track_muted: std::collections::BTreeSet::new(),
+            track_soloed: std::collections::BTreeSet::new(),
+            track_locked: std::collections::BTreeSet::new(),
+            media_target: None,
         }
     }
 }
@@ -533,6 +549,10 @@ mod tests {
         assert!(timeline.analog_tracks.is_empty());
         assert!(timeline.keyframes.is_empty());
         assert!(timeline.track_states.is_empty());
+        assert!(timeline.track_muted.is_empty());
+        assert!(timeline.track_soloed.is_empty());
+        assert!(timeline.track_locked.is_empty());
+        assert!(timeline.media_target.is_none());
     }
 
     #[test]
@@ -746,6 +766,10 @@ impl Timeline {
             analog_tracks: Vec::new(),
             keyframes: Vec::new(),
             track_states,
+            track_muted: std::collections::BTreeSet::new(),
+            track_soloed: std::collections::BTreeSet::new(),
+            track_locked: std::collections::BTreeSet::new(),
+            media_target: self.media_target.clone(),
         }
     }
 

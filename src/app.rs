@@ -597,6 +597,13 @@ pub(crate) enum NativeServicePolicy {
     ModelOnly,
 }
 
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PendingTimelineCloseAction {
+    CloseApp,
+    SwitchMedia(std::path::PathBuf),
+    CloseVideo,
+}
+
 pub struct PealayerApp {
     pub(crate) native_service_policy: NativeServicePolicy,
     pub(crate) web_only: bool,
@@ -693,6 +700,8 @@ pub struct PealayerApp {
     pub(crate) show_four_d_editor: bool,
     pub(crate) dock_state: egui_dock::DockState<crate::ui::layout::PealayerTab>,
     pub timeline: crate::four_d::models::Timeline,
+    pub(crate) timeline_saved_baseline: Option<crate::four_d::history::TimelineSnapshot>,
+    pub(crate) pending_timeline_close_action: Option<PendingTimelineCloseAction>,
     pub(crate) engine_handle: crate::four_d::engine::EngineHandle,
 
     pub(crate) recording_session: crate::four_d::curve_record::RecordingSession,
@@ -1031,6 +1040,11 @@ impl eframe::App for PealayerApp {
         self.flush_timeline_toolbar_save(ctx);
         self.flush_status_bar_save(ctx);
         self.flush_control_bar_save(ctx);
+        let close_requested = ctx.input(|i| i.viewport().close_requested());
+        if close_requested && self.is_timeline_dirty() {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            self.pending_timeline_close_action = Some(PendingTimelineCloseAction::CloseApp);
+        }
         if std::mem::take(&mut self.deferred_config_save) {
             self.save_config();
         }
@@ -2240,6 +2254,7 @@ impl eframe::App for PealayerApp {
             self.apply_interop_command(ui.ctx(), command, "Notification");
         }
         crate::ui::remote_location::draw(self, ui.ctx());
+        self.draw_timeline_close_confirmation(ui.ctx());
     }
 
     fn save(&mut self, _storage: &mut dyn eframe::Storage) {
@@ -2417,6 +2432,38 @@ impl PealayerApp {
         // Accessible even when the timeline has focus, as long as the user is not actively
         // typing into a TextEdit or interacting with a modal popup.
         if !text_editing {
+            let save_pressed = ctx.input(|i| {
+                (i.modifiers.command || i.modifiers.ctrl)
+                    && !i.modifiers.shift
+                    && !i.modifiers.alt
+                    && i.key_pressed(egui::Key::S)
+            });
+            if save_pressed {
+                ctx.input_mut(|i| i.consume_key(egui::Modifiers::COMMAND, egui::Key::S));
+                ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::S));
+                if let Err(e) = self.save_current_timeline_sidecar() {
+                    if self.current_video_path.is_none() {
+                        if let Some(path) = rfd::FileDialog::new()
+                            .add_filter("Pealayer Timeline", &["json"])
+                            .save_file()
+                        {
+                            self.timeline.track_muted = self.track_muted.clone();
+                            self.timeline.track_soloed = self.track_soloed.clone();
+                            self.timeline.track_locked = self.track_locked.clone();
+                            self.timeline.media_target = self.current_video_path.as_ref().map(|p| p.to_string_lossy().to_string());
+                            if let Err(err) = self.timeline.save_to_file(&path) {
+                                self.show_error = Some(format!("Failed to save timeline: {err}"));
+                            } else {
+                                self.timeline_saved_baseline = Some(self.snapshot_timeline());
+                                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("timeline");
+                                self.set_osd(format!("{} {name}", self.tr("Timeline saved:")));
+                            }
+                        }
+                    } else {
+                        self.show_error = Some(e);
+                    }
+                }
+            }
             if ctx.input(|i| i.key_pressed(egui::Key::Space)) {
                 ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::Space));
                 self.toggle_playback();
@@ -6824,6 +6871,10 @@ impl PealayerApp {
     }
 
     pub fn load_video_file(&mut self, path: std::path::PathBuf) {
+        if self.is_timeline_dirty() {
+            self.pending_timeline_close_action = Some(PendingTimelineCloseAction::SwitchMedia(path));
+            return;
+        }
         if crate::mpv::external::active() && !crate::mpv::external::status().connected {
             self.load_media_target(&path.to_string_lossy()); return;
         }
@@ -6871,10 +6922,20 @@ impl PealayerApp {
             }
             if sidecar.exists() {
                 if let Ok(timeline) = crate::four_d::models::Timeline::load_from_file(&sidecar) {
+                    self.track_muted = timeline.track_muted.clone();
+                    self.track_soloed = timeline.track_soloed.clone();
+                    self.track_locked = timeline.track_locked.clone();
                     self.timeline = timeline;
                     self.sync_timeline_engine();
                 }
+            } else {
+                self.timeline = crate::four_d::models::Timeline::default();
+                self.track_muted.clear();
+                self.track_soloed.clear();
+                self.track_locked.clear();
+                self.sync_timeline_engine();
             }
+            self.timeline_saved_baseline = Some(self.snapshot_timeline());
         }
     }
 
@@ -6924,7 +6985,11 @@ impl PealayerApp {
         {
             match crate::four_d::models::Timeline::load_from_file(path) {
                 Ok(timeline) => {
+                    self.track_muted = timeline.track_muted.clone();
+                    self.track_soloed = timeline.track_soloed.clone();
+                    self.track_locked = timeline.track_locked.clone();
                     self.timeline = timeline;
+                    self.timeline_saved_baseline = Some(self.snapshot_timeline());
                     self.sync_timeline_engine();
                 }
                 Err(error) => {
@@ -7130,6 +7195,12 @@ impl PealayerApp {
             mc.update_metadata(crate::platform::media_controls::SessionMetadata::default());
             mc.update_playback(false, false, 0.0, 0.0);
         }
+        self.timeline = crate::four_d::models::Timeline::default();
+        self.track_muted.clear();
+        self.track_soloed.clear();
+        self.track_locked.clear();
+        self.timeline_saved_baseline = Some(self.snapshot_timeline());
+        self.sync_timeline_engine();
         self.set_osd("Video Closed".to_string());
         self.save_config();
     }
@@ -7140,6 +7211,7 @@ impl PealayerApp {
         let mut items=vec![
             Item {domain:"effect_designer".into(),state:dirty(crate::ui::effects_library::unsaved_designer(self,ctx))},
             Item {domain:"cue_dialog".into(),state:dirty(crate::ui::layout::unsaved_cue(self,ctx))},
+            Item {domain:"timeline_cues".into(),state:if self.is_timeline_dirty() { State::Dirty } else { State::Clean }},
             Item {domain:"preferences".into(),state:dirty(Some(self.preferences_draft.as_ref().is_some_and(|draft|draft.is_dirty())))},
             Item {domain:"rf".into(),state:dirty(Some(self.rf.dirty()))},
             Item {domain:"board_settings".into(),state:dirty(Some(self.board_settings_dirty))},
@@ -8397,16 +8469,33 @@ impl PealayerApp {
             templates: self.timeline.templates.clone(),
             keyframes: self.timeline.keyframes.clone(),
             track_states: self.timeline.track_states.clone(),
+            track_muted: self.track_muted.clone(),
+            track_soloed: self.track_soloed.clone(),
+            track_locked: self.track_locked.clone(),
+            media_target: self.current_video_path.as_ref().map(|p| p.to_string_lossy().to_string()),
         }
     }
 
-    fn persist_timeline_track_preferences(&mut self) {
-        if crate::peer::active(){self.sync_timeline_engine();return;}
-        let Some(video_path) = self.current_video_path.as_ref() else {
-            return;
-        };
+    pub fn is_timeline_dirty(&self) -> bool {
+        let current = self.snapshot_timeline();
+        match &self.timeline_saved_baseline {
+            Some(baseline) => current != *baseline,
+            None => {
+                !self.timeline.instances.is_empty()
+                    || !self.timeline.templates.is_empty()
+                    || !self.timeline.analog_tracks.is_empty()
+                    || !self.timeline.keyframes.is_empty()
+                    || !self.track_muted.is_empty()
+                    || !self.track_soloed.is_empty()
+                    || !self.track_locked.is_empty()
+            }
+        }
+    }
+
+    pub fn current_timeline_sidecar_path(&self) -> Option<std::path::PathBuf> {
+        let video_path = self.current_video_path.as_ref()?;
         if crate::media::is_remote_media_target(&video_path.to_string_lossy()) {
-            return;
+            return None;
         }
         let mut sidecar = video_path.clone();
         sidecar.set_extension("4d.json");
@@ -8414,14 +8503,167 @@ impl PealayerApp {
             let mut json_sidecar = video_path.clone();
             json_sidecar.set_extension("json");
             if json_sidecar.exists() {
-                sidecar = json_sidecar;
+                return Some(json_sidecar);
             }
         }
-        if let Err(error) = self.timeline.save_to_file(&sidecar) {
+        Some(sidecar)
+    }
+
+    pub fn save_current_timeline_sidecar(&mut self) -> Result<std::path::PathBuf, String> {
+        if crate::peer::active() {
+            return Err("Peer client cannot write server sidecar directly".into());
+        }
+        let Some(sidecar) = self.current_timeline_sidecar_path() else {
+            return Err(self.tr("No local media loaded to associate timeline sidecar"));
+        };
+        self.timeline.track_muted = self.track_muted.clone();
+        self.timeline.track_soloed = self.track_soloed.clone();
+        self.timeline.track_locked = self.track_locked.clone();
+        self.timeline.media_target = self.current_video_path.as_ref().map(|p| p.to_string_lossy().to_string());
+        self.timeline
+            .save_to_file(&sidecar)
+            .map_err(|e| format!("Failed to save timeline: {e}"))?;
+        self.timeline_saved_baseline = Some(self.snapshot_timeline());
+        let name = sidecar
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("timeline");
+        self.set_osd(format!("{} {name}", self.tr("Timeline saved:")));
+        Ok(sidecar)
+    }
+
+    fn persist_timeline_track_preferences(&mut self) {
+        if crate::peer::active() {
+            self.sync_timeline_engine();
+            return;
+        }
+        if let Err(error) = self.save_current_timeline_sidecar() {
             self.set_osd(format!(
                 "{}: {error}",
                 self.tr("Could not save timeline settings")
             ));
+        }
+    }
+
+    pub fn request_close_video(&mut self) {
+        if self.is_timeline_dirty() {
+            self.pending_timeline_close_action = Some(PendingTimelineCloseAction::CloseVideo);
+        } else {
+            self.close_video();
+        }
+    }
+
+    pub fn request_load_video_file(&mut self, path: std::path::PathBuf) {
+        if self.is_timeline_dirty() {
+            self.pending_timeline_close_action = Some(PendingTimelineCloseAction::SwitchMedia(path));
+        } else {
+            self.load_video_file(path);
+        }
+    }
+
+    pub fn request_quit(&mut self, ctx: &egui::Context) {
+        if self.is_timeline_dirty() {
+            self.pending_timeline_close_action = Some(PendingTimelineCloseAction::CloseApp);
+        } else {
+            ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+        }
+    }
+
+    pub(crate) fn execute_timeline_close_action(
+        &mut self,
+        ctx: &egui::Context,
+        action: PendingTimelineCloseAction,
+    ) {
+        match action {
+            PendingTimelineCloseAction::CloseApp => {
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
+            PendingTimelineCloseAction::SwitchMedia(path) => {
+                self.load_video_file(path);
+            }
+            PendingTimelineCloseAction::CloseVideo => {
+                self.close_video();
+            }
+        }
+    }
+
+    pub(crate) fn draw_timeline_close_confirmation(&mut self, ctx: &egui::Context) {
+        let Some(action) = self.pending_timeline_close_action.clone() else {
+            return;
+        };
+        let mut save = false;
+        let mut discard = false;
+        let mut cancel = false;
+        let confirm = crate::ui::dialog::confirmation_modal(
+            ctx,
+            egui::Id::new("timeline-confirm-close"),
+            &self.tr("Unsaved timeline cues"),
+            crate::ui::icons::WARNING,
+            &self.tr("Save cues to timeline sidecar before proceeding?"),
+            &self.tr("Cancel"),
+            |ui| {
+                if ui
+                    .add(
+                        elegance::Button::new(format!(
+                            "{}  {}",
+                            crate::ui::icons::FLOPPY_DISK,
+                            self.tr("Save")
+                        ))
+                        .min_width(crate::ui::dialog::ACTION_BUTTON_WIDTH),
+                    )
+                    .clicked()
+                {
+                    save = true;
+                }
+                if ui
+                    .add(
+                        elegance::Button::new(format!(
+                            "{}  {}",
+                            crate::ui::icons::TRASH,
+                            self.tr("Discard")
+                        ))
+                        .accent(elegance::Accent::Red)
+                        .min_width(crate::ui::dialog::ACTION_BUTTON_WIDTH),
+                    )
+                    .clicked()
+                {
+                    discard = true;
+                }
+                if ui
+                    .add(
+                        elegance::Button::new(format!(
+                            "{}  {}",
+                            crate::ui::icons::X,
+                            self.tr("Cancel")
+                        ))
+                        .outline()
+                        .min_width(crate::ui::dialog::ACTION_BUTTON_WIDTH),
+                    )
+                    .clicked()
+                {
+                    cancel = true;
+                }
+                cancel || save || discard
+            },
+        );
+
+        if save {
+            match self.save_current_timeline_sidecar() {
+                Ok(_) => {
+                    self.pending_timeline_close_action = None;
+                    self.execute_timeline_close_action(ctx, action);
+                }
+                Err(error) => {
+                    self.show_error = Some(error);
+                    self.pending_timeline_close_action = None;
+                }
+            }
+        } else if discard {
+            self.timeline_saved_baseline = Some(self.snapshot_timeline());
+            self.pending_timeline_close_action = None;
+            self.execute_timeline_close_action(ctx, action);
+        } else if cancel || confirm.dismissed {
+            self.pending_timeline_close_action = None;
         }
     }
 
@@ -9567,6 +9809,8 @@ impl Default for PealayerApp {
             show_four_d_editor: true,
             dock_state: crate::ui::layout::create_initial_layout(),
             timeline: crate::four_d::models::Timeline::new(),
+            timeline_saved_baseline: None,
+            pending_timeline_close_action: None,
             engine_handle,
             recording_session: crate::four_d::curve_record::RecordingSession::new(),
             input_capture: crate::four_d::input_capture::InputCaptureState::new(),
@@ -11989,5 +12233,75 @@ pub(crate) mod tests {
         assert_eq!(updated.as_ref().unwrap().board_name, "MutatedBoard");
         assert!(!Arc::ptr_eq(&shared, &app.advertised_hardware_shared().unwrap()));
         assert_eq!(shared.board_name, "TestBoard", "a newer revision mutated an existing read-only view");
+    }
+
+    #[test]
+    fn timeline_dirty_tracking_and_sidecar_saving() {
+        let _lock = lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.timeline_saved_baseline = Some(app.snapshot_timeline());
+        assert!(!app.is_timeline_dirty());
+
+        // Adding cue makes timeline dirty
+        let effect = crate::four_d::models::Effect::new("Splash".into(), String::new(), 1000, vec![]);
+        let effect_id = effect.id;
+        app.timeline.templates.push(effect);
+        app.timeline.instances.push(crate::four_d::models::EffectInstance::new(effect_id, 500));
+        assert!(app.is_timeline_dirty());
+
+        // Context authoring reports dirty state
+        let ctx = eframe::egui::Context::default();
+        let inspection = app.inspect_authoring(&ctx);
+        let timeline_item = inspection.items.iter().find(|i| i.domain == "timeline_cues").unwrap();
+        assert_eq!(timeline_item.state, crate::authoring::State::Dirty);
+
+        // Saving to sidecar clears dirty state
+        let temp_dir = std::env::temp_dir().join(format!("pealayer_dirty_test_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let video_path = temp_dir.join("movie.mp4");
+        std::fs::write(&video_path, b"dummy").unwrap();
+        app.current_video_path = Some(video_path.clone());
+
+        let sidecar = app.save_current_timeline_sidecar().expect("sidecar write should succeed");
+        assert_eq!(sidecar, temp_dir.join("movie.4d.json"));
+        assert!(sidecar.exists());
+        assert!(!app.is_timeline_dirty());
+
+        let inspection_clean = app.inspect_authoring(&ctx);
+        let clean_item = inspection_clean.items.iter().find(|i| i.domain == "timeline_cues").unwrap();
+        assert_eq!(clean_item.state, crate::authoring::State::Clean);
+
+        // Verify track_muted, track_soloed, track_locked and media_target are saved and restored
+        app.track_muted.insert(2);
+        app.track_soloed.insert(3);
+        app.track_locked.insert(4);
+        assert!(app.is_timeline_dirty());
+        app.save_current_timeline_sidecar().unwrap();
+        assert!(!app.is_timeline_dirty());
+
+        let json_content = std::fs::read_to_string(&sidecar).unwrap();
+        assert!(json_content.contains("\"track_muted\""));
+        assert!(json_content.contains("\"track_soloed\""));
+        assert!(json_content.contains("\"track_locked\""));
+        assert!(json_content.contains("\"media_target\""));
+
+        let mut loaded_app = PealayerApp::default();
+        loaded_app.load_video_file(video_path.clone());
+        assert!(loaded_app.track_muted.contains(&2));
+        assert!(loaded_app.track_soloed.contains(&3));
+        assert!(loaded_app.track_locked.contains(&4));
+        assert_eq!(loaded_app.timeline.instances.len(), 1);
+
+        // Requesting close/quit when dirty prompts confirmation action
+        app.timeline.instances.push(crate::four_d::models::EffectInstance::new(effect_id, 1500));
+        assert!(app.is_timeline_dirty());
+        assert!(app.pending_timeline_close_action.is_none());
+
+        app.request_close_video();
+        assert_eq!(
+            app.pending_timeline_close_action,
+            Some(PendingTimelineCloseAction::CloseVideo)
+        );
+        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 }

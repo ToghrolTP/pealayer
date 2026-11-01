@@ -732,7 +732,9 @@ pub fn run() -> eframe::Result {
                 show_error: None,
                 show_four_d_editor: loaded_config.workspace_session.nle,
 
-                timeline: startup_effect_cue_timeline,
+                timeline: startup_effect_cue_timeline.clone(),
+                timeline_saved_baseline: Some(crate::four_d::history::TimelineSnapshot::from(&startup_effect_cue_timeline)),
+                pending_timeline_close_action: None,
                 engine_handle,
                 recording_session: crate::four_d::curve_record::RecordingSession::new(),
                 input_capture: crate::four_d::input_capture::InputCaptureState::new(),
