@@ -59,7 +59,7 @@ first wraps that tuple in IdSalt. Corrected readback still requires actual wheel
 scrolling. The combined branch subsequently passed 1,016 native unit tests and the
 entire workspace integration suite, including all 13 public workspace tests and
 the transfer regressions. The additional sidebar raster regression brings the
-latest native unit result to 1,017 passed, one explicitly ignored external-mpv
+latest pre-review native unit result to 1,017 passed, one explicitly ignored external-mpv
 acceptance test, and no failures.
 
 The Web regression/build/PWA pipeline passed with the exact npm lock dependencies
@@ -82,6 +82,29 @@ platform checks remain a separate mandatory merge gate.
 The normal current-main merge also includes #224's timeline cue persistence and
 unsaved-change protection. Its close-request check runs before the retained
 pointer-release layout-save coalescing; neither side is discarded.
+
+### Reviewer ownership and navigation follow-up
+
+The completed automated review identified five additional real interaction gaps.
+All are repaired without removing relay recording or panel functionality:
+
+- Disable PaneHost's donor F6 handler. Pealayer's existing shortcut dispatcher
+  remains the sole owner of the F1-F8 relay-recording shortcuts.
+- Process explicit reveals before building the dock. Clear a different maximized
+  panel and persist that view state so the requested panel is actually visible.
+- Forward the final explicit reveal to `DockArea::raise_panel`. Requests made by
+  panel bodies survive until the following render instead of being drained after
+  the builder has already run. Floating placement is retained.
+- Capture and restore rail open/enabled/width state with named workspace profiles
+  and the automatic session snapshot. Restore dock/rail ownership transactionally;
+  an unrelated previously open rail cannot steal a restored panel.
+- Route menu pane opening through the application helper: enter the editor from
+  Simple mode and respect locked dock ownership before changing visible state.
+
+New input/model/profile regressions pass in the full local native unit suite:
+1,021 passed, zero failed, one opt-in external-mpv test ignored. The earlier
+release-package attempt was canceled rather than publishing a superseded build.
+Final workspace/Web/package/platform verification applies to the repaired head.
 
 ## Remaining branch history
 

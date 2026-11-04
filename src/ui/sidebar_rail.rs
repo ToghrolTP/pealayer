@@ -246,6 +246,9 @@ pub fn show_sidebar_rail(
         let open_panes = [pane];
         let mut content = SidebarPaneContent { app };
         let out = PaneHost::new(Id::unique("pealayer-sidebar-pane-host"))
+            // F1-F8 belong to Pealayer's relay-recording dispatcher. The
+            // donor host must not also interpret F6 as pane navigation.
+            .f6(false)
             .rtl(content.app.rtl)
             .policy(SidePolicy::OneSlot)
             .show(
@@ -273,6 +276,7 @@ pub fn show_sidebar_rail(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use eframe::egui;
     use craft_ui::panes::{Edge, PaneContent, PaneRequest, Place, RailRequest};
 
     #[test]
@@ -443,6 +447,31 @@ mod tests {
             assert!(rail_req.is_none());
             assert!(pane_out.is_some());
         }));
+    }
+
+    #[test]
+    fn property_host_does_not_consume_the_app_owned_f6_recording_key() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let mut app = PealayerApp::default();
+        let mut state = SidebarRailState { open: Some(SidebarPane::MediaInspector), ..Default::default() };
+        let ctx = egui::Context::default();
+        for pressed in [false, false, true] {
+            let events = if pressed { vec![egui::Event::Key {
+                key: egui::Key::F6, physical_key: Some(egui::Key::F6),
+                pressed: true, repeat: false, modifiers: egui::Modifiers::NONE,
+            }] } else { Vec::new() };
+            discard_ui_output(ctx.run_ui(egui::RawInput {
+                events,
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 700.0))),
+                ..Default::default()
+            }, |ui| {
+                show_sidebar_rail(&mut app, ui, &mut state);
+                if pressed {
+                    assert!(ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::F6)),
+                        "pane navigation stole the application's relay-recording shortcut");
+                }
+            }));
+        }
     }
 
     #[test]

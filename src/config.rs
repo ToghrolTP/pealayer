@@ -852,6 +852,7 @@ pub struct WorkspaceProfile {
     pub nle: bool,
     pub window_geometry: Option<WindowGeometry>,
     pub dock_layout: Option<String>,
+    pub sidebar_rail: crate::ui::sidebar_rail::SidebarRailState,
     pub dialogs: WorkspaceDialogs,
     /// Serialized egui memory contains movable window rectangles, active dock
     /// leaves, and every stable ScrollArea offset.
@@ -867,6 +868,7 @@ impl Default for WorkspaceProfile {
             nle: true,
             window_geometry: None,
             dock_layout: None,
+            sidebar_rail: crate::ui::sidebar_rail::SidebarRailState::default(),
             dialogs: WorkspaceDialogs::default(),
             egui_memory: None,
         }
@@ -2653,6 +2655,7 @@ mod tests {
                 maximized: false,
             }),
             dock_layout: Some("{\"surface\":\"hardware\"}".to_string()),
+            sidebar_rail: crate::ui::sidebar_rail::SidebarRailState::default(),
             dialogs: WorkspaceDialogs {
                 board_information: true,
                 board_information_tab: 2,

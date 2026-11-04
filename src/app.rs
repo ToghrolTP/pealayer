@@ -2033,6 +2033,9 @@ impl eframe::App for PealayerApp {
             .frame(frame)
             .show_inside(ui, |ui| {
                 if self.show_four_d_editor {
+                    // Requests emitted while drawing a panel are retained for
+                    // the next render, when DockArea can actually raise it.
+                    let raise_panel = self.prepare_workspace_reveals(ui.ctx());
                     if self.dock_state.layout.panels().is_empty() {
                         ui.centered_and_justified(|ui| {
                             ui.vertical_centered(|ui| {
@@ -2057,12 +2060,15 @@ impl eframe::App for PealayerApp {
                         let view_before = dock_view.clone();
                         let output = ui.scope(|ui| {
                             let mut tab_viewer = crate::ui::layout::PealayerTabViewer { app: self };
-                            craft_ui::docking::DockArea::new(egui::Id::new("workspace_dock_area"))
+                            let mut area = craft_ui::docking::DockArea::new(egui::Id::new("workspace_dock_area"))
                                 .locked(locked)
                                 .input_blocked(modal_blocked)
                                 .maximized(dock_view.maximized)
-                                .auto_collapse_iconic(dock_view.auto_collapse)
-                                .show_content(ui, &layout_snapshot, &dock_style, &mut tab_viewer)
+                                .auto_collapse_iconic(dock_view.auto_collapse);
+                            if let Some(panel) = raise_panel {
+                                area = area.raise_panel(panel);
+                            }
+                            area.show_content(ui, &layout_snapshot, &dock_style, &mut tab_viewer)
                         }).inner;
                         self.workspace_rendering = false;
                         if !output.actions.is_empty() {
@@ -2083,15 +2089,6 @@ impl eframe::App for PealayerApp {
                         }
 
                         if !self.pending_tab_reveals.is_empty() {
-                            let mut layout_changed = false;
-                            for tab in std::mem::take(&mut self.pending_tab_reveals) {
-                                if crate::ui::layout::reveal_and_focus_tab(&mut self.dock_state, tab) {
-                                    layout_changed = true;
-                                }
-                            }
-                            if layout_changed {
-                                self.save_dock_layout();
-                            }
                             ui.ctx().request_repaint();
                         }
                     }
@@ -6015,9 +6012,53 @@ impl PealayerApp {
         if crate::ui::layout::reveal_and_focus_tab(&mut self.dock_state, tab) {
             self.save_dock_layout();
         }
-        if !self.pending_tab_reveals.contains(&tab) {
-            self.pending_tab_reveals.push(tab);
+        self.pending_tab_reveals.retain(|queued| *queued != tab);
+        self.pending_tab_reveals.push(tab);
+    }
+
+    pub(crate) fn prepare_workspace_reveals(
+        &mut self,
+        ctx: &egui::Context,
+    ) -> Option<crate::ui::layout::PealayerTab> {
+        let requests = std::mem::take(&mut self.pending_tab_reveals);
+        let requested = requests.last().copied()?;
+        let mut view = crate::ui::layout::DockViewState::load(ctx);
+        let before = view.clone();
+        let mut changed = false;
+        for tab in requests {
+            changed |= crate::ui::layout::reveal_and_focus_tab(&mut self.dock_state, tab);
         }
+        // An explicit reveal must not remain behind a different maximized
+        // panel. Keep maximization when revealing that same panel.
+        if view.maximized != Some(requested) {
+            view.maximized = None;
+        }
+        if view != before {
+            view.store(ctx);
+            changed = true;
+        }
+        if changed {
+            self.deferred_config_save = true;
+        }
+        Some(requested)
+    }
+
+    pub(crate) fn open_sidebar_pane(
+        &mut self,
+        pane: crate::ui::sidebar_rail::SidebarPane,
+    ) -> Result<(), String> {
+        let tab = crate::ui::layout::PealayerTab::from(pane);
+        if self.dock_state.layout.contains(&tab) {
+            self.dock_state.set_visible(tab, false,
+                Some(crate::ui::layout::PealayerTab::ProgramMonitor),
+                |_| craft_ui::docking::Permissions::default())
+                .map_err(|error| format!("Cannot open sidebar panel: {error:?}"))?;
+        }
+        self.show_four_d_editor = true;
+        self.sidebar_rail_state.enabled = true;
+        self.sidebar_rail_state.open = Some(pane);
+        self.deferred_config_save = true;
+        Ok(())
     }
 
     pub const EFFECT_CONTROLS_PING_DURATION: f64 = 1.2;
@@ -6077,6 +6118,7 @@ impl PealayerApp {
             nle: self.show_four_d_editor,
             window_geometry: self.window_geometry,
             dock_layout: serde_json::to_string(&dock_state).ok(),
+            sidebar_rail: self.sidebar_rail_state,
             dialogs: crate::config::WorkspaceDialogs {
                 subtitles: self.show_sub_settings,
                 audio: self.show_audio_settings,
@@ -6104,11 +6146,12 @@ impl PealayerApp {
         ctx: &egui::Context,
         profile: &crate::config::WorkspaceProfile,
     ) -> Result<(), String> {
-        let dock_state = profile
+        let mut dock_state = profile
             .dock_layout
             .as_deref()
             .map(crate::ui::layout::decode_workspace)
-            .transpose()?;
+            .transpose()?
+            .unwrap_or_else(|| self.dock_state.clone());
         let memory = profile
             .egui_memory
             .as_deref()
@@ -6118,10 +6161,20 @@ impl PealayerApp {
             })
             .transpose()?;
 
-        self.show_four_d_editor = profile.nle;
-        if let Some(dock_state) = dock_state {
-            self.dock_state = dock_state;
+        let rail = profile.sidebar_rail;
+        if let Some(pane) = rail.open.filter(|_| rail.enabled) {
+            let tab = crate::ui::layout::PealayerTab::from(pane);
+            if dock_state.layout.contains(&tab) {
+                dock_state.set_visible(tab, false,
+                    Some(crate::ui::layout::PealayerTab::ProgramMonitor),
+                    |_| craft_ui::docking::Permissions::default())
+                    .map_err(|error| format!("Could not restore sidebar ownership: {error:?}"))?;
+            }
         }
+        self.show_four_d_editor = profile.nle;
+        self.dock_state = dock_state;
+        self.sidebar_rail_state = rail;
+        self.pending_tab_reveals.clear();
         let dialogs = &profile.dialogs;
         self.show_sub_settings = dialogs.subtitles;
         self.show_audio_settings = dialogs.audio;
@@ -7375,6 +7428,7 @@ impl PealayerApp {
             nle: self.show_four_d_editor,
             window_geometry: self.window_geometry,
             dock_layout: cfg.workspace_dock_layout.clone(),
+            sidebar_rail: self.sidebar_rail_state,
             dialogs: crate::config::WorkspaceDialogs {
                 subtitles: self.show_sub_settings,
                 audio: self.show_audio_settings,
@@ -10119,6 +10173,80 @@ pub(crate) mod tests {
 
         let profile = app.capture_workspace_profile(&egui::Context::default());
         assert!(profile.dock_layout.is_some());
+    }
+
+    #[test]
+    fn workspace_profiles_restore_sidebar_owner_width_and_enabled_state() {
+        let _lock = lock_app_tests();
+        use crate::ui::{layout::PealayerTab as Tab, sidebar_rail::SidebarPane as Pane};
+        let ctx = egui::Context::default();
+        let mut app = PealayerApp::default();
+        let docked = app.capture_workspace_profile(&ctx);
+        app.open_sidebar_pane(Pane::HardwareMonitor).unwrap();
+        app.sidebar_rail_state.width = 420.0;
+        let profile = app.capture_workspace_profile(&ctx);
+        let profile = serde_json::from_str(&serde_json::to_string(&profile).unwrap()).unwrap();
+        app.open_sidebar_pane(Pane::MediaInspector).unwrap();
+        app.sidebar_rail_state.enabled = false;
+        app.apply_workspace_profile(&ctx, &profile).unwrap();
+        assert!(app.is_tab_open_in_sidebar(Tab::HardwareMonitor));
+        assert!(!app.is_tab_open_in_dock(Tab::HardwareMonitor));
+        assert_eq!(app.sidebar_rail_state.width, 420.0);
+        assert!(app.is_tab_open_in_dock(Tab::EffectsLibrary));
+        assert_eq!(app.runtime_config_snapshot().workspace_session.sidebar_rail,
+            app.sidebar_rail_state);
+        app.apply_workspace_profile(&ctx, &docked).unwrap();
+        assert_eq!(app.sidebar_rail_state, docked.sidebar_rail);
+        assert!(app.is_tab_open_in_dock(Tab::HardwareMonitor));
+        assert!(!app.is_tab_open_in_sidebar(Tab::MediaInspector));
+    }
+
+    #[test]
+    fn sidebar_menu_open_from_simple_enters_editor_and_honors_locked_ownership() {
+        let _lock = lock_app_tests();
+        use crate::ui::{layout::PealayerTab as Tab, sidebar_rail::SidebarPane as Pane};
+        let mut app = PealayerApp::default();
+        app.show_four_d_editor = false;
+        app.dock_state.locked = true;
+        assert!(app.open_sidebar_pane(Pane::HardwareMonitor).is_err());
+        assert!(!app.show_four_d_editor);
+        assert!(app.is_tab_open_in_dock(Tab::HardwareMonitor));
+        app.dock_state.locked = false;
+        app.open_sidebar_pane(Pane::HardwareMonitor).unwrap();
+        assert!(app.show_four_d_editor);
+        assert!(app.is_tab_open_in_sidebar(Tab::HardwareMonitor));
+        assert!(!app.is_tab_open_in_dock(Tab::HardwareMonitor));
+    }
+
+    #[test]
+    fn explicit_reveals_clear_obscuring_maximize_and_reach_the_next_dock_render() {
+        let _lock = lock_app_tests();
+        use crate::ui::layout::{DockViewState, PealayerTab as Tab};
+        let ctx = egui::Context::default();
+        let mut app = PealayerApp::default();
+        app.workspace_rendering = true;
+        DockViewState { maximized: Some(Tab::ProgramMonitor), auto_collapse: false }.store(&ctx);
+        // A body callback queues a reveal after this frame's builder has run.
+        assert_eq!(app.prepare_workspace_reveals(&ctx), None);
+        app.open_or_focus_tab(Tab::Timeline);
+        assert_eq!(app.pending_tab_reveals, [Tab::Timeline]);
+        assert_eq!(app.prepare_workspace_reveals(&ctx), Some(Tab::Timeline));
+        assert_eq!(DockViewState::load(&ctx).maximized, None);
+        assert!(!DockViewState::load(&ctx).auto_collapse);
+        assert!(app.deferred_config_save);
+        assert_eq!(app.prepare_workspace_reveals(&ctx), None);
+        // The last explicit request owns the raise, even if already queued.
+        app.dock_state.apply_all([craft_ui::docking::Action::Float {
+            panel: Tab::EffectControls, rect: [100.0, 100.0, 400.0, 400.0],
+        }], |_| craft_ui::docking::Permissions::default()).unwrap();
+        DockViewState { maximized: Some(Tab::EffectControls), ..Default::default() }.store(&ctx);
+        app.open_or_focus_tab(Tab::EffectControls);
+        app.open_or_focus_tab(Tab::Timeline);
+        app.open_or_focus_tab(Tab::EffectControls);
+        assert_eq!(app.prepare_workspace_reveals(&ctx), Some(Tab::EffectControls));
+        assert_eq!(DockViewState::load(&ctx).maximized, Some(Tab::EffectControls));
+        assert!(app.dock_state.layout.floating.iter().any(|window| window.contains(&Tab::EffectControls)),
+            "raising a covered floating panel must preserve its floating placement");
     }
 
     #[test]
