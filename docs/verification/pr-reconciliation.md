@@ -105,9 +105,13 @@ All are repaired without removing relay recording or panel functionality:
   only its rail owner; captured profiles still restore their full arrangement.
 
 New input/model/profile regressions pass in the full local native unit suite:
-1,022 passed, zero failed, one opt-in external-mpv test ignored. The full workspace
-suite passed before the final mode-only profile regression; its final rerun and
-hosted checks remain required. An earlier package attempt was canceled rather than
+1,022 passed, zero failed, one opt-in external-mpv test ignored. A full workspace
+rerun exposed a downloader fixture race: Winsock inherits the listener's
+nonblocking mode, but the fixture's HTTP reader expected blocking reads. A new
+delayed-byte test failed before the fix; accepted fixture sockets now explicitly
+return to blocking mode. Resume, source-validator and exact-byte assertions stay
+intact. The complete rerun and hosted checks remain required.
+An earlier package attempt was canceled rather than
 publishing a superseded build; the repaired package subsequently passed resource,
 runtime-identity and smoke verification and is being refreshed for the final fix.
 

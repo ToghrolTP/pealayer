@@ -75,18 +75,51 @@ impl Drop for Fixture {
 fn payload() -> Vec<u8> {
     (0..256 * 1024).map(|n| (n % 251) as u8).collect()
 }
-fn respond(
-    mut stream: TcpStream,
-    mode: &str,
-    captured: Arc<Mutex<Vec<String>>>,
-    first_response: Arc<(Mutex<bool>, Condvar)>,
-) {
+fn prepare_fixture_stream(stream: &TcpStream) {
+    // Winsock inherits the listener's nonblocking mode on accepted sockets.
+    // The fixture's blocking parser must wait for request bytes, not interpret
+    // an early WSAEWOULDBLOCK as a closed/failed connection.
+    stream.set_nonblocking(false).unwrap();
     stream
         .set_read_timeout(Some(Duration::from_secs(2)))
         .unwrap();
     stream
         .set_write_timeout(Some(Duration::from_secs(2)))
         .unwrap();
+}
+
+#[test]
+fn accepted_fixture_socket_waits_for_delayed_request_bytes() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let mut client = TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+    let (mut stream, _) = listener.accept().unwrap();
+    prepare_fixture_stream(&stream);
+    let (ready_tx, ready_rx) = std::sync::mpsc::channel();
+    let (read_tx, read_rx) = std::sync::mpsc::channel();
+    let worker = thread::spawn(move || {
+        ready_tx.send(()).unwrap();
+        let mut byte = [0];
+        let result = stream.read_exact(&mut byte).map(|()| byte)
+            .map_err(|error| error.kind());
+        read_tx.send(result).unwrap();
+    });
+    ready_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+    assert!(matches!(read_rx.recv_timeout(Duration::from_millis(50)),
+        Err(std::sync::mpsc::RecvTimeoutError::Timeout)),
+        "fixture socket must wait, not close before the client writes");
+    client.write_all(b"x").unwrap();
+    assert_eq!(read_rx.recv_timeout(Duration::from_secs(2)).unwrap(), Ok([b'x']));
+    worker.join().unwrap();
+}
+
+fn respond(
+    mut stream: TcpStream,
+    mode: &str,
+    captured: Arc<Mutex<Vec<String>>>,
+    first_response: Arc<(Mutex<bool>, Condvar)>,
+) {
+    prepare_fixture_stream(&stream);
     let mut bytes = Vec::new();
     let mut buf = [0; 1024];
     while !bytes.ends_with(b"\r\n\r\n") && bytes.len() < 8192 {
