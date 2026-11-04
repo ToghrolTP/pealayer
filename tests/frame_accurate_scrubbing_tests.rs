@@ -1,5 +1,5 @@
 use pealayer::mpv::frame_cache::{CachedFrame, FrameCache};
-use pealayer::mpv::seek::{ScrubResult, SeekBackend, SeekController, SeekMode};
+use pealayer::mpv::seek::{PendingSeek, ScrubResult, SeekBackend, SeekController, SeekMode};
 use pealayer::ui::controls::resolve_display_time;
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::{Duration, Instant};
@@ -10,8 +10,12 @@ struct MockSeekBackend {
 }
 
 impl SeekBackend for MockSeekBackend {
-    fn execute_seek(&self, target_time: f64, mode: SeekMode) {
-        self.seeks.lock().unwrap().push((target_time, mode));
+    fn execute_seek(&self, request: PendingSeek) -> bool {
+        self.seeks
+            .lock()
+            .unwrap()
+            .push((request.target_time, request.mode));
+        true
     }
 }
 
@@ -94,7 +98,7 @@ fn test_rapid_scrub_stress_across_cache_boundaries() {
     );
 
     // Commit seek to conclude the scrub sequence
-    let commit_id = controller.request_commit(40.0);
+    let commit_id = controller.request_commit(40.0).request_id;
     assert!(commit_id > 0);
 
     // Allow background worker to process dispatched seeks deterministically
@@ -260,7 +264,7 @@ fn test_edge_cases_non_finite_and_negative_seek_times() {
         match scrub_res {
             ScrubResult::Cached(_) | ScrubResult::Dispatched(_) => {}
         }
-        let commit_id = controller.request_commit(t);
+        let commit_id = controller.request_commit(t).request_id;
         assert!(commit_id > 0);
     }
 

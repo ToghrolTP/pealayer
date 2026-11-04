@@ -6949,9 +6949,9 @@ fn draw_addressable_strip_tool(
             .unwrap_or(strip.default_fps)
             .clamp(strip.minimum_fps, strip.maximum_fps)
     });
-    let available_modes = ["solid", "pixel", "frame", "rainbow", "effect"]
+    let available_modes = ["solid", "pixel", "diagnostic", "frame", "rainbow", "effect"]
         .into_iter()
-        .filter(|mode| strip.supports(mode))
+        .filter(|mode| strip.supports(if *mode == "diagnostic" {"frame"} else {mode}))
         .collect::<Vec<_>>();
     let mut mode = ui.data_mut(|data| {
         data.get_persisted::<String>(mode_id)
@@ -7059,6 +7059,7 @@ fn draw_addressable_strip_tool(
                         .selected_text(match mode.as_str() {
                             "solid" => app.tr("Solid color"),
                             "pixel" => app.tr("Single pixel"),
+                            "diagnostic" => app.tr("Pixel diagnostics"),
                             "frame" => app.tr("Color frame"),
                             "rainbow" => app.tr("Rainbow"),
                             "effect" => app.tr("Effect"),
@@ -7069,6 +7070,7 @@ fn draw_addressable_strip_tool(
                                 let label = match *advertised {
                                     "solid" => app.tr("Solid color"),
                                     "pixel" => app.tr("Single pixel"),
+                                    "diagnostic" => app.tr("Pixel diagnostics"),
                                     "frame" => app.tr("Color frame"),
                                     "rainbow" => app.tr("Rainbow"),
                                     "effect" => app.tr("Effect"),
@@ -7107,6 +7109,7 @@ fn draw_addressable_strip_tool(
                         }
                     }
                 }
+                "diagnostic" => crate::ui::pixel_diagnostic::draw(app, ui, capabilities, pixels),
                 "pixel" => {
                     pixel = pixel.min(pixels.saturating_sub(1));
                     ui.horizontal_wrapped(|ui| {
@@ -20723,7 +20726,11 @@ mod dock_content_tests {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 240.0))),
                 ..Default::default()
             }, |ui| {
-                id.set(ui.make_persistent_id(("pealayer-panel-scroll", &PealayerTab::EffectControls)));
+                // ScrollArea wraps its source in IdSalt before combining it
+                // with the UI scope; use the same identity for the readback.
+                id.set(ui.make_persistent_id(egui::IdSalt::new((
+                    "pealayer-panel-scroll", &PealayerTab::EffectControls,
+                ))));
                 panel_body(ui, &PealayerTab::EffectControls, |ui| {
                     ui.allocate_space(egui::vec2(100.0, 1000.0));
                 });

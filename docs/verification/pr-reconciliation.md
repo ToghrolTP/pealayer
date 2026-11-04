@@ -11,10 +11,10 @@ This is a source-integration ledger, not an installation or physical acceptance 
 | Effects Library double-click, #220 | Merged; shared Manage path, action-gutter and inline-draft guards retained | Both complete native/Web matrices and CodeQL passed, including real pointer-event coverage. |
 | Ant Design patch, #221 | Merged; reviewed manifest, integrity lock and unchanged MIT license | Complete native/Web/PWA and CodeQL checks passed. |
 | Cargo updates, #222 | Merged; reviewed uuid/zip/notify and platform transitive changes | Complete four-platform native/Web and CodeQL checks passed. |
-| Decoder clock and exact-zero seek, #217 | Review in progress; paired controller reservation contract must be reconciled | Existing exact-head matrices passed. The 50 ms execution/read and 250 ms freshness limits must not be relaxed. |
-| Strip preview command, #212 | One-line command change also appears in #217; keep open until integration is proved | Its old failed aggregate followed a cancelled Linux duplicate; another complete exact-head matrix passed. |
-| Strip designer and deliberate probes, #218 | Designer/probe/UI files equal the copies carried by #217; keep open until integration is proved | Both old exact-head matrices passed. Optical/human and installed acceptance remain separate. |
-| Craft UI docking, #216 | Draft integration under repair; no claim of complete Phase 6 acceptance | Earlier push passed, PR health failed on real whitespace errors. Updated combined-head platform verification is required. |
+| Decoder clock and exact-zero seek, #217 | Merged after the paired PCController reservation contract in #701 | Both complete combined-head matrices and CodeQL passed. The 50 ms execution/read and 250 ms freshness limits remain unchanged. |
+| Strip preview command, #212 | Preserved on main through #217; duplicate draft can close | The unified `effect play` command is verified in merged source. Its old failed aggregate followed a cancelled duplicate; another complete exact-head matrix passed. |
+| Strip designer and deliberate probes, #218 | Its source history is included in merged main through #217 | Designer/probe/UI modules match; the remaining layout difference is the later reviewed double-click improvement. Optical/human and installed acceptance remain separate. |
+| Craft UI docking, #216 | Current-main integration and verification in progress | Local reproduction found one remaining scroll-fixture ID mismatch. Corrected readback retains real wheel-input assertions; combined-head platform checks remain required. |
 
 ## Craft docking repairs
 
@@ -53,9 +53,15 @@ host-owned menu-state round trips, real tall-form wheel input and nine
 viewport/scale render combinations. Selected icons use contrast ink, not accent
 ink on an identical accent fill.
 Rust parse, whitespace, generated-opcode and low-write policy checks passed locally.
-Offline native compilation could not start because the pinned egui fork is not in
-the shared cache; this is not a passing native test result. Hosted checks own that
-gate. Do not mark the draft ready or merge it until its combined exact head passes.
+Dependencies now use the existing shared cache. A local full native run reproduced
+the hosted failure: 984 passed, one failed, one intentionally ignored. The remaining
+test computed a raw tuple ID whereas the fork's ScrollArea first wraps that tuple
+in IdSalt; corrected readback still requires actual wheel scrolling. The final
+combined-head native/Web/platform results must be recorded before merging.
+
+The normal current-main merge also includes #224's timeline cue persistence and
+unsaved-change protection. Its close-request check runs before the retained
+pointer-release layout-save coalescing; neither side is discarded.
 
 ## Preserved boundaries
 
