@@ -12,9 +12,9 @@ This is a source-integration ledger, not an installation or physical acceptance 
 | Ant Design patch, #221 | Merged; reviewed manifest, integrity lock and unchanged MIT license | Complete native/Web/PWA and CodeQL checks passed. |
 | Cargo updates, #222 | Merged; reviewed uuid/zip/notify and platform transitive changes | Complete four-platform native/Web and CodeQL checks passed. |
 | Decoder clock and exact-zero seek, #217 | Merged after the paired PCController reservation contract in #701 | Both complete combined-head matrices and CodeQL passed. The 50 ms execution/read and 250 ms freshness limits remain unchanged. |
-| Strip preview command, #212 | Preserved on main through #217; duplicate draft can close | The unified `effect play` command is verified in merged source. Its old failed aggregate followed a cancelled duplicate; another complete exact-head matrix passed. |
+| Strip preview command, #212 | Preserved on main through #217; duplicate draft closed | The unified `effect play` command is verified in merged source. Its old failed aggregate followed a cancelled duplicate; another complete exact-head matrix passed. |
 | Strip designer and deliberate probes, #218 | Automatically marked merged when #217 included its complete history | Designer/probe/UI modules match; the remaining layout difference is the later reviewed double-click improvement. Optical/human and installed acceptance remain separate. |
-| Craft UI docking, #216 | Current-main integration and verification in progress | Local reproduction found one remaining scroll-fixture ID mismatch. Corrected readback retains real wheel-input assertions; combined-head platform checks remain required. |
+| Craft UI docking, #216 | Current-main integration completed; final hosted checks pending | Native/workspace/Web/PWA checks, actual light/dark captures and a host-compatible package passed. Final review added mode-only profile ownership coverage; the replacement package and complete exact-head platform checks remain required. |
 
 ## Craft docking repairs
 
@@ -100,11 +100,23 @@ All are repaired without removing relay recording or panel functionality:
   an unrelated previously open rail cannot steal a restored panel.
 - Route menu pane opening through the application helper: enter the editor from
   Simple mode and respect locked dock ownership before changing visible state.
+- Mode-only profiles without a saved dock arrangement retain the current dock
+  and rail together. Changing Simple/NLE mode must not strand a panel by clearing
+  only its rail owner; captured profiles still restore their full arrangement.
 
 New input/model/profile regressions pass in the full local native unit suite:
-1,021 passed, zero failed, one opt-in external-mpv test ignored. The earlier
-release-package attempt was canceled rather than publishing a superseded build.
-Final workspace/Web/package/platform verification applies to the repaired head.
+1,022 passed, zero failed, one opt-in external-mpv test ignored. The full workspace
+suite passed before the final mode-only profile regression; its final rerun and
+hosted checks remain required. An earlier package attempt was canceled rather than
+publishing a superseded build; the repaired package subsequently passed resource,
+runtime-identity and smoke verification and is being refreshed for the final fix.
+
+The isolated packaged application's live RPC path also created, captured, changed
+and restored a named rail profile. Readback verified its enabled state, owner and
+420-point width; the temporary test profile was then deleted. Synthetic local
+video decoding, advancing elapsed time, Pause and exact-zero seek settlement were
+observed without a controller or physical outputs. This does not establish
+production-host, audio or taskbar/GPU acceptance.
 
 ## Remaining branch history
 

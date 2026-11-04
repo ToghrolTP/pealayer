@@ -6161,7 +6161,14 @@ impl PealayerApp {
             })
             .transpose()?;
 
-        let rail = profile.sidebar_rail;
+        // Mode-only profiles retain the current layout. Keep its rail owner as
+        // well: clearing just the rail would strand a panel already removed
+        // from the dock. Captured profiles restore both parts of the snapshot.
+        let rail = if profile.dock_layout.is_some() {
+            profile.sidebar_rail
+        } else {
+            self.sidebar_rail_state
+        };
         if let Some(pane) = rail.open.filter(|_| rail.enabled) {
             let tab = crate::ui::layout::PealayerTab::from(pane);
             if dock_state.layout.contains(&tab) {
@@ -10216,6 +10223,28 @@ pub(crate) mod tests {
         assert!(app.show_four_d_editor);
         assert!(app.is_tab_open_in_sidebar(Tab::HardwareMonitor));
         assert!(!app.is_tab_open_in_dock(Tab::HardwareMonitor));
+    }
+
+    #[test]
+    fn mode_only_workspace_profiles_preserve_the_existing_sidebar_owner() {
+        let _lock = lock_app_tests();
+        use crate::ui::{layout::PealayerTab as Tab, sidebar_rail::SidebarPane as Pane};
+        let ctx = egui::Context::default();
+        let mut app = PealayerApp::default();
+        app.open_sidebar_pane(Pane::HardwareMonitor).unwrap();
+        app.sidebar_rail_state.width = 420.0;
+        let rail = app.sidebar_rail_state;
+        let dock = serde_json::to_string(&app.dock_state).unwrap();
+
+        for profile in crate::config::default_workspace_profiles().values() {
+            assert!(profile.dock_layout.is_none());
+            app.apply_workspace_profile(&ctx, profile).unwrap();
+            assert_eq!(app.show_four_d_editor, profile.nle);
+            assert_eq!(app.sidebar_rail_state, rail);
+            assert_eq!(serde_json::to_string(&app.dock_state).unwrap(), dock);
+            assert!(app.is_tab_open_in_sidebar(Tab::HardwareMonitor));
+            assert!(!app.is_tab_open_in_dock(Tab::HardwareMonitor));
+        }
     }
 
     #[test]
