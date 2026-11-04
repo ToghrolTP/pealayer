@@ -53,11 +53,13 @@ impl TryFrom<PealayerTab> for SidebarPane {
     }
 }
 
-// Embedded clean 24x24 SVG vectors for high-density rail rendering
-const SVG_CIRCUITRY: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M15 9h.01"/><path d="M9 9h.01"/><path d="M9 15h.01"/><path d="M15 15h.01"/><path d="M9 12h6"/><path d="M12 9v6"/></svg>"##;
-const SVG_INFO: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>"##;
-const SVG_SLIDERS: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" x2="4" y1="21" y2="14"/><line x1="4" x2="4" y1="10" y2="3"/><line x1="12" x2="12" y1="21" y2="12"/><line x1="12" x2="12" y1="8" y2="3"/><line x1="20" x2="20" y1="21" y2="16"/><line x1="20" x2="20" y1="12" y2="3"/><line x1="1" x2="7" y1="14" y2="14"/><line x1="9" x2="15" y1="8" y2="8"/><line x1="17" x2="23" y1="16" y2="16"/></svg>"##;
-const SVG_SPARKLE: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>"##;
+// Rail multiplies the raster by its live theme/interaction tint. SVG
+// currentColor defaults to black in the loader, which cannot be tinted lighter;
+// a white alpha mask preserves the selected palette in both light and dark mode.
+const SVG_CIRCUITRY: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect width="18" height="18" x="3" y="3" rx="2"/><path d="M15 9h.01"/><path d="M9 9h.01"/><path d="M9 15h.01"/><path d="M15 15h.01"/><path d="M9 12h6"/><path d="M12 9v6"/></svg>"##;
+const SVG_INFO: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></svg>"##;
+const SVG_SLIDERS: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="4" x2="4" y1="21" y2="14"/><line x1="4" x2="4" y1="10" y2="3"/><line x1="12" x2="12" y1="21" y2="12"/><line x1="12" x2="12" y1="8" y2="3"/><line x1="20" x2="20" y1="21" y2="16"/><line x1="20" x2="20" y1="12" y2="3"/><line x1="1" x2="7" y1="14" y2="14"/><line x1="9" x2="15" y1="8" y2="8"/><line x1="17" x2="23" y1="16" y2="16"/></svg>"##;
+const SVG_SPARKLE: &[u8] = br##"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="#ffffff" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3-1.912 5.813a2 2 0 0 1-1.275 1.275L3 12l5.813 1.912a2 2 0 0 1 1.275 1.275L12 21l1.912-5.813a2 2 0 0 1 1.275-1.275L21 12l-5.813-1.912a2 2 0 0 1-1.275-1.275L12 3Z"/></svg>"##;
 
 pub fn icon_source(pane: SidebarPane) -> ImageSource<'static> {
     let (uri, bytes) = match pane {
@@ -351,6 +353,23 @@ mod tests {
                     assert!(!bytes.is_empty());
                 }
                 _ => panic!("Expected ImageSource::Bytes for {pane:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn sidebar_icon_rasters_are_tintable_alpha_masks() {
+        for pane in SidebarPane::ALL {
+            let ImageSource::Bytes { bytes, .. } = icon_source(pane) else {
+                panic!("Expected embedded SVG for {pane:?}");
+            };
+            let image = egui_extras::image::load_svg_bytes(&bytes, &Default::default())
+                .expect("sidebar SVG must rasterize");
+            assert!(image.pixels.iter().any(|pixel| pixel.a() > 0));
+            assert!(image.pixels.iter().any(|pixel| pixel.a() == 0));
+            for pixel in image.pixels.iter().filter(|pixel| pixel.a() > 0) {
+                assert_eq!([pixel.r(), pixel.g(), pixel.b()], [pixel.a(); 3],
+                    "{pane:?} must use white premultiplied ink so Rail's theme tint remains visible");
             }
         }
     }
