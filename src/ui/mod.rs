@@ -21,6 +21,8 @@ pub mod group_picker;
 pub mod hardware_control;
 pub(crate) mod pwm_policy;
 pub mod i18n;
+pub(crate) mod fonts;
+pub(crate) mod egui_dock;
 pub mod icons;
 pub mod layout;
 mod timeline_toolbar;

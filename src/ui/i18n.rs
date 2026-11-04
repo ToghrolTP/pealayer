@@ -1,112 +1,21 @@
 use crate::config::AppLanguage;
 use eframe::egui;
-use std::sync::Arc;
 
 /// Also used by isolated native UI fixtures so their font metrics match the app.
 #[doc(hidden)]
 pub fn configure_ui_fonts(context: &egui::Context, prefer_vazirmatn: bool) {
-    context.data_mut(|data| data.remove::<(crate::config::UiFontFamily, crate::config::UiFontFamily, bool)>(egui::Id::new("preferred-ui-fonts")));
-    install_ui_fonts(context, prefer_vazirmatn, crate::config::UiFontFamily::System, crate::config::UiFontFamily::Bundled);
+    crate::ui::fonts::install(context, &crate::config::AppConfig::default(), prefer_vazirmatn);
 }
 
 pub fn configure_preferred_fonts(context: &egui::Context, config: &crate::config::AppConfig) {
+    type Selection = (crate::config::UiFontFamily, crate::config::UiFontFamily, String, String, bool);
     let key = egui::Id::new("preferred-ui-fonts");
-    let desired = (config.ui_font_family, config.monospace_font_family,
+    let desired: Selection = (config.ui_font_family, config.monospace_font_family,
+        config.ui_font_name.clone(), config.monospace_font_name.clone(),
         crate::config::resolve_language(crate::config::resolved_language_preference(config)) == AppLanguage::Persian);
-    if context.data(|data| data.get_temp::<(crate::config::UiFontFamily, crate::config::UiFontFamily, bool)>(key)) == Some(desired) { return; }
-    install_ui_fonts(context, desired.2, desired.0, desired.1);
+    if context.data(|data| data.get_temp::<Selection>(key)).as_ref() == Some(&desired) { return; }
+    crate::ui::fonts::install(context, config, desired.4);
     context.data_mut(|data| data.insert_temp(key, desired));
-}
-
-fn install_ui_fonts(context: &egui::Context, prefer_vazirmatn: bool,
-    normal: crate::config::UiFontFamily, mono: crate::config::UiFontFamily) {
-    let mut fonts = egui::FontDefinitions::default();
-    egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
-
-    // Prefer the platform UI face. Vazirmatn remains immediately behind it so
-    // Persian and Arabic text has a bundled, release-safe fallback. For a
-    // Persian UI the bundled font is first so shaping is consistent across OSes.
-    let system_font = [
-        #[cfg(target_os = "windows")]
-        r"C:\Windows\Fonts\segoeui.ttf",
-        #[cfg(target_os = "macos")]
-        "/System/Library/Fonts/SFNS.ttf",
-        #[cfg(target_os = "linux")]
-        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-        #[cfg(target_os = "linux")]
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    ]
-    .iter()
-    .find_map(|path| std::fs::read(path).ok());
-
-    fonts.font_data.insert(
-        "pealayer-vazirmatn".to_owned(),
-        Arc::new(egui::FontData::from_static(include_bytes!(
-            "../../assets/fonts/Vazirmatn-Regular.ttf"
-        ))),
-    );
-    if let Some(bytes) = system_font {
-        fonts.font_data.insert(
-            "pealayer-system-ui".to_owned(),
-            Arc::new(egui::FontData::from_owned(bytes)),
-        );
-    }
-
-    let has_system_font = fonts.font_data.contains_key("pealayer-system-ui");
-    let proportional = fonts
-        .families
-        .get_mut(&egui::FontFamily::Proportional)
-        .expect("egui provides a proportional font family");
-    if normal == crate::config::UiFontFamily::Vazirmatn || prefer_vazirmatn && normal == crate::config::UiFontFamily::System {
-        proportional.insert(0, "pealayer-vazirmatn".to_owned());
-        if has_system_font {
-            proportional.insert(1, "pealayer-system-ui".to_owned());
-        }
-    } else if has_system_font && normal == crate::config::UiFontFamily::System {
-        proportional.insert(0, "pealayer-system-ui".to_owned());
-        proportional.insert(1, "pealayer-vazirmatn".to_owned());
-    } else {
-        proportional.push("pealayer-vazirmatn".to_owned());
-    }
-
-    if mono == crate::config::UiFontFamily::System {
-        let paths = [
-            #[cfg(windows)] r"C:\Windows\Fonts\consola.ttf",
-            #[cfg(target_os = "macos")] "/System/Library/Fonts/Menlo.ttc",
-            #[cfg(target_os = "linux")] "/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf",
-        ];
-        if let Some(bytes) = paths.iter().find_map(|path| std::fs::read(path).ok()) {
-            fonts.font_data.insert("pealayer-system-mono".into(), Arc::new(egui::FontData::from_owned(bytes)));
-            fonts.families.get_mut(&egui::FontFamily::Monospace).unwrap().insert(0, "pealayer-system-mono".into());
-        }
-    }
-
-    // Named emphasis faces preserve normal UI sizes and icon/fallback coverage.
-    // Load once, not from status painting; systems without these faces retain
-    // the existing family rather than provisioning/downloading a second font.
-    for (name, fallback, paths) in [
-        ("pealayer-status-strong", egui::FontFamily::Proportional, &[
-            #[cfg(target_os = "windows")] r"C:\Windows\Fonts\segoeuib.ttf",
-            #[cfg(target_os = "macos")] "/System/Library/Fonts/Supplemental/Arial Bold.ttf",
-            #[cfg(target_os = "linux")] "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf",
-            #[cfg(target_os = "linux")] "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
-        ][..]),
-        ("pealayer-status-mono-strong", egui::FontFamily::Monospace, &[
-            #[cfg(target_os = "windows")] r"C:\Windows\Fonts\consolab.ttf",
-            #[cfg(target_os = "macos")] "/System/Library/Fonts/Supplemental/Courier New Bold.ttf",
-            #[cfg(target_os = "linux")] "/usr/share/fonts/truetype/dejavu/DejaVuSansMono-Bold.ttf",
-        ][..]),
-    ] {
-        let mut faces = fonts.families.get(&fallback).cloned().unwrap_or_default();
-        if (fallback == egui::FontFamily::Proportional && normal == crate::config::UiFontFamily::System
-            || fallback == egui::FontFamily::Monospace && mono == crate::config::UiFontFamily::System)
-            && let Some(bytes) = paths.iter().find_map(|path| std::fs::read(path).ok()) {
-            fonts.font_data.insert(name.into(), Arc::new(egui::FontData::from_owned(bytes)));
-            faces.insert(0, name.into());
-        }
-        fonts.families.insert(egui::FontFamily::Name(name.into()), faces);
-    }
-    context.set_fonts(fonts);
 }
 
 /// Translate application-owned copy. Values learned from media metadata or
@@ -116,6 +25,15 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         return english.to_owned();
     }
     let translated = match english {
+        "Workspace interface" => "رابط فضای کاری",
+        "Group Preferences navigation" => "گروه‌بندی پیمایش تنظیمات",
+        "Personalization" => "شخصی‌سازی",
+        "Experience" => "تجربهٔ کاربری",
+        "Connections" => "اتصال‌ها",
+        "Application" => "برنامه",
+        "Choose installed font" => "انتخاب قلم نصب‌شده",
+        "Installed UI font" => "قلم نصب‌شدهٔ رابط",
+        "Installed monospace font" => "قلم نصب‌شدهٔ هم‌عرض",
         "Sparkle" => "درخشش",
         "Folder" => "پوشه",
         "Plug" => "اتصال",

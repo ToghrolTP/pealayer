@@ -287,6 +287,7 @@ body {
 .preferences-rail button:hover { color: var(--text); background: var(--surface-2); }
 .preferences-rail button.is-active { color: var(--text); border-color: color-mix(in srgb, var(--accent) 44%, var(--line)); background: var(--accent-soft); }
 .preferences-rail button.is-active .anticon { color: var(--accent); }
+.preferences-rail-group { padding: 9px 11px 2px; color: var(--muted); font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
 .preferences-detail { min-width: 0; display: grid; align-content: start; gap: 12px; }
 .preferences-group.ant-card { border-radius: 12px !important; box-shadow: 0 12px 32px color-mix(in srgb, var(--canvas) 24%, transparent) !important; }
 .preferences-group .ant-card-head { min-height: 48px; padding-inline: 18px; border-bottom-color: var(--line); }
@@ -1169,6 +1170,7 @@ html[data-motion="disabled"] .app-statusbar .status-widget { transition: none; }
   .preferences-rail { position: static; display: flex; align-items: center; overflow-x: auto; scrollbar-width: none; }
   .preferences-rail::-webkit-scrollbar { display: none; }
   .preferences-rail button { width: auto; flex: 0 0 auto; display: flex; white-space: nowrap; }
+  .preferences-rail-group { display: none; }
   .hardware-summary-grid { grid-template-columns: 1fr; }
   .strip-control__configuration, .strip-control__editor, .buzzer-control__melody, .buzzer-control__tone { grid-template-columns: 1fr; align-items: stretch; }
   .strip-control__modes .ant-segmented-group { overflow-x: auto; }

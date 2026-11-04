@@ -345,7 +345,8 @@ fn text_widget(
 ) -> egui::Response {
     let font = status_font(ui, monospace, strong);
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, ITEM_HEIGHT), egui::Sense::click_and_drag());
-    let galley = egui::WidgetText::from(egui::RichText::new(text).font(font).color(color))
+    let galley = egui::WidgetText::from(egui::RichText::new(text).font(font).color(color)
+        .variations([("wght", if strong { 600.0 } else { 400.0 })]))
         .into_galley(ui, Some(egui::TextWrapMode::Truncate), (width - 6.0).max(1.0), egui::TextStyle::Small);
     let x = match align { egui::Align::Min => rect.left() + 3.0,
         egui::Align::Center => rect.center().x - galley.size().x * 0.5,
@@ -365,7 +366,7 @@ fn workspace_trigger(ui: &mut egui::Ui, name: &str, icon: &str, rtl: bool,
     ui.painter().text(icon_center, egui::Align2::CENTER_CENTER, icon,
         egui::FontId::proportional(12.0), visuals.text_color());
     let name_rect = rect.shrink2(egui::vec2(20.0, 0.0));
-    let galley = egui::WidgetText::from(egui::RichText::new(name).font(status_font(ui, false, true)))
+    let galley = egui::WidgetText::from(egui::RichText::new(name).font(status_font(ui, false, true)).variations([("wght", 600.0)]))
         .into_galley(ui, Some(egui::TextWrapMode::Truncate), name_rect.width(), egui::TextStyle::Small);
     ui.painter().with_clip_rect(name_rect).galley(egui::pos2(
         if rtl { name_rect.right() - galley.size().x } else { name_rect.left() },

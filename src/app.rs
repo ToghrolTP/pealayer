@@ -2047,6 +2047,8 @@ impl eframe::App for PealayerApp {
                                 crate::ui::layout::draw_workspace_tab_menu(self, ui);
                             });
                         });
+                    } else if crate::platform::interop::get_live_config().workspace_ui == crate::config::WorkspaceUi::EguiDock {
+                        crate::ui::egui_dock::show(self, ui, raise_panel);
                     } else {
                         self.workspace_rendering = true;
                         let layout_snapshot = self.dock_state.layout.clone();

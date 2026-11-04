@@ -11,8 +11,12 @@ export const controlDensityHeight = (choice: string): number => {
 export interface AppearanceState {
   ui_animation_mode: 'system' | 'enabled' | 'disabled';
   ui_control_density: ControlDensity;
-  ui_font_family: 'system' | 'bundled' | 'vazirmatn';
-  monospace_font_family: 'system' | 'bundled';
+  ui_font_family: 'system' | 'bundled' | 'vazirmatn' | 'custom';
+  monospace_font_family: 'system' | 'bundled' | 'custom';
+  ui_font_name: string;
+  monospace_font_name: string;
+  workspace_ui: 'craft_ui' | 'egui_dock';
+  preferences_grouped_navigation: boolean;
   theme: 'system' | 'light' | 'dark';
   color_palette: 'studio' | 'native';
   accent_color: string;
@@ -20,9 +24,12 @@ export interface AppearanceState {
   resolved_theme?: 'light' | 'dark';
   resolved_accent?: string;
 }
-export const uiFontCss = (choice: string) => choice === 'vazirmatn' ? 'Vazirmatn, sans-serif'
-  : choice === 'bundled' ? 'PealayerUbuntu, Vazirmatn, sans-serif' : "-apple-system, BlinkMacSystemFont, 'Segoe UI', Vazirmatn, sans-serif";
-export const monoFontCss = (choice: string) => choice === 'bundled' ? 'PealayerHack, monospace' : 'Consolas, Menlo, monospace';
+const customFamily = (name: string) => JSON.stringify(name.replace(/[\x00-\x1f\x7f]/g, '')).replace(/</g, '\\3c ');
+export const uiFontCss = (choice: string, name = ''): string => choice === 'custom' && name.trim()
+  ? `${customFamily(name)}, ${uiFontCss('system')}` : choice === 'vazirmatn' ? 'Vazirmatn, sans-serif'
+  : choice === 'bundled' ? 'PealayerUbuntu, Vazirmatn, sans-serif' : "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Vazirmatn, sans-serif";
+export const monoFontCss = (choice: string, name = ''): string => choice === 'custom' && name.trim()
+  ? `${customFamily(name)}, ${monoFontCss('system')}` : choice === 'bundled' ? 'PealayerHack, monospace' : 'ui-monospace, Consolas, Menlo, monospace';
 
 /** Only preference fields enter config patches; host resolution is live state. */
 export function mergeAppearance<T extends Record<string, any>>(
@@ -35,6 +42,10 @@ export function mergeAppearance<T extends Record<string, any>>(
     ui_control_density: appearance.ui_control_density,
     ui_font_family: appearance.ui_font_family,
     monospace_font_family: appearance.monospace_font_family,
+    ui_font_name: appearance.ui_font_name,
+    monospace_font_name: appearance.monospace_font_name,
+    workspace_ui: appearance.workspace_ui,
+    preferences_grouped_navigation: appearance.preferences_grouped_navigation,
     theme: appearance.theme,
     color_palette: appearance.color_palette,
     accent_color: appearance.accent_color,

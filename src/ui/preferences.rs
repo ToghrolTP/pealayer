@@ -320,6 +320,7 @@ impl StandalonePreferencesApp {
         // Native OS changes do not dirty the draft or alter the cached
         // preference tuple. Still refresh this independently hosted titlebar.
         crate::ui::sync_native_window_appearance(ctx, appearance.4);
+        crate::ui::i18n::configure_preferred_fonts(ctx, &self.draft.config);
     }
 
     fn watch_external_config(&mut self, ctx: &egui::Context) {
@@ -759,8 +760,15 @@ fn draw_preferences_editor(draft: &mut PreferencesDraft, ui: &mut egui::Ui) -> P
                     egui::vec2(PREFERENCES_RAIL_WIDTH, ui.available_height()),
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
+                        crate::ui::dialog::scroll_column(ui, "preferences_navigation", None, |ui| {
                         ui.spacing_mut().item_spacing.y = 4.0;
+                        let mut previous_group = "";
                         for (index, section) in sections.iter().enumerate() {
+                            if draft.config.preferences_grouped_navigation && previous_group != section.navigation_group {
+                                if index > 0 { ui.add_space(9.0); }
+                                ui.label(egui::RichText::new(tr(section.navigation_group).to_uppercase()).size(10.0).weak());
+                                previous_group = section.navigation_group;
+                            }
                             if preferences_tab_button(
                                 ui,
                                 draft.tab == index,
@@ -772,6 +780,7 @@ fn draw_preferences_editor(draft: &mut PreferencesDraft, ui: &mut egui::Ui) -> P
                                 draft.tab = index;
                             }
                         }
+                        });
                     },
                 );
                 ui.separator();
@@ -848,6 +857,11 @@ fn draw_contract_section(
             for control in group_controls {
                 changed |=
                     render_contract_control(ui, control, &mut values, tr, label_width, rtl_ui);
+            }
+            if group == "Typography" {
+                ui.add_space(6.0);
+                ui.label(tr("The quick brown fox · 0123456789 · فارسی"));
+                ui.label(egui::RichText::new("00:03:42.125  PWM 75%  Aa Bb 0O 1Il").monospace());
             }
             if section.id == "playback" && group == "Open Location / URL" {
                 let remote_count = draft
@@ -974,12 +988,14 @@ fn render_contract_control(
         }
         PreferenceControlKind::Select => {
             let audio_output = matches!(control.key, "audio_device" | "sfx_audio_device");
+            let font_picker = matches!(control.key, "ui_font_name" | "monospace_font_name");
+            let dynamic_label = audio_output || font_picker;
             let selected = current.as_str().unwrap_or_default();
             let selected_label = control
                 .options
                 .iter()
                 .find(|option| option.value.as_str() == Some(selected))
-                .map(|option| if audio_output { option.description.clone().unwrap_or_else(|| tr(option.label)) } else { tr(option.label) })
+                .map(|option| if dynamic_label { option.description.clone().unwrap_or_else(|| tr(option.label)) } else { tr(option.label) })
                 .unwrap_or_else(|| selected.to_string());
             preference_row(ui, control_icon, &tr(control.label), label_width, |ui| {
                 let control_width = ui.available_width().min(PREFERENCE_CONTROL_MAX_WIDTH);
@@ -987,11 +1003,20 @@ fn render_contract_control(
                     .width(control_width)
                     .selected_text(selected_label)
                     .show_ui(ui, |ui| {
+                        let search_id = ui.id().with(("font-search", control.key));
+                        let mut search = ui.data_mut(|d| d.get_temp::<String>(search_id).unwrap_or_default());
+                        if font_picker {
+                            ui.add(egui::TextEdit::singleline(&mut search).hint_text(tr("Search…")).desired_width(control_width));
+                            ui.separator();
+                            ui.data_mut(|d| d.insert_temp(search_id, search.clone()));
+                        }
+                        let query = search.to_lowercase();
                         for option in &control.options {
+                            if font_picker && !option.value.as_str().unwrap_or_default().to_lowercase().contains(&query) { continue; }
                             if ui
                                 .dropdown_choice(
                                     option.value == current,
-                                    if audio_output { option.description.clone().unwrap_or_else(|| tr(option.label)) } else { tr(option.label) },
+                                    if dynamic_label { option.description.clone().unwrap_or_else(|| tr(option.label)) } else { tr(option.label) },
                                 )
                                 .clicked()
                             {
@@ -2209,8 +2234,17 @@ mod tests {
         let original = AppConfig::default();
         let mut draft = PreferencesDraft::new(original.clone(), 0);
         draft.config.pin_controls = !original.pin_controls;
+        draft.config.workspace_ui = crate::config::WorkspaceUi::EguiDock;
+        draft.config.preferences_grouped_navigation = false;
+        draft.config.ui_font_family = crate::config::UiFontFamily::Custom;
+        draft.config.ui_font_name = "Example UI family".into();
+        draft.config.monospace_font_family = crate::config::UiFontFamily::Custom;
+        draft.config.monospace_font_name = "Example fixed width family".into();
         let preview = draft.take_preview_update().expect("live preview");
         assert_eq!(preview.pin_controls, !original.pin_controls);
+        assert_eq!(preview.workspace_ui, crate::config::WorkspaceUi::EguiDock);
+        assert_eq!(preview.ui_font_name, "Example UI family");
+        assert_eq!(preview.monospace_font_name, "Example fixed width family");
         assert!(draft.take_preview_update().is_none());
         draft.restore_saved();
         let restored = draft.take_preview_update().expect("discard preview");

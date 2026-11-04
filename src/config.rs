@@ -897,7 +897,11 @@ impl UiControlDensity {
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum UiFontFamily { #[default] System, Bundled, Vazirmatn }
+pub enum UiFontFamily { #[default] System, Bundled, Vazirmatn, Custom }
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceUi { #[default] CraftUi, EguiDock }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
@@ -1074,6 +1078,10 @@ pub struct AppConfig {
     pub ui_control_density: UiControlDensity,
     pub ui_font_family: UiFontFamily,
     pub monospace_font_family: UiFontFamily,
+    pub ui_font_name: String,
+    pub monospace_font_name: String,
+    pub workspace_ui: WorkspaceUi,
+    pub preferences_grouped_navigation: bool,
     pub language: AppLanguage,
     pub direction: AppDirection,
     pub hardware_endpoint: Option<String>,
@@ -1274,7 +1282,11 @@ impl Default for AppConfig {
             ui_animation_mode: UiAnimationMode::System,
             ui_control_density: UiControlDensity::Compact,
             ui_font_family: UiFontFamily::System,
-            monospace_font_family: UiFontFamily::Bundled,
+            monospace_font_family: UiFontFamily::System,
+            ui_font_name: String::new(),
+            monospace_font_name: String::new(),
+            workspace_ui: WorkspaceUi::CraftUi,
+            preferences_grouped_navigation: true,
             language: AppLanguage::System,
             direction: AppDirection::Auto,
             hardware_endpoint: None,
@@ -1793,6 +1805,10 @@ impl AppConfig {
         self.ui_control_density = source.ui_control_density;
         self.ui_font_family = source.ui_font_family;
         self.monospace_font_family = source.monospace_font_family;
+        self.ui_font_name.clone_from(&source.ui_font_name);
+        self.monospace_font_name.clone_from(&source.monospace_font_name);
+        self.workspace_ui = source.workspace_ui;
+        self.preferences_grouped_navigation = source.preferences_grouped_navigation;
         self.app_icon_preset = source.app_icon_preset;
     }
 
@@ -2122,6 +2138,9 @@ impl AppConfig {
             return Err("volume must be between 0 and 130".to_string());
         }
         if self.monospace_font_family == UiFontFamily::Vazirmatn { return Err("Vazirmatn is not a monospace font".into()); }
+        for name in [&self.ui_font_name, &self.monospace_font_name] {
+            if name.len() > 256 || name.chars().any(char::is_control) { return Err("Font family names must be plain text of at most 256 bytes".into()); }
+        }
         if self.status_bar.metric_limits.iter().any(|range| matches!(range, [Some(low), Some(high)] if low > high)) {
             return Err("Status widget minimum must not exceed maximum".into());
         }

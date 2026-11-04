@@ -66,6 +66,7 @@ interface PreferenceSection {
   id: string;
   label: string;
   icon: string;
+  navigation_group: string;
 }
 
 interface PreferenceOption {
@@ -263,7 +264,22 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
     setContract((current) => current
       ? { ...current, values: mergeAppearance(current.values, appearance) }
       : current);
-  }, [appearance?.theme, appearance?.color_palette, appearance?.accent_color, appearance?.custom_accent_color]);
+  }, [appearance?.theme, appearance?.color_palette, appearance?.accent_color, appearance?.custom_accent_color,
+    appearance?.ui_animation_mode, appearance?.ui_control_density, appearance?.ui_font_family, appearance?.monospace_font_family,
+    appearance?.ui_font_name, appearance?.monospace_font_name, appearance?.workspace_ui, appearance?.preferences_grouped_navigation]);
+
+  // Installed-font controls are host-owned and conditional on the font choice.
+  // Refresh on local changes and remote/native previews without overwriting drafts.
+  useEffect(() => {
+    if (!contract) return;
+    const abort = new AbortController();
+    void fetch(`${apiBaseUrl}/api/preferences`, { signal: abort.signal }).then(response => {
+      if (!response.ok) throw new Error(`Preferences request failed (${response.status})`);
+      return response.json() as Promise<PreferencesContract>;
+    }).then(next => setContract(current => current ? { ...current, controls: next.controls } : current))
+      .catch(error => { if (!abort.signal.aborted) setStatus({ kind: 'error', text: String(error) }); });
+    return () => abort.abort();
+  }, [apiBaseUrl, appearance?.ui_font_family, appearance?.monospace_font_family]);
 
   useEffect(() => {
     if (!timelineWheelPreferences) return;
@@ -424,6 +440,7 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
           {commonLabel}
           <Select
             value={value}
+            showSearch={['ui_font_name', 'monospace_font_name'].includes(control.key) ? { optionFilterProp: 'label' } : undefined}
             onOpenChange={(open) => { if (open && ['audio_device', 'sfx_audio_device'].includes(control.key)) void refreshAudioOutputs(); }}
             options={(control.options ?? []).map((option) => ({ value: option.value, label: option.description || tr(locale, option.label) }))}
             onChange={(next) => void update(control, next)}
@@ -524,7 +541,10 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
       {loading && !contract ? <FujiLoader locale={locale} /> : contract && (
         <div className="preferences-layout">
           <nav className="preferences-rail" aria-label={tr(locale, 'Preference sections')}>
-            {contract.sections.map((item) => (
+            {contract.sections.map((item, index) => (
+              <React.Fragment key={item.id}>
+              {contract.values.preferences_grouped_navigation && (index === 0 || contract.sections[index - 1].navigation_group !== item.navigation_group) &&
+                <span className="preferences-rail-group">{tr(locale, item.navigation_group)}</span>}
               <button
                 key={item.id}
                 type="button"
@@ -535,6 +555,7 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
                 {sectionIcons[item.id] ?? <SettingOutlined />}
                 <span>{tr(locale, item.label)}</span>
               </button>
+              </React.Fragment>
             ))}
           </nav>
           <main className="preferences-detail">

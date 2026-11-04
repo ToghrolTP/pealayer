@@ -109,6 +109,7 @@ pub struct PreferenceSection {
     pub id: &'static str,
     pub label: &'static str,
     pub icon: &'static str,
+    pub navigation_group: &'static str,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -294,31 +295,37 @@ pub fn preference_sections() -> Vec<PreferenceSection> {
     vec![
         PreferenceSection {
             id: "appearance",
+            navigation_group: "Personalization",
             label: "Appearance",
             icon: "sparkle",
         },
         PreferenceSection {
             id: "playback",
+            navigation_group: "Experience",
             label: "Playback",
             icon: "play",
         },
         PreferenceSection {
             id: "hardware",
+            navigation_group: "Connections",
             label: "Hardware",
             icon: "plug",
         },
         PreferenceSection {
             id: "input",
+            navigation_group: "Connections",
             label: "Input",
             icon: "sliders",
         },
         PreferenceSection {
             id: "web",
+            navigation_group: "Connections",
             label: "Web UI",
             icon: "globe",
         },
         PreferenceSection {
             id: "advanced",
+            navigation_group: "Application",
             label: "Advanced",
             icon: "gear",
         },
@@ -396,13 +403,16 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             &[("system", "System"), ("light", "Light"), ("dark", "Dark")],
         ),
         PreferenceControl::accent(config),
+        PreferenceControl::select("workspace_ui", "appearance", "Interface", "Workspace interface",
+            &[("craft_ui", "CraftUI"), ("egui_dock", "egui Dock")]),
+        PreferenceControl::boolean("preferences_grouped_navigation", "appearance", "Interface", "Group Preferences navigation"),
         PreferenceControl::choice_slider("ui_control_density", "appearance", "Interface", "Control density",
             &[("compact", "Compact"), ("regular", "Regular"),
               ("comfortable", "Comfortable"), ("spacious", "Spacious")]),
         PreferenceControl::select("ui_font_family", "appearance", "Typography", "UI font",
-            &[("system", "System font"), ("bundled", "Bundled font"), ("vazirmatn", "Vazirmatn")]),
+            &[("system", "System font"), ("bundled", "Bundled font"), ("vazirmatn", "Vazirmatn"), ("custom", "Choose installed font")]),
         PreferenceControl::select("monospace_font_family", "appearance", "Typography", "Monospace font",
-            &[("system", "System font"), ("bundled", "Bundled font")]),
+            &[("system", "System font"), ("bundled", "Bundled font"), ("custom", "Choose installed font")]),
         PreferenceControl::select("ui_animation_mode", "appearance", "Interface", "Animations and transitions",
             &[("system", "System default"), ("enabled", "Enabled"), ("disabled", "Disabled")]),
         PreferenceControl::select(
@@ -1223,6 +1233,22 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
     );
     recent_click.inverted = true;
     controls.insert(14, recent_click);
+    for (key, label, choice, selected) in [
+        ("ui_font_name", "Installed UI font", config.ui_font_family, &config.ui_font_name),
+        ("monospace_font_name", "Installed monospace font", config.monospace_font_family, &config.monospace_font_name),
+    ] {
+        if choice != crate::config::UiFontFamily::Custom { continue; }
+        let mut control = PreferenceControl::select(key, "appearance", "Typography", label, &[]);
+        control.description = Some("Fonts installed on the application host. Unavailable families fall back to the system font.");
+        let mut names = crate::ui::fonts::family_names();
+        if !selected.is_empty() && !names.contains(selected) { names.insert(0, selected.clone()); }
+        control.options = names.into_iter().map(|name| PreferenceOption {
+            value: serde_json::json!(name), label: "Installed font", description: Some(name), color: None, icon: Some("text-t"),
+        }).collect();
+        let after = if key == "ui_font_name" { "ui_font_family" } else { "monospace_font_family" };
+        let index = controls.iter().position(|control| control.key == after).unwrap() + 1;
+        controls.insert(index, control);
+    }
     let mut hints = std::collections::HashSet::new();
     for control in &mut controls {
         control.icon = semantic_preference_icon(control);
@@ -1243,7 +1269,9 @@ fn semantic_preference_icon(control: &PreferenceControl) -> &'static str {
         "color_palette" => "swatches",
         "ui_animation_mode" => "waveform",
         "ui_control_density" => "sliders-horizontal",
-        "ui_font_family" | "monospace_font_family" => "text-t",
+        "workspace_ui" => "tabs",
+        "preferences_grouped_navigation" => "list-checks",
+        "ui_font_family" | "monospace_font_family" | "ui_font_name" | "monospace_font_name" => "text-t",
         "language" => "translate",
         "fullscreen_video_background" => "frame-corners",
         "always_on_top" => "push-pin",
@@ -1342,9 +1370,9 @@ mod tests {
         let controls = preference_controls(&crate::config::AppConfig::default());
         let interface: Vec<_> = controls.iter().filter(|control| control.section == "appearance" && control.group == "Interface").collect();
         assert_eq!(interface.iter().map(|control| control.key).collect::<Vec<_>>(),
-            ["theme", "accent_color", "ui_control_density", "ui_animation_mode", "color_palette", "app_icon_preset", "fullscreen_video_background", "language"]);
+            ["theme", "accent_color", "workspace_ui", "preferences_grouped_navigation", "ui_control_density", "ui_animation_mode", "color_palette", "app_icon_preset", "fullscreen_video_background", "language"]);
         assert_eq!(interface.iter().map(|control| control.icon).collect::<Vec<_>>(),
-            ["circle-half", "palette", "sliders-horizontal", "waveform", "swatches", "image", "frame-corners", "translate"]);
+            ["circle-half", "palette", "tabs", "list-checks", "sliders-horizontal", "waveform", "swatches", "image", "frame-corners", "translate"]);
         for (key, icon) in [("always_on_top", "push-pin"), ("osd_position", "target"), ("osd_timeout_seconds", "clock"),
             ("app_icon_playing", "play"), ("app_icon_paused", "pause"), ("app_icon_stopped", "stop-circle")] {
             assert_eq!(controls.iter().find(|control| control.key == key).unwrap().icon, icon);

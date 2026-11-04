@@ -1,6 +1,7 @@
 # Read-only visual verification: never focuses, moves, launches or clicks a window.
 param(
     [string]$ProcessName = 'pealayer',
+    [int]$ExpectedProcessId = 0,
     [Parameter(Mandatory = $true)][string]$OutputPath,
     # Optional window-relative pixel rectangle: x, y, width, height.
     [int[]]$CropRectangle,
@@ -24,6 +25,7 @@ public static class PealayerReadOnlyCapture {
 '@
 [void][PealayerReadOnlyCapture]::SetProcessDPIAware()
 $candidateProcesses = @(Get-Process -Name $ProcessName | Where-Object {
+    ($ExpectedProcessId -eq 0 -or $_.Id -eq $ExpectedProcessId) -and
     $_.MainWindowHandle -ne 0 -and ($RenderOccludedWindow -or $_.MainWindowHandle -eq [PealayerReadOnlyCapture]::GetForegroundWindow())
 })
 if ($candidateProcesses.Count -eq 0) { throw 'Bring the requested application into view first. This script does not change focus.' }
