@@ -60,12 +60,21 @@ pub struct ConfirmationResponse {
     pub close: egui::Response,
 }
 
+pub(crate) fn confirmation_modal_frame(tokens: &crate::ui::craft_theme::Tokens) -> egui::Frame {
+    egui::Frame::new()
+        .fill(tokens.panel_bg)
+        .stroke(egui::Stroke::new(1.0, tokens.border_subtle))
+        .corner_radius(6.0)
+        .inner_margin(egui::Margin::same(12))
+}
+
 /// Shared unsaved-change chrome. Close/Escape mean Keep editing; the caller owns
 /// Save/Discard. Backdrop clicks never silently dispose of a dirty draft.
 pub fn confirmation_modal(ctx: &egui::Context, id: egui::Id, heading: &str,
     icon: &str, message: &str, close_label: &str, footer: impl FnOnce(&mut egui::Ui) -> bool) -> ConfirmationResponse {
     crate::ui::sync_elegance_theme(ctx);
     let theme = elegance::Theme::current(ctx);
+    let tokens = crate::ui::craft_theme::current(ctx);
     let focus_id = id.with("previous-focus");
     let first_frame = ctx.data(|data| data.get_temp::<Option<egui::Id>>(focus_id)).is_none();
     if first_frame {
@@ -73,11 +82,9 @@ pub fn confirmation_modal(ctx: &egui::Context, id: egui::Id, heading: &str,
         ctx.data_mut(|data| data.insert_temp(focus_id, previous));
     }
     let width = (ctx.content_rect().width() - 64.0).clamp(160.0, 440.0);
-    let frame = egui::Frame::new().fill(theme.palette.card)
-        .stroke(egui::Stroke::new(1.0, theme.palette.border))
-        .corner_radius(theme.card_radius).inner_margin(egui::Margin::same(12));
+    let frame = confirmation_modal_frame(&tokens);
     let modal = egui::Modal::new(id).frame(frame)
-        .backdrop_color(egui::Color32::from_black_alpha(150)).show(ctx, |ui| {
+        .backdrop_color(tokens.modal_backdrop).show(ctx, |ui| {
             ui.ctx().accesskit_node_builder(ui.unique_id(), |node| {
                 node.set_role(egui::accesskit::Role::AlertDialog);
                 node.set_label(heading);
@@ -137,9 +144,16 @@ pub fn singleline_text_edit<'a>(ui: &egui::Ui, text: &'a mut dyn egui::TextBuffe
 /// that slot instead of letting a TextEdit frame move its baseline by a pixel.
 pub fn inline_caption_edit(ui: &mut egui::Ui, id: egui::Id, text: &mut String,
     size: egui::Vec2, font: egui::FontId, alignment: egui::Align) -> egui::Response {
+    let prev_interact = ui.spacing().interact_size;
+    if size.y < prev_interact.y {
+        ui.spacing_mut().interact_size.y = size.y;
+    }
     let response = ui.add_sized(size, singleline_text_edit(ui, text).min_size(egui::vec2(0.0, size.y)).id(id).font(font)
         .text_color(ui.visuals().strong_text_color()).horizontal_align(alignment)
         .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 0))).char_limit(64));
+    if size.y < prev_interact.y {
+        ui.spacing_mut().interact_size = prev_interact;
+    }
     let visuals = ui.style().interact(&response);
     let stroke = if visuals.bg_stroke.width > 0.0 { visuals.bg_stroke }
         else { egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.fg_stroke.color) };
@@ -591,6 +605,19 @@ mod tests {
     }
 
     #[test]
+    fn confirmation_modal_frame_uses_craft_theme_tokens() {
+        use super::*;
+        let ctx = egui::Context::default();
+        let config = crate::config::AppConfig::default();
+        crate::ui::configure_native_visuals(&ctx, &config);
+        let tokens = crate::ui::craft_theme::current(&ctx);
+
+        let frame = confirmation_modal_frame(&tokens);
+        assert_eq!(frame.fill, tokens.panel_bg);
+        assert_eq!(frame.stroke.color, tokens.border_subtle);
+    }
+
+    #[test]
     fn inline_caption_fonts_and_baselines_are_stable_with_an_inside_outline() {
         use super::*;
         for dark in [false,true] {
@@ -819,14 +846,14 @@ mod tests {
                             numeric_slider_wheel(ui, &response, value, 0.0..=130.0, crate::config::NumericInputSteps::for_step(1.0));
                             ui.add_space(600.0);
                         });
-                        offset = result.state.offset.y;
+                        offset = result.state.offset().y;
                     });
                     output.textures_delta.clear();
                     slider_rect
                 };
                 render(vec![], &mut value);
                 let point = render(vec![], &mut value).left_center() + egui::vec2(20.0, 0.0);
-                let wheel = |delta| egui::Event::MouseWheel { unit, delta: egui::vec2(0.0, delta), modifiers, phase: egui::TouchPhase::Move };
+                let wheel = |delta| egui::Event::MouseWheel { unit, delta: egui::vec2(0.0, delta), modifiers, phase: egui::TouchPhase::Move, source: egui::MouseWheelSource::Wheel };
                 render(vec![egui::Event::PointerMoved(point), wheel(1.0)], &mut value);
                 assert!((value - (50.0 + increment)).abs() < 1e-8, "wrong increment: {modifiers:?}/{unit:?}");
                 for _ in 0..12 { render(vec![], &mut value); }
@@ -855,7 +882,7 @@ mod tests {
             (response_rect, changed)
         };
         let point = render(vec![], true, &mut value).0.left_center() + egui::vec2(20.0, 0.0);
-        let wheel = |delta| egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, delta), modifiers: egui::Modifiers::NONE, phase: egui::TouchPhase::Move };
+        let wheel = |delta| egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, delta), modifiers: egui::Modifiers::NONE, phase: egui::TouchPhase::Move, source: egui::MouseWheelSource::Wheel };
         assert!(!render(vec![egui::Event::PointerMoved(point), wheel(10.0)], true, &mut value).1);
         assert_eq!(value, 130.0);
         render(vec![egui::Event::PointerMoved(point + egui::vec2(0.0, 100.0)), wheel(-10.0)], true, &mut value);

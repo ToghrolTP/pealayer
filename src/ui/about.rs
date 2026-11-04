@@ -337,7 +337,12 @@ fn libraries_and_licenses(_app: &PealayerApp, ui: &mut egui::Ui) {
                 "MIT OR Apache-2.0",
                 "Native interface and rendering",
             ),
-            ("egui_dock", "0.19.1", "MIT", "Dockable workspace"),
+            (
+                "craft-ui",
+                "0.1.0",
+                "MIT OR Apache-2.0",
+                "Dockable workspace and UI components",
+            ),
             ("egui-phosphor", "0.12.0", "MIT", "Vector icon vocabulary"),
             (
                 "libmpv2 / mpv",

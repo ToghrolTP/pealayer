@@ -34,33 +34,23 @@ pub(super) struct Metrics {
 }
 
 fn button_width(ui: &egui::Ui, label: &str) -> f32 {
-    let style = ui.style().button_style(
-        &egui::widget_style::Classes::default(),
-        egui::widget_style::WidgetState::Inactive,
-    );
+    let font_id = egui::TextStyle::Button.resolve(ui.style());
+    let color = ui.visuals().widgets.inactive.text_color();
     let text_width = ui.fonts_mut(|fonts| {
         fonts
-            .layout_no_wrap(
-                label.to_owned(),
-                style.text_style.font_id,
-                style.text_style.color,
-            )
+            .layout_no_wrap(label.to_owned(), font_id, color)
             .size()
             .x
     });
-    (text_width + f32::from(style.frame.inner_margin.left + style.frame.inner_margin.right))
-        .max(30.0)
+    let padding = ui.spacing().button_padding.x * 2.0;
+    (text_width + padding).max(30.0)
 }
 
 fn button_height(ui: &egui::Ui) -> f32 {
-    let style = ui.style().button_style(
-        &egui::widget_style::Classes::default(),
-        egui::widget_style::WidgetState::Inactive,
-    );
-    let text_height = ui.fonts_mut(|fonts| {
-        fonts.row_height(&style.text_style.font_id)
-    });
-    (text_height + f32::from(style.frame.inner_margin.top + style.frame.inner_margin.bottom))
+    let font_id = egui::TextStyle::Button.resolve(ui.style());
+    let text_height = ui.fonts_mut(|fonts| fonts.row_height(&font_id));
+    let padding = ui.spacing().button_padding.y * 2.0;
+    (text_height + padding)
         .max(ui.spacing().interact_size.y)
         .max(25.0)
 }
@@ -535,6 +525,25 @@ mod tests {
                         assert!(actual.height()<=metrics.height(available.width())+1.0,"reserved height at {width}, hidden={hidden}: {actual:?}");
                     });output.textures_delta.clear();
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn monitor_controls_respect_craft_theme_tokens() {
+        for palette in [crate::config::ColorPalette::Native, crate::config::ColorPalette::Studio] {
+            for theme in [egui::Theme::Light, egui::Theme::Dark] {
+                let ctx = egui::Context::default();
+                ctx.set_theme(theme);
+                let config = crate::config::AppConfig { color_palette: palette,
+                    accent_color: crate::config::AccentColor::PealayerGreen, ..Default::default() };
+                crate::ui::configure_native_visuals(&ctx, &config);
+                let tokens = crate::ui::craft_theme::current(&ctx);
+                let selected = super::super::craft_theme::icon_button_style(&tokens, false).selected;
+                assert_eq!(tokens.pill_active_bg, ctx.style_of(theme).visuals.selection.bg_fill);
+                assert_eq!(selected.icon, super::super::accent_foreground(tokens.pill_active_bg));
+                assert_ne!(selected.icon, selected.fill);
+                assert_eq!(tokens.playhead, tokens.focus);
             }
         }
     }

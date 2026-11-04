@@ -265,6 +265,12 @@ impl TimelineToolbarPreferences {
     }
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct UiPreferences {
+    pub sidebar_rail: crate::ui::sidebar_rail::SidebarRailState,
+}
+
 #[cfg(test)]
 mod timeline_toolbar_tests {
     use super::*;
@@ -846,6 +852,7 @@ pub struct WorkspaceProfile {
     pub nle: bool,
     pub window_geometry: Option<WindowGeometry>,
     pub dock_layout: Option<String>,
+    pub sidebar_rail: crate::ui::sidebar_rail::SidebarRailState,
     pub dialogs: WorkspaceDialogs,
     /// Serialized egui memory contains movable window rectangles, active dock
     /// leaves, and every stable ScrollArea offset.
@@ -861,6 +868,7 @@ impl Default for WorkspaceProfile {
             nle: true,
             window_geometry: None,
             dock_layout: None,
+            sidebar_rail: crate::ui::sidebar_rail::SidebarRailState::default(),
             dialogs: WorkspaceDialogs::default(),
             egui_memory: None,
         }
@@ -1191,6 +1199,8 @@ pub struct AppConfig {
     pub auto_reload_config: bool,
     pub status_bar: StatusBarConfig,
     pub control_bars: ControlBarsConfig,
+    #[serde(default)]
+    pub ui: UiPreferences,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window_geometry: Option<WindowGeometry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -1369,6 +1379,7 @@ impl Default for AppConfig {
             auto_reload_config: true,
             status_bar: StatusBarConfig::default(),
             control_bars: ControlBarsConfig::default(),
+            ui: UiPreferences::default(),
             window_geometry: None,
             workspace_dock_layout: None,
             workspace_session: WorkspaceProfile::default(),
@@ -2644,6 +2655,7 @@ mod tests {
                 maximized: false,
             }),
             dock_layout: Some("{\"surface\":\"hardware\"}".to_string()),
+            sidebar_rail: crate::ui::sidebar_rail::SidebarRailState::default(),
             dialogs: WorkspaceDialogs {
                 board_information: true,
                 board_information_tab: 2,
@@ -3110,5 +3122,21 @@ mod tests {
         assert!(!resolve_rtl(AppDirection::Auto, AppLanguage::English));
         assert!(resolve_rtl(AppDirection::Rtl, AppLanguage::English));
         assert!(!resolve_rtl(AppDirection::Ltr, AppLanguage::Persian));
+    }
+
+    #[test]
+    fn config_serializes_and_deserializes_sidebar_rail_state() {
+        let mut config = AppConfig::default();
+        assert!(config.ui.sidebar_rail.enabled);
+        config.ui.sidebar_rail.width = 380.0;
+        config.ui.sidebar_rail.open = Some(crate::ui::sidebar_rail::SidebarPane::HardwareMonitor);
+
+        let json = serde_json::to_string(&config).expect("serialize");
+        let restored: AppConfig = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(restored.ui.sidebar_rail.width, 380.0);
+        assert_eq!(
+            restored.ui.sidebar_rail.open,
+            Some(crate::ui::sidebar_rail::SidebarPane::HardwareMonitor)
+        );
     }
 }

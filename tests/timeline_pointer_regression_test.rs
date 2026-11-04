@@ -1,5 +1,4 @@
 use eframe::egui;
-use egui_dock::TabViewer;
 use pealayer::app::PealayerApp;
 use pealayer::four_d::controller::{HardwareAction, HardwareCapabilities, HardwareControl};
 use pealayer::four_d::curve::{AnalogTrack, Interpolation, Keyframe};
