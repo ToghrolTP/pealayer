@@ -6,7 +6,7 @@ use std::{
     net::{TcpListener, TcpStream},
     path::PathBuf,
     sync::{
-        Arc, Mutex,
+        Arc, Condvar, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     thread,
@@ -17,6 +17,7 @@ struct Fixture {
     url: String,
     requests: Arc<Mutex<Vec<String>>>,
     stop: Arc<AtomicBool>,
+    first_response: Arc<(Mutex<bool>, Condvar)>,
     thread: Option<thread::JoinHandle<()>>,
 }
 impl Fixture {
@@ -28,13 +29,16 @@ impl Fixture {
         let captured = requests.clone();
         let stop = Arc::new(AtomicBool::new(false));
         let stopping = stop.clone();
+        let first_response = Arc::new((Mutex::new(false), Condvar::new()));
+        let gate = first_response.clone();
         let worker = thread::spawn(move || {
             let mut workers = Vec::new();
             while !stopping.load(Ordering::Relaxed) {
                 match listener.accept() {
                     Ok((stream, _)) => {
                         let captured = captured.clone();
-                        workers.push(thread::spawn(move || respond(stream, mode, captured)));
+                        let gate = gate.clone();
+                        workers.push(thread::spawn(move || respond(stream, mode, captured, gate)));
                     }
                     Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
                         thread::sleep(Duration::from_millis(5))
@@ -50,12 +54,20 @@ impl Fixture {
             url,
             requests,
             stop,
+            first_response,
             thread: Some(worker),
         }
+    }
+
+    fn release_first_response(&self) {
+        let (released, ready) = &*self.first_response;
+        *released.lock().unwrap() = true;
+        ready.notify_all();
     }
 }
 impl Drop for Fixture {
     fn drop(&mut self) {
+        self.release_first_response();
         self.stop.store(true, Ordering::Relaxed);
         self.thread.take().unwrap().join().unwrap();
     }
@@ -63,7 +75,12 @@ impl Drop for Fixture {
 fn payload() -> Vec<u8> {
     (0..256 * 1024).map(|n| (n % 251) as u8).collect()
 }
-fn respond(mut stream: TcpStream, mode: &str, captured: Arc<Mutex<Vec<String>>>) {
+fn respond(
+    mut stream: TcpStream,
+    mode: &str,
+    captured: Arc<Mutex<Vec<String>>>,
+    first_response: Arc<(Mutex<bool>, Condvar)>,
+) {
     stream
         .set_read_timeout(Some(Duration::from_secs(2)))
         .unwrap();
@@ -131,9 +148,18 @@ fn respond(mut stream: TcpStream, mode: &str, captured: Arc<Mutex<Vec<String>>>)
     } else {
         data.len()
     };
-    for chunk in data[start..end].chunks(4096) {
+    for (index, chunk) in data[start..end].chunks(4096).enumerate() {
         if stream.write_all(chunk).is_err() {
             break;
+        }
+        // A busy CI runner may not schedule the test before a timed response
+        // finishes. Keep a real partial body until Pause/Cancel is requested;
+        // then unblock any pending read so the worker can acknowledge it.
+        if number == 1 && mode != "interrupt" && (index + 1) * 4096 == 32 * 1024 {
+            let (released, ready) = &*first_response;
+            let _released = ready
+                .wait_while(released.lock().unwrap(), |released| !*released)
+                .unwrap();
         }
         thread::sleep(Duration::from_millis(4));
     }
@@ -197,6 +223,7 @@ fn pause_resume_validates_range_and_commits_exact_data() {
     let id = add(&manager, &fixture.url);
     wait(&manager, &id, |j| j.downloaded >= 16 * 1024);
     manager.action(&id, "pause").unwrap();
+    fixture.release_first_response();
     wait(&manager, &id, |j| j.actions.contains(&"remove"));
     let before = fs::metadata(storage.0.join(&id).join("payload.part"))
         .unwrap()
@@ -228,6 +255,7 @@ fn ignored_range_restarts_instead_of_appending() {
     let id = add(&manager, &fixture.url);
     wait(&manager, &id, |j| j.downloaded >= 16 * 1024);
     manager.action(&id, "pause").unwrap();
+    fixture.release_first_response();
     wait(&manager, &id, |j| j.actions.contains(&"remove"));
     manager.action(&id, "resume").unwrap();
     let job = wait(&manager, &id, |j| {
@@ -244,6 +272,7 @@ fn changed_source_refuses_resume_without_touching_partial() {
     let id = add(&manager, &fixture.url);
     wait(&manager, &id, |j| j.downloaded >= 16 * 1024);
     manager.action(&id, "pause").unwrap();
+    fixture.release_first_response();
     wait(&manager, &id, |j| j.actions.contains(&"remove"));
     let before = fs::read(storage.0.join(&id).join("payload.part")).unwrap();
     manager.action(&id, "resume").unwrap();
@@ -279,6 +308,7 @@ fn cancel_never_commits_or_removes_saved_partial() {
     let id = add(&manager, &fixture.url);
     wait(&manager, &id, |j| j.downloaded >= 16 * 1024);
     manager.action(&id, "cancel").unwrap();
+    fixture.release_first_response();
     let job = wait(&manager, &id, |j| j.actions.contains(&"remove"));
     assert_eq!(job.state, State::Cancelled);
     assert!(job.output.is_none());
@@ -303,6 +333,7 @@ fn progressive_reads_combine_cached_prefix_with_validated_origin_bytes() {
     let id = add(&manager, &fixture.url);
     wait(&manager, &id, |job| job.downloaded >= 16 * 1024);
     manager.action(&id, "pause").unwrap();
+    fixture.release_first_response();
     wait(&manager, &id, |job| job.actions.contains(&"remove"));
     let info = manager.cache_info(&id).unwrap();
     assert!(info.buffered < info.total);
@@ -330,6 +361,7 @@ fn progressive_reads_refuse_a_different_source_identity() {
     let id = add(&manager, &fixture.url);
     wait(&manager, &id, |job| job.downloaded >= 16 * 1024);
     manager.action(&id, "pause").unwrap();
+    fixture.release_first_response();
     wait(&manager, &id, |job| job.actions.contains(&"remove"));
     assert!(
         manager

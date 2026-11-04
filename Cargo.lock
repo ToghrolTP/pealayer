@@ -3558,6 +3558,7 @@ dependencies = [
  "libc",
  "libloading 0.9.0",
  "libmpv2",
+ "libmpv2-sys",
  "log",
  "mdns-sd",
  "network-interface",

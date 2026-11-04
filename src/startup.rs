@@ -641,6 +641,16 @@ pub fn run() -> eframe::Result {
                 crate::mpv::frame_cache::FrameCache::new(128 * 1024 * 1024),
             ));
 
+            let mut native_seek_client = crate::mpv::seek_completion::NativeSeekClient::new(mpv_static)
+                .expect("Failed to create seek completion client");
+            let seek_repaint = cc.egui_ctx.clone();
+            native_seek_client.set_wakeup_callback(move || {
+                if !crate::platform::windows::native_window_operation_active() {
+                    seek_repaint.request_repaint();
+                }
+            });
+            let native_seek_client = Arc::new(native_seek_client);
+
             let mut app = PealayerApp {
                 native_service_policy: crate::app::NativeServicePolicy::Production,
                 web_only: cli_options.web_only,
@@ -660,6 +670,8 @@ pub fn run() -> eframe::Result {
                 rtl,
                 mpv: crate::mpv::player::Player(mpv_static),
                 mpv_client: Arc::new(mpv_client),
+                native_seek_client: Arc::clone(&native_seek_client),
+                seek_epoch: 0,
                 external_catalog_revision: 0,
                 external_seek_revision: 0,
                 pending_external_media: None,
@@ -715,7 +727,7 @@ pub fn run() -> eframe::Result {
                 selected_timeline_track: None,
                 seek_pos: None,
                 seek_controller: crate::mpv::seek::SeekController::with_cache(
-                    crate::mpv::seek::MpvSeekBackend::new(mpv_static),
+                    crate::mpv::seek::MpvSeekBackend::new(mpv_static, Arc::clone(&native_seek_client)),
                     frame_cache.clone(),
                 ),
                 frame_cache,
