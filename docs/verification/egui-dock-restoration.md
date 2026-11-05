@@ -65,3 +65,19 @@ the replacement, the running review build is not the installed production app.
 Cafe-PC's configured SSH route also refused the connection. Those are explicit
 deployment blockers, not successful installations. Live menu acceptance and
 remote delivery remain open; rendered interaction tests are not user acceptance.
+
+## Follow-up from live review
+
+The user confirmed the empty-header context menu opens. The original Dock
+adapter omitted the close-all button's separate border and keyboard-focus colors;
+upstream consequently painted a dark vertical rule beside ×. The Dock-only
+adapter now removes that border, maps hover/focus colors to the active palette,
+and paints the application icon glyphs centered by visible ink within the
+existing clickable slots. The change preserves upstream click handling and the
+separate CraftUI renderer. Pointer and geometry tests cover both themes and
+multiple display scales. Broader visual comparison of every historical state
+remains open; this targeted correction is not a claim of complete parity.
+
+The user ran the graceful updater and the canonical process reported the
+restoration commit afterward. This does not establish Cafe deployment or live
+acceptance of the later close-button refinements.

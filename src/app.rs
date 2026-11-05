@@ -855,6 +855,7 @@ pub struct PealayerApp {
     pub(crate) seekbar_hover_thumbnails: bool,
     pub(crate) nle_seekbar_hover_thumbnails: bool,
     pub(crate) seekbar_markers: crate::config::SeekbarMarkersConfig,
+    pub(crate) effect_designer_cue_colors: std::collections::BTreeMap<String, String>,
     pub(crate) seekbar_thumbnail_preview: crate::ui::seek_preview::SeekbarThumbnailPreview,
     pub(crate) quick_seek_seconds: f64,
     pub(crate) frame_step_count: u32,
@@ -1632,6 +1633,7 @@ impl eframe::App for PealayerApp {
                     .collect(),
                 current_chapter_index,
                 seekbar_markers: self.seekbar_markers.clone(),
+                effect_designer_cue_colors: self.effect_designer_cue_colors.clone(),
                 control_bars: self.control_bars,
                 media_keys_enabled: self.media_keys_enabled,
                 media_keys_background_enabled: self.media_keys_background_enabled,
@@ -7428,6 +7430,7 @@ impl PealayerApp {
         cfg.seekbar_hover_thumbnails = self.seekbar_hover_thumbnails;
         cfg.nle_seekbar_hover_thumbnails = self.nle_seekbar_hover_thumbnails;
         cfg.seekbar_markers = self.seekbar_markers.clone();
+        cfg.effect_designer_cue_colors = self.effect_designer_cue_colors.clone();
         cfg.consistent_video_aspect_ratio = self.consistent_video_aspect_ratio;
         cfg.always_on_top = self.always_on_top;
         cfg.quick_seek_seconds = self.quick_seek_seconds;
@@ -7795,6 +7798,7 @@ impl PealayerApp {
         self.seekbar_hover_thumbnails = config.seekbar_hover_thumbnails;
         self.nle_seekbar_hover_thumbnails = config.nle_seekbar_hover_thumbnails;
         self.seekbar_markers = config.seekbar_markers.clone();
+        self.effect_designer_cue_colors = config.effect_designer_cue_colors.clone();
         let aspect_lock_enabled =
             !self.consistent_video_aspect_ratio && config.consistent_video_aspect_ratio;
         self.consistent_video_aspect_ratio = config.consistent_video_aspect_ratio;
@@ -10106,6 +10110,7 @@ impl Default for PealayerApp {
             seekbar_hover_thumbnails: false,
             nle_seekbar_hover_thumbnails: false,
             seekbar_markers: crate::config::SeekbarMarkersConfig::default(),
+            effect_designer_cue_colors: crate::config::default_designer_cue_colors(),
             seekbar_thumbnail_preview: crate::ui::seek_preview::SeekbarThumbnailPreview::default(),
             quick_seek_seconds: 10.0,
             frame_step_count: 1,

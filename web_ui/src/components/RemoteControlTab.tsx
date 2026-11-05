@@ -62,6 +62,7 @@ export interface PlayerState {
   settled_seek_revision?: number;
   settled_seek_target?: number | null;
   seekbar_markers?: { chapter_color: string; active_chapter_color: string; keyframe_color: string };
+  effect_designer_cue_colors?: Record<string, string>;
   timeline_keyframes?: Array<{ id: string; time_ms: number; label: string }>;
   seekable?: boolean;
   live?: boolean;

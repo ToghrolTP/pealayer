@@ -516,6 +516,9 @@ fn draw_actions(app: &mut PealayerApp, ui: &mut egui::Ui, surface: Surface, end:
             && !has_drag
         {
             egui::Popup::menu(&response)
+                // The secondary-click customization menu has its own lifetime.
+                // Sharing the default ID makes it close this menu on left click.
+                .id(response.id.with("media-tracks"))
                 .show(|ui| super::media_tracks::draw_track_menu(app, ui, kind));
         } else if response.clicked() && is_enabled && !has_drag {
             requested = Some(action);
@@ -801,6 +804,37 @@ mod tests {
             crate::config::ControlBarsConfig::default()
         );
         assert!(app.pending_control_bar_save.is_none());
+    }
+
+    #[test]
+    fn track_selectors_keep_primary_popups_open_separate_from_customization() {
+        let _lock = crate::app::tests::lock_app_tests();
+        for surface in [Surface::Simple, Surface::Monitor] {
+            for action in [Action::VideoTrack, Action::AudioTrack, Action::SubtitleTrack] {
+                let ctx = egui::Context::default();
+                let mut app = PealayerApp::default();
+                app.engine_handle = crate::four_d::engine::memory_only_test_engine();
+                app.current_video_path = Some("fixture.mp4".into());
+                app.control_bars.layout_mut(surface).hidden.fill(true);
+                app.control_bars.layout_mut(surface).hidden[action as usize] = false;
+                render(&ctx, &mut app, surface, vec![]);
+                render(&ctx, &mut app, surface, vec![]);
+                let point = rect(&ctx, surface, action).center();
+                render(&ctx, &mut app, surface, vec![egui::Event::PointerMoved(point), pointer(point, egui::PointerButton::Primary, true)]);
+                render(&ctx, &mut app, surface, vec![pointer(point, egui::PointerButton::Primary, false)]);
+                let output = render(&ctx, &mut app, surface, vec![]);
+                let id = super::super::action_customization::owner(surface).with(action);
+                assert!(egui::Popup::is_id_open(&ctx, id.with("media-tracks")), "primary popup closed for {action:?}");
+                assert!(output.shapes.iter().any(|s| matches!(&s.shape,egui::Shape::Text(t) if t.galley.text().contains("No tracks available"))));
+                assert!(egui::DragAndDrop::payload::<Drag>(&ctx).is_none());
+                egui::Popup::close_all(&ctx);
+                render(&ctx, &mut app, surface, vec![]);
+                render(&ctx, &mut app, surface, vec![pointer(point, egui::PointerButton::Secondary, true)]);
+                render(&ctx, &mut app, surface, vec![pointer(point, egui::PointerButton::Secondary, false)]);
+                assert!(egui::Popup::is_id_open(&ctx, id.with("popup")), "customization must remain available");
+                assert!(!egui::Popup::is_id_open(&ctx, id.with("media-tracks")));
+            }
+        }
     }
     #[test]
     fn overflow_stays_square_and_reachable_when_every_action_is_hidden_or_too_wide() {

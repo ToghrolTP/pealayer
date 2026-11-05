@@ -908,6 +908,7 @@ pub fn run() -> eframe::Result {
                 seekbar_hover_thumbnails: loaded_config.seekbar_hover_thumbnails,
                 nle_seekbar_hover_thumbnails: loaded_config.nle_seekbar_hover_thumbnails,
                 seekbar_markers: loaded_config.seekbar_markers.clone(),
+                effect_designer_cue_colors: loaded_config.effect_designer_cue_colors.clone(),
                 seekbar_thumbnail_preview:
                     crate::ui::seek_preview::SeekbarThumbnailPreview::default(),
                 quick_seek_seconds: loaded_config.quick_seek_seconds,

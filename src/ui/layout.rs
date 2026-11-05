@@ -14747,10 +14747,14 @@ impl<'a> PealayerTabViewer<'a> {
                             crate::ui::digital_twin::draw_digital_twin_card(self.app, ui);
                             ui.add_space(10.0);
                         }
-                        if self.app.advertised_hardware().is_some_and(|caps| caps.supports_rf_transmit) {
+                        // The manager also supports offline review/editing. When connected,
+                        // only expose it for a controller advertising RF support.
+                        if !self.app.is_connected || capabilities.as_ref().is_some_and(|caps| caps.supports_rf_transmit) {
                             if ui.button(format!("{} {}",crate::ui::icons::RADIO,self.app.tr("RF controls…"))).clicked() {
                                 self.app.rf.open = true;
-                                if let Err(error) = self.app.request_rf("catalog",serde_json::json!({"read_board":true})) { self.app.rf.error = error; }
+                                if self.app.is_connected {
+                                    if let Err(error) = self.app.request_rf("catalog",serde_json::json!({"read_board":true})) { self.app.rf.error = error; }
+                                }
                             }
                         }
                         if self.app.estop_active {
@@ -15276,22 +15280,20 @@ impl<'a> PealayerTabViewer<'a> {
                                         .max_rect(header_rect.shrink2(egui::vec2(4.0, 1.0)))
                                         .layout(egui::Layout::right_to_left(egui::Align::Center)),
                                 );
-                                if header_ui
-                                    .add_enabled(
-                                        can_add_keyframe,
-                                        egui::Button::new(crate::ui::icons::DIAMOND),
-                                    )
-                                    .on_hover_text(self.app.tr("Add exact timeline keyframe at playhead (K)"))
+                                header_ui.set_clip_rect(ui.clip_rect().intersect(header_rect));
+                                if crate::ui::media_tracks::header_button(
+                                    &mut header_ui,"timeline-add-keyframe",crate::ui::icons::DIAMOND,
+                                    false,can_add_keyframe,false,&self.app.tr("Add exact timeline keyframe at playhead (K)"))
                                     .clicked()
                                 {
                                     let time_ms = self.app.timeline_playhead_time_ms();
                                     self.app.insert_timeline_keyframe(time_ms);
                                     ui.ctx().request_repaint();
                                 }
-                                egui::containers::menu::MenuButton::from_button(
-                                    egui::Button::new(crate::ui::icons::LIST_CHECKS),
-                                )
-                                .ui(&mut header_ui, |ui| {
+                                let track_manager = crate::ui::media_tracks::header_button(
+                                    &mut header_ui,"timeline-track-manager",crate::ui::icons::LIST_CHECKS,
+                                    false,true,false,&self.app.tr("Timeline tracks"));
+                                egui::Popup::menu(&track_manager).show(|ui| {
                                     ui.set_min_width(245.0);
                                     ui.strong(self.app.tr("Timeline tracks"));
                                     ui.label(
@@ -15384,6 +15386,7 @@ impl<'a> PealayerTabViewer<'a> {
                                 let filter_response = header_ui.add_sized(
                                     [158.0, 22.0],
                                     crate::ui::dialog::singleline_text_edit(ui, &mut timeline_track_filter)
+                                        .font(egui::FontId::proportional(13.0))
                                         .hint_text(self.app.tr("Tracks"))
                                         .frame(egui::Frame::NONE)
                                         .margin(egui::Margin::symmetric(4, 2)),
@@ -15551,7 +15554,15 @@ impl<'a> PealayerTabViewer<'a> {
                                             egui::FontId::proportional(14.0),
                                             icon_color,
                                         );
-                                        let label_width = if !track_row.relay_ids.is_empty() {
+                                        let media_actions_width = match track_row.kind {
+                                            TimelineTrackKind::Video(_) => Some(crate::ui::media_tracks::HEADER_SELECTOR_WIDTH),
+                                            TimelineTrackKind::Audio(_) | TimelineTrackKind::Subtitle(_) => Some(
+                                                crate::ui::media_tracks::HEADER_SELECTOR_WIDTH + TIMELINE_TRACK_STATE_BUTTON_SIZE + ui.spacing().item_spacing.x),
+                                            _ => None,
+                                        };
+                                        let label_width = if let Some(actions) = media_actions_width {
+                                            (ui.available_width() - actions - ui.spacing().item_spacing.x - 4.0).max(0.0)
+                                        } else if !track_row.relay_ids.is_empty() {
                                             116.0
                                         } else {
                                             158.0
@@ -15684,7 +15695,7 @@ impl<'a> PealayerTabViewer<'a> {
                                             None => track_row.name.clone(),
                                         });
                                         ui.allocate_ui_with_layout(
-                                            ui.available_size(),
+                                            egui::vec2((ui.available_width()-4.0).max(0.0),ui.available_height()),
                                             egui::Layout::right_to_left(egui::Align::Center),
                                             |ui| {
                                         if let Some(control) = reorder_control.as_ref() {
@@ -15735,20 +15746,11 @@ impl<'a> PealayerTabViewer<'a> {
                                                 );
                                                 media_control_clicked |= selector.clicked();
                                                 let visible = track_row.active && track_row.enabled;
-                                                let visibility = ui
-                                                    .dropdown_choice(
-                                                        visible,
-                                                        if visible {
-                                                            crate::ui::icons::EYE
-                                                        } else {
-                                                            crate::ui::icons::EYE_SLASH
-                                                        },
-                                                    )
-                                                    .on_hover_text(if visible {
-                                                        self.app.tr("Hide subtitles")
-                                                    } else {
-                                                        self.app.tr("Show subtitles")
-                                                    });
+                                                let visibility = crate::ui::media_tracks::header_button(ui,
+                                                    ("timeline-subtitle-visibility",&track_row.key),
+                                                    if visible {crate::ui::icons::EYE} else {crate::ui::icons::EYE_SLASH},
+                                                    false,true,visible,
+                                                    &self.app.tr(if visible {"Hide subtitles"} else {"Show subtitles"}));
                                                 if visibility.clicked() {
                                                     media_control_clicked = true;
                                                     if track_row.active {

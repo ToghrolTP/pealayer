@@ -1314,6 +1314,7 @@ pub struct PlayerStatusResponse {
     #[serde(default)]
     pub current_chapter_index: Option<i64>,
     pub seekbar_markers: crate::config::SeekbarMarkersConfig,
+    pub effect_designer_cue_colors: std::collections::BTreeMap<String, String>,
     pub control_bars: crate::config::ControlBarsConfig,
     pub media_keys_enabled: bool,
     pub media_keys_background_enabled: bool,
@@ -1671,6 +1672,7 @@ impl Default for PlayerStatusResponse {
             chapters: Vec::new(),
             current_chapter_index: None,
             seekbar_markers: crate::config::SeekbarMarkersConfig::default(),
+            effect_designer_cue_colors: crate::config::default_designer_cue_colors(),
             control_bars: crate::config::ControlBarsConfig::default(),
             media_keys_enabled: true,
             media_keys_background_enabled: true,

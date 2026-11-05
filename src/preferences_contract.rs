@@ -366,6 +366,12 @@ fn seekbar_color_control(key: &'static str, label: &'static str) -> PreferenceCo
     control
 }
 
+fn designer_color_control(key: &'static str, label: &'static str) -> PreferenceControl {
+    let mut control = PreferenceControl::text(key, "hardware", "Effect designer colors", label, "#RRGGBB");
+    control.kind = PreferenceControlKind::Color;
+    control
+}
+
 pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceControl> {
     let audio_devices = crate::peer::client().and_then(|client| client.snapshot()).and_then(|snapshot| serde_json::from_value::<Vec<crate::mpv::audio_output::AudioDevice>>(snapshot.session.status.get("audio_devices")?.clone()).ok()).unwrap_or_else(crate::mpv::audio_output::available_audio_devices);
     let audio_output_control = |key, label, selected: &str, follow_media: bool| {
@@ -749,6 +755,16 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "Timeline",
             "Use compact timeline track rows",
         ),
+        designer_color_control("effect_designer_cue_colors.motion", "Seat motion"),
+        designer_color_control("effect_designer_cue_colors.relay", "Relay"),
+        designer_color_control("effect_designer_cue_colors.pwm", "PWM"),
+        designer_color_control("effect_designer_cue_colors.beep", "Buzzer"),
+        designer_color_control("effect_designer_cue_colors.rgb", "Status RGB"),
+        designer_color_control("effect_designer_cue_colors.addressable", "Strip pixel"),
+        designer_color_control("effect_designer_cue_colors.rf", "RF"),
+        designer_color_control("effect_designer_cue_colors.display", "Display"),
+        designer_color_control("effect_designer_cue_colors.menu", "Front-panel action"),
+        designer_color_control("effect_designer_cue_colors.opcode", "Raw opcode"),
         {
             let mut control = PreferenceControl::boolean(
                 "timeline_hide_cue_text_overflow",

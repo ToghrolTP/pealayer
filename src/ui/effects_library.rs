@@ -785,6 +785,22 @@ fn move_step_repeat(step: &mut crate::four_d::controller::HardwareMacroStep, ite
     step.repeat_interval_ms = Some(interval.min(3_600_000).min(room / repeats / 1_000).max(1) as u32);
 }
 
+fn effect_period_us(draft: &ControllerEffectDraft) -> u64 {
+    if draft.repeat_interval_ms > 0 { u64::from(draft.repeat_interval_ms) * 1_000 }
+    else { draft.steps.iter().filter_map(|s| step_repetition(s).ok().map(|p| p.2)).max().unwrap_or(0) }
+}
+
+fn move_effect_repeat(draft: &mut ControllerEffectDraft, iteration: u16, original_period_us: u64, delta_ms: i64, quantum_ms: Option<u64>) {
+    if iteration == 0 || draft.repeat_count < 2 { return; }
+    let base = draft.steps.iter().filter_map(|s| step_repetition(s).ok().map(|p| p.2)).max().unwrap_or(0);
+    let minimum = base.div_ceil(1_000).max(1);
+    let maximum = (i32::MAX as u64).saturating_sub(base) / u64::from(draft.repeat_count - 1) / 1_000;
+    if minimum > maximum { return; }
+    let interval = (original_period_us as f64 / 1_000.0 + delta_ms as f64 / f64::from(iteration)).round() as i64;
+    let interval = quantum_ms.map_or(interval.max(1) as u64, |q| quantize_time(interval, q));
+    draft.repeat_interval_ms = interval.clamp(minimum, maximum.min(3_600_000)) as u32;
+}
+
 fn visible_step_instances(steps: &[crate::four_d::controller::HardwareMacroStep], indexes: &[usize], from_us: u64, to_us: u64, active: Option<SequenceCueDragState>) -> Vec<(usize, u16)> {
     let mut instances = Vec::new();
     for &index in indexes {
@@ -802,6 +818,44 @@ fn visible_step_instances(steps: &[crate::four_d::controller::HardwareMacroStep]
         if !instances.contains(&(drag.index, drag.iteration)) { instances.push((drag.index, drag.iteration)); }
     }
     instances.extend(indexes.iter().map(|&index| (index, 0)));
+    instances
+}
+
+// Projection only: the source index owns selection, editing and persistence.
+// Cull whole cycles before projecting their steps; never expand a stored plan.
+fn visible_sequence_instances(
+    draft: &ControllerEffectDraft, indexes: &[usize], from_us: u64, to_us: u64,
+    show_repeats: bool, active: Option<SequenceCueDragState>,
+) -> Vec<(usize, u16, u16, u64)> {
+    let base = draft.steps.iter().filter_map(|step| step_repetition(step).ok().map(|p| p.2)).max().unwrap_or(0);
+    let period = if draft.repeat_interval_ms == 0 { base } else { u64::from(draft.repeat_interval_ms) * 1_000 };
+    let count = if show_repeats && repeated_sequence_duration_ms(&draft.steps, draft.repeat_count, draft.repeat_interval_ms).is_ok() { draft.repeat_count } else { 1 };
+    let mut instances = Vec::new();
+    if show_repeats {
+        let first = if period > 0 { from_us.saturating_sub(base + 1_000_000).div_ceil(period) } else { 0 };
+        let last = if period > 0 { (to_us / period).min(u64::from(count - 1)) } else { 0 };
+        for cycle in (first..=last).rev() {
+            let offset = cycle * period;
+            for (index, iteration) in visible_step_instances(&draft.steps, indexes, from_us.saturating_sub(offset), to_us.saturating_sub(offset), None) {
+                if cycle == 0 && iteration == 0 { continue; }
+                let step = &draft.steps[index];
+                let at = offset + step.at_us + u64::from(iteration) * step_repetition(step).map_or(0, |p| p.1);
+                let visual_length = (u64::from(step.duration_ms.unwrap_or(0)) * 1_000).max(1_000_000);
+                if at <= to_us && at + visual_length >= from_us {
+                    instances.push((index, iteration, cycle as u16, at));
+                }
+            }
+        }
+        if let Some(drag) = active.filter(|drag| indexes.contains(&drag.index)) {
+            let step = &draft.steps[drag.index];
+            if (drag.iteration > 0 || drag.effect_iteration > 0)
+                && !instances.iter().any(|&(index, iteration, cycle, _)| (index, iteration, cycle) == (drag.index, drag.iteration, drag.effect_iteration)) {
+                let at = u64::from(drag.effect_iteration) * period + step.at_us + u64::from(drag.iteration) * step_repetition(step).map_or(0, |p| p.1);
+                instances.push((drag.index, drag.iteration, drag.effect_iteration, at));
+            }
+        }
+    }
+    instances.extend(indexes.iter().map(|&index| (index, 0, 0, draft.steps[index].at_us)));
     instances
 }
 
@@ -877,6 +931,8 @@ struct SequenceCueDragState {
     start_ms: u64,
     duration_ms: u64,
     iteration: u16,
+    effect_iteration: u16,
+    effect_period_us: u64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
@@ -1389,6 +1445,24 @@ fn paint_sequence_resize_handles(
     );
 }
 
+fn designer_cue_color(colors: &std::collections::BTreeMap<String, String>, kind: &str) -> egui::Color32 {
+    let key = match kind { "relay-mask" | "relays-off" => "relay", "pwm-off" => "pwm", "menu-action" => "menu", other => other };
+    let rgb = colors.get(key).or_else(|| colors.get("opcode"))
+        .and_then(|hex| crate::config::parse_rgb_hex(hex)).unwrap_or([121,121,121]);
+    egui::Color32::from_rgb(rgb[0],rgb[1],rgb[2])
+}
+
+fn designer_cue_ink(color: egui::Color32) -> egui::Color32 {
+    let linear = |v: u8| { let s = f32::from(v) / 255.0; if s <= 0.04045 { s / 12.92 } else { ((s + 0.055) / 1.055).powf(2.4) } };
+    if 0.2126 * linear(color.r()) + 0.7152 * linear(color.g()) + 0.0722 * linear(color.b()) > 0.179 { egui::Color32::BLACK } else { egui::Color32::WHITE }
+}
+
+fn paint_repeat_outline(painter: &egui::Painter, cue: egui::Rect, stroke: egui::Stroke, whole_effect: bool) {
+    let rect = cue.shrink(stroke.width / 2.0);
+    let points = [rect.left_top(), rect.right_top(), rect.right_bottom(), rect.left_bottom(), rect.left_top()];
+    painter.add(egui::Shape::dashed_line(&points, stroke, if whole_effect { 5.0 } else { 1.0 }, 3.0));
+}
+
 fn paint_sequence_move_grip(
     painter: &egui::Painter,
     cue: egui::Rect,
@@ -1489,6 +1563,7 @@ fn draw_sequence_timeline(
     capabilities: Option<&crate::four_d::controller::HardwareCapabilities>,
     wheel_preferences: crate::config::TimelineWheelPreferences,
 ) {
+    let cue_colors = crate::platform::interop::get_live_config().effect_designer_cue_colors;
     let state_prefix = (
         "effect-sequence-timeline",
         draft.reference.clone(),
@@ -1504,6 +1579,7 @@ fn draw_sequence_timeline(
     selection.normalize(draft.steps.len(), *selected_index);
     let mut bulk_action = None;
     let mut cue_has_focus = false;
+    let mut focused_projection = None;
     let mut zoom = ui
         .data_mut(|data| data.get_persisted::<f32>(zoom_id).unwrap_or(90.0))
         .clamp(30.0, 320.0);
@@ -1511,6 +1587,9 @@ fn draw_sequence_timeline(
         .data_mut(|data| data.get_persisted::<u64>(quantize_id).unwrap_or(50))
         .max(1);
     let mut snap = ui.data_mut(|data| data.get_persisted::<bool>(snap_id).unwrap_or(true));
+    // A view preference, shared by native designer instances, not effect data.
+    let ghosts_id = egui::Id::new("effect-designer-show-repeat-ghosts");
+    let mut show_repeats = ui.data_mut(|data| data.get_persisted::<bool>(ghosts_id).unwrap_or(true));
     let mut menu_action = None;
     let templates = sequence_lane_templates(capabilities);
     let mut pending_insert: Option<(String, u64)> = None;
@@ -1525,6 +1604,11 @@ fn draw_sequence_timeline(
         .show(ui, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.strong(format!("{} {}", crate::ui::icons::WAVEFORM, designer_tr(ui, "Effect timeline")));
+                if ui.checkbox(&mut show_repeats, designer_tr(ui, "Show repeat ghosts"))
+                    .on_hover_text(designer_tr(ui, "Repeated cues are linked to their original; hiding them does not disable repetition"))
+                    .changed() {
+                    ui.data_mut(|data| { data.insert_persisted(ghosts_id, show_repeats); data.remove::<SequenceCueDragState>(drag_id); });
+                }
                 let all_button = ui.add_enabled(!draft.steps.is_empty(), egui::Button::new(designer_tr(ui, "Select all cues")))
                     .on_hover_text("Ctrl+A");
                 cue_has_focus |= all_button.has_focus();
@@ -1610,7 +1694,8 @@ fn draw_sequence_timeline(
             let row_height = 42.0;
             let ruler_height = 28.0;
             let px_per_ms = zoom / 1_000.0;
-            let duration_ms = sequence_duration_ms(&draft.steps).max(1_000);
+            let duration_ms = repeated_sequence_duration_ms(&draft.steps, draft.repeat_count, draft.repeat_interval_ms)
+                .unwrap_or_else(|_| sequence_duration_ms(&draft.steps)).max(1_000);
             let timeline_width = (duration_ms as f32 * px_per_ms + 80.0)
                 .max((ui.available_width() - label_width).max(360.0));
             let canvas_size = egui::vec2(
@@ -1721,14 +1806,13 @@ fn draw_sequence_timeline(
                         let from_us = ((ui.clip_rect().left() - timeline_left).max(0.0) / px_per_ms * 1_000.0) as u64;
                         let to_us = ((ui.clip_rect().right() - timeline_left).max(0.0) / px_per_ms * 1_000.0) as u64;
                         let active_drag = ui.data_mut(|data| data.get_temp::<SequenceCueDragState>(drag_id));
-                        let instances = visible_step_instances(&draft.steps, indexes, from_us, to_us, active_drag);
-                        for (index, iteration) in instances {
+                        let instances = visible_sequence_instances(draft, indexes, from_us, to_us, show_repeats, active_drag);
+                        for (index, iteration, effect_iteration, at_us) in instances {
                             let source = draft.steps[index].clone();
                             let mut shown = source.clone();
-                            let period = step_repetition(&source).map_or(0, |p| p.1);
-                            shown.at_us += u64::from(iteration) * period;
+                            shown.at_us = at_us;
                             let step = &shown;
-                            let ghost = iteration > 0;
+                            let ghost = iteration > 0 || effect_iteration > 0;
                             let duration_resizable = step.duration_ms.is_some();
                             let start_ms = step.at_us.div_ceil(1_000);
                             let display_duration =
@@ -1744,15 +1828,19 @@ fn draw_sequence_timeline(
                             );
                             let mut response = ui.interact(
                                 cue,
-                                egui::Id::new((state_prefix.clone(), "cue", index, iteration)),
+                                egui::Id::new((state_prefix.clone(), "cue", index, iteration, effect_iteration)),
                                 egui::Sense::click_and_drag(),
                             );
                             let cue_label = displayed_sequence_cue_label(ui, step);
-                            let cue_label = if ghost { format!("↻{} {cue_label}", iteration + 1) } else { cue_label };
+                            let cue_label = if effect_iteration > 0 { format!("↻{}.{} {cue_label}", effect_iteration + 1, iteration + 1) }
+                                else if ghost { format!("↻{} {cue_label}", iteration + 1) } else { cue_label };
                             let duration_label = step.duration_ms.map_or_else(
                                 || designer_tr(ui, "Instant cue (drag to move)"),
                                 |duration| crate::duration::format_time_value_ms_with_preference(u64::from(duration), human_readable_time_units),
                             );
+                            if ghost {
+                                response = response.on_hover_text(designer_tr(ui, "Drag to adjust repeat interval; resize to change shared cue length"));
+                            }
                             response = response.on_hover_text(format!(
                                 "{}\n{}: {}\n{}: {}\n{}: {}",
                                 cue_label,
@@ -1782,38 +1870,26 @@ fn draw_sequence_timeline(
                             }
                             let selected = selection.indices.contains(&index);
                             cue_has_focus |= response.has_focus();
+                            if response.has_focus() && ghost { focused_projection = Some((index,iteration,effect_iteration)); }
                             let interaction = ui.style().interact_selectable(&response, selected);
-                            let fill = if selected {
-                                visuals.selection.bg_fill
-                            } else if response.hovered() {
-                                interaction.weak_bg_fill.gamma_multiply(1.25)
-                            } else {
-                                interaction.weak_bg_fill
-                            };
+                            let fill = designer_cue_color(&cue_colors, &step.kind);
+                            let ink = designer_cue_ink(fill);
+                            let stroke = egui::Stroke::new(if selected { 2.0 } else { 1.0 },
+                                if selected { tokens.accent } else { ink.gamma_multiply(0.7) });
                             painter.rect(
                                 cue,
                                 5.0,
-                                if ghost { fill.gamma_multiply(0.4) } else { fill },
-                                egui::Stroke::new(
-                                    if selected { 1.5 } else { 1.0 },
-                                    if selected {
-                                        visuals.selection.stroke.color
-                                    } else {
-                                        interaction.bg_stroke.color
-                                    },
-                                ),
+                                if ghost { fill.gamma_multiply(if selected || response.hovered() { 0.65 } else { 0.4 }) } else { fill },
+                                if ghost { egui::Stroke::NONE } else { stroke },
                                 egui::StrokeKind::Inside,
                             );
+                            if ghost { paint_repeat_outline(&painter, cue, stroke, effect_iteration > 0); }
                             paint_sequence_cue_label(
                                 &painter,
                                 cue,
                                 &cue_label,
                                 egui::FontId::proportional(11.5),
-                                if ghost { interaction.fg_stroke.color.gamma_multiply(0.5) } else if selected {
-                                    visuals.selection.stroke.color
-                                } else {
-                                    interaction.fg_stroke.color
-                                },
+                                if ghost { interaction.fg_stroke.color } else { ink },
                                 hide_cue_text_overflow,
                                 duration_resizable,
                             );
@@ -1861,6 +1937,7 @@ fn draw_sequence_timeline(
                                         index
                                     });
                                     let pointer_x = ui.input(|input| input.pointer.press_origin()).map_or(pointer.x, |p| p.x);
+                                    let effect_period_us = effect_period_us(draft);
                                     ui.data_mut(|data| {
                                         data.insert_temp(
                                             drag_id,
@@ -1872,6 +1949,8 @@ fn draw_sequence_timeline(
                                                 start_ms,
                                                 duration_ms,
                                                 iteration,
+                                                effect_iteration,
+                                                effect_period_us,
                                             },
                                         );
                                     });
@@ -1881,14 +1960,17 @@ fn draw_sequence_timeline(
                                 && let Some(pointer) = response.interact_pointer_pos()
                                 && let Some(drag) = ui
                                     .data_mut(|data| data.get_temp::<SequenceCueDragState>(drag_id))
-                                && drag.index == index && drag.iteration == iteration
+                                && drag.index == index && drag.iteration == iteration && drag.effect_iteration == effect_iteration
                             {
                                 let delta_ms =
                                     ((pointer.x - drag.pointer_x) / px_per_ms).round() as i64;
+                                if effect_iteration > 0 && matches!(drag.mode, crate::app::DragMode::Move) {
+                                    move_effect_repeat(draft, effect_iteration, drag.effect_period_us, delta_ms, snap.then_some(quantum_ms));
+                                } else {
                                 let step = &mut draft.steps[drag.duplicate_index.unwrap_or(index)];
                                 match drag.mode {
                                     crate::app::DragMode::Move => {
-                                        if ghost {
+                                        if ghost && effect_iteration == 0 {
                                             move_step_repeat(step, iteration, drag.start_ms, delta_ms, snap.then_some(quantum_ms));
                                         } else {
                                         let moved = drag.start_ms as i64 + delta_ms;
@@ -1938,6 +2020,7 @@ fn draw_sequence_timeline(
                                         );
                                     }
                                 }
+                                }
                             }
                             if response.drag_stopped() {
                                 ui.data_mut(|data| data.remove::<SequenceCueDragState>(drag_id));
@@ -1953,6 +2036,20 @@ fn draw_sequence_timeline(
                                 *selected_index = index;
                                 if !selection.indices.contains(&index) { selection = SequenceCueSelection::single(index); }
                                 selection.primary = index;
+                                if ghost {
+                                    ui.menu_button(designer_tr(ui, if effect_iteration > 0 { "Repeat effect" } else { "Repeat step" }), |ui| {
+                                        let mut count = if effect_iteration > 0 { draft.repeat_count } else { draft.steps[index].repeat_count.unwrap_or(1) };
+                                        let mut interval = u64::from(if effect_iteration > 0 { draft.repeat_interval_ms } else { draft.steps[index].repeat_interval_ms.unwrap_or(0) });
+                                        ui.horizontal(|ui| { ui.label(designer_tr(ui, "Count")); ui.add(egui::DragValue::new(&mut count).range(1..=1_000)); });
+                                        ui.horizontal(|ui| {
+                                            ui.label(designer_tr(ui, "Interval"));
+                                            ui.add(crate::duration::time_value_drag(&mut interval, 0..=3_600_000, 10.0, human_readable_time_units));
+                                        });
+                                        if effect_iteration > 0 { draft.repeat_count = count; draft.repeat_interval_ms = interval as u32; }
+                                        else { draft.steps[index].repeat_count = Some(count); draft.steps[index].repeat_interval_ms = Some(interval as u32); }
+                                    });
+                                    ui.separator();
+                                }
                                 if let Some(action) = sequence_cue_context_menu(
                                     ui,
                                     &mut draft.steps[index],
@@ -2083,16 +2180,26 @@ fn draw_sequence_timeline(
                     bulk_action = Some(SequenceBulkAction::Duplicate);
                 }
             }
-            if shortcut_enabled && !selection.indices.is_empty()
-                && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft)) {
-                let earliest = selection.indices.iter().filter_map(|index| draft.steps.get(*index)).map(|step| step.at_us).min().unwrap_or(0);
-                let delta = quantum_ms.saturating_mul(1_000).min(earliest);
-                for index in &selection.indices { draft.steps[*index].at_us -= delta; }
-            }
-            if shortcut_enabled && !selection.indices.is_empty()
-                && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight)) {
-                for index in &selection.indices {
-                    draft.steps[*index].at_us = draft.steps[*index].at_us.saturating_add(quantum_ms.saturating_mul(1_000));
+            if shortcut_enabled && !selection.indices.is_empty() {
+                let direction = ui.input_mut(|input| {
+                    if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowLeft) { -1 }
+                    else if input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowRight) { 1 } else { 0 }
+                });
+                if direction != 0 {
+                    let delta = direction * quantum_ms as i64;
+                    if let Some((index,iteration,cycle)) = focused_projection {
+                        if cycle > 0 {
+                            move_effect_repeat(draft,cycle,effect_period_us(draft),delta * i64::from(cycle),snap.then_some(quantum_ms));
+                        } else {
+                            let step = &mut draft.steps[index];
+                            let at = step.at_us + u64::from(iteration) * step_repetition(step).map_or(0,|p|p.1);
+                            move_step_repeat(step,iteration,at.div_ceil(1_000),delta * i64::from(iteration),snap.then_some(quantum_ms));
+                        }
+                    } else {
+                        let earliest = selection.indices.iter().map(|index| draft.steps[*index].at_us).min().unwrap_or(0);
+                        let delta = (delta * 1_000).max(-(earliest as i64));
+                        for index in &selection.indices { draft.steps[*index].at_us = (draft.steps[*index].at_us as i64 + delta).max(0) as u64; }
+                    }
                 }
             }
         });
@@ -4617,11 +4724,13 @@ mod tests {
 
     #[test]
     fn repeat_ghosts_are_visible_views_of_source_and_select_it_in_both_themes() {
+      for whole_effect in [false, true] {
         for dark in [false, true] {
             let context = egui::Context::default();
             context.set_visuals(if dark { egui::Visuals::dark() } else { egui::Visuals::light() });
             context.all_styles_mut(|style| style.animation_time = 0.0);
             let mut draft = ControllerEffectDraft::default();
+            draft.repeat_count = if whole_effect { 2 } else { 1 };
             draft.steps = vec![
                 crate::four_d::controller::HardwareMacroStep { kind: "relay".into(), target: Some(0), value: Some(0), ..Default::default() },
                 crate::four_d::controller::HardwareMacroStep { kind: "relay".into(), target: Some(0), value: Some(1), at_us: 1_000_000, duration_ms: Some(700), repeat_count: Some(3), repeat_interval_ms: Some(1_000), ..Default::default() },
@@ -4637,14 +4746,15 @@ mod tests {
                 output
             };
             let output = render(vec![], &mut draft, &mut selected);
-            fn locate(shape: &egui::epaint::Shape) -> Option<egui::Pos2> {
+            fn locate(shape: &egui::epaint::Shape, prefix: &str) -> Option<egui::Pos2> {
                 match shape {
-                    egui::epaint::Shape::Text(text) if text.galley.job.text.starts_with("↻2") => Some(text.pos + text.galley.rect.center().to_vec2()),
-                    egui::epaint::Shape::Vec(shapes) => shapes.iter().find_map(locate),
+                    egui::epaint::Shape::Text(text) if text.galley.job.text.starts_with(prefix) => Some(text.pos + text.galley.rect.center().to_vec2()),
+                    egui::epaint::Shape::Vec(shapes) => shapes.iter().find_map(|shape| locate(shape, prefix)),
                     _ => None,
                 }
             }
-            let ghost = output.shapes.iter().find_map(|shape| locate(&shape.shape)).expect("dimmed repeat must render");
+            let prefix = if whole_effect { "↻2.2" } else { "↻2" };
+            let ghost = output.shapes.iter().find_map(|shape| locate(&shape.shape, prefix)).expect("dimmed repeat must render");
             render(vec![egui::Event::PointerMoved(ghost), egui::Event::PointerButton { pos: ghost, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }], &mut draft, &mut selected);
             render(vec![egui::Event::PointerButton { pos: ghost, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }], &mut draft, &mut selected);
             assert_eq!(selected, 1);
@@ -4654,9 +4764,51 @@ mod tests {
             let moved = ghost + egui::vec2(18.0, 0.0);
             render(vec![egui::Event::PointerMoved(moved)], &mut draft, &mut selected);
             render(vec![egui::Event::PointerButton { pos: moved, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }], &mut draft, &mut selected);
-            let mut expected = original.clone(); expected[1].repeat_interval_ms = Some(1_200);
-            assert_eq!(draft.steps, expected, "dragging the repeat must only edit source spacing");
+            let mut expected = original.clone();
+            if whole_effect { assert_eq!(draft.repeat_interval_ms, 3_900); } else { expected[1].repeat_interval_ms = Some(1_200); }
+            assert_eq!(draft.steps, expected, "dragging a proxy edits its source, never materializes cues");
+            context.data_mut(|data| data.insert_persisted(egui::Id::new("effect-designer-show-repeat-ghosts"), false));
+            let output = render(vec![], &mut draft, &mut selected);
+            assert!(output.shapes.iter().all(|shape| locate(&shape.shape, "↻").is_none()), "the view toggle hides all repeat ghosts");
+            assert_eq!(draft.steps, expected, "hiding ghosts never changes the schedule");
         }
+      }
+    }
+
+    #[test]
+    fn nested_repeat_projection_is_exact_bounded_and_source_owned() {
+        use crate::four_d::controller::HardwareMacroStep;
+        let mut draft = ControllerEffectDraft::default();
+        draft.repeat_count = 2;
+        draft.steps = vec![HardwareMacroStep { at_us: 101, duration_ms: Some(100), repeat_count: Some(2), repeat_interval_ms: Some(150), ..Default::default() }];
+        let source = draft.steps.clone();
+        assert_eq!(visible_sequence_instances(&draft, &[0], 0, 1_000_000, true, None),
+            [(0,1,1,400202),(0,0,1,250202),(0,1,0,150101),(0,0,0,101)]);
+        assert_eq!(visible_sequence_instances(&draft, &[0], 0, 1_000_000, false, None), [(0,0,0,101)]);
+        assert_eq!(draft.steps, source);
+        move_effect_repeat(&mut draft, 1, 250101, -1_000, None);
+        assert_eq!(draft.repeat_interval_ms,251);
+        move_effect_repeat(&mut draft, 2, 250101, 400, None);
+        assert_eq!(draft.repeat_interval_ms,450);
+        assert_eq!(draft.steps,source);
+        draft.repeat_interval_ms = 1;
+        assert!(visible_sequence_instances(&draft, &[0], 0, 1_000_000, true, None).iter().all(|i| i.2 == 0));
+        draft.repeat_interval_ms = 0;
+        draft.repeat_count = 1_000;
+        draft.steps = vec![HardwareMacroStep { duration_ms: Some(1), repeat_count: Some(1_000), repeat_interval_ms: Some(1), ..Default::default() }];
+        let instances = visible_sequence_instances(&draft, &[0], 900_000_000, 901_000_000, true, None);
+        assert!(instances.len() < 4_000, "must cull a million-instance schedule before allocating");
+        assert!(instances.iter().any(|i| i.2 == 900));
+    }
+
+    #[test]
+    fn cue_palette_preserves_type_and_contrast_for_all_projections() {
+        let palette = crate::config::default_designer_cue_colors();
+        assert_eq!(designer_cue_color(&palette,"relay-mask"),designer_cue_color(&palette,"relay"));
+        assert_eq!(designer_cue_color(&palette,"pwm-off"),designer_cue_color(&palette,"pwm"));
+        assert_eq!(designer_cue_color(&palette,"menu-action"),designer_cue_color(&palette,"menu"));
+        assert_eq!(designer_cue_ink(egui::Color32::WHITE),egui::Color32::BLACK);
+        assert_eq!(designer_cue_ink(egui::Color32::BLACK),egui::Color32::WHITE);
     }
 
     #[test]
