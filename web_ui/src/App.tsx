@@ -802,7 +802,7 @@ const App: React.FC = () => {
             )}
             {activeTab === 'effects' && <EffectsTab state={state} sendCmd={sendCmd} locale={runtime?.locale || 'en'} apiBaseUrl={apiBaseUrl} importedEffect={importedEffect} onImported={() => setImportedEffect(null)} />}
             {activeTab === 'downloads' && <DownloadsTab apiBaseUrl={apiBaseUrl} sendCmd={sendCmd} />}
-            {activeTab === 'hardware' && <HardwareTab state={state} sendCmd={sendCmd} locale={runtime?.locale || 'en'} />}
+            {activeTab === 'hardware' && <HardwareTab state={state} sendCmd={sendCmd} locale={runtime?.locale || 'en'} onPreferences={() => setActiveTab('preferences')} />}
             {activeTab === 'about' && (
               <PlayerInfoTab state={state} connectionMode={connectionMode} runtime={runtime} locale={runtime?.locale || 'en'} apiBaseUrl={apiBaseUrl} websocketUrl={resolveWebSocketUrl()} platform={platform} />
             )}

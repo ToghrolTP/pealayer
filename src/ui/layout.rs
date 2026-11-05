@@ -8625,6 +8625,37 @@ fn draw_control_card_grid(
 }
 
 #[cfg(test)]
+mod hardware_monitor_offline_tests {
+    use super::*;
+    #[test]
+    fn monitor_never_paints_cached_live_cards_or_rf_after_transport_loss() {
+        let _lock=crate::app::tests::lock_app_tests();
+        for connected in [false,true] {
+            let mut app=PealayerApp::default();
+            app.engine_handle=crate::four_d::engine::memory_only_test_engine();
+            app.is_connected=connected;
+            app.engine_handle.connection_requested.store(false,std::sync::atomic::Ordering::Relaxed);
+            *app.engine_handle.hardware_capabilities.lock().unwrap()=Some(crate::four_d::controller::HardwareCapabilities {
+                board_connected:!connected,supports_rf_transmit:true,board_name:"Cached fixture board".into(),..Default::default()
+            });
+            let ctx=egui::Context::default();
+            for frame in 0..2 {
+                let mut output=ctx.run_ui(egui::RawInput{screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(360.0,700.0))),time:Some(frame as f64),..Default::default()},|ui| {
+                    PealayerTabViewer{app:&mut app}.ui(ui,&mut PealayerTab::HardwareMonitor);
+                });
+                let text=output.shapes.iter().filter_map(|shape|match &shape.shape {egui::Shape::Text(t)=>Some(t.galley.text()),_=>None}).collect::<Vec<_>>().join("\n");
+                assert!(text.contains(if connected {"No board connected"}else{"Hardware Disconnected"}),"{text}");
+                assert!(!text.contains("RF controls"),"RF leaked into unavailable Monitor");
+                assert!(!text.contains("Cached fixture board"),"stale connected board card was painted");
+                assert!(!text.contains("Buzzer & melodies"));
+                assert!(!app.rf.open);assert!(app.hardware_effect_authoring.pending_operation.is_none());
+                output.textures_delta.clear();
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 mod timeline_row_tests {
     use super::*;
 
@@ -14708,12 +14739,12 @@ impl<'a> PealayerTabViewer<'a> {
                             }
                     }
                     PealayerTab::HardwareMonitor => {
-                        crate::four_d::authority::draw_controls(self.app,ui);
+                        if self.app.is_connected {crate::four_d::authority::draw_controls(self.app,ui);}
                         let capabilities = self.app.advertised_hardware();
                         if let Some(capabilities) = &capabilities {
                             channel_folders::draw_dialogs(self.app, ui, capabilities);
                         }
-                        ui.horizontal(|ui| {
+                        ui.horizontal_wrapped(|ui| {
                             ui.heading(self.app.tr("Hardware Monitor Dashboard"));
                             if crate::ui::hardware_control::channel_manager_available(
                                 self.app.is_connected,
@@ -14743,15 +14774,15 @@ impl<'a> PealayerTabViewer<'a> {
                         ui.add_space(8.0);
 
                         hardware_monitor_scroll(ui, |ui| {
-                        if crate::four_d::controller::is_demo_endpoint(&self.app.serial_port)
-                            || self.app.advertised_hardware().as_ref().is_some_and(|c| c.board_name.contains("Virtual"))
+                        if crate::ui::hardware_monitor::live_board(self.app.is_connected,capabilities.as_ref()) && (crate::four_d::controller::is_demo_endpoint(&self.app.serial_port)
+                            || capabilities.as_ref().is_some_and(|c| c.board_name.contains("Virtual")))
                         {
                             crate::ui::digital_twin::draw_digital_twin_card(self.app, ui);
                             ui.add_space(10.0);
                         }
-                        // The manager also supports offline review/editing. When connected,
-                        // only expose it for a controller advertising RF support.
-                        if !self.app.is_connected || capabilities.as_ref().is_some_and(|caps| caps.supports_rf_transmit) {
+                        // A retained catalog is not a live RF connection. Offline
+                        // authoring remains separate from the Hardware Monitor.
+                        if crate::ui::hardware_monitor::show_rf(self.app.is_connected,capabilities.as_ref()) {
                             if ui.button(format!("{} {}",crate::ui::icons::RADIO,self.app.tr("RF controls…"))).clicked() {
                                 self.app.rf.open = true;
                                 if self.app.is_connected {
@@ -14759,7 +14790,7 @@ impl<'a> PealayerTabViewer<'a> {
                                 }
                             }
                         }
-                        if self.app.estop_active {
+                        if self.app.is_connected && self.app.estop_active {
                             let estop_banner_label =
                                 self.app.tr("EMERGENCY STOP ACTIVE - ALL OUTPUTS DISABLED");
                             ui.horizontal(|ui| {
@@ -14780,56 +14811,17 @@ impl<'a> PealayerTabViewer<'a> {
                             ui.add_space(8.0);
                         }
 
-                        let availability = crate::four_d::programming::hardware_availability(self.app.is_connected, false, capabilities.as_ref());
-                        if matches!(availability, crate::four_d::programming::HardwareAvailability::Programming | crate::four_d::programming::HardwareAvailability::ProgrammingLatch | crate::four_d::programming::HardwareAvailability::ProgrammingRecovery) {
-                            ui.colored_label(ui.visuals().warn_fg_color,
-                                format!("{} {}", crate::ui::icons::LOCK, self.app.tr(availability.label())));
+                        let availability=crate::four_d::programming::hardware_availability(self.app.is_connected,false,capabilities.as_ref());
+                        if crate::ui::hardware_monitor::live_board(self.app.is_connected,capabilities.as_ref())
+                            && matches!(availability,crate::four_d::programming::HardwareAvailability::Programming|crate::four_d::programming::HardwareAvailability::ProgrammingLatch|crate::four_d::programming::HardwareAvailability::ProgrammingRecovery) {
+                            ui.colored_label(ui.visuals().warn_fg_color,format!("{} {}",crate::ui::icons::LOCK,self.app.tr(availability.label())));
                         }
-                        if !self.app.is_connected {
-                            ui.label(egui::RichText::new(
-                                self.app.tr("Hardware Disconnected")
-                            ).weak());
-                        } else if crate::four_d::controller::is_controller_endpoint(&self.app.serial_port)
-                            && capabilities.is_none()
-                        {
-                            if self.app.connection_notice.is_some() {
-                                ui.horizontal_wrapped(|ui| {
-                                    ui.colored_label(
-                                        ui.visuals().warn_fg_color,
-                                        crate::ui::icons::WARNING,
-                                    );
-                                    ui.label(
-                                        egui::RichText::new(
-                                            self.app.hardware_unavailable_detail(None),
-                                        )
-                                        .weak(),
-                                    );
-                                });
-                            } else {
-                                ui.label(egui::RichText::new(
-                                    self.app.tr("Loading hardware…")
-                                ).weak());
-                            }
-                        } else if capabilities
-                            .as_ref()
-                            .is_some_and(|capabilities| !capabilities.board_connected)
-                        {
-                            ui.horizontal_wrapped(|ui| {
-                                ui.colored_label(
-                                    ui.visuals().warn_fg_color,
-                                    crate::ui::icons::WARNING,
-                                );
-                                ui.label(
-                                    egui::RichText::new(
-                                        self.app.hardware_unavailable_detail(capabilities.as_ref()),
-                                    )
-                                    .weak(),
-                                );
-                            });
+                        if !crate::ui::hardware_monitor::live_board(self.app.is_connected,capabilities.as_ref()) {
+                            crate::ui::hardware_monitor::draw_unavailable(self.app,ui,capabilities.as_ref());
                         }
 
                         if let Some(capabilities) = capabilities
-                            .filter(|capabilities| capabilities.board_connected)
+                            .filter(|capabilities| self.app.is_connected && capabilities.board_connected)
                         {
                             let (board_card_title, board_card_subtitle) = board_card_labels(
                                 display_language,

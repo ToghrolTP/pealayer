@@ -22,3 +22,27 @@ export function hardwareAvailability(state: PlayerState, peerConnected = true): 
 export function hardwareOutputsAvailable(state: PlayerState) {
   return Boolean(state.controller_connected && state.hardware_connected && state.hardware_details?.outputs_available !== false && hardwareAvailability(state) === 'ok');
 }
+
+/** Cached capabilities do not authorize live Monitor cards or RF controls. */
+export function hardwareMonitorReady(state: PlayerState) {
+  return Boolean(state.controller_connected && state.hardware_connected && state.hardware_details);
+}
+export function hardwareMonitorRfAvailable(state: PlayerState) {
+  return hardwareMonitorReady(state) && hardwareOutputsAvailable(state) && state.hardware?.supports_rf_transmit === true;
+}
+export function hardwareMonitorEmpty(state: PlayerState) {
+  const availability = hardwareAvailability(state);
+  if (!state.controller_connected) {
+    const progress = Boolean(state.hardware_connection_requested);
+    return { title: progress ? 'Connecting to PCController…' : 'Hardware Disconnected',
+      detail: state.hardware_error || (progress ? 'Waiting for the configured PCController connection.' : 'Connect to PCController to discover live board controls.'),
+      progress, primary: !progress && Boolean(state.hardware_endpoint?.trim()) ? 'connect' as const : null };
+  }
+  if (!state.hardware_details) return { title: state.hardware_error ? 'Hardware catalog unavailable' : 'Loading hardware…',
+    detail: state.hardware_error || 'Waiting for PCController to advertise the board capabilities.',
+    progress: !state.hardware_error, primary: 'refresh' as const };
+  const programming = ['programming', 'programming_latched', 'programming_recovery'].includes(availability);
+  return { title: programming ? hardwareLabels[availability] : 'No board connected',
+    detail: state.hardware_error || (programming ? 'Board controls are unavailable while programming or recovery is in progress.' : 'PCController is reachable, but no board is connected. Connect the board and check its USB cable, power, and port.'),
+    progress: programming, primary: 'refresh' as const };
+}
