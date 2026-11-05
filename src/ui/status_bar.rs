@@ -348,11 +348,48 @@ fn text_widget(
     let galley = egui::WidgetText::from(egui::RichText::new(text).font(font).color(color)
         .variations([("wght", if strong { 600.0 } else { 400.0 })]))
         .into_galley(ui, Some(egui::TextWrapMode::Truncate), (width - 6.0).max(1.0), egui::TextStyle::Small);
+    paint_centered_galley(ui, rect, galley, color, align);
+    response.on_hover_text(text)
+}
+
+fn paint_centered_galley(ui: &egui::Ui, rect: egui::Rect, galley: std::sync::Arc<egui::Galley>,
+    color: egui::Color32, align: egui::Align) {
     let x = match align { egui::Align::Min => rect.left() + 3.0,
         egui::Align::Center => rect.center().x - galley.size().x * 0.5,
         egui::Align::Max => rect.right() - 3.0 - galley.size().x };
-    ui.painter().with_clip_rect(rect).galley(egui::pos2(x, rect.center().y - galley.size().y * 0.5), galley, color);
-    response.on_hover_text(text)
+    // Center visible glyphs, not font-specific ascent/descent/line-gap space.
+    // This works for native, bundled and user-selected fonts without offsets.
+    let center_y = if galley.mesh_bounds.is_finite() { galley.mesh_bounds.center().y }
+        else { galley.rect.center().y };
+    ui.painter().with_clip_rect(rect).galley(egui::pos2(x, rect.center().y - center_y), galley, color);
+}
+
+fn connection_caption(app: &PealayerApp, hardware: Option<&HardwareCapabilities>) -> (String, bool) {
+    let requested = app.engine_handle.connection_requested.load(std::sync::atomic::Ordering::Relaxed);
+    let availability = crate::four_d::programming::hardware_availability(app.is_connected, requested, hardware);
+    let ready = availability == crate::four_d::programming::HardwareAvailability::Ready;
+    let text = if ready {
+        hardware.map(|hardware| app.display_text(&hardware.board_name)).filter(|name| !name.is_empty())
+            .unwrap_or_else(|| app.tr("Connected board"))
+    } else { app.tr(availability.label()) };
+    let icon = match app.status_bar.connection_icon {
+        crate::config::StatusConnectionIcon::Plug => crate::ui::icons::PLUG,
+        crate::config::StatusConnectionIcon::Circle => "●",
+        crate::config::StatusConnectionIcon::Controller => crate::ui::icons::CPU,
+        crate::config::StatusConnectionIcon::None => "",
+    };
+    let mode = app.status_bar.connection_mode.then(|| app.engine_handle.active_transport.try_lock().ok()
+        .and_then(|value| value.clone())).flatten();
+    let text = match mode { Some(mode) => format!("{text} · {mode}"), None => text };
+    (format!("{icon} {text}").trim().to_owned(), ready)
+}
+
+fn connection_preferred_width(app: &PealayerApp, ui: &egui::Ui, hardware: Option<&HardwareCapabilities>) -> f32 {
+    let text = connection_caption(app, hardware).0;
+    let galley = egui::WidgetText::from(egui::RichText::new(text).font(status_font(ui, false, true))
+        .variations([("wght", 600.0)]))
+        .into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Small);
+    (galley.size().x + 6.0).ceil().max(if app.status_bar.connection_mode { 252.0 } else { 148.0 })
 }
 
 fn workspace_trigger(ui: &mut egui::Ui, name: &str, icon: &str, rtl: bool,
@@ -368,9 +405,8 @@ fn workspace_trigger(ui: &mut egui::Ui, name: &str, icon: &str, rtl: bool,
     let name_rect = rect.shrink2(egui::vec2(20.0, 0.0));
     let galley = egui::WidgetText::from(egui::RichText::new(name).font(status_font(ui, false, true)).variations([("wght", 600.0)]))
         .into_galley(ui, Some(egui::TextWrapMode::Truncate), name_rect.width(), egui::TextStyle::Small);
-    ui.painter().with_clip_rect(name_rect).galley(egui::pos2(
-        if rtl { name_rect.right() - galley.size().x } else { name_rect.left() },
-        rect.center().y - galley.size().y * 0.5), galley, visuals.text_color());
+    paint_centered_galley(ui, name_rect, galley, visuals.text_color(),
+        if rtl { egui::Align::Max } else { egui::Align::Min });
     crate::ui::control_density::paint_chevron(ui,
         egui::Rect::from_center_size(chevron_center, egui::vec2(14.0, 14.0)), visuals.text_color());
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, ui.is_enabled(), name));
@@ -431,6 +467,7 @@ fn render_widget(
     hardware: Option<&HardwareCapabilities>,
     log: &TelemetryLog,
     progress: &[StatusProgress],
+    connection_width: f32,
 ) -> Option<(egui::Response, String)> {
     let color = ui.visuals().text_color();
     let (text, width, mono, color) = match item {
@@ -464,57 +501,27 @@ fn render_widget(
             } else {
                 rect.left() + 7.0
             };
-            ui.painter().text(
-                egui::pos2(icon_x, rect.center().y),
-                egui::Align2::CENTER_CENTER,
-                icon,
-                egui::FontId::proportional(12.0),
-                color,
-            );
+            let icon_galley = ui.painter().layout_no_wrap(icon.into(), egui::FontId::proportional(12.0), color);
+            paint_centered_galley(ui, egui::Rect::from_center_size(egui::pos2(icon_x,rect.center().y),
+                egui::vec2(18.0,ITEM_HEIGHT)), icon_galley, color, egui::Align::Center);
             let number_rect = if app.rtl {
                 egui::Rect::from_min_max(rect.min, rect.max - egui::vec2(19.0, 0.0))
             } else {
                 egui::Rect::from_min_max(rect.min + egui::vec2(19.0, 0.0), rect.max)
             };
-            ui.painter().with_clip_rect(number_rect).text(
-                number_rect.right_center() - egui::vec2(3.0, 0.0),
-                egui::Align2::RIGHT_CENTER,
-                &fps.formatted,
-                status_font(ui, app.status_bar.uses_monospace(item), true),
-                color,
-            );
+            let galley = ui.painter().layout_no_wrap(fps.formatted.clone(),
+                status_font(ui, app.status_bar.uses_monospace(item), true), color);
+            paint_centered_galley(ui, number_rect, galley, color, egui::Align::Max);
             return Some((
                 response.on_hover_text(format!("{mode}\n{}", fps.tooltip)),
                 text,
             ));
         }
         Widget::Connection => {
-            let requested = app
-                .engine_handle
-                .connection_requested
-                .load(std::sync::atomic::Ordering::Relaxed);
-            let availability = crate::four_d::programming::hardware_availability(app.is_connected, requested, hardware);
-            let ready = availability == crate::four_d::programming::HardwareAvailability::Ready;
-            let text = if ready {
-                hardware
-                    .map(|hardware| app.display_text(&hardware.board_name))
-                    .filter(|name| !name.is_empty())
-                    .unwrap_or_else(|| app.tr("Connected board"))
-            } else {
-                app.tr(availability.label())
-            };
-            let icon = match app.status_bar.connection_icon {
-                crate::config::StatusConnectionIcon::Plug => crate::ui::icons::PLUG,
-                crate::config::StatusConnectionIcon::Circle => "●",
-                crate::config::StatusConnectionIcon::Controller => crate::ui::icons::CPU,
-                crate::config::StatusConnectionIcon::None => "",
-            };
-            let mode = app.status_bar.connection_mode.then(|| app.engine_handle.active_transport.try_lock().ok()
-                .and_then(|value| value.clone())).flatten();
-            let text = match mode { Some(mode) => format!("{text} · {mode}"), None => text };
+            let (text, ready) = connection_caption(app, hardware);
             (
-                format!("{icon} {text}").trim().to_owned(),
-                if app.status_bar.connection_mode { 252.0 } else { 148.0 },
+                text,
+                connection_width,
                 false,
                 if ready && app.is_connected {
                     egui::Color32::from_rgb(46, 204, 113)
@@ -1024,7 +1031,7 @@ fn click_item(app: &mut PealayerApp, ui: &mut egui::Ui, item: Widget, progress: 
     }
 }
 fn draw_group(app: &mut PealayerApp, ui: &mut egui::Ui, end: bool, hardware: Option<&HardwareCapabilities>,
-    log: &TelemetryLog, progress: &[StatusProgress], log_id: egui::Id, rects: &mut Vec<(Widget, egui::Rect)>) {
+    log: &TelemetryLog, progress: &[StatusProgress], log_id: egui::Id, rects: &mut Vec<(Widget, egui::Rect)>, connection_width: f32) {
     let background = ui.interact(ui.max_rect(), ui.id().with(("status-side", end)), egui::Sense::click());
     let items = group_items(app, end, hardware, progress);
     egui::ScrollArea::horizontal().id_salt(("status-side-scroll", end))
@@ -1050,7 +1057,7 @@ fn draw_group(app: &mut PealayerApp, ui: &mut egui::Ui, end: bool, hardware: Opt
                         if dragging { ui.set_clip_rect(ui.ctx().content_rect()); }
                         let bg = ui.painter().add(egui::Shape::Noop);
                         let response = if item == Widget::Workspace { Some((workspace_selector(app, ui), String::new())) }
-                            else { render_widget(app, ui, item, hardware, log, progress) };
+                            else { render_widget(app, ui, item, hardware, log, progress, connection_width) };
                         if let Some((response, _)) = &response {
                             let alpha = crate::ui::motion::hover_alpha(ui, id.with("hover"), response.hovered() || response.has_focus());
                             ui.painter().set(bg, egui::Shape::rect_filled(response.rect, 3.0,
@@ -1125,15 +1132,22 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         .show_inside(ui, |ui| {
         ui.spacing_mut().item_spacing.x=3.0;
         ui.with_layout(crate::ui::i18n::layout(app.rtl,egui::Align::Center), |ui| {
+            let all_items: Vec<_> = [false, true].into_iter()
+                .flat_map(|end| group_items(app,end,hardware.as_ref(),&progress)).collect();
+            let other_width: f32 = all_items.iter().filter(|item| **item != Widget::Connection)
+                .map(|item| slot_width(*item)).sum();
+            let gaps = all_items.len().saturating_sub(1) as f32 * if app.status_bar.dividers { 7.0 } else { 3.0 };
+            let connection_width = connection_preferred_width(app,ui,hardware.as_ref())
+                .min((ui.available_width()-other_width-gaps).max(148.0));
             let items=group_items(app,true,hardware.as_ref(),&progress);
             let separators=if app.status_bar.dividers { items.len().saturating_sub(1) as f32*4.0 } else { 0.0 };
-            let end_width=(items.iter().map(|item| if *item == Widget::Connection && app.status_bar.connection_mode { 252.0 } else { slot_width(*item) }).sum::<f32>() + items.len().saturating_sub(1) as f32*3.0 + separators)
+            let end_width=(items.iter().map(|item| if *item == Widget::Connection { connection_width } else { slot_width(*item) }).sum::<f32>() + items.len().saturating_sub(1) as f32*3.0 + separators)
                 .max(24.0).min((ui.available_width()-48.0).max(24.0));
             let start_width=(ui.available_width()-end_width-3.0).max(1.0);
             ui.allocate_ui_with_layout(egui::vec2(start_width,ITEM_HEIGHT),crate::ui::i18n::layout(app.rtl,egui::Align::Center),
-                |ui|draw_group(app,ui,false,hardware.as_ref(),&log,&progress,log_id,&mut rects));
+                |ui|draw_group(app,ui,false,hardware.as_ref(),&log,&progress,log_id,&mut rects,connection_width));
             ui.allocate_ui_with_layout(egui::vec2(end_width,ITEM_HEIGHT),crate::ui::i18n::layout(app.rtl,egui::Align::Center),
-                |ui|draw_group(app,ui,true,hardware.as_ref(),&log,&progress,log_id,&mut rects));
+                |ui|draw_group(app,ui,true,hardware.as_ref(),&log,&progress,log_id,&mut rects,connection_width));
         });
     });
     #[cfg(test)] ui.ctx().data_mut(|data|data.insert_temp(egui::Id::new("test-status-widget-rects"),rects));
@@ -1151,6 +1165,45 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 }
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_fonts_center_status_ink_and_use_available_connection_space() {
+        let _guard = crate::app::tests::lock_app_tests();
+        for family in [crate::config::UiFontFamily::System, crate::config::UiFontFamily::Bundled] {
+            for scale in [1.0, 1.25, 1.5, 2.0] {
+                for (width,rtl,trailing) in [(1000.0,false,false),(1000.0,true,false),(1000.0,false,true),(420.0,false,false)] {
+                    let context = egui::Context::default();
+                    context.set_pixels_per_point(scale);
+                    let config = crate::config::AppConfig { ui_font_family:family, monospace_font_family:family, ..Default::default() };
+                    crate::ui::fonts::install(&context,&config,false);
+                    let mut app = PealayerApp::default();
+                    app.engine_handle = crate::four_d::engine::memory_only_test_engine();
+                    app.rtl=rtl;
+                    app.status_bar=crate::config::StatusBarConfig::default();
+                    app.status_bar.place_at_end(Widget::Connection,trailing);
+                    app.status_bar.fps_mode=StatusBarFpsMode::Media;
+                    app.current_video_path=Some("fixture.mp4".into());
+                    app.media_fps=23.976;
+                    let mut output=context.run_ui(egui::RawInput {screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(width,420.0))),..Default::default()},|ui|draw(&mut app,ui));
+                    let rects=context.data(|d|d.get_temp::<Vec<(Widget,egui::Rect)>>(egui::Id::new("test-status-widget-rects"))).unwrap();
+                    for widget in [Widget::Fps,Widget::Connection] {
+                        let rect=rects.iter().find(|(w,_)|*w==widget).unwrap().1;
+                        let text=output.shapes.iter().find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if (widget==Widget::Fps && text.galley.text().ends_with("fps"))
+                                || (widget==Widget::Connection && text.galley.text().contains("Hardware:")) => Some(text),_=>None
+                        }).expect("status caption");
+                        let ink=text.galley.mesh_bounds.translate(text.pos.to_vec2());
+                        assert!((ink.center().y-rect.center().y).abs()<0.05,"{family:?} {scale} {widget:?}: {ink:?} {rect:?}");
+                        assert!(ink.top()>=rect.top() && ink.bottom()<=rect.bottom(),"glyphs clipped vertically");
+                        if widget==Widget::Connection && width>=1000.0 {
+                            assert!(!text.galley.elided,"space available but hardware caption elided");
+                            assert!(rect.width()>=text.galley.size().x+5.9);
+                        }
+                    }
+                    output.textures_delta.clear();
+                }
+            }
+        }
+    }
     use super::*;
 
     #[test]
@@ -1184,7 +1237,7 @@ mod tests {
             for source in ["controller-host","controller-board"] {
                 for fraction in [None,Some(0.01),Some(0.99)] {
                     let progress=StatusProgress{id:"op".into(),source:source.into(),label:"PCController update".into(),phase:"health-checking".into(),fraction,detail:"".into()};
-                    let response=render_widget(&app,ui,Widget::Progress,None,&TelemetryLog::default(),&[progress]).unwrap().0;
+                    let response=render_widget(&app,ui,Widget::Progress,None,&TelemetryLog::default(),&[progress],148.0).unwrap().0;
                     assert_eq!(response.rect.size(),egui::vec2(168.0,ITEM_HEIGHT));
                 }
             }
@@ -1238,7 +1291,7 @@ mod tests {
         for (index,text) in output.shapes.iter().filter_map(|s|if let egui::Shape::Text(t)=&s.shape {Some(t)}else{None}).enumerate() {
             let mono=index==1;
             let rect=context.data(|d|d.get_temp::<egui::Rect>(egui::Id::new(("metric-center",mono)))).unwrap();
-            assert!((text.pos.y+text.galley.size().y*0.5-rect.center().y).abs()<0.01);
+            assert!((text.pos.y+text.galley.mesh_bounds.center().y-rect.center().y).abs()<0.01);
             assert_eq!(text.galley.job.sections[0].format.font_id.family,if mono {egui::FontFamily::Monospace}else{egui::FontFamily::Proportional});
         }
     }
@@ -1767,15 +1820,15 @@ mod tests {
         let mut output = context.run_ui(egui::RawInput::default(), |ui| {
             // For Demo endpoint, Widget::Timeline must return None (no "Preparing hardware")
             app.serial_port = crate::four_d::controller::DEMO_ENDPOINT.to_string();
-            assert!(render_widget(&app, ui, Widget::Timeline, None, &TelemetryLog::default(), &[]).is_none());
+            assert!(render_widget(&app, ui, Widget::Timeline, None, &TelemetryLog::default(), &[],148.0).is_none());
 
             // For direct serial, Widget::Timeline must also return None
             app.serial_port = "direct:COM3".to_string();
-            assert!(render_widget(&app, ui, Widget::Timeline, None, &TelemetryLog::default(), &[]).is_none());
+            assert!(render_widget(&app, ui, Widget::Timeline, None, &TelemetryLog::default(), &[],148.0).is_none());
 
             // For controller endpoint, Widget::Timeline renders the coordinator timeline status
             app.serial_port = "pccontroller://127.0.0.1:8787".to_string();
-            assert!(render_widget(&app, ui, Widget::Timeline, None, &TelemetryLog::default(), &[]).is_some());
+            assert!(render_widget(&app, ui, Widget::Timeline, None, &TelemetryLog::default(), &[],148.0).is_some());
         });
         output.textures_delta.clear();
     }

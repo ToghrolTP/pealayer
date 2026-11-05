@@ -66,13 +66,35 @@ fn resolve(name: Option<&str>, mono: bool, emphasis: bool) -> Option<egui::FontD
         // Reject bitmap/unsupported faces before handing them to egui. Keep TTC index.
         if ab_glyph::FontRef::try_from_slice_and_index(font.blob.as_ref(), font.index).is_ok() {
             let (blob, _) = font.blob.clone().into_raw_parts();
-            found = Some(egui::FontData::from_blob(blob, font.index));
+            let mut data = egui::FontData::from_blob(blob, font.index);
+            // Fontique selects a face, but FontData does not inherit the query's
+            // variable-font location. Some installed VFs default to weight 100.
+            apply_weight(&mut data, if emphasis { 600.0 } else { 400.0 });
+            found = Some(data);
             QueryStatus::Stop
         } else {
             QueryStatus::Continue
         }
     });
     found
+}
+
+fn apply_weight(data: &mut egui::FontData, weight: f32) {
+    for axis in data.variation_axes() {
+        if axis.tag.to_string() == "wght" {
+            data.tweak.coords.push(axis.tag, weight.clamp(axis.range.min, axis.range.max));
+        }
+    }
+}
+
+#[cfg(any(windows, test))]
+fn windows_monospace_family(names: &[String]) -> Option<String> {
+    // Windows has no NONCLIENTMETRICS fixed-pitch preference. DirectWrite's
+    // generic match may be Courier New; prefer its modern UI companions when
+    // installed. Never assume Segoe's monospace variant exists on every host.
+    ["Segoe UI Mono", "Segoe Monospace", "Cascadia Mono", "Consolas"]
+        .iter()
+        .find_map(|preferred| names.iter().find(|name| name.eq_ignore_ascii_case(preferred)).cloned())
 }
 
 #[cfg(target_os = "linux")]
@@ -173,8 +195,8 @@ fn desktop_name(mono: bool) -> Option<String> {
 #[cfg(windows)]
 fn desktop_name(mono: bool) -> Option<String> {
     if mono {
-        return None;
-    } // DirectWrite's generic monospace match.
+        return windows_monospace_family(&family_names());
+    }
     use windows::Win32::UI::WindowsAndMessaging::{
         NONCLIENTMETRICSW, SPI_GETNONCLIENTMETRICS, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS,
         SystemParametersInfoW,
@@ -313,6 +335,28 @@ pub fn install(ctx: &egui::Context, config: &AppConfig, persian: bool) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn windows_monospace_prefers_installed_modern_faces_without_inventing_one() {
+        let names = ["Courier New", "Consolas", "Cascadia Mono"].map(str::to_owned);
+        assert_eq!(windows_monospace_family(&names).as_deref(), Some("Cascadia Mono"));
+        assert_eq!(windows_monospace_family(&["consolas".into()]).as_deref(), Some("consolas"));
+        assert_eq!(windows_monospace_family(&["Courier New".into()]), None);
+    }
+
+    #[test]
+    fn installed_variable_fonts_keep_requested_regular_and_semibold_weights() {
+        // Host-conditional coverage: CI need not install private YekanBakh.
+        for name in family_names().into_iter().filter(|name|
+            name.contains("Yekan") || name == "Cascadia Mono") {
+            for (emphasis, expected) in [(false,400.0_f32),(true,600.0_f32)] {
+                let font = resolve(Some(&name),false,emphasis).unwrap();
+                if let Some(axis) = font.variation_axes().into_iter().find(|axis| axis.tag.to_string()=="wght") {
+                    assert!(font.tweak.coords.as_ref().iter().any(|(tag,value)|
+                        tag.to_string()=="wght" && *value==expected.clamp(axis.range.min,axis.range.max)), "{name}");
+                }
+            }
+        }
+    }
     #[test]
     fn desktop_family_parsing_preserves_multiword_names() {
         assert_eq!(super::without_point_size("'Noto Sans 11'"), "Noto Sans");
