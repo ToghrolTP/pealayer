@@ -376,6 +376,9 @@ pub enum InteropCommand {
     ConfigureAddressableStrip {
         pixels: u16,
     },
+    SetAddressableStripColorOrder { order:String },
+    RestoreControllerEffectExamples,
+    OpenStripDesigner { reference:Option<String> },
     FillAddressableStrip {
         red: u8,
         green: u8,
@@ -625,6 +628,7 @@ impl InteropCommand {
             Self::ConfigureAddressableStrip { pixels } if *pixels == 0 => {
                 Err("addressable strip pixel count must be greater than zero".to_string())
             }
+            Self::SetAddressableStripColorOrder {order} if !matches!(order.as_str(),"RGB"|"RBG"|"GRB"|"GBR"|"BRG"|"BGR") => Err("Invalid strip color order".into()),
             Self::SetAddressableStripPixel { pixel, pixels, .. }
                 if *pixels == 0 || *pixel >= *pixels =>
             {
@@ -893,6 +897,7 @@ pub fn command_catalog() -> Value {
             "send_addressable_strip_frame", "start_addressable_strip_rainbow",
             "start_addressable_strip_effect", "stop_addressable_strip",
             "refresh_addressable_strip_status", "clear_addressable_strip",
+            "hardware.strip.color_order", "controller_effect.restore_examples", "controller_effect.strip.edit",
             "press_front_panel_key", "board_information", "rf_control", "open_rf_manager"
         ],
         "json_rpc_prefix": "pealayer",
@@ -1617,7 +1622,7 @@ impl WebControllerEffectDraft {
                         "lighting effect requires a safe id and a program object".to_string()
                     );
                 }
-                Ok(())
+                crate::four_d::strip_program::validate_definition(&self.program,self.default_pixels,self.default_fps,self.duration_ms)
             }
             _ => Err("effect kind must be sequence, strip-stream or audio".to_string()),
         }
@@ -2290,6 +2295,9 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
                 .ok_or_else(|| "missing valid addressable strip pixel count".to_string())?;
             Some(InteropCommand::ConfigureAddressableStrip { pixels })
         }
+        "hardware.strip.color_order" => Some(InteropCommand::SetAddressableStripColorOrder {order:request.params.get("order").and_then(Value::as_str).ok_or("Missing strip color order")?.to_owned()}),
+        "controller_effect.restore_examples" => Some(InteropCommand::RestoreControllerEffectExamples),
+        "controller_effect.strip.edit" => Some(InteropCommand::OpenStripDesigner {reference:request.params.get("reference").and_then(Value::as_str).map(str::to_owned)}),
         "hardware.strip.fill" | "pealayer.hardware.strip.fill" => {
             let byte = |name: &str| {
                 request

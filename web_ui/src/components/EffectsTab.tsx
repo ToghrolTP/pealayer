@@ -8,6 +8,8 @@ const newAudioId = () => {
   return `${hex.slice(0,8)}-${hex.slice(8,12)}-${hex.slice(12,16)}-${hex.slice(16,20)}-${hex.slice(20)}`;
 };
 import { ColorPicker } from './ColorPicker';
+import { StripDesigner } from './StripDesigner';
+import { stripDraftError } from '../stripProgram';
 import { hardwareOutputsAvailable } from '../hardwareAvailability';
 import { ColorDropdown } from './ColorDropdown';
 import { DesignerFieldLabel } from './DesignerFieldLabel';
@@ -471,7 +473,8 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale, 
     <Dropdown trigger={['contextMenu']} menu={{ items: [
       { key: 'effect', icon: <PlusOutlined />, label: tr(locale, 'New effect') },
       { key: 'group', icon: <FolderAddOutlined />, label: tr(locale, 'New group') },
-    ], onClick: ({ key }) => { if (key === 'group') openGroupEditor(); else openEditor(); } }}>
+      { key: 'examples', icon: <PlusOutlined />, label: tr(locale,'Add example effects'), disabled: !state.controller_connected },
+    ], onClick: ({ key }) => { if (key === 'group') openGroupEditor(); else if(key==='examples'){void sendCmd('controller_effect.restore_examples');} else openEditor(); } }}>
       <div className="effects-library-empty-space" style={{ minHeight: 140, flex: 1 }} aria-label={tr(locale, 'Effects Library')} />
     </Dropdown>
     <EffectGroupDialog draft={groupDraft} setDraft={setGroupDraft} save={saveGroup} locale={locale} />
@@ -487,8 +490,8 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale, 
       cancelButtonProps={{ disabled: captureBusy || saving }}
       confirmLoading={saving}
       onOk={save}
-      okText={tr(locale, 'Save')}
-      okButtonProps={{ icon: <SaveOutlined />, disabled: captureBusy || saving || !draft?.name.trim() }}
+      okText={tr(locale, draft?.kind === 'audio' ? 'Save' : 'Publish')}
+      okButtonProps={{ icon: <SaveOutlined />, disabled: captureBusy || saving || !draft?.name.trim() || (draft?.kind === 'strip-stream' && !!stripDraftError(draft)) }}
       width={900}
     >
       {draft && <div className="effect-editor">
@@ -562,8 +565,13 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale, 
             </div>,
           }))} /></ConfigProvider>
         </> : <div className="effect-editor__program">
-          <label><DesignerFieldLabel label="Frames per second" locale={locale} /><InputNumber min={1} max={120} value={draft.default_fps} onChange={(default_fps) => setDraft({ ...draft, default_fps: default_fps ?? 20 })} /></label>
-          <label><DesignerFieldLabel label="Pixels" locale={locale} /><InputNumber min={1} value={draft.default_pixels} onChange={(default_pixels) => setDraft({ ...draft, default_pixels: default_pixels ?? 100 })} /></label>
+          <label><DesignerFieldLabel label="Frames per second" locale={locale} /><InputNumber min={state.hardware_details?.strip?.minimum_fps ?? 1} max={state.hardware_details?.strip?.maximum_fps ?? 120} value={draft.default_fps} onChange={(default_fps) => setDraft({ ...draft, default_fps: default_fps ?? 20 })} /></label>
+          <label><DesignerFieldLabel label="Pixels" locale={locale} /><InputNumber min={state.hardware_details?.strip?.minimum_pixels ?? 1} max={state.hardware_details?.strip?.maximum_pixels ?? 100} value={draft.default_pixels} onChange={(default_pixels) => setDraft({ ...draft, default_pixels: default_pixels ?? 100 })} /></label>
+          <StripDesigner value={draft.programText} pixels={draft.default_pixels} locale={locale} disabled={captureBusy||saving} onChange={programText=>setDraft({...draft,programText})}/>
+          <Space wrap>
+            <Button icon={<PlayCircleOutlined/>} disabled={captureBusy||saving||!hardwareOutputsAvailable(state)||Boolean(state.estop_active)||!draft.name.trim()||!!stripDraftError(draft)} onClick={()=>{void sendCmd('controller_effect.publish_and_run',draftPayload(draft));}}>{tr(locale,'Publish & Run')}</Button>
+            <Button icon={<StopOutlined/>} disabled={!state.hardware_details?.strip?.running} onClick={()=>{void sendCmd('hardware.strip.stop');}}>{tr(locale,'Stop')}</Button>
+          </Space>
           <Collapse items={[{ key: 'technical', label: tr(locale, 'Technical'), children: <label className="effect-editor__wide"><DesignerFieldLabel label="Program" locale={locale} /><Input.TextArea rows={12} value={draft.programText} onChange={(event) => setDraft({ ...draft, programText: event.target.value })} /></label> }]} />
         </div>}
       </div>}

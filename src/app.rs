@@ -3518,6 +3518,12 @@ impl PealayerApp {
         self.request_hardware_effect_command("strip-config", format!("strip config {pixels}"))
     }
 
+    pub(crate) fn set_addressable_strip_color_order(&mut self,order:&str)->Result<(),String>{
+        let strip=self.addressable_strip_contract("")?;
+        if !strip.color_orders.iter().any(|v|v==order) || !order.bytes().all(|b|b.is_ascii_uppercase()) {return Err("Color order is not advertised by this controller".into());}
+        self.request_hardware_effect_command("strip-order",format!("strip order {order}"))
+    }
+
     pub(crate) fn fill_addressable_strip(
         &mut self,
         red: u8,
@@ -3702,6 +3708,8 @@ impl PealayerApp {
             }
             let program: serde_json::Value = serde_json::from_str(&draft.program_json)
                 .map_err(|error| format!("Invalid lighting program JSON: {error}"))?;
+            crate::four_d::strip_program::validate_definition(&program,draft.default_pixels,draft.default_fps,draft.duration_ms)?;
+            if let Some(strip)=self.advertised_hardware().and_then(|h|h.strip_control){Self::validate_strip_settings(&strip,draft.default_pixels,Some(draft.default_fps))?;}
             serde_json::json!({
                 "reference": format!("effect:{id}"),
                 "id": id,
@@ -4254,7 +4262,7 @@ impl PealayerApp {
                             self.engine_handle.request_catalog_refresh();
                         }
                         "strip-config" | "strip-fill" | "strip-frame" | "strip-pixel"
-                        | "strip-status" => {
+                        | "strip-status" | "strip-order" | "effect-examples" => {
                             self.engine_handle.request_catalog_refresh();
                         }
                         _ => {}
@@ -5183,6 +5191,16 @@ impl PealayerApp {
                     self.set_osd(error);
                     return;
                 }
+            }
+            InteropCommand::SetAddressableStripColorOrder {order} => {if let Err(error)=self.set_addressable_strip_color_order(&order){self.set_osd(error);}}
+            InteropCommand::RestoreControllerEffectExamples => {if let Err(error)=self.request_hardware_effect_command("effect-examples","effect restore-examples".into()){self.set_osd(error);}}
+            InteropCommand::OpenStripDesigner {reference} => {
+                if crate::ui::effects_library::unsaved_designer(self,ctx)!=Some(false) || self.hardware_effect_authoring.pending_operation.is_some() || self.hardware_effect_authoring.active {
+                    self.set_osd("Finish the current effect edit or recording first".to_string());
+                } else if let Some(reference)=reference {
+                    let effect=self.advertised_hardware().and_then(|h|h.strip_effects.into_iter().find(|e|format!("effect:{}",e.id)==reference));
+                    if let Some(effect)=effect {crate::ui::effects_library::select_strip(self,&effect);self.show_effect_library_editor=true;}else{self.set_osd("Strip effect is no longer advertised".to_string());}
+                } else {crate::ui::effects_library::start_new_lighting(self,&[]);self.show_effect_library_editor=true;}
             }
             InteropCommand::FillAddressableStrip {
                 red,
@@ -9629,6 +9647,7 @@ fn web_hardware_details(
             "modes": strip.modes,
             "running": strip.running,
             "active_name": strip.active_name,
+            "color_order":strip.color_order,"color_orders":strip.color_orders,"stream":strip.stream,
         })
     });
     serde_json::json!({

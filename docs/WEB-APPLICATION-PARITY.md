@@ -16,6 +16,14 @@ widths, and has been exercised against live state rather than sample data.
 
 ## Current product ledger
 
+Strip authoring: [native and Web strip designer](STRIP-DESIGNER.md) now share
+the PCController-owned layered program contract: ordered pixel segments,
+gradient/fade/blink/breathing patterns, easing, offline preview, publish and
+acknowledged publish-and-run. Example effects are opt-in user definitions.
+Color-order settings and standalone frame acknowledgements use host state.
+Source/contract/width checks passed; packaged visuals, live deployment, board
+acceptance and unified standalone/timeline/RGB-input telemetry remain open.
+
 Download center: [shared service and remaining gates](DOWNLOAD-CENTER.md) adds
 a Rust-authoritative queue, native/Web surfaces and a player-independent
 standalone utility. Rust HTTP, local aria2, yt-dlp and queued FFmpeg processing

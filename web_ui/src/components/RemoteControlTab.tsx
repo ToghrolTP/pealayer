@@ -149,6 +149,8 @@ export interface PlayerState {
       minimum_pixels: number; maximum_pixels: number; default_pixels: number;
       minimum_fps: number; maximum_fps: number; default_fps: number;
       modes: string[]; running: boolean; active_name: string;
+      color_order?:string; color_orders?:string[];
+      stream?:{pixels:number;requested_fps:number;frames_acked:number;frames_failed:number;last_ack_unix_ms:number;last_error:string}|null;
     } | null;
     supports?: Record<string, boolean>;
   } | null;

@@ -812,11 +812,13 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
       </div>
 
       <div className="strip-control__configuration">
+        {!!strip.color_orders?.length&&<label><span>{tr(locale,'Color order')}</span><Select value={strip.color_order} options={strip.color_orders.map(value=>({value,label:value}))} onChange={order=>{void sendCmd('hardware.strip.color_order',{order});}}/></label>}
         <label><span>{tr(locale, 'Pixel count')}</span><InputNumber min={strip.minimum_pixels} max={strip.maximum_pixels} value={pixels} onChange={(value) => setStripPixels(value)} /></label>
         <label><span>{tr(locale, 'Frames per second')}</span><InputNumber min={strip.minimum_fps} max={strip.maximum_fps} value={fps} onChange={(value) => setStripFps(value)} /></label>
         <Button onClick={() => sendCmd('hardware.strip.configure', { pixels })}>{tr(locale, 'Configure')}</Button>
       </div>
 
+      {!!strip.stream?.pixels&&<Space wrap><span>{strip.stream.frames_acked} {tr(locale,'ACKed frames')}</span><span>{strip.stream.frames_failed} {tr(locale,'Failed frames')}</span>{strip.stream.last_error&&<Typography.Text type="danger">{strip.stream.last_error}</Typography.Text>}</Space>}
       <Segmented
         block
         className="strip-control__modes"

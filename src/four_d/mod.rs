@@ -1,4 +1,5 @@
 pub mod controller;
+pub mod strip_program;
 pub mod programming;
 pub mod authority;
 pub mod curve;

@@ -12,6 +12,7 @@ pub mod dialog;
 pub mod dropdown;
 pub mod effects_library;
 pub(crate) mod strip_designer;
+pub(crate) mod strip_layers;
 pub(crate) mod pixel_diagnostic;
 mod elegance_theme;
 pub use elegance_theme::sync_elegance_theme;

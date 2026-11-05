@@ -71,7 +71,7 @@ fn draft_can_publish(draft: &ControllerEffectDraft) -> bool {
     let name = draft.name.trim();
     !name.is_empty() && name.chars().count() <= 64 && !name.chars().any(char::is_control)
         && if draft.kind == "sequence" { repeated_sequence_duration_ms(&draft.steps,draft.repeat_count,draft.repeat_interval_ms).is_ok() }
-        else if draft.kind == "strip-stream" { serde_json::from_str::<serde_json::Value>(&draft.program_json).is_ok_and(|program| super::strip_designer::valid(&program)) }
+        else if draft.kind == "strip-stream" { serde_json::from_str::<serde_json::Value>(&draft.program_json).is_ok_and(|program| crate::four_d::strip_program::validate_definition(&program,draft.default_pixels,draft.default_fps,draft.duration_ms).is_ok()) }
         else { serde_json::from_str::<serde_json::Value>(&draft.program_json).is_ok_and(|program| program.is_object()) }
 }
 
@@ -489,18 +489,16 @@ pub(crate) fn empty_library_context_menu(
     response
 }
 
-fn start_new_lighting(
+pub(crate) fn start_new_lighting(
     app: &mut PealayerApp,
-    effects: &[crate::four_d::controller::HardwareStripEffect],
+    _effects: &[crate::four_d::controller::HardwareStripEffect],
 ) {
-    if let Some(template) = effects.first() {
-        select_strip(app, template);
-        app.effect_library_draft.reference.clear();
-        app.effect_library_draft.id.clear();
-        app.effect_library_draft.name.clear();
-    } else {
-        app.effect_library_draft = ControllerEffectDraft::default();
+    app.effect_library_draft = ControllerEffectDraft::default();
+    if let Some(strip)=app.advertised_hardware().and_then(|h|h.strip_control){
+        app.effect_library_draft.default_pixels=strip.default_pixels;
+        app.effect_library_draft.default_fps=strip.default_fps;
     }
+    app.effect_library_draft.program_json=serde_json::to_string_pretty(&crate::four_d::strip_program::Program::new(app.effect_library_draft.default_pixels as usize)).unwrap();
     app.effect_library_selection = None;
     app.effect_library_draft.is_new = true;
 }
@@ -3274,6 +3272,9 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         {
                             start_new_lighting(app, &strips);
                         }
+                        if ui.button(format!("{} {}",crate::ui::icons::SPARKLE,app.tr("Add example effects"))).clicked(){
+                            app.apply_interop_command(&ui.ctx().clone(),crate::platform::interop::InteropCommand::RestoreControllerEffectExamples,"Examples");
+                        }
                     });
                     ui.add_space(8.0);
                     super::layout::sidebar_scroll(ui, "controller_effect_editor_list", |ui| {
@@ -3480,13 +3481,13 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                         ui.label(&labels.7);
                                         ui.add(
                                             egui::DragValue::new(&mut draft.default_fps)
-                                                .range(1..=30),
+                                                .range(capabilities.as_ref().and_then(|h|h.strip_control.as_ref()).map_or(1..=120,|s|s.minimum_fps..=s.maximum_fps)),
                                         );
                                         ui.end_row();
                                         ui.label(&labels.8);
                                         ui.add(
                                             egui::DragValue::new(&mut draft.default_pixels)
-                                                .range(1..=100),
+                                                .range(capabilities.as_ref().and_then(|h|h.strip_control.as_ref()).map_or(1..=100,|s|s.minimum_pixels..=s.maximum_pixels)),
                                         );
                                         ui.end_row();
                                     }
@@ -4501,7 +4502,9 @@ mod tests {
         start_new_lighting(&mut app, &[]);
         assert!(app.effect_library_draft.is_new);
         assert_eq!(app.effect_library_draft.kind, "strip-stream");
-        assert!(app.effect_library_draft.program_json.is_empty());
+        let program: crate::four_d::strip_program::Program =
+            serde_json::from_str(&app.effect_library_draft.program_json).unwrap();
+        assert!(program.validate(app.effect_library_draft.default_pixels as usize).is_ok());
         assert!(app.effect_library_selection.is_none());
     }
 

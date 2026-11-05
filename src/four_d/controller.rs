@@ -870,6 +870,15 @@ pub struct HardwareStripControl {
     pub modes: Vec<String>,
     pub running: bool,
     pub active_name: String,
+    #[serde(default)] pub color_order: String,
+    #[serde(default)] pub color_orders: Vec<String>,
+    #[serde(default)] pub stream: Option<HardwareStripStream>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct HardwareStripStream {
+    pub pixels:u16, pub requested_fps:u8, pub frames_acked:u64, pub frames_failed:u64,
+    pub last_ack_unix_ms:i64, pub last_error:String,
 }
 
 impl HardwareStripControl {
@@ -2203,6 +2212,9 @@ fn parse_strip_control(snapshot: &Value, catalog: &Value) -> Option<HardwareStri
         modes,
         running,
         active_name,
+        color_order: descriptor.get("color_order").and_then(Value::as_str).unwrap_or_default().to_owned(),
+        color_orders: descriptor.get("color_orders").and_then(Value::as_array).map(|v|v.iter().filter_map(Value::as_str).map(str::to_owned).collect()).unwrap_or_default(),
+        stream: snapshot.pointer("/outputs/strip_stats").and_then(|v|serde_json::from_value(v.clone()).ok()),
     })
 }
 

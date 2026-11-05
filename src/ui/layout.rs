@@ -7063,6 +7063,13 @@ fn draw_addressable_strip_tool(
                 .num_columns(2)
                 .spacing([10.0, 7.0])
                 .show(ui, |ui| {
+                    if !strip.color_orders.is_empty(){
+                        ui.label(app.tr("Color order"));
+                        let mut order=strip.color_order.clone();
+                        ui.add_enabled_ui(mutation_enabled,|ui|{crate::ui::dropdown::ComboBox::from_id_salt("strip-color-order").selected_text(&order).show_ui(ui,|ui|{for candidate in &strip.color_orders{ui.selectable_value(&mut order,candidate.clone(),candidate);}});});
+                        if order!=strip.color_order {if let Err(error)=app.set_addressable_strip_color_order(&order){app.set_osd(error);}}
+                        ui.end_row();
+                    }
                     ui.label(app.tr("Pixel count"));
                     ui.horizontal(|ui| {
                         ui.add(
@@ -7337,6 +7344,10 @@ fn draw_addressable_strip_tool(
             if !app.hardware_effect_authoring.status.is_empty() {
                 ui.add_space(5.0);
                 ui.weak(&app.hardware_effect_authoring.status);
+            }
+            if let Some(stream)=strip.stream.as_ref().filter(|s|s.pixels>0){
+                ui.horizontal_wrapped(|ui|{ui.weak(format!("{} {} · {} FPS",stream.pixels,app.tr("pixels"),stream.requested_fps));ui.separator();ui.label(format!("{} {} · {} {}",stream.frames_acked,app.tr("ACKed frames"),stream.frames_failed,app.tr("Failed frames")));});
+                if !stream.last_error.is_empty(){ui.colored_label(ui.visuals().error_fg_color,&stream.last_error);}
             }
         },
     );
