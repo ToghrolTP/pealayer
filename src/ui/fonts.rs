@@ -233,6 +233,16 @@ pub fn install(ctx: &egui::Context, config: &AppConfig, persian: bool) {
             "../../assets/fonts/Vazirmatn-Regular.ttf"
         ))),
     );
+    // Licensed YekanBakh stays on the host. Only the open Vazirmatn fallback
+    // is bundled; missing VF installations must not silently resolve to Arial.
+    let persian_family = family_names().into_iter().find(|name|
+        name.eq_ignore_ascii_case("Yekan Bakh VF") || name.eq_ignore_ascii_case("YekanBakh VF"));
+    let mut persian_chain=vec!["pealayer-vazirmatn".to_string()];
+    if let Some(name)=persian_family.as_deref() && let Some(data)=resolve(Some(name),false,false) {
+        fonts.font_data.insert("pealayer-yekan-vf".into(),Arc::new(data));
+        persian_chain.insert(0,"pealayer-yekan-vf".into());
+    }
+    fonts.families.insert(egui::FontFamily::Name("pealayer-persian".into()),persian_chain.clone());
     for (mono, choice, custom) in [
         (false, config.ui_font_family, &config.ui_font_name),
         (
@@ -272,13 +282,20 @@ pub fn install(ctx: &egui::Context, config: &AppConfig, persian: bool) {
         }
         if !mono {
             let chain = fonts.families.get_mut(&family).unwrap();
-            if choice == UiFontFamily::Vazirmatn || (persian && choice == UiFontFamily::System) {
+            if persian && choice == UiFontFamily::System {
+                for name in persian_chain.iter().rev() { chain.insert(0,name.clone()); }
+            } else if choice == UiFontFamily::Vazirmatn {
                 chain.insert(0, "pealayer-vazirmatn".into());
             } else {
                 chain.push("pealayer-vazirmatn".into());
             }
         }
         let mut emphasis = fonts.families[&family].clone();
+        if persian && !mono && choice==UiFontFamily::System {
+            if let Some(name)=persian_family.as_deref() && let Some(data)=resolve(Some(name),false,true) {
+                fonts.font_data.insert(strong.into(),Arc::new(data));emphasis.insert(0,strong.into());
+            }
+        }
         if use_native
             && !(persian && !mono && choice == UiFontFamily::System)
             && let Some(data) = resolve(name.as_deref(), mono, true)

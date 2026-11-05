@@ -19,7 +19,9 @@ test('native workspace and font previews share one appearance contract', () => {
   const next = mergeAppearance({ volume: 42 }, preview);
   for (const [key, value] of Object.entries(preview)) assert.equal(next[key], value);
   assert.equal(next.volume, 42);
-  assert.match(uiFontCss('custom', 'Segoe UI'), /^"Segoe UI", system-ui/);
+  assert.match(uiFontCss('custom', 'Segoe UI'), /^"Segoe UI", PealayerPersian, system-ui/);
+  assert.match(uiFontCss('system'), /^PealayerPersian, system-ui/);
+  assert.equal(uiFontCss('vazirmatn'), 'Vazirmatn, sans-serif');
   assert.match(monoFontCss('custom', 'Cascadia Mono'), /^"Cascadia Mono", ui-monospace/);
   assert.equal(monoFontCss('custom', ''), monoFontCss('system'));
   assert.match(uiFontCss('custom', 'A"B'), /^"A\\"B",/);

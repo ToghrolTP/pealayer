@@ -423,6 +423,10 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "Theme",
             &[("system", "System"), ("light", "Light"), ("dark", "Dark")],
         ),
+        PreferenceControl::select(
+            "color_palette", "appearance", "Interface", "Color palette",
+            &[("native", "Neutral (default)"), ("studio", "Studio")],
+        ),
         PreferenceControl::accent(config),
         PreferenceControl::select("workspace_ui", "appearance", "Interface", "Workspace interface",
             &[("craft_ui", "CraftUI"), ("egui_dock", "egui Dock")]),
@@ -436,13 +440,6 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             &[("system", "System font"), ("bundled", "Bundled font"), ("custom", "Choose installed font")]),
         PreferenceControl::select("ui_animation_mode", "appearance", "Interface", "Animations and transitions",
             &[("system", "System default"), ("enabled", "Enabled"), ("disabled", "Disabled")]),
-        PreferenceControl::select(
-            "color_palette",
-            "appearance",
-            "Interface",
-            "Color palette",
-            &[("native", "Neutral (default)"), ("studio", "Studio")],
-        ),
         application_icon_control("app_icon", "Default icon", "Bundled application icon"),
         PreferenceControl::select(
             "app_icon_preset", "appearance", "Interface", "Application icon",
@@ -1391,9 +1388,9 @@ mod tests {
         let controls = preference_controls(&crate::config::AppConfig::default());
         let interface: Vec<_> = controls.iter().filter(|control| control.section == "appearance" && control.group == "Interface").collect();
         assert_eq!(interface.iter().map(|control| control.key).collect::<Vec<_>>(),
-            ["theme", "accent_color", "workspace_ui", "preferences_grouped_navigation", "ui_control_density", "ui_animation_mode", "color_palette", "app_icon_preset", "fullscreen_video_background", "language"]);
+            ["theme", "color_palette", "accent_color", "workspace_ui", "preferences_grouped_navigation", "ui_control_density", "ui_animation_mode", "app_icon_preset", "fullscreen_video_background", "language"]);
         assert_eq!(interface.iter().map(|control| control.icon).collect::<Vec<_>>(),
-            ["circle-half", "palette", "tabs", "list-checks", "sliders-horizontal", "waveform", "swatches", "image", "frame-corners", "translate"]);
+            ["circle-half", "swatches", "palette", "tabs", "list-checks", "sliders-horizontal", "waveform", "image", "frame-corners", "translate"]);
         for (key, icon) in [("always_on_top", "push-pin"), ("osd_position", "target"), ("osd_timeout_seconds", "clock"),
             ("app_icon_playing", "play"), ("app_icon_paused", "pause"), ("app_icon_stopped", "stop-circle")] {
             assert_eq!(controls.iter().find(|control| control.key == key).unwrap().icon, icon);

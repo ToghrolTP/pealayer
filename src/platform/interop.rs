@@ -2893,6 +2893,9 @@ pub fn spawn_interop_listener(
     egui_ctx: eframe::egui::Context,
     application_identity: String,
 ) {
+    // Keep the listening identity stable even if branding is previewed or this
+    // process is a named review/remote-client instance.
+    egui_ctx.data_mut(|data| data.insert_temp(eframe::egui::Id::new("native-listener-identity"), application_identity.clone()));
     // TCP automation now shares the unified HTTP/WebSocket listener at
     // `/api/ipc`. Keep the native Unix socket because it consumes no TCP port.
     #[cfg(unix)]

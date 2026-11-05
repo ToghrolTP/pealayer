@@ -41,6 +41,8 @@
 @font-face { font-family: PealayerUbuntu; src: url('../../assets/fonts/Ubuntu-Light.ttf') format('truetype'); font-display: swap; }
 @font-face { font-family: PealayerHack; src: url('../../assets/fonts/Hack-Regular.ttf') format('truetype'); font-display: swap; }
 @font-face { font-family: Vazirmatn; src: url('../../assets/fonts/Vazirmatn-Regular.ttf') format('truetype'); font-display: swap; }
+/* Optional licensed host font: no private font bytes are served or bundled. */
+@font-face { font-family: PealayerPersian; src: local('Yekan Bakh VF'), local('YekanBakh VF'); font-weight: 100 900; unicode-range: U+0600-06FF, U+0750-077F, U+08A0-08FF, U+FB50-FDFF, U+FE70-FEFF; font-display: swap; }
 
 :root[data-theme='light'] {
   --canvas: #eeeeee;
@@ -288,12 +290,18 @@ body {
 .preferences-rail button.is-active { color: var(--text); border-color: color-mix(in srgb, var(--accent) 44%, var(--line)); background: var(--accent-soft); }
 .preferences-rail button.is-active .anticon { color: var(--accent); }
 .preferences-rail-group { padding: 9px 11px 2px; color: var(--muted); font-size: 10px; font-weight: 600; letter-spacing: .08em; text-transform: uppercase; }
-.preferences-detail { min-width: 0; display: grid; align-content: start; gap: 12px; }
+.preferences-detail { min-width: 0; display: grid; grid-template-columns: minmax(0, 1fr); align-content: start; gap: 12px; }
+.preferences-detail > *, .preferences-group__controls > * { min-width: 0; max-width: 100%; }
 .preferences-group.ant-card { border-radius: 12px !important; box-shadow: 0 12px 32px color-mix(in srgb, var(--canvas) 24%, transparent) !important; }
 .preferences-group .ant-card-head { min-height: 48px; padding-inline: 18px; border-bottom-color: var(--line); }
 .preferences-group .ant-card-head-title { color: var(--text); font-size: 14px; }
 .preferences-group .ant-card-body { padding: 8px 18px 12px; }
-.preferences-group__controls { display: grid; }
+.preferences-group__controls { display: grid; grid-template-columns: minmax(0, 1fr); }
+.preference-palette-option { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.preference-palette-option > span:last-child { overflow: hidden; text-overflow: ellipsis; }
+.preference-palette-preview { display: flex; align-items: center; box-sizing: border-box; flex: 0 0 54px; width: 54px; height: 20px; padding: 3px 3px 3px 14px; border: 1px solid; border-radius: 3px; }
+.preference-palette-preview > span { width: 100%; height: 100%; display: flex; align-items: center; padding: 0 4px; border-radius: 2px; }
+.preference-palette-preview i { width: 100%; border-top: 1.5px solid currentColor; }
 .preferences-group--optional.ant-collapse { background: var(--surface-1); border-color: var(--line); }
 .preferences-group--optional .ant-collapse-header { color: var(--text); font-weight: 600; }
 .preferences-group--optional .ant-collapse-content { background: transparent; border-color: var(--line); }
@@ -328,7 +336,7 @@ body {
 .numeric-value-control__input { display: flex; align-items: center; gap: 4px; min-width: 0; }
 .numeric-value-control__input .ant-input-number { flex: 1; min-width: 60px; }
 .numeric-step-row { display: flex; justify-content: space-between; align-items: center; gap: 12px; margin-block: 12px; }
-.preference-control .ant-select, .preference-control .ant-input, .preference-control .ant-input-number { width: 100%; }
+.preference-control .ant-select, .preference-control .ant-input, .preference-control .ant-input-number { width: 100%; min-width: 0; max-width: 100%; }
 .preference-network-option { min-width: 0; display: flex; align-items: center; gap: 10px; }
 .preference-network-option > .anticon { flex: 0 0 18px; color: var(--accent); font-size: 16px; }
 .preference-network-option > span { min-width: 0; display: flex; flex-direction: column; }

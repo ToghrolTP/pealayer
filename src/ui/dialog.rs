@@ -1230,10 +1230,12 @@ pub fn scroll_column_at(
     offset: Option<f32>,
     body: impl FnOnce(&mut egui::Ui),
 ) -> f32 {
-    let width = ui.available_width();
     let mut scroll = egui::ScrollArea::vertical().id_salt(id).auto_shrink([false, false]);
     if let Some(offset) = offset { scroll = scroll.vertical_scroll_offset(offset); }
     scroll.show(ui, |ui| {
+        // The scrollbar owns part of the outer width. Use the content viewport,
+        // otherwise cards extend under the scrollbar/right edge.
+        let width = ui.available_width();
         ui.allocate_ui_with_layout(egui::vec2(width, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
             ui.set_width(width);
             body(ui);

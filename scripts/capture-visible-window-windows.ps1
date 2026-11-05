@@ -2,6 +2,9 @@
 param(
     [string]$ProcessName = 'pealayer',
     [int]$ExpectedProcessId = 0,
+    # Optional enumerated HWND for helper windows; MainWindowHandle can select
+    # winit's event-target window instead of the actual Preferences surface.
+    [long]$WindowHandle = 0,
     [Parameter(Mandatory = $true)][string]$OutputPath,
     # Optional window-relative pixel rectangle: x, y, width, height.
     [int[]]$CropRectangle,
@@ -19,6 +22,7 @@ public static class PealayerReadOnlyCapture {
     [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
     [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr window, out Rect rectangle);
     [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr window);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
     [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
     [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr window, IntPtr dc, uint flags);
 }
@@ -26,14 +30,22 @@ public static class PealayerReadOnlyCapture {
 [void][PealayerReadOnlyCapture]::SetProcessDPIAware()
 $candidateProcesses = @(Get-Process -Name $ProcessName | Where-Object {
     ($ExpectedProcessId -eq 0 -or $_.Id -eq $ExpectedProcessId) -and
-    $_.MainWindowHandle -ne 0 -and ($RenderOccludedWindow -or $_.MainWindowHandle -eq [PealayerReadOnlyCapture]::GetForegroundWindow())
+    $_.MainWindowHandle -ne 0 -and ($WindowHandle -ne 0 -or $RenderOccludedWindow -or $_.MainWindowHandle -eq [PealayerReadOnlyCapture]::GetForegroundWindow())
 })
 if ($candidateProcesses.Count -eq 0) { throw 'Bring the requested application into view first. This script does not change focus.' }
 if ($candidateProcesses.Count -ne 1) { throw 'Multiple matching windows exist; use a unique process name rather than guessing a capture target.' }
 $windowProcess = $candidateProcesses[0]
-if ([PealayerReadOnlyCapture]::IsIconic($windowProcess.MainWindowHandle)) { throw 'The window is minimized.' }
+$captureWindow = $windowProcess.MainWindowHandle
+if ($WindowHandle -ne 0) {
+    [uint32]$ownerProcess = 0
+    [void][PealayerReadOnlyCapture]::GetWindowThreadProcessId([IntPtr]$WindowHandle, [ref]$ownerProcess)
+    if ($ExpectedProcessId -eq 0 -or $ownerProcess -ne $ExpectedProcessId) { throw 'Explicit window handle must belong to ExpectedProcessId.' }
+    $captureWindow = [IntPtr]$WindowHandle
+    if (-not $RenderOccludedWindow -and $captureWindow -ne [PealayerReadOnlyCapture]::GetForegroundWindow()) { throw 'Requested window is not foreground.' }
+}
+if ([PealayerReadOnlyCapture]::IsIconic($captureWindow)) { throw 'The window is minimized.' }
 $rectangle = New-Object PealayerReadOnlyCapture+Rect
-if (-not [PealayerReadOnlyCapture]::GetWindowRect($windowProcess.MainWindowHandle, [ref]$rectangle)) { throw 'Cannot read the window rectangle.' }
+if (-not [PealayerReadOnlyCapture]::GetWindowRect($captureWindow, [ref]$rectangle)) { throw 'Cannot read the window rectangle.' }
 $width = $rectangle.Right - $rectangle.Left
 $height = $rectangle.Bottom - $rectangle.Top
 if ($width -le 0 -or $height -le 0) { throw 'Window has no visible extent.' }
@@ -43,7 +55,7 @@ try {
     if ($RenderOccludedWindow) {
         $captureDc = $graphics.GetHdc()
         try {
-            if (-not [PealayerReadOnlyCapture]::PrintWindow($windowProcess.MainWindowHandle, $captureDc, 2)) {
+            if (-not [PealayerReadOnlyCapture]::PrintWindow($captureWindow, $captureDc, 2)) {
                 throw 'This window does not support read-only PrintWindow rendering.'
             }
         } finally { $graphics.ReleaseHdc($captureDc) }

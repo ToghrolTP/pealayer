@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ColorPicker } from './ColorPicker';
 import { ColorDropdown } from './ColorDropdown';
 import {
@@ -55,7 +55,8 @@ import {
   VideoCameraOutlined,
 } from '@ant-design/icons';
 import { tr } from '../i18n';
-import { mergeAppearance } from '../appearance';
+import { mergeAppearance, resolvedAppearanceTheme } from '../appearance';
+import palettes from '../../../assets/themes/palettes.json';
 import { NumericValueControl } from './NumericValueControl';
 import { ServerFilePicker } from './ServerFilePicker';
 import type { TimelineWheelPreferences } from '../timelineWheel';
@@ -216,6 +217,17 @@ function ChoiceSlider({ options, value, label, locale, disabled, onCommit }: {
 export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, locale, appearance, timelineWheelPreferences, onConfigChange }) => {
   const [contract, setContract] = useState<PreferencesContract | null>(null);
   const [section, setSection] = useState('appearance');
+  const detail = useRef<HTMLElement>(null);
+  const sectionScroll = useRef<Record<string, number>>({});
+  const selectSection = (next: string) => {
+    const scroller = detail.current?.closest('.app-content');
+    if (scroller) sectionScroll.current[section] = scroller.scrollTop;
+    setSection(next);
+  };
+  useLayoutEffect(() => {
+    const scroller = detail.current?.closest('.app-content');
+    if (scroller) scroller.scrollTop = sectionScroll.current[section] ?? 0;
+  }, [section]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
   const [status, setStatus] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
@@ -435,6 +447,14 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
       </div>;
     }
     if (control.kind === 'select') {
+      const scheme = resolvedAppearanceTheme(contract?.values.theme ?? 'system', window.matchMedia('(prefers-color-scheme: light)').matches, appearance);
+      const paletteLabel = (value: unknown, label: string) => {
+        const colors = palettes[value === 'studio' ? 'studio' : 'native'][scheme];
+        return <span className="preference-palette-option"><span aria-hidden="true" className="preference-palette-preview"
+          style={{ background: colors.canvas, borderColor: colors['line-strong'], color: colors.text }}>
+          <span style={{ background: colors['surface-2'] }}><i /></span>
+        </span><span>{label}</span></span>;
+      };
       return (
         <label className="preference-control" key={control.key}>
           {commonLabel}
@@ -443,6 +463,8 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
             showSearch={['ui_font_name', 'monospace_font_name'].includes(control.key) ? { optionFilterProp: 'label' } : undefined}
             onOpenChange={(open) => { if (open && ['audio_device', 'sfx_audio_device'].includes(control.key)) void refreshAudioOutputs(); }}
             options={(control.options ?? []).map((option) => ({ value: option.value, label: option.description || tr(locale, option.label) }))}
+            optionRender={control.key === 'color_palette' ? option => paletteLabel(option.value, String(option.label)) : undefined}
+            labelRender={control.key === 'color_palette' ? option => paletteLabel(option.value, String(option.label)) : undefined}
             onChange={(next) => void update(control, next)}
           />
         </label>
@@ -550,7 +572,7 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
                 type="button"
                 className={item.id === section ? 'is-active' : ''}
                 aria-pressed={item.id === section}
-                onClick={() => setSection(item.id)}
+                onClick={() => selectSection(item.id)}
               >
                 {sectionIcons[item.id] ?? <SettingOutlined />}
                 <span>{tr(locale, item.label)}</span>
@@ -558,7 +580,7 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
               </React.Fragment>
             ))}
           </nav>
-          <main className="preferences-detail">
+          <main className="preferences-detail" ref={detail}>
             {groups.map((group) => {
               const children = <div className="preferences-group__controls">
                 {controls.filter((control) => control.group === group.name).map(renderControl)}

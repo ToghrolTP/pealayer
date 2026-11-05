@@ -35,7 +35,7 @@ export interface AppearanceState {
 const customFamily = (name: string) => JSON.stringify(name.replace(/[\x00-\x1f\x7f]/g, '')).replace(/</g, '\\3c ');
 export const uiFontCss = (choice: string, name = ''): string => choice === 'custom' && name.trim()
   ? `${customFamily(name)}, ${uiFontCss('system')}` : choice === 'vazirmatn' ? 'Vazirmatn, sans-serif'
-  : choice === 'bundled' ? 'PealayerUbuntu, Vazirmatn, sans-serif' : "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Vazirmatn, sans-serif";
+  : choice === 'bundled' ? 'PealayerUbuntu, Vazirmatn, sans-serif' : "PealayerPersian, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Vazirmatn, sans-serif";
 export const monoFontCss = (choice: string, name = ''): string => choice === 'custom' && name.trim()
   ? `${customFamily(name)}, ${monoFontCss('system')}` : choice === 'bundled' ? 'PealayerHack, monospace' : 'ui-monospace, Consolas, Menlo, monospace';
 
