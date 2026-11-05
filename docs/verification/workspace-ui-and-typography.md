@@ -65,6 +65,47 @@ Private captures: `verification/craftui-preferences.png` (workspace) and
 These are review-build visuals, not a production deployment receipt.
 Linux DE and macOS font resolution require native desktop verification.
 Cafe's configured SSH endpoint refused connections during this pass. No hardware
-outputs were changed. Pakar's build remains gated by stale donor comparisons;
-the grouping change must not be described as a tested Pakar binary until those
-evidence checks are reconciled by its owner.
+outputs were changed. Pakar's required native build gates now pass: release
+compiled, all 173 UI tests passed, and both modes plus grouped Appearance were
+captured with the isolated loopback fixture. Its broader donor audit still has
+unrelated stale comparisons and filesystem inventory drift; that merge gate
+remains open. Native captures also expose existing narrow Keys-panel clipping
+in both modes; this is recorded separately from the presentation adapter.
+
+Final review captures include both Pealayer modes, Typography and the separate
+native Preferences window. The temporary embedded-window review setting was
+restored; production `native_dialog_windows` remained enabled throughout.
+
+## Preferences navigation API
+
+Use the existing IPC/HTTP/WebSocket command dispatcher:
+
+```json
+{"command":"navigate_preferences","section":"appearance","scroll_y":400}
+```
+
+HTTP: POST `/api/process/command` or `/api/player/command` with that JSON.
+JSON-RPC (also supported over native IPC and WebSocket):
+
+```json
+{"jsonrpc":"2.0","id":1,"method":"pealayer.preferences.navigate","params":{"section":"appearance","scroll_y":400}}
+```
+
+Section is optional and uses IDs advertised by GET `/api/preferences`.
+`scroll_y` is an absolute logical-pixel offset; zero returns to the top and
+the scroll area clamps at its content end. Negative, non-finite, excessive
+offsets and unknown sections are rejected. This opens Preferences if needed,
+selects the section and scrolls without modifying/saving any settings or draft.
+It targets the receiving process, never a connected remote authority's window.
+The separate native helper receives the same typed request through a bounded
+private pipe, with no disk polling or injected mouse/keyboard events.
+`accepted` means queued, not that a frame has already rendered. Headless servers
+cannot display a native Preferences window.
+
+Navigation regression checks passed (12 tests), followed by all 57
+Preferences-focused tests. They cover IPC/RPC agreement, validation, keeping
+invalid navigation local rather than forwarding it to a remote authority,
+section selection and scrolling without changing a draft.
+The existing remote-client safety restriction still uses the embedded editor:
+its separate helper cannot edit the server's configuration. This restriction
+is distinct from the review profile's temporarily disabled native-window setting.

@@ -517,8 +517,9 @@ fn local_process_payload(body: &[u8]) -> bool {
     // Invalid parameters still belong to this process and must receive its
     // validation error, not be sent to the authority by the gateway.
     if let Some(method) = value.get("method").and_then(serde_json::Value::as_str) {
-        return matches!(method, "pealayer.process.status" | "pealayer.process.connect" | "pealayer.process.quit");
+        return matches!(method, "pealayer.process.status" | "pealayer.process.connect" | "pealayer.process.quit" | "pealayer.preferences.navigate" | "navigate_preferences");
     }
+    if value.get("command").and_then(serde_json::Value::as_str) == Some("navigate_preferences") { return true; }
     serde_json::from_value::<crate::platform::interop::InteropCommand>(value)
         .is_ok_and(|command| command.is_process_local())
 }
@@ -1853,6 +1854,25 @@ mod tests {
         }
     }
     use super::*;
+
+    #[test]
+    fn preferences_navigation_is_validated_and_never_relayed_to_the_authority() {
+        use crate::platform::interop::{InteropCommand, parse_interop_request};
+        let ipc = r#"{"command":"navigate_preferences","section":"appearance","scroll_y":400}"#;
+        let rpc = r#"{"jsonrpc":"2.0","id":1,"method":"pealayer.preferences.navigate","params":{"section":"appearance","scroll_y":400}}"#;
+        assert_eq!(parse_interop_request(ipc).unwrap().1, parse_interop_request(rpc).unwrap().1);
+        assert!(local_process_payload(ipc.as_bytes()));
+        assert!(local_process_payload(rpc.as_bytes()));
+        assert!(matches!(parse_interop_request(ipc).unwrap().1, InteropCommand::NavigatePreferences { .. }));
+        let invalid_ipc = br#"{"command":"navigate_preferences","scroll_y":"invalid"}"#;
+        assert!(local_process_payload(invalid_ipc));
+        assert!(parse_interop_request(std::str::from_utf8(invalid_ipc).unwrap()).is_err());
+        for params in [r#"{"scroll_y":-1}"#, r#"{"scroll_y":1000001}"#, r#"{"scroll_y":0,"section":"bogus"}"#, r#"{"scroll_y":0,"save":true}"#] {
+            let payload = format!(r#"{{"method":"pealayer.preferences.navigate","params":{params}}}"#);
+            assert!(local_process_payload(payload.as_bytes()));
+            assert!(parse_interop_request(&payload).is_err());
+        }
+    }
 
     #[test]
     fn process_lifecycle_uses_one_contract_across_rpc_ipc_http_and_websocket() {

@@ -6,6 +6,7 @@ use crate::preferences_contract::{
     set_value_at_path, value_at_path,
 };
 use eframe::egui;
+use crate::preferences_contract::PreferencesNavigation;
 
 const PREFERENCES_RAIL_WIDTH: f32 = 118.0;
 const PREFERENCE_ROW_HEIGHT: f32 = 33.0;
@@ -23,6 +24,7 @@ const REPLACEMENT_ROW_MIN_WIDTH: f32 = REPLACEMENT_ARROW_WIDTH
 
 pub(crate) struct NativePreferencesController {
     child: std::process::Child,
+    navigation: std::sync::mpsc::SyncSender<PreferencesNavigation>,
 }
 
 #[derive(Clone)]
@@ -34,6 +36,8 @@ pub(crate) struct PreferencesDraft {
     status: String,
     status_until: Option<std::time::Instant>,
     confirm_close: bool,
+    pending_navigation: Option<PreferencesNavigation>,
+    scroll_y: f32,
 }
 
 #[derive(Default)]
@@ -61,6 +65,8 @@ impl PreferencesDraft {
             status: String::new(),
             status_until: None,
             confirm_close: false,
+            pending_navigation: None,
+            scroll_y: 0.0,
         }
     }
 
@@ -136,13 +142,30 @@ impl NativePreferencesController {
     fn spawn(owner_hwnd: isize, tab: usize, ctx: &egui::Context) -> Result<Self, String> {
         let executable = std::env::current_exe()
             .map_err(|error| format!("resolve Pealayer executable: {error}"))?;
-        let child = std::process::Command::new(executable)
+        let mut child = std::process::Command::new(executable)
             .arg("--preferences-helper")
             .arg(owner_hwnd.to_string())
             .arg("--preferences-tab")
             .arg(tab.to_string())
+            .stdin(std::process::Stdio::piped())
             .spawn()
             .map_err(|error| format!("open native Preferences window: {error}"))?;
+        let mut input = child.stdin.take().expect("piped Preferences input");
+        let (navigation, requests) = std::sync::mpsc::sync_channel::<PreferencesNavigation>(8);
+        // Never block the UI on the child or a full OS pipe. Only typed,
+        // bounded navigation requests travel here, not arbitrary commands.
+        if let Err(error) = std::thread::Builder::new().name("preferences-navigation".into()).spawn(move || {
+            use std::io::Write;
+            for request in requests {
+                let Ok(mut line) = serde_json::to_vec(&request) else { continue; };
+                line.push(b'\n');
+                if input.write_all(&line).is_err() { break; }
+            }
+        }) {
+            let _ = child.kill();
+            let _ = child.wait();
+            return Err(format!("start Preferences navigation: {error}"));
+        }
         crate::diagnostics::record_shell_action("helper_spawned", "preferences");
         #[cfg(target_os = "windows")]
         {
@@ -167,7 +190,7 @@ impl NativePreferencesController {
         }
         #[cfg(not(target_os = "windows"))]
         let _ = ctx;
-        Ok(Self { child })
+        Ok(Self { child, navigation })
     }
 
     fn is_open(&mut self) -> bool {
@@ -190,6 +213,37 @@ pub(crate) fn open(app: &mut PealayerApp, ctx: &egui::Context) {
     ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
     ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
     ctx.request_repaint();
+}
+
+pub(crate) fn navigate(app: &mut PealayerApp, ctx: &egui::Context, navigation: PreferencesNavigation) {
+    if let Err(error) = navigation.validate() { app.config_status = error; return; }
+    open(app, ctx);
+    if app.preferences_draft.is_none() {
+        app.preferences_draft = Some(PreferencesDraft::new(app.runtime_config_snapshot(), app.preferences_tab));
+    }
+    app.preferences_draft.as_mut().unwrap().pending_navigation = Some(navigation);
+}
+
+fn receive_navigation(ctx: egui::Context) -> std::sync::mpsc::Receiver<PreferencesNavigation> {
+    let (sender, receiver) = std::sync::mpsc::sync_channel(8);
+    std::thread::spawn(move || {
+        use std::io::{BufRead, Read};
+        let input = std::io::stdin();
+        let mut input = input.lock();
+        loop {
+            // The parent sends < 256-byte records. Bound manual helper input too.
+            let mut bytes = Vec::new();
+            let mut bounded = (&mut input).take(4097);
+            if bounded.read_until(b'\n', &mut bytes).ok().filter(|n| *n > 0).is_none() { break; }
+            if bytes.len() > 4096 { break; }
+            let Ok(request) = serde_json::from_slice::<PreferencesNavigation>(&bytes) else { continue; };
+            if request.validate().is_ok() {
+                if sender.send(request).is_err() { break; }
+                ctx.request_repaint();
+            }
+        }
+    });
+    receiver
 }
 
 fn reap_exited_controller(controller: &mut Option<NativePreferencesController>) -> bool {
@@ -246,6 +300,7 @@ struct StandalonePreferencesApp {
     config_watcher: Option<crate::config::ConfigFileWatcher>,
     config_reload_due: Option<std::time::Instant>,
     branding_config: Option<AppConfig>,
+    navigation: std::sync::mpsc::Receiver<PreferencesNavigation>,
 }
 
 impl StandalonePreferencesApp {
@@ -405,6 +460,7 @@ impl eframe::App for StandalonePreferencesApp {
 
         self.apply_appearance(ui.ctx());
         self.watch_external_config(ui.ctx());
+        for request in self.navigation.try_iter().take(8) { self.draft.pending_navigation = Some(request); }
         let close_requested = ui.ctx().input(|input| input.viewport().close_requested());
         if close_requested && self.draft.is_dirty() {
             ui.ctx()
@@ -501,6 +557,7 @@ pub(crate) fn run_native_preferences(owner_hwnd: isize) -> eframe::Result {
                 config_watcher: None,
                 config_reload_due: None,
                 branding_config: None,
+                navigation: receive_navigation(creation.egui_ctx.clone()),
             }))
         }),
     )
@@ -534,6 +591,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             .as_mut()
             .is_some_and(NativePreferencesController::is_open)
         {
+            if let Some(request) = app.preferences_draft.as_mut().and_then(|draft| draft.pending_navigation.take()) {
+                if let Err(error) = app.native_preferences.as_ref().unwrap().navigation.try_send(request) {
+                    app.config_status = format!("Preferences navigation not delivered: {error}");
+                }
+            }
             return;
         }
         if host == crate::ui::dialog::DialogHost::Native {
@@ -663,6 +725,10 @@ fn native_tr(language: AppLanguage, key: &'static str) -> String {
 }
 
 fn draw_preferences_editor(draft: &mut PreferencesDraft, ui: &mut egui::Ui) -> PreferencesOutcome {
+    let navigation = draft.pending_navigation.take();
+    if let Some(section) = navigation.as_ref().and_then(|request| request.section.as_ref()) {
+        if let Some(index) = preference_sections().iter().position(|item| item.id == section) { draft.tab = index; }
+    }
     crate::ui::sync_elegance_theme(ui.ctx());
     let language = crate::config::resolved_language_preference(&draft.config);
     let tr = |key: &'static str| native_tr(language, key);
@@ -786,7 +852,7 @@ fn draw_preferences_editor(draft: &mut PreferencesDraft, ui: &mut egui::Ui) -> P
                 ui.separator();
             }
             let detail_width = ui.available_width();
-            crate::ui::dialog::scroll_column(ui, "preferences_contract_content", None, |ui| {
+            draft.scroll_y = crate::ui::dialog::scroll_column_at(ui, "preferences_contract_content", navigation.as_ref().map(|request| request.scroll_y), |ui| {
                 ui.set_max_width((detail_width - 10.0).max(180.0));
                 ui.spacing_mut().item_spacing.y = 8.0;
                 let _ = draw_contract_section(draft, ui, &tr, &sections, rtl);
@@ -1997,7 +2063,7 @@ mod tests {
         let mut command = std::process::Command::new("true");
         let mut child = command.spawn().unwrap();
         child.wait().unwrap();
-        let mut controller = Some(NativePreferencesController { child });
+        let mut controller = Some(NativePreferencesController { child, navigation: std::sync::mpsc::sync_channel(1).0 });
         assert!(reap_exited_controller(&mut controller));
         assert!(controller.is_none());
         assert!(!reap_exited_controller(&mut controller));
@@ -2018,6 +2084,30 @@ mod tests {
             preferences_helper_owner(&["pealayer.exe".to_string()]),
             None
         );
+    }
+
+    #[test]
+    fn navigation_changes_scroll_and_section_without_editing_preferences() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let mut draft = PreferencesDraft::new(AppConfig::default(), 1);
+        let ctx = egui::Context::default();
+        let render = |draft: &mut PreferencesDraft| {
+            ctx.run_ui(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(700.0, 450.0))),
+                ..Default::default()
+            }, |ui| { draw_preferences_editor(draft, ui); }).drop_without_applying_deltas();
+        };
+        render(&mut draft);
+        draft.pending_navigation = Some(PreferencesNavigation { section: Some("appearance".into()), scroll_y: 400.0 });
+        render(&mut draft);
+        assert_eq!(draft.tab, 0);
+        assert!(draft.scroll_y > 0.0);
+        assert!(draft.pending_navigation.is_none());
+        assert!(!draft.is_dirty());
+        draft.pending_navigation = Some(PreferencesNavigation { section: None, scroll_y: 0.0 });
+        render(&mut draft);
+        assert_eq!(draft.scroll_y, 0.0);
+        assert!(draft.take_preview_update().is_none());
     }
 
     #[test]
@@ -2270,6 +2360,7 @@ mod tests {
             config_watcher: None,
             config_reload_due: None,
             branding_config: None,
+            navigation: std::sync::mpsc::sync_channel(1).1,
         };
         let ctx = egui::Context::default();
         helper.apply_appearance(&ctx);
@@ -2301,6 +2392,7 @@ mod tests {
             draft: PreferencesDraft::new(AppConfig::default(), 0), owner_hwnd: 0,
             native_window_initialized: false, applied_appearance: None,
             config_watcher: None, config_reload_due: None, branding_config: None,
+            navigation: std::sync::mpsc::sync_channel(1).1,
         };
         let ctx = egui::Context::default();
         helper.apply_appearance(&ctx);

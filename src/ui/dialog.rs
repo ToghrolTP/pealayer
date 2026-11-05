@@ -1223,6 +1223,24 @@ pub fn scroll_column(
     scroll_column_impl(ui, id, max_height, false, body);
 }
 
+/// The same one-column layout with an explicit one-shot navigation offset.
+pub fn scroll_column_at(
+    ui: &mut egui::Ui,
+    id: impl std::hash::Hash + std::fmt::Debug,
+    offset: Option<f32>,
+    body: impl FnOnce(&mut egui::Ui),
+) -> f32 {
+    let width = ui.available_width();
+    let mut scroll = egui::ScrollArea::vertical().id_salt(id).auto_shrink([false, false]);
+    if let Some(offset) = offset { scroll = scroll.vertical_scroll_offset(offset); }
+    scroll.show(ui, |ui| {
+        ui.allocate_ui_with_layout(egui::vec2(width, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+            ui.set_width(width);
+            body(ui);
+        });
+    }).state.offset().y
+}
+
 /// A vertically content-sized scroll column for compact dialogs. It behaves
 /// like [`scroll_column`], but does not stretch a short body to fill the whole
 /// window. A height limit still lets the body scroll when the user makes the

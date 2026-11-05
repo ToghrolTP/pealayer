@@ -1,5 +1,26 @@
 use serde::Serialize;
 
+/// Process-local navigation only; never saves or changes a preference value.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreferencesNavigation {
+    #[serde(default)]
+    pub section: Option<String>,
+    pub scroll_y: f32,
+}
+
+impl PreferencesNavigation {
+    pub fn validate(&self) -> Result<(), String> {
+        if !self.scroll_y.is_finite() || !(0.0..=1_000_000.0).contains(&self.scroll_y) {
+            return Err("scroll_y must be a finite offset between 0 and 1000000 logical pixels".into());
+        }
+        if self.section.as_ref().is_some_and(|id| !preference_sections().iter().any(|s| s.id == id)) {
+            return Err("Unknown Preferences section; use an ID from /api/preferences".into());
+        }
+        Ok(())
+    }
+}
+
 fn timeline_wheel_control(key: &'static str, label: &'static str) -> PreferenceControl {
     let mut control = PreferenceControl::select(key, "input", "Timeline navigation", label, &[
         ("zoom", "Zoom"),
