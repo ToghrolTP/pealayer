@@ -125,8 +125,8 @@ export const ApplicationStatusBar: React.FC<ApplicationStatusBarProps> = ({ stat
         {screenRate ? <DashboardOutlined /> : <VideoCameraOutlined />}<span className="status-fps-value">{rate != null && Number.isFinite(rate) && rate > 0 && (screenRate || state.current_video) ? `${rate.toFixed(2)} fps` : '— fps'}</span></button>;
       case 'connection': { const availability = hardwareAvailability(state, connected); return <>
         {config.connection_icon === 'circle' ? <i className="status-connection-dot" /> : config.connection_icon === 'none' ? null : config.connection_icon === 'controller' ? <DashboardOutlined /> : <ApiOutlined />}
-        {availability === 'ok' ? state.hardware?.board_name || state.hardware_details?.board_name || 'PCController' : tr(locale, hardwareLabels[availability])}
-        {config.connection_mode && state.hardware_transport ? ` · ${state.hardware_transport}` : null}</>; }
+        <span className="status-connection-caption">{availability === 'ok' ? state.hardware?.board_name || state.hardware_details?.board_name || 'PCController' : tr(locale, hardwareLabels[availability])}
+        {config.connection_mode && state.hardware_transport ? ` · ${state.hardware_transport}` : null}</span></>; }
       case 'hot': return hardwareLive && telemetry?.hot === true ? <><WarningOutlined /> HOT · {tr(locale, 'Temperature alert')}</> : null;
       case 'estop': return state.estop_active ? <><WarningOutlined />{tr(locale, 'E-STOP ACTIVE')}</> : null;
       case 'voltage': return voltage === undefined ? null : `${(voltage / 1000).toFixed(2)} V`;
@@ -166,7 +166,7 @@ export const ApplicationStatusBar: React.FC<ApplicationStatusBarProps> = ({ stat
         const child = content(widget); if (child == null) return null;
         return <Dropdown key={widget} trigger={widget==='chart'||widget==='message'?['contextMenu','click']:['contextMenu']} menu={menu(widget)}><span
           className={`status-widget status-widget--${widget}${config.monospace[WIDGETS.indexOf(widget)] ? ' is-monospace' : ''}${dropTarget?.widget === widget ? ` is-drop-${dropTarget.after ? 'after' : 'before'}` : ''}${dragged === widget ? ' is-dragging' : ''}`}
-          style={widget==='connection' && config.connection_mode ? {width:252} : METRICS.includes(widget as ChartMetric) ? {color: config.semantic_colors && (widget==='temperature' && telemetry?.hot===true) ? 'var(--red)'
+          style={widget==='connection' && config.connection_mode ? {minWidth:252} : METRICS.includes(widget as ChartMetric) ? {color: config.semantic_colors && (widget==='temperature' && telemetry?.hot===true) ? 'var(--red)'
             : config.semantic_colors && (()=>{ const index=METRICS.indexOf(widget as ChartMetric), value=[voltage,current,temperature][index], [low,high]=config.metric_limits[index];
                 return value!=null && (low!=null && value<low || high!=null && value>high); })() ? 'var(--amber)' : 'var(--muted)'} : undefined}
           data-status-widget={widget} title={label(widget)} draggable onContextMenu={(event) => event.stopPropagation()}

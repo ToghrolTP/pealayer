@@ -1103,7 +1103,9 @@ html[data-motion="disabled"] *, html[data-motion="disabled"] *::before, html[dat
 .statusbar-primary::-webkit-scrollbar { display: none; }
 .app-statusbar .status-widget { flex: 0 0 auto; position: relative; height: 22px; padding-inline: 3px; cursor: grab; min-width: 0; display: inline-flex; align-items: center; gap: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .app-statusbar .status-widget--fps { width: 88px; }
-.app-statusbar .status-widget--connection { width: 148px; font-weight: 600; }
+.app-statusbar .status-widget--connection { flex: 0 1 auto; width: max-content; min-width: 148px; max-width: 100%; font-weight: 600; }
+.status-connection-caption { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status-widget--connection > .anticon { flex: 0 0 auto; }
 .app-statusbar .status-widget--voltage, .app-statusbar .status-widget--current { width: 58px; justify-content: flex-end; }
 .app-statusbar .status-widget--temperature { width: 64px; justify-content: flex-end; }
 .app-statusbar .status-widget--timeline { width: 148px; }

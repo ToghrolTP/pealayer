@@ -13,6 +13,10 @@ groups reserve that width, bounded by the remaining space. Narrow bars retain
 truncation/tooltips and horizontal group scrolling; numeric telemetry slots and
 the trailing workspace anchor remain stable.
 
+The React footer had the same 148/252-pixel ceiling. Its connection widget now
+uses intrinsic content width and may shrink within the scrollable group. Only
+the caption ellipsizes under real space pressure; its icon cannot shrink.
+
 FPS used vertical line-box centering. Different ascenders, descenders and line
 gaps in native monospace faces put the painted glyphs off-center even when the
 layout box was centered. Status captions and FPS now center their visible glyph
@@ -67,6 +71,7 @@ physical pixels; the public images are the bottom 56 pixels, unretouched.
 | Compact two-sided widgets | `48fd59ce65022b039d28570288ff967bf52bca8e` | [Status bar](../screenshots/status-bar-compact.png) | PR #166 |
 | CraftUI surfaces | `9610177510c02f393c56bd024625c70b21442c99` | [Status bar](../screenshots/status-bar-craft.png) | [PR #216](https://github.com/ToghrolTP/pealayer/pull/216#issuecomment-6647068767) |
 | Native typography before repair | `d6feabf8c0956523aa5050bf978975cee8b6c431` | [Status bar](../screenshots/status-bar-native-before.png) | [PR #225](https://github.com/ToghrolTP/pealayer/pull/225#issuecomment-6647048566) |
+| Repaired native layout | `af070c1cd3161514ea035dc2da2ed0a46485f7f5` | [Status bar](../screenshots/status-bar-fixed.png) | PR #225 |
 
 The unused-space ellipsis is present in all three: the fixed slot predates the
 native font work. FPS typeface/baseline and the trailing workspace presentation
@@ -78,6 +83,11 @@ Executable SHA-256 provenance for the fresh historical builds:
 - Compact: `406fe80e7d890faf8464606471bfca8ce43a3ba3d4593450d7d73684750b0847`.
 - CraftUI: `59b265ac0fddac383e38c082392bb593283b5469f8a4a906c64f950e32ed8ee0`.
 
-Repaired-runtime evidence is tracked in the issue. Compilation and screenshots
-are not production deployment proof; the Cafe SSH endpoint refused connection
-during this pass.
+The repaired native package passed host-libmpv, utility, icon-resource and Web
+bundle/PWA checks, and reported the clean source revision through the API. The
+actual capture shows the full hardware caption and centered FPS using Cascadia
+Mono on this installation. The follow-up Web width repair is separately covered
+by the status-widget guardrail and TypeScript/bundle checks.
+
+Compilation and screenshots are not production deployment proof; the Cafe SSH
+endpoint refused connection during this pass.
