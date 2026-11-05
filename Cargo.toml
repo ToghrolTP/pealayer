@@ -16,7 +16,9 @@ pealayer-downloads = { path = "crates/download-core", features = ["ui"] }
 craft-ui = { git = "https://github.com/storytold/craft-libs.git", features = ["serde"] }
 # Upstream egui 0.37 port (anhosh/egui_dock#354), pinned for reproducible builds.
 egui_dock = { git = "https://github.com/crumblingstatue/egui_dock.git", rev = "4bd1dcd90c7a71ed3bf38159f49a2992fa653c2c", features = ["serde"] }
-fontique = "0.12.0"
+# Match eframe's dynamic Fontconfig backend: both Fontique versions share the
+# same fontconfig-sys instance, whose dlopen feature removes direct symbols.
+fontique = { version = "0.12.0", features = ["fontconfig-dlopen"] }
 eframe = { version = "0.37", features = ["glow", "persistence"] }
 egui-elegance = "=0.17.4"
 winit = { version = "0.30", default-features = false }
