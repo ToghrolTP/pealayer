@@ -42,6 +42,8 @@ try {
         assert.ok(await evaluate(`document.body.innerText.includes('PEALAYER_PCCONTROLLER_LIBRARY')`),'clicking info must reveal full details');
         assert.deepEqual(await evaluate(`JSON.parse(document.querySelector('#fixture-state').textContent)`),[],'info is read-only');
         assert.ok(await evaluate(`document.documentElement.scrollWidth<=innerWidth+1`),'diagnostic popover must fit phone width');
+        const popover=await evaluate(`(()=>{const rect=document.querySelector('.ant-popover').getBoundingClientRect();return {left:rect.left,right:rect.right,viewport:innerWidth};})()`);
+        assert.ok(popover.left>=0&&popover.right<=popover.viewport+1,`info popover clipped: ${JSON.stringify(popover)}`);
         if(process.env.PEALAYER_VERIFICATION_DIRECTORY && [390,1440].includes(width)){const image=await send('Page.captureScreenshot',{format:'png',clip:{x:0,y:0,width,height:640,scale:1}});await writeFile(path.join(process.env.PEALAYER_VERIFICATION_DIRECTORY,`hardware-connection-details-${width}${light?'-light':''}.png`),Buffer.from(image.data,'base64'));}
       }
       if(mode==='stale') {
