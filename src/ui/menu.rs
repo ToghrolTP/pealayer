@@ -270,7 +270,10 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         app.request_close_video();
                     }
 
-                    if ui.button(app.tr("Open Timeline Project...")).clicked() {
+                    if ui.button(format!("{} Projects, scenes and timelines…",crate::ui::icons::FOLDER_OPEN)).clicked() {
+                        crate::ui::projects::open(app,&ctx);ui.close();
+                    }
+                    if ui.button(app.tr("Open Timeline...")).clicked() {
                         ui.close();
                         if crate::peer::active(){crate::ui::peer_browser::open(&ctx,crate::ui::peer_browser::Purpose::TimelineOpen,None);}
                         else if let Some(path) = rfd::FileDialog::new()

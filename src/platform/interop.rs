@@ -122,6 +122,7 @@ impl LaunchReceiptCache {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum InteropCommand {
+    Documents { request: crate::projects::Request },
     #[serde(skip)]
     InspectAuthoring { request_id: u64 },
     RfControl { operation: String, #[serde(default)] params: Value },
@@ -1749,6 +1750,7 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
             .ok_or_else(|| format!("missing string parameter: {}", names.join(" or ")))
     };
     let command = match request.method.as_str() {
+        "pealayer.documents" => Some(InteropCommand::Documents { request: serde_json::from_value(request.params.clone()).map_err(|e|e.to_string())? }),
         "pealayer.process.status" => Some(InteropCommand::GetProcessStatus),
         "pealayer.process.quit" => Some(InteropCommand::QuitLocal),
         "pealayer.process.connect" => Some(InteropCommand::ConnectPeer {
@@ -2810,6 +2812,7 @@ fn dispatch_local_payload(
     expected_identity: &str,
     expected_session_id: Option<u32>,
 ) -> String {
+    if let Some(response) = crate::projects::rpc_payload(payload, false) { return response; }
     if let Some(response) = crate::downloads::rpc_payload(payload, false) { return response; }
     if let Some(response) = crate::server::discovery::rpc_payload(payload) { return response; }
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(payload)

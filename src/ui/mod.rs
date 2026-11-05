@@ -35,6 +35,7 @@ pub mod remote_location;
 pub mod rf;
 pub mod palette;
 pub mod preferences;
+pub mod projects;
 pub mod peer_browser;
 pub mod seek_preview;
 pub mod status_bar;

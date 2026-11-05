@@ -629,6 +629,7 @@ fn handle_websocket(stream: TcpStream, state: ControlState) {
 }
 
 fn handle_websocket_text(state: &ControlState, text: &str) -> Option<String> {
+    if let Some(response)=crate::projects::rpc_payload(text,true) {return Some(response);}
     if local_process_payload(text.as_bytes()) {
         if !crate::platform::interop::get_live_config().web_allow_control {
             return Some(crate::platform::interop::format_interop_error(None, -32003, "Web control permission is disabled"));
@@ -902,7 +903,7 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
             }
             crate::peer::gui_request(path,value)
         })),
-        ("POST", "/api/peer/files")=>peer_result(serde_json::from_slice(&request.body).map_err(|error|error.to_string()).and_then(|value|crate::peer::gui_request(path,value))),
+        ("POST", "/api/peer/files" | "/api/peer/documents")=>peer_result(serde_json::from_slice(&request.body).map_err(|error|error.to_string()).and_then(|value|crate::peer::gui_request(path,value))),
         ("POST", "/api/peer/open")=>peer_result(serde_json::from_slice(&request.body).map_err(|error|error.to_string()).and_then(|value|crate::peer::gui_request(path,value))),
         ("OPTIONS", _) => HttpResponse::text(204, "No Content", ""),
         ("GET", "/healthz") => HttpResponse::json(
@@ -1099,7 +1100,7 @@ fn denied_web_capability(
     path: &str,
     web: &crate::config::AppConfig,
 ) -> Option<&'static str> {
-    let configuration_route = matches!(
+    let configuration_route = path == "/api/peer/documents" || matches!(
         (method, path),
         ("GET", "/api/config") | ("GET", "/api/preferences") | ("POST", "/api/config") | ("GET", "/api/peer/session") | ("GET", "/api/peer/hardware") | ("POST", "/api/peer/config") | ("POST", "/api/peer/files")
     );
@@ -1112,7 +1113,7 @@ fn denied_web_capability(
             | ("POST", "/api/ipc")
             | ("POST", "/api/process/command")
     );
-    let file_route = path.starts_with("/api/fs/") || path.starts_with("/api/remote/") || matches!(path,"/api/peer/files"|"/api/peer/open")
+    let file_route = path.starts_with("/api/fs/") || path.starts_with("/api/remote/") || matches!(path,"/api/peer/files"|"/api/peer/open"|"/api/peer/documents")
         || matches!(path, "/api/player/frame" | "/api/player/seek-thumbnail"
             | "/api/player/taskbar-preview" | "/api/player/taskbar-preview.png" | "/api/player/taskbar-icons.png");
     let update_route = path.starts_with("/api/update/");
@@ -1198,6 +1199,10 @@ fn permission_denied(capability: &str) -> HttpResponse {
 
 fn remote_command_permission(command: &crate::platform::interop::InteropCommand) -> Option<&'static str> {
     use crate::platform::interop::InteropCommand;
+    if matches!(command,InteropCommand::Documents {..}) {
+        let config=crate::platform::interop::get_live_config();
+        if !config.web_allow_file_access || !config.web_allow_configuration || !config.web_allow_control {return Some("Document file, configuration or control permission is disabled");}
+    }
     if crate::platform::interop::get_live_config().web_allow_file_access { return None; }
     match command {
         InteropCommand::BrowseRemote { .. } | InteropCommand::SelectRemote { .. } | InteropCommand::Open { .. } => Some("Web host file access permission is disabled"),
@@ -1342,6 +1347,7 @@ fn pwa_manifest_response() -> HttpResponse {
 }
 
 fn json_rpc_response(body: &[u8], state: &ControlState) -> HttpResponse {
+    if let Some(response)=crate::projects::rpc_payload(&String::from_utf8_lossy(body),true) {return HttpResponse::json(200,"OK",response);}
     if let Some(response) = crate::downloads::rpc_payload(&String::from_utf8_lossy(body), true) {
         return HttpResponse::json(200, "OK", response);
     }
@@ -1554,6 +1560,7 @@ fn parse_player_command(body: &[u8]) -> Result<crate::platform::interop::Interop
 }
 
 fn dispatch_ipc_payload(state: &ControlState, payload: &str) -> String {
+    if let Some(response)=crate::projects::rpc_payload(payload,true) {return response;}
     if let Some(response) = discovery::rpc_payload(payload) { return response; }
     if let Some(response) = crate::downloads::rpc_payload(payload, true) { return response; }
     use crate::platform::interop::InteropCommand;

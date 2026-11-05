@@ -1034,6 +1034,7 @@ mod seekbar_marker_tests {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct AppConfig {
+    pub project_discovery: crate::projects::Discovery,
     pub external_mpv: crate::mpv::external::Settings,
     pub volume: f64,
     pub is_muted: bool,
@@ -1241,6 +1242,7 @@ pub struct EffectCueSession {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            project_discovery: crate::projects::Discovery::default(),
             external_mpv: crate::mpv::external::Settings::default(),
             volume: 100.0,
             is_muted: false,
@@ -2114,6 +2116,9 @@ impl AppConfig {
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        if self.project_discovery.folders.len()>32768 || self.project_discovery.associations.len()>1000 {
+            return Err("Project discovery exceeds folder or remembered association limits".into());
+        }
         self.external_mpv.validate()?;
         if self.audio_effects.len() > 256 { return Err("At most 256 audio effects may be saved".into()); }
         let mut audio_ids = std::collections::HashSet::new();
@@ -2416,7 +2421,7 @@ pub fn parse_rgb_hex(value: &str) -> Option<[u8; 3]> {
 static CONFIG_TEMP_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 #[cfg(target_os = "windows")]
-fn replace_file(source: &std::path::Path, destination: &std::path::Path) -> Result<(), String> {
+pub(crate) fn replace_file(source: &std::path::Path, destination: &std::path::Path) -> Result<(), String> {
     use std::os::windows::ffi::OsStrExt;
     use windows::Win32::Storage::FileSystem::{
         MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
@@ -2444,7 +2449,7 @@ fn replace_file(source: &std::path::Path, destination: &std::path::Path) -> Resu
 }
 
 #[cfg(not(target_os = "windows"))]
-fn replace_file(source: &std::path::Path, destination: &std::path::Path) -> Result<(), String> {
+pub(crate) fn replace_file(source: &std::path::Path, destination: &std::path::Path) -> Result<(), String> {
     std::fs::rename(source, destination)
         .map_err(|error| format!("replace configuration {}: {error}", destination.display()))
 }

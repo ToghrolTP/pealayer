@@ -624,6 +624,7 @@ pub enum PendingTimelineCloseAction {
 }
 
 pub struct PealayerApp {
+    pub(crate) project: crate::app_projects::ProjectSession,
     pub(crate) native_service_policy: NativeServicePolicy,
     pub(crate) web_only: bool,
     pub(crate) app_name: String,
@@ -1219,6 +1220,7 @@ impl eframe::App for PealayerApp {
 
         if crate::peer::active(){crate::peer::mirror(||self.process_events());}else{self.process_events();}
         if crate::peer::active(){self.poll_peer_session(ctx);}
+        self.poll_project_discovery(ctx);
         self.sync_window_level(ctx);
         self.tick_virtual_board_kinematics(ctx);
 
@@ -2105,6 +2107,7 @@ impl eframe::App for PealayerApp {
                 crate::ui::audio::draw_settings_dialog(self, ui);
                 crate::ui::preferences::draw(self, ui);
                 crate::ui::peer_browser::draw(self,ui);
+                crate::ui::projects::draw(self, ui);
                 if let Some(request) = crate::ui::peer_browser::draw_connection(ui) {
                     self.apply_interop_command(ui.ctx(), crate::platform::interop::InteropCommand::ConnectPeer { request }, "ui");
                 }
@@ -4326,6 +4329,12 @@ impl PealayerApp {
         source: &str,
     ) {
         use crate::platform::interop::InteropCommand;
+        if let InteropCommand::Documents {request}=&command {
+            if let Some(client)=crate::peer::client() {
+                if let Err(error)=client.queue("/api/peer/documents",serde_json::to_value(request).unwrap()) {self.show_error=Some(error);}
+            } else if let Err(error)=self.document_request(ctx,request.clone()) {self.show_error=Some(error);}
+            return;
+        }
         if crate::peer::active() && let InteropCommand::Launch{request}=&command {
             if let Some(target)=&request.target{self.load_media_target(target);}
             if let Some(value)=request.volume{self.apply_interop_command(ctx,InteropCommand::SetVolume{value},source);}
@@ -5047,6 +5056,7 @@ impl PealayerApp {
                 self.set_emergency_stop(active);
                 return;
             }
+            InteropCommand::Documents { .. } => unreachable!("handled before session forwarding"),
             InteropCommand::InvokeHardwareAction { action_id } => {
                 let Some(capabilities) = self
                     .advertised_hardware()
@@ -5613,6 +5623,7 @@ impl PealayerApp {
                         // configured Simple-workspace window geometry.
                         self.pending_video_aspect_resize = true;
                     }
+                    self.finish_project_media_load();
                     if let Some(position) = self.pending_resume_position.take().filter(|_|!crate::peer::active()) {
                         if self.is_seekable {
                             let target = if self.duration > 0.0 {
@@ -6951,6 +6962,7 @@ impl PealayerApp {
     }
 
     pub fn load_video_file(&mut self, path: std::path::PathBuf) {
+        if self.discover_media_project(&path.to_string_lossy()) { return; }
         if self.is_timeline_dirty() {
             self.pending_timeline_close_action = Some(PendingTimelineCloseAction::SwitchMedia(path));
             return;
@@ -7089,6 +7101,7 @@ impl PealayerApp {
     }
 
     pub fn load_url(&mut self, url: &str) {
+        if self.discover_media_project(url) { return; }
         if crate::mpv::external::active() && !crate::mpv::external::status().connected {
             self.load_media_target(url); return;
         }
@@ -7955,6 +7968,7 @@ impl PealayerApp {
     fn apply_peer_request(&mut self,ctx:&egui::Context,path:&str,value:serde_json::Value)->Result<serde_json::Value,String>{
         if crate::peer::active(){return Err("Only the authoritative instance can apply session changes".into())}
         match path {
+            "/api/peer/documents" => return self.document_request(ctx, serde_json::from_value(value).map_err(|e|format!("Invalid document request: {e}"))?),
             "/api/peer/open"=>{
                 let target=value.get("target").and_then(serde_json::Value::as_str).ok_or("Media target is required")?;
                 if target.is_empty() || target.len()>32768{return Err("Invalid media target".into())}
@@ -9834,6 +9848,7 @@ impl Default for PealayerApp {
             external_catalog_revision: 0,
             external_seek_revision: 0,
             pending_external_media: None,
+            project: crate::app_projects::ProjectSession::default(),
             pending_external_pause: false,
             mpv_client,
             native_seek_client: Arc::clone(&native_seek_client),

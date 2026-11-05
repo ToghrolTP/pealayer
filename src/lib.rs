@@ -16,6 +16,8 @@ pub mod messaging;
 pub mod mpv;
 pub mod network;
 pub mod peer;
+pub mod projects;
+mod app_projects;
 pub mod performance;
 pub mod process_control;
 pub mod platform;

@@ -636,6 +636,11 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             control.description = Some("Applied in order to every text subtitle");
             control
         },
+        PreferenceControl::boolean("project_discovery.enabled", "playback", "Associated projects", "Load the project associated with opened media"),
+        PreferenceControl::boolean("project_discovery.remembered", "playback", "Associated projects", "Search remembered project associations"),
+        PreferenceControl::boolean("project_discovery.beside_media", "playback", "Associated projects", "Search beside local media (.pealayer.json)"),
+        PreferenceControl::boolean("project_discovery.search_paths", "playback", "Associated projects", "Search configured project folders"),
+        PreferenceControl::text("project_discovery.folders", "playback", "Associated projects", "Project folders (one per line)", "Folder paths"),
         PreferenceControl::boolean(
             "restore_last_media_on_startup",
             "playback",

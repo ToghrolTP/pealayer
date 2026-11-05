@@ -11,6 +11,7 @@ import {
   SettingOutlined,
 } from '@ant-design/icons';
 import { HeaderBar } from './components/HeaderBar';
+import { ProjectDialog } from './components/ProjectDialog';
 import { ApplicationStatusBar, StatusBarVisibility } from './components/ApplicationStatusBar';
 import { SharedToasts } from './components/SharedToasts';
 import { PublishingAuthority } from './components/PublishingAuthority';
@@ -432,6 +433,7 @@ const App: React.FC = () => {
     }
   }, [connectionTarget, runtime?.websocketPath]);
 
+  const [projectsOpen, setProjectsOpen] = React.useState(false);
   const apiBaseUrl = (() => {
     try {
       const url = new URL(resolveWebSocketUrl());
@@ -685,6 +687,7 @@ const App: React.FC = () => {
       <SharedToasts snapshot={state.messages} connected={connected} locale={runtime?.locale || 'en'} dismiss={id => sendCmd('pealayer.toast.dismiss', { id })} invoke={(id, created_at_ms, action_id) => sendCmd('pealayer.toast.invoke', { id, created_at_ms, action_id })} />
       <PublishingAuthority state={state} sendCmd={sendCmd} locale={runtime?.locale ?? 'en'} />
       <RemoteLocationDialog state={state.remote_browser} connected={connected} base={apiBaseUrl} sendCmd={sendCmd} autoInspect={appConfig?.open_url_fetch_remote_info !== false} />
+      {projectsOpen && <ProjectDialog base={apiBaseUrl} locale={runtime?.locale || 'en'} onClose={() => setProjectsOpen(false)} />}
       <Layout className="app-shell">
         <HeaderBar
           collapsed={collapsed}
@@ -698,6 +701,7 @@ const App: React.FC = () => {
           onConnectionTargetChange={changeConnectionTarget}
           platform={platform}
           onBrowseRemote={() => sendCmd('pealayer.remote.browse', { target: '' })}
+          onProjects={() => setProjectsOpen(true)}
         />
 
         {!connected && (

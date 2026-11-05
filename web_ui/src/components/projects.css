@@ -1,0 +1,12 @@
+.project-dialog { max-width: calc(100vw - 24px); }
+.project-dialog .ant-modal-body { max-height: 72dvh; overflow-y: auto; overscroll-behavior: contain; }
+.project-dialog .ant-flex > .ant-input { min-width: 0; flex: 1; }
+.project-dialog .ant-btn { display: inline-flex; align-items: center; justify-content: center; }
+.project-dialog__actions { margin-bottom: 16px; }
+.project-dialog__actions input { max-width: 160px; }
+.project-dialog__component { padding: 12px 0; border-bottom: 1px solid var(--ant-color-border-secondary); display: grid; gap: 8px; }
+.project-dialog__media-grid { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
+.project-dialog__media-grid .ant-input-number { width: 100%; }
+.project-dialog__scene-row { padding: 8px 0; border-bottom: 1px solid var(--ant-color-border-secondary); }
+.project-dialog .ant-collapse { margin: 16px 0; }
+@media (max-width: 560px) { .project-dialog__media-grid { grid-template-columns: 1fr; gap: 0; } .project-dialog .ant-modal-footer .ant-btn { flex: 1 1 45%; } }
