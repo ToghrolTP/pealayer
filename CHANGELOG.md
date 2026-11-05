@@ -56,6 +56,10 @@ retroactively attributed to an older download.
 
 ### 🎞️ Timeline and effects
 
+- Repeated steps and whole effects show linked, dimmed cue projections by
+  default. Select any occurrence, drag spacing, resize its shared length or
+  edit repeat counts from its menu. Escape cancels a projection drag without
+  changing the source or closing its containing Web designer.
 - Create direct hardware cues by track interaction or shortcut; distinguish
   move-only value markers and recorded clips from resizable holds and PWM ramps.
 - Resize streamed lighting's active window without changing its cycle speed;

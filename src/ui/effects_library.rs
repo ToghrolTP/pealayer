@@ -935,6 +935,29 @@ struct SequenceCueDragState {
     effect_period_us: u64,
 }
 
+#[derive(Clone)]
+struct SequenceRepeatDragSnapshot {
+    index: usize,
+    step: crate::four_d::controller::HardwareMacroStep,
+    effect_interval_ms: u32,
+}
+
+fn cancel_repeat_drag(ui: &mut egui::Ui, draft: &mut ControllerEffectDraft, drag_id: egui::Id) {
+    let snapshot = ui.data_mut(|data| {
+        data.remove::<SequenceCueDragState>(drag_id);
+        let snapshot = data.get_temp::<SequenceRepeatDragSnapshot>(drag_id.with("repeat-snapshot"));
+        data.remove::<SequenceRepeatDragSnapshot>(drag_id.with("repeat-snapshot"));
+        snapshot
+    });
+    if let Some(snapshot) = snapshot {
+        if let Some(step) = draft.steps.get_mut(snapshot.index) {
+            *step = snapshot.step;
+        }
+        draft.repeat_interval_ms = snapshot.effect_interval_ms;
+    }
+    ui.ctx().stop_dragging();
+}
+
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 struct SequenceCueSelection {
     indices: std::collections::BTreeSet<usize>,
@@ -1573,6 +1596,10 @@ fn draw_sequence_timeline(
     let quantize_id = egui::Id::new((state_prefix.clone(), "quantize"));
     let snap_id = egui::Id::new((state_prefix.clone(), "snap"));
     let drag_id = egui::Id::new((state_prefix.clone(), "drag"));
+    let repeat_drag_active = ui.data(|data| data.get_temp::<SequenceRepeatDragSnapshot>(drag_id.with("repeat-snapshot")).is_some());
+    if repeat_drag_active && ui.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)) {
+        cancel_repeat_drag(ui, draft, drag_id);
+    }
     let selection_id = sequence_selection_id(draft);
     let mut selection = ui.data_mut(|data| data.get_temp::<SequenceCueSelection>(selection_id))
         .unwrap_or_else(|| SequenceCueSelection::single(*selected_index));
@@ -1607,7 +1634,8 @@ fn draw_sequence_timeline(
                 if ui.checkbox(&mut show_repeats, designer_tr(ui, "Show repeat ghosts"))
                     .on_hover_text(designer_tr(ui, "Repeated cues are linked to their original; hiding them does not disable repetition"))
                     .changed() {
-                    ui.data_mut(|data| { data.insert_persisted(ghosts_id, show_repeats); data.remove::<SequenceCueDragState>(drag_id); });
+                    cancel_repeat_drag(ui, draft, drag_id);
+                    ui.data_mut(|data| data.insert_persisted(ghosts_id, show_repeats));
                 }
                 let all_button = ui.add_enabled(!draft.steps.is_empty(), egui::Button::new(designer_tr(ui, "Select all cues")))
                     .on_hover_text("Ctrl+A");
@@ -1917,6 +1945,13 @@ fn draw_sequence_timeline(
                                 response.request_focus();
                             }
                             if response.drag_started_by(egui::PointerButton::Primary) {
+                                if ghost {
+                                    ui.data_mut(|data| data.insert_temp(drag_id.with("repeat-snapshot"), SequenceRepeatDragSnapshot {
+                                        index,
+                                        step: source.clone(),
+                                        effect_interval_ms: draft.repeat_interval_ms,
+                                    }));
+                                }
                                 *selected_index = index;
                                 if !selection.indices.contains(&index) { selection = SequenceCueSelection::single(index); }
                                 selection.primary = index;
@@ -2023,7 +2058,10 @@ fn draw_sequence_timeline(
                                 }
                             }
                             if response.drag_stopped() {
-                                ui.data_mut(|data| data.remove::<SequenceCueDragState>(drag_id));
+                                ui.data_mut(|data| {
+                                    data.remove::<SequenceCueDragState>(drag_id);
+                                    data.remove::<SequenceRepeatDragSnapshot>(drag_id.with("repeat-snapshot"));
+                                });
                             }
                             if selected && !ghost {
                                 let reveal_id = egui::Id::new((state_prefix.clone(), "reveal-cue"));
@@ -4767,6 +4805,15 @@ mod tests {
             let mut expected = original.clone();
             if whole_effect { assert_eq!(draft.repeat_interval_ms, 3_900); } else { expected[1].repeat_interval_ms = Some(1_200); }
             assert_eq!(draft.steps, expected, "dragging a proxy edits its source, never materializes cues");
+            let expected_interval = draft.repeat_interval_ms;
+            render(vec![egui::Event::PointerMoved(moved), egui::Event::PointerButton { pos: moved, button: egui::PointerButton::Primary, pressed: true, modifiers: egui::Modifiers::NONE }], &mut draft, &mut selected);
+            let cancelled = moved + egui::vec2(45.0, 0.0);
+            render(vec![egui::Event::PointerMoved(cancelled)], &mut draft, &mut selected);
+            assert!(draft.steps != expected || draft.repeat_interval_ms != expected_interval, "exercise a real changed repeat preview before cancelling");
+            render(vec![egui::Event::Key { key: egui::Key::Escape, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }], &mut draft, &mut selected);
+            render(vec![egui::Event::PointerButton { pos: cancelled, button: egui::PointerButton::Primary, pressed: false, modifiers: egui::Modifiers::NONE }], &mut draft, &mut selected);
+            assert_eq!(draft.steps, expected, "Escape restores the exact source, including sub-millisecond placement");
+            assert_eq!(draft.repeat_interval_ms, expected_interval, "Escape restores whole-effect spacing and release cannot recommit");
             context.data_mut(|data| data.insert_persisted(egui::Id::new("effect-designer-show-repeat-ghosts"), false));
             let output = render(vec![], &mut draft, &mut selected);
             assert!(output.shapes.iter().all(|shape| locate(&shape.shape, "↻").is_none()), "the view toggle hides all repeat ghosts");
