@@ -27,6 +27,8 @@
 - Never invoke egui Context accessors, widgets, or repaint callbacks from inside input/data/memory/output transactions; the context lock is non-reentrant. Snapshot inputs first, then perform the narrow transaction.
 # Continuity and native Windows assets
 
+- A workspace-renderer migration or selectable adapter must preserve application-owned chrome and interactions, not just serialized panels. egui Dock retains the live palette, Phosphor disclosure carets, focused-panel outline, tab and empty-header menus, collapse/reveal, floating layers and modal ownership. Keep the rendered pointer/paint regressions in `ui::egui_dock::tests`; layout round-trips alone are not UI acceptance. See `docs/verification/egui-dock-restoration.md`.
+
 - Modal corner-close controls must use `ui::dialog::close_button`, whose paint, hit target and focus outline share an exact square independent of text padding. Use `confirmation_modal` for unsaved-change prompts; do not reintroduce stock text-sized × buttons. Keep geometry and non-destructive Close/Escape regression coverage across fonts, display scales and interaction states.
 
 - On Windows, Pealayer-owned source, caches, staging and runtime files belong under `%LOCALAPPDATA%\Programs\Pealayer`. The canonical source is `source\Pealayer`, the shared Cargo cache is `build-cache\cargo-target`, and the running executable is `bin\pealayer.exe`. `C:\development` is reserved for development tools, not Pealayer checkouts or build artifacts. Use the shared Windows path resolver rather than inventing another checkout/cache path; preserve existing work when relocating it.
