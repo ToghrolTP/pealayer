@@ -21,6 +21,10 @@ retroactively attributed to an older download.
 
 ### 🎛️ Hardware controls
 
+- Hardware connection cards use a short, actionable explanation by default.
+  Hover or click the circled information button for the original technical
+  diagnostic and a copy action, in native and Web UI.
+
 - PWM indicators and On/Off selection share confirmed power state. Unknown or
   unavailable samples stay neutral; queued requests no longer fake PWM status.
 

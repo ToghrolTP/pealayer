@@ -24,8 +24,8 @@ try {
   await send('Page.enable');await send('Runtime.enable');
   for(const light of [false,true]) {for(const width of [390,768,1440]) {
     await send('Emulation.setDeviceMetricsOverride',{width,height:850,deviceScaleFactor:1,mobile:false});
-    for(const [mode,title] of [['stale','Hardware Disconnected'],['connecting','Connecting to PCController…'],['catalog','Loading hardware…'],['board','No board connected']]) {
-      await send('Page.navigate',{url:`http://127.0.0.1:18191/scripts/hardware-monitor-fixture.html?state=${mode}${light?'&light':''}`});
+    for(const [mode,title] of [['stale','Hardware Disconnected'],['connecting','Connecting to PCController…'],['catalog','Loading hardware…'],['board','No board connected'],['error','Hardware Disconnected']]) {
+      await send('Page.navigate',{url:`http://127.0.0.1:18191/scripts/hardware-monitor-fixture.html?state=${mode}${mode==='error'?'&error':''}${light?'&light':''}`});
       let ready=false;
       for(let n=0;n<100;n++){if(await evaluate(`document.querySelector('.hardware-empty-state h4')?.textContent === ${JSON.stringify(title)}`)){ready=true;break;}await sleep(100);}
       assert.ok(ready,`missing ${title} at ${width}: ${await evaluate('document.body.innerText.slice(0,1500)')} / ${errors.join('; ')}`);
@@ -33,6 +33,17 @@ try {
       const result=await evaluate(`({cards:document.querySelectorAll('.ant-card').length,width:document.documentElement.scrollWidth,viewport:innerWidth,commands:JSON.parse(document.querySelector('#fixture-state').textContent),rf:document.body.textContent.includes('RF remote')})`);
       assert.equal(result.cards,1,'unavailable monitor must not render cached board or RF cards');
       assert.ok(result.width<=result.viewport+1,`${mode} overflowed at ${width}`);assert.deepEqual(result.commands,[],'rendering must not connect, refresh or actuate');assert.equal(result.rf,false);
+      if(mode==='error') {
+        assert.equal(await evaluate(`document.body.innerText.includes('PEALAYER_PCCONTROLLER_LIBRARY')`),false,'raw diagnostic must be hidden by default');
+        assert.ok(await evaluate(`document.querySelector('[role="status"]').textContent.startsWith("Couldn't connect to PCController.")`));
+        if(process.env.PEALAYER_VERIFICATION_DIRECTORY && [390,1440].includes(width)){const image=await send('Page.captureScreenshot',{format:'png',clip:{x:0,y:0,width,height:440,scale:1}});await writeFile(path.join(process.env.PEALAYER_VERIFICATION_DIRECTORY,`hardware-connection-hint-${width}${light?'-light':''}.png`),Buffer.from(image.data,'base64'));}
+        await evaluate(`document.querySelector('button[aria-label="Connection details"]').click()`);
+        await sleep(200);
+        assert.ok(await evaluate(`document.body.innerText.includes('PEALAYER_PCCONTROLLER_LIBRARY')`),'clicking info must reveal full details');
+        assert.deepEqual(await evaluate(`JSON.parse(document.querySelector('#fixture-state').textContent)`),[],'info is read-only');
+        assert.ok(await evaluate(`document.documentElement.scrollWidth<=innerWidth+1`),'diagnostic popover must fit phone width');
+        if(process.env.PEALAYER_VERIFICATION_DIRECTORY && [390,1440].includes(width)){const image=await send('Page.captureScreenshot',{format:'png',clip:{x:0,y:0,width,height:640,scale:1}});await writeFile(path.join(process.env.PEALAYER_VERIFICATION_DIRECTORY,`hardware-connection-details-${width}${light?'-light':''}.png`),Buffer.from(image.data,'base64'));}
+      }
       if(mode==='stale') {
         if(process.env.PEALAYER_VERIFICATION_DIRECTORY){const image=await send('Page.captureScreenshot',{format:'png',clip:{x:0,y:0,width,height:340,scale:1}});await writeFile(path.join(process.env.PEALAYER_VERIFICATION_DIRECTORY,`hardware-monitor-web-${width}${light?'-light':''}.png`),Buffer.from(image.data,'base64'));}
         await evaluate(`Array.from(document.querySelectorAll('button')).find(button=>button.textContent.trim()==='Connect').click()`);
@@ -40,7 +51,7 @@ try {
       }
     }
   }}
-  assert.deepEqual(errors,[]);console.log('Hardware Monitor browser: four unavailable states, stale RF exclusion, user-only Connect and 390/768/1440 widths passed');
+  assert.deepEqual(errors,[]);console.log('Hardware Monitor browser: five unavailable states, info disclosure, stale RF exclusion, user-only Connect and 390/768/1440 widths passed');
   await send('Browser.close').catch(()=>{});
 } finally {
   socket?.close();

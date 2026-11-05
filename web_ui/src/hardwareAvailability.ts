@@ -35,14 +35,17 @@ export function hardwareMonitorEmpty(state: PlayerState) {
   if (!state.controller_connected) {
     const progress = Boolean(state.hardware_connection_requested);
     return { title: progress ? 'Connecting to PCController…' : 'Hardware Disconnected',
-      detail: state.hardware_error || (progress ? 'Waiting for the configured PCController connection.' : 'Connect to PCController to discover live board controls.'),
+      detail: state.hardware_error?.trim() ? "Couldn't connect to PCController. Check that it is running, then try again." : (progress ? 'Waiting for the configured PCController connection.' : 'Connect to PCController to discover live board controls.'),
+      diagnostics: state.hardware_error?.trim() || null,
       progress, primary: !progress && Boolean(state.hardware_endpoint?.trim()) ? 'connect' as const : null };
   }
   if (!state.hardware_details) return { title: state.hardware_error ? 'Hardware catalog unavailable' : 'Loading hardware…',
-    detail: state.hardware_error || 'Waiting for PCController to advertise the board capabilities.',
+    detail: state.hardware_error?.trim() ? "Couldn't load the hardware controls. Try refreshing the connection." : 'Waiting for PCController to advertise the board capabilities.',
+    diagnostics: state.hardware_error?.trim() || null,
     progress: !state.hardware_error, primary: 'refresh' as const };
   const programming = ['programming', 'programming_latched', 'programming_recovery'].includes(availability);
   return { title: programming ? hardwareLabels[availability] : 'No board connected',
-    detail: state.hardware_error || (programming ? 'Board controls are unavailable while programming or recovery is in progress.' : 'PCController is reachable, but no board is connected. Connect the board and check its USB cable, power, and port.'),
+    detail: programming ? 'Board controls are unavailable while programming or recovery is in progress.' : 'PCController is reachable, but no board is connected. Connect the board and check its USB cable, power, and port.',
+    diagnostics: state.hardware_error?.trim() || null,
     progress: programming, primary: 'refresh' as const };
 }

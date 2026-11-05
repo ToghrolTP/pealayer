@@ -18,6 +18,7 @@ import {
   Input,
   InputNumber,
   Modal,
+  Popover,
   Segmented,
   Select,
   Slider,
@@ -42,6 +43,7 @@ import {
   PlusOutlined,
   EyeInvisibleOutlined,
   EyeOutlined,
+  InfoCircleOutlined,
   LockOutlined,
   PlayCircleOutlined,
   PushpinOutlined,
@@ -458,7 +460,13 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
       <header className="surface-page__header"><Typography.Title level={2}>{tr(locale, 'Hardware Monitor')}</Typography.Title></header>
       <Card className="surface-card hardware-empty-state">
         <div className="hardware-empty-state__heading"><span className="hardware-empty-state__icon">{empty.progress ? <ReloadOutlined spin /> : <DisconnectOutlined />}</span><Typography.Title level={4}>{tr(locale, empty.title)}</Typography.Title></div>
-        <Typography.Paragraph type="secondary" role="status" aria-live="polite">{tr(locale, empty.detail)}</Typography.Paragraph>
+        <div className="hardware-empty-state__message">
+          <Typography.Paragraph type="secondary" role="status" aria-live="polite">{tr(locale, empty.detail)}</Typography.Paragraph>
+          {empty.diagnostics && <Popover title={tr(locale, 'Connection details')} trigger={['hover', 'click']} destroyOnHidden
+            content={<Typography.Paragraph copyable style={{ maxWidth: 'min(440px, calc(100vw - 64px))', maxHeight: 240, overflow: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', margin: 0 }}>{empty.diagnostics}</Typography.Paragraph>}>
+            <Button type="text" shape="circle" size="small" icon={<InfoCircleOutlined />} aria-label={tr(locale, 'Connection details')} />
+          </Popover>}
+        </div>
         <Space wrap>
           {empty.primary === 'connect' && <Button icon={<UsbOutlined />} onClick={() => sendCmd('pealayer.hardware.connection', { connected: true })}>{tr(locale, 'Connect')}</Button>}
           {empty.primary === 'refresh' && <Button icon={<ReloadOutlined />} onClick={() => sendCmd('hardware.catalog.refresh')}>{tr(locale, 'Refresh')}</Button>}

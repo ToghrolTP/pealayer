@@ -17,12 +17,37 @@ pub(crate) enum Action {
     Preferences,
 }
 
+#[derive(Clone, Copy)]
+pub(crate) struct ConnectionHint<'a> {
+    pub title: &'a str,
+    pub copy: &'a str,
+    pub detail: &'a str,
+}
+
+fn connection_hint_contents(ui: &mut egui::Ui, hint: ConnectionHint<'_>) {
+    ui.set_max_width((ui.ctx().viewport_rect().width() - 40.0).clamp(120.0, 440.0));
+    ui.strong(hint.title);
+    ui.separator();
+    egui::ScrollArea::vertical()
+        .max_height(240.0)
+        .show(ui, |ui| {
+            ui.add(egui::Label::new(hint.detail).wrap().selectable(true));
+        });
+    if ui
+        .button(format!("{} {}", crate::ui::icons::COPY, hint.copy))
+        .clicked()
+    {
+        ui.ctx().copy_text(hint.detail.to_owned());
+    }
+}
+
 /// Pure, palette-adapted empty-state view. Opening it never starts a connection,
 /// refreshes the board, changes authority or sends an RF/output command.
 pub(crate) fn empty_card(
     ui: &mut egui::Ui,
     title: &str,
     detail: &str,
+    diagnostics: Option<ConnectionHint<'_>>,
     progress: bool,
     primary: Option<(&str, Action)>,
     preferences: &str,
@@ -59,7 +84,30 @@ pub(crate) fn empty_card(
                 ui.add(egui::Label::new(egui::RichText::new(title).size(17.0).strong()).wrap());
             });
             ui.add_space(8.0);
-            ui.add(egui::Label::new(egui::RichText::new(detail).weak()).wrap());
+            ui.horizontal_top(|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                    if let Some(hint) = diagnostics {
+                        let response = ui
+                            .menu_button(crate::ui::icons::INFO, |ui| {
+                                connection_hint_contents(ui, hint)
+                            })
+                            .response;
+                        response.widget_info(|| {
+                            egui::WidgetInfo::labeled(
+                                egui::WidgetType::Button,
+                                response.enabled(),
+                                hint.title,
+                            )
+                        });
+                        response.on_hover_ui(|ui| connection_hint_contents(ui, hint));
+                    }
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(detail).weak())
+                            .halign(egui::Align::Min)
+                            .wrap(),
+                    );
+                });
+            });
             ui.add_space(12.0);
             ui.horizontal_wrapped(|ui| {
                 if let Some((label, value)) = primary {
@@ -106,16 +154,21 @@ pub(crate) fn draw_unavailable(
             } else {
                 "Hardware Disconnected"
             }),
-            app.connection_notice
-                .clone()
-                .filter(|notice| !notice.trim().is_empty())
-                .unwrap_or_else(|| {
-                    app.tr(if requested {
-                        "Waiting for the configured PCController connection."
-                    } else {
-                        "Connect to PCController to discover live board controls."
-                    })
-                }),
+            if app
+                .connection_notice
+                .as_ref()
+                .is_some_and(|notice| !notice.trim().is_empty())
+            {
+                app.tr(
+                    "Couldn't connect to PCController. Check that it is running, then try again.",
+                )
+            } else {
+                app.tr(if requested {
+                    "Waiting for the configured PCController connection."
+                } else {
+                    "Connect to PCController to discover live board controls."
+                })
+            },
             requested,
             (!requested && !app.serial_port.trim().is_empty())
                 .then(|| (app.tr("Connect"), Action::Connect)),
@@ -127,9 +180,15 @@ pub(crate) fn draw_unavailable(
             } else {
                 "Loading hardware…"
             }),
-            app.connection_notice.clone().unwrap_or_else(|| {
+            if app
+                .connection_notice
+                .as_ref()
+                .is_some_and(|notice| !notice.trim().is_empty())
+            {
+                app.tr("Couldn't load the hardware controls. Try refreshing the connection.")
+            } else {
                 app.tr("Waiting for PCController to advertise the board capabilities.")
-            }),
+            },
             app.connection_notice.is_none(),
             Some((app.tr("Refresh"), Action::Refresh)),
         )
@@ -151,17 +210,34 @@ pub(crate) fn draw_unavailable(
                     "Board controls are unavailable while programming or recovery is in progress.",
                 )
             } else {
-                app.hardware_unavailable_detail(caps)
+                app.tr("PCController is reachable, but no board is connected. Connect the board and check its USB cable, power, and port.")
             },
             programming,
             Some((app.tr("Refresh"), Action::Refresh)),
         )
     };
+    // Keep original diagnostics intact, but never use them as default card copy.
+    // State, not message-string matching, determines the plain-language summary.
+    let diagnostic = app
+        .connection_notice
+        .clone()
+        .filter(|notice| !notice.trim().is_empty())
+        .or_else(|| {
+            (app.is_connected && caps.is_some()).then(|| app.hardware_unavailable_detail(caps))
+        })
+        .filter(|notice| notice != &detail);
+    let hint_title = app.tr("Connection details");
+    let copy = app.tr("Copy");
     let preferences = app.tr("Hardware preferences");
     let response = empty_card(
         ui,
         &title,
         &detail,
+        diagnostic.as_deref().map(|detail| ConnectionHint {
+            title: &hint_title,
+            copy: &copy,
+            detail,
+        }),
         progress,
         primary
             .as_ref()
@@ -190,6 +266,109 @@ pub(crate) fn draw_unavailable(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const DIAGNOSTIC: &str = "embedded PCController unavailable (no packaged PCController library found; set PEALAYER_PCCONTROLLER_LIBRARY); external coordinator unavailable (connection timed out)";
+    fn has_text(output: &egui::FullOutput, value: &str) -> bool {
+        output.shapes.iter().any(|shape| {
+            matches!(&shape.shape, egui::Shape::Text(text)
+            if text.galley.text().contains(value))
+        })
+    }
+    fn render(
+        ctx: &egui::Context,
+        app: &mut crate::app::PealayerApp,
+        width: f32,
+        events: Vec<egui::Event>,
+    ) -> egui::FullOutput {
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(width, 700.0),
+                )),
+                events,
+                ..Default::default()
+            },
+            |ui| draw_unavailable(app, ui, None),
+        );
+        output.textures_delta.clear();
+        output
+    }
+    #[test]
+    fn connection_errors_are_plain_by_default_and_the_info_control_reveals_full_details() {
+        for width in [220.0, 320.0, 640.0] {
+            for light in [false, true] {
+                let ctx = egui::Context::default();
+                ctx.set_visuals(if light {
+                    egui::Visuals::light()
+                } else {
+                    egui::Visuals::dark()
+                });
+                crate::ui::i18n::configure_ui_fonts(&ctx, false);
+                let mut app = crate::app::PealayerApp::default();
+                app.is_connected = false;
+                app.connection_notice = Some(DIAGNOSTIC.into());
+                let _ = render(&ctx, &mut app, width, vec![]);
+                let output = render(&ctx, &mut app, width, vec![]);
+                assert!(has_text(&output, "Couldn't connect to PCController."));
+                assert!(!has_text(&output, "PEALAYER_PCCONTROLLER_LIBRARY"));
+                let icon = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == crate::ui::icons::INFO => {
+                            Some(text.pos + text.galley.mesh_bounds.center().to_vec2())
+                        }
+                        _ => None,
+                    })
+                    .expect("circled information control must be visible");
+                for pressed in [true, false] {
+                    let _ = render(
+                        &ctx,
+                        &mut app,
+                        width,
+                        vec![
+                            egui::Event::PointerMoved(icon),
+                            egui::Event::PointerButton {
+                                pos: icon,
+                                button: egui::PointerButton::Primary,
+                                pressed,
+                                modifiers: egui::Modifiers::default(),
+                            },
+                        ],
+                    );
+                }
+                let output = render(&ctx, &mut app, width, vec![egui::Event::PointerMoved(icon)]);
+                assert!(
+                    has_text(&output, "Connection details"),
+                    "details menu missing at {width}"
+                );
+                assert!(
+                    has_text(&output, "PEALAYER_PCCONTROLLER_LIBRARY"),
+                    "diagnostic lost at {width}"
+                );
+                assert!(has_text(&output, "Copy"));
+                assert_eq!(app.connection_notice.as_deref(), Some(DIAGNOSTIC));
+                assert!(
+                    !app.engine_handle
+                        .connection_requested
+                        .load(std::sync::atomic::Ordering::Relaxed)
+                );
+            }
+        }
+    }
+    #[test]
+    fn catalog_errors_do_not_claim_a_lost_controller_connection() {
+        let ctx = egui::Context::default();
+        let mut app = crate::app::PealayerApp::default();
+        app.is_connected = true;
+        app.connection_notice = Some(DIAGNOSTIC.into());
+        let _ = render(&ctx, &mut app, 400.0, vec![]);
+        let output = render(&ctx, &mut app, 400.0, vec![]);
+        assert!(has_text(&output, "Couldn't load the hardware controls."));
+        assert!(!has_text(&output, "Couldn't connect to PCController."));
+        assert!(!has_text(&output, "PEALAYER_PCCONTROLLER_LIBRARY"));
+    }
     #[test]
     fn disconnected_cached_board_cannot_restore_live_cards_or_rf() {
         let mut caps = HardwareCapabilities {
@@ -240,6 +419,7 @@ mod tests {
                             ui,
                             "Hardware Disconnected",
                             "Connect to PCController to discover live board controls.",
+                            None,
                             false,
                             Some(("Connect", Action::Connect)),
                             "Hardware preferences",
