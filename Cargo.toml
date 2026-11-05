@@ -16,12 +16,12 @@ pealayer-downloads = { path = "crates/download-core", features = ["ui"] }
 craft-ui = { git = "https://github.com/storytold/craft-libs.git", features = ["serde"] }
 # Upstream egui 0.37 port (anhosh/egui_dock#354), pinned for reproducible builds.
 egui_dock = { git = "https://github.com/crumblingstatue/egui_dock.git", rev = "4bd1dcd90c7a71ed3bf38159f49a2992fa653c2c", features = ["serde"] }
-fontique = "0.11.1"
+fontique = "0.12.0"
 eframe = { version = "0.37", features = ["glow", "persistence"] }
-egui-elegance = "=0.17.0"
+egui-elegance = "=0.17.4"
 winit = { version = "0.30", default-features = false }
 env_logger = "0.11.11"
-libmpv2 = { version = "6.0.0", features = ["render"] }
+libmpv2 = { version = "7.0.0", features = ["render"] }
 libmpv2-sys = "=4.0.1"
 log = "0.4.31"
 jiff = "0.2.28"
@@ -45,7 +45,7 @@ url = "2.5.8"
 image = { version = "0.25.9", default-features = false, features = ["ico", "jpeg", "png", "webp"] }
 include_dir = "0.7.4"
 raw-window-handle = "0.6.2"
-souvlaki = { version = "0.8.3", default-features = false, features = ["use_zbus"] }
+souvlaki = { version = "0.9.3", default-features = false, features = ["use_zbus"] }
 ab_glyph = "0.2"
 notify = "8.2.0"
 open = "5.4.4"
