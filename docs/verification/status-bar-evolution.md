@@ -43,9 +43,69 @@ VF falling back to its thin default. No private font is bundled.
 
 ## Genuine visual history
 
-Representative source milestones: compact two-sided widgets (`48fd59c`, PR
-#166), CraftUI surface styling (`9610177`, PR #216), and native typography
-(`d6feabf`, PR #225; status implementation introduced in `1fbed60`).
+The original gallery covered only late revisions of the same compact design.
+That was not the requested full history. The [complete source audit](status-bar-history-audit.md)
+now accounts for every component change, its first actual integration, relevant
+changes in other files and branch reconciliation. The gallery begins below with
+the original application, not with October's compact-widget implementation.
+
+### Original dock status bar
+
+![Original dock status bar](../screenshots/status-bar-original-dock.png)
+
+First running integration, `e8e6b9676d0deee93928e794ec39ddf729d95e3c`.
+The component existed at `dc49b29` but was not called yet. The screenshot's
+Memory: 42.8 MB and System Ready were historical placeholders, not measurements.
+UI FPS is a real render-loop observation. No hardware or media was connected.
+
+### Hardware status joins the original bar
+
+![Original hardware status addition](../screenshots/status-bar-hardware-origin.png)
+
+`3bc0e0872739b736ab942bfe9ae216004cc04462`: red disconnected indicator and
+hardware caption added alongside the old placeholders. E-STOP appears only
+when active; it was not activated for this capture.
+
+### Truthful connection status replaces the placeholders
+
+![Status bar without invented memory or readiness](../screenshots/status-bar-truthful.png)
+
+`bab90c8bb243465bc2e0068678097e854b099a74`, PR #25: removes memory and
+System Ready, retains the UI FPS counter, introduces a real connecting state.
+
+### Capability-driven, configurable status bar
+
+![Capability-era status bar without loaded media](../screenshots/status-bar-capabilities.png)
+
+`0ec9ffc2dcd535ca31bfdce0502696f41bbe713f`, PR #46: real media FPS replaces
+the UI counter and is correctly absent with no media loaded. The RGB/telemetry/
+warning widgets are capability-driven and absent while disconnected. Their
+history and per-item context-menu changes are recorded in the audit, not
+fabricated in this idle screenshot.
+
+These four early applications were freshly built from unmodified tracked source
+and each original Cargo.lock. All used their original 800 × 600 logical default
+window at 150% desktop scale (1222 × 956 physical window, 1222 × 46 public
+bottom crop). The first two predate configuration persistence and control APIs;
+the third used an isolated portable profile and had no established controller
+connection. The fourth used an explicit isolated config with auto-connect off.
+The user authorized normal window-close requests for these isolated historical
+instances. The old applications were closed before the next build; no forced
+termination or private production settings were used.
+
+Executable SHA-256 values, in the same order:
+
+- Original dock: `cf016ff319dcb24e207c74f63c0aa59305529b93c8a385937074a8f26a2dd9a2`.
+- Hardware addition: `cc48bf69748e2618d670c95c659cea42642e48b112a6382bb45b7a4dbbaa31ee`.
+- Truthful connection: `8932eb4c9b4ac123808cf137234fcc8f468ab8a2ed1cbc7ca573efb00201735b`.
+- Capability era: `a2344ce36177c0bf350576f97defa8f8b7ab4df298ddc5078630655c60917744`.
+
+### Late-stage comparison and repaired typography
+
+Compact two-sided widgets (`48fd59c`, PR #166), CraftUI surface styling
+(`9610177`, PR #216), native typography (`d6feabf`, PR #225; status
+implementation introduced in `1fbed60`) and the repaired result follow the
+earlier designs above. They are deliberately not represented as the whole history.
 
 Historical screenshots come only from real compiled applications, never a
 current widget with a reconstructed theme. Use a separate explicit profile with
