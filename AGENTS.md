@@ -28,6 +28,7 @@
 # Continuity and native Windows assets
 
 - A workspace-renderer migration or selectable adapter must preserve application-owned chrome and interactions, not just serialized panels. egui Dock retains the live palette, Phosphor disclosure carets, focused-panel outline, tab and empty-header menus, collapse/reveal, floating layers and modal ownership. Keep the rendered pointer/paint regressions in `ui::egui_dock::tests`; layout round-trips alone are not UI acceptance. See `docs/verification/egui-dock-restoration.md`.
+- egui Dock keeps its pre-CraftUI 24-point header baseline with font-aware growth; do not borrow CraftUI's independent 32-point header. Center title ink without changing its width, caption or drag semantics. Paint close glyphs using the actual upstream response and clipped tab viewport, not a full-height guessed slot or the entire leaf. Keep large-font/fractional-scale/RTL/overflow and visible close-rule regressions in the Dock adapter; never restyle CraftUI to fix Dock-only chrome.
 
 - Modal corner-close controls must use `ui::dialog::close_button`, whose paint, hit target and focus outline share an exact square independent of text padding. Use `confirmation_modal` for unsaved-change prompts; do not reintroduce stock text-sized × buttons. Keep geometry and non-destructive Close/Escape regression coverage across fonts, display scales and interaction states.
 

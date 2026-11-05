@@ -19,6 +19,8 @@ struct Projection {
 struct TabButton {
     tab: Tab,
     rect: egui::Rect,
+    clip_rect: egui::Rect,
+    close_rect: Option<egui::Rect>,
     layer: egui::LayerId,
 }
 
@@ -37,9 +39,10 @@ fn dock_style(ui: &egui::Ui) -> egui_dock::Style {
     style.dock_area_padding = None;
     style.main_surface_border_stroke = egui::Stroke::NONE;
     style.main_surface_border_rounding = egui::CornerRadius::ZERO;
-    style.tab_bar.height = t
-        .tab_h
-        .max(ui.text_style_height(&egui::TextStyle::Body) + 6.0);
+    // egui Dock was 24 points before the CraftUI migration. Its selectable
+    // adapter must not inherit CraftUI's independently tuned 32-point chrome.
+    style.tab_bar.height = HEADER_BUTTON_WIDTH
+        .max(ui.text_style_height(&egui::TextStyle::Button) + 4.0).ceil();
     style.tab_bar.bg_fill = t.tab_bg;
     style.tab_bar.hline_color = t.separator;
     style.tab.active.bg_fill = t.panel_bg;
@@ -158,8 +161,11 @@ fn decorate_headers(
                 if secondary && !path.surface.is_main() { super::icons::APP_WINDOW } else { super::icons::X },
                 if secondary && path.surface.is_main() { t.text_dim } else { icon_color(close_all) });
             for tab in buttons.iter().filter(|b| leaf.tabs.contains(&b.tab)) {
-                let close = egui::Rect::from_min_max(egui::pos2(tab.rect.right()-HEADER_BUTTON_WIDTH.min(height).min(tab.rect.width()),tab.rect.top()),tab.rect.max);
-                paint_header_icon(&painter,close,super::icons::X,icon_color(close));
+                let tab_clip = tab.clip_rect.intersect(header).intersect(clip);
+                if let Some(close) = tab.close_rect.filter(|rect| rect.intersects(tab_clip)) {
+                    // Scrollable tabs must not paint over collapse/close-all.
+                    paint_header_icon(&painter.with_clip_rect(tab_clip),close,super::icons::X,icon_color(close));
+                }
             }
         }
         if dock.focused_leaf() == Some(path) {
@@ -408,38 +414,58 @@ fn retain_unchanged(source: &Node<Tab>, before: &Node<Tab>, after: &mut Node<Tab
     }
 }
 
-impl egui_dock::TabViewer for PealayerTabViewer<'_> {
+// Keep Dock-only title metrics out of the shared CraftUI panel viewer.
+struct DockTabViewer<'a> {
+    viewer: PealayerTabViewer<'a>,
+    context: egui::Context,
+    title_font: egui::FontId,
+}
+
+impl egui_dock::TabViewer for DockTabViewer<'_> {
     type Tab = Tab;
     fn title(&mut self, tab: &mut Tab) -> egui::WidgetText {
-        format!("{} {}", tab.icon(), tab.title(self.app)).into()
+        let mut galley = self.context.fonts_mut(|fonts| fonts.layout_no_wrap(
+            format!("{} {}", tab.icon(), tab.title(self.viewer.app)),
+            self.title_font.clone(), egui::Color32::PLACEHOLDER));
+        // Upstream centers the line box. Center its actual ink instead, without
+        // changing text, width, hit targets, accessibility or drag geometry.
+        let delta = galley.rect.center().y - galley.mesh_bounds.center().y;
+        let normalized = std::sync::Arc::make_mut(&mut galley);
+        for row in &mut normalized.rows { row.pos.y += delta; }
+        normalized.mesh_bounds = normalized.mesh_bounds.translate(egui::vec2(0.0, delta));
+        egui::WidgetText::Galley(galley)
     }
     fn id(&mut self, tab: &mut Tab) -> egui::Id {
         egui::Id::new(("workspace-panel", *tab))
     }
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
-        PealayerTabViewer::ui(self, ui, tab);
+        PealayerTabViewer::ui(&mut self.viewer, ui, tab);
     }
     fn scroll_bars(&self, tab: &Tab) -> [bool; 2] {
-        PealayerTabViewer::scroll_bars(self, tab)
+        PealayerTabViewer::scroll_bars(&self.viewer, tab)
     }
     fn is_closeable(&self, _tab: &Tab) -> bool {
-        !self.app.dock_state.locked
+        !self.viewer.app.dock_state.locked
     }
     fn allowed_in_windows(&self, _tab: &mut Tab) -> bool {
-        !self.app.dock_state.locked
+        !self.viewer.app.dock_state.locked
     }
     fn on_tab_button(&mut self, tab: &mut Tab, response: &egui::Response) {
+        // Read the real upstream target before entering the data transaction.
+        let close_rect = response.ctx.read_response(response.id.with("close-button")).map(|close| close.rect);
         response.ctx.data_mut(|data| {
             let buttons = data.get_temp_mut_or_default::<Vec<TabButton>>(tab_buttons_id());
             buttons.push(TabButton {
                 tab: *tab,
                 rect: response.rect,
+                clip_rect: response.interact_rect,
+                close_rect,
                 layer: response.layer_id,
             });
         });
     }
     fn context_menu(&mut self, ui: &mut egui::Ui, tab: &mut Tab, _node: egui_dock::NodePath) {
-        self.draw_context_menu(ui, *tab);
+        self.viewer.draw_context_menu(ui, *tab);
     }
 }
 
@@ -477,7 +503,11 @@ pub fn show(app: &mut PealayerApp, ui: &mut egui::Ui, reveal: Option<Tab>) {
     let header_height = style.tab_bar.height;
     app.workspace_rendering = true;
     ui.add_enabled_ui(!blocked, |ui| {
-        let mut viewer = PealayerTabViewer { app };
+        let mut viewer = DockTabViewer {
+            viewer: PealayerTabViewer { app },
+            context: ui.ctx().clone(),
+            title_font: egui::TextStyle::Button.resolve(ui.style()),
+        };
         egui_dock::DockArea::new(&mut projection.dock)
             .id(egui::Id::new("egui-workspace-dock"))
             .style(style)
@@ -608,6 +638,7 @@ mod tests {
         let ctx = egui::Context::default();
         super::super::i18n::configure_ui_fonts(&ctx, false);
         let mut app = PealayerApp::default();
+        app.engine_handle = crate::four_d::engine::memory_only_test_engine();
         app.dock_state.layout = Layout {
             root: Some(Node::Tabs {
                 panels: vec![Tab::EffectControls, Tab::MediaInspector],
@@ -621,10 +652,93 @@ mod tests {
     }
 
     #[test]
+    fn dock_caption_ink_and_compact_height_match_header_controls() {
+        let _guard = crate::app::tests::lock_app_tests();
+        for dark in [false, true] {
+          for scale in [1.0, 1.25, 1.5, 2.0] {
+           for language in [crate::config::AppLanguage::English, crate::config::AppLanguage::Persian] {
+            for size in [14.0, 22.0] {
+                let (ctx, mut app) = fixture();
+                app.language = language;
+                app.rtl = language.is_rtl();
+                super::super::i18n::configure_ui_fonts(&ctx, language.is_rtl());
+                ctx.set_pixels_per_point(scale);
+                ctx.set_visuals(if dark { egui::Visuals::dark() } else { egui::Visuals::light() });
+                ctx.all_styles_mut(|style| {
+                    style.text_styles.insert(egui::TextStyle::Body, egui::FontId::proportional(size));
+                    style.text_styles.insert(egui::TextStyle::Button, egui::FontId::proportional(size));
+                });
+                frame(&ctx, &mut app, vec![]);
+                let output = frame(&ctx, &mut app, vec![]);
+                let buttons = ctx.data(|data| data.get_temp::<Vec<TabButton>>(tab_buttons_id())).unwrap();
+                let header = buttons[0].rect;
+                if size == 14.0 && scale == 1.0 && language == crate::config::AppLanguage::English {
+                    assert_eq!(header.height(), 24.0, "egui Dock must retain its pre-CraftUI compact header, not CraftUI's 32-point header");
+                }
+                assert!(header.height() >= 24.0, "non-Latin/large-font metrics can grow, never shrink the compact baseline");
+                let close = buttons[0].close_rect.expect("real upstream close hit target");
+                assert_eq!(close.width(), HEADER_BUTTON_WIDTH);
+                assert_eq!(close.width(), close.height(), "large fonts must not stretch the close target");
+                assert!((close.center().y - header.center().y).abs() < 0.01);
+                let title = Tab::EffectControls.title(&app);
+                let caption = output.shapes.iter().find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text().contains(&title) => Some(text.visual_bounding_rect()),
+                    _ => None,
+                }).expect("actual tab caption");
+                assert!(caption.height() <= header.height()-2.0, "font-aware height must contain the caption ink");
+                assert!((caption.center().y - header.center().y).abs() < 0.5,
+                    "caption ink must align with header glyphs at font {size}: {caption:?} vs {header:?}");
+            }
+           }
+          }
+        }
+    }
+
+    #[test]
+    fn overflow_close_glyphs_stay_clipped_and_no_vertical_close_rule_is_painted() {
+        let _guard = crate::app::tests::lock_app_tests();
+        for dark in [false, true] {
+            let (ctx, mut app) = fixture();
+            ctx.set_visuals(if dark { egui::Visuals::dark() } else { egui::Visuals::light() });
+            let draw = |app: &mut PealayerApp, events| {
+                let mut output = ctx.run_ui(egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(220.0, 500.0))),
+                    events, ..Default::default()
+                }, |ui| show(app, ui, None));
+                output.textures_delta.clear(); output
+            };
+            draw(&mut app, vec![]);
+            draw(&mut app, vec![]);
+            let projection = ctx.data(|data| data.get_temp::<Projection>(egui::Id::new("egui-dock-projection"))).unwrap();
+            let leaf = projection.dock.main_surface().root_node().unwrap().get_leaf().unwrap();
+            let close_left = leaf.rect.right() - HEADER_BUTTON_WIDTH;
+            for pointer in [egui::Pos2::ZERO, egui::pos2(leaf.rect.right()-12.0,leaf.rect.top()+12.0)] {
+                let output = draw(&mut app, vec![egui::Event::PointerMoved(pointer)]);
+                let buttons = ctx.data(|data| data.get_temp::<Vec<TabButton>>(tab_buttons_id())).unwrap();
+                assert!(buttons.iter().any(|button| button.rect.right() > close_left), "fixture must overflow");
+                for shape in &output.shapes {
+                    match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == super::super::icons::X
+                            && text.visual_bounding_rect().center().x < close_left => {
+                            assert!(shape.clip_rect.right() <= close_left+0.1, "tab close glyph must not bleed over close-all");
+                            assert!(shape.clip_rect.left() >= leaf.rect.left()+HEADER_BUTTON_WIDTH-0.1, "tab close glyph must not bleed over disclosure");
+                        }
+                        egui::Shape::LineSegment {points,stroke} if stroke.color.a() > 0 => {
+                            assert!(!(points.iter().all(|point| (point.x-close_left).abs()<0.1)
+                                && (points[1].y-points[0].y).abs()>12.0), "unwanted visible close-all left border");
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn restored_header_chevrons_and_palette_match_live_renderer_geometry() {
         let _guard = crate::app::tests::lock_app_tests();
         for dark in [false, true] {
-            for scale in [1.0, 1.25, 2.0] {
+            for scale in [1.0, 1.25, 1.5, 2.0] {
                 let (ctx, mut app) = fixture();
                 ctx.set_visuals(if dark {
                     egui::Visuals::dark()

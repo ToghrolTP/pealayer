@@ -29,11 +29,12 @@ Existing controller definitions, repeat contracts and firmware are unchanged.
 
 The running canonical application was started paused and reported clean local
 authoring state. The agent's updater launch was policy-denied; the user ran the
-approved updater command. That upload reported aborted after 19,660,800 of
-58,593,280 bytes, without replacing the executable. A retry with captured output
-was requested; installed acceptance remains pending until its actual manifest
-matches the packaged executable. No manual executable replacement or policy
-workaround was used.
+approved updater command. Its first upload aborted after 19,660,800 of
+58,593,280 bytes without replacing the executable. The user repeated the same
+updater path with captured output: it completed and acknowledged the replacement.
+API readback independently confirmed process `354688`, the packaged source and
+exact SHA-256 above, and clean authoring state. The local canonical update is
+installed. No manual executable replacement or policy workaround was used.
 
 Cafe deployment is deferred at the user's explicit request while unavailable.
 It must use that host's compatible runtime and the normal graceful peer updater.

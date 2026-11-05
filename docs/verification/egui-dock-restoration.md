@@ -81,3 +81,77 @@ remains open; this targeted correction is not a claim of complete parity.
 The user ran the graceful updater and the canonical process reported the
 restoration commit afterward. This does not establish Cafe deployment or live
 acceptance of the later close-button refinements.
+
+## Pre-CraftUI comparison and remaining geometry correction
+
+This pass compares **both** the first parent of the CraftUI merge (`41ef0ae`,
+before PR #216) and the last egui Dock renderer inside that PR (`4b264ca`, before
+`37c8acb`). They are different checkpoints: the latter had already adopted Craft
+palette tokens. It is not an untouched pre-PR baseline.
+
+| Area | Historical source | Current finding and correction |
+| --- | --- | --- |
+| Header height | Pre-PR `Style::from_egui` used the upstream 24-point bar. The in-PR token adapter changed it to 32. | The selectable adapter had retained CraftUI's 32-point geometry. egui Dock now restores its own 24-point baseline, growing only for the actual Button font. CraftUI remains 32 points. |
+| Disclosure | Application Phosphor caret painted over a retained 24-point upstream hit slot. | Restored and preserved. No replacement collapse implementation. |
+| Caption alignment | Upstream centers the font line box, including its font-dependent gap. | Normalize the Dock title galley's visible ink inside that same line box. Width, text, accessibility, drag preview and click target remain owned by upstream. |
+| Close controls | Separate tab-close and close-all controls, with upstream targets. | Paint the glyph inside the actual registered close response, not an estimated full-height gutter. Large fonts retain a centered square target. |
+| Unwanted rule | Upstream close-all has an independent left-border color, not the tab outline. | Its transparent override was already restored; new paint-output tests guard the actual rule in light/dark and hovered states. |
+| Overflow | Native titles were clipped by the tab scroller. | Custom close glyphs were using the entire leaf as their clip and could draw over neighboring controls. They now use the tab's actual clipped interaction rectangle. |
+| Menus and focus | Tab menu, unused-header menu, caret collapse and reveal existed before migration. | Retained rendered pointer tests cover all of them, hide/restore and focused-panel outlines. |
+| Floating/modal/locked state | Independent surfaces and modal/input ownership. | Preserve the existing floating-layer, modal shielding, locked-docking and shared-layout tests; no panel or workspace schema changes. |
+
+An [earlier real native capture](../screenshots/pealayer-en-dark.png) shows the
+compact Dock arrangement. It is from the recorded screenshot manifest, **not** a
+new rendering of the immediate pre-merge checkpoint. The restored screenshot
+above is likewise historical. New source/paint tests must not be presented as
+new installed screenshots.
+
+All implementation changes for this correction are confined to the egui Dock
+adapter. The CraftUI renderer, its 32-point header, palette, property rails and
+shared panel contents are not being restyled or rolled back. Verification and
+new package/live-capture results will be recorded with their actual boundaries.
+
+All eleven Dock tests passed after this correction. The added geometry matrix
+covers light/dark, English/Persian, 100/125/150/200% scale, and normal/large fonts.
+The overflow fixture checks actual paint clipping and the absence of a visible
+close-all left rule, including hover. Existing pointer tests continue to cover
+menus, collapse/reveal, hidden-panel restoration, floating layers and modal
+ownership. These are rendered fixtures, not an installed screenshot claim.
+
+## New native visual verification
+
+The full native suite passed: **1,106 passed, one ignored**. Clean-source package
+`5532e2776804032e45b5738ee0fee063a08b5d28` passed Web/PWA bundle integrity,
+Windows resources, all seven quick-action icon checks, libmpv smoke and the
+standalone downloader resource/headless smoke. Packaging skipped duplicate
+native/Web regression runs; the native suite above was run separately. No
+new Web behavior change is claimed for this native-only adapter correction.
+
+Executable SHA-256:
+`afe5ea4a5085eb3dc7260f31cd5f616bf395eba6c05c13403548c2217e8120db`.
+The isolated review API reported that exact source, clean authoring state, no
+playback or hardware connection and disabled automatic hardware connection.
+The minimized review window was restored through the application's own API;
+captures use the maintained read-only Win32 utility. Theme/renderer changes
+were made through the isolated profile's config API, not the regular instance.
+
+These are fresh native captures from the same executable, inspected after
+capture. They are not mockups, old images relabelled as new, or hardware proof.
+
+### egui Dock: dark
+
+![Compact egui Dock headers, aligned controls and no close-all rule](../screenshots/egui-dock-header-parity.png)
+
+### egui Dock: light
+
+![The corrected egui Dock header in the light palette](../screenshots/egui-dock-header-parity-light.png)
+
+### CraftUI: control capture
+
+![Unchanged CraftUI header and panel styling in the same review executable](../screenshots/craft-ui-header-parity-control.png)
+
+The regular application's config still reports CraftUI with System theme. Its
+preceding repeat-projection update is verified installed. This Dock package's
+local updater launch was policy-blocked; the user has been given the same
+graceful updater path. Installed replacement requires manifest readback, not
+only these review captures. Cafe deployment remains user-deferred while offline.

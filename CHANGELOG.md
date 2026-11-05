@@ -6,6 +6,12 @@ retroactively attributed to an older download.
 
 ## Next milestone · unreleased
 
+### 🪟 Workspace chrome
+
+- egui Dock restores its compact header height, centers tab captions and close
+  icons consistently, and clips scrolling tab controls correctly. Its close-all
+  control has no stray left-hand rule. CraftUI keeps its existing styling.
+
 ### 🎛️ Hardware controls
 
 - PWM indicators and On/Off selection share confirmed power state. Unknown or
