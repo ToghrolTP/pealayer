@@ -27,7 +27,7 @@ import { useWebPlatform } from './webPlatform';
 import './styles.css';
 import './shared-toasts.css';
 import palettes from '../../assets/themes/palettes.json';
-import { accentForeground, controlDensityHeight, mergeAppearance, paletteName as resolvePaletteName, resolvedAccent, resolvedAppearanceTheme, uiFontCss, monoFontCss } from './appearance';
+import { accentForeground, controlDensityHeight, controlDensityText, mergeAppearance, paletteName as resolvePaletteName, resolvedAccent, resolvedAppearanceTheme, uiFontCss, monoFontCss } from './appearance';
 
 const { Sider, Content } = Layout;
 const RemoteControlTab = React.lazy(() => import('./components/RemoteControlTab').then((module) => ({ default: module.RemoteControlTab })));
@@ -642,7 +642,7 @@ const App: React.FC = () => {
 
   return (
     <ConfigProvider direction={runtime?.direction}
-      componentSize={controlDensity === 'compact' ? 'small' : 'middle'}
+      componentSize={controlHeight <= 24 ? 'small' : 'middle'}
       theme={{
         algorithm: resolvedTheme === 'light' ? theme.defaultAlgorithm : theme.darkAlgorithm,
           token: {
@@ -668,8 +668,11 @@ const App: React.FC = () => {
           fontFamily: uiFont,
         },
         components: {
-          Select: { optionHeight: controlHeight, optionPadding: '0 8px' },
-          Menu: { itemHeight: controlHeight },
+          Input: controlDensityText(controlDensity),
+          InputNumber: controlDensityText(controlDensity),
+          Button: controlDensityText(controlDensity),
+          Select: { ...controlDensityText(controlDensity), optionHeight: controlHeight, optionPadding: '0 8px' },
+          Menu: { ...controlDensityText(controlDensity), itemHeight: controlHeight },
           Modal: {
             contentBg: palette['surface-1'],
             headerBg: 'transparent',

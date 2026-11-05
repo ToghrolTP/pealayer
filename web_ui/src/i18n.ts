@@ -338,6 +338,7 @@ const fa: Record<string, string> = {
   'Effects Library': 'کتابخانهٔ افکت‌ها',
   'Control density': 'تراکم کنترل‌ها',
   'Compact': 'فشرده',
+  'Extra compact': 'بسیار فشرده',
   'Comfortable': 'آزاد',
   'Regular': 'معمولی',
   'Spacious': 'جاداتر',

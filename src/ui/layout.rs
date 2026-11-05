@@ -2219,10 +2219,15 @@ fn draw_pwm_step_button(
     control: &crate::four_d::controller::HardwareControl,
     action: &crate::four_d::controller::HardwareAction, enabled: bool,
 ) {
-    let size = ui.spacing().interact_size.y;
-    let response = ui.add_enabled(enabled, egui::Button::new(crate::ui::icons::action(&action.verb))
-        .min_size(egui::vec2(size, size)))
-        .on_hover_text(crate::ui::i18n::visual_text(app.language, &action.name));
+    let size = crate::ui::control_density::height(ui);
+    let response = ui.scope(|ui| {
+        // The row reserves a square, not a text button plus horizontal padding.
+        // Keep the icon inside that slot even at the original 18-point density.
+        ui.spacing_mut().button_padding.x = 0.0;
+        ui.add_enabled(enabled, egui::Button::new(crate::ui::icons::action(&action.verb))
+            .min_size(egui::vec2(size, size)))
+            .on_hover_text(crate::ui::i18n::visual_text(app.language, &action.name))
+    }).inner;
     if hardware_control_activated(app, ui, &response) {
         crate::ui::hardware_control::invoke_action(app, control, action);
     }
@@ -2264,7 +2269,7 @@ fn draw_pwm_editor_row_with_buttons(
             let decrease = buttons.and_then(|(app, control)| pwm_step_action(app, control, "decrease"));
             let increase = buttons.and_then(|(app, control)| pwm_step_action(app, control, "increase"));
             let reserved = (usize::from(decrease.is_some()) + usize::from(increase.is_some())) as f32
-                * (ui.spacing().interact_size.y + gap);
+                * (crate::ui::control_density::height(ui) + gap);
             let (slider_width, number_width) = pwm_editor_widths((row_width - reserved).max(60.0), gap);
             if let Some(action) = decrease {
                 let (app, control) = buttons.expect("action has a source");
@@ -8626,16 +8631,16 @@ mod timeline_row_tests {
             ).collect(), ..Default::default()
         };
         for width in [180.0, 216.0, 300.0, 420.0] {
-            for height in [24.0, 28.0, 32.0, 36.0] {
+            for density in crate::config::UiControlDensity::ALL {
                 let context = egui::Context::default();
+                context.all_styles_mut(|style| crate::ui::control_density::configure(style, density));
                 let (sender, receiver) = std::sync::mpsc::channel();
                 let mut percent = 24.007;
                 let output = context.run_ui(egui::RawInput::default(), |ui| {
                     ui.set_width(width);
-                    ui.spacing_mut().interact_size.y = height;
                     let response = draw_pwm_control_editor(&app, ui, &control, &mut percent, width);
                     assert_eq!(response, PwmEditorResponse::default());
-                    assert!(ui.min_rect().width() <= width + 2.0, "width={width}, height={height}: {:?}", ui.min_rect());
+                    assert!(ui.min_rect().width() <= width + 2.0, "width={width}, density={density:?}: {:?}", ui.min_rect());
                     transmit_pwm_editor_response_with(&sender, true, ui, 1, pwm_raw(percent), response);
                 });
                 discard_ui_output(output);

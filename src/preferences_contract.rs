@@ -428,7 +428,7 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             &[("craft_ui", "CraftUI"), ("egui_dock", "egui Dock")]),
         PreferenceControl::boolean("preferences_grouped_navigation", "appearance", "Interface", "Group Preferences navigation"),
         PreferenceControl::choice_slider("ui_control_density", "appearance", "Interface", "Control density",
-            &[("compact", "Compact"), ("regular", "Regular"),
+            &[("extra_compact", "Extra compact"), ("compact", "Compact"), ("regular", "Regular"),
               ("comfortable", "Comfortable"), ("spacious", "Spacious")]),
         PreferenceControl::select("ui_font_family", "appearance", "Typography", "UI font",
             &[("system", "System font"), ("bundled", "Bundled font"), ("vazirmatn", "Vazirmatn"), ("custom", "Choose installed font")]),
@@ -1377,9 +1377,9 @@ mod tests {
         let contract = super::preferences_contract(&crate::config::AppConfig::default());
         let control = contract.controls.iter().find(|control| control.key == "ui_control_density").unwrap();
         assert!(matches!(control.kind, super::PreferenceControlKind::ChoiceSlider));
-        assert_eq!(control.options.len(), 4);
+        assert_eq!(control.options.len(), 5);
         assert_eq!(contract.values["ui_control_density"], serde_json::json!("compact"));
-        for ((density, option), height) in UiControlDensity::ALL.into_iter().zip(&control.options).zip([24.0, 28.0, 32.0, 36.0]) {
+        for ((density, option), height) in UiControlDensity::ALL.into_iter().zip(&control.options).zip([18.0, 24.0, 28.0, 32.0, 36.0]) {
             assert_eq!(serde_json::to_value(density).unwrap(), option.value);
             assert_eq!(serde_json::from_value::<UiControlDensity>(option.value.clone()).unwrap(), density);
             assert_eq!(density.base_height(), height);

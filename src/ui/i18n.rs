@@ -1215,6 +1215,7 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Loostr" => "لوستر",
         "Stage light" => "نور صحنه",
         "Garden" => "باغ",
+        "Extra compact" => "بسیار فشرده",
         "Compact" => "فشرده",
             "Comfortable" => "آزاد",
             "Regular" => "معمولی",

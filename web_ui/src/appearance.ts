@@ -1,12 +1,20 @@
-export type ControlDensity = 'compact' | 'regular' | 'comfortable' | 'spacious';
+export type ControlDensity = 'extra_compact' | 'compact' | 'regular' | 'comfortable' | 'spacious';
 export const controlDensityHeight = (choice: string): number => {
   switch (choice) {
+    case 'extra_compact': return 18;
     case 'regular': return 28;
     case 'comfortable': return 32;
     case 'spacious': return 36;
     default: return 24;
   }
 };
+
+// Ant's default 22px text line otherwise forces inputs above the restored 18px
+// height. Scope this to control components, not page text or headings.
+export const controlDensityText = (choice: string) => choice === 'extra_compact'
+  ? { fontSize: 14, fontSizeLG: 14, lineHeight: (controlDensityHeight(choice) - 2) / 14,
+    lineHeightLG: (controlDensityHeight(choice) - 2) / 14 }
+  : {};
 
 export interface AppearanceState {
   ui_animation_mode: 'system' | 'enabled' | 'disabled';

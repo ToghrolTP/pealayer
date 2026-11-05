@@ -4,7 +4,11 @@ use crate::config::UiControlDensity;
 
 pub fn configure(style: &mut egui::Style, density: UiControlDensity) {
     style.spacing.interact_size.y = density.base_height();
-    style.spacing.button_padding.y = ((style.spacing.interact_size.y - style.spacing.icon_width) * 0.5).max(0.0);
+    // Before 88741e3, egui 0.36.2 supplied an 18-point minimum and 1-point
+    // vertical padding. Deriving padding from icon width would inflate that
+    // restored size again when the text is taller than the icon.
+    style.spacing.button_padding.y = if density == UiControlDensity::ExtraCompact { 1.0 }
+        else { ((style.spacing.interact_size.y - style.spacing.icon_width) * 0.5).max(0.0) };
     // Stroke changes must never expand a field, chevron or neighboring widget.
     for visuals in [&mut style.visuals.widgets.inactive, &mut style.visuals.widgets.hovered,
         &mut style.visuals.widgets.active, &mut style.visuals.widgets.open] {
@@ -43,6 +47,38 @@ pub fn paint_choice_ticks(ui: &egui::Ui, rect: egui::Rect, count: usize, selecte
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn extra_compact_restores_the_historical_eighteen_point_controls() {
+        for dark in [false, true] {
+            for scale in [1.0, 1.25, 1.5, 2.0] {
+                let ctx = egui::Context::default();
+                ctx.set_pixels_per_point(scale);
+                ctx.set_visuals(if dark { egui::Visuals::dark() } else { egui::Visuals::light() });
+                ctx.all_styles_mut(|style| configure(style, UiControlDensity::ExtraCompact));
+                let mut value = "Compact".to_owned();
+                let mut previous = None;
+                for hovered in [false, true, false] {
+                    ctx.run_ui(egui::RawInput {
+                        events: if hovered { vec![egui::Event::PointerMoved(egui::pos2(40.0, 10.0))] }
+                            else { vec![egui::Event::PointerGone] },
+                        ..Default::default()
+                    }, |ui| {
+                        assert_eq!(ui.spacing().interact_size.y, 18.0);
+                        assert_eq!(ui.spacing().button_padding.y, 1.0);
+                        assert_eq!(height(ui), 18.0);
+                        let output = crate::ui::dialog::singleline_text_edit(ui, &mut value).show(ui);
+                        assert_eq!(output.response.rect.height(), 18.0);
+                        assert!((output.galley_pos.y + output.galley.size().y / 2.0
+                            - output.response.rect.center().y).abs() <= 1.0);
+                        let geometry = (output.response.rect, output.galley_pos);
+                        if let Some(previous) = previous { assert_eq!(geometry, previous); }
+                        previous = Some(geometry);
+                    }).drop_without_applying_deltas();
+                }
+            }
+        }
+    }
 
     #[test]
     fn inputs_combos_color_triggers_and_menu_rows_share_density_in_both_themes() {

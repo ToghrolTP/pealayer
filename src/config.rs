@@ -881,12 +881,13 @@ pub enum UiAnimationMode { #[default] System, Enabled, Disabled }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum UiControlDensity { #[default] Compact, Regular, Comfortable, Spacious }
+pub enum UiControlDensity { ExtraCompact, #[default] Compact, Regular, Comfortable, Spacious }
 impl UiControlDensity {
-    pub const ALL: [Self; 4] = [Self::Compact, Self::Regular, Self::Comfortable, Self::Spacious];
+    pub const ALL: [Self; 5] = [Self::ExtraCompact, Self::Compact, Self::Regular, Self::Comfortable, Self::Spacious];
 
     pub const fn base_height(self) -> f32 {
         match self {
+            Self::ExtraCompact => 18.0,
             Self::Compact => 24.0,
             Self::Regular => 28.0,
             Self::Comfortable => 32.0,
@@ -2854,6 +2855,14 @@ mod tests {
 
     #[test]
     fn control_density_is_persisted_and_reconciled_with_shared_appearance() {
+        for density in UiControlDensity::ALL {
+            let source = AppConfig { ui_control_density: density, ..Default::default() };
+            let restored: AppConfig = serde_json::from_value(serde_json::to_value(&source).unwrap()).unwrap();
+            assert_eq!(restored.ui_control_density, density);
+            let mut target = AppConfig::default();
+            target.copy_appearance_from(&restored);
+            assert_eq!(target.ui_control_density, density);
+        }
         let source = AppConfig { ui_control_density: UiControlDensity::Comfortable,
             ui_font_family: UiFontFamily::Vazirmatn, monospace_font_family: UiFontFamily::System, ..Default::default() };
         let values = serde_json::to_value(&source).unwrap();

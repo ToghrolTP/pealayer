@@ -1,6 +1,16 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { accentForeground, mergeAppearance, paletteName, resolvedAccent, resolvedAppearanceTheme, uiFontCss, monoFontCss } from '../src/appearance.ts';
+import { accentForeground, controlDensityHeight, controlDensityText, mergeAppearance, paletteName, resolvedAccent, resolvedAppearanceTheme, uiFontCss, monoFontCss } from '../src/appearance.ts';
+
+test('the original 18-point density remains available without reinterpreting saved choices', () => {
+  for (const [choice, height] of Object.entries({ extra_compact: 18, compact: 24, regular: 28, comfortable: 32, spacious: 36 })) {
+    assert.equal(controlDensityHeight(choice), height);
+    assert.equal(mergeAppearance({}, { ui_control_density: choice }).ui_control_density, choice);
+  }
+  const text = controlDensityText('extra_compact');
+  assert.equal(text.fontSize * text.lineHeight + 2, 18);
+  assert.deepEqual(controlDensityText('compact'), {});
+});
 
 test('native workspace and font previews share one appearance contract', () => {
   const preview = { ui_font_family: 'custom', ui_font_name: 'Segoe UI',
