@@ -292,3 +292,13 @@ on Cafe and David with the corrected CSS confirmed over HTTP. Erfan is updated
 without launching over KMPlayer. These are delivery checks, not visual proof.
 Current mobile visual acceptance is still pending, not inferred from CSS/build.
 See [cause, scope and verification](verification/MOBILE-BUTTON-CENTERING.md).
+
+## External authoring assets
+
+Native and Web file drops reuse one Rust ingestion/review queue, the current
+document formats, SFX library and effect designer. Browser/consumer files use
+bounded, owner-pinned byte uploads instead of server interpretation of local
+paths. Scenes/timeline fragments append only after review; audio source-field
+drops only update the current draft. See [user guide](ASSET-IMPORTS.md) and
+[verification and explicit deployment gates](verification/external-asset-import-draft.md).
+This does not complete the separate project/session restoration workflow.

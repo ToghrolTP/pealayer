@@ -860,6 +860,9 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
     if let Some(capability) = denied_web_capability(&request.method, path, &web) {
         return permission_denied(capability);
     }
+    if path.starts_with("/api/assets/upload") && query_value(&request.target,"owner_id").is_some_and(|id|id != crate::peer::instance_id()) {
+        return HttpResponse::json(409,"Conflict",serde_json::json!({"error":"Asset session owner changed; retry the transfer"}).to_string());
+    }
     match (request.method.as_str(), path) {
         ("GET", "/api/peer/session") => {
             match crate::peer::server_session() {
@@ -1094,6 +1097,12 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
         })()),
         ("POST", "/api/assets/upload/finish") => peer_result(query_value(&request.target,"id").and_then(|s|uuid::Uuid::parse_str(&s).ok()).ok_or_else(||"Asset upload UUID is required".to_string()).and_then(asset_upload::finish)),
         ("DELETE", "/api/assets/upload") => peer_result(query_value(&request.target,"id").and_then(|s|uuid::Uuid::parse_str(&s).ok()).ok_or_else(||"Asset upload UUID is required".to_string()).and_then(asset_upload::cancel)),
+        ("DELETE", "/api/assets/upload/batch") => peer_result(query_value(&request.target,"batch_id").and_then(|s|uuid::Uuid::parse_str(&s).ok()).ok_or_else(||"Asset batch UUID is required".to_string()).and_then(asset_upload::abort_batch)),
+        ("POST", "/api/assets/upload/retain") => peer_result(serde_json::from_slice::<serde_json::Value>(&request.body).map_err(|e|e.to_string()).and_then(|value| {
+            let paths:Vec<String>=serde_json::from_value(value.get("paths").cloned().ok_or("Asset paths are required")?).map_err(|e|e.to_string())?;
+            if paths.is_empty() || paths.len()>crate::assets::MAX_FILES{return Err("Choose 1–64 asset paths".into());}
+            asset_upload::retain_paths(&paths);Ok(serde_json::json!({"retained":true}))
+        })),
         ("GET", "/api/fs/locations") => HttpResponse::json(200, "OK",
             serde_json::json!({"locations": fs_locations::locations(&web.recent_media)}).to_string()),
         ("GET", "/api/fs/thumbnail") => thumbnail_response(&request.target),
@@ -2016,6 +2025,7 @@ mod tests {
         assert_eq!(denied_web_capability("GET", "/", &restricted), None);
         assert_eq!(denied_web_capability("POST", "/api/messages", &restricted), Some("control"));
         assert_eq!(denied_web_capability("GET", "/api/messages", &restricted), None);
+        for path in ["/api/assets","/api/assets/upload/begin","/api/assets/upload/retain","/api/assets/upload/batch"] {assert!(denied_web_capability("POST",path,&restricted).is_some());}
     }
 
     #[test]

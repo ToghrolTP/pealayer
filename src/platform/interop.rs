@@ -877,7 +877,8 @@ impl InteropCommand {
 }
 
 pub fn command_catalog() -> Value {
-    serde_json::json!({
+    let assets=serde_json::json!({"import":"pealayer.assets.import","review":"pealayer.assets.review","snapshot":"/api/assets","upload":"/api/assets/upload","chunk_bytes":crate::server::asset_upload::CHUNK_BYTES,"destinations":["player","library","timeline","audio-source"],"placement":"integer milliseconds; scene/timeline imports append after review, never replace the session","ownership":"transfer receipts pinned to the receiving session owner; hardware effect programs remain with PCController"});
+    let mut catalog=serde_json::json!({
         "contract": "pealayer.control",
         "transports": ["native", "http", "json-rpc", "websocket"],
         "process": { "status": "/api/process/status", "authoring": "/api/process/authoring", "command": "/api/process/command", "methods": ["pealayer.process.status", "pealayer.process.connect", "pealayer.process.quit"], "scope": "local process, never relayed to authority", "connect": "validated, idempotent, graceful restart; poll local status after reconnect" },
@@ -916,7 +917,9 @@ pub fn command_catalog() -> Value {
         "transport": { "nudge": "pealayer.transport.nudge", "directions": [-1,1],
             "paused_step": "frame_step_count", "playing_step": "quick_seek_seconds" },
         "discovery": "/api/player/commands"
-    })
+    });
+    catalog.as_object_mut().unwrap().insert("assets".into(),assets);
+    catalog
 }
 
 pub fn parse_text_command(input: &str) -> Result<InteropCommand, String> {

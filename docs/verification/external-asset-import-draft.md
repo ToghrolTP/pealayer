@@ -1,8 +1,9 @@
-# External asset imports — preserved work in progress
+# External asset imports — implementation and verification
 
-This branch is a checkpoint, not a production/deployment candidate. The user
-prioritized the Hardware Monitor disconnected-state regression before the
-remaining import verification. No regular application was replaced by this work.
+The resumed feature includes the Hardware Monitor disconnected-state fix, rather
+than losing that intervening work. Source checks and real-browser verification
+are complete; packaging/runtime and deployment receipts are recorded separately
+below. Cafe deployment is deferred at the user's request until it returns.
 
 ## Implemented source
 
@@ -32,19 +33,46 @@ second independent format or replace its pending application adapter blindly.
 
 ## Verification and remaining gates
 
-- Initial Rust library check and three pure asset-model tests passed.
-- Browser ordered-transfer/failure/cancellation checks and TypeScript passed.
-- The focused upload test exposed a Windows read-only flush-handle error; the
-  finalizer now opens a writable handle. Rerun that regression before acceptance.
-- Rerun the native suite after subsequent authoring/lock/error-routing edits.
-- Complete rendered native drop/hover/geometry tests, browser phone/tablet/desktop
-  interaction tests, effect-import round trips, source-field drops, scene partial
-  rejection checks, clean packaging and destination-runtime smoke verification.
-- Check media+subtitle asynchronous load ordering and pin authority identity over
-  an in-flight native upload. Verify incomplete/cancelled-batch cleanup behavior.
-- Improve review presentation and localization; ensure previews display the exact
-  imported channels and programs before approval. No physical output test occurred.
-- Deploy through the approved graceful updater only after these gates pass.
+- Full native library suite: 1,098 passed, one ignored. Final focused asset tests
+  additionally cover rendered review/values, typed RPC and exact panned geometry.
+- Browser ordered transfer, failure, command rejection and cancellation checks,
+  TypeScript and complete Web prebuild checks passed.
+- The Windows flush regression is fixed and its actual upload test passes.
+- A real installed-browser fixture exercises the actual drop/source/review
+  controls at 390/768/1440 widths in both themes. No overflow, automatic commands,
+  duplicate source import or page exceptions occurred. These are real controls
+  with isolated memory-only transport, not physical-device proof.
+- Batch cancellation removes registered partial and completed unretained files.
+  Inputs are retained before final command submission: an acknowledgement lost
+  after queuing must not delete files the importer may already be using.
+- Transfer owner receipts pin the immutable destination. Reordered chunks,
+  path traversal, reserved device names, overruns and incomplete finalization
+  fail closed. Native consumers transfer files rather than forwarding local paths.
+- Movie/subtitle drops wait for FileLoaded for the requested media. An unrelated
+  movie cannot receive the pending subtitle, and failed loads expire the queue.
+- Scene review displays real sampled/unsampled values. Missing/incompatible
+  channels or board identity reject the whole scene without partial placement.
+  Imported motion is not silently converted into output. Cached channel catalogs
+  support offline authoring; unknown mappings require a valid catalog first.
+- Existing curves keep their channel policies; colliding times and locked
+  channels reject the transaction. External effect definitions open as new
+  identities and the Save path refuses to overwrite an occupied controller ID.
+
+## Explicit boundaries
+
+The original project-persistence draft remains separate. This importer does not
+restore projects, run scenes or publish/execute imported hardware programs.
+Saved/published effect cards use the existing timeline drag path after review;
+opening a JSON definition is not automatically executing or publishing it.
+Relative audio dependencies must accompany browser/consumer uploads in the same
+batch. A process crash can leave unretained upload files on disk; ordinary cancel
+and failure cleanup is verified, not cross-crash disk garbage collection.
+No human listening, physical board output or production CPU soak is claimed.
+
+## Packaging/runtime checkpoint
+
+Pending the clean, source-identified package and isolated live API/decoder pass.
+No regular application was replaced during source/browser testing.
 
 The connected production application, its private configuration and hardware
 outputs were not used as fixtures. No successful Cafe deployment is claimed.

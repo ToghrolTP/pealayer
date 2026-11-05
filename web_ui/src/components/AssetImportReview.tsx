@@ -22,8 +22,9 @@ export function AssetImportReview({ state, sendCmd, openEffect }: {
     }}>
     <Typography.Paragraph strong>{review?.name}</Typography.Paragraph>
     <Typography.Paragraph>{review?.kind === 'effect'
-      ? 'Review this definition in the existing Effect properties editor, then Save or Publish. Hardware effects remain owned by PCController.'
-      : `Append at ${formatTimelineTime(time)} without replacing existing cues, moving the playhead or changing your workspace.`}</Typography.Paragraph>
+      ? 'Review this definition in Effect properties, then Save or Publish. Drag the saved effect from the library to reuse it. Hardware effects remain owned by PCController.'
+      : `Append at ${formatTimelineTime(time,true)} without replacing existing cues, moving the playhead or changing your workspace.`}</Typography.Paragraph>
+    <div className="asset-review-items">{review?.summary.map((line,index)=><div key={index}>{line}</div>)}</div>
     <Alert type="info" showIcon message={review?.kind === 'scene' ? 'Sampled relay/PWM values become set-and-keep cues. Unknown channels are not invented. No live scene is run.' : 'Pause playback before arranging timeline assets. Existing channel locks are respected.'} />
   </Modal>;
 }

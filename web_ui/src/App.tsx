@@ -19,7 +19,7 @@ import { WebViewBoundary } from './components/WebViewBoundary';
 import { RemoteLocationDialog } from './components/RemoteLocationDialog';
 import { AssetDropTarget } from './components/AssetDropTarget';
 import { AssetImportReview } from './components/AssetImportReview';
-import type { ImportedEffect } from './assetImports';
+import { assetDropDestination, type ImportedEffect } from './assetImports';
 import { useClipboardUrls } from './clipboardUrls';
 import './remote-location.css';
 import type { PlayerState } from './components/RemoteControlTab';
@@ -746,14 +746,10 @@ const App: React.FC = () => {
             onScroll={handleContentScroll}
           >
             <AssetDropTarget apiBaseUrl={apiBaseUrl} sendCmd={sendCmd}
+              enabled={['timeline','player','effects'].includes(activeTab)}
               destination={activeTab === 'effects' ? { surface: 'library' } : activeTab === 'timeline' ? { surface: 'timeline', start_time_ms: Math.max(0, Math.round((state.playback_time ?? 0) * 1000)) } : { surface: 'player' }}
               destinationForDrop={event => {
-                const lane = (event.target as HTMLElement).closest<HTMLElement>('[data-asset-lane]');
-                if (lane) {
-                  const rect = lane.getBoundingClientRect();
-                  return { surface: 'timeline', track_key: lane.dataset.assetLane, start_time_ms: Math.round(Math.max(0, Math.min(1, (event.clientX - rect.left) / Math.max(1, rect.width))) * Number(lane.dataset.assetDuration)) };
-                }
-                return activeTab === 'effects' ? { surface: 'library' } : activeTab === 'timeline' ? { surface: 'timeline', start_time_ms: Math.max(0, Math.round((state.playback_time ?? 0) * 1000)) } : { surface: 'player' };
+                return assetDropDestination(event.target,event.clientX,activeTab === 'effects' ? { surface: 'library' } : activeTab === 'timeline' ? { surface: 'timeline', start_time_ms: Math.max(0, Math.round((state.playback_time ?? 0) * 1000)) } : { surface: 'player' });
               }}>
             <WebViewBoundary key={activeTab} locale={runtime?.locale || 'en'}>
             <React.Suspense fallback={<FujiLoader locale={runtime?.locale || 'en'} />}>

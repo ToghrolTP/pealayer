@@ -1912,6 +1912,13 @@ impl eframe::App for PealayerApp {
         if !dropped_file_paths.is_empty() {
             self.load_dropped_files(ui.ctx(),dropped_file_paths);
         }
+        // Drop hit regions describe only the immediately preceding visible
+        // frame. Closed panels and editors must not keep invisible targets.
+        ui.ctx().data_mut(|data| {
+            data.remove::<crate::assets::TimelineDropArea>(egui::Id::new("external-assets-timeline"));
+            data.remove::<egui::Rect>(egui::Id::new("external-assets-library"));
+            data.remove::<(egui::Rect,uuid::Uuid)>(egui::Id::new("external-assets-audio-source"));
+        });
 
         // Initialize RTT texture once if not done yet
         let mut init_rtt = false;
@@ -3632,6 +3639,10 @@ impl PealayerApp {
             return Err("Finish or discard capture before publishing edits".into());
         }
         let mut draft = self.effect_library_draft.clone();
+        if draft.is_new && self.advertised_hardware().is_some_and(|caps| {
+            if draft.kind=="sequence" {draft.id.parse::<u64>().ok().is_some_and(|id|caps.macros.iter().any(|e|e.id==id))}
+            else {caps.strip_effects.iter().any(|e|e.id==draft.id)}
+        }) {return Err("This effect ID is already in use. Choose a free ID before saving the imported copy".into());}
         if draft.kind == "sequence" {
             draft.steps.sort_by_key(|step| step.at_us);
             crate::ui::effects_library::repeated_sequence_duration_ms(&draft.steps, draft.repeat_count, draft.repeat_interval_ms)?;
@@ -4371,7 +4382,7 @@ impl PealayerApp {
         // that operates the session goes through the authority's unified engine.
         if let Some(client)=crate::peer::client() && !crate::peer::mirroring()
             && !command.is_process_local()
-            && !matches!(&command,InteropCommand::QuitLocal|InteropCommand::OpenPreferences|InteropCommand::OpenMediaInformation|InteropCommand::OpenBoardInformation{..}|InteropCommand::OpenRfManager|InteropCommand::Activate|InteropCommand::Minimize|InteropCommand::Maximize|InteropCommand::Restore|InteropCommand::SetFullscreen{..}|InteropCommand::ToggleFullscreen|InteropCommand::GetStatus) {
+            && !matches!(&command,InteropCommand::ImportAssets{..}|InteropCommand::QuitLocal|InteropCommand::OpenPreferences|InteropCommand::OpenMediaInformation|InteropCommand::OpenBoardInformation{..}|InteropCommand::OpenRfManager|InteropCommand::Activate|InteropCommand::Minimize|InteropCommand::Maximize|InteropCommand::Restore|InteropCommand::SetFullscreen{..}|InteropCommand::ToggleFullscreen|InteropCommand::GetStatus) {
             if matches!(&command,InteropCommand::OpenMediaFolder){crate::ui::peer_browser::open(ctx,crate::ui::peer_browser::Purpose::Media,None);return;}
             if let Err(error)=serde_json::to_value(&command).map_err(|error|error.to_string()).and_then(|value|client.queue("/api/player/command",value)){self.show_error=Some(error);}
             return;
@@ -5654,6 +5665,7 @@ impl PealayerApp {
                 }
                 Some(Ok(Event::FileLoaded)) => {
                     self.media_metadata_loaded = true;
+                    self.attach_loaded_asset_subtitles();
                     if let Ok(duration) = self.mpv.get_property::<f64>("duration")
                         && duration.is_finite()
                         && duration > 0.0
@@ -7083,7 +7095,7 @@ impl PealayerApp {
 
     pub fn load_dropped_files(&mut self, ctx: &egui::Context, paths: Vec<std::path::PathBuf>) {
         let destination=crate::assets::native_destination(ctx);
-        if let Err(error)=self.import_assets(crate::assets::ImportRequest {paths:paths.iter().map(|p|p.to_string_lossy().into_owned()).collect(),destination},ctx) {self.show_error=Some(error);}
+        if let Err(error)=self.import_assets(crate::assets::ImportRequest {paths:paths.iter().map(|p|p.to_string_lossy().into_owned()).collect(),destination,owner_id:None},ctx) {self.show_error=Some(error);}
     }
 
     pub fn load_url(&mut self, url: &str) {

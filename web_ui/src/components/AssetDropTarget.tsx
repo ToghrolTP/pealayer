@@ -1,18 +1,20 @@
-import React, { useRef, useState } from 'react';
+import React, { useRef, useState, useEffect } from 'react';
 import { Button, message, Progress } from 'antd';
 import { ImportOutlined } from '@ant-design/icons';
 import { externalFiles, importAssetFiles } from '../assetImports';
 import type { AssetDestination } from '../assetImports';
 
-export function AssetDropTarget({ children, destination, apiBaseUrl, sendCmd, destinationForDrop }: {
+export function AssetDropTarget({ children, destination, apiBaseUrl, sendCmd, destinationForDrop, enabled = true }: {
   children: React.ReactNode; destination: AssetDestination; apiBaseUrl: string;
   sendCmd: (command: string, payload?: Record<string, unknown>) => Promise<boolean>;
   destinationForDrop?: (event: React.DragEvent<HTMLDivElement>) => AssetDestination;
+  enabled?: boolean;
 }) {
   const input = useRef<HTMLInputElement>(null);
   const [progress, setProgress] = useState<number | null>(null);
   const [hover, setHover] = useState(false);
   const controller = useRef<AbortController | null>(null);
+  useEffect(()=>()=>{controller.current?.abort();},[]);
   const upload = async (files: File[], target = destination) => {
     if (controller.current) return;
     const transfer = new AbortController(); controller.current = transfer; setProgress(0);
@@ -20,10 +22,12 @@ export function AssetDropTarget({ children, destination, apiBaseUrl, sendCmd, de
     catch (error) { if (!transfer.signal.aborted) void message.error(String(error instanceof Error ? error.message : error)); }
     finally { controller.current = null; setProgress(null); }
   };
+  if(!enabled) return <>{children}</>;
   return <div className={`asset-drop-target ${hover ? 'is-external-drop' : ''}`}
     onDragOver={event => { if (externalFiles(event.dataTransfer)) { event.preventDefault(); event.dataTransfer.dropEffect = 'copy'; setHover(true); } }}
     onDragLeave={event => { if (!event.currentTarget.contains(event.relatedTarget as Node)) setHover(false); }}
     onDrop={event => {
+      setHover(false);
       if (!externalFiles(event.dataTransfer) || event.defaultPrevented) return;
       event.preventDefault(); setHover(false); void upload(Array.from(event.dataTransfer.files), destinationForDrop?.(event) ?? destination);
     }}>

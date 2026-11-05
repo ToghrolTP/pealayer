@@ -532,7 +532,7 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale, 
             options={recordingColors.map(color => ({ value: color.id, label: tr(locale, color.label), color: color.hex }))}
             onChange={(color, hex) => setDraft({ ...draft, color: color === 'custom' ? hex! : color })} /></label>}
         </div></ConfigProvider>
-        {draft.kind === 'audio' ? <SoundEffectFields program={audioProgram} onChange={updateAudio} state={state} reference={draft.reference} apiBaseUrl={apiBaseUrl} locale={locale} sendCmd={sendCmd} /> : draft.kind === 'sequence' ? <>
+        {draft.kind === 'audio' ? <SoundEffectFields key={draft.id} program={audioProgram} onChange={updateAudio} state={state} reference={draft.reference} apiBaseUrl={apiBaseUrl} locale={locale} sendCmd={sendCmd} /> : draft.kind === 'sequence' ? <>
           <div className="effect-editor__toolbar"><strong>{tr(locale, 'Sequence steps')}</strong><Space wrap>
             <EffectRecorder state={state} sendCmd={sendCmd} locale={locale} effect={draftPayload(draft)} onSequenceChange={(steps, id) => setDraft((current) => current ? { ...current, id: String(id), reference: `effect:${id}`, is_new: false, steps } : current)} />
             <Button disabled={captureBusy || (!draft.steps.length && !sequenceLaneChoices(state.hardware_details?.controls ?? [],sequenceExtraKinds(state.hardware_details)).length)} icon={<PlusOutlined />} onClick={() => sequenceActions.current?.addStep()}>{tr(locale, 'Add step')}</Button>
