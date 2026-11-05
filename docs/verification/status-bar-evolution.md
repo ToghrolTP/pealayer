@@ -57,6 +57,27 @@ Use the existing detached comparison worktree and shared build cache, with its
 already-generated host configuration (do not add a duplicate Cargo config).
 Do not copy another machine's libmpv or publish executables/private profiles.
 
-The current before-fix capture reproduces the short hardware label despite a
-large empty area. Historical rebuild and repaired-runtime evidence are tracked
-in the issue. Compilation and screenshots are not production deployment proof.
+The following genuine captures are published. The two historical rebuilds used
+unmodified tracked source and their locked dependencies; the process-local API
+confirmed the expected commit before capture. All windows were 2002 × 1346
+physical pixels; the public images are the bottom 56 pixels, unretouched.
+
+| Milestone | Source | Capture | Screenshot-only discussion |
+| --- | --- | --- | --- |
+| Compact two-sided widgets | `48fd59ce65022b039d28570288ff967bf52bca8e` | [Status bar](../screenshots/status-bar-compact.png) | PR #166 |
+| CraftUI surfaces | `9610177510c02f393c56bd024625c70b21442c99` | [Status bar](../screenshots/status-bar-craft.png) | [PR #216](https://github.com/ToghrolTP/pealayer/pull/216#issuecomment-6647068767) |
+| Native typography before repair | `d6feabf8c0956523aa5050bf978975cee8b6c431` | [Status bar](../screenshots/status-bar-native-before.png) | [PR #225](https://github.com/ToghrolTP/pealayer/pull/225#issuecomment-6647048566) |
+
+The unused-space ellipsis is present in all three: the fixed slot predates the
+native font work. FPS typeface/baseline and the trailing workspace presentation
+did change. No historical playback-rate or CPU claim is inferred from the idle
+FPS readings in these screenshots.
+
+Executable SHA-256 provenance for the fresh historical builds:
+
+- Compact: `406fe80e7d890faf8464606471bfca8ce43a3ba3d4593450d7d73684750b0847`.
+- CraftUI: `59b265ac0fddac383e38c082392bb593283b5469f8a4a906c64f950e32ed8ee0`.
+
+Repaired-runtime evidence is tracked in the issue. Compilation and screenshots
+are not production deployment proof; the Cafe SSH endpoint refused connection
+during this pass.
