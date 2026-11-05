@@ -37,6 +37,7 @@ API additions reuse the existing IPC/RPC/Web command router:
 ## Acceptance and remaining gates
 
 - Passed: Rust strip/model/cue/API tests, native editor width checks at 340/768/1200 points, TypeScript check, Web pattern/draft validation tests, Go host publish/prepare/render tests. Prepared fixture retains the 10,000 ms start and 11,000 ms stop.
-- Pending: packaged native/Web visual review, production installation, physical color-order/segment/Rainbow tests and observed board timing. These are not implied by source tests.
+- Verified locally: packaged native designer opened through IPC and captured with the read-only Win32 helper; canonical updater restart confirmed through API with the original libmpv retained. A follow-up pins the shared action bar outside the editor scroll area after that capture exposed its visibility issue.
+- Pending: final action-bar capture, Web visual review, paired host/production deployment, physical color-order/segment/Rainbow tests and observed board timing. These are not implied by source tests.
 - Standalone strip/Rainbow stream counters are implemented. Prepared timeline progress remains on the existing media-timeline acknowledgement/status contract; those steps do not increment the standalone counters. The concurrent RGB-input receiver has its own telemetry. Unifying their presentation is a follow-up, not a physical refresh-rate claim.
-- Cafe's SSH endpoint refused the connection during this pass. The existing local installed instance predates reliable draft inspection, so replacement waits for an explicit safe restart; it has not been silently closed.
+- Cafe's SSH endpoint refused the connection during this pass. Local installation used the graceful updater with explicit restart approval; a denied tool launch was completed by the user, not bypassed.
