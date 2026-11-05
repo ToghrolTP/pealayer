@@ -52,7 +52,31 @@ fixture exercises URL-update callbacks through downloading/verifying/restarting
 and withholds completion until the expected build manifest appears. It does
 not replace an executable or actuate hardware.
 
-Build/package, runtime CLI evidence and deployment receipts are recorded here
-after execution. Cafe deployment remains deferred at the user's request until
-its normal connection returns; do not confuse local fixtures with remote
+The full native library suite passed: **1,115 passed, one ignored**. Windows
+packaging passed the production TypeScript/Web/PWA checks, native resources,
+all seven quick-action icons, libmpv smoke and downloader smoke. Packaging
+skipped duplicate native/Web regression runs; the full native suite ran
+separately. No new browser interaction changes are claimed.
+
+The packaged executable passed actual process/loopback checks for plain output,
+forced semantic ANSI, JSON-only completion, and JSON failure on stderr with
+exit code 4. This is captured program output, not a hand-written console mock.
+Repeat those bounded, hardware-free checks with:
+
+```powershell
+.\scripts\verify-updater-console.ps1 -Executable <packaged-exe> -EvidenceDirectory <existing-private-directory>
+```
+
+The graceful updater then installed and restarted the canonical local app.
+Its process-local authoring endpoint reported clean before replacement. Fresh
+manifest readback matched source
+`b75a27b68ae9de356a9bb219ac24ada47754b9ad` and executable SHA-256
+`086c496fb10caf0b822e1f0a0320f95bbb67c0315eb6284fce2763fb6c7ae96a`.
+The restarted process remained clean and retained CraftUI/System settings.
+The actual upload/restart receipt completed in about six seconds, with no
+stale verification percentage. Private console evidence is under the program
+root's `verification` directory, not committed logs or user configuration.
+
+Cafe deployment remains deferred at the user's request until its normal
+connection returns; local fixtures and installation do not imply remote
 installation or physical acceptance.

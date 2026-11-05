@@ -150,8 +150,10 @@ capture. They are not mockups, old images relabelled as new, or hardware proof.
 
 ![Unchanged CraftUI header and panel styling in the same review executable](../screenshots/craft-ui-header-parity-control.png)
 
-The regular application's config still reports CraftUI with System theme. Its
-preceding repeat-projection update is verified installed. This Dock package's
-local updater launch was policy-blocked; the user has been given the same
-graceful updater path. Installed replacement requires manifest readback, not
-only these review captures. Cafe deployment remains user-deferred while offline.
+The user-installed Dock update was subsequently verified through the regular
+app's manifest: source `5532e2776804032e45b5738ee0fee063a08b5d28` and the exact
+SHA-256 above. The later [updater-console delivery](updater-console.md) retains
+this fix and is also verified installed. The regular config still reports
+CraftUI with System theme; verification did not change its preferred renderer.
+Cafe deployment remains user-deferred while offline. Runtime manifest readback
+is installation evidence; these review captures remain separate visual evidence.
