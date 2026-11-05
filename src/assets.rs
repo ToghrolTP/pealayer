@@ -1618,4 +1618,13 @@ mod tests {
         assert!(app.pending_timeline_close_action.is_none());
         std::fs::remove_dir_all(directory).unwrap();
     }
+    #[test]
+    fn acknowledged_asset_replica_is_not_an_unsaved_consumer_sidecar() {
+        let mut app=PealayerApp::default();app.current_video_path=Some("fixture.mkv".into());
+        let effect=Effect::new("Imported".into(),"sparkle".into(),1000,vec![]);app.timeline.instances.push(EffectInstance::new(effect.id,10429));app.timeline.templates.push(effect);
+        app.acknowledge_peer_authoring_snapshot(true,true);assert!(!app.is_timeline_dirty());
+        app.timeline.instances[0].start_time_ms=11000;
+        app.acknowledge_peer_authoring_snapshot(false,false);assert!(app.is_timeline_dirty(),"unchanged server snapshots must not erase pending local edits");
+        app.acknowledge_peer_authoring_snapshot(true,false);assert!(!app.is_timeline_dirty());
+    }
 }

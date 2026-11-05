@@ -8110,9 +8110,10 @@ impl PealayerApp {
             }
             state.config=Some(snapshot.session.config.clone());
         }
-        if state.timeline!=snapshot.session.timeline {
+        let replica_timeline_changed=state.timeline!=snapshot.session.timeline;
+        if replica_timeline_changed {
             if let Some(timeline)=&snapshot.session.timeline {
-                self.timeline=timeline.timeline.clone();self.track_muted=timeline.muted.clone();self.track_soloed=timeline.soloed.clone();
+                self.timeline=timeline.timeline.clone();self.track_muted=timeline.muted.clone();self.track_soloed=timeline.soloed.clone();self.track_locked=timeline.timeline.track_locked.clone();
             }
             state.timeline=snapshot.session.timeline.clone();
         }
@@ -8137,7 +8138,8 @@ impl PealayerApp {
             return;
         }
         self.connection_notice=client.error.lock().ok().and_then(|value|value.clone()).or_else(||client.command_error.lock().ok().and_then(|value|value.clone()));
-        if state.loaded_media!=snapshot.session.media {
+        let replica_media_changed=state.loaded_media!=snapshot.session.media;
+        if replica_media_changed {
             let _=self.mpv.0.command("stop",&[]);
             state.loaded_media=snapshot.session.media.clone();
             state.media_error=None;
@@ -8152,6 +8154,11 @@ impl PealayerApp {
         }
         if let Some(error)=crate::peer::take_preview_error(){state.media_error=Some(error);}
         self.current_video_path=snapshot.session.media.clone().map(std::path::PathBuf::from);
+        // This is an acknowledged authority snapshot, not a new local sidecar
+        // draft. Install the baseline AFTER both media and timeline so a clean
+        // consumer can close without a false unsaved-work prompt. Unacknowledged
+        // local edits are not marked clean on unchanged authority snapshots.
+        self.acknowledge_peer_authoring_snapshot(replica_timeline_changed,replica_media_changed);
         self.volume=snapshot.session.status.get("volume").and_then(serde_json::Value::as_f64).unwrap_or(self.volume);
         self.is_muted=snapshot.session.status.get("muted").and_then(serde_json::Value::as_bool).unwrap_or(self.is_muted);
         self.is_paused=snapshot.session.paused;
@@ -8212,6 +8219,9 @@ impl PealayerApp {
         self.sub_tracks=view.tracks.iter().filter(|track|track.kind==MediaTrackType::Subtitle).map(|track|SubtitleTrack{id:track.id,title:track.title.clone(),lang:track.language.clone()}).collect();
         self.media_tracks=view.tracks;self.set_media_file_info(view.file);
         self.current_vid=view.vid;self.current_aid=view.aid;self.current_sid=view.sid;
+    }
+    pub(crate) fn acknowledge_peer_authoring_snapshot(&mut self,timeline_changed:bool,media_changed:bool){
+        if timeline_changed||media_changed{self.timeline_saved_baseline=Some(self.snapshot_timeline());}
     }
 
     fn poll_external_config(&mut self, ctx: &egui::Context) {
@@ -8756,7 +8766,10 @@ impl PealayerApp {
         );
 
         let decision=if save {Some(TimelineCloseDecision::Save)}else if discard{Some(TimelineCloseDecision::Discard)}else if cancel||confirm.dismissed{Some(TimelineCloseDecision::Cancel)}else{None};
-        if let Some(decision)=decision {self.apply_interop_command(ctx,crate::platform::interop::InteropCommand::ResolveTimelineClose{decision},"ui");}
+        if let Some(decision)=decision {
+            if self.pending_timeline_close_action.is_some(){if let Err(error)=self.resolve_timeline_close(ctx,decision){self.show_error=Some(error);}}
+            else {self.apply_interop_command(ctx,crate::platform::interop::InteropCommand::ResolveTimelineClose{decision},"ui");}
+        }
     }
 
     pub(crate) fn resolve_timeline_close(&mut self,ctx:&egui::Context,decision:TimelineCloseDecision)->Result<(),String>{

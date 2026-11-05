@@ -59,6 +59,12 @@ second independent format or replace its pending application adapter blindly.
   movie while Save/Discard/Cancel is pending; Cancel removes them without touching
   cues or playhead. Native, consumer, Web and RPC choices reuse one resolver.
   The dialog and its transient state are not restored from browser storage.
+- The two-instance transfer passed, but cleanup exposed a pre-existing missing
+  consumer sidecar baseline. Acknowledged media/timeline replicas now install
+  their baseline after both fields, while unchanged server snapshots do not
+  clean pending local edits. Native local-window confirmations remain local;
+  only server-owned confirmations are forwarded. The final consumer acceptance
+  includes clean authoring inspection and graceful exit without closing authority.
 - Current PCController EffectDescriptor/effects.json exports adapt into the
   existing typed designer payload, retaining steps, engine, repeats and properties.
   The RPC name validator now allows the same printable punctuation as native
