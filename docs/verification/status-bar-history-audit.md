@@ -5,8 +5,8 @@ and [issue #228](https://github.com/ToghrolTP/pealayer/issues/228).
 
 The initial gallery incorrectly selected only late revisions of one design.
 This audit starts with the first component and its first actual integration.
-It includes all 46 non-merge changes to `src/ui/status_bar.rs` reachable from
-the locally fetched refs through the typography repair, including the recovered
+It includes all 47 non-merge changes to `src/ui/status_bar.rs` reachable from
+the locally fetched refs through the divider repair, including the recovered
 work branch. Changes outside that file are listed separately. A source-history
 entry is not a claim that its connected/playing/error states were captured.
 
@@ -73,6 +73,7 @@ as separate designs. Source identifiers belong here, not in the gallery titles.
 | `9610177` | Layout | CraftUI well background and separator. |
 | `1fbed60` | Layout | Native/custom typography and selectable workspace chrome. |
 | `7d9e8f9` | Layout | Measured connection width and visible-glyph vertical centering; modern native monospace and variable-font weights. |
+| `60389d3` | Layout/tests | Remove duplicate panel separator and density-dependent settling/resize behavior; retain compact item dividers with explicit theme tokens and independent matching Web slots. Painted geometry/hover coverage. |
 
 ## Integration and changes outside the component
 

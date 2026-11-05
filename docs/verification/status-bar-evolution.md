@@ -238,3 +238,29 @@ by the status-widget guardrail and TypeScript/bundle checks.
 
 Compilation and screenshots are not production deployment proof; the Cafe SSH
 endpoint refused connection during this pass.
+
+### Divider repair and stable panel sizing
+
+![Verified divider and panel repair](../screenshots/status-bar-divider-fixed.png)
+
+Actual package built from clean source
+`60389d3fbd3e10162492459bb7501fcf1b7e3922`. The local process API confirmed
+that revision, `git_dirty: false`, no loaded media, no hardware connection and
+zero clock updates. Its native authoring state was clean before graceful Quit.
+The window was 2002 × 1346 physical pixels at 150%; this is the unretouched
+2002 × 56 bottom crop. The review profile uses System UI and System monospace
+(installed Cascadia Mono here). The real idle Screen FPS is not a media rate or
+performance benchmark.
+
+Executable SHA-256:
+`b53a49ed303444457db7c8ae2c8e9f28201fc52439b1c867ce63c478e1b8286e`.
+Runtime SHA-256:
+`e56ce67cd00f06a59dc7ed5b97a49a9182a381554c755dc4570a52af1ef30e65`.
+The host-compatible package passed its libmpv smoke, utility, icon-resource and
+Web bundle/PWA verification. Source checks remain 21 status tests, 4 font tests,
+Web status/responsive guardrails and TypeScript. Existing deprecation/unused-code
+warnings remain; they are not claimed as resolved by this focused repair.
+The comparison worktree was restored to its original detached revision, and the
+shared release cache now contains the current repair rather than a historical
+executable. Cafe deployment remains blocked by the refused SSH endpoint; this
+capture is local native verification, not production or browser acceptance.
