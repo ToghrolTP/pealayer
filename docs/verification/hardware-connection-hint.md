@@ -42,5 +42,28 @@ connection/board evidence:
 
 ![Expanded technical details in the light theme](../screenshots/hardware-connection-details-web.png)
 
-Package, full-suite and installation receipts follow below after verification.
+The full native suite passed: **1,117 passed, one ignored**. Production Windows
+packaging passed TypeScript/Web/PWA integrity, native resources, all seven
+quick-action icon checks, libmpv smoke and downloader smoke. Packaging skipped
+duplicate regression runs; the native suite and focused Web/browser checks
+above ran separately.
+
+The graceful updater installed source
+`6d678c71749ac8b6ef280e2b88dfc98395c5b419` into the canonical local application.
+Fresh manifest readback matched executable SHA-256
+`ff0a8706c2f59204dbf1c6c31675a2863905b39f780ba247d3b145c520b27484`.
+Process-local authoring was clean before and after replacement, and CraftUI and
+System theme settings were retained. No hardware commands were sent for these
+checks. A private read-only capture of the installed native UI confirms the
+short message and information control; that full-window image includes user
+media and is not published.
+
+The restart also exposed a separate tiny-window condition despite valid saved
+application dimensions. The existing Maximize API restored a usable window;
+this is a recovery, not a source fix. Investigation belongs to
+[the native window integration issue](https://github.com/ToghrolTP/pealayer/issues/34).
+The additional eframe window-settings persistence is a candidate to examine,
+not a proven cause. The running application's window should not be manipulated
+again merely to improve this report's captures.
+
 Cafe deployment remains user-deferred until its normal connection returns.
