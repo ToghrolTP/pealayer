@@ -54,6 +54,11 @@ second independent format or replace its pending application adapter blindly.
   placement now checks for actual loaded media before requiring Pause. The
   previous candidate saved its SFX but rejected placement; it is not accepted as
   the final runtime build.
+- The next real probe confirmed SFX placement and timeline append, then reached
+  the unsaved-media guard. Mixed subtitles now remain queued for their requested
+  movie while Save/Discard/Cancel is pending; Cancel removes them without touching
+  cues or playhead. Native, consumer, Web and RPC choices reuse one resolver.
+  The dialog and its transient state are not restored from browser storage.
 - Current PCController EffectDescriptor/effects.json exports adapt into the
   existing typed designer payload, retaining steps, engine, repeats and properties.
   The RPC name validator now allows the same printable punctuation as native

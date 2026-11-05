@@ -17,6 +17,15 @@ and designer controls remain the owners of the imported data.
 
 ## Arrange and reuse
 
+Opening a different movie still respects unsaved timeline work. Native and Web
+show Save/Discard/Cancel rather than replacing it. Subtitles from a mixed drop
+wait for that decision and the requested movie's FileLoaded event; Cancel removes
+only those pending attachments. Additional playlist files must be dropped again
+after confirming a pending media switch. Automation can explicitly choose via
+`pealayer.timeline.resolve_pending` with `decision: save`, `discard` or `cancel`;
+the importer never makes that decision for the user. Saving without a local
+media sidecar uses the existing separate timeline/project save workflow.
+
 Timeline audio drops use the pointed time, not the playhead or nearest keyframe.
 A sound remains on the Audio effects lane even when dropped over another row;
 an imported scene/timeline retains its own channel mapping. Locked destinations

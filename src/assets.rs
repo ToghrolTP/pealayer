@@ -596,8 +596,13 @@ impl PealayerApp {
                     _ => vec![(name, asset, destination)],
                 })
                 .collect::<Vec<_>>();
-            batch.sort_by_key(|(_, asset, _)| !matches!(asset, Ok(Prepared::Media(_))));
+            batch.sort_by_key(|(_, asset, destination)| {
+                !(matches!(asset, Ok(Prepared::Media(_)))
+                    || matches!(asset, Ok(Prepared::Audio(_)))
+                        && *destination == Destination::Player)
+            });
             let mut media_loaded = false;
+            let mut requested_media = None;
             for (name, asset, mut destination) in batch {
                 if matches!(&asset, Ok(Prepared::Scene(_) | Prepared::Timeline(_)))
                     && !matches!(destination, Destination::Timeline { .. })
@@ -636,7 +641,21 @@ impl PealayerApp {
                     Ok(Prepared::Audio(audio)) if destination != Destination::Player => {
                         self.asset_import.audio.push_back((audio, destination))
                     }
-                    Ok(Prepared::Audio(audio)) => self.load_media_target(&audio.program.source),
+                    Ok(Prepared::Audio(audio)) => {
+                        if requested_media.is_some() {
+                            if self.pending_timeline_close_action.is_some() {
+                                self.asset_error("Confirm the media change before appending additional playlist files".into());
+                            } else if let Err(error) = self
+                                .mpv
+                                .command("loadfile", &[&audio.program.source, "append-play"])
+                            {
+                                self.asset_error(error.to_string());
+                            }
+                        } else {
+                            requested_media = Some(PathBuf::from(&audio.program.source));
+                            self.load_media_target(&audio.program.source);
+                        }
+                    }
                     Ok(Prepared::Effect(mut effect)) => {
                         // External definitions are copies. Never upsert over an
                         // unrelated live controller program by its exported ID.
@@ -689,21 +708,29 @@ impl PealayerApp {
                             continue;
                         }
                         if !media_loaded {
+                            requested_media = Some(path.clone());
                             self.load_video_file(path);
                             media_loaded = true;
+                        } else if self.pending_timeline_close_action.is_some() {
+                            self.asset_error("Confirm the media change before appending additional playlist files".into());
                         } else if let Some(path) = path.to_str() {
                             let _ = self.mpv.command("loadfile", &[path, "append-play"]);
                         }
                     }
                     Ok(Prepared::Subtitle(path)) => {
-                        if let Some(media) = self.current_video_path.clone() {
+                        if let Some(media) = requested_media
+                            .clone()
+                            .or_else(|| self.current_video_path.clone())
+                        {
                             // loadfile is asynchronous. sub-add before FileLoaded
                             // would attach to the old movie or be discarded.
-                            if media_loaded || !self.media_metadata_loaded {
+                            if requested_media.is_some() || !self.media_metadata_loaded {
                                 self.asset_import.subtitles.push((media, path));
-                                self.asset_import
-                                    .subtitle_started
-                                    .get_or_insert_with(std::time::Instant::now);
+                                if self.pending_timeline_close_action.is_none() {
+                                    self.asset_import
+                                        .subtitle_started
+                                        .get_or_insert_with(std::time::Instant::now);
+                                }
                             } else {
                                 self.attach_asset_subtitle(path);
                             }
@@ -734,6 +761,11 @@ impl PealayerApp {
                     Err(error) => self.asset_error(error),
                 }
             }
+        }
+        if !self.asset_import.subtitles.is_empty() && self.pending_timeline_close_action.is_none() {
+            self.asset_import
+                .subtitle_started
+                .get_or_insert_with(std::time::Instant::now);
         }
         if let Some(started) = self.asset_import.subtitle_started {
             let timeout = std::time::Duration::from_secs(60);
@@ -775,15 +807,23 @@ impl PealayerApp {
             return;
         }
         self.asset_import.subtitle_started = None;
+        let mut pending = Vec::new();
         for (media, path) in std::mem::take(&mut self.asset_import.subtitles) {
             if self.current_video_path.as_ref() == Some(&media) {
                 self.attach_asset_subtitle(path);
             } else {
-                self.asset_error(
-                    "Media changed before its dropped subtitles could be attached; drop them again"
-                        .into(),
-                );
+                pending.push((media, path));
             }
+        }
+        self.asset_import.subtitles = pending;
+        self.publish_asset_snapshot();
+    }
+    pub(crate) fn cancel_asset_media_change(&mut self, path: &Path) {
+        self.asset_import
+            .subtitles
+            .retain(|(media, _)| media != path);
+        if self.asset_import.subtitles.is_empty() {
+            self.asset_import.subtitle_started = None;
         }
         self.publish_asset_snapshot();
     }
@@ -1053,20 +1093,22 @@ impl PealayerApp {
         Ok(())
     }
     pub(crate) fn draw_asset_review(&mut self, ctx: &eframe::egui::Context) {
-        let remote = crate::peer::client()
-            .and_then(|c| c.snapshot())
-            .and_then(|s| {
-                s.session
-                    .status
-                    .get("asset_imports")?
-                    .get("reviews")?
-                    .as_array()?
-                    .first()
-                    .cloned()
-            });
-        let value = remote
-            .clone()
-            .or_else(|| snapshot().get("reviews")?.as_array()?.first().cloned());
+        if self.pending_timeline_close_action.is_some()
+            || crate::peer::client().is_some_and(|c| c.pending_timeline_change())
+        {
+            return;
+        }
+        let remote = crate::peer::client().and_then(|c| c.asset_review());
+        let value = remote.clone().or_else(|| {
+            SNAPSHOT
+                .lock()
+                .ok()?
+                .as_ref()?
+                .get("reviews")?
+                .as_array()?
+                .first()
+                .cloned()
+        });
         let Some(value) = value else {
             return;
         };
@@ -1399,6 +1441,10 @@ mod tests {
             crate::platform::interop::parse_interop_request(&json.replace("10429", "\"bad\""))
                 .is_err()
         );
+        for decision in ["save", "discard", "cancel"] {
+            assert!(crate::platform::interop::parse_interop_request(&format!(r#"{{"method":"pealayer.timeline.resolve_pending","params":{{"decision":"{decision}"}}}}"#)).is_ok());
+        }
+        assert!(crate::platform::interop::parse_interop_request(r#"{"method":"pealayer.timeline.resolve_pending","params":{"decision":"overwrite"}}"#).is_err());
     }
     #[test]
     fn current_controller_descriptor_preserves_steps_repeats_and_properties() {
@@ -1520,5 +1566,56 @@ mod tests {
         }
         app.asset_import.reviews.clear();
         app.publish_asset_snapshot();
+    }
+    #[test]
+    fn mixed_drop_waits_for_unsaved_decision_and_cancel_preserves_work() {
+        let directory =
+            std::env::temp_dir().join(format!("pealayer-mixed-assets-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        let movie = directory.join("new.mkv");
+        let subtitle = directory.join("captions.srt");
+        std::fs::write(&movie, b"not decoded: dirty timeline must block loadfile").unwrap();
+        std::fs::write(&subtitle, b"1\n00:00:00,000 --> 00:00:01,000\nTest\n").unwrap();
+        let mut app = PealayerApp::default();
+        let ctx = eframe::egui::Context::default();
+        let effect = Effect::new("Work".into(), "sparkle".into(), 1000, vec![]);
+        app.timeline
+            .instances
+            .push(EffectInstance::new(effect.id, 0));
+        app.timeline.templates.push(effect);
+        app.playback_time = 14.429;
+        let before = app.timeline.clone();
+        app.import_assets(
+            ImportRequest {
+                paths: vec![
+                    subtitle.to_string_lossy().into(),
+                    movie.to_string_lossy().into(),
+                ],
+                destination: Destination::Player,
+                owner_id: None,
+            },
+            &ctx,
+        )
+        .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while app.asset_import.receiver.is_some() && std::time::Instant::now() < deadline {
+            app.process_asset_imports(&ctx);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(
+            app.pending_timeline_close_action,
+            Some(crate::app::PendingTimelineCloseAction::SwitchMedia(
+                movie.clone()
+            ))
+        );
+        assert_eq!(app.asset_import.subtitles, vec![(movie.clone(), subtitle)]);
+        assert!(app.asset_import.subtitle_started.is_none());
+        app.resolve_timeline_close(&ctx, crate::app::TimelineCloseDecision::Cancel)
+            .unwrap();
+        assert_eq!(app.timeline, before);
+        assert_eq!(app.playback_time, 14.429);
+        assert!(!app.asset_import.busy());
+        assert!(app.pending_timeline_close_action.is_none());
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }

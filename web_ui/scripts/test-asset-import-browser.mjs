@@ -18,13 +18,18 @@ try{
   await send('Page.enable');await send('Runtime.enable');
   for(const light of [false,true])for(const width of [390,768,1440]){
     await send('Emulation.setDeviceMetricsOverride',{width,height:850,deviceScaleFactor:1,mobile:false});
-    for(const review of [false,true]){
-      await send('Page.navigate',{url:`http://127.0.0.1:18191/scripts/asset-import-fixture.html?${light?'light&':''}${review?'review':''}`});
+    for(const mode of ['drop','review','unsaved']){
+      const review=mode==='review';
+      await send('Page.navigate',{url:`http://127.0.0.1:18191/scripts/asset-import-fixture.html?${light?'light&':''}${mode}`});
       let ready=false;for(let n=0;n<100;n++){if(await evaluate(`Boolean(document.querySelector('#fixture-state'))`)){ready=true;break;}await sleep(100);}assert.ok(ready);
       await sleep(150);
       assert.ok(await evaluate('document.documentElement.scrollWidth<=innerWidth+1'),`overflow ${width}`);
       assert.deepEqual(await evaluate(`JSON.parse(document.querySelector('#fixture-state').textContent).commands`),[],'rendering never imports or actuates');
-      if(review){
+      if(mode==='unsaved') {
+        const bounds=await evaluate(`(()=>{const r=document.querySelector('.ant-modal').getBoundingClientRect();return {left:r.left,right:r.right};})()`);assert.ok(bounds.left>=0 && bounds.right<=width+1);
+        await evaluate(`Array.from(document.querySelectorAll('.ant-modal button')).find(b=>b.textContent.trim()==='Cancel').click()`);
+        await sleep(20);assert.deepEqual(await evaluate(`JSON.parse(document.querySelector('#fixture-state').textContent).commands`),[['resolve_timeline_close',{decision:'cancel'}]]);
+      }else if(review){
         assert.equal(await evaluate(`document.querySelector('.asset-review-items').textContent.includes('pwm.0 · 35.000%')`),true);
         const bounds=await evaluate(`(()=>{const r=document.querySelector('.ant-modal').getBoundingClientRect();return {left:r.left,right:r.right};})()`);assert.ok(bounds.left>=0 && bounds.right<=width+1);
         if(width===390 && process.env.PEALAYER_VERIFICATION_DIRECTORY){const shot=await send('Page.captureScreenshot',{format:'png'});await writeFile(path.join(process.env.PEALAYER_VERIFICATION_DIRECTORY,`asset-review-phone${light?'-light':''}.png`),Buffer.from(shot.data,'base64'));}

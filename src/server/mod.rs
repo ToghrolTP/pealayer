@@ -1218,7 +1218,7 @@ fn permission_denied(capability: &str) -> HttpResponse {
 
 fn remote_command_permission(command: &crate::platform::interop::InteropCommand) -> Option<&'static str> {
     use crate::platform::interop::InteropCommand;
-    if matches!(command,InteropCommand::ImportAssets{..}|InteropCommand::ReviewAsset{..}) {
+    if matches!(command,InteropCommand::ImportAssets{..}|InteropCommand::ReviewAsset{..}|InteropCommand::ResolveTimelineClose{..}) {
         let config=crate::platform::interop::get_live_config();
         if !config.web_allow_file_access || !config.web_allow_configuration || !config.web_allow_control {return Some("Asset import requires file, configuration and control permissions");}
     }

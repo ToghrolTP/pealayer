@@ -308,6 +308,7 @@ pub enum InteropCommand {
     },
     ImportAssets { request: crate::assets::ImportRequest },
     ReviewAsset { id: uuid::Uuid, accept: bool },
+    ResolveTimelineClose {decision:crate::app::TimelineCloseDecision},
     PlayControllerEffect {
         reference: String,
     },
@@ -891,7 +892,7 @@ pub fn command_catalog() -> Value {
         "preferences_navigation": { "method": "pealayer.preferences.navigate", "command": "navigate_preferences", "section": "optional schema section ID", "scroll_y": "absolute logical pixel offset, clamped to content", "scope": "local native process, including its Preferences helper", "accepted": "queued, not confirmation that a frame has rendered" },
         "about_navigation": { "method": "pealayer.about.open", "command": "open_about", "tab": ["overview", "build", "board", "libraries"], "scope": "local native process, never relayed to authority", "accepted": "queued, not confirmation that a frame has rendered" },
         "commands": [
-            "import_assets", "review_asset",
+            "import_assets", "review_asset", "resolve_timeline_close",
             "open", "play", "pause", "toggle_pause", "stop", "next", "previous",
             "browse_remote", "select_remote", "sort_remote", "close_remote_browser",
             "chapter_previous", "chapter_next", "set_chapter",
@@ -1292,6 +1293,7 @@ pub struct PlayerStatusResponse {
     pub runtime: RuntimeIdentity,
     #[serde(default)]
     pub asset_imports: Value,
+    pub pending_timeline_change: bool,
     #[serde(default)] pub rf: Value,
     #[serde(default)]
     pub remote_browser: crate::remote_location::BrowserState,
@@ -1662,6 +1664,7 @@ impl Default for PlayerStatusResponse {
             application: ApplicationIdentity::default(),
             runtime: RuntimeIdentity::default(),
             asset_imports: crate::assets::snapshot(),
+            pending_timeline_change: false,
             rf: Value::Null,
             status: String::new(),
             messages: crate::messaging::MessageSnapshot::default(),
@@ -2135,6 +2138,7 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
             id: serde_json::from_value(request.params.get("id").cloned().unwrap_or_default()).map_err(|_|"Asset review requires a UUID".to_string())?,
             accept: request.params.get("accept").and_then(Value::as_bool).ok_or("Asset review requires accept: true or false")?,
         }),
+        "pealayer.timeline.resolve_pending"=>Some(InteropCommand::ResolveTimelineClose{decision:serde_json::from_value(request.params.get("decision").cloned().ok_or("A save, discard or cancel decision is required")?).map_err(|e|format!("Invalid timeline decision: {e}"))?}),
         "controller_effect.play" | "pealayer.controller_effect.play" => {
             Some(InteropCommand::PlayControllerEffect {
                 reference: string(&["reference", "effect"])?,

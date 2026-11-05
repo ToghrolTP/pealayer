@@ -602,6 +602,9 @@ pub enum PendingTimelineCloseAction {
     SwitchMedia(std::path::PathBuf),
     CloseVideo,
 }
+#[derive(Clone,Copy,Debug,PartialEq,Eq,serde::Serialize,serde::Deserialize)]
+#[serde(rename_all="snake_case")]
+pub enum TimelineCloseDecision {Save,Discard,Cancel}
 
 pub struct PealayerApp {
     pub(crate) native_service_policy: NativeServicePolicy,
@@ -1569,6 +1572,7 @@ impl eframe::App for PealayerApp {
                 status: crate::four_d::programming::hardware_availability(controller_connected, hardware_connection_requested, hardware.as_ref()).code().to_string(),
                 playing: !self.is_paused && self.current_video_path.is_some(),
                 asset_imports: crate::assets::snapshot(),
+                pending_timeline_change: self.pending_timeline_close_action.is_some(),
                 volume: self.volume,
                 muted: self.is_muted,
                 playback_rate: self.playback_rate,
@@ -4848,6 +4852,9 @@ impl PealayerApp {
             InteropCommand::ReviewAsset { id, accept } => {
                 if let Err(error)=self.review_asset(ctx,id,accept){self.asset_error(error);}
             }
+            InteropCommand::ResolveTimelineClose{decision}=>{
+                if let Err(error)=self.resolve_timeline_close(ctx,decision){self.asset_error(error);}
+            }
             InteropCommand::PlayControllerEffect { reference } => {
                 if let Err(error) = self.play_controller_effect(&reference) {
                     self.set_osd(error);
@@ -7027,6 +7034,7 @@ impl PealayerApp {
     pub fn load_video_file(&mut self, path: std::path::PathBuf) {
         if self.is_timeline_dirty() {
             self.pending_timeline_close_action = Some(PendingTimelineCloseAction::SwitchMedia(path));
+            self.last_web_broadcast=None;
             return;
         }
         if crate::mpv::external::active() && !crate::mpv::external::status().connected {
@@ -8688,9 +8696,9 @@ impl PealayerApp {
     }
 
     pub(crate) fn draw_timeline_close_confirmation(&mut self, ctx: &egui::Context) {
-        let Some(action) = self.pending_timeline_close_action.clone() else {
+        if self.pending_timeline_close_action.is_none() && !crate::peer::client().is_some_and(|client|client.pending_timeline_change()) {
             return;
-        };
+        }
         let mut save = false;
         let mut discard = false;
         let mut cancel = false;
@@ -8747,24 +8755,22 @@ impl PealayerApp {
             },
         );
 
-        if save {
-            match self.save_current_timeline_sidecar() {
-                Ok(_) => {
-                    self.pending_timeline_close_action = None;
-                    self.execute_timeline_close_action(ctx, action);
-                }
-                Err(error) => {
-                    self.show_error = Some(error);
-                    self.pending_timeline_close_action = None;
-                }
+        let decision=if save {Some(TimelineCloseDecision::Save)}else if discard{Some(TimelineCloseDecision::Discard)}else if cancel||confirm.dismissed{Some(TimelineCloseDecision::Cancel)}else{None};
+        if let Some(decision)=decision {self.apply_interop_command(ctx,crate::platform::interop::InteropCommand::ResolveTimelineClose{decision},"ui");}
+    }
+
+    pub(crate) fn resolve_timeline_close(&mut self,ctx:&egui::Context,decision:TimelineCloseDecision)->Result<(),String>{
+        let action=self.pending_timeline_close_action.clone().ok_or("No timeline change is awaiting confirmation")?;
+        match decision {
+            TimelineCloseDecision::Save=>{self.save_current_timeline_sidecar()?;},
+            TimelineCloseDecision::Discard=>self.timeline_saved_baseline=Some(self.snapshot_timeline()),
+            TimelineCloseDecision::Cancel=>{
+                if let PendingTimelineCloseAction::SwitchMedia(path)=&action{self.cancel_asset_media_change(path);}
             }
-        } else if discard {
-            self.timeline_saved_baseline = Some(self.snapshot_timeline());
-            self.pending_timeline_close_action = None;
-            self.execute_timeline_close_action(ctx, action);
-        } else if cancel || confirm.dismissed {
-            self.pending_timeline_close_action = None;
         }
+        self.pending_timeline_close_action=None;self.last_web_broadcast=None;
+        if decision!=TimelineCloseDecision::Cancel{self.execute_timeline_close_action(ctx,action);}
+        Ok(())
     }
 
     /// Insert an exact, timeline-wide magnetic guide and make the edit durable.

@@ -23,6 +23,7 @@ import type { ControlBarsConfig } from '../controlBars';
 import { ElapsedTimeInput } from './ElapsedTimeInput';
 
 export interface PlayerState {
+  pending_timeline_change?: boolean;
   asset_imports?: import('../assetImports').AssetImportState;
   control_bars?: ControlBarsConfig;
   media_keys_enabled?: boolean;

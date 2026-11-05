@@ -3,7 +3,7 @@ import React, {useState} from 'react';
 import {createRoot} from 'react-dom/client';
 import {ConfigProvider,theme} from 'antd';
 import {AssetDropTarget} from '../src/components/AssetDropTarget';
-import {AssetImportReview} from '../src/components/AssetImportReview';
+import {AssetImportReview,PendingTimelineChange} from '../src/components/AssetImportReview';
 import {SoundEffectFields} from '../src/components/SoundEffectFields';
 import {assetDropDestination} from '../src/assetImports';
 import type {AssetImportState} from '../src/assetImports';
@@ -33,6 +33,7 @@ function Fixture(){
       </AssetDropTarget>
       <section style={{marginTop:20}}><SoundEffectFields program={{source}} onChange={patch=>{if(patch.source!==undefined)setSource(patch.source);}} state={{audio_devices:[]} as PlayerState} reference="" apiBaseUrl="" locale="en" sendCmd={send}/></section>
       <AssetImportReview state={review} sendCmd={send} openEffect={()=>{throw Error('Unexpected effect editor');}}/>
+      <PendingTimelineChange open={params.has('unsaved')} sendCmd={send} locale="en"/>
       <output id="fixture-state" hidden>{JSON.stringify({commands,source})}</output>
     </main>
   </ConfigProvider>;

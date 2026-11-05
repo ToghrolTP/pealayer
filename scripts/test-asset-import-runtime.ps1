@@ -46,6 +46,9 @@ $movie=Join-Path $FixtureDirectory 'black.mkv';$sub=Join-Path $FixtureDirectory 
 if($LASTEXITCODE -ne 0){throw 'Could not generate isolated movie fixture.'}
 [IO.File]::WriteAllText($sub,"1`n00:00:00,000 --> 00:00:00,900`nAsset import fixture`n")
 Send-Command @{command='import_assets';request=@{paths=@($sub,$movie);destination=@{surface='player'}}}
+$null=Wait-Status {param($s) $s.pending_timeline_change}
+# These are this isolated test's own cues, exported above, never user edits.
+Send-Command @{command='resolve_timeline_close';decision='discard'}
 $state=Wait-Status {param($s) @($s.media_tracks|Where-Object kind -eq 'subtitle').Count -gt 0 -and -not $s.asset_imports.busy}
 Send-Command @{command='pause'}
 if($state.current_video -ne $movie){throw 'Subtitle attached to the wrong media.'}

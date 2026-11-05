@@ -1,7 +1,18 @@
-import { Alert, Modal, Space, Typography } from 'antd';
-import { FileAddOutlined } from '@ant-design/icons';
+import { Alert, Button, Modal, Space, Typography } from 'antd';
+import { DeleteOutlined, FileAddOutlined, SaveOutlined } from '@ant-design/icons';
+import {tr,type UiLocale} from '../i18n';
 import type { AssetImportState, ImportedEffect } from '../assetImports';
 import { formatTimelineTime } from '../timelineTime';
+
+export function PendingTimelineChange({open,sendCmd,locale}:{open:boolean;locale:UiLocale;sendCmd:(command:string,payload?:Record<string,unknown>)=>Promise<boolean>}) {
+  const decide=(decision:'save'|'discard'|'cancel')=>void sendCmd('resolve_timeline_close',{decision});
+  return <Modal open={open} title={tr(locale,'Unsaved timeline cues')} onCancel={()=>decide('cancel')}
+    footer={<Space wrap><Button onClick={()=>decide('cancel')}>{tr(locale,'Cancel')}</Button>
+      <Button danger icon={<DeleteOutlined/>} onClick={()=>decide('discard')}>{tr(locale,'Discard')}</Button>
+      <Button type="primary" icon={<SaveOutlined/>} onClick={()=>decide('save')}>{tr(locale,'Save')}</Button></Space>}>
+      {tr(locale,'Save cues to timeline sidecar before proceeding?')}
+    </Modal>;
+}
 
 export function AssetImportReview({ state, sendCmd, openEffect }: {
   state?: AssetImportState;

@@ -18,7 +18,7 @@ import { FujiLoader } from './components/FujiLoader';
 import { WebViewBoundary } from './components/WebViewBoundary';
 import { RemoteLocationDialog } from './components/RemoteLocationDialog';
 import { AssetDropTarget } from './components/AssetDropTarget';
-import { AssetImportReview } from './components/AssetImportReview';
+import { AssetImportReview, PendingTimelineChange } from './components/AssetImportReview';
 import { assetDropDestination, type ImportedEffect } from './assetImports';
 import { useClipboardUrls } from './clipboardUrls';
 import './remote-location.css';
@@ -87,7 +87,7 @@ if (typeof window !== 'undefined') {
 function persistJson(key: string, value: unknown, immediate = false): void {
   // Never resurrect transient notifications from offline storage.
   if (key === STORAGE.state && value && typeof value === 'object') {
-    const { messages: _messages, remote_browser: _remoteBrowser, asset_imports: _assetImports, ...snapshot } = value as PlayerState;
+    const { messages: _messages, remote_browser: _remoteBrowser, asset_imports: _assetImports, pending_timeline_change: _pendingTimeline, ...snapshot } = value as PlayerState;
     value = snapshot;
   }
   if (immediate) {
@@ -126,7 +126,7 @@ const App: React.FC = () => {
   const [activeTab, setActiveTabState] = useState<SurfaceId>(surfaceFromLocation);
   const [connected, setConnected] = useState<boolean>(false);
   const [connectionMode, setConnectionMode] = useState<'ws' | 'http'>('http');
-  const [state, setState] = useState<PlayerState>(() => ({ ...readStoredJson<PlayerState>(STORAGE.state, { status: 'initializing' }), messages: undefined, asset_imports: undefined }));
+  const [state, setState] = useState<PlayerState>(() => ({ ...readStoredJson<PlayerState>(STORAGE.state, { status: 'initializing' }), messages: undefined, asset_imports: undefined, pending_timeline_change: false }));
   const [importedEffect, setImportedEffect] = useState<ImportedEffect | null>(null);
   const [runtime, setRuntime] = useState<RuntimeConfig | null>(() => readStoredJson<RuntimeConfig | null>(STORAGE.runtime, null));
   const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>('dark');
@@ -819,7 +819,8 @@ const App: React.FC = () => {
             </React.Suspense>
             </WebViewBoundary>
             </AssetDropTarget>
-            <AssetImportReview state={state.asset_imports} sendCmd={sendCmd} openEffect={effect => { setImportedEffect(effect); setActiveTab('effects'); }} />
+            <AssetImportReview state={state.pending_timeline_change?undefined:state.asset_imports} sendCmd={sendCmd} openEffect={effect => { setImportedEffect(effect); setActiveTab('effects'); }} />
+            <PendingTimelineChange open={connected && state.pending_timeline_change===true} sendCmd={sendCmd} locale={runtime?.locale||'en'}/>
           </Content>
         </Layout>
         <ApplicationStatusBar
