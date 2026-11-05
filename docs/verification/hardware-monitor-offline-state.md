@@ -51,6 +51,23 @@ Web prebuild suite; actual browser interactions across all four unavailable
 states at 390/768/1440 pixels in light and dark themes. The native paint tests
 also check the real Monitor branch, not only an isolated visibility predicate.
 
+The clean packaged source checkpoint is `487860c`. Packaging passed executable
+resource/Jump List icon checks, the destination libmpv smoke check, standalone
+downloader smoke and Web/PWA bundle integrity. The isolated native process
+reported no media, no requested connection and both controller/board disconnected;
+its local authoring inspection was clean. The saved profile was arranged and
+switched through the existing configuration/workspace API, without mouse input.
+
+Actual native captures from that packaged executable:
+
+![egui Dock, isolated disconnected profile](../assets/hardware-monitor/disconnected-native-dock.png)
+
+![CraftUI, isolated disconnected profile](../assets/hardware-monitor/disconnected-native-craft.png)
+
+These captures document the renderer, not a real board connection. Screenshot
+publication is a documentation-only follow-up and does not imply another binary
+build. The user has explicitly deferred Cafe deployment until its return.
+
 Runtime and physical acceptance remain separate. Before packaging or replacing
 an app, re-query its local authoring endpoint; use the host-compatible graceful
 updater. A closed API/SSH route is a deployment blocker, not successful delivery.
