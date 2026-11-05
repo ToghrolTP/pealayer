@@ -41,3 +41,31 @@ Cafe delivery complete without a fresh updater receipt and runtime verification.
 The project/scene persistence draft belongs to issue #226. It must not be included
 in a production package or described as complete merely because these Preferences
 checks pass.
+
+## Verified UI checkpoint
+
+Executable source `d6feabf8c0956523aa5050bf978975cee8b6c431` was launched in the
+isolated, hardware-disconnected review profile. Preferences remained a separate
+native window. Process-local navigation selected/scrolled Appearance, Typography
+and Web UI; read-only Win32 captures were inspected:
+
+- all four icon-file rows have matching input, Browse and Reset edges;
+- Color palette follows Theme with its surface/text preview;
+- the long network-interface caption truncates and cards stay within the column;
+- Typography controls and the Persian sample render without UI automation.
+
+The exact UI-only branch passed 60 Preferences native tests, six Web appearance
+tests, TypeScript and preference-file/responsive guards. Windows resource,
+quick-action icon, player libmpv smoke and downloader smoke checks passed.
+
+Publication was interrupted because the regular application was actually running
+from the staging executable, locking that destination. This was confirmed with
+`QueryFullProcessImageName`, not inferred from a generic access-denied message.
+The subsequent graceful peer-updater invocation was explicitly denied by the
+execution tool's policy. A manual updater action was requested; no restart,
+canonical installation or Cafe deployment is claimed without its receipt.
+
+Typography follow-up: inspect variable-font weight coordinates as well as family
+selection. The Persian sample appears unusually light; resolving an installed
+variable family alone does not prove its requested regular/semibold axis is used.
+Do not mark that visual detail accepted solely from a successful font lookup.
