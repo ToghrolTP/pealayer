@@ -1,10 +1,35 @@
 import assert from 'node:assert/strict';
+import { designerCueColor, designerCueInk, editEffectRepeatInterval, sequenceInstances } from '../src/cueAuthoring.ts';
 import { readFileSync } from 'node:fs';
 import { duplicateStep, moveSequenceStep, parseTimeMs, formatTimeMs, repeatedSequenceDurationMs, sequenceKindLabels, sequenceLaneName, selectCueIndices, duplicateSequenceCues, deleteSequenceCues, stepRepetition, stepInstances, editStepInstance } from '../src/cueAuthoring.ts';
 const controls = [
   { key: 'seat.a', name: 'Seat Left', default_name: 'Seat A' },
   { key: 'seat.b', name: 'صندلی راست', default_name: 'Seat B' },
 ];
+const nested = [{ kind: 'relay', at_us: 101, duration_ms: 100, repeat_count: 2, repeat_interval_ms: 150 }];
+const nestedBefore = structuredClone(nested);
+assert.deepEqual(sequenceInstances(nested, 2).map(({iteration,effectIteration,at_us}) => [iteration,effectIteration,at_us]),
+  [[1,1,400202],[0,1,250202],[1,0,150101],[0,0,101]], 'whole effect periods retain exact microseconds, including step repeats');
+assert.equal(sequenceInstances(nested, 3, 300).find(item => item.effectIteration === 2 && item.iteration === 0).at_us, 600101);
+assert.deepEqual(sequenceInstances(nested, 3, 300, false), [{source:0,iteration:0,effectIteration:0,at_us:101}]);
+assert.deepEqual(nested, nestedBefore, 'view toggles and projection never change the published source');
+assert.equal(editEffectRepeatInterval(nested,3,0,2,400),450, 'later whole-effect ghosts divide movement by cycle number');
+assert.equal(editEffectRepeatInterval(nested,3,300,1,-500),251, 'explicit whole-effect spacing cannot overlap the full microsecond span');
+assert.equal(editEffectRepeatInterval(nested,3,300,1,1e12),1073616, 'dragged spacing respects the complete controller timestamp range');
+assert.deepEqual(nested,nestedBefore,'whole-effect interval gestures must not move source steps');
+const cuePalette = JSON.parse(readFileSync(new URL('../../assets/themes/designer-cue-colors.json',import.meta.url),'utf8'));
+assert.equal(designerCueColor(cuePalette,'relay-mask'),cuePalette.relay);
+assert.equal(designerCueColor(cuePalette,'pwm-off'),cuePalette.pwm);
+assert.equal(designerCueColor(cuePalette,'menu-action'),cuePalette.menu);
+assert.equal(designerCueInk('#ffffff'),'#000000');
+assert.equal(designerCueInk('#000000'),'#ffffff');
+const dense = [{kind:'relay',at_us:0,duration_ms:1,repeat_count:1000,repeat_interval_ms:1}];
+const windowed = sequenceInstances(dense,1000,0,true,900000000,901000000);
+assert.ok(windowed.length < 4000, 'cull nested million-instance schedules before materializing');
+assert.ok(windowed.some(item => item.effectIteration === 900));
+assert.ok(sequenceInstances(nested,2,0,true,9000000,9100000,{index:0,iteration:1,effectIteration:1})
+  .some(item => item.effectIteration === 1 && item.iteration === 1), 'active proxy stays mounted outside the viewport');
+assert.equal(sequenceInstances(nested,2,1).filter(item => item.effectIteration > 0).length,0,'invalid whole-effect interval does not show a misleading schedule');
 const { sequenceLaneChoices, sequenceStepTemplate, sequenceNeedsQuantize, quantizeSequence, sequenceExtraKinds } = await import('../src/cueAuthoring.ts');
 const choices = sequenceLaneChoices([
   { key:'seat.b', name:'VIP Right', kind:'seat' }, { key:'relay.5', name:'Screen', kind:'relay' },

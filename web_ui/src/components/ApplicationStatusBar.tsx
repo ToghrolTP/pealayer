@@ -120,7 +120,7 @@ export const ApplicationStatusBar: React.FC<ApplicationStatusBarProps> = ({ stat
   };
   const content = (widget: StatusWidget): React.ReactNode => {
     switch (widget) {
-      case 'fps': return <button type="button" className="app-statusbar__fps" onClick={() => changeMode(nextFpsMode(config.fps_mode))}
+      case 'fps': return <button type="button" className={`app-statusbar__fps${screenRate ? ' is-screen-rate' : ''}`} onClick={() => changeMode(nextFpsMode(config.fps_mode))}
         title={`${tr(locale, MODE_LABELS[config.fps_mode])} · ${tr(locale, screenRate ? 'Screen render rate' : 'Media frame rate')} · ${tr(locale, 'Click to switch frame rate source')}`}>
         {screenRate ? <DashboardOutlined /> : <VideoCameraOutlined />}<span className="status-fps-value">{rate != null && Number.isFinite(rate) && rate > 0 && (screenRate || state.current_video) ? `${rate.toFixed(2)} fps` : '— fps'}</span></button>;
       case 'connection': { const availability = hardwareAvailability(state, connected); return <>

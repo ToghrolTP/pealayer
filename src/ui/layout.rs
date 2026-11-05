@@ -14747,10 +14747,14 @@ impl<'a> PealayerTabViewer<'a> {
                             crate::ui::digital_twin::draw_digital_twin_card(self.app, ui);
                             ui.add_space(10.0);
                         }
-                        if self.app.advertised_hardware().is_some_and(|caps| caps.supports_rf_transmit) {
+                        // The manager also supports offline review/editing. When connected,
+                        // only expose it for a controller advertising RF support.
+                        if !self.app.is_connected || capabilities.as_ref().is_some_and(|caps| caps.supports_rf_transmit) {
                             if ui.button(format!("{} {}",crate::ui::icons::RADIO,self.app.tr("RF controls…"))).clicked() {
                                 self.app.rf.open = true;
-                                if let Err(error) = self.app.request_rf("catalog",serde_json::json!({"read_board":true})) { self.app.rf.error = error; }
+                                if self.app.is_connected {
+                                    if let Err(error) = self.app.request_rf("catalog",serde_json::json!({"read_board":true})) { self.app.rf.error = error; }
+                                }
                             }
                         }
                         if self.app.estop_active {

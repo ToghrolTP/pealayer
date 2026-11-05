@@ -514,7 +514,7 @@ fn render_widget(
                 egui::Rect::from_min_max(rect.min + egui::vec2(19.0, 0.0), rect.max)
             };
             let galley = ui.painter().layout_no_wrap(fps.formatted.clone(),
-                status_font(ui, app.status_bar.uses_monospace(item), true), color);
+                status_font(ui, app.status_bar.uses_monospace(item), !fps.is_ui_rate), color);
             paint_centered_galley(ui, number_rect, galley, color, egui::Align::Max);
             return Some((
                 response.on_hover_text(format!("{mode}\n{}", fps.tooltip)),
@@ -1542,6 +1542,30 @@ mod tests {
             StatusBarFpsMode::Media.next().next().next(),
             StatusBarFpsMode::Media
         );
+    }
+
+    #[test]
+    fn render_fps_uses_regular_font_while_media_remains_emphasized() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let context = egui::Context::default();
+        crate::ui::fonts::install(&context,&crate::config::AppConfig::default(),false);
+        let mut app = PealayerApp::default();
+        app.engine_handle = crate::four_d::engine::memory_only_test_engine();
+        app.current_video_path = Some("fixture.mp4".into());
+        app.media_fps = 24.0;
+        for (mode,paused,strong) in [(StatusBarFpsMode::Ui,false,false),(StatusBarFpsMode::Media,true,true),(StatusBarFpsMode::Auto,true,false),(StatusBarFpsMode::Auto,false,true)] {
+            app.status_bar.fps_mode=mode; app.is_paused=paused;
+            let mut expected=None;
+            let mut output=context.run_ui(Default::default(),|ui| {
+                expected=Some(status_font(ui,app.status_bar.uses_monospace(Widget::Fps),strong));
+                render_widget(&app,ui,Widget::Fps,None,&TelemetryLog::default(),&[],100.0);
+            });
+            let actual=output.shapes.iter().find_map(|s| match &s.shape {
+                egui::Shape::Text(t) if t.galley.text().ends_with("fps") => Some(t.galley.job.sections[0].format.font_id.clone()),_=>None
+            }).unwrap();
+            assert_eq!(Some(actual),expected,"wrong FPS weight for {mode:?}, paused={paused}");
+            output.textures_delta.clear();
+        }
     }
     #[test]
     fn reactive_idle_screen_rate_uses_real_intervals_without_continuous_repaint() {

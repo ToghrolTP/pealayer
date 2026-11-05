@@ -64,8 +64,23 @@ fn dock_style(ui: &egui::Ui) -> egui_dock::Style {
     style.separator.color_hovered = t.focus;
     style.separator.color_dragged = t.accent_hover;
     style.separator.extra_interact_width = t.gap;
-    style.buttons.close_tab_color = t.icon;
-    style.buttons.close_tab_active_color = t.tab_text_active;
+    // Keep upstream hit targets; paint consistently sized Phosphor glyphs below.
+    style.buttons.close_tab_color = egui::Color32::TRANSPARENT;
+    style.buttons.close_tab_active_color = egui::Color32::TRANSPARENT;
+    style.buttons.close_tab_bg_fill = t.hover;
+    style.buttons.close_all_tabs_color = egui::Color32::TRANSPARENT;
+    style.buttons.close_all_tabs_active_color = egui::Color32::TRANSPARENT;
+    style.buttons.close_all_tabs_disabled_color = egui::Color32::TRANSPARENT;
+    style.buttons.close_all_tabs_bg_fill = t.hover;
+    style.buttons.close_all_tabs_border_color = egui::Color32::TRANSPARENT;
+    style.buttons.collapse_tabs_bg_fill = t.hover;
+    style.buttons.collapse_tabs_border_color = egui::Color32::TRANSPARENT;
+    // Keyboard focus must use the same palette, not the upstream default skin.
+    style.tab.inactive_with_kb_focus = style.tab.inactive.clone();
+    style.tab.inactive_with_kb_focus.outline_color = t.focus;
+    style.tab.active_with_kb_focus = style.tab.active.clone();
+    style.tab.active_with_kb_focus.outline_color = t.focus;
+    style.tab.focused_with_kb_focus = style.tab.focused.clone();
     // Preserve the upstream button/hit target, replacing only its solid triangle.
     style.buttons.collapse_tabs_color = egui::Color32::TRANSPARENT;
     style.buttons.collapse_tabs_active_color = egui::Color32::TRANSPARENT;
@@ -77,6 +92,12 @@ fn disclosure_rect(header: egui::Rect) -> egui::Rect {
         header.min,
         egui::vec2(HEADER_BUTTON_WIDTH.min(header.width()), header.height()),
     )
+}
+
+fn paint_header_icon(painter: &egui::Painter, rect: egui::Rect, glyph: &str, color: egui::Color32) {
+    let galley = painter.layout_no_wrap(glyph.into(),egui::FontId::proportional(14.0),color);
+    let origin = rect.center() - galley.mesh_bounds.center().to_vec2();
+    painter.galley(origin,galley,color);
 }
 
 /// Register only genuinely empty header space, not a y-band across unrelated
@@ -116,17 +137,30 @@ fn decorate_headers(
                 .pointer_hover_pos()
                 .is_some_and(|p| rect.contains(p))
                 && ui.ctx().layer_id_at(rect.center()) == Some(button.layer);
-            painter.text(
-                rect.center(),
-                egui::Align2::CENTER_CENTER,
+            paint_header_icon(
+                &painter, rect,
                 if leaf.collapsed {
                     super::icons::CARET_RIGHT
                 } else {
                     super::icons::CARET_DOWN
                 },
-                egui::FontId::proportional(13.0),
                 if hovered { t.tab_text_active } else { t.icon },
             );
+            let close_all = egui::Rect::from_min_max(egui::pos2(header.right()-HEADER_BUTTON_WIDTH.min(header.width()),header.top()),header.max);
+            let secondary = ui.input(|i| i.modifiers.shift);
+            let icon_color = |rect: egui::Rect| {
+                if !interactive { t.text_dim }
+                else if ui.ctx().pointer_hover_pos().is_some_and(|p| rect.contains(p))
+                    && ui.ctx().layer_id_at(rect.center()) == Some(button.layer) { t.tab_text_active }
+                else { t.icon }
+            };
+            paint_header_icon(&painter,close_all,
+                if secondary && !path.surface.is_main() { super::icons::APP_WINDOW } else { super::icons::X },
+                if secondary && path.surface.is_main() { t.text_dim } else { icon_color(close_all) });
+            for tab in buttons.iter().filter(|b| leaf.tabs.contains(&b.tab)) {
+                let close = egui::Rect::from_min_max(egui::pos2(tab.rect.right()-HEADER_BUTTON_WIDTH.min(height).min(tab.rect.width()),tab.rect.top()),tab.rect.max);
+                paint_header_icon(&painter,close,super::icons::X,icon_color(close));
+            }
         }
         if dock.focused_leaf() == Some(path) {
             super::craft_theme::paint_active_panel_outline(&painter, leaf.rect, &t);
@@ -626,6 +660,16 @@ mod tests {
                     has_text(&output, super::super::icons::CARET_DOWN),
                     "custom caret not rendered"
                 );
+                assert!(has_text(&output,super::super::icons::X),"custom close glyphs must render");
+                for shape in &output.shapes {
+                    if let egui::Shape::Text(text) = &shape.shape {
+                        if [super::super::icons::X,super::super::icons::CARET_DOWN].contains(&text.galley.text())
+                            && header.contains(text.visual_bounding_rect().center()) {
+                            assert!((text.visual_bounding_rect().center().y-header.center().y).abs()<0.15,
+                                "header icon ink must be vertically centered at {scale}: {:?}",text.visual_bounding_rect());
+                        }
+                    }
+                }
                 for shape in &output.shapes {
                     if let egui::Shape::Text(text) = &shape.shape {
                         if text.galley.text() == super::super::icons::CARET_DOWN {
@@ -659,6 +703,9 @@ mod tests {
                     let tokens = super::super::craft_theme::current(&ctx);
                     assert_eq!(style.tab.focused.outline_color, tokens.focus);
                     assert_eq!(style.tab_bar.bg_fill, tokens.tab_bg);
+                    assert_eq!(style.buttons.close_all_tabs_border_color,egui::Color32::TRANSPARENT);
+                    assert_eq!(style.buttons.close_all_tabs_bg_fill,tokens.hover);
+                    assert_eq!(style.tab.active_with_kb_focus.bg_fill,style.tab.active.bg_fill);
                     assert_eq!(
                         style.buttons.collapse_tabs_color,
                         egui::Color32::TRANSPARENT

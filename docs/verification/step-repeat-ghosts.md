@@ -14,14 +14,32 @@ expanded volatile plan; persisted definitions keep their editable repeat fields.
 No firmware schema or board flash is required.
 
 Native and both Web designer entry points draw dimmed repeated instances on
-the source lane. Originals draw above overlapping ghosts. Clicking, keyboard
+the source lane, including repetitions of the entire effect and nested repeats.
+**Show repeat ghosts** is enabled by default and saved as a local designer view
+preference (native UI persistence / browser storage). It does not alter the
+effect's execution or published repeat parameters. Whole-effect copies have
+dashed borders; step-only copies have dotted borders. Originals retain solid
+borders and draw above overlapping ghosts. Clicking, keyboard
 selection and context actions bind to the original step; copies never become
-extra saved steps. Drag a ghost body/leading edge to change interval; drag its
+extra saved steps. Drag a step ghost body/leading edge to change its step interval;
+drag a whole-effect ghost to change the whole-effect interval. Movement of later
+copies is divided by their repeat index. Whole-effect intervals are bounded by
+the full sequence span and controller timestamp range. Arrow keys on a focused
+ghost nudge its interval; its context menu exposes repeat count and interval.
+Drag its
 trailing resize handle to change the shared step length. Native spacing respects
 the selected snap grid. Moving an original moves its entire repetition schedule.
 Ghost edits never retarget a channel, seek media, play a preview or issue an
 output command. Explicit Duplicate/Delete operate on selected sources once.
 The count includes the original occurrence.
+
+Preferences → Hardware → Effect designer colors exposes background colors for
+motion, relays, PWM, buzzer, status RGB, strip pixels, RF, displays, front-panel
+actions and raw commands. The canonical palette asset supplies native/Web
+defaults. Preferences use the existing config API and live state publication;
+source and all its projections keep the same type color. Text contrast is chosen
+from the configured background. Selection is an outline, not a replacement type
+color. Reset uses the existing Preferences control reset operation.
 
 Repeat previews are viewport-bounded, retaining an actively dragged instance
 outside the viewport. Web cancellation, lost capture, an external draft

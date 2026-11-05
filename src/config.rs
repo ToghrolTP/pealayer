@@ -1020,6 +1020,10 @@ pub struct SeekbarMarkersConfig {
     pub keyframe_color: String,
 }
 
+pub fn default_designer_cue_colors() -> std::collections::BTreeMap<String, String> {
+    serde_json::from_str(include_str!("../assets/themes/designer-cue-colors.json")).expect("bundled cue palette")
+}
+
 impl Default for SeekbarMarkersConfig {
     fn default() -> Self {
         Self { chapter_color: "#969696".into(), active_chapter_color: "#B0B0B0".into(), keyframe_color: "#EF4444".into() }
@@ -1029,6 +1033,21 @@ impl Default for SeekbarMarkersConfig {
 #[cfg(test)]
 mod seekbar_marker_tests {
     use super::*;
+    #[test]
+    fn designer_palette_validates_roundtrips_and_is_in_the_live_contract() {
+        let mut config = AppConfig::default();
+        assert_eq!(config.effect_designer_cue_colors.len(),10);
+        config.effect_designer_cue_colors.insert("relay".into(), "#F59E0B".into());
+        assert!(config.validate().is_ok());
+        let saved = serde_json::to_value(&config).unwrap();
+        assert_eq!(serde_json::from_value::<AppConfig>(saved).unwrap().effect_designer_cue_colors, config.effect_designer_cue_colors);
+        let controls = crate::preferences_contract::preference_controls(&config);
+        assert_eq!(controls.iter().filter(|c| c.key.starts_with("effect_designer_cue_colors.")).count(),10);
+        let status = crate::platform::interop::PlayerStatusResponse { effect_designer_cue_colors: config.effect_designer_cue_colors.clone(), ..Default::default() };
+        assert_eq!(serde_json::to_value(status).unwrap()["effect_designer_cue_colors"]["relay"],"#F59E0B");
+        config.effect_designer_cue_colors.insert("relay".into(),"bad".into());
+        assert!(config.validate().unwrap_err().contains("effect_designer_cue_colors.relay"));
+    }
     #[test]
     fn marker_defaults_validation_and_roundtrip() {
         let mut config = AppConfig::default();
@@ -1120,6 +1139,7 @@ pub struct AppConfig {
     pub seekbar_hover_thumbnails: bool,
     pub nle_seekbar_hover_thumbnails: bool,
     pub seekbar_markers: SeekbarMarkersConfig,
+    pub effect_designer_cue_colors: std::collections::BTreeMap<String, String>,
     pub consistent_video_aspect_ratio: bool,
     pub always_on_top: AlwaysOnTopMode,
     pub quick_seek_seconds: f64,
@@ -1323,6 +1343,7 @@ impl Default for AppConfig {
             seekbar_hover_thumbnails: false,
             nle_seekbar_hover_thumbnails: false,
             seekbar_markers: SeekbarMarkersConfig::default(),
+            effect_designer_cue_colors: default_designer_cue_colors(),
             consistent_video_aspect_ratio: true,
             always_on_top: AlwaysOnTopMode::Never,
             quick_seek_seconds: 10.0,
@@ -2135,6 +2156,11 @@ impl AppConfig {
             effect.validate()?;
             if effect.duration_ms == 0 || effect.duration_ms > 86_400_000 { return Err("SFX duration must be finite, positive and at most 24 hours".into()); }
             if !audio_ids.insert(effect.id) { return Err("Duplicate audio effect ID".into()); }
+        }
+        for key in default_designer_cue_colors().keys() {
+            if self.effect_designer_cue_colors.get(key).and_then(|value| parse_rgb_hex(value)).is_none() {
+                return Err(format!("effect_designer_cue_colors.{key} must be an RGB hex color"));
+            }
         }
         for (key, value) in [("chapter_color", &self.seekbar_markers.chapter_color),
             ("active_chapter_color", &self.seekbar_markers.active_chapter_color),
