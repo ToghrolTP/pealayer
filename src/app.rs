@@ -3140,19 +3140,15 @@ impl PealayerApp {
             sample.rate = self.playback_rate.clamp(0.25, 4.0);
             }
         }
-        let taskbar_state = crate::platform::windows::compute_taskbar_state_with_error(
+        let taskbar_state = crate::platform::windows::compute_taskbar_state_with_update(
             self.playback_time,
             self.duration,
             self.is_paused,
             self.show_error.is_some(),
+            &crate::update::manager().status(),
         );
-        if self.last_taskbar_state != Some(taskbar_state) {
-            crate::platform::windows::update_windows_taskbar_state_ext(
-                self.playback_time,
-                self.duration,
-                self.is_paused,
-                self.show_error.is_some(),
-            );
+        if self.last_taskbar_state != Some(taskbar_state)
+            && crate::platform::windows::apply_windows_taskbar_state(taskbar_state) {
             self.last_taskbar_state = Some(taskbar_state);
         }
 

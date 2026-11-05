@@ -264,6 +264,8 @@ export interface PlayerState {
     source?: string | null;
     bytes_done: number;
     bytes_total?: number | null;
+    progress_percent: number | null;
+    active: boolean;
     sha256?: string | null;
     version?: string | null;
     message: string;

@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, Button, Card, Descriptions, Input, Progress, Tag, Row, Col, Statistic, Typography, Space } from 'antd';
+import { Alert, Button, Card, Descriptions, Input, Progress, Spin, Tag, Row, Col, Statistic, Typography, Space } from 'antd';
 import {
   InfoCircleOutlined,
   DesktopOutlined,
@@ -39,7 +39,7 @@ export const PlayerInfoTab: React.FC<PlayerInfoTabProps> = ({ state, connectionM
   }, [state.update]);
 
   useEffect(() => {
-    if (!updateStatus || !['downloading', 'receiving', 'verifying', 'staged', 'restarting'].includes(updateStatus.state)) return;
+    if (!updateStatus?.active) return;
     const timer = window.setInterval(() => {
       fetch(`${apiBaseUrl}/api/update/status`)
         .then((response) => response.ok ? response.json() : Promise.reject())
@@ -47,7 +47,7 @@ export const PlayerInfoTab: React.FC<PlayerInfoTabProps> = ({ state, connectionM
         .catch(() => {});
     }, 350);
     return () => window.clearInterval(timer);
-  }, [apiBaseUrl, updateStatus?.state]);
+  }, [apiBaseUrl, updateStatus?.active]);
 
   const startUrlUpdate = async () => {
     if (!updateUrl.trim()) return;
@@ -66,7 +66,7 @@ export const PlayerInfoTab: React.FC<PlayerInfoTabProps> = ({ state, connectionM
       setUpdateStatus(body);
     } catch (error) {
       setUpdateStatus({
-        state: 'failed', bytes_done: 0, message: 'Update request failed',
+        state: 'failed', bytes_done: 0, progress_percent: null, active: false, message: 'Update request failed',
         error: error instanceof Error ? error.message : String(error),
       });
     } finally {
@@ -74,9 +74,9 @@ export const PlayerInfoTab: React.FC<PlayerInfoTabProps> = ({ state, connectionM
     }
   };
 
-  const updatePercent = updateStatus?.bytes_total
-    ? Math.min(100, Math.round(updateStatus.bytes_done * 100 / updateStatus.bytes_total))
-    : undefined;
+  // Current-phase progress comes from the coordinator; byte totals only describe
+  // the transfer and must not turn verification into a misleading 100% bar.
+  const updatePercent = updateStatus?.progress_percent ?? undefined;
 
   const formatBytes = (bytes?: number | null) => {
     if (bytes == null) return '—';
@@ -231,13 +231,14 @@ export const PlayerInfoTab: React.FC<PlayerInfoTabProps> = ({ state, connectionM
             maxLength={64}
           />
           <Button type="primary" icon={<CloudDownloadOutlined />} loading={requestingUpdate}
-            disabled={!updateUrl.trim() || Boolean(updateStatus && ['downloading', 'receiving', 'verifying', 'staged', 'restarting'].includes(updateStatus.state))}
+            disabled={!updateUrl.trim() || Boolean(updateStatus?.active)}
             onClick={() => void startUrlUpdate()}>
             {tr(locale, 'Download, verify and restart')}
           </Button>
           {updateStatus && updateStatus.state !== 'idle' && (
             <div aria-live="polite">
               <Space wrap>
+                {updateStatus.active && updatePercent === undefined && <Spin size="small" />}
                 <Tag color={updateStatus.state === 'failed' ? 'error' : updateStatus.state === 'completed' || updateStatus.state === 'current' ? 'success' : 'processing'}>
                   {updateStatus.state}
                 </Tag>

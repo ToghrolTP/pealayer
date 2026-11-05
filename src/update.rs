@@ -23,7 +23,7 @@ fn sha256_hex(digest: impl AsRef<[u8]>) -> String {
         .collect()
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Deserialize, PartialEq)]
 pub struct UpdateStatus {
     pub operation_id: Option<String>,
     pub state: String,
@@ -34,6 +34,27 @@ pub struct UpdateStatus {
     pub version: Option<String>,
     pub message: String,
     pub error: Option<String>,
+}
+
+// Keep byte totals as transfer diagnostics, but publish current-phase progress
+// separately so Web/API consumers never mistake a finished download for verification.
+impl Serialize for UpdateStatus {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct;
+        let mut state = serializer.serialize_struct("UpdateStatus", 11)?;
+        state.serialize_field("operation_id", &self.operation_id)?;
+        state.serialize_field("state", &self.state)?;
+        state.serialize_field("source", &self.source)?;
+        state.serialize_field("bytes_done", &self.bytes_done)?;
+        state.serialize_field("bytes_total", &self.bytes_total)?;
+        state.serialize_field("sha256", &self.sha256)?;
+        state.serialize_field("version", &self.version)?;
+        state.serialize_field("message", &self.message)?;
+        state.serialize_field("error", &self.error)?;
+        state.serialize_field("progress_percent", &self.progress_percent())?;
+        state.serialize_field("active", &self.active())?;
+        state.end()
+    }
 }
 
 impl Default for UpdateStatus {
@@ -61,6 +82,9 @@ impl UpdateStatus {
     }
 
     pub fn progress_percent(&self) -> Option<f64> {
+        if !matches!(self.state.as_str(), "receiving" | "downloading") {
+            return None;
+        }
         self.bytes_total
             .filter(|total| *total > 0)
             .map(|total| (self.bytes_done as f64 * 100.0 / total as f64).clamp(0.0, 100.0))
@@ -631,6 +655,13 @@ fn download_update(
         }
         manager.wake_gui();
     }
+    // Verification includes flushing, hashing and archive materialization, not
+    // just the final executable inspection. Stop exposing transfer progress now.
+    if let Ok(mut inner) = manager.inner.lock() {
+        inner.status.state = "verifying".to_string();
+        inner.status.message = "Verifying downloaded update".to_string();
+    }
+    manager.wake_gui();
     file.flush().map_err(|error| error.to_string())?;
     file.sync_all().map_err(|error| error.to_string())?;
     if let Some(size) = content_length
@@ -1782,6 +1813,39 @@ fn validate_libmpv_compatibility(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn update_progress_is_scoped_to_the_current_phase_in_json() {
+        let mut status = UpdateStatus {
+            state: "receiving".into(), bytes_done: 50, bytes_total: Some(100),
+            ..Default::default()
+        };
+        for phase in ["receiving", "downloading"] {
+            status.state = phase.into();
+            assert_eq!(status.progress_percent(), Some(50.0));
+            let json = serde_json::to_value(&status).unwrap();
+            assert_eq!(json["progress_percent"], 50.0);
+            assert_eq!(json["active"], true);
+        }
+        status.bytes_done = 100;
+        assert_eq!(status.progress_percent(), Some(100.0));
+        for phase in ["verifying", "staged", "restarting", "completed", "current", "aborted", "failed", "idle"] {
+            status.state = phase.into();
+            assert_eq!(status.progress_percent(), None, "{phase}");
+            let json = serde_json::to_value(&status).unwrap();
+            assert!(json["progress_percent"].is_null(), "{phase}");
+            assert_eq!(json["bytes_done"], 100); // diagnostic transfer data survives
+            assert_eq!(json["active"], status.active());
+            assert_eq!(serde_json::from_value::<UpdateStatus>(json).unwrap(), status);
+        }
+        status.state = "downloading".into();
+        for total in [None, Some(0)] {
+            status.bytes_total = total;
+            assert_eq!(status.progress_percent(), None);
+        }
+        status.bytes_total = Some(80);
+        assert_eq!(status.progress_percent(), Some(100.0));
+    }
 
     #[test]
     fn abort_closes_staging_file_and_cleanup_failure_does_not_lock_future_updates() {

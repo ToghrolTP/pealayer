@@ -100,28 +100,32 @@ fn progress_label(app: &PealayerApp, operation: &StatusProgress) -> String {
     app.tr(key)
 }
 
+fn app_update_operation(update: &crate::update::UpdateStatus) -> Option<StatusProgress> {
+    update.active().then(|| StatusProgress {
+        id: update.operation_id.clone().unwrap_or_else(|| "app-update".into()),
+        source: "app".into(),
+        label: "App update".into(),
+        phase: update.state.clone(),
+        fraction: update.progress_percent().map(|value| value as f32 / 100.0),
+        detail: update.message.clone(),
+    })
+}
+
 pub fn active_operations(capabilities: Option<&HardwareCapabilities>) -> Vec<StatusProgress> {
-    if let Some(snapshot) = crate::peer::client().and_then(|client| client.snapshot()) {
-        return snapshot
+    let mut result: Vec<StatusProgress> = if let Some(snapshot) = crate::peer::client().and_then(|client| client.snapshot()) {
+        snapshot
             .session
             .status
             .get("status_operations")
             .cloned()
             .and_then(|value| serde_json::from_value(value).ok())
-            .unwrap_or_default();
-    }
-    let mut result = capabilities.map(controller_operations).unwrap_or_default();
-    let update = crate::update::manager().status();
-    if update.active() {
-        let fraction = update.progress_percent().map(|value| value as f32 / 100.0);
-        result.push(StatusProgress {
-            id: update.operation_id.unwrap_or_else(|| "app-update".into()),
-            source: "app".into(),
-            label: "App update".into(),
-            phase: update.state,
-            fraction,
-            detail: update.message,
-        });
+            .unwrap_or_default()
+    } else {
+        capabilities.map(controller_operations).unwrap_or_default()
+    };
+    // Updating this process must remain visible even while it consumes a peer.
+    if let Some(update) = app_update_operation(&crate::update::manager().status()) {
+        result.insert(0, update);
     }
     if let Some(downloads) = crate::downloads::progress_if_initialized() {
         for job in downloads {
@@ -1215,6 +1219,33 @@ mod tests {
         }
     }
     use super::*;
+
+    #[test]
+    fn update_progress_verification_has_no_completed_download_percentage() {
+        let _lock = crate::app::tests::lock_app_tests();
+        let context = egui::Context::default();
+        let mut app = PealayerApp::default();
+        app.engine_handle = crate::four_d::engine::memory_only_test_engine();
+        let mut status = crate::update::UpdateStatus {
+            state: "receiving".into(), bytes_done: 100, bytes_total: Some(100),
+            ..Default::default()
+        };
+        assert_eq!(app_update_operation(&status).unwrap().fraction, Some(1.0));
+        status.state = "verifying".into();
+        let operation = app_update_operation(&status).unwrap();
+        assert_eq!(operation.fraction, None);
+        let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+            let (response, text) = render_widget(&app, ui, Widget::Progress, None,
+                &TelemetryLog::default(), std::slice::from_ref(&operation), 168.0).unwrap();
+            assert_eq!(response.rect.size(), egui::vec2(168.0, ITEM_HEIGHT));
+            assert!(text.contains("verifying"));
+            assert!(!text.contains('%'));
+        });
+        assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text().contains("100%"))));
+        output.textures_delta.clear();
+        status.state = "completed".into();
+        assert!(app_update_operation(&status).is_none());
+    }
 
     #[test]
     fn controller_update_operations_keep_host_and_board_identity_and_newest_progress() {
