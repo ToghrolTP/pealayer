@@ -23,7 +23,9 @@ pub enum Destination {
     #[default]
     Player,
     Library,
-    AudioSource { draft_id: uuid::Uuid },
+    AudioSource {
+        draft_id: uuid::Uuid,
+    },
     Timeline {
         start_time_ms: u64,
         #[serde(default)]
@@ -70,8 +72,16 @@ pub struct ImportRequest {
 }
 impl ImportRequest {
     pub fn validate(&self) -> Result<(), String> {
-        if matches!(self.destination,Destination::AudioSource{..}) && self.paths.len()!=1 {return Err("Choose one audio source file".into());}
-        if self.owner_id.as_ref().is_some_and(|id|uuid::Uuid::parse_str(id).is_err()) {return Err("Invalid asset owner identity".into());}
+        if matches!(self.destination, Destination::AudioSource { .. }) && self.paths.len() != 1 {
+            return Err("Choose one audio source file".into());
+        }
+        if self
+            .owner_id
+            .as_ref()
+            .is_some_and(|id| uuid::Uuid::parse_str(id).is_err())
+        {
+            return Err("Invalid asset owner identity".into());
+        }
         if self.paths.is_empty()
             || self.paths.len() > MAX_FILES
             || self
@@ -117,6 +127,48 @@ pub enum Prepared {
     Timeline(Timeline),
     Scene(crate::projects::Scene),
     Effect(crate::platform::interop::WebControllerEffectDraft),
+    EffectCollection(Vec<crate::platform::interop::WebControllerEffectDraft>),
+}
+
+/// Adapt the CURRENT PCController EffectDescriptor (also used by effects.json)
+/// to the existing editor/save payload. These are two current purpose-specific
+/// shapes, not historical schemas. Validation stays in the shared save command.
+fn effect_definition(
+    mut value: serde_json::Value,
+) -> Result<crate::platform::interop::WebControllerEffectDraft, String> {
+    if value.get("kind").and_then(|v| v.as_str()) == Some("sequence")
+        && value.get("steps").is_some()
+    {
+        let mut properties = value
+            .get("properties")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({}));
+        if let Some(engine) = value.get("engine").and_then(|v| v.as_str()) {
+            if !matches!(engine, "auto" | "host" | "mcu") {
+                return Err("Invalid sequence execution mode".into());
+            }
+            properties
+                .as_object_mut()
+                .ok_or("Effect properties must be an object")?
+                .insert("mode".into(), engine.into());
+        }
+        let program = serde_json::json!({"steps":value["steps"],"repeat_count":value.get("repeat_count").cloned().unwrap_or(1.into()),"repeat_interval_ms":value.get("repeat_interval_ms").cloned().unwrap_or(0.into()),"properties":properties});
+        value
+            .as_object_mut()
+            .unwrap()
+            .insert("program".into(), program);
+    }
+    let object = value
+        .as_object_mut()
+        .ok_or("Expected an effect definition")?;
+    object.entry("category").or_insert_with(|| "Other".into());
+    let effect: crate::platform::interop::WebControllerEffectDraft =
+        serde_json::from_value(value).map_err(|e| e.to_string())?;
+    crate::platform::interop::InteropCommand::SaveControllerEffect {
+        effect: effect.clone(),
+    }
+    .validate()?;
+    Ok(effect)
 }
 
 pub fn prepare(path: &Path) -> Result<Prepared, String> {
@@ -157,7 +209,18 @@ pub fn prepare(path: &Path) -> Result<Prepared, String> {
             }
             let value: serde_json::Value =
                 serde_json::from_slice(&bytes).map_err(|e| format!("Invalid asset JSON: {e}"))?;
-            let prepared = if value
+            let prepared = if let Some(effects) = value.get("effects").and_then(|v| v.as_array()) {
+                if effects.is_empty() || effects.len() > MAX_FILES {
+                    return Err("Choose a catalog containing 1–64 effect definitions".into());
+                }
+                Prepared::EffectCollection(
+                    effects
+                        .iter()
+                        .cloned()
+                        .map(effect_definition)
+                        .collect::<Result<Vec<_>, _>>()?,
+                )
+            } else if value
                 .get("kind")
                 .and_then(|v| v.as_str())
                 .is_some_and(|v| v.starts_with("pealayer-"))
@@ -181,14 +244,10 @@ pub fn prepare(path: &Path) -> Result<Prepared, String> {
                 }
                 .validate()?;
                 Prepared::Timeline(timeline)
-            } else if value.get("kind").is_some() && value.get("program").is_some() {
-                let effect: crate::platform::interop::WebControllerEffectDraft =
-                    serde_json::from_value(value).map_err(|e| e.to_string())?;
-                crate::platform::interop::InteropCommand::SaveControllerEffect {
-                    effect: effect.clone(),
-                }
-                .validate()?;
-                Prepared::Effect(effect)
+            } else if value.get("kind").is_some()
+                && (value.get("program").is_some() || value.get("steps").is_some())
+            {
+                Prepared::Effect(effect_definition(value)?)
             } else {
                 return Err(
                     "Unrecognized asset document; expected a scene, timeline or effect definition"
@@ -200,6 +259,19 @@ pub fn prepare(path: &Path) -> Result<Prepared, String> {
     }
 }
 fn resolve_dependencies(mut asset: Prepared, path: &Path) -> Result<Prepared, String> {
+    if let Prepared::EffectCollection(effects) = asset {
+        return Ok(Prepared::EffectCollection(
+            effects
+                .into_iter()
+                .map(
+                    |effect| match resolve_dependencies(Prepared::Effect(effect), path)? {
+                        Prepared::Effect(effect) => Ok(effect),
+                        _ => unreachable!(),
+                    },
+                )
+                .collect::<Result<Vec<_>, String>>()?,
+        ));
+    }
     let resolve = |audio: &mut AudioEffect| -> Result<(), String> {
         if !crate::media::is_remote_media_target(&audio.program.source) {
             let source = crate::projects::resolve_path(path, &audio.program.source);
@@ -276,12 +348,30 @@ pub fn append_timeline(
     next.instances.extend(copy.instances);
     next.keyframes.extend(copy.keyframes);
     for mut curve in copy.analog_tracks {
-        if let Some(existing)=next.analog_tracks.iter_mut().find(|track|track.channel==curve.channel) {
-            if existing.locked {return Err(format!("PWM {} is locked",curve.channel));}
-            if curve.keyframes.iter().any(|p|existing.keyframes.iter().any(|q|q.time_ms==p.time_ms)) {return Err(format!("PWM {} already has a point at an imported time",curve.channel));}
+        if let Some(existing) = next
+            .analog_tracks
+            .iter_mut()
+            .find(|track| track.channel == curve.channel)
+        {
+            if existing.locked {
+                return Err(format!("PWM {} is locked", curve.channel));
+            }
+            if curve
+                .keyframes
+                .iter()
+                .any(|p| existing.keyframes.iter().any(|q| q.time_ms == p.time_ms))
+            {
+                return Err(format!(
+                    "PWM {} already has a point at an imported time",
+                    curve.channel
+                ));
+            }
             existing.keyframes.append(&mut curve.keyframes);
-            existing.keyframes.sort_by_key(|point|point.time_ms);
-        } else {curve.armed=false;next.analog_tracks.push(curve);}
+            existing.keyframes.sort_by_key(|point| point.time_ms);
+        } else {
+            curve.armed = false;
+            next.analog_tracks.push(curve);
+        }
     }
     crate::projects::TimelineDocument {
         timeline: next.clone(),
@@ -304,7 +394,10 @@ pub struct ImportState {
 }
 impl ImportState {
     pub(crate) fn busy(&self) -> bool {
-        self.receiver.is_some() || self.audio_active.is_some() || !self.audio.is_empty() || !self.subtitles.is_empty()
+        self.receiver.is_some()
+            || self.audio_active.is_some()
+            || !self.audio.is_empty()
+            || !self.subtitles.is_empty()
     }
     pub(crate) fn awaiting_review(&self) -> bool {
         !self.reviews.is_empty()
@@ -317,16 +410,64 @@ struct Review {
     asset: Prepared,
     destination: Destination,
 }
-fn review_summary(asset:&Prepared)->Vec<String> {
+fn review_summary(asset: &Prepared) -> Vec<String> {
     match asset {
-        Prepared::Scene(scene)=>scene.channels.iter().map(|(key,value)|match value {
-            crate::projects::ChannelValue::Boolean{on}=>format!("{key} · {}",if *on {"On"} else {"Off"}),
-            crate::projects::ChannelValue::Pwm{percent_milli}=>format!("{key} · {:.3}%",f64::from(*percent_milli)/1000.0),
-            crate::projects::ChannelValue::Motion{direction}=>format!("{key} · {direction:?} (requires explicit mapping)"),
-        }).chain(scene.unsampled.iter().map(|key|format!("{key} · Unsampled (unchanged)"))).collect(),
-        Prepared::Timeline(timeline)=> timeline.instances.iter().filter_map(|cue| timeline.templates.iter().find(|e|e.id==cue.effect_id).map(|e|format!("{} · {} · {}",crate::duration::format_timeline_time_ms(cue.start_time_ms,true),e.name,crate::duration::format_effect_duration(e.duration_ms)))).chain(timeline.analog_tracks.iter().map(|curve|format!("{} · PWM {} · {} points",curve.name,curve.channel,curve.keyframes.len()))).collect(),
-        Prepared::Effect(effect)=>vec![format!("{} · {}",effect.kind,effect.category),format!("{} · {}",effect.id,crate::duration::format_effect_duration(effect.duration_ms))],
-        _=>vec![],
+        Prepared::Scene(scene) => scene
+            .channels
+            .iter()
+            .map(|(key, value)| match value {
+                crate::projects::ChannelValue::Boolean { on } => {
+                    format!("{key} · {}", if *on { "On" } else { "Off" })
+                }
+                crate::projects::ChannelValue::Pwm { percent_milli } => {
+                    format!("{key} · {:.3}%", f64::from(*percent_milli) / 1000.0)
+                }
+                crate::projects::ChannelValue::Motion { direction } => {
+                    format!("{key} · {direction:?} (requires explicit mapping)")
+                }
+            })
+            .chain(
+                scene
+                    .unsampled
+                    .iter()
+                    .map(|key| format!("{key} · Unsampled (unchanged)")),
+            )
+            .collect(),
+        Prepared::Timeline(timeline) => timeline
+            .instances
+            .iter()
+            .filter_map(|cue| {
+                timeline
+                    .templates
+                    .iter()
+                    .find(|e| e.id == cue.effect_id)
+                    .map(|e| {
+                        format!(
+                            "{} · {} · {}",
+                            crate::duration::format_timeline_time_ms(cue.start_time_ms, true),
+                            e.name,
+                            crate::duration::format_effect_duration(e.duration_ms)
+                        )
+                    })
+            })
+            .chain(timeline.analog_tracks.iter().map(|curve| {
+                format!(
+                    "{} · PWM {} · {} points",
+                    curve.name,
+                    curve.channel,
+                    curve.keyframes.len()
+                )
+            }))
+            .collect(),
+        Prepared::Effect(effect) => vec![
+            format!("{} · {}", effect.kind, effect.category),
+            format!(
+                "{} · {}",
+                effect.id,
+                crate::duration::format_effect_duration(effect.duration_ms)
+            ),
+        ],
+        _ => vec![],
     }
 }
 static SNAPSHOT: Mutex<Option<serde_json::Value>> = Mutex::new(None);
@@ -345,8 +486,14 @@ impl PealayerApp {
         ctx: &eframe::egui::Context,
     ) -> Result<(), String> {
         request.validate()?;
-        if request.owner_id.as_deref().is_some_and(|id| id != crate::peer::instance_id()) {
-            return Err("Asset session owner changed; retry the import in the selected session".into());
+        if request
+            .owner_id
+            .as_deref()
+            .is_some_and(|id| id != crate::peer::instance_id())
+        {
+            return Err(
+                "Asset session owner changed; retry the import in the selected session".into(),
+            );
         }
         if self.asset_import.receiver.is_some()
             || self.asset_import.reviews.len() + self.asset_import.audio.len() + request.paths.len()
@@ -358,7 +505,9 @@ impl PealayerApp {
         // Capture the immutable target before starting the worker; never resolve
         // a different session half way through an import.
         let client = crate::peer::client().cloned();
-        if client.is_none() { crate::server::asset_upload::retain_paths(&request.paths); }
+        if client.is_none() {
+            crate::server::asset_upload::retain_paths(&request.paths);
+        }
         let ctx = ctx.clone();
         std::thread::Builder::new()
             .name("asset-import".into())
@@ -369,7 +518,9 @@ impl PealayerApp {
                     let result = crate::server::asset_upload::forward(&client, &request);
                     vec![(
                         "Remote asset import".into(),
-                        result.map(|source| source.map_or(Prepared::Forwarded,Prepared::AudioSource)),
+                        result.map(|source| {
+                            source.map_or(Prepared::Forwarded, Prepared::AudioSource)
+                        }),
                         request.destination,
                     )]
                 } else {
@@ -383,10 +534,17 @@ impl PealayerApp {
                                     .unwrap_or_default()
                                     .to_string_lossy()
                                     .into_owned(),
-                                if matches!(request.destination,Destination::AudioSource{..}) {
-                                    if file_kind(Path::new(path)) == FileKind::Audio && Path::new(path).is_file() {Ok(Prepared::AudioSource(path.clone()))}
-                                    else {Err("Choose an audio file for this sound effect".into())}
-                                } else {prepare(Path::new(path))},
+                                if matches!(request.destination, Destination::AudioSource { .. }) {
+                                    if file_kind(Path::new(path)) == FileKind::Audio
+                                        && Path::new(path).is_file()
+                                    {
+                                        Ok(Prepared::AudioSource(path.clone()))
+                                    } else {
+                                        Err("Choose an audio file for this sound effect".into())
+                                    }
+                                } else {
+                                    prepare(Path::new(path))
+                                },
                                 request.destination.clone(),
                             )
                         })
@@ -401,29 +559,78 @@ impl PealayerApp {
         Ok(())
     }
     pub(crate) fn process_asset_imports(&mut self, ctx: &eframe::egui::Context) {
-        let mut changed=false;
+        let mut changed = false;
         let result = self.asset_import.receiver.as_ref().map(|rx| rx.try_recv());
         if let Some(Ok(batch)) = result {
-            changed=true;
+            changed = true;
             self.asset_import.receiver = None;
             // A mixed drop loads media before attaching its subtitle tracks.
-            let mut batch = batch;
+            let total = batch
+                .iter()
+                .map(|(_, asset, _)| match asset {
+                    Ok(Prepared::EffectCollection(effects)) => effects.len(),
+                    _ => 1,
+                })
+                .sum::<usize>();
+            if total + self.asset_import.reviews.len() > MAX_FILES {
+                self.asset_error(
+                    "This drop exceeds 64 pending asset definitions; import a smaller selection"
+                        .into(),
+                );
+                self.publish_asset_snapshot();
+                return;
+            }
+            let mut batch = batch
+                .into_iter()
+                .flat_map(|(name, asset, destination)| match asset {
+                    Ok(Prepared::EffectCollection(effects)) => effects
+                        .into_iter()
+                        .map(|effect| {
+                            (
+                                format!("{name} · {}", effect.name),
+                                Ok(Prepared::Effect(effect)),
+                                destination.clone(),
+                            )
+                        })
+                        .collect::<Vec<_>>(),
+                    _ => vec![(name, asset, destination)],
+                })
+                .collect::<Vec<_>>();
             batch.sort_by_key(|(_, asset, _)| !matches!(asset, Ok(Prepared::Media(_))));
             let mut media_loaded = false;
             for (name, asset, mut destination) in batch {
-                if matches!(&asset,Ok(Prepared::Scene(_)|Prepared::Timeline(_))) && !matches!(destination,Destination::Timeline{..}) {
-                    destination=Destination::Timeline{start_time_ms:(self.playback_time.max(0.0)*1000.0).round().min(MAX_TIME_MS as f64) as u64,track_key:None};
+                if matches!(&asset, Ok(Prepared::Scene(_) | Prepared::Timeline(_)))
+                    && !matches!(destination, Destination::Timeline { .. })
+                {
+                    destination = Destination::Timeline {
+                        start_time_ms: (self.playback_time.max(0.0) * 1000.0)
+                            .round()
+                            .min(MAX_TIME_MS as f64) as u64,
+                        track_key: None,
+                    };
                 }
                 match asset {
                     Ok(Prepared::Forwarded) => {}
                     Ok(Prepared::AudioSource(source)) => {
-                        if let Destination::AudioSource{draft_id} = destination {
-                            if self.show_effect_library_editor && self.effect_library_draft.kind == "audio" && self.effect_library_draft.id == draft_id.to_string() {
-                                match serde_json::from_str::<crate::mpv::sfx::AudioProgram>(&self.effect_library_draft.program_json) {
-                                    Ok(mut program)=> {program.source=source;self.effect_library_draft.program_json=serde_json::to_string(&program).unwrap();self.effect_library_draft.duration_ms=0;}
-                                    Err(error)=>self.asset_error(error.to_string()),
+                        if let Destination::AudioSource { draft_id } = destination {
+                            if self.show_effect_library_editor
+                                && self.effect_library_draft.kind == "audio"
+                                && self.effect_library_draft.id == draft_id.to_string()
+                            {
+                                match serde_json::from_str::<crate::mpv::sfx::AudioProgram>(
+                                    &self.effect_library_draft.program_json,
+                                ) {
+                                    Ok(mut program) => {
+                                        program.source = source;
+                                        self.effect_library_draft.program_json =
+                                            serde_json::to_string(&program).unwrap();
+                                        self.effect_library_draft.duration_ms = 0;
+                                    }
+                                    Err(error) => self.asset_error(error.to_string()),
                                 }
-                            } else {self.asset_error("The sound effect draft changed before the file was ready; drop it again".into());}
+                            } else {
+                                self.asset_error("The sound effect draft changed before the file was ready; drop it again".into());
+                            }
                         }
                     }
                     Ok(Prepared::Audio(audio)) if destination != Destination::Player => {
@@ -433,15 +640,46 @@ impl PealayerApp {
                     Ok(Prepared::Effect(mut effect)) => {
                         // External definitions are copies. Never upsert over an
                         // unrelated live controller program by its exported ID.
-                        effect.id=if effect.kind=="sequence" {
-                            let mut used=self.advertised_hardware().map(|caps|caps.macros.iter().map(|m|m.id).collect::<std::collections::BTreeSet<_>>()).unwrap_or_default();
-                            for review in &self.asset_import.reviews {if let Prepared::Effect(e)=&review.asset {if e.kind=="sequence" {if let Ok(id)=e.id.parse::<u64>() {used.insert(id);}}}}
-                            if self.show_effect_library_editor {if let Ok(id)=self.effect_library_draft.id.parse::<u64>() {used.insert(id);}}
-                            let Some(id)=(0..=255u64).find(|id|!used.contains(id)) else {self.asset_error("No free sequence slots; remove an unused effect before importing".into());continue;};
+                        effect.id = if effect.kind == "sequence" {
+                            let mut used = self
+                                .advertised_hardware()
+                                .map(|caps| {
+                                    caps.macros
+                                        .iter()
+                                        .map(|m| m.id)
+                                        .collect::<std::collections::BTreeSet<_>>()
+                                })
+                                .unwrap_or_default();
+                            for review in &self.asset_import.reviews {
+                                if let Prepared::Effect(e) = &review.asset {
+                                    if e.kind == "sequence" {
+                                        if let Ok(id) = e.id.parse::<u64>() {
+                                            used.insert(id);
+                                        }
+                                    }
+                                }
+                            }
+                            if self.show_effect_library_editor {
+                                if let Ok(id) = self.effect_library_draft.id.parse::<u64>() {
+                                    used.insert(id);
+                                }
+                            }
+                            let Some(id) = (0..=255u64).find(|id| !used.contains(id)) else {
+                                self.asset_error("No free sequence slots; remove an unused effect before importing".into());
+                                continue;
+                            };
                             id.to_string()
-                        } else {uuid::Uuid::new_v4().to_string()};
-                        effect.reference.clear();effect.is_new=true;
-                        self.asset_import.reviews.push_back(Review{id:uuid::Uuid::new_v4(),name,asset:Prepared::Effect(effect),destination});
+                        } else {
+                            uuid::Uuid::new_v4().to_string()
+                        };
+                        effect.reference.clear();
+                        effect.is_new = true;
+                        self.asset_import.reviews.push_back(Review {
+                            id: uuid::Uuid::new_v4(),
+                            name,
+                            asset: Prepared::Effect(effect),
+                            destination,
+                        });
                     }
                     Ok(Prepared::Media(path)) => {
                         if matches!(destination, Destination::Library) {
@@ -462,9 +700,13 @@ impl PealayerApp {
                             // loadfile is asynchronous. sub-add before FileLoaded
                             // would attach to the old movie or be discarded.
                             if media_loaded || !self.media_metadata_loaded {
-                                self.asset_import.subtitles.push((media,path));
-                                self.asset_import.subtitle_started.get_or_insert_with(std::time::Instant::now);
-                            } else { self.attach_asset_subtitle(path); }
+                                self.asset_import.subtitles.push((media, path));
+                                self.asset_import
+                                    .subtitle_started
+                                    .get_or_insert_with(std::time::Instant::now);
+                            } else {
+                                self.attach_asset_subtitle(path);
+                            }
                         } else {
                             self.asset_error("Load media before attaching a subtitle".into());
                         }
@@ -479,13 +721,13 @@ impl PealayerApp {
                 }
             }
         } else if let Some(Err(mpsc::TryRecvError::Disconnected)) = result {
-            changed=true;
+            changed = true;
             self.asset_import.receiver = None;
             self.asset_error("Asset import worker stopped".into());
         }
         if self.asset_import.audio_active.is_none() && !crate::mpv::sfx::importing() {
             if let Some((audio, destination)) = self.asset_import.audio.pop_front() {
-                changed=true;
+                changed = true;
                 let id = audio.id;
                 match crate::mpv::sfx::import(audio) {
                     Ok(()) => self.asset_import.audio_active = Some((id, destination)),
@@ -493,30 +735,55 @@ impl PealayerApp {
                 }
             }
         }
-        if let Some(started)=self.asset_import.subtitle_started {
-            let timeout=std::time::Duration::from_secs(60);
-            if started.elapsed()>=timeout {
-                self.asset_import.subtitles.clear();self.asset_import.subtitle_started=None;changed=true;
-                self.asset_error("The movie did not finish loading; dropped subtitles were not attached".into());
-            }else {ctx.request_repaint_after(timeout.saturating_sub(started.elapsed()));}
+        if let Some(started) = self.asset_import.subtitle_started {
+            let timeout = std::time::Duration::from_secs(60);
+            if started.elapsed() >= timeout {
+                self.asset_import.subtitles.clear();
+                self.asset_import.subtitle_started = None;
+                changed = true;
+                self.asset_error(
+                    "The movie did not finish loading; dropped subtitles were not attached".into(),
+                );
+            } else {
+                ctx.request_repaint_after(timeout.saturating_sub(started.elapsed()));
+            }
         }
-        if changed {self.publish_asset_snapshot();}
+        if changed {
+            self.publish_asset_snapshot();
+        }
         if self.asset_import.receiver.is_some() || !self.asset_import.audio.is_empty() {
             ctx.request_repaint_after(std::time::Duration::from_millis(50));
         }
     }
-    fn attach_asset_subtitle(&mut self,path:PathBuf) {
-        if let Err(error)=self.mpv.command("sub-add", &[&path.to_string_lossy(),"select"]) {
+    fn attach_asset_subtitle(&mut self, path: PathBuf) {
+        if let Err(error) = self
+            .mpv
+            .command("sub-add", &[&path.to_string_lossy(), "select"])
+        {
             self.asset_error(format!("Could not attach subtitle: {error}"));
-        } else { self.refresh_media_tracks(); }
+        } else {
+            self.refresh_media_tracks();
+        }
     }
     pub(crate) fn attach_loaded_asset_subtitles(&mut self) {
-        let loaded=self.mpv.get_property::<String>("path").ok().map(PathBuf::from);
-        if loaded.as_ref()!=self.current_video_path.as_ref(){return;}
-        self.asset_import.subtitle_started=None;
-        for (media,path) in std::mem::take(&mut self.asset_import.subtitles) {
-            if self.current_video_path.as_ref() == Some(&media) {self.attach_asset_subtitle(path);}
-            else {self.asset_error("Media changed before its dropped subtitles could be attached; drop them again".into());}
+        let loaded = self
+            .mpv
+            .get_property::<String>("path")
+            .ok()
+            .map(PathBuf::from);
+        if loaded.as_ref() != self.current_video_path.as_ref() {
+            return;
+        }
+        self.asset_import.subtitle_started = None;
+        for (media, path) in std::mem::take(&mut self.asset_import.subtitles) {
+            if self.current_video_path.as_ref() == Some(&media) {
+                self.attach_asset_subtitle(path);
+            } else {
+                self.asset_error(
+                    "Media changed before its dropped subtitles could be attached; drop them again"
+                        .into(),
+                );
+            }
         }
         self.publish_asset_snapshot();
     }
@@ -576,18 +843,33 @@ impl PealayerApp {
         self.publish_asset_snapshot();
     }
     fn append_asset_fragment(&mut self, fragment: &Timeline, time: u64) -> Result<(), String> {
-        if !self.is_paused {
+        if self.current_video_path.is_some() && !self.is_paused {
             return Err("Pause playback before adding an asset to the timeline".into());
         }
         let mut next = self.timeline.clone();
         let ids = append_timeline(&mut next, fragment, time)?;
-        if fragment.analog_tracks.iter().any(|curve|self.timeline.analog_tracks.iter().any(|track|track.channel==curve.channel && track.locked)) || fragment.templates.iter().any(|effect| {
-            effect.target.primary_relay_id().is_some_and(|id|self.track_locked.contains(&id)) ||
-            effect.direct_control.as_ref().is_some_and(|direct|self.advertised_hardware().is_some_and(|hardware|hardware.controls.iter().any(|control|control.key==direct.control_key && control.locked))) ||
-            effect
-                .actions
+        if fragment.analog_tracks.iter().any(|curve| {
+            self.timeline
+                .analog_tracks
                 .iter()
-                .any(|action| self.track_locked.contains(&action.relay_id))
+                .any(|track| track.channel == curve.channel && track.locked)
+        }) || fragment.templates.iter().any(|effect| {
+            effect
+                .target
+                .primary_relay_id()
+                .is_some_and(|id| self.track_locked.contains(&id))
+                || effect.direct_control.as_ref().is_some_and(|direct| {
+                    self.advertised_hardware().is_some_and(|hardware| {
+                        hardware
+                            .controls
+                            .iter()
+                            .any(|control| control.key == direct.control_key && control.locked)
+                    })
+                })
+                || effect
+                    .actions
+                    .iter()
+                    .any(|action| self.track_locked.contains(&action.relay_id))
                 || effect
                     .direct_control
                     .as_ref()
@@ -631,7 +913,7 @@ impl PealayerApp {
                 self.append_asset_fragment(&timeline, review.destination.time())?
             }
             Prepared::Scene(scene) => {
-                if !self.is_paused {
+                if self.current_video_path.is_some() && !self.is_paused {
                     return Err("Pause playback before adding scene cues".into());
                 }
                 let hardware = self.advertised_hardware().ok_or(
@@ -771,12 +1053,32 @@ impl PealayerApp {
         Ok(())
     }
     pub(crate) fn draw_asset_review(&mut self, ctx: &eframe::egui::Context) {
-        let remote=crate::peer::client().and_then(|c|c.snapshot()).and_then(|s|s.session.status.get("asset_imports")?.get("reviews")?.as_array()?.first().cloned());
-        let value=remote.clone().or_else(||snapshot().get("reviews")?.as_array()?.first().cloned());
-        let Some(value)=value else {return;};
-        let Some(id)=value.get("id").and_then(|v|v.as_str()).and_then(|v|uuid::Uuid::parse_str(v).ok()) else{return;};
-        let kind=value["kind"].as_str().unwrap_or_default();
-        let time=value["destination"]["start_time_ms"].as_u64().unwrap_or(0);
+        let remote = crate::peer::client()
+            .and_then(|c| c.snapshot())
+            .and_then(|s| {
+                s.session
+                    .status
+                    .get("asset_imports")?
+                    .get("reviews")?
+                    .as_array()?
+                    .first()
+                    .cloned()
+            });
+        let value = remote
+            .clone()
+            .or_else(|| snapshot().get("reviews")?.as_array()?.first().cloned());
+        let Some(value) = value else {
+            return;
+        };
+        let Some(id) = value
+            .get("id")
+            .and_then(|v| v.as_str())
+            .and_then(|v| uuid::Uuid::parse_str(v).ok())
+        else {
+            return;
+        };
+        let kind = value["kind"].as_str().unwrap_or_default();
+        let time = value["destination"]["start_time_ms"].as_u64().unwrap_or(0);
         let mut action = None;
         let modal=eframe::egui::Modal::new(eframe::egui::Id::new("external-asset-review")).show(ctx,|ui|{
             ui.set_width((ctx.content_rect().width()-64.0).clamp(200.0,520.0));
@@ -792,16 +1094,40 @@ impl PealayerApp {
             });
             ui.add_space(12.0);ui.horizontal(|ui|{if ui.button(self.tr("Cancel")).clicked(){action=Some(false);}if ui.button(self.tr(if kind=="effect"{"Open properties"}else{"Add to timeline"})).clicked(){action=Some(true);}});
         });
-        if modal.should_close(){action=Some(false);}
+        if modal.should_close() {
+            action = Some(false);
+        }
         if let Some(accept) = action {
             if remote.is_some() {
-                if accept && kind=="effect" {
-                    if let (Ok(effect),Ok(destination))=(serde_json::from_value(value["effect"].clone()),serde_json::from_value(value["destination"].clone())) {
-                        self.asset_import.reviews.push_back(Review{id,name:value["name"].as_str().unwrap_or_default().into(),asset:Prepared::Effect(effect),destination});
-                        if let Err(error)=self.review_asset(ctx,id,true){self.asset_import.reviews.retain(|r|r.id!=id);self.asset_error(error);return;}
-                    } else {self.asset_error("Invalid imported effect from the authority".into());return;}
+                if accept && kind == "effect" {
+                    if let (Ok(effect), Ok(destination)) = (
+                        serde_json::from_value(value["effect"].clone()),
+                        serde_json::from_value(value["destination"].clone()),
+                    ) {
+                        self.asset_import.reviews.push_back(Review {
+                            id,
+                            name: value["name"].as_str().unwrap_or_default().into(),
+                            asset: Prepared::Effect(effect),
+                            destination,
+                        });
+                        if let Err(error) = self.review_asset(ctx, id, true) {
+                            self.asset_import.reviews.retain(|r| r.id != id);
+                            self.asset_error(error);
+                            return;
+                        }
+                    } else {
+                        self.asset_error("Invalid imported effect from the authority".into());
+                        return;
+                    }
                 }
-                self.apply_interop_command(ctx,crate::platform::interop::InteropCommand::ReviewAsset{id,accept:accept && kind!="effect"},"assets");
+                self.apply_interop_command(
+                    ctx,
+                    crate::platform::interop::InteropCommand::ReviewAsset {
+                        id,
+                        accept: accept && kind != "effect",
+                    },
+                    "assets",
+                );
             } else if let Err(error) = self.review_asset(ctx, id, accept) {
                 self.asset_error(error);
             }
@@ -817,24 +1143,44 @@ pub struct TimelineDropArea {
     pub row_height: f32,
     pub keys: Vec<String>,
 }
-pub fn paint_drop_target(ui:&eframe::egui::Ui,rect:eframe::egui::Rect,label:&str) {
+pub fn paint_drop_target(ui: &eframe::egui::Ui, rect: eframe::egui::Rect, label: &str) {
     use eframe::egui;
-    let hovering=ui.input(|input|!input.raw.hovered_files.is_empty() && input.pointer.latest_pos().is_some_and(|p|rect.contains(p)));
+    let hovering = ui.input(|input| {
+        !input.raw.hovered_files.is_empty()
+            && input.pointer.latest_pos().is_some_and(|p| rect.contains(p))
+    });
     if hovering {
-        let color=ui.visuals().selection.stroke.color;
-        let painter=ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
-        painter.rect_filled(rect,4.0,color.linear_multiply(0.12));
-        painter.rect_stroke(rect.shrink(1.0),4.0,egui::Stroke::new(2.0,color),egui::StrokeKind::Inside);
-        if !label.is_empty(){painter.text(rect.left_top()+egui::vec2(12.0,12.0),egui::Align2::LEFT_TOP,label,egui::FontId::proportional(14.0),ui.visuals().text_color());}
+        let color = ui.visuals().selection.stroke.color;
+        let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
+        painter.rect_filled(rect, 4.0, color.linear_multiply(0.12));
+        painter.rect_stroke(
+            rect.shrink(1.0),
+            4.0,
+            egui::Stroke::new(2.0, color),
+            egui::StrokeKind::Inside,
+        );
+        if !label.is_empty() {
+            painter.text(
+                rect.left_top() + egui::vec2(12.0, 12.0),
+                egui::Align2::LEFT_TOP,
+                label,
+                egui::FontId::proportional(14.0),
+                ui.visuals().text_color(),
+            );
+        }
     }
 }
 pub fn native_destination(ctx: &eframe::egui::Context) -> Destination {
     let Some(pointer) = ctx.pointer_latest_pos() else {
         return Destination::Player;
     };
-    if let Some((rect,draft_id))=ctx.data(|d|d.get_temp::<(eframe::egui::Rect,uuid::Uuid)>(eframe::egui::Id::new("external-assets-audio-source")))
-        && rect.contains(pointer) {
-        return Destination::AudioSource{draft_id};
+    if let Some((rect, draft_id)) = ctx.data(|d| {
+        d.get_temp::<(eframe::egui::Rect, uuid::Uuid)>(eframe::egui::Id::new(
+            "external-assets-audio-source",
+        ))
+    }) && rect.contains(pointer)
+    {
+        return Destination::AudioSource { draft_id };
     }
     let area = ctx.data(|d| {
         d.get_temp::<TimelineDropArea>(eframe::egui::Id::new("external-assets-timeline"))
@@ -905,7 +1251,7 @@ mod tests {
             ImportRequest {
                 paths: vec![],
                 destination: Default::default(),
-                owner_id:None,
+                owner_id: None,
             }
             .validate()
             .is_err()
@@ -921,84 +1267,258 @@ mod tests {
     }
     #[test]
     fn curve_import_merges_channel_without_duplicate_outputs_or_partial_mutation() {
-        use crate::four_d::curve::{AnalogTrack,Keyframe,Interpolation};
-        let mut curve=AnalogTrack::new("Wind",0);
-        curve.keyframes=vec![Keyframe::new(429,0.5,Interpolation::Linear)];
-        let fragment=Timeline{analog_tracks:vec![curve.clone()],..Default::default()};
-        let mut target=fragment.clone();
-        append_timeline(&mut target,&fragment,10000).unwrap();
-        assert_eq!(target.analog_tracks.len(),1);
-        assert_eq!(target.analog_tracks[0].keyframes.iter().map(|p|p.time_ms).collect::<Vec<_>>(),vec![429,10429]);
-        let before=target.clone();
-        assert!(append_timeline(&mut target,&fragment,10000).is_err());
-        assert_eq!(target,before);
-        target.analog_tracks[0].locked=true;
-        assert!(append_timeline(&mut target,&fragment,20000).is_err());
+        use crate::four_d::curve::{AnalogTrack, Interpolation, Keyframe};
+        let mut curve = AnalogTrack::new("Wind", 0);
+        curve.keyframes = vec![Keyframe::new(429, 0.5, Interpolation::Linear)];
+        let fragment = Timeline {
+            analog_tracks: vec![curve.clone()],
+            ..Default::default()
+        };
+        let mut target = fragment.clone();
+        append_timeline(&mut target, &fragment, 10000).unwrap();
+        assert_eq!(target.analog_tracks.len(), 1);
+        assert_eq!(
+            target.analog_tracks[0]
+                .keyframes
+                .iter()
+                .map(|p| p.time_ms)
+                .collect::<Vec<_>>(),
+            vec![429, 10429]
+        );
+        let before = target.clone();
+        assert!(append_timeline(&mut target, &fragment, 10000).is_err());
+        assert_eq!(target, before);
+        target.analog_tracks[0].locked = true;
+        assert!(append_timeline(&mut target, &fragment, 20000).is_err());
     }
     #[test]
     fn actual_native_drop_geometry_accounts_for_pan_zoom_and_header() {
         use eframe::egui;
-        let ctx=egui::Context::default();
-        let mut output=ctx.run_ui(egui::RawInput{screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(900.0,600.0))),events:vec![egui::Event::PointerMoved(egui::pos2(200.0,160.0))],..Default::default()},|_|{
-            ctx.data_mut(|d|d.insert_temp(egui::Id::new("external-assets-timeline"),TimelineDropArea {
-                viewport:egui::Rect::from_min_max(egui::pos2(100.0,100.0),egui::pos2(800.0,500.0)),
-                content_origin:egui::pos2(-842.9,100.0),zoom:100.0,row_height:40.0,keys:vec!["hardware:relay.1".into(),"controller-effect:audio".into()],
-            }));
-            assert_eq!(native_destination(&ctx),Destination::Timeline{start_time_ms:10429,track_key:Some("controller-effect:audio".into())});
-        });output.textures_delta.clear();
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(900.0, 600.0),
+                )),
+                events: vec![egui::Event::PointerMoved(egui::pos2(200.0, 160.0))],
+                ..Default::default()
+            },
+            |_| {
+                ctx.data_mut(|d| {
+                    d.insert_temp(
+                        egui::Id::new("external-assets-timeline"),
+                        TimelineDropArea {
+                            viewport: egui::Rect::from_min_max(
+                                egui::pos2(100.0, 100.0),
+                                egui::pos2(800.0, 500.0),
+                            ),
+                            content_origin: egui::pos2(-842.9, 100.0),
+                            zoom: 100.0,
+                            row_height: 40.0,
+                            keys: vec!["hardware:relay.1".into(), "controller-effect:audio".into()],
+                        },
+                    )
+                });
+                assert_eq!(
+                    native_destination(&ctx),
+                    Destination::Timeline {
+                        start_time_ms: 10429,
+                        track_key: Some("controller-effect:audio".into())
+                    }
+                );
+            },
+        );
+        output.textures_delta.clear();
     }
     #[test]
     fn rejected_scene_does_not_partially_append_or_seek() {
-        let ctx=eframe::egui::Context::default();
-        let mut app=PealayerApp::default();
-        app.is_paused=true;app.playback_time=14.429;
-        let original=app.timeline.clone();
-        let id=uuid::Uuid::new_v4();
-        app.asset_import.reviews.push_back(Review{id,name:"Scene".into(),asset:Prepared::Scene(crate::projects::Scene{name:"Scene".into(),board_identity:"another-board".into(),..Default::default()}),destination:Destination::Timeline{start_time_ms:10429,track_key:None}});
-        assert!(app.review_asset(&ctx,id,true).is_err());
-        assert_eq!(app.timeline,original);assert_eq!(app.playback_time,14.429);
+        let ctx = eframe::egui::Context::default();
+        let mut app = PealayerApp::default();
+        app.is_paused = true;
+        app.playback_time = 14.429;
+        let original = app.timeline.clone();
+        let id = uuid::Uuid::new_v4();
+        app.asset_import.reviews.push_back(Review {
+            id,
+            name: "Scene".into(),
+            asset: Prepared::Scene(crate::projects::Scene {
+                name: "Scene".into(),
+                board_identity: "another-board".into(),
+                ..Default::default()
+            }),
+            destination: Destination::Timeline {
+                start_time_ms: 10429,
+                track_key: None,
+            },
+        });
+        assert!(app.review_asset(&ctx, id, true).is_err());
+        assert_eq!(app.timeline, original);
+        assert_eq!(app.playback_time, 14.429);
         assert!(app.asset_import.awaiting_review());
-        app.review_asset(&ctx,id,false).unwrap();
+        app.review_asset(&ctx, id, false).unwrap();
         assert!(!app.asset_import.awaiting_review());
     }
     #[test]
     fn document_reader_reuses_scene_contract_and_rejects_unknown_or_truncated_json() {
-        let path=std::env::temp_dir().join(format!("pealayer-asset-{}.json",uuid::Uuid::new_v4()));
-        let scene=crate::projects::Scene{name:"Preset".into(),channels:std::collections::BTreeMap::from([("relay.1".into(),crate::projects::ChannelValue::Boolean{on:true})]),..Default::default()};
-        let doc=crate::projects::Document::Scene(scene.clone());
-        std::fs::write(&path,serde_json::to_vec(&doc).unwrap()).unwrap();
-        match prepare(&path).unwrap(){Prepared::Scene(actual)=>assert_eq!(actual,scene),_=>panic!("expected existing scene format")}
-        std::fs::write(&path,b"{\"kind\":\"unknown\"}").unwrap();assert!(prepare(&path).is_err());
-        std::fs::write(&path,b"{").unwrap();assert!(prepare(&path).is_err());
+        let path =
+            std::env::temp_dir().join(format!("pealayer-asset-{}.json", uuid::Uuid::new_v4()));
+        let scene = crate::projects::Scene {
+            name: "Preset".into(),
+            channels: std::collections::BTreeMap::from([(
+                "relay.1".into(),
+                crate::projects::ChannelValue::Boolean { on: true },
+            )]),
+            ..Default::default()
+        };
+        let doc = crate::projects::Document::Scene(scene.clone());
+        std::fs::write(&path, serde_json::to_vec(&doc).unwrap()).unwrap();
+        match prepare(&path).unwrap() {
+            Prepared::Scene(actual) => assert_eq!(actual, scene),
+            _ => panic!("expected existing scene format"),
+        }
+        std::fs::write(&path, b"{\"kind\":\"unknown\"}").unwrap();
+        assert!(prepare(&path).is_err());
+        std::fs::write(&path, b"{").unwrap();
+        assert!(prepare(&path).is_err());
         std::fs::remove_file(path).unwrap();
     }
     #[test]
     fn asset_rpc_uses_the_same_typed_destination_and_rejects_invalid_commands() {
-        let json=r#"{"jsonrpc":"2.0","id":1,"method":"pealayer.assets.import","params":{"paths":["sound.wav"],"destination":{"surface":"timeline","start_time_ms":10429,"track_key":"controller-effect:audio"}}}"#;
-        let (_,command)=crate::platform::interop::parse_interop_request(json).unwrap();
-        let crate::platform::interop::InteropCommand::ImportAssets{request}=command else{panic!("wrong command")};
-        assert_eq!(request.destination.time(),10429);assert_eq!(request.paths,vec!["sound.wav"]);
-        assert!(crate::platform::interop::parse_interop_request(&json.replace("10429","-1")).is_err());
-        assert!(crate::platform::interop::parse_interop_request(&json.replace("10429","\"bad\"")).is_err());
+        let json = r#"{"jsonrpc":"2.0","id":1,"method":"pealayer.assets.import","params":{"paths":["sound.wav"],"destination":{"surface":"timeline","start_time_ms":10429,"track_key":"controller-effect:audio"}}}"#;
+        let (_, command) = crate::platform::interop::parse_interop_request(json).unwrap();
+        let crate::platform::interop::InteropCommand::ImportAssets { request } = command else {
+            panic!("wrong command")
+        };
+        assert_eq!(request.destination.time(), 10429);
+        assert_eq!(request.paths, vec!["sound.wav"]);
+        assert!(
+            crate::platform::interop::parse_interop_request(&json.replace("10429", "-1")).is_err()
+        );
+        assert!(
+            crate::platform::interop::parse_interop_request(&json.replace("10429", "\"bad\""))
+                .is_err()
+        );
+    }
+    #[test]
+    fn current_controller_descriptor_preserves_steps_repeats_and_properties() {
+        let value = serde_json::json!({"id":"7","reference":"effect:7","name":"Light / dark","category":"Lighting","kind":"sequence","engine":"host","duration_ms":1000,"steps":[{"at_us":0,"kind":"relay","target":5,"value":1}],"repeat_count":3,"repeat_interval_ms":500,"properties":{"color":"#FFAA00","label":"Lamp"}});
+        let effect = effect_definition(value).unwrap();
+        assert_eq!(effect.program["repeat_count"], 3);
+        assert_eq!(effect.program["repeat_interval_ms"], 500);
+        assert_eq!(effect.program["properties"]["mode"], "host");
+        assert_eq!(effect.program["properties"]["color"], "#FFAA00");
+        assert_eq!(effect.program["steps"][0]["target"], 5);
+        let path =
+            std::env::temp_dir().join(format!("pealayer-catalog-{}.json", uuid::Uuid::new_v4()));
+        std::fs::write(
+            &path,
+            serde_json::to_vec(
+                &serde_json::json!({"effects":[effect],"groups":{"Lighting":{"icon":"lightbulb"}}}),
+            )
+            .unwrap(),
+        )
+        .unwrap();
+        assert!(
+            matches!(prepare(&path).unwrap(),Prepared::EffectCollection(effects) if effects.len()==1)
+        );
+        std::fs::remove_file(path).unwrap();
+    }
+    #[test]
+    fn no_media_import_is_offline_authoring_not_playing() {
+        let mut app = PealayerApp::default();
+        app.is_paused = false;
+        let original_time = app.playback_time;
+        let effect = Effect::new("Marker".into(), "sparkle".into(), 1000, vec![]);
+        let fragment = Timeline {
+            instances: vec![EffectInstance::new(effect.id, 0)],
+            templates: vec![effect],
+            ..Default::default()
+        };
+        app.append_asset_fragment(&fragment, 10429).unwrap();
+        assert_eq!(app.timeline.instances[0].start_time_ms, 10429);
+        assert_eq!(app.playback_time, original_time);
     }
     #[test]
     fn native_review_renders_actual_values_and_never_mutates_on_open() {
         use eframe::egui;
-        let mut app=PealayerApp::default();
-        app.is_paused=true;app.playback_time=14.429;
-        let original=app.timeline.clone();
-        let review=Review{id:uuid::Uuid::new_v4(),name:"Scene.json".into(),asset:Prepared::Scene(crate::projects::Scene{name:"Preset".into(),channels:std::collections::BTreeMap::from([("relay.5".into(),crate::projects::ChannelValue::Boolean{on:true}),("pwm.0".into(),crate::projects::ChannelValue::Pwm{percent_milli:35000})]),..Default::default()}),destination:Destination::Timeline{start_time_ms:10429,track_key:None}};
-        app.asset_import.reviews.push_back(review);app.publish_asset_snapshot();
-        for width in [390.0,768.0,1440.0] {
-            let ctx=egui::Context::default();
+        let mut app = PealayerApp::default();
+        app.is_paused = true;
+        app.playback_time = 14.429;
+        let original = app.timeline.clone();
+        let review = Review {
+            id: uuid::Uuid::new_v4(),
+            name: "Scene.json".into(),
+            asset: Prepared::Scene(crate::projects::Scene {
+                name: "Preset".into(),
+                channels: std::collections::BTreeMap::from([
+                    (
+                        "relay.5".into(),
+                        crate::projects::ChannelValue::Boolean { on: true },
+                    ),
+                    (
+                        "pwm.0".into(),
+                        crate::projects::ChannelValue::Pwm {
+                            percent_milli: 35000,
+                        },
+                    ),
+                ]),
+                ..Default::default()
+            }),
+            destination: Destination::Timeline {
+                start_time_ms: 10429,
+                track_key: None,
+            },
+        };
+        app.asset_import.reviews.push_back(review);
+        app.publish_asset_snapshot();
+        for width in [390.0, 768.0, 1440.0] {
+            let ctx = egui::Context::default();
             // Centered popup/scroll geometry settles after the sizing pass.
-            for _ in 0..2 {let mut output=ctx.run_ui(egui::RawInput{screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(width,850.0))),..Default::default()},|_|app.draw_asset_review(&ctx));output.textures_delta.clear();}
-            let mut output=ctx.run_ui(egui::RawInput{screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(width,850.0))),..Default::default()},|_|app.draw_asset_review(&ctx));
-            let text=output.shapes.iter().filter_map(|shape|if let egui::epaint::Shape::Text(t)=&shape.shape{Some(t.galley.job.text.clone())}else{None}).collect::<Vec<_>>();
-            assert!(text.iter().any(|t|t.contains("pwm.0 · 35.000%")),"Missing actual scene values: {text:?}");
-            assert_eq!(app.timeline,original);assert_eq!(app.playback_time,14.429);assert!(app.asset_import.awaiting_review());
+            for _ in 0..2 {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 850.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |_| app.draw_asset_review(&ctx),
+                );
+                output.textures_delta.clear();
+            }
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(width, 850.0),
+                    )),
+                    ..Default::default()
+                },
+                |_| app.draw_asset_review(&ctx),
+            );
+            let text = output
+                .shapes
+                .iter()
+                .filter_map(|shape| {
+                    if let egui::epaint::Shape::Text(t) = &shape.shape {
+                        Some(t.galley.job.text.clone())
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+            assert!(
+                text.iter().any(|t| t.contains("pwm.0 · 35.000%")),
+                "Missing actual scene values: {text:?}"
+            );
+            assert_eq!(app.timeline, original);
+            assert_eq!(app.playback_time, 14.429);
+            assert!(app.asset_import.awaiting_review());
             output.textures_delta.clear();
         }
-        app.asset_import.reviews.clear();app.publish_asset_snapshot();
+        app.asset_import.reviews.clear();
+        app.publish_asset_snapshot();
     }
 }

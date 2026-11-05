@@ -1604,11 +1604,9 @@ impl WebControllerEffectDraft {
             let value = value.trim();
             (!value.is_empty()
                 && value.len() <= 64
-                && value
-                    .chars()
-                    .all(|character| character.is_alphanumeric() || " -_".contains(character)))
+                && !value.chars().any(char::is_control))
             .then_some(())
-            .ok_or_else(|| format!("{label} must contain 1 to 64 safe characters"))
+            .ok_or_else(|| format!("{label} must contain 1 to 64 printable characters"))
         };
         field("effect name", &self.name)?;
         field("effect category", &self.category)?;

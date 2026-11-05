@@ -50,6 +50,16 @@ second independent format or replace its pending application adapter blindly.
   fail closed. Native consumers transfer files rather than forwarding local paths.
 - Movie/subtitle drops wait for FileLoaded for the requested media. An unrelated
   movie cannot receive the pending subtitle, and failed loads expire the queue.
+- The first real runtime probe found that no-media mpv reports unpaused. Offline
+  placement now checks for actual loaded media before requiring Pause. The
+  previous candidate saved its SFX but rejected placement; it is not accepted as
+  the final runtime build.
+- Current PCController EffectDescriptor/effects.json exports adapt into the
+  existing typed designer payload, retaining steps, engine, repeats and properties.
+  The RPC name validator now allows the same printable punctuation as native
+  Save (including slashes in real catalog names), while retaining length/control
+  character bounds. Full group-style/empty-group catalog replacement remains
+  PCController's existing import workflow, not a silent side effect of a drop.
 - Scene review displays real sampled/unsampled values. Missing/incompatible
   channels or board identity reject the whole scene without partial placement.
   Imported motion is not silently converted into output. Cached channel catalogs

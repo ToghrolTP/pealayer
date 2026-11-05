@@ -11,7 +11,7 @@ and designer controls remain the owners of the imported data.
 | Audio onto the sound-effect source field | Change that draft's source only. Save reads its duration using the existing SFX engine. |
 | Video or audio onto Player | Open it with the existing player; additional video files enter its playlist. |
 | Subtitle | Attach and select it using the existing subtitle track controls. A movie and its subtitles may be dropped together. |
-| Effect definition JSON | Review, then open the existing Effect properties designer as a new copy. Save/Publish there, then drag its saved library card into Timeline. Hardware programs stay owned by PCController. |
+| Effect definition JSON / `effects.json` catalog | Review definitions individually, then open the existing Effect properties designer as a new copy. Save/Publish there, then drag its saved library card into Timeline. Hardware programs stay owned by PCController. |
 | Scene JSON | Review sampled channel values, then add set-and-keep cues on their mapped relay/PWM channels. This does not run the scene or invent values for unsampled channels. |
 | Timeline JSON | Review, then append its cues, guides and curves at the drop position. Existing media, playhead, viewport and track policies remain unchanged. |
 
@@ -24,12 +24,16 @@ are rejected. Curves for the same PWM channel merge without changing that
 channel's existing policies; a colliding point time rejects the import instead
 of silently overwriting it. Timeline import is one undoable edit.
 
-JSON files use the current effect descriptor or Pealayer scene/timeline document
+JSON files use the current PCController effect descriptor/catalog, editor save
+payload or Pealayer scene/timeline document
 formats. The existing timeline Save format is also accepted. Project/media/
 workspace restoration is deliberately not triggered by dropping a file: that
 would replace the current session, not add an asset. Project restore remains a
 separate workflow. For JSON with relative audio dependencies, include those
 audio files in the same upload; uploaded siblings retain their filenames.
+Catalog imports bring effect definitions and group membership into the designer;
+they do not automatically overwrite group icons or create empty groups. Retain
+the source catalog for PCController's own full-library import if those are needed.
 
 ## Browser and remote clients
 
