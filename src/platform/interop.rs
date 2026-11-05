@@ -190,6 +190,10 @@ pub enum InteropCommand {
         #[serde(flatten)]
         navigation: crate::preferences_contract::PreferencesNavigation,
     },
+    OpenAbout {
+        #[serde(default)]
+        tab: crate::ui::about::AboutTab,
+    },
     OpenMediaInformation,
     OpenMediaFolder,
     EditConfiguration,
@@ -549,7 +553,7 @@ fn valid_timeline_track_key(value: &str) -> bool {
 
 impl InteropCommand {
     pub fn is_process_local(&self) -> bool {
-        matches!(self, Self::QuitLocal | Self::GetProcessStatus | Self::ConnectPeer { .. } | Self::InspectAuthoring { .. } | Self::NavigatePreferences { .. })
+        matches!(self, Self::QuitLocal | Self::GetProcessStatus | Self::ConnectPeer { .. } | Self::InspectAuthoring { .. } | Self::NavigatePreferences { .. } | Self::OpenAbout { .. })
     }
 
     pub fn query_result(&self) -> Option<Value> {
@@ -876,6 +880,7 @@ pub fn command_catalog() -> Value {
         "messaging": { "contract": "pealayer.messages.v1", "snapshot": "/api/messages", "subscription": "/ws", "publish": "pealayer.toast.show", "dismiss": "pealayer.toast.dismiss", "invoke": "pealayer.toast.invoke", "max_actions": 4, "default_action": "bound action ID", "state": "pealayer.messages.state", "surfaces": ["egui", "web", "terminal"], "persistent_timeout_ms": 0 },
         "remote_folders": { "browse": "pealayer.remote.browse", "select": "pealayer.remote.select", "sort": "pealayer.remote.sort", "close": "pealayer.remote.close", "state": "/api/remote/state", "thumbnail": "/api/remote/thumbnail", "subscription": "/ws" },
         "preferences_navigation": { "method": "pealayer.preferences.navigate", "command": "navigate_preferences", "section": "optional schema section ID", "scroll_y": "absolute logical pixel offset, clamped to content", "scope": "local native process, including its Preferences helper", "accepted": "queued, not confirmation that a frame has rendered" },
+        "about_navigation": { "method": "pealayer.about.open", "command": "open_about", "tab": ["overview", "build", "board", "libraries"], "scope": "local native process, never relayed to authority", "accepted": "queued, not confirmation that a frame has rendered" },
         "commands": [
             "open", "play", "pause", "toggle_pause", "stop", "next", "previous",
             "browse_remote", "select_remote", "sort_remote", "close_remote_browser",
@@ -884,6 +889,7 @@ pub fn command_catalog() -> Value {
             "set_rate", "set_fullscreen", "toggle_fullscreen", "activate", "minimize",
             "maximize", "restore", "open_preferences", "navigate_preferences", "open_media_information", "open_media_folder", "edit_configuration", "open_board_information", "show_message", "show_osd", "hide_osd", "set_workspace",
             "create_workspace_profile", "update_workspace_profile", "delete_workspace_profile",
+            "open_about",
             "move_workspace_profile", "timeline.track.update", "timeline.track.manage", "update_config",
             "reload_config", "add_effect_cue", "update_effect_cue", "remove_effect_cue", "set_recording",
             "get_status", "publish_toast", "dismiss_toast", "invoke_toast_action", "quit", "controller_effect_cue.add", "controller_effect.play",
@@ -1872,6 +1878,12 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         }
         "navigate_preferences" | "pealayer.preferences.navigate" => Some(InteropCommand::NavigatePreferences {
             navigation: serde_json::from_value(request.params.clone()).map_err(|error| error.to_string())?,
+        }),
+        "pealayer.about.open" => Some(InteropCommand::OpenAbout {
+            tab: match request.params.get("tab") {
+                Some(value) => serde_json::from_value(value.clone()).map_err(|error| error.to_string())?,
+                None => crate::ui::about::AboutTab::default(),
+            },
         }),
         "media_information" | "open_media_information" | "pealayer.media.information" => {
             Some(InteropCommand::OpenMediaInformation)

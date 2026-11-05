@@ -4562,6 +4562,12 @@ impl PealayerApp {
             InteropCommand::NavigatePreferences { navigation } => {
                 crate::ui::preferences::navigate(self, ctx, navigation);
             }
+            InteropCommand::OpenAbout { tab } => {
+                self.about_tab = tab.index();
+                self.show_about_dialog = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            }
             InteropCommand::OpenMediaInformation => {
                 self.open_or_focus_tab(crate::ui::layout::PealayerTab::MediaInspector);
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);

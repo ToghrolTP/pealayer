@@ -313,6 +313,14 @@ fn action_button_with_kind(
 }
 
 /// A shared, left-aligned navigation row for modal/dialog side rails.
+pub fn navigation_width(ui: &egui::Ui, label: &str) -> f32 {
+    let galley = ui.painter().layout_no_wrap(label.into(),
+        egui::FontId::proportional(CONTROL_TEXT_SIZE), ui.visuals().text_color());
+    // Same leading icon/text slot and trailing inset as navigation_control.
+    (33.0 + galley.size().x + 12.0).ceil().max(80.0)
+}
+
+/// A shared, left-aligned navigation row for modal/dialog side rails.
 pub fn navigation_button(
     ui: &mut egui::Ui,
     selected: bool,
@@ -396,17 +404,18 @@ fn navigation_control(
         } else {
             rect.center().y
         };
-        painter.text(
-            egui::pos2(text_x, title_y),
-            egui::Align2::LEFT_CENTER,
-            label,
-            egui::FontId::proportional(CONTROL_TEXT_SIZE),
-            if selected {
+        let text_color = if selected {
                 ui.visuals().widgets.hovered.fg_stroke.color
             } else {
                 ui.visuals().text_color()
-            },
-        );
+            };
+        let mut job = egui::text::LayoutJob::simple_singleline(label.into(),
+            egui::FontId::proportional(CONTROL_TEXT_SIZE), text_color);
+        job.wrap.max_width = (rect.right() - 12.0 - text_x).max(1.0);
+        job.wrap.max_rows = 1;
+        job.wrap.break_anywhere = true;
+        let galley = painter.layout_job(job);
+        painter.galley(egui::pos2(text_x, title_y - galley.size().y * 0.5), galley, text_color);
         if let Some(metadata) = metadata {
             painter.text(
                 egui::pos2(text_x, rect.center().y + 9.0),
@@ -417,7 +426,7 @@ fn navigation_control(
             );
         }
     }
-    response
+    response.on_hover_text(label)
 }
 
 /// Align dialog actions to the conventional trailing edge while respecting
