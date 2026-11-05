@@ -1031,7 +1031,8 @@ fn click_item(app: &mut PealayerApp, ui: &mut egui::Ui, item: Widget, progress: 
     }
 }
 fn draw_group(app: &mut PealayerApp, ui: &mut egui::Ui, end: bool, hardware: Option<&HardwareCapabilities>,
-    log: &TelemetryLog, progress: &[StatusProgress], log_id: egui::Id, rects: &mut Vec<(Widget, egui::Rect)>, connection_width: f32) {
+    log: &TelemetryLog, progress: &[StatusProgress], log_id: egui::Id, rects: &mut Vec<(Widget, egui::Rect)>, connection_width: f32,
+    divider_color: egui::Color32) {
     let background = ui.interact(ui.max_rect(), ui.id().with(("status-side", end)), egui::Sense::click());
     let items = group_items(app, end, hardware, progress);
     egui::ScrollArea::horizontal().id_salt(("status-side-scroll", end))
@@ -1043,7 +1044,7 @@ fn draw_group(app: &mut PealayerApp, ui: &mut egui::Ui, end: bool, hardware: Opt
                     if index > 0 && app.status_bar.dividers {
                         let (rect, _) = ui.allocate_exact_size(egui::vec2(1.0, ITEM_HEIGHT), egui::Sense::hover());
                         ui.painter().line_segment([rect.center_top()+egui::vec2(0.0,5.0), rect.center_bottom()-egui::vec2(0.0,5.0)],
-                            egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.bg_stroke.color));
+                            egui::Stroke::new(1.0, divider_color));
                     }
                     let id = ui.make_persistent_id(("status-widget", item));
                     let offset_id = id.with("offset");
@@ -1127,8 +1128,17 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         if !app.status_bar.chart_paused { log.sample(now,hardware.as_ref()); } log.clone() });
     let payload = egui::DragAndDrop::payload::<Widget>(ui.ctx());
     let mut rects = Vec::new();
+    let frame = status_bar_panel_frame(&tokens);
     let panel = egui::Panel::bottom("status_bar")
-        .frame(status_bar_panel_frame(&tokens))
+        // These are fixed-height slots, not a resizable workspace panel.
+        // An unconstrained centered panel converges from the density-dependent
+        // default size over multiple frames, visibly shifting the whole row.
+        .exact_size(ITEM_HEIGHT + frame.total_margin().sum().y)
+        .resizable(false)
+        .frame(frame)
+        // The themed frame already owns this boundary. Panel otherwise reserves
+        // another point and paints a second line just outside the frame outline.
+        .show_separator_line(false)
         .show_inside(ui, |ui| {
         ui.spacing_mut().item_spacing.x=3.0;
         ui.with_layout(crate::ui::i18n::layout(app.rtl,egui::Align::Center), |ui| {
@@ -1145,9 +1155,9 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 .max(24.0).min((ui.available_width()-48.0).max(24.0));
             let start_width=(ui.available_width()-end_width-3.0).max(1.0);
             ui.allocate_ui_with_layout(egui::vec2(start_width,ITEM_HEIGHT),crate::ui::i18n::layout(app.rtl,egui::Align::Center),
-                |ui|draw_group(app,ui,false,hardware.as_ref(),&log,&progress,log_id,&mut rects,connection_width));
+                |ui|draw_group(app,ui,false,hardware.as_ref(),&log,&progress,log_id,&mut rects,connection_width,tokens.separator));
             ui.allocate_ui_with_layout(egui::vec2(end_width,ITEM_HEIGHT),crate::ui::i18n::layout(app.rtl,egui::Align::Center),
-                |ui|draw_group(app,ui,true,hardware.as_ref(),&log,&progress,log_id,&mut rects,connection_width));
+                |ui|draw_group(app,ui,true,hardware.as_ref(),&log,&progress,log_id,&mut rects,connection_width,tokens.separator));
         });
     });
     #[cfg(test)] ui.ctx().data_mut(|data|data.insert_temp(egui::Id::new("test-status-widget-rects"),rects));
@@ -1831,6 +1841,87 @@ mod tests {
             assert!(render_widget(&app, ui, Widget::Timeline, None, &TelemetryLog::default(), &[],148.0).is_some());
         });
         output.textures_delta.clear();
+    }
+
+    #[test]
+    fn status_dividers_have_one_boundary_and_stable_inset_geometry() {
+        let _guard = crate::app::tests::lock_app_tests();
+        for theme in [egui::Theme::Dark, egui::Theme::Light] {
+            for scale in [1.0, 1.25, 1.5, 2.0] {
+                for rtl in [false, true] {
+                    let context = egui::Context::default();
+                    context.set_pixels_per_point(scale);
+                    let config = crate::config::AppConfig {
+                        ui_control_density: if rtl { crate::config::UiControlDensity::Spacious }
+                            else { crate::config::UiControlDensity::ExtraCompact },
+                        ..Default::default()
+                    };
+                    crate::ui::configure_native_visuals(&context, &config);
+                    context.set_theme(theme);
+                    let tokens = crate::ui::craft_theme::current(&context);
+                    let mut app = PealayerApp::default();
+                    app.engine_handle = crate::four_d::engine::memory_only_test_engine();
+                    app.rtl = rtl;
+                    app.status_bar = crate::config::StatusBarConfig::default();
+                    app.status_bar.fps_mode = StatusBarFpsMode::Ui;
+                    let width = if rtl { 420.0 } else { 1000.0 };
+                    // Apply the Context's pending zoom/viewport changes before
+                    // the first status draw. A headless sizing pass has an
+                    // intentionally unbounded (8000-point) viewport.
+                    for _ in 0..2 {
+                        let mut setup = context.run_ui(egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 420.0))),
+                            ..Default::default()
+                        }, |_| {});
+                        setup.textures_delta.clear();
+                    }
+                    for enabled in [true, false] {
+                        app.status_bar.dividers = enabled;
+                        let mut previous_rects = None;
+                        let mut pointer = egui::pos2(-1.0, -1.0);
+                        for hover in [false, true, false] {
+                            let mut output = context.run_ui(egui::RawInput {
+                                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 420.0))),
+                                events: vec![egui::Event::PointerMoved(if hover { pointer } else { egui::pos2(-1.0, -1.0) })],
+                                ..Default::default()
+                            }, |ui| draw(&mut app, ui));
+                            let rects = context.data(|d| d.get_temp::<Vec<(Widget, egui::Rect)>>(egui::Id::new("test-status-widget-rects"))).unwrap();
+                            let connection = rects.iter().find(|(w, _)| *w == Widget::Connection).unwrap().1;
+                            pointer = connection.center();
+                            if let Some(previous) = &previous_rects { assert_eq!(&rects, previous, "hover changed status slots"); }
+                            previous_rects = Some(rects);
+                            let mut frames = 0;
+                            let mut dividers = 0;
+                            for shape in &output.shapes {
+                                match &shape.shape {
+                                    egui::Shape::Rect(rect) if rect.rect.width() > width - 2.0 && rect.stroke.width > 0.0 => {
+                                        frames += 1;
+                                        assert_eq!(rect.stroke, egui::Stroke::new(1.0, tokens.separator));
+                                        assert_eq!(rect.fill, tokens.well_bg);
+                                        assert!(rect.rect.top() <= connection.top() && rect.rect.bottom() >= connection.bottom(),
+                                            "frame must contain the row at {theme:?}/{scale}/{rtl}");
+                                    }
+                                    egui::Shape::LineSegment { points, stroke } => {
+                                        assert!((points[1].x - points[0].x).abs() < width - 2.0,
+                                            "duplicate full-width Panel separator outside the frame");
+                                        if points[0].x == points[1].x && stroke.color == tokens.separator {
+                                            dividers += 1;
+                                            assert_eq!(*stroke, egui::Stroke::new(1.0, tokens.separator));
+                                            assert!(((points[1].y - points[0].y).abs() - (ITEM_HEIGHT - 10.0)).abs() <= 1.0 / scale);
+                                            assert!(((points[0].y + points[1].y) * 0.5 - connection.center().y).abs() <= 1.0 / scale);
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            assert_eq!(frames, 1, "one themed frame owns the boundary");
+                            assert_eq!(dividers, usize::from(enabled), "only the two visible start widgets need a divider; the lone end widget does not");
+                            output.textures_delta.clear();
+                        }
+                    }
+                }
+            }
+        }
     }
 
     #[test]

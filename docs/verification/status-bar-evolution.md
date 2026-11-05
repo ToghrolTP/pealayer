@@ -31,15 +31,47 @@ unchanged. Fontique's requested weight is explicitly carried into egui's `wght`
 axis, clamped to the actual face's range; this also repairs installed YekanBakh
 VF falling back to its thin default. No private font is bundled.
 
+The [divider investigation](status-bar-history-audit.md#divider-history-two-different-boundaries)
+traces the original full-height native separators, their omission during the
+reorderable rewrite, and their reintroduction as 12-point lines. The specific
+five-point endpoint insets are code choices in the compact rewrite; the PR gives
+no separate justification for shortening the original separators. The user has
+chosen to keep compact styling for now and track full-height/larger options for
+later rather than changing that default again.
+
+CraftUI's status frame also accidentally retained egui's automatic panel
+separator. Both painted adjacent top edges; disabling the automatic separator
+leaves a single themed frame boundary and removes its extra reserved point.
+The panel now derives its height from the existing 22-point slots plus the frame
+margins/stroke and explicitly disables panel resizing. Previously its centered
+contents converged over several frames from a density-dependent default height;
+at Spacious density this moved the row while the pointer hovered. This fix
+removes that settling drift and the unintended resize-edge affordance. No new
+font-size or physical-pixel constant is introduced; display scaling still applies.
+Widget dividers now explicitly use the same active separator token.
+
+Web dividers were full-height borders inside each widget, unlike native lines.
+They now occupy their own 1-by-12-pixel flex slot between actually rendered
+widgets. This matches the retained compact native style, preserves text width,
+and leaves drag-insertion pseudo-elements independent. Show dividers still
+controls both surfaces; no divider appears before the first visible item of
+either anchored group.
+
 ## Verification
 
-- 20 status-bar tests pass, including new native/bundled visible-glyph centering
+- 21 status-bar tests pass, including native/bundled visible-glyph centering
   and unelided hardware-caption checks at 100%, 125%, 150% and 200% scale; LTR,
   RTL, start/end placements and narrow bars are covered.
+- The new divider test paints the actual bar at 100%, 125%, 150% and 200% scale,
+  dark/light themes, LTR/RTL and Extra compact/Spacious density. It checks the
+  single frame boundary, first-frame/hover slot stability, inset divider geometry
+  and color, and Show dividers on/off with no leading/trailing orphan lines.
 - 4 font tests pass, including installed variable weight coordinates, modern
   Windows family selection, monospace advances and fallback preservation.
 - Test processes use an isolated configuration supplied before startup. UI
   fixtures use the memory-only engine, never a live hardware worker.
+- Web status-widget and responsive-layout guardrails and TypeScript no-emit pass.
+  These source checks are not browser screenshot or touch-device acceptance.
 
 ## Genuine visual history
 
@@ -169,10 +201,24 @@ physical pixels; the public images are the bottom 56 pixels, unretouched.
 
 | Milestone | Source | Capture | Screenshot-only discussion |
 | --- | --- | --- | --- |
-| Compact two-sided widgets | `48fd59ce65022b039d28570288ff967bf52bca8e` | [Status bar](../screenshots/status-bar-compact.png) | PR #166 |
+| Compact two-sided widgets | `48fd59ce65022b039d28570288ff967bf52bca8e` | [Status bar](../screenshots/status-bar-compact.png) | [PR #166](https://github.com/ToghrolTP/pealayer/pull/166#issuecomment-6647123702) |
 | CraftUI surfaces | `9610177510c02f393c56bd024625c70b21442c99` | [Status bar](../screenshots/status-bar-craft.png) | [PR #216](https://github.com/ToghrolTP/pealayer/pull/216#issuecomment-6647068767) |
 | Native typography before repair | `d6feabf8c0956523aa5050bf978975cee8b6c431` | [Status bar](../screenshots/status-bar-native-before.png) | [PR #225](https://github.com/ToghrolTP/pealayer/pull/225#issuecomment-6647048566) |
-| Repaired native layout | `af070c1cd3161514ea035dc2da2ed0a46485f7f5` | [Status bar](../screenshots/status-bar-fixed.png) | PR #225 |
+| Repaired native layout | `af070c1cd3161514ea035dc2da2ed0a46485f7f5` | [Status bar](../screenshots/status-bar-fixed.png) | [PR #225](https://github.com/ToghrolTP/pealayer/pull/225#issuecomment-6647251132) |
+
+### Screenshot-only discussion index
+
+- [Original dock — commit discussion](https://github.com/ToghrolTP/pealayer/commit/e8e6b9676d0deee93928e794ec39ddf729d95e3c#commitcomment-208218747)
+- [Hardware addition — commit discussion](https://github.com/ToghrolTP/pealayer/commit/3bc0e0872739b736ab942bfe9ae216004cc04462#commitcomment-208218751)
+- [Truthful connection — PR #25](https://github.com/ToghrolTP/pealayer/pull/25#issuecomment-6647465792)
+- [Capability-driven media status — PR #46](https://github.com/ToghrolTP/pealayer/pull/46#issuecomment-6647466182)
+- [Selectable media/screen FPS — PR #90](https://github.com/ToghrolTP/pealayer/pull/90#issuecomment-6647590130)
+- [Rearrangeable widgets — PR #149](https://github.com/ToghrolTP/pealayer/pull/149#issuecomment-6647590482)
+- [Stable slots and trailing workspace — PR #150](https://github.com/ToghrolTP/pealayer/pull/150#issuecomment-6647590876)
+- [Compact layout and divider comparison — PR #166](https://github.com/ToghrolTP/pealayer/pull/166#issuecomment-6647123702)
+- [CraftUI surface — PR #216](https://github.com/ToghrolTP/pealayer/pull/216#issuecomment-6647068767)
+- [Native typography before repair — PR #225](https://github.com/ToghrolTP/pealayer/pull/225#issuecomment-6647048566)
+- [Repaired typography — PR #225](https://github.com/ToghrolTP/pealayer/pull/225#issuecomment-6647251132)
 
 The unused-space ellipsis is present in all three late pre-repair captures: the fixed slot predates the
 native font work. FPS typeface/baseline and the trailing workspace presentation

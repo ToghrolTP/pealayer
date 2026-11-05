@@ -90,6 +90,43 @@ Merges that touched the component (`6a888af`, `386076b`, `8bfa51a`,
 The preserved `4f9ec05` work is reachable from main and the current UI branch.
 No historical source is reset, deleted or rewritten for this comparison.
 
+## Divider history: two different boundaries
+
+The vertical **item dividers** and the horizontal **panel boundary** changed
+independently. The original native item dividers really were full-height. The
+short strokes in recent screenshots are not the original design and were not
+caused by the monospace font or display scaling.
+
+| Revision | Exact change | Evidence and reason |
+| --- | --- | --- |
+| [Original component](https://github.com/ToghrolTP/pealayer/commit/dc49b29) through [selectable FPS](https://github.com/ToghrolTP/pealayer/commit/c1b15be) | Stock `ui.separator()` between applicable status items. In a horizontal layout, egui extends the vertical line to the available row height; no five-point inset. | Actual original/dual-FPS captures show the full divider. Conditional items disappearing can remove their adjacent separator, but does not shorten it. |
+| [Reorderable rewrite](https://github.com/ToghrolTP/pealayer/commit/a242919) | The new widget loop omitted the old separator calls. | PR #149 introduced reorderable widgets and a scrolling group; its implementation did not carry over dividers. The separators still found by text search are inside menus, not the bar. The fixed-slot follow-up also lacks item dividers. |
+| [Compact two-sided rewrite](https://github.com/ToghrolTP/pealayer/commit/48fd59c) | Restores configurable, default-on dividers, but replaces stock separators with a 1-point allocated slot and endpoints inset **5 points at both ends** of a 22-point row: **12 points of visible line**. | PR #166 explicitly describes optional dividers and compact stable slots. Neither its body nor discussion explains the particular five-point inset or records a user request to shorten the old full-height dividers. Compact styling is the surrounding context, not proof that this specific change was requested. The same commit gives Web widgets full-height `border-inline-start`, creating a native/Web mismatch. |
+| [CraftUI panel styling](https://github.com/ToghrolTP/pealayer/commit/9610177) | Adds `well_bg` and a 1-point frame outline on all four edges. Leaves `Panel::show_separator_line` enabled. | The pinned egui revision's `resolve_frame` reserves an extra point outside the frame; `show_inside` paints another horizontal separator there. This creates two adjacent top lines, not a font-rendering artifact. The original test checked only frame tokens and never drew the actual Panel, so it missed the duplicate. |
+| [Native typography](https://github.com/ToghrolTP/pealayer/commit/1fbed60) and [glyph/width repair](https://github.com/ToghrolTP/pealayer/commit/7d9e8f9) | No change to item-divider endpoints or the double panel boundary. | Font changes alter nearby text weight and alignment, not the divider's 12-point geometry. |
+
+The boundary repair disables egui's additional panel separator while retaining
+the themed frame. Regression coverage inspects the actual painted shapes rather
+than only the frame configuration. Web separators must be independent of the
+widget's text box, so borders cannot consume caption width or interfere with
+the drag-insertion pseudo-elements. The existing Show dividers preference and
+rendered-item filtering remain authoritative.
+
+Painted-geometry verification also exposed a panel-sizing problem: the panel
+inherits a density-dependent initial height and a resizable default, but its
+widgets all occupy fixed 22-point slots. Centered layout feeds progressively
+smaller measured heights into subsequent frames, moving the row while it settles.
+Deriving the panel's exact height from those slots plus the existing frame
+margins/stroke and disabling resizing makes the first and hovered frames stable.
+
+Follow-up requested during this comparison: keep compact dividers for now, but
+allow full-height or larger dividers later. Track a shared native/Web divider
+size preference (compact/full-row/custom height and, if requested, thickness)
+without tying it to font choice or silently changing existing settings. This is
+backlog, not a shipped setting. Any larger size must stay within the bar's own
+layout/clip area; actual hit targets, text slots and drag indicators need geometry
+coverage. PR #166 receives the real before/after captures and these findings.
+
 ## Capture limits
 
 The historical full applications are built with each revision's own lockfile.

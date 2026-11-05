@@ -190,7 +190,11 @@ export const ApplicationStatusBar: React.FC<ApplicationStatusBarProps> = ({ stat
       className={end?'statusbar-end':'statusbar-primary'}
       onDragOver={(event)=>{ if(!dragged)return; event.preventDefault(); event.dataTransfer.dropEffect='move'; }}
       onDrop={(event)=>{ event.preventDefault(); if(dragged)place(dragged,end); setDragged(null); setDropTarget(null); }}>
-      {displayedWidgets(config.order).filter((widget)=>widgetVisible(config,widget)&&atEnd(widget)===end).map(widgetElement)}
+      {displayedWidgets(config.order).filter((widget)=>widgetVisible(config,widget)&&atEnd(widget)===end)
+        .map(widgetElement).filter((element)=>element!==null).map((element,index)=><React.Fragment key={element.key}>
+          {config.dividers && index>0 && <span className="status-widget-divider" aria-hidden="true" />}
+          {element}
+        </React.Fragment>)}
     </div></Dropdown>)}
   </footer>;
 };
