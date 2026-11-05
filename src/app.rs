@@ -587,27 +587,7 @@ pub struct KeyframeDragState {
     pub group_originals: Vec<(uuid::Uuid, usize, u64, f32)>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DroppedFileKind {
-    Media,
-    Subtitle,
-    Timeline,
-}
-
-pub fn dropped_file_kind(path: &std::path::Path) -> DroppedFileKind {
-    let extension = path
-        .extension()
-        .and_then(|value| value.to_str())
-        .unwrap_or_default()
-        .to_ascii_lowercase();
-    match extension.as_str() {
-        "srt" | "vtt" | "ass" | "ssa" | "sub" | "idx" | "sup" => DroppedFileKind::Subtitle,
-        "json" => DroppedFileKind::Timeline,
-        // Let mpv make the final decision for its broad set of supported audio,
-        // video and playlist formats instead of maintaining a brittle allowlist.
-        _ => DroppedFileKind::Media,
-    }
-}
+pub use crate::assets::{FileKind as DroppedFileKind, file_kind as dropped_file_kind};
 
 /// Native service startup is explicit, never inferred from viewport visibility.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -746,6 +726,7 @@ pub struct PealayerApp {
     pub(crate) show_effect_library_editor: bool,
     pub(crate) effect_library_selection: Option<String>,
     pub(crate) effect_library_draft: ControllerEffectDraft,
+    pub(crate) asset_import: crate::assets::ImportState,
     pub(crate) effect_group_draft: Option<ControllerEffectGroupDraft>,
     pub(crate) track_muted: std::collections::BTreeSet<u8>,
     pub(crate) track_soloed: std::collections::BTreeSet<u8>,
@@ -1120,6 +1101,7 @@ impl eframe::App for PealayerApp {
         self.process_controller_call_results();
         self.bootstrap_native_services(ctx);
         self.process_audio_effect_results();
+        self.process_asset_imports(ctx);
         if !self.rf.pending && self.engine_handle.take_rf_catalog_refresh_request() {
             if let Err(error) = self.request_rf(
                 "catalog",
@@ -1586,6 +1568,7 @@ impl eframe::App for PealayerApp {
                 }),
                 status: crate::four_d::programming::hardware_availability(controller_connected, hardware_connection_requested, hardware.as_ref()).code().to_string(),
                 playing: !self.is_paused && self.current_video_path.is_some(),
+                asset_imports: crate::assets::snapshot(),
                 volume: self.volume,
                 muted: self.is_muted,
                 playback_rate: self.playback_rate,
@@ -1927,7 +1910,7 @@ impl eframe::App for PealayerApp {
                 .collect::<Vec<_>>()
         });
         if !dropped_file_paths.is_empty() {
-            self.load_dropped_files(dropped_file_paths);
+            self.load_dropped_files(ui.ctx(),dropped_file_paths);
         }
 
         // Initialize RTT texture once if not done yet
@@ -2107,6 +2090,7 @@ impl eframe::App for PealayerApp {
                 crate::ui::menu::draw_estop_release_dialog(self, ui);
                 crate::ui::subtitles::draw_settings_dialog(self, ui);
                 crate::ui::audio::draw_settings_dialog(self, ui);
+                self.draw_asset_review(ui.ctx());
                 crate::ui::preferences::draw(self, ui);
                 crate::ui::peer_browser::draw(self,ui);
                 if let Some(request) = crate::ui::peer_browser::draw_connection(ui) {
@@ -4847,6 +4831,12 @@ impl PealayerApp {
                 self.timeline.instances.push(instance);
                 self.sync_timeline_engine();
             }
+            InteropCommand::ImportAssets { request } => {
+                if let Err(error)=self.import_assets(request,ctx){self.asset_error(error);}
+            }
+            InteropCommand::ReviewAsset { id, accept } => {
+                if let Err(error)=self.review_asset(ctx,id,accept){self.asset_error(error);}
+            }
             InteropCommand::PlayControllerEffect { reference } => {
                 if let Err(error) = self.play_controller_effect(&reference) {
                     self.set_osd(error);
@@ -7083,73 +7073,9 @@ impl PealayerApp {
         }
     }
 
-    pub fn load_dropped_files(&mut self, paths: Vec<std::path::PathBuf>) {
-        let mut first_media = true;
-        let mut subtitle_added = false;
-        let mut queued_media = 0usize;
-
-        // Load/queue media before attaching subtitles so a mixed Windows drop
-        // reliably attaches subtitle files to the newly selected item.
-        for path in paths
-            .iter()
-            .filter(|path| dropped_file_kind(path) == DroppedFileKind::Media)
-        {
-            if first_media {
-                self.load_video_file(path.clone());
-                first_media = false;
-            } else if let Some(path_str) = path.to_str() {
-                if self
-                    .mpv
-                    .command("loadfile", &[path_str, "append-play"])
-                    .is_ok()
-                {
-                    self.add_recent_media(path.clone());
-                    queued_media += 1;
-                }
-            }
-        }
-
-        for path in paths
-            .iter()
-            .filter(|path| dropped_file_kind(path) == DroppedFileKind::Subtitle)
-        {
-            if let Some(path_str) = path.to_str() {
-                if self.mpv.command("sub-add", &[path_str]).is_ok() {
-                    subtitle_added = true;
-                }
-            }
-        }
-        if subtitle_added {
-            self.refresh_media_tracks();
-        }
-
-        for path in paths
-            .iter()
-            .filter(|path| dropped_file_kind(path) == DroppedFileKind::Timeline)
-        {
-            match crate::four_d::models::Timeline::load_from_file(path) {
-                Ok(timeline) => {
-                    self.track_muted = timeline.track_muted.clone();
-                    self.track_soloed = timeline.track_soloed.clone();
-                    self.track_locked = timeline.track_locked.clone();
-                    self.timeline = timeline;
-                    self.timeline_saved_baseline = Some(self.snapshot_timeline());
-                    self.sync_timeline_engine();
-                }
-                Err(error) => {
-                    self.show_error = Some(format!(
-                        "Failed to load dropped timeline {}: {error}",
-                        path.display()
-                    ));
-                }
-            }
-        }
-
-        if queued_media > 0 {
-            self.set_osd(format!("Queued {queued_media} additional media file(s)"));
-        } else if subtitle_added {
-            self.set_osd("External subtitle loaded".to_string());
-        }
+    pub fn load_dropped_files(&mut self, ctx: &egui::Context, paths: Vec<std::path::PathBuf>) {
+        let destination=crate::assets::native_destination(ctx);
+        if let Err(error)=self.import_assets(crate::assets::ImportRequest {paths:paths.iter().map(|p|p.to_string_lossy().into_owned()).collect(),destination},ctx) {self.show_error=Some(error);}
     }
 
     pub fn load_url(&mut self, url: &str) {
@@ -7358,6 +7284,7 @@ impl PealayerApp {
             Item {domain:"timeline_cues".into(),state:if self.is_timeline_dirty() { State::Dirty } else { State::Clean }},
             Item {domain:"preferences".into(),state:dirty(Some(self.preferences_draft.as_ref().is_some_and(|draft|draft.is_dirty())))},
             Item {domain:"rf".into(),state:dirty(Some(self.rf.dirty()))},
+            Item {domain:"asset_reviews".into(),state:if self.asset_import.awaiting_review(){State::Dirty}else{State::Clean}},
             Item {domain:"board_settings".into(),state:dirty(Some(self.board_settings_dirty))},
         ];
         // These editors don't expose complete saved baselines yet. Report that
@@ -7376,6 +7303,7 @@ impl PealayerApp {
             ("channel_folder",self.channel_folder_pending),
             ("rf_operation",self.rf.pending),
             ("audio_import",crate::mpv::sfx::importing()),
+            ("asset_import",self.asset_import.busy()),
         ] {items.push(Item {domain:domain.into(),state:if busy {State::Busy} else {State::Clean}});}
         Inspection::new(items)
     }
@@ -9994,6 +9922,7 @@ impl Default for PealayerApp {
             show_effect_library_editor: false,
             effect_library_selection: None,
             effect_library_draft: ControllerEffectDraft::default(),
+            asset_import: Default::default(),
             effect_group_draft: None,
             track_muted: std::collections::BTreeSet::new(),
             track_soloed: std::collections::BTreeSet::new(),
@@ -11665,7 +11594,7 @@ pub(crate) mod tests {
         );
         assert_eq!(
             dropped_file_kind(std::path::Path::new("show.4d.json")),
-            DroppedFileKind::Timeline
+            DroppedFileKind::Document
         );
         assert_eq!(
             dropped_file_kind(std::path::Path::new("stream.m3u8")),

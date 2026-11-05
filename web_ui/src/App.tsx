@@ -17,6 +17,9 @@ import { PublishingAuthority } from './components/PublishingAuthority';
 import { FujiLoader } from './components/FujiLoader';
 import { WebViewBoundary } from './components/WebViewBoundary';
 import { RemoteLocationDialog } from './components/RemoteLocationDialog';
+import { AssetDropTarget } from './components/AssetDropTarget';
+import { AssetImportReview } from './components/AssetImportReview';
+import type { ImportedEffect } from './assetImports';
 import { useClipboardUrls } from './clipboardUrls';
 import './remote-location.css';
 import type { PlayerState } from './components/RemoteControlTab';
@@ -26,6 +29,7 @@ import { tr } from './i18n';
 import { useWebPlatform } from './webPlatform';
 import './styles.css';
 import './shared-toasts.css';
+import './asset-imports.css';
 import palettes from '../../assets/themes/palettes.json';
 import { accentForeground, controlDensityHeight, controlDensityText, mergeAppearance, paletteName as resolvePaletteName, resolvedAccent, resolvedAppearanceTheme, uiFontCss, monoFontCss } from './appearance';
 
@@ -83,7 +87,7 @@ if (typeof window !== 'undefined') {
 function persistJson(key: string, value: unknown, immediate = false): void {
   // Never resurrect transient notifications from offline storage.
   if (key === STORAGE.state && value && typeof value === 'object') {
-    const { messages: _messages, remote_browser: _remoteBrowser, ...snapshot } = value as PlayerState;
+    const { messages: _messages, remote_browser: _remoteBrowser, asset_imports: _assetImports, ...snapshot } = value as PlayerState;
     value = snapshot;
   }
   if (immediate) {
@@ -122,7 +126,8 @@ const App: React.FC = () => {
   const [activeTab, setActiveTabState] = useState<SurfaceId>(surfaceFromLocation);
   const [connected, setConnected] = useState<boolean>(false);
   const [connectionMode, setConnectionMode] = useState<'ws' | 'http'>('http');
-  const [state, setState] = useState<PlayerState>(() => ({ ...readStoredJson<PlayerState>(STORAGE.state, { status: 'initializing' }), messages: undefined }));
+  const [state, setState] = useState<PlayerState>(() => ({ ...readStoredJson<PlayerState>(STORAGE.state, { status: 'initializing' }), messages: undefined, asset_imports: undefined }));
+  const [importedEffect, setImportedEffect] = useState<ImportedEffect | null>(null);
   const [runtime, setRuntime] = useState<RuntimeConfig | null>(() => readStoredJson<RuntimeConfig | null>(STORAGE.runtime, null));
   const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>('dark');
   const [quickSeekSeconds, setQuickSeekSeconds] = useState<number>(10);
@@ -740,6 +745,16 @@ const App: React.FC = () => {
             className={`app-content ${activeTab === 'timeline' ? 'app-content--studio' : ''}`}
             onScroll={handleContentScroll}
           >
+            <AssetDropTarget apiBaseUrl={apiBaseUrl} sendCmd={sendCmd}
+              destination={activeTab === 'effects' ? { surface: 'library' } : activeTab === 'timeline' ? { surface: 'timeline', start_time_ms: Math.max(0, Math.round((state.playback_time ?? 0) * 1000)) } : { surface: 'player' }}
+              destinationForDrop={event => {
+                const lane = (event.target as HTMLElement).closest<HTMLElement>('[data-asset-lane]');
+                if (lane) {
+                  const rect = lane.getBoundingClientRect();
+                  return { surface: 'timeline', track_key: lane.dataset.assetLane, start_time_ms: Math.round(Math.max(0, Math.min(1, (event.clientX - rect.left) / Math.max(1, rect.width))) * Number(lane.dataset.assetDuration)) };
+                }
+                return activeTab === 'effects' ? { surface: 'library' } : activeTab === 'timeline' ? { surface: 'timeline', start_time_ms: Math.max(0, Math.round((state.playback_time ?? 0) * 1000)) } : { surface: 'player' };
+              }}>
             <WebViewBoundary key={activeTab} locale={runtime?.locale || 'en'}>
             <React.Suspense fallback={<FujiLoader locale={runtime?.locale || 'en'} />}>
             {activeTab === 'timeline' && (
@@ -785,7 +800,7 @@ const App: React.FC = () => {
                 apiBaseUrl={apiBaseUrl}
               />
             )}
-            {activeTab === 'effects' && <EffectsTab state={state} sendCmd={sendCmd} locale={runtime?.locale || 'en'} apiBaseUrl={apiBaseUrl} />}
+            {activeTab === 'effects' && <EffectsTab state={state} sendCmd={sendCmd} locale={runtime?.locale || 'en'} apiBaseUrl={apiBaseUrl} importedEffect={importedEffect} onImported={() => setImportedEffect(null)} />}
             {activeTab === 'downloads' && <DownloadsTab apiBaseUrl={apiBaseUrl} sendCmd={sendCmd} />}
             {activeTab === 'hardware' && <HardwareTab state={state} sendCmd={sendCmd} locale={runtime?.locale || 'en'} />}
             {activeTab === 'about' && (
@@ -807,6 +822,8 @@ const App: React.FC = () => {
             )}
             </React.Suspense>
             </WebViewBoundary>
+            </AssetDropTarget>
+            <AssetImportReview state={state.asset_imports} sendCmd={sendCmd} openEffect={effect => { setImportedEffect(effect); setActiveTab('effects'); }} />
           </Content>
         </Layout>
         <ApplicationStatusBar

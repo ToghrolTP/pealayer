@@ -306,6 +306,8 @@ pub enum InteropCommand {
         reference: String,
         start_time_ms: u64,
     },
+    ImportAssets { request: crate::assets::ImportRequest },
+    ReviewAsset { id: uuid::Uuid, accept: bool },
     PlayControllerEffect {
         reference: String,
     },
@@ -567,6 +569,7 @@ impl InteropCommand {
 
     pub fn validate(&self) -> Result<(), String> {
         match self {
+            Self::ImportAssets { request } => request.validate(),
             Self::ConnectPeer { request } => request.validate(),
             Self::NavigatePreferences { navigation } => navigation.validate(),
             Self::RfControl { operation, params } => {
@@ -882,6 +885,7 @@ pub fn command_catalog() -> Value {
         "preferences_navigation": { "method": "pealayer.preferences.navigate", "command": "navigate_preferences", "section": "optional schema section ID", "scroll_y": "absolute logical pixel offset, clamped to content", "scope": "local native process, including its Preferences helper", "accepted": "queued, not confirmation that a frame has rendered" },
         "about_navigation": { "method": "pealayer.about.open", "command": "open_about", "tab": ["overview", "build", "board", "libraries"], "scope": "local native process, never relayed to authority", "accepted": "queued, not confirmation that a frame has rendered" },
         "commands": [
+            "import_assets", "review_asset",
             "open", "play", "pause", "toggle_pause", "stop", "next", "previous",
             "browse_remote", "select_remote", "sort_remote", "close_remote_browser",
             "chapter_previous", "chapter_next", "set_chapter",
@@ -1277,6 +1281,8 @@ pub struct PlayerStatusResponse {
     pub application: ApplicationIdentity,
     #[serde(default)]
     pub runtime: RuntimeIdentity,
+    #[serde(default)]
+    pub asset_imports: Value,
     #[serde(default)] pub rf: Value,
     #[serde(default)]
     pub remote_browser: crate::remote_location::BrowserState,
@@ -1648,6 +1654,7 @@ impl Default for PlayerStatusResponse {
             external_mpv: crate::mpv::external::Status::default(),
             application: ApplicationIdentity::default(),
             runtime: RuntimeIdentity::default(),
+            asset_imports: crate::assets::snapshot(),
             rf: Value::Null,
             status: String::new(),
             messages: crate::messaging::MessageSnapshot::default(),
@@ -2114,6 +2121,13 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
                     .unwrap_or_default(),
             })
         }
+        "pealayer.assets.import" => Some(InteropCommand::ImportAssets {
+            request: serde_json::from_value(request.params.clone()).map_err(|e|format!("Invalid asset import: {e}"))?,
+        }),
+        "pealayer.assets.review" => Some(InteropCommand::ReviewAsset {
+            id: serde_json::from_value(request.params.get("id").cloned().unwrap_or_default()).map_err(|_|"Asset review requires a UUID".to_string())?,
+            accept: request.params.get("accept").and_then(Value::as_bool).ok_or("Asset review requires accept: true or false")?,
+        }),
         "controller_effect.play" | "pealayer.controller_effect.play" => {
             Some(InteropCommand::PlayControllerEffect {
                 reference: string(&["reference", "effect"])?,

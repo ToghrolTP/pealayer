@@ -1060,7 +1060,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                   </Dropdown>
                 </div>
                 </Dropdown>
-                <div className="timeline-lane" data-motion-track={track.control_key && !track.locked && isMotionControl(track.control_key) ? track.control_key : undefined}>
+                <div className="timeline-lane" data-asset-lane={track.key} data-asset-duration={timelineDurationMs} data-motion-track={track.control_key && !track.locked && isMotionControl(track.control_key) ? track.control_key : undefined}>
                   {effectCues.map((cue) => (
                     (() => {
                       const placement = cuePreviews[cue.id] ?? cue;

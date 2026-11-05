@@ -63,6 +63,8 @@ import { TimeValueField } from './TimeValueField';
 import { formatTimeMs, repeatedSequenceDurationMs, sequenceKindLabels, sequenceExtraKinds, sequenceStepTemplate, moveSequenceStep, sequenceLaneKey, sequenceLaneChoices } from '../cueAuthoring';
 
 interface EffectsTabProps {
+  importedEffect?: import('../assetImports').ImportedEffect | null;
+  onImported?: () => void;
   state: PlayerState;
   sendCmd: (command: string, payload?: Record<string, unknown>) => Promise<boolean>;
   locale: UiLocale;
@@ -139,9 +141,21 @@ const draftPayload = (draft: EffectDraft): Record<string, unknown> => ({
   } : JSON.parse(draft.programText || '{}'),
 });
 
-export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale, apiBaseUrl }) => {
+export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale, apiBaseUrl, importedEffect, onImported }) => {
   const effects = state.controller_effects ?? [];
   const [draft, setDraft] = useState<EffectDraft | null>(null);
+  useEffect(() => {
+    // Never overwrite another open editor. A pending import opens when that
+    // editor is explicitly closed, with its full program/properties intact.
+    if (!importedEffect || draft) return;
+    const parts = programParts(importedEffect.program);
+    setDraft({ ...importedEffect, reference: '', color: importedEffect.color || String(parts.properties.color ?? ''),
+      steps: parts.steps, properties: parts.properties,
+      repeat_count: Number((importedEffect.program as Record<string, unknown>)?.repeat_count ?? 1),
+      repeat_interval_ms: Number((importedEffect.program as Record<string, unknown>)?.repeat_interval_ms ?? 0),
+      programText: JSON.stringify(importedEffect.program ?? {}, null, 2), is_new: true });
+    onImported?.();
+  }, [importedEffect, draft, onImported]);
   const [saving, setSaving] = useState(false);
   const [activeStep, setActiveStep] = useState('0');
   const previousIdentities = useRef(new Map<string, { name: string; icon: string; category: string }>());
