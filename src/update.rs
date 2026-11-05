@@ -7,6 +7,14 @@ use std::process::{Child, Command};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+pub mod console;
+
+/// Local presentation events; the updater's API/wire status remains unchanged.
+pub enum UpdateProgress<'a> {
+    Phase(&'a str),
+    Status(&'a UpdateStatus),
+}
+
 const MAX_UPDATE_BYTES: u64 = 512 * 1024 * 1024;
 const UPDATE_CHUNK_BYTES: usize = 768 * 1024;
 const HELPER_ARGUMENT: &str = "--pealayer-update-helper";
@@ -959,8 +967,12 @@ pub fn current_artifact() -> Result<Vec<u8>, String> {
     fs::read(executable).map_err(|error| format!("read current executable: {error}"))
 }
 
-pub fn push_current_to_peer(target: &str) -> Result<UpdateStatus, String> {
+pub fn push_current_to_peer(
+    target: &str,
+    mut progress: impl FnMut(UpdateProgress<'_>),
+) -> Result<UpdateStatus, String> {
     let target = normalize_peer_base_url(target)?;
+    progress(UpdateProgress::Phase("Inspecting local package"));
     let manifest = current_manifest()?;
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let client = reqwest::blocking::Client::builder()
@@ -980,6 +992,7 @@ pub fn push_current_to_peer(target: &str) -> Result<UpdateStatus, String> {
         arch: Some(manifest.arch.clone()),
         libmpv_runtime: manifest.libmpv_runtime.clone(),
     };
+    progress(UpdateProgress::Phase("Connecting to peer"));
     let mut status: UpdateStatus = client
         .post(format!("{target}/api/update/begin"))
         .header(reqwest::header::CONTENT_TYPE, "application/json")
@@ -989,6 +1002,7 @@ pub fn push_current_to_peer(target: &str) -> Result<UpdateStatus, String> {
         .map_err(|error| format!("begin peer update: {error}"))?
         .json()
         .map_err(|error| format!("decode peer update response: {error}"))?;
+    progress(UpdateProgress::Status(&status));
     let operation_id = status
         .operation_id
         .clone()
@@ -1023,8 +1037,9 @@ pub fn push_current_to_peer(target: &str) -> Result<UpdateStatus, String> {
             }
         };
         offset += count as u64;
-        crate::cli_println!("{}", status.message);
+        progress(UpdateProgress::Status(&status));
     }
+    progress(UpdateProgress::Phase("Requesting verification and graceful restart"));
     let finish_result = client
         .post(format!("{target}/api/update/finish"))
         .header(reqwest::header::CONTENT_TYPE, "application/json")
@@ -1049,6 +1064,7 @@ pub fn push_current_to_peer(target: &str) -> Result<UpdateStatus, String> {
             return Err(error);
         }
     };
+    progress(UpdateProgress::Status(&status));
     if status.state == "current" {
         return Ok(status);
     }
@@ -1056,6 +1072,7 @@ pub fn push_current_to_peer(target: &str) -> Result<UpdateStatus, String> {
     let deadline = Instant::now() + Duration::from_secs(90);
     let mut observed_restart = false;
     while Instant::now() < deadline {
+        progress(UpdateProgress::Phase("Waiting for peer build acknowledgement"));
         std::thread::sleep(Duration::from_millis(350));
         let response = client.get(format!("{target}/api/update/manifest")).send();
         match response.and_then(reqwest::blocking::Response::error_for_status) {
@@ -1098,6 +1115,7 @@ pub fn request_update_from_url(
     target: &str,
     url: &str,
     sha256: Option<&str>,
+    mut progress: impl FnMut(UpdateProgress<'_>),
 ) -> Result<UpdateStatus, String> {
     let target = normalize_peer_base_url(target)?;
     let request = FetchUpdateRequest {
@@ -1109,6 +1127,7 @@ pub fn request_update_from_url(
         .timeout(Duration::from_secs(30))
         .build()
         .map_err(|error| error.to_string())?;
+    progress(UpdateProgress::Phase("Requesting remote download"));
     let mut status: UpdateStatus = client
         .post(format!("{target}/api/update/from-url"))
         .header(reqwest::header::CONTENT_TYPE, "application/json")
@@ -1121,6 +1140,7 @@ pub fn request_update_from_url(
     let deadline = Instant::now() + Duration::from_secs(300);
     let mut replacement_sha256 = sha256.map(normalize_sha256).transpose()?;
     let mut observed_restart = false;
+    progress(UpdateProgress::Status(&status));
     while Instant::now() < deadline {
         if replacement_sha256.is_none() {
             replacement_sha256 = status.sha256.clone();
@@ -1142,8 +1162,14 @@ pub fn request_update_from_url(
             .and_then(reqwest::blocking::Response::error_for_status)
             .and_then(reqwest::blocking::Response::json::<UpdateStatus>)
         {
-            Ok(next) => status = next,
-            Err(_) => observed_restart = true,
+            Ok(next) => {
+                status = next;
+                progress(UpdateProgress::Status(&status));
+            }
+            Err(_) => {
+                observed_restart = true;
+                progress(UpdateProgress::Phase("Waiting for peer build acknowledgement"));
+            }
         }
         if let Some(expected) = replacement_sha256.as_deref()
             && let Ok(response) = client
@@ -1813,6 +1839,71 @@ fn validate_libmpv_compatibility(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn url_update_reports_authoritative_phases_and_waits_for_matching_build() {
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.set_nonblocking(true).unwrap();
+        let target = format!("http://{}", listener.local_addr().unwrap());
+        let expected = "a".repeat(64);
+        let server_sha = expected.clone();
+        let server = std::thread::spawn(move || {
+            let deadline = Instant::now() + Duration::from_secs(10);
+            let manifest = |sha256: String| serde_json::to_value(UpdateManifest {
+                format: "pealayer-update".into(), service: "Pealayer".into(), version: "fixture".into(),
+                git_commit: "fixture".into(), git_dirty: false, platform: std::env::consts::OS.into(),
+                arch: std::env::consts::ARCH.into(), sha256, size: 10,
+                artifact_url: "/api/update/artifact".into(), libmpv_runtime: None,
+            }).unwrap();
+            let status = |state: &str, done| serde_json::to_value(UpdateStatus {
+                state: state.into(), bytes_done: done, bytes_total: Some(10),
+                sha256: Some(server_sha.clone()), ..Default::default()
+            }).unwrap();
+            for (path, payload) in [
+                ("/api/update/from-url", status("downloading", 0)),
+                ("/api/update/status", status("verifying", 10)),
+                ("/api/update/manifest", manifest("b".repeat(64))),
+                ("/api/update/status", status("restarting", 10)),
+                ("/api/update/manifest", manifest(server_sha.clone())),
+            ] {
+                let (mut stream, _) = loop {
+                    match listener.accept() {
+                        Ok(value) => break value,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock && Instant::now() < deadline => {
+                            std::thread::sleep(Duration::from_millis(5));
+                        }
+                        Err(error) => panic!("fixture accept: {error}"),
+                    }
+                };
+                stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+                let mut headers = Vec::new();
+                while !headers.ends_with(b"\r\n\r\n") {
+                    let mut byte = [0];
+                    stream.read_exact(&mut byte).unwrap();
+                    headers.push(byte[0]);
+                    assert!(headers.len() < 16384);
+                }
+                let headers = String::from_utf8(headers).unwrap();
+                assert!(headers.lines().next().unwrap().contains(path), "{headers}");
+                let length = headers.lines().filter_map(|line| line.split_once(':'))
+                    .find(|(key, _)| key.eq_ignore_ascii_case("content-length"))
+                    .map(|(_, value)| value.trim().parse::<usize>().unwrap()).unwrap_or(0);
+                stream.read_exact(&mut vec![0; length]).unwrap();
+                let body = payload.to_string();
+                write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len()).unwrap();
+            }
+        });
+        let mut phases = Vec::new();
+        let status = request_update_from_url(&target, "https://example.invalid/fixture.exe", Some(&expected), |event| {
+            if let UpdateProgress::Status(status) = event { phases.push(status.state.clone()); }
+        }).unwrap();
+        server.join().unwrap();
+        assert_eq!(phases, ["downloading", "verifying", "restarting"]);
+        assert_eq!(status.state, "completed");
+        assert_eq!(status.sha256.as_deref(), Some(expected.as_str()));
+        assert_eq!(status.version.as_deref(), Some("fixture"));
+    }
 
     #[test]
     fn update_progress_is_scoped_to_the_current_phase_in_json() {

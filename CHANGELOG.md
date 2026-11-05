@@ -6,6 +6,13 @@ retroactively attributed to an older download.
 
 ## Next milestone · unreleased
 
+### 📦 Updating Pealayer
+
+- The command-line updater shows clear upload/download, verification, restart
+  and acknowledged-completion phases, with transfer speed and ETA when known.
+  Semantic terminal colors follow terminal support; redirected logs stay plain
+  and bounded. Use the update command's new `--json` option for automation.
+
 ### 🪟 Workspace chrome
 
 - egui Dock restores its compact header height, centers tab captions and close
