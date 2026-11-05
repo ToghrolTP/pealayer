@@ -15150,6 +15150,7 @@ impl<'a> PealayerTabViewer<'a> {
                             data.get_temp::<String>(timeline_filter_id)
                                 .unwrap_or_default()
                         });
+                        self.app.project.track_filter = timeline_track_filter.clone();
                         let all_timeline_rows = all_timeline_track_rows(self.app);
                         let cue_reveal = timeline_cue_reveal(self.app, ui.ctx());
                         let timeline_rows = all_timeline_rows
@@ -15229,10 +15230,10 @@ impl<'a> PealayerTabViewer<'a> {
                         // origin regardless of visible track count or panel height.
                         let timeline_vertical_sync_id =
                             egui::Id::new("timeline-shared-vertical-offset");
-                        let synced_vertical_offset = ui.ctx().data_mut(|data| {
+                        let synced_vertical_offset = self.app.project.restore_scroll.map(|s|s[1]).unwrap_or_else(|| ui.ctx().data_mut(|data| {
                             data.get_persisted::<f32>(timeline_vertical_sync_id)
                                 .unwrap_or(0.0)
-                        });
+                        }));
                         let mut timeline_header_scroll_id = None;
                         let mut timeline_header_offset_y = synced_vertical_offset;
                         let mut pending_timeline_wheel = None;
@@ -16577,10 +16578,14 @@ impl<'a> PealayerTabViewer<'a> {
                             let mut keyframe_hit = false;
                             let mut keyframe_context_owned = false;
                             let mut requested_cue_rect = None;
-                            let timeline_scroll = egui::ScrollArea::both()
+                            let mut timeline_area = egui::ScrollArea::both()
                                 .id_salt("timeline_scroll")
                                 .content_margin(egui::Margin::ZERO)
-                                .vertical_scroll_offset(timeline_header_offset_y)
+                                .vertical_scroll_offset(timeline_header_offset_y);
+                            if let Some(offset)=self.app.project.restore_scroll.take() {
+                                timeline_area=timeline_area.horizontal_scroll_offset(offset[0]).vertical_scroll_offset(offset[1]);
+                            }
+                            let timeline_scroll = timeline_area
                                 .show_viewport(ui, |ui, viewport| {
                                         let size = egui::vec2(total_width, total_height);
                                         let (_, rect) = ui.allocate_space(size);
@@ -19415,6 +19420,7 @@ impl<'a> PealayerTabViewer<'a> {
                                 timeline_scroll_state.store(ui.ctx(), timeline_scroll_id);
                             }
 
+                            self.app.project.scroll = [timeline_scroll_state.offset().x,timeline_scroll_state.offset().y];
                             let synced_offset_y = timeline_scroll_state.offset().y;
                             ui.ctx().data_mut(|data| {
                                 data.insert_persisted(

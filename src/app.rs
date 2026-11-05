@@ -624,6 +624,7 @@ pub enum PendingTimelineCloseAction {
 }
 
 pub struct PealayerApp {
+    pub(crate) project: crate::app_projects::ProjectSession,
     pub(crate) native_service_policy: NativeServicePolicy,
     pub(crate) web_only: bool,
     pub(crate) app_name: String,
@@ -1221,6 +1222,7 @@ impl eframe::App for PealayerApp {
 
         if crate::peer::active(){crate::peer::mirror(||self.process_events());}else{self.process_events();}
         if crate::peer::active(){self.poll_peer_session(ctx);}
+        self.poll_project_discovery(ctx);
         self.sync_window_level(ctx);
         self.tick_virtual_board_kinematics(ctx);
 
@@ -2107,6 +2109,7 @@ impl eframe::App for PealayerApp {
                 crate::ui::audio::draw_settings_dialog(self, ui);
                 crate::ui::preferences::draw(self, ui);
                 crate::ui::peer_browser::draw(self,ui);
+                crate::ui::projects::draw(self, ui);
                 if let Some(request) = crate::ui::peer_browser::draw_connection(ui) {
                     self.apply_interop_command(ui.ctx(), crate::platform::interop::InteropCommand::ConnectPeer { request }, "ui");
                 }
@@ -4066,6 +4069,7 @@ impl PealayerApp {
             .map(|mut queue| queue.drain(..).collect::<Vec<_>>())
             .unwrap_or_default();
         for result in results {
+            if result.operation.starts_with("project-scene:") {self.complete_scene_call(result);continue;}
             if result.operation=="rf-received" {
                 if let Ok(event)=result.result {self.rf.receive(event);}
                 continue;
@@ -4372,6 +4376,12 @@ impl PealayerApp {
         source: &str,
     ) {
         use crate::platform::interop::InteropCommand;
+        if let InteropCommand::Documents {request}=&command {
+            if let Some(client)=crate::peer::client() {
+                if let Err(error)=client.queue("/api/peer/documents",serde_json::to_value(request).unwrap()) {self.show_error=Some(error);}
+            } else if let Err(error)=self.document_request(ctx,request.clone()) {self.show_error=Some(error);}
+            return;
+        }
         if crate::peer::active() && let InteropCommand::Launch{request}=&command {
             if let Some(target)=&request.target{self.load_media_target(target);}
             if let Some(value)=request.volume{self.apply_interop_command(ctx,InteropCommand::SetVolume{value},source);}
@@ -5099,6 +5109,7 @@ impl PealayerApp {
                 self.set_emergency_stop(active);
                 return;
             }
+            InteropCommand::Documents { .. } => unreachable!("handled before session forwarding"),
             InteropCommand::InvokeHardwareAction { action_id } => {
                 let Some(capabilities) = self
                     .advertised_hardware()
@@ -5414,6 +5425,17 @@ impl PealayerApp {
         self.was_playing_before_scrub = false;
     }
 
+    pub(crate) fn reset_project_media_state(&mut self) {
+        self.capture_current_playback_position();
+        self.reset_scrub_state();
+        self.clear_frame_cache();
+        if let Ok(mut rtt)=self.rtt_state.try_lock() {rtt.has_rendered_frame=false;}
+        self.media_metadata_loaded=false;
+        self.cache_duration=None;
+        self.cache_buffering_percent=None;
+        self.set_media_file_info(crate::media_info::MediaFileInfo::default());
+    }
+
     fn reset_scrub_state(&mut self) {
         self.seek_epoch = self.seek_epoch.wrapping_add(1);
         self.native_seek_client.finish();
@@ -5600,6 +5622,7 @@ impl PealayerApp {
                 },
                 Some(Ok(Event::EndFile(reason))) => {
                     if reason == 4 {
+                        if self.project.pending_media.is_some() {self.fail_project_media_load("decoder rejected the media");continue;}
                         if crate::peer::active(){
                             // Decoder failure is only a preview failure. Do not
                             // stop or advance the server or its hardware cues.
@@ -5634,7 +5657,7 @@ impl PealayerApp {
                         sample.buffering = false;
                         sample.sampled_at = std::time::Instant::now();
                     }
-                    self.show_error = None;
+                    if self.project.pending_media.is_none() {self.show_error = None;}
                     self.is_eof = false;
                     self.playback_time = 0.0;
                     self.duration = 0.0;
@@ -5675,6 +5698,7 @@ impl PealayerApp {
                         // configured Simple-workspace window geometry.
                         self.pending_video_aspect_resize = true;
                     }
+                    self.finish_project_media_load();
                     if let Some(position) = self.pending_resume_position.take().filter(|_|!crate::peer::active()) {
                         if self.is_seekable {
                             let target = if self.duration > 0.0 {
@@ -5875,6 +5899,7 @@ impl PealayerApp {
 
     /// Restarts playback of the current video from the beginning (0.0s).
     pub fn replay(&mut self) {
+        if self.project.pending_media.is_some() || self.scene_operation_busy() {return;}
         if self.current_video_path.is_none() {
             return;
         }
@@ -5901,6 +5926,7 @@ impl PealayerApp {
 
     /// Resumes playback, or restarts if playback finished.
     pub fn play(&mut self) {
+        if self.project.pending_media.is_some() || self.scene_operation_busy() {return;}
         if self.current_video_path.is_none() {
             return;
         }
@@ -7013,6 +7039,8 @@ impl PealayerApp {
     }
 
     pub fn load_video_file(&mut self, path: std::path::PathBuf) {
+        self.cancel_project_media_load();
+        if self.discover_media_project(&path.to_string_lossy()) { return; }
         if self.is_timeline_dirty() {
             self.pending_timeline_close_action = Some(PendingTimelineCloseAction::SwitchMedia(path));
             return;
@@ -7151,6 +7179,8 @@ impl PealayerApp {
     }
 
     pub fn load_url(&mut self, url: &str) {
+        self.cancel_project_media_load();
+        if self.discover_media_project(url) { return; }
         if crate::mpv::external::active() && !crate::mpv::external::status().connected {
             self.load_media_target(url); return;
         }
@@ -7317,6 +7347,7 @@ impl PealayerApp {
     }
 
     pub fn close_video(&mut self) {
+        self.cancel_project_media_load();
         self.reset_scrub_state();
         self.clear_frame_cache();
         self.capture_current_playback_position();
@@ -7357,6 +7388,7 @@ impl PealayerApp {
             Item {domain:"preferences".into(),state:dirty(Some(self.preferences_draft.as_ref().is_some_and(|draft|draft.is_dirty())))},
             Item {domain:"rf".into(),state:dirty(Some(self.rf.dirty()))},
             Item {domain:"board_settings".into(),state:dirty(Some(self.board_settings_dirty))},
+            Item {domain:"project_editor".into(),state:dirty(Some(crate::ui::projects::dirty(ctx)))},
         ];
         // These editors don't expose complete saved baselines yet. Report that
         // limit explicitly rather than equating an open editor with saved data.
@@ -7374,6 +7406,7 @@ impl PealayerApp {
             ("channel_folder",self.channel_folder_pending),
             ("rf_operation",self.rf.pending),
             ("audio_import",crate::mpv::sfx::importing()),
+            ("project_operation",crate::ui::projects::busy(ctx) || self.project.pending_media.is_some() || self.scene_operation_busy()),
         ] {items.push(Item {domain:domain.into(),state:if busy {State::Busy} else {State::Clean}});}
         Inspection::new(items)
     }
@@ -8020,6 +8053,7 @@ impl PealayerApp {
     fn apply_peer_request(&mut self,ctx:&egui::Context,path:&str,value:serde_json::Value)->Result<serde_json::Value,String>{
         if crate::peer::active(){return Err("Only the authoritative instance can apply session changes".into())}
         match path {
+            "/api/peer/documents" => return self.document_request(ctx, serde_json::from_value(value).map_err(|e|format!("Invalid document request: {e}"))?),
             "/api/peer/open"=>{
                 let target=value.get("target").and_then(serde_json::Value::as_str).ok_or("Media target is required")?;
                 if target.is_empty() || target.len()>32768{return Err("Invalid media target".into())}
@@ -9900,6 +9934,7 @@ impl Default for PealayerApp {
             external_catalog_revision: 0,
             external_seek_revision: 0,
             pending_external_media: None,
+            project: crate::app_projects::ProjectSession::default(),
             pending_external_pause: false,
             mpv_client,
             native_seek_client: Arc::clone(&native_seek_client),

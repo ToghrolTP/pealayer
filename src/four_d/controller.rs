@@ -196,8 +196,14 @@ pub struct HardwareCapabilities {
     pub board_identity: HardwareBoardIdentity,
     pub port: HardwarePort,
     pub host_instance_id: String,
+    #[serde(default)]
+    pub pwm_configuration_revision: String,
     pub capability_bits: u32,
     pub active_relays: std::collections::BTreeSet<u8>,
+    /// A complete mask was sampled for this connected generation. Empty alone
+    /// does not distinguish all-Off from an absent status sample.
+    #[serde(default)]
+    pub relays_sampled: bool,
     pub motion: Option<HardwareMotionState>,
     pub board_profile: Option<HardwareBoardProfile>,
     pub controls: Vec<HardwareControl>,
@@ -907,12 +913,14 @@ impl HardwareCapabilities {
         };
         let was_board_connected = self.board_connected;
         let before_relays = self.active_relays.clone();
+        let before_relays_sampled = self.relays_sampled;
         let before_telemetry = self.telemetry.clone();
 
         self.board_connected = true;
 
         if let Some(mask) = status.get("active_relays").and_then(Value::as_u64) {
             self.active_relays = active_relays_from_mask(&self.relays, mask);
+            self.relays_sampled = true;
         }
         let mut next_telemetry = telemetry_from_status(status, self.board_connected);
         next_telemetry.pwm_values = before_telemetry.pwm_values.clone();
@@ -934,6 +942,7 @@ impl HardwareCapabilities {
         self.telemetry = next_telemetry;
 
         !was_board_connected
+            || self.relays_sampled != before_relays_sampled
             || self.active_relays != before_relays
             || self.telemetry != before_telemetry
     }
@@ -1127,10 +1136,11 @@ impl HardwareCapabilities {
                     .and_then(Value::as_u64)
                     .unwrap_or(0);
                 let next = active_relays_from_mask(&self.relays, mask);
-                if next == self.active_relays {
+                if next == self.active_relays && self.relays_sampled {
                     false
                 } else {
                     self.active_relays = next;
+                    self.relays_sampled = true;
                     true
                 }
             }
@@ -1224,6 +1234,7 @@ impl HardwareCapabilities {
 
     pub(crate) fn mark_board_disconnected(&mut self) -> bool {
         let changed = self.board_connected
+            || self.relays_sampled
             || !self.active_relays.is_empty()
             || self.motion.is_some()
             || self.status_led.is_some()
@@ -1232,6 +1243,7 @@ impl HardwareCapabilities {
         self.board_connected = false;
         self.pwm_revision = 0;
         self.active_relays.clear();
+        self.relays_sampled = false;
         self.motion = None;
         self.status_led = None;
         self.front_panel = None;
@@ -1481,11 +1493,12 @@ pub(crate) struct ControllerRpcError {
     pub resource: Option<String>,
     pub retryable: bool,
     pub retry_after_ms: Option<u64>,
+    pub outcome: Option<String>,
 }
 
 impl ControllerRpcError {
     fn from_message(message: String) -> Self {
-        Self { message, transport_failed: false, kind: None, resource: None, retryable: false, retry_after_ms: None }
+        Self { message, transport_failed: false, kind: None, resource: None, retryable: false, retry_after_ms: None, outcome: None }
     }
     pub(crate) fn transport(message: String) -> Self { Self { transport_failed: true, ..Self::from_message(message) } }
     fn io(context: &str, error: std::io::Error) -> Self {
@@ -1538,6 +1551,7 @@ pub(crate) fn controller_json_rpc_error(error: &Value) -> ControllerRpcError {
         resource: data.and_then(|value| value.get("resource")).and_then(Value::as_str).map(str::to_string),
         retryable: data.and_then(|value| value.get("retryable")).and_then(Value::as_bool).unwrap_or(false),
         retry_after_ms: data.and_then(|value| value.get("retry_after_ms")).and_then(Value::as_u64),
+        outcome: data.and_then(|value| value.get("outcome")).and_then(Value::as_str).map(str::to_owned),
     }
 }
 
@@ -3153,8 +3167,10 @@ fn parse_hardware_capabilities_with_front_panel(
         board_identity,
         port,
         host_instance_id,
+        pwm_configuration_revision: catalog.get("pwm_configuration_revision").and_then(Value::as_str).unwrap_or_default().into(),
         capability_bits,
         active_relays,
+        relays_sampled: board_connected && snapshot.pointer("/status/active_relays").and_then(Value::as_u64).is_some(),
         motion,
         board_profile,
         controls,
@@ -4495,6 +4511,29 @@ mod tests {
             {"key":"relay.6","kind":"relay","role":"user-output","index":6,"default_name":"Relay 6","control":"relay"}
         ]});
         parse_hardware_capabilities(&snapshot, &catalog)
+    }
+
+    #[test]
+    fn relay_scene_capture_distinguishes_unknown_off_and_reconnect() {
+        let mut cap=live_capabilities();
+        assert!(cap.relays_sampled);
+        assert!(cap.active_relays.is_empty());
+        cap.mark_board_disconnected();
+        assert!(!cap.relays_sampled);
+        cap.apply_status_notification(&json!({"status":{}}));
+        assert!(cap.board_connected);
+        assert!(!cap.relays_sampled,"a connected status without a mask is not an Off sample");
+        assert!(cap.apply_status_notification(&json!({"status":{"active_relays":0}})));
+        assert!(cap.relays_sampled);
+        let scene=crate::projects::Scene::capture(&cap);
+        assert_eq!(scene.channels.get("relay.5"),Some(&crate::projects::ChannelValue::Boolean{on:false}));
+        cap.apply_status_notification(&json!({"status":{"active_relays":16}}));
+        let scene=crate::projects::Scene::capture(&cap);
+        assert_eq!(scene.channels.get("relay.5"),Some(&crate::projects::ChannelValue::Boolean{on:true}));
+        cap.mark_board_disconnected();
+        let scene=crate::projects::Scene::capture(&cap);
+        assert!(scene.channels.is_empty());
+        assert!(scene.unsampled.contains(&"relay.5".into()));
     }
 
     #[test]
