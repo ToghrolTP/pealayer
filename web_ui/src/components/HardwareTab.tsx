@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { hardwareAvailability, hardwareLabels, hardwareOutputsAvailable } from '../hardwareAvailability';
+import '../hardware-monitor.css';
+import { hardwareAvailability, hardwareLabels, hardwareOutputsAvailable, hardwareMonitorReady, hardwareMonitorRfAvailable, hardwareMonitorEmpty } from '../hardwareAvailability';
 import { reconcilePWMDrafts } from '../pwmDrafts';
 import { hardwareControlIdentity } from '../hardwareIdentity';
 import { defaultPwmCard, guardHardwarePointerStart, observedControlActive, powerActionSelected, pwmAdjustment, pwmActionVisible, pwmIndicatorAction, pwmRowActions } from '../pwmCard';
@@ -14,7 +15,6 @@ import {
   Collapse,
   Divider,
   Dropdown,
-  Empty,
   Input,
   InputNumber,
   Modal,
@@ -66,6 +66,7 @@ import { channelFolderGroups, channelFolderKind, isRawSeatRelay } from '../chann
 interface HardwareTabProps {
   state: PlayerState;
   sendCmd: (command: string, payload?: Record<string, unknown>) => Promise<boolean>;
+  onPreferences?: () => void;
   locale: UiLocale;
 }
 
@@ -121,7 +122,7 @@ const telemetryValue = (value: number | boolean | null | undefined, unit = '') =
   return `${value}${unit}`;
 };
 
-export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale }) => {
+export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale, onPreferences }) => {
   const details = state.hardware_details;
   const outputAvailable = hardwareOutputsAvailable(state);
   const availability = hardwareAvailability(state);
@@ -451,13 +452,19 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
     }));
   }, [details, locale, pwmDrafts, sendCmd, state.estop_active, outputAvailable, dragKey, dropKey, controls, optimisticActive, channelFolders]);
 
-  if (!details || !state.controller_connected) {
+  if (!details || !hardwareMonitorReady(state)) {
+    const empty = hardwareMonitorEmpty(state);
     return <section className="surface-page hardware-page">
-      <Empty
-        image={<DisconnectOutlined />}
-        description={tr(locale, state.controller_connected ? 'No board is connected or advertising capabilities' : 'Connecting to PCController…')}
-      />
-      <RfManager key="rf-manager" rf={state.rf} hardwareConnected={state.hardware_connected} sendCmd={sendCmd} locale={locale} />
+      <header className="surface-page__header"><Typography.Title level={2}>{tr(locale, 'Hardware Monitor')}</Typography.Title></header>
+      <Card className="surface-card hardware-empty-state">
+        <div className="hardware-empty-state__heading"><span className="hardware-empty-state__icon">{empty.progress ? <ReloadOutlined spin /> : <DisconnectOutlined />}</span><Typography.Title level={4}>{tr(locale, empty.title)}</Typography.Title></div>
+        <Typography.Paragraph type="secondary" role="status" aria-live="polite">{tr(locale, empty.detail)}</Typography.Paragraph>
+        <Space wrap>
+          {empty.primary === 'connect' && <Button icon={<UsbOutlined />} onClick={() => sendCmd('pealayer.hardware.connection', { connected: true })}>{tr(locale, 'Connect')}</Button>}
+          {empty.primary === 'refresh' && <Button icon={<ReloadOutlined />} onClick={() => sendCmd('hardware.catalog.refresh')}>{tr(locale, 'Refresh')}</Button>}
+          {onPreferences && <Button icon={<ToolOutlined />} onClick={onPreferences}>{tr(locale, 'Preferences')}</Button>}
+        </Space>
+      </Card>
     </section>;
   }
 
@@ -712,7 +719,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
 
     <Collapse className="hardware-sections" defaultActiveKey={grouped.map((item) => item.key)} items={grouped} />
     {channelFolders.dialogs}
-    <RfManager key="rf-manager" rf={state.rf} hardwareConnected={state.hardware_connected} sendCmd={sendCmd} assignment={rfAssignment} locale={locale} />
+    {hardwareMonitorRfAvailable(state) && <RfManager key="rf-manager" rf={state.rf} hardwareConnected={state.hardware_connected} sendCmd={sendCmd} assignment={rfAssignment} locale={locale} />}
 
     <Card
       className={`surface-card buzzer-control${details.buzzer?.playing ? ' is-playing' : ''}`}

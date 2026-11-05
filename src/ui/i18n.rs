@@ -25,6 +25,14 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         return english.to_owned();
     }
     let translated = match english {
+        "Connecting to PCController…" => "در حال اتصال به PCController…",
+        "Hardware catalog unavailable" => "فهرست سخت‌افزار در دسترس نیست",
+        "No board connected" => "بردی متصل نیست",
+        "Hardware preferences" => "تنظیمات سخت‌افزار",
+        "Waiting for the configured PCController connection." => "در انتظار اتصال به PCController تنظیم‌شده.",
+        "Connect to PCController to discover live board controls." => "برای نمایش کنترل‌های زندهٔ برد به PCController متصل شوید.",
+        "Waiting for PCController to advertise the board capabilities." => "در انتظار دریافت قابلیت‌های برد از PCController.",
+        "Board controls are unavailable while programming or recovery is in progress." => "هنگام برنامه‌ریزی یا بازیابی، کنترل‌های برد در دسترس نیستند.",
         "Strip designer" => "طراحی نوار نور",
         "Segmented design" => "طرح بخش‌بندی‌شده",
         "Segment" => "بخش",

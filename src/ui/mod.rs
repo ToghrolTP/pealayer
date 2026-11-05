@@ -20,6 +20,7 @@ pub mod error;
 pub mod four_d;
 pub mod group_picker;
 pub mod hardware_control;
+pub(crate) mod hardware_monitor;
 pub(crate) mod pwm_policy;
 pub mod i18n;
 pub(crate) mod fonts;
