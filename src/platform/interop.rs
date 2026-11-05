@@ -3913,7 +3913,7 @@ mod tests {
         ));
 
         let save: JsonRpcRequest = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","id":3,"method":"controller_effect.save","params":{"id":"lighting-primary","name":"Lighting primary","icon":"lightning","category":"Lighting","kind":"strip-stream","program":{"primitive":"police"},"default_fps":30,"duration_ms":5000,"default_pixels":100,"is_new":true}}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"controller_effect.save","params":{"id":"lighting-primary","name":"Lighting primary","icon":"lightning","category":"Lighting","kind":"strip-stream","program":{"primitive":"alternating-zones","period_ms":1000,"step_ms":100,"swap_after_steps":5},"default_fps":30,"duration_ms":5000,"default_pixels":100,"is_new":true}}"#,
         )
         .unwrap();
         assert!(matches!(
@@ -3921,8 +3921,14 @@ mod tests {
             Some(InteropCommand::SaveControllerEffect { effect })
                 if effect.id == "lighting-primary"
                     && effect.icon == "lightning"
-                    && effect.program["primitive"] == "police"
+                    && effect.program["primitive"] == "alternating-zones"
         ));
+
+        // Demo names are user effects, not executable primitive IDs. Keep the
+        // public API strict rather than restoring the removed built-in alias.
+        let mut invalid_program = save.clone();
+        invalid_program.params["program"] = serde_json::json!({"primitive":"police"});
+        assert!(command_from_json_rpc(&invalid_program).is_err());
 
         let invalid: JsonRpcRequest = serde_json::from_str(
             r#"{"jsonrpc":"2.0","id":4,"method":"controller_effect.play","params":{"reference":"effect; delete all"}}"#,
