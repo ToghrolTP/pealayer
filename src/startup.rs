@@ -109,51 +109,30 @@ pub fn run() -> eframe::Result {
                 std::process::exit(1);
             }
         },
-        Ok(crate::cli::CliAction::PushUpdate(target)) => {
-            match crate::update::push_current_to_peer(&target) {
-                Ok(status) => {
-                    crate::cli_println!(
-                        "{}",
-                        serde_json::to_string_pretty(&status).unwrap_or_default()
-                    );
-                    return Ok(());
-                }
-                Err(error) => {
-                    crate::cli_eprintln!("Peer update failed: {error}");
-                    std::process::exit(4);
-                }
-            }
+        Ok(crate::cli::CliAction::PushUpdate { target, output }) => {
+            let mut reporter = crate::update::console::Reporter::open("Peer update", &target, output);
+            let result = crate::update::push_current_to_peer(&target, |progress| reporter.progress(progress));
+            reporter.finish(&result);
+            drop(reporter);
+            if result.is_err() { std::process::exit(4); }
+            return Ok(());
         }
-        Ok(crate::cli::CliAction::UpdateFrom { url, sha256 }) => {
+        Ok(crate::cli::CliAction::UpdateFrom { url, sha256, output }) => {
             let target = format!("http://127.0.0.1:{}", crate::config::control_port());
-            match crate::update::request_update_from_url(&target, &url, sha256.as_deref()) {
-                Ok(status) => {
-                    crate::cli_println!(
-                        "{}",
-                        serde_json::to_string_pretty(&status).unwrap_or_default()
-                    );
-                    return Ok(());
-                }
-                Err(error) => {
-                    crate::cli_eprintln!("URL update request failed: {error}");
-                    std::process::exit(4);
-                }
-            }
+            let mut reporter = crate::update::console::Reporter::open("URL update", &target, output);
+            let result = crate::update::request_update_from_url(&target, &url, sha256.as_deref(), |progress| reporter.progress(progress));
+            reporter.finish(&result);
+            drop(reporter);
+            if result.is_err() { std::process::exit(4); }
+            return Ok(());
         }
-        Ok(crate::cli::CliAction::UpdateStatus(target)) => {
-            match crate::update::peer_update_status(&target) {
-                Ok(status) => {
-                    crate::cli_println!(
-                        "{}",
-                        serde_json::to_string_pretty(&status).unwrap_or_default()
-                    );
-                    return Ok(());
-                }
-                Err(error) => {
-                    crate::cli_eprintln!("Update status request failed: {error}");
-                    std::process::exit(4);
-                }
-            }
+        Ok(crate::cli::CliAction::UpdateStatus { target, output }) => {
+            let mut reporter = crate::update::console::Reporter::open("Update status", &target, output);
+            let result = crate::update::peer_update_status(&target);
+            reporter.finish(&result);
+            drop(reporter);
+            if result.is_err() { std::process::exit(4); }
+            return Ok(());
         }
         Ok(crate::cli::CliAction::RegisterAssociations) => {
             match crate::platform::associations::register_file_associations(None) {

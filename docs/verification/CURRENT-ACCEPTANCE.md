@@ -30,6 +30,12 @@ required checks are not passed while the user's test/CI skip remains in effect.
 
 ## Delivered source and deployment
 
+- [The updater console](updater-console.md) now has semantic progress phases,
+  factual transfer speed/ETA, clean redirected logs and explicit JSON output.
+  Full native tests, packaged CLI fixtures and local graceful installation are
+  verified. The preceding Dock correction is also verified installed locally;
+  Cafe installation remains user-deferred, not completed by those local checks.
+
 - Web media/file browsing now exposes shared drive/location selection, mapped and
   remembered network locations, Windows folder shortcuts/known folders and recent
   custom media folders. [Contract and verification](web-file-locations.md) retain
