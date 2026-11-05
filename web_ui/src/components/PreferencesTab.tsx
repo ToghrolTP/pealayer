@@ -83,7 +83,7 @@ interface PreferenceControl {
   section: string;
   group: string;
   label: string;
-  kind: 'accent' | 'color' | 'boolean' | 'file' | 'multi_select' | 'number' | 'replacement_list' | 'select' | 'choice_slider' | 'text';
+  kind: 'accent' | 'color' | 'boolean' | 'file' | 'multi_select' | 'number' | 'replacement_list' | 'select' | 'choice_slider' | 'text' | 'multiline_text';
   icon: string;
   description?: string;
   options?: PreferenceOption[];
@@ -538,6 +538,13 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
         </div>
       );
     }
+    if (control.kind === 'multiline_text') return (
+      <label className="preference-control" key={control.key}>
+        {commonLabel}
+        <Input.TextArea defaultValue={value ?? ''} rows={3} placeholder={control.placeholder}
+          onBlur={event => event.currentTarget.value !== (value ?? '') && void update(control, event.currentTarget.value)} />
+      </label>
+    );
     return (
       <label className="preference-control" key={control.key}>
         {commonLabel}

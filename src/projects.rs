@@ -37,9 +37,11 @@ pub struct TimelineView {
     pub selected_cues: BTreeSet<uuid::Uuid>,
     pub selected_curve_points: BTreeSet<(uuid::Uuid, usize)>,
     pub selected_keyframe: Option<uuid::Uuid>,
+    pub selected_track: Option<String>,
+    pub track_filter: String,
 }
 impl Default for TimelineView {
-    fn default() -> Self { Self { position_ms: 0, zoom: 100.0, scroll: [0.0; 2], selected_cues: BTreeSet::new(), selected_curve_points: BTreeSet::new(), selected_keyframe: None } }
+    fn default() -> Self { Self { position_ms: 0, zoom: 100.0, scroll: [0.0; 2], selected_cues: BTreeSet::new(), selected_curve_points: BTreeSet::new(), selected_keyframe: None, selected_track:None, track_filter:String::new() } }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -100,6 +102,7 @@ pub enum Document {
 #[serde(tag="operation", rename_all="snake_case", deny_unknown_fields)]
 pub enum Request {
     Snapshot,
+    Validate { document:Document },
     Read { path:String },
     Write { path:String, document:Document },
     Load { path:String, #[serde(default)] components:Option<Components>, #[serde(default)] discard_unsaved:bool },
@@ -159,6 +162,8 @@ impl Scene {
 impl TimelineDocument {
     pub fn validate(&self) -> Result<(), String> {
         let t=&self.timeline;
+        bounded_text(&self.view.track_filter,4096,"track filter")?;
+        if let Some(track)=&self.view.selected_track { bounded_text(track,512,"selected track")?; }
         time(self.view.position_ms)?;
         if !self.view.zoom.is_finite() || !(1.0..=10000.0).contains(&self.view.zoom) || self.view.scroll.iter().any(|v|!v.is_finite() || !(0.0..=1e12).contains(v)) { return Err("Invalid timeline view".into()); }
         if t.instances.len()>10_000 || t.templates.len()>10_000 || t.keyframes.len()>10_000 || t.analog_tracks.len()>1024 { return Err("Timeline exceeds authoring limits".into()); }
@@ -209,7 +214,13 @@ impl Media {
     }
 }
 pub fn validate_workspace(workspace: &crate::config::WorkspaceProfile) -> Result<(), String> {
-    if let Some(layout)=&workspace.dock_layout {crate::ui::layout::decode_workspace(layout)?;}
+    if let Some(layout)=&workspace.dock_layout {
+        let mut dock=crate::ui::layout::decode_workspace(layout)?;
+        if let Some(pane)=workspace.sidebar_rail.open.filter(|_|workspace.sidebar_rail.enabled) {
+            let tab=crate::ui::layout::PealayerTab::from(pane);
+            if dock.layout.contains(&tab) {dock.set_visible(tab,false,Some(crate::ui::layout::PealayerTab::ProgramMonitor),|_|craft_ui::docking::Permissions::default()).map_err(|e|format!("Invalid sidebar ownership: {e:?}"))?;}
+        }
+    }
     if let Some(memory)=&workspace.egui_memory {serde_json::from_str::<eframe::egui::Memory>(memory).map_err(|e|format!("Invalid workspace: {e}"))?;}
     Ok(())
 }
@@ -301,5 +312,75 @@ impl Discovery {
         if self.beside_media && local {paths.push(file.with_extension("pealayer.json"));}
         if self.search_paths {if let Some(name)=file.with_extension("pealayer.json").file_name() { for folder in self.folders.lines().map(str::trim).filter(|s|!s.is_empty()).take(32) {paths.push(Path::new(folder).join(name));}}}
         let mut seen=BTreeSet::new(); paths.retain(|p|seen.insert(p.clone()) && p.is_file()); paths
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn temp_dir()->PathBuf {
+        let path=std::env::temp_dir().join(format!("pealayer-project-test-{}",uuid::Uuid::new_v4()));
+        std::fs::create_dir(&path).unwrap();path
+    }
+    #[test]
+    fn exact_timeline_view_round_trip() {
+        let mut view=TimelineView::default();
+        view.position_ms=351;view.scroll=[12.5,99.25];view.zoom=123.5;
+        view.selected_track=Some("hardware:pwm.1".into());view.track_filter="Window".into();
+        let doc=Document::Timeline(TimelineDocument {timeline:Timeline::default(),view});
+        doc.validate().unwrap();
+        let copy:Document=serde_json::from_slice(&serde_json::to_vec(&doc).unwrap()).unwrap();
+        assert_eq!(doc,copy);
+    }
+    #[test]
+    fn timeline_validation_rejects_invalid_selection_and_nonfinite_view() {
+        let mut document=TimelineDocument {timeline:Timeline::default(),view:TimelineView::default()};
+        document.view.selected_cues.insert(uuid::Uuid::new_v4());
+        assert!(document.validate().unwrap_err().contains("Selection"));
+        document.view.selected_cues.clear();document.view.scroll[1]=f32::NAN;
+        assert!(document.validate().unwrap_err().contains("view"));
+    }
+    #[test]
+    fn invalid_document_cannot_replace_existing_file() {
+        let dir=temp_dir();let path=dir.join("scene.json");
+        let doc=Document::Scene(Scene::default());doc.write(&path).unwrap();
+        let before=std::fs::read(&path).unwrap();
+        let mut scene=Scene::default();scene.channels.insert("pwm.1".into(),ChannelValue::Pwm{percent_milli:100001});
+        assert!(Document::Scene(scene).write(&path).is_err());
+        assert_eq!(std::fs::read(&path).unwrap(),before);
+        assert_eq!(Document::read(&path).unwrap(),doc);
+        assert_eq!(std::fs::read_dir(&dir).unwrap().count(),1);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn resolve_checks_every_selected_component_before_returning() {
+        let dir=temp_dir();let path=dir.join("project.json");
+        Document::Scene(Scene::default()).write(&dir.join("scene.json")).unwrap();
+        let project=Project {scene:Some(Part::File {path:"scene.json".into()}),timeline:Some(Part::File {path:"missing.json".into()}),..Project::default()};
+        assert!(resolve(&project,&path,Components::default()).is_err());
+        let selected=Components {scene:true,timeline:false,media:false,workspace:false};
+        let loaded=resolve(&project,&path,selected).unwrap();
+        assert!(matches!(loaded.scene,Some(Part::Embedded{..})));assert!(loaded.timeline.is_none());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn linked_component_kind_must_match_and_unknown_fields_fail_closed() {
+        let dir=temp_dir();let path=dir.join("project.json");
+        Document::Scene(Scene::default()).write(&dir.join("wrong.json")).unwrap();
+        let project=Project {timeline:Some(Part::File {path:"wrong.json".into()}),..Project::default()};
+        assert!(resolve(&project,&path,Components::default()).unwrap_err().contains("Wrong document kind"));
+        assert!(serde_json::from_str::<Document>(r#"{"kind":"pealayer-scene","data":{"name":"","board_identity":"","channels":{},"unsampled":[],"apply":true}}"#).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn multiple_discovery_sources_are_deduplicated_and_disable_is_respected() {
+        let dir=temp_dir();let media=dir.join("movie.mkv");let project=dir.join("movie.pealayer.json");
+        Document::Project(Project::default()).write(&project).unwrap();
+        let mut discovery=Discovery::default();
+        discovery.folders=dir.to_string_lossy().into_owned();
+        discovery.associations.insert(media.to_string_lossy().into_owned(),project.to_string_lossy().into_owned());
+        assert_eq!(discovery.candidates(&media.to_string_lossy()),vec![project]);
+        discovery.enabled=false;assert!(discovery.candidates(&media.to_string_lossy()).is_empty());
+        std::fs::remove_dir_all(dir).unwrap();
     }
 }

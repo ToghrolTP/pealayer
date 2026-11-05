@@ -1373,6 +1373,15 @@ fn render_contract_control(
                 }
             });
         }
+        PreferenceControlKind::MultilineText => {
+            let mut text=current.as_str().unwrap_or_default().to_string();
+            preference_multiline_row(ui,control_icon,&tr(control.label),control.description.map(tr),label_width,PREFERENCE_ROW_HEIGHT*3.0,|ui|{
+                if ui.add(egui::TextEdit::multiline(&mut text).desired_rows(3).desired_width(f32::INFINITY).hint_text(control.placeholder.unwrap_or_default())).changed() {
+                    replacement=Some(serde_json::Value::String(text));
+                }
+            });
+            description_rendered=true;
+        }
         PreferenceControlKind::Text => {
             let mut text = current.as_str().unwrap_or_default().to_string();
             let text_align = crate::ui::i18n::input_alignment(rtl_ui, &text);

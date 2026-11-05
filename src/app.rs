@@ -5424,6 +5424,17 @@ impl PealayerApp {
         self.was_playing_before_scrub = false;
     }
 
+    pub(crate) fn reset_project_media_state(&mut self) {
+        self.capture_current_playback_position();
+        self.reset_scrub_state();
+        self.clear_frame_cache();
+        if let Ok(mut rtt)=self.rtt_state.try_lock() {rtt.has_rendered_frame=false;}
+        self.media_metadata_loaded=false;
+        self.cache_duration=None;
+        self.cache_buffering_percent=None;
+        self.set_media_file_info(crate::media_info::MediaFileInfo::default());
+    }
+
     fn reset_scrub_state(&mut self) {
         self.seek_epoch = self.seek_epoch.wrapping_add(1);
         self.native_seek_client.finish();
@@ -5610,6 +5621,7 @@ impl PealayerApp {
                 },
                 Some(Ok(Event::EndFile(reason))) => {
                     if reason == 4 {
+                        self.cancel_project_media_load();
                         if crate::peer::active(){
                             // Decoder failure is only a preview failure. Do not
                             // stop or advance the server or its hardware cues.
@@ -5886,6 +5898,7 @@ impl PealayerApp {
 
     /// Restarts playback of the current video from the beginning (0.0s).
     pub fn replay(&mut self) {
+        if self.project.pending_media.is_some() {return;}
         if self.current_video_path.is_none() {
             return;
         }
@@ -5912,6 +5925,7 @@ impl PealayerApp {
 
     /// Resumes playback, or restarts if playback finished.
     pub fn play(&mut self) {
+        if self.project.pending_media.is_some() {return;}
         if self.current_video_path.is_none() {
             return;
         }
@@ -7024,6 +7038,7 @@ impl PealayerApp {
     }
 
     pub fn load_video_file(&mut self, path: std::path::PathBuf) {
+        self.cancel_project_media_load();
         if self.discover_media_project(&path.to_string_lossy()) { return; }
         if self.is_timeline_dirty() {
             self.pending_timeline_close_action = Some(PendingTimelineCloseAction::SwitchMedia(path));
@@ -7163,6 +7178,7 @@ impl PealayerApp {
     }
 
     pub fn load_url(&mut self, url: &str) {
+        self.cancel_project_media_load();
         if self.discover_media_project(url) { return; }
         if crate::mpv::external::active() && !crate::mpv::external::status().connected {
             self.load_media_target(url); return;
@@ -7330,6 +7346,7 @@ impl PealayerApp {
     }
 
     pub fn close_video(&mut self) {
+        self.cancel_project_media_load();
         self.reset_scrub_state();
         self.clear_frame_cache();
         self.capture_current_playback_position();
@@ -7370,6 +7387,7 @@ impl PealayerApp {
             Item {domain:"preferences".into(),state:dirty(Some(self.preferences_draft.as_ref().is_some_and(|draft|draft.is_dirty())))},
             Item {domain:"rf".into(),state:dirty(Some(self.rf.dirty()))},
             Item {domain:"board_settings".into(),state:dirty(Some(self.board_settings_dirty))},
+            Item {domain:"project_editor".into(),state:dirty(Some(crate::ui::projects::dirty(ctx)))},
         ];
         // These editors don't expose complete saved baselines yet. Report that
         // limit explicitly rather than equating an open editor with saved data.
@@ -7387,6 +7405,7 @@ impl PealayerApp {
             ("channel_folder",self.channel_folder_pending),
             ("rf_operation",self.rf.pending),
             ("audio_import",crate::mpv::sfx::importing()),
+            ("project_operation",crate::ui::projects::busy(ctx) || self.project.pending_media.is_some()),
         ] {items.push(Item {domain:domain.into(),state:if busy {State::Busy} else {State::Clean}});}
         Inspection::new(items)
     }

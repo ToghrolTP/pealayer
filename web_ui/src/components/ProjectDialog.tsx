@@ -38,6 +38,7 @@ export function ProjectDialog({ base, locale, onClose }: { base: string; locale:
       if (typeof result.path === 'string') setPath(result.path);
       if (result.saved) { setBaseline(JSON.stringify(selected())); setNotice('Saved on the Pealayer authority.'); }
       if (result.loaded) setNotice('Loaded paused. Scene values are staged, not applied.');
+      if (result.media_pending) setNotice('Loading media; timeline and workspace commit after decoder confirmation.');
       if (result.queued) setNotice('Commands queued; check Hardware Monitor for acknowledgements.');
       return result;
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); return null; }
@@ -76,7 +77,10 @@ export function ProjectDialog({ base, locale, onClose }: { base: string; locale:
             const file = e.target.files?.[0]; if (!file) return;
             try { if (file.size > 32 * 1024 * 1024) throw new Error('Document exceeds 32 MiB'); const value = JSON.parse(await file.text());
               if (!['pealayer-project', 'pealayer-scene', 'pealayer-timeline', 'pealayer-media', 'pealayer-workspace'].includes(value.kind)) throw new Error('Not a Pealayer document');
-              setDocument(value); setInclude(all); setNotice('Imported for review. The authority validates before loading.');
+              // Parse and validate the complete typed contract on the authority
+              // before any untrusted nested object reaches the editor render.
+              const validated = await request({ operation: 'validate', document: value });
+              if (validated?.document) { setBaseline(''); setNotice('Imported for review.'); }
             } catch (reason) { setError(String(reason)); }
           }} /></label>
         </Flex>

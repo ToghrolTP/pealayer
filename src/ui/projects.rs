@@ -11,8 +11,10 @@ struct Editor {
     reply:Arc<Mutex<Option<Result<serde_json::Value,String>>>>,
 }
 fn id()->egui::Id {egui::Id::new("project-metadata-editor")}
-pub(crate) fn dirty(ctx:&egui::Context)->bool {ctx.data_mut(|d|d.get_temp::<Editor>(id())).is_some_and(|e|e.document!=e.baseline)}
+pub(crate) fn dirty(ctx:&egui::Context)->bool {ctx.data_mut(|d|d.get_temp::<Editor>(id())).is_some_and(|e|included(&e.document,e.include)!=e.baseline)}
+pub(crate) fn busy(ctx:&egui::Context)->bool {ctx.data_mut(|d|d.get_temp::<Editor>(id())).is_some_and(|e|e.busy)}
 pub(crate) fn open(app:&PealayerApp,ctx:&egui::Context) {
+    if ctx.data_mut(|d|d.get_temp::<Editor>(id())).is_some() {return;}
     let document=Document::Project(app.capture_project(ctx));
     let state=Editor {baseline:document.clone(),document,path:app.project.path.as_ref().map(|p|p.to_string_lossy().into_owned()).unwrap_or_default(),include:Components::default(),error:None,notice:None,candidates:vec![],discard:false,confirm_outputs:false,busy:false,reply:Arc::new(Mutex::new(None))};
     ctx.data_mut(|d|d.insert_temp(id(),state));
@@ -34,10 +36,10 @@ fn accept(editor:&mut Editor,result:Result<serde_json::Value,String>) {
     match result {
         Ok(value)=>{
             if let Some(document)=value.get("document") {match serde_json::from_value::<Document>(document.clone()) {
-                Ok(document)=>{editor.baseline=document.clone();editor.document=document;editor.include=Components::default();},Err(e)=>{editor.error=Some(e.to_string());return;}
+                Ok(document)=>{if let Err(error)=document.validate(){editor.error=Some(error);return;}editor.baseline=document.clone();editor.document=document;editor.include=Components::default();},Err(e)=>{editor.error=Some(e.to_string());return;}
             }}
             if let Some(path)=value.get("path").and_then(|p|p.as_str()) {editor.path=path.into();}
-            editor.notice=Some(if value.get("saved")==Some(&true.into()) {editor.baseline=editor.document.clone();"Saved"} else if value.get("loaded")==Some(&true.into()) {"Loaded paused. Scene outputs have not been applied."} else if value.get("queued")==Some(&true.into()) {"Hardware commands queued; monitor controller acknowledgements."} else {"Ready"}.into());editor.error=None;
+            editor.notice=Some(if value.get("saved")==Some(&true.into()) {editor.baseline=included(&editor.document,editor.include);"Saved"} else if value.get("media_pending")==Some(&true.into()) {"Loading media; timeline and workspace commit after decoder confirmation."} else if value.get("loaded")==Some(&true.into()) {"Loaded paused. Scene outputs have not been applied."} else if value.get("queued")==Some(&true.into()) {"Hardware commands queued; monitor controller acknowledgements."} else {"Ready"}.into());editor.error=None;
         },Err(error)=>editor.error=Some(error),
     }
 }
@@ -56,10 +58,10 @@ fn path_field(ui:&mut egui::Ui,label:&str,path:&mut String,key:&str,save:bool) {
         }
     });
 }
-fn component<T:Clone>(ui:&mut egui::Ui,label:&str,key:&str,part:&mut Option<Part<T>>,include:&mut bool,load:&mut bool,default:Option<T>) {
+fn component<T:Clone>(ui:&mut egui::Ui,label:&str,key:&str,part:&mut Option<Part<T>>,include:&mut bool,load:&mut bool) {
     ui.horizontal(|ui|{
         ui.checkbox(include,label); ui.add_enabled_ui(*include,|ui|{ui.checkbox(load,"Load");});
-        if part.is_none() && *include {if let Some(value)=default {*part=Some(Part::embedded(value));}}
+        if part.is_none() {ui.weak("Not captured");}
         let mut linked=matches!(part,Some(Part::File {..}));
         if ui.checkbox(&mut linked,"Separate file").changed() {if linked {*part=Some(Part::File {path:String::new()});} else {*include=false;*part=None;}}
     });
@@ -98,12 +100,10 @@ pub(crate) fn draw(app:&mut PealayerApp,root:&mut egui::Ui) {
                         ui.label("Title");ui.add(crate::ui::dialog::singleline_text_edit(ui,&mut project.title).desired_width(f32::INFINITY));
                         ui.label("Notes");ui.add(egui::TextEdit::multiline(&mut project.notes).desired_rows(2).desired_width(f32::INFINITY));
                         ui.label("Save / load components");
-                        let captured=app.capture_project(&ctx);
-                        fn embedded<T>(part:Option<Part<T>>)->Option<T>{match part {Some(Part::Embedded {value})=>Some(value),_=>None}}
-                        component(ui,"Scene","project-scene",&mut project.scene,&mut editor.include.scene,&mut project.load.scene,embedded(captured.scene));
-                        component(ui,"Timeline","project-timeline",&mut project.timeline,&mut editor.include.timeline,&mut project.load.timeline,embedded(captured.timeline));
-                        component(ui,"Media","project-media-info",&mut project.media,&mut editor.include.media,&mut project.load.media,embedded(captured.media));
-                        component(ui,"Workspace","project-workspace",&mut project.workspace,&mut editor.include.workspace,&mut project.load.workspace,embedded(captured.workspace));
+                        component(ui,"Scene","project-scene",&mut project.scene,&mut editor.include.scene,&mut project.load.scene);
+                        component(ui,"Timeline","project-timeline",&mut project.timeline,&mut editor.include.timeline,&mut project.load.timeline);
+                        component(ui,"Media","project-media-info",&mut project.media,&mut editor.include.media,&mut project.load.media);
+                        component(ui,"Workspace","project-workspace",&mut project.workspace,&mut editor.include.workspace,&mut project.load.workspace);
                         if let Some(Part::Embedded {value:media})=&mut project.media {media_editor(ui,media);}
                         if let Some(Part::Embedded {value:scene})=&mut project.scene {scene_editor(ui,scene);}
                         ui.horizontal_wrapped(|ui|{
@@ -132,12 +132,13 @@ pub(crate) fn draw(app:&mut PealayerApp,root:&mut egui::Ui) {
                 if ui.add_enabled(editor.confirm_outputs,egui::Button::new("Apply scene")).clicked(){request=Some(Request::ApplyScene {scene:scene.clone(),confirm:true});}
             }
             if editor.busy {ui.spinner();}
-            if editor.document!=editor.baseline && ui.button("Discard changes and close").clicked(){discard_close=true;}
+            if included(&editor.document,editor.include)!=editor.baseline && ui.button("Discard changes and close").clicked(){discard_close=true;}
         }));
     });
     if discard_close {ctx.data_mut(|d|d.remove::<Editor>(id()));return;}
     if close {
-        if editor.document!=editor.baseline {editor.error=Some("Save your document before closing, or use Discard changes.".into());}
+        if editor.busy {editor.error=Some("Wait for the current document operation to finish.".into());}
+        else if included(&editor.document,editor.include)!=editor.baseline {editor.error=Some("Save your document before closing, or use Discard changes.".into());}
         else {ctx.data_mut(|d|d.remove::<Editor>(id()));return;}
     }
     ctx.data_mut(|d|d.insert_temp(id(),editor.clone()));

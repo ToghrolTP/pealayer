@@ -4,6 +4,26 @@ Owner: [issue #226](https://github.com/ToghrolTP/pealayer/issues/226).
 Branch: `feat/project-scene-persistence`, stacked on the UI work in PR #225.
 This is not a production-ready feature or deployment candidate.
 
+## Merge audit repairs (5 November 2026)
+
+The draft is now based on merged UI main. Document import has a typed authority
+validation operation before Web rendering. Native project drafts (including
+component inclusion changes) and pending operations participate in authoring
+inspection; reopening cannot overwrite the editor. Project capture no longer
+queries the entire live session on every editor frame. Timeline documents retain
+selected track and search filter, and folder preferences use multiline controls.
+
+Media restoration now defers timeline/workspace commit until a matching decoder
+FileLoaded and exact-seek submission, cancels pending prepared Play, and retains
+the old authoring state on decoder failure. Explicit Open/Close cancels pending
+project restoration. This is not yet full media rollback or physical acceptance.
+Association-write failures are surfaced separately from a completed document save.
+
+Six document round-trip, selection-validation, atomic-write, linked-component and
+discovery tests passed with an isolated configuration. Native library checking and
+Web TypeScript checking passed. Remaining acceptance items below still apply;
+these incremental repairs do not make the draft merge-ready.
+
 ## Preserved work
 
 Typed scene, timeline, media, workspace and project documents; bounded reads and

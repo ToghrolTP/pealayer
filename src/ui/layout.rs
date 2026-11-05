@@ -15150,6 +15150,7 @@ impl<'a> PealayerTabViewer<'a> {
                             data.get_temp::<String>(timeline_filter_id)
                                 .unwrap_or_default()
                         });
+                        self.app.project.track_filter = timeline_track_filter.clone();
                         let all_timeline_rows = all_timeline_track_rows(self.app);
                         let cue_reveal = timeline_cue_reveal(self.app, ui.ctx());
                         let timeline_rows = all_timeline_rows
