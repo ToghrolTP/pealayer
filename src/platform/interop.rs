@@ -358,6 +358,7 @@ pub enum InteropCommand {
         on_behavior: crate::four_d::controller::PwmOnBehavior,
     },
     RefreshHardwareCatalog,
+    SetHardwareConnection { connected: bool },
     HardwareAuthority {
         operation: String,
         #[serde(default)]
@@ -898,7 +899,7 @@ pub fn command_catalog() -> Value {
             "timeline.cue.place", "timeline.cue.edit", "controller_effect.publish_and_run", "controller_effect.record.capabilities",
             "controller_effect.record.start", "controller_effect.record.status",
             "controller_effect.record.save", "controller_effect.record.discard",
-            "set_emergency_stop", "invoke_hardware_action", "set_hardware_pwm", "refresh_hardware_catalog",
+            "set_emergency_stop", "invoke_hardware_action", "set_hardware_pwm", "refresh_hardware_catalog", "set_hardware_connection",
             "configure_addressable_strip", "fill_addressable_strip", "set_addressable_strip_pixel",
             "send_addressable_strip_frame", "start_addressable_strip_rainbow",
             "start_addressable_strip_effect", "stop_addressable_strip",
@@ -907,6 +908,7 @@ pub fn command_catalog() -> Value {
             "press_front_panel_key", "board_information", "rf_control", "open_rf_manager"
         ],
         "json_rpc_prefix": "pealayer",
+        "hardware_connection": {"method":"pealayer.hardware.connection","command":"set_hardware_connection","params":{"connected":"required boolean"},"scope":"current session authority; existing configured endpoint"},
         "transport": { "nudge": "pealayer.transport.nudge", "directions": [-1,1],
             "paused_step": "frame_step_count", "playing_step": "quick_seek_seconds" },
         "discovery": "/api/player/commands"
@@ -2250,6 +2252,9 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         "hardware.catalog.refresh" | "pealayer.hardware.catalog.refresh" => {
             Some(InteropCommand::RefreshHardwareCatalog)
         }
+        "pealayer.hardware.connection" => Some(InteropCommand::SetHardwareConnection {
+            connected: request.params.get("connected").and_then(Value::as_bool).ok_or("Hardware connection requires connected: true or false")?,
+        }),
         "pealayer.hardware.authority" => {
             let operation = string(&["operation"])?;
             if !matches!(operation.as_str(), "request" | "accept" | "reject" | "release" | "lock" | "unlock") {
@@ -4272,6 +4277,12 @@ mod tests {
 
     #[test]
     fn parses_hardware_presentation_updates_for_web_channel_management() {
+        for connected in [true,false] {
+            let request:JsonRpcRequest=serde_json::from_value(serde_json::json!({"jsonrpc":"2.0","id":"connection","method":"pealayer.hardware.connection","params":{"connected":connected}})).unwrap();
+            assert_eq!(command_from_json_rpc(&request).unwrap(),Some(InteropCommand::SetHardwareConnection{connected}));
+        }
+        let invalid:JsonRpcRequest=serde_json::from_value(serde_json::json!({"jsonrpc":"2.0","id":"connection","method":"pealayer.hardware.connection","params":{"connected":"yes"}})).unwrap();
+        assert!(command_from_json_rpc(&invalid).is_err());
         let folder: JsonRpcRequest = serde_json::from_str(r#"{"jsonrpc":"2.0","id":"folder","method":"hardware.folder.update","params":{"operation":"move","kind":"pwm","name":"Lighting","keys":["pwm.0"]}}"#).unwrap();
         assert!(matches!(command_from_json_rpc(&folder).unwrap(), Some(InteropCommand::UpdateHardwareFolder { fields }) if fields["operation"] == "move" && fields["keys"][0] == "pwm.0"));
         let invalid: JsonRpcRequest = serde_json::from_str(r#"{"jsonrpc":"2.0","id":"folder","method":"hardware.folder.update","params":[]}"#).unwrap();

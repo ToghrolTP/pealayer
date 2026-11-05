@@ -19,11 +19,11 @@ captions reserve the actual trailing selector/mute/visibility widths plus an
 edge inset. Pointer geometry checks cover all five density choices, large
 button fonts, both themes and fractional display scales.
 
-RF management belongs to Hardware Monitor, not the Workspace menu. The latter
-entry came from the initial RF integration; the hardware location remains
-available disconnected for reviewing and preparing a draft, and saving or
-transmitting continues to follow the controller's connection and capability
-checks. Opening the offline manager does not issue a board request.
+RF management belongs to Hardware Monitor, not the Workspace menu. Its Monitor
+entry now requires a live controller, a connected board, advertised RF support
+and available outputs. The earlier offline-entry predicate was a regression;
+saved RF definitions are preserved, but cached capabilities cannot expose live
+Monitor controls after transport loss. See [the disconnected-state audit](hardware-monitor-offline-state.md).
 
 The status FPS widget chooses regular text when it reports screen rendering FPS
 and retains emphasis for media FPS, including when Auto changes source. Native

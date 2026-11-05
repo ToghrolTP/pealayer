@@ -5134,6 +5134,14 @@ impl PealayerApp {
             InteropCommand::RefreshHardwareCatalog => {
                 self.engine_handle.request_catalog_refresh();
             }
+            InteropCommand::SetHardwareConnection { connected } => {
+                let endpoint=self.serial_port.trim().to_string();
+                if connected && endpoint.is_empty() {self.set_osd(self.tr("Enter a hardware endpoint before connecting."));return;}
+                self.connection_notice=None;
+                if self.engine_handle.sender.send(crate::four_d::engine::EngineMessage::ReconfigureEndpoint{endpoint,connect:connected}).is_err() {
+                    self.set_osd("Hardware connection engine is unavailable".into());
+                }
+            }
             InteropCommand::HardwareAuthority { operation, requester_id } => {
                 crate::four_d::authority::request(self, &operation, &requester_id);
             }
