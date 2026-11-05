@@ -1133,21 +1133,12 @@ fn render_contract_control(
                 let mut index = control.options.iter().position(|option| option.value == current).unwrap_or(0);
                 preference_row(ui, control_icon, &tr(control.label), label_width, |ui| {
                     let labels: Vec<_> = control.options.iter().map(|option| tr(option.label)).collect();
-                    let font = egui::TextStyle::Body.resolve(ui.style());
-                    let label_width = labels.iter().map(|label| {
-                        ui.painter().layout_no_wrap(label.clone(), font.clone(), ui.visuals().text_color()).size().x
-                    }).fold(0.0_f32, f32::max);
                     let width = ui.available_width().min(PREFERENCE_CONTROL_MAX_WIDTH);
-                    let selected_label = labels[index].clone();
-                    ui.scope(|ui| {
-                        ui.spacing_mut().slider_width = (width - label_width - ui.spacing().item_spacing.x).max(48.0);
-                        let response = ui.add(egui::Slider::new(&mut index, 0..=control.options.len() - 1)
-                            .step_by(1.0).show_value(false).text(selected_label));
-                        crate::ui::control_density::paint_choice_ticks(ui, response.rect, control.options.len(), index);
-                        if response.changed() {
-                            replacement = Some(control.options[index].value.clone());
-                        }
-                    });
+                    let response = crate::ui::control_density::choice_slider(ui, &mut index,
+                        &labels, &tr(control.label), width);
+                    if response.changed() {
+                        replacement = Some(control.options[index].value.clone());
+                    }
                 });
             }
         }

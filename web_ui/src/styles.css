@@ -321,9 +321,13 @@ body {
 .server-file-picker__files .ant-table-row { cursor: pointer; }
 .preference-control { min-width: 0; min-height: 56px; padding: 10px 0; display: grid; grid-template-columns: minmax(170px, .8fr) minmax(180px, 1.2fr); align-items: center; gap: 12px; border-bottom: 1px solid color-mix(in srgb, var(--line) 64%, transparent); color: var(--text); }
 .preference-control:last-child { border-bottom: 0; }
-.preference-choice-slider { min-width: 0; display: grid; grid-template-columns: minmax(48px, 1fr) 12ch; align-items: center; gap: 12px; }
-.preference-choice-slider .ant-slider { margin: 0 6px; }
-.preference-choice-slider__value { font-size: 13px; text-align: start; }
+.preference-choice-slider { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; }
+.preference-choice-slider .ant-slider { flex: 1 1 112px; min-width: 64px; margin: 0 6px; }
+.preference-choice-slider__value { display: inline-grid; flex: 0 1 auto; max-width: 100%; min-width: 0; min-height: var(--control-height, 24px); align-items: center; padding: 0 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-2); color: var(--text); font-size: 13px; line-height: min(20px, calc(var(--control-height, 24px) - 2px)); font-weight: 600; text-align: center; }
+.preference-choice-slider__measure, .preference-choice-slider__caption { grid-area: 1 / 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.preference-choice-slider__measure { visibility: hidden; pointer-events: none; }
+.preference-choice-slider:focus-within .preference-choice-slider__value { border-color: var(--accent); }
+.preference-choice-slider[data-disabled='true'] .preference-choice-slider__value { opacity: .45; }
 .preference-control--boolean { grid-template-columns: minmax(0, 1fr) auto; }
 .preference-control__label { min-width: 0; display: flex; align-items: center; justify-content: flex-start; gap: 7px; font-size: 13px; font-weight: 600; text-align: start; }
 .preference-control__label .anticon { flex: 0 0 16px; width: 16px; color: var(--accent); text-align: center; }

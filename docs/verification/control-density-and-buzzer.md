@@ -13,6 +13,34 @@ Design tokens and the custom color menu's shared height variable. Saving,
 preview, discarding and cross-client appearance reconciliation use the existing
 preferences path, not a separate per-widget setting.
 
+## Aligned discrete-choice control
+
+The density selector now uses an explicit circular thumb and five subtle detents
+inside the rail. The former notches were painted at the bottom edge of the whole
+Slider response, with endpoint calculations assuming a circle even when the theme
+used a narrow rectangular thumb. That made marks disagree with the thumb and
+stick below the control. Labels were also captured before slider input was applied.
+
+The replacement gives the inner slider and its reserved slot the same height,
+including with large fonts. Detents share the actual travel range and centerline;
+the active marker is covered by the thumb. Fixed stroke widths, inset endpoints
+and clipping prevent hover/focus bleed. The selected label updates in the same
+frame, in a rounded neutral capsule whose width reserves the longest translated
+choice. Text ink is vertically centered. Narrow layouts stack the capsule below
+the rail instead of shrinking the rail into an unusable target.
+
+This changes presentation, not stored values, density heights, live preview or
+Save/Discard semantics. The stock slider still owns drag, keyboard and accessibility
+interaction. Web uses the same five-choice contract and matching stable capsule;
+hidden measurement labels are excluded from accessibility navigation.
+
+Native regression tests compare actual painted thumb/marker positions and text
+origins at all five densities, light/dark themes, three scales, two font sizes and
+180/260/420-point control widths, through idle/hover/focus/disabled states. Pointer,
+keyboard and disabled input behavior are covered separately. Web guards and
+TypeScript checking pass. Installed-build capture and production deployment are
+separate gates; see the current PR checkpoint for those results.
+
 ## Restored original density
 
 The parent of `88741e3` pinned egui 0.36.2 and did not override its spacing:

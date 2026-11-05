@@ -201,7 +201,7 @@ function ChoiceSlider({ options, value, label, locale, disabled, onCommit }: {
   const [index, setIndex] = useState(selected);
   useEffect(() => setIndex(selected), [selected]);
   if (!options.length) return null;
-  return <div className="preference-choice-slider">
+  return <div className="preference-choice-slider" data-disabled={disabled}>
     <Slider min={0} max={options.length - 1} step={1} value={index} disabled={disabled}
       ariaLabelForHandle={tr(locale, label)}
       ariaValueTextFormatterForHandle={position => tr(locale, options[position]?.label ?? '')}
@@ -210,7 +210,10 @@ function ChoiceSlider({ options, value, label, locale, disabled, onCommit }: {
       onChange={setIndex} onChangeComplete={position => {
         if (options[position].value !== value) onCommit(options[position].value);
       }} />
-    <span className="preference-choice-slider__value">{tr(locale, options[index]?.label ?? '')}</span>
+    <span className="preference-choice-slider__value" title={tr(locale, options[index]?.label ?? '')}>
+      {options.map((option, position) => <span key={position} aria-hidden="true" className="preference-choice-slider__measure">{tr(locale, option.label)}</span>)}
+      <span className="preference-choice-slider__caption">{tr(locale, options[index]?.label ?? '')}</span>
+    </span>
   </div>;
 }
 
