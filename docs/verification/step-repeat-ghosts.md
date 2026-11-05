@@ -33,6 +33,37 @@ Ghost edits never retarget a channel, seek media, play a preview or issue an
 output command. Explicit Duplicate/Delete operate on selected sources once.
 The count includes the original occurrence.
 
+## Using the projections
+
+1. Enable **Repeat step** in a step's properties, **Repeat effect** for the
+   complete sequence, or both. **Show repeat ghosts** starts enabled; its saved
+   view choice never changes the execution schedule.
+2. Click an original or any ghost: every visible occurrence of that source
+   shares selection. Delete and Duplicate operate on that source only once.
+3. Drag a dotted step ghost to adjust the step's start-to-start interval. Drag
+   a dashed whole-effect ghost to adjust the complete sequence's interval.
+   Later copies divide pointer movement by their repetition index. Nested
+   whole-effect ghosts edit the whole-effect interval, not the inner loop.
+4. Drag the trailing edge to change the shared source length. Use arrow keys
+   to nudge spacing, or right-click a ghost to edit its repeat count/interval.
+   Double-click opens its original properties, never a detached copy.
+5. Press **Escape** during a projection drag to cancel it. Native restores the
+   source and effect interval captured at drag start; Web discards its preview.
+   Releasing the pointer afterward cannot recommit the cancelled change.
+
+### Follow-up verification
+
+Native light/dark pointer tests cover selecting and moving step/whole-effect
+projections and cancelling an actual changed drag. The disconnected browser
+fixture covers default/saved visibility, both selection directions, one-source
+Delete, interval dragging and arrow keys, shared-length resizing, Escape, count
+menus and dotted/dashed styling at 390, 768 and 1440 pixels in both themes.
+These exercise the real shared `SequenceTimeline` used by both Web designers.
+No previews, publishing, hardware outputs or media seeking are involved.
+
+Cafe deployment is deferred at the user's request while it is unavailable.
+Local source, fixture and package verification are not installed Cafe acceptance.
+
 Preferences → Hardware → Effect designer colors exposes background colors for
 motion, relays, PWM, buzzer, status RGB, strip pixels, RF, displays, front-panel
 actions and raw commands. The canonical palette asset supplies native/Web

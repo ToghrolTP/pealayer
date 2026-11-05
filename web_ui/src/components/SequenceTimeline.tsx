@@ -148,6 +148,14 @@ export function SequenceTimeline<T extends SequenceStep>({ steps, onChange, loca
     return choice ? (choice.translated ? tr(locale, choice.name) : choice.name) : sequenceLaneName(key, controls);
   };
   return <section className="sequence-authoring" ref={section} tabIndex={0} aria-label={tr(locale, 'Effect timeline')}
+    onKeyDownCapture={event => {
+      // Cancel before a containing modal handles Escape. Previews are local;
+      // the source and repeat settings are committed only on pointer release.
+      if (event.key === 'Escape' && drag.current) {
+        event.preventDefault(); event.stopPropagation();
+        drag.current = null; setPreview(null); setRepeatPreview(null);
+      }
+    }}
     onCopy={event => {
       if (disabled || !selected.size || (event.target as HTMLElement).closest('input,textarea,select,[contenteditable="true"]')) return;
       event.preventDefault(); event.stopPropagation();

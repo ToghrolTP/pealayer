@@ -16,6 +16,11 @@ widths, and has been exercised against live state rather than sample data.
 
 ## Current product ledger
 
+Repeat projections: native and both Web designers share default-enabled step
+and whole-effect ghosts, source selection, interval/length gestures, count
+menus and Escape cancellation. [Interaction guide and verification](verification/step-repeat-ghosts.md)
+distinguish disconnected authoring tests from deployment and hardware acceptance.
+
 Strip authoring: [native and Web strip designer](STRIP-DESIGNER.md) now share
 the PCController-owned layered program contract: ordered pixel segments,
 gradient/fade/blink/breathing patterns, easing, offline preview, publish and
