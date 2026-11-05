@@ -41,6 +41,14 @@ successful COM initialization calls.
 - Native paint regression checks that verification renders no `100%` text.
 - TypeScript checks and `npm run test:update` protect current-contract consumption
   and the indeterminate Web indicator. No estimated verification percentage exists.
+- Passed locally: 12 updater tests, two existing taskbar-state tests, the focused
+  progress/paint/serialization tests, TypeScript, Web update/status/responsive
+  guards, and host-compatible release packaging with libmpv smoke/PWA/resource checks.
+- The packaged isolated review process also passed an actual HTTP transfer/abort
+  check: two bytes of a declared four yielded `receiving`, `active: true`, 50%;
+  abort yielded `active: false`, null progress and retained transfer diagnostics.
+  No executable was submitted or installed; the test staging file was removed by
+  the abort API and the review process exited through its local Quit API.
 - Live Windows taskbar observation during the next installed-build update remains
   a separate acceptance gate. An older running executable cannot acquire this fix
   merely because it is downloading the corrected replacement.
