@@ -37,9 +37,22 @@ hidden measurement labels are excluded from accessibility navigation.
 Native regression tests compare actual painted thumb/marker positions and text
 origins at all five densities, light/dark themes, three scales, two font sizes and
 180/260/420-point control widths, through idle/hover/focus/disabled states. Pointer,
-keyboard and disabled input behavior are covered separately. Web guards and
-TypeScript checking pass. Installed-build capture and production deployment are
-separate gates; see the current PR checkpoint for those results.
+keyboard and disabled input behavior are covered separately. All 13 density-related
+Rust tests pass, alongside TypeScript, 53 Web parity guards and responsive guards.
+
+The packaged Windows build passed the host-specific libmpv smoke test and resource
+checks. The actual native Preferences window was opened and positioned through its
+API in an isolated, hardware-disconnected review profile, then captured using the
+read-only Windows capture helper. The capture confirms contained markers and
+centered capsule text; it is not a mock-up. No preference was changed for this capture.
+
+![Control density in the running native application](../screenshots/control-density-native-detail.png)
+
+[Full Preferences screenshot](../screenshots/control-density-native.png)
+
+Production activation is a separate gate: the canonical updater awaits the user's
+approved launch, and Cafe's configured SSH endpoint refused connection during this
+pass. These screenshots prove the review build, not installation on either host.
 
 ## Restored original density
 
