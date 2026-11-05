@@ -100,6 +100,47 @@ Executable SHA-256 values, in the same order:
 - Truthful connection: `8932eb4c9b4ac123808cf137234fcc8f468ab8a2ed1cbc7ca573efb00201735b`.
 - Capability era: `a2344ce36177c0bf350576f97defa8f8b7ab4df298ddc5078630655c60917744`.
 
+### Explicit media/screen FPS selection
+
+![Separate media and screen FPS mode](../screenshots/status-bar-dual-fps.png)
+
+`c1b15be070b300fdef9ca55d08227c8e4a1a1865`, PR #90: distinct mode icon,
+click-to-toggle and context-menu selection. The review profile selects Screen.
+This revision displays a dash after reactive idle when its live sample expires;
+that is an actual unavailable reading, not an invented zero or media frame rate.
+
+### First rearrangeable widget strip
+
+![First rearrangeable strip with workspace beside the other widgets](../screenshots/status-bar-reorderable.png)
+
+`a242919404d15815d1648e41c8b7333a343b719b`, PR #149: Screen is named
+explicitly; hardware has its semantic-colored icon; workspace joins the same
+left-hand strip. Drag ordering, operation progress, HOT and charts appear here.
+The screenshot shows the default ordering, not an artificially rearranged bar.
+
+### Stable slots and the workspace restored to the end
+
+![Fixed slots and trailing workspace](../screenshots/status-bar-fixed-slots.png)
+
+`3fb294e63cfd9d9d059d9260d4b4f053123ab3f7`, PR #150: strong monospace
+FPS, fixed numeric slots and workspace anchored right again. The preceding
+idle-rate repair keeps a real sample available; this capture reports 71.43 fps
+from the UI, not from a movie. FPS icon/text separation was refined immediately
+afterward in `634abe3`; the later compact captures include that refinement.
+The full hardware caption still fits in this version's 200-point slot.
+
+These three builds used unmodified tracked source and their lockfiles. Their
+local process API reported the exact revisions above and `git_dirty: false`.
+They used an isolated profile, Screen FPS mode, no media and no hardware
+connection. All three windows were 2002 × 1346 physical pixels; crops are
+2002 × 56. Each was closed through its Quit API before the next build.
+
+Executable SHA-256 values:
+
+- Dual FPS: `5960ba92c8da3a8710243d0dbae10d61c8774b623ad563d6230a8be1c9679d50`.
+- Rearrangeable: `d4fae27d8044c5d8be2ea9caefd985ea2be454b361a0325c5847cdb53740ee29`.
+- Fixed slots: `bbbe47874984205af9bdef65516a483535dc7c0e523694d4a0e046a55f5d18b9`.
+
 ### Late-stage comparison and repaired typography
 
 Compact two-sided widgets (`48fd59c`, PR #166), CraftUI surface styling
@@ -121,7 +162,7 @@ Use the existing detached comparison worktree and shared build cache, with its
 already-generated host configuration (do not add a duplicate Cargo config).
 Do not copy another machine's libmpv or publish executables/private profiles.
 
-The following genuine captures are published. The two historical rebuilds used
+The following four late-stage captures complete the gallery. These two historical rebuilds used
 unmodified tracked source and their locked dependencies; the process-local API
 confirmed the expected commit before capture. All windows were 2002 × 1346
 physical pixels; the public images are the bottom 56 pixels, unretouched.
@@ -133,7 +174,7 @@ physical pixels; the public images are the bottom 56 pixels, unretouched.
 | Native typography before repair | `d6feabf8c0956523aa5050bf978975cee8b6c431` | [Status bar](../screenshots/status-bar-native-before.png) | [PR #225](https://github.com/ToghrolTP/pealayer/pull/225#issuecomment-6647048566) |
 | Repaired native layout | `af070c1cd3161514ea035dc2da2ed0a46485f7f5` | [Status bar](../screenshots/status-bar-fixed.png) | PR #225 |
 
-The unused-space ellipsis is present in all three: the fixed slot predates the
+The unused-space ellipsis is present in all three late pre-repair captures: the fixed slot predates the
 native font work. FPS typeface/baseline and the trailing workspace presentation
 did change. No historical playback-rate or CPU claim is inferred from the idle
 FPS readings in these screenshots.

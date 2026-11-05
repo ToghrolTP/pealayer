@@ -82,6 +82,7 @@ as separate designs. Source identifiers belong here, not in the gallery titles.
 | `e8e6b96` | First call from the dock application's frame; earliest running bar captured in the gallery. Parent app had no status-bar draw call. |
 | `3b9670c` | Removes other invented runtime state and adds explicit configuration-path isolation used by later review builds. |
 | `eb2d41a` | Clears stale media FPS when changing files; avoids attributing the previous source's frame rate to the new one. |
+| `eb53fcd` | Active playback repaint pacing follows VSync/display refresh instead of a fixed cap; changes the observed UI rate, not the bar layout. |
 | `f138354` | Removes the corresponding Web footer connection-width ceiling. |
 
 Merges that touched the component (`6a888af`, `386076b`, `8bfa51a`,
