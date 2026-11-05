@@ -44,7 +44,24 @@ projection invariants. Caret containment is checked in light/dark at 100%, 125%
 and 200% display scale. Fixtures use a parent-selected isolated configuration
 and the memory-only hardware engine; they do not actuate outputs.
 
-Build, installed screenshot and deployment receipts will be recorded in the PR.
-Source tests do not establish a deployed runtime or interactive acceptance.
-Cafe-PC's configured SSH route refused the connection during this pass; this is
-an explicit remote-deployment blocker, not a successful installation.
+The full native library suite passed: **1,069 passed, zero failed, one ignored**,
+including all nine Dock tests. The Windows package built from clean source
+`ba0b121e742cbf94051889d97265c35c61f53c4b`; libmpv smoke, standalone utility smoke,
+native resources/quick-action icons and Web/PWA bundle integrity checks passed.
+Packaging skipped duplicate regression runs; the library result is a separate
+run, and no local Web behavioral suite is claimed for this native-only change.
+
+The isolated review process reported that exact clean commit and `egui_dock`
+through its APIs. Its real native window was captured read-only and inspected:
+the Phosphor carets, matching headers and panel boundaries are present. It has
+no media loaded and automatic hardware connection disabled. This is a genuine
+runtime screenshot, not a reconstruction or hardware/playing-state proof.
+
+![Restored egui Dock in the isolated native review app](../screenshots/egui-dock-restored.png)
+
+The canonical local updater launch was blocked by tool execution policy; the
+user was given the verified graceful-update command. Until API readback confirms
+the replacement, the running review build is not the installed production app.
+Cafe-PC's configured SSH route also refused the connection. Those are explicit
+deployment blockers, not successful installations. Live menu acceptance and
+remote delivery remain open; rendered interaction tests are not user acceptance.
