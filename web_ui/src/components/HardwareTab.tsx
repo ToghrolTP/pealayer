@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { hardwareAvailability, hardwareLabels, hardwareOutputsAvailable } from '../hardwareAvailability';
 import { reconcilePWMDrafts } from '../pwmDrafts';
 import { hardwareControlIdentity } from '../hardwareIdentity';
-import { defaultPwmCard, guardHardwarePointerStart, observedControlActive, powerActionSelected, pwmActionVisible, pwmIndicatorAction, pwmRowActions } from '../pwmCard';
+import { defaultPwmCard, guardHardwarePointerStart, observedControlActive, powerActionSelected, pwmAdjustment, pwmActionVisible, pwmIndicatorAction, pwmRowActions } from '../pwmCard';
 import { RfManager } from './RfManager';
 import { PwmPolicyEditor } from './PwmPolicyEditor';
 import { PublishingAuthority } from './PublishingAuthority';
@@ -81,7 +81,7 @@ const isStopAction = (action: HardwareAction) => action.verb.toLowerCase() === '
 
 const powerActionClass = (verb: string, selected: boolean) => {
   const power = verb.toLowerCase();
-  return selected && (power === 'on' || power === 'off')
+  return selected && ['on', 'off', 'up', 'down'].includes(power)
     ? `hardware-power-action hardware-power-action--${power}${selected ? ' is-selected' : ''}`
     : '';
 };
@@ -274,16 +274,36 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
     const value = pwmDrafts[control.key] ?? control.percent;
     const disabled = control.locked || !outputAvailable || Boolean(state.estop_active)
       || details?.pwm_available === false || control.percent == null;
+    const adjust = (sign: number, modifiers: {ctrlKey?:boolean;metaKey?:boolean;shiftKey?:boolean}) => {
+      if (disabled || value == null || control.channel == null) return;
+      const percent = Math.round(Math.max(0, Math.min(100, value + sign * pwmAdjustment(modifiers))) * 10) / 10;
+      pwmSentAt.current[control.key] = details?.pwm_revision ?? 0;
+      setPwmDrafts(current => ({...current, [control.key]: percent}));
+      sendCmd('hardware.pwm.set', {channel: control.channel, percent});
+    };
     const step = (verb: 'decrease' | 'increase') => {
       const action = control.actions.find(action => action.verb.toLowerCase() === verb);
-      return action && pwmActionVisible(pwmPreferences, verb) ? <Tooltip title={tr(locale, action.name || action.verb)}>
+      return pwmPreferences.show_step_buttons && action && pwmActionVisible(pwmPreferences, verb) ? <Tooltip title={tr(locale, action.name || action.verb)}>
         <Button aria-label={tr(locale, verb === 'decrease' ? 'Decrease' : 'Increase')}
           icon={verb === 'decrease' ? <MinusOutlined /> : <PlusOutlined />}
-          disabled={disabled} {...actionInputProps(control, action)} />
+          disabled={disabled} onClick={event => adjust(verb === 'decrease' ? -1 : 1, event)} />
       </Tooltip> : null;
     };
     return <div className="hardware-control__pwm"
-      onMouseDownCapture={guardHardwarePointerStart} onPointerDownCapture={guardHardwarePointerStart}>
+      onMouseDownCapture={guardHardwarePointerStart} onPointerDownCapture={guardHardwarePointerStart}
+      onKeyDownCapture={event => {
+        if (!disabled && ['ArrowLeft','ArrowRight','ArrowDown','ArrowUp'].includes(event.key)) {
+          event.preventDefault(); event.stopPropagation();
+          adjust(['ArrowLeft','ArrowDown'].includes(event.key) ? -1 : 1, event);
+        }
+      }} ref={element => {
+        if (!element) return;
+        const wheel = (event: WheelEvent) => {
+          if (!disabled && event.deltaY) { event.preventDefault(); event.stopPropagation(); adjust(-Math.sign(event.deltaY), event); }
+        };
+        element.addEventListener('wheel', wheel, {passive:false});
+        return () => element.removeEventListener('wheel', wheel);
+      }}>
       {step('decrease')}
       {value == null ? <span className="hardware-control__pwm-unknown">—</span> : <Slider
         min={0} max={100} step={0.1} value={value} disabled={disabled}
@@ -416,7 +436,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
                 <Button
                   disabled={control.locked || !outputAvailable || (state.estop_active && action.verb !== 'stop')}
                   danger={action.verb === 'stop'}
-                  className={powerActionClass(action.verb, powerActionSelected(action.verb, active))}
+                  className={powerActionClass(action.verb, powerActionSelected(action.verb, active, control.direction))}
                   type={powerActionSelected(action.verb, active) ? 'primary' : 'default'}
                   {...actionInputProps(control, action)}
                 >
@@ -623,7 +643,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
                     <Space.Compact className="channel-manager__live">
                       {liveActions.map((action) => {
                         const verb = action.verb.toLowerCase();
-                        const selected = powerActionSelected(verb, active);
+                        const selected = powerActionSelected(verb, active, control.direction);
                         const icon = /up/.test(verb) ? <ArrowUpOutlined /> : /down/.test(verb) ? <ArrowDownOutlined /> : verb === 'on' ? <ThunderboltOutlined /> : <PoweroffOutlined />;
                         const label = verb === 'on' ? tr(locale, 'On') : verb === 'off' ? tr(locale, 'Off') : action.name || action.verb;
                         return <Tooltip title={action.name || action.verb} key={action.id}><Button size="small" icon={icon} className={powerActionClass(verb, selected)} type={selected ? 'primary' : 'default'} danger={verb === 'stop'} disabled={control.locked || (state.estop_active && verb !== 'stop')} {...actionInputProps(control, action)}>{label}</Button></Tooltip>;
@@ -792,11 +812,13 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
       </div>
 
       <div className="strip-control__configuration">
+        {!!strip.color_orders?.length&&<label><span>{tr(locale,'Color order')}</span><Select value={strip.color_order} options={strip.color_orders.map(value=>({value,label:value}))} onChange={order=>{void sendCmd('hardware.strip.color_order',{order});}}/></label>}
         <label><span>{tr(locale, 'Pixel count')}</span><InputNumber min={strip.minimum_pixels} max={strip.maximum_pixels} value={pixels} onChange={(value) => setStripPixels(value)} /></label>
         <label><span>{tr(locale, 'Frames per second')}</span><InputNumber min={strip.minimum_fps} max={strip.maximum_fps} value={fps} onChange={(value) => setStripFps(value)} /></label>
         <Button onClick={() => sendCmd('hardware.strip.configure', { pixels })}>{tr(locale, 'Configure')}</Button>
       </div>
 
+      {!!strip.stream?.pixels&&<Space wrap><span>{strip.stream.frames_acked} {tr(locale,'ACKed frames')}</span><span>{strip.stream.frames_failed} {tr(locale,'Failed frames')}</span>{strip.stream.last_error&&<Typography.Text type="danger">{strip.stream.last_error}</Typography.Text>}</Space>}
       <Segmented
         block
         className="strip-control__modes"

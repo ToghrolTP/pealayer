@@ -886,6 +886,8 @@ pub fn run() -> eframe::Result {
                 application_shortcuts: loaded_config.application_shortcuts.clone(),
                 global_hardware_hotkeys_enabled: loaded_config.global_hardware_hotkeys_enabled,
                 hardware_key_bindings: loaded_config.hardware_key_bindings.clone(),
+                hardware_number_shortcuts_enabled: loaded_config.hardware_number_shortcuts_enabled,
+                hardware_sequence_matcher: Default::default(),
                 hardware_binding_dialog_channel: None,
                 hardware_binding_draft: None,
                 hardware_binding_capturing: false,

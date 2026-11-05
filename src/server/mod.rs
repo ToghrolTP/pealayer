@@ -517,9 +517,9 @@ fn local_process_payload(body: &[u8]) -> bool {
     // Invalid parameters still belong to this process and must receive its
     // validation error, not be sent to the authority by the gateway.
     if let Some(method) = value.get("method").and_then(serde_json::Value::as_str) {
-        return matches!(method, "pealayer.process.status" | "pealayer.process.connect" | "pealayer.process.quit" | "pealayer.preferences.navigate" | "navigate_preferences");
+        return matches!(method, "pealayer.process.status" | "pealayer.process.connect" | "pealayer.process.quit" | "pealayer.preferences.navigate" | "navigate_preferences" | "pealayer.about.open");
     }
-    if value.get("command").and_then(serde_json::Value::as_str) == Some("navigate_preferences") { return true; }
+    if matches!(value.get("command").and_then(serde_json::Value::as_str), Some("navigate_preferences" | "open_about")) { return true; }
     serde_json::from_value::<crate::platform::interop::InteropCommand>(value)
         .is_ok_and(|command| command.is_process_local())
 }
@@ -1861,6 +1861,24 @@ mod tests {
         }
     }
     use super::*;
+
+    #[test]
+    fn about_navigation_uses_local_rpc_and_ipc_without_board_or_authority_dispatch() {
+        use crate::platform::interop::parse_interop_request;
+        for tab in ["overview", "build", "board", "libraries"] {
+            let ipc = format!(r#"{{"command":"open_about","tab":"{tab}"}}"#);
+            let rpc = format!(r#"{{"method":"pealayer.about.open","params":{{"tab":"{tab}"}}}}"#);
+            assert_eq!(parse_interop_request(&ipc).unwrap().1, parse_interop_request(&rpc).unwrap().1);
+            assert!(local_process_payload(ipc.as_bytes()));
+            assert!(local_process_payload(rpc.as_bytes()));
+        }
+        for tab in [r#""invalid""#, "5", "null"] {
+            let rpc = format!(r#"{{"method":"pealayer.about.open","params":{{"tab":{tab}}}}}"#);
+            assert!(local_process_payload(rpc.as_bytes()));
+            assert!(parse_interop_request(&rpc).is_err());
+        }
+        assert!(parse_interop_request(r#"{"method":"pealayer.about.open","params":{}}"#).unwrap().1.is_process_local());
+    }
 
     #[test]
     fn preferences_navigation_is_validated_and_never_relayed_to_the_authority() {

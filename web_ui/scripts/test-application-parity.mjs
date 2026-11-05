@@ -38,6 +38,11 @@ const contracts = [
     && preferences.includes('onChangeComplete={position =>') && app.includes('controlDensityHeight(controlDensity)')
     && ['extra_compact', 'regular', 'comfortable', 'spacious'].every(choice => read('src/appearance.ts').includes(`case '${choice}': return`)),
     'Density uses discrete semantic choices, shared five-level sizing and release-only Web persistence'],
+  [preferences.includes('className="preference-choice-slider__measure"') && preferences.includes('aria-hidden="true"')
+    && css.includes('.preference-choice-slider__measure { visibility: hidden; pointer-events: none; }')
+    && css.includes('.preference-choice-slider:focus-within .preference-choice-slider__value { border-color: var(--accent); }')
+    && css.includes('grid-area: 1 / 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;'),
+    'Density value capsule reserves every translated label width, supports narrow layouts and has layout-stable focus styling'],
   [hardware.includes('disabled={!state.hardware_connected || !details.buzzer?.playing}'), 'Buzzer stop follows authoritative activity, not connection alone'],
   [studio.includes('<ControlBar') && remote.includes('<ControlBar') && controlBar.includes('<VolumeControl') && volumeControl.includes("sendCmd('set_volume'") && controlBar.includes("sendCmd('set_mute'") && volumeControl.includes('aria-label={tr(locale, \'Volume\')}'), 'Simple and NLE share accessible horizontal volume and mute controls using session commands'],
   [css.includes('.control-bar { width: 100%; min-width: 0; display: flex; flex-wrap: wrap;') && css.includes('.control-bar__volume.media-volume') && controlBar.indexOf('{group(true)}') < controlBar.indexOf('<VolumeControl'), 'the monitor wraps bounded groups with trailing selectors before volume'],

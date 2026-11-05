@@ -191,6 +191,10 @@ pub enum InteropCommand {
         #[serde(flatten)]
         navigation: crate::preferences_contract::PreferencesNavigation,
     },
+    OpenAbout {
+        #[serde(default)]
+        tab: crate::ui::about::AboutTab,
+    },
     OpenMediaInformation,
     OpenMediaFolder,
     EditConfiguration,
@@ -377,6 +381,9 @@ pub enum InteropCommand {
     ConfigureAddressableStrip {
         pixels: u16,
     },
+    SetAddressableStripColorOrder { order:String },
+    RestoreControllerEffectExamples,
+    OpenStripDesigner { reference:Option<String> },
     FillAddressableStrip {
         red: u8,
         green: u8,
@@ -547,7 +554,7 @@ fn valid_timeline_track_key(value: &str) -> bool {
 
 impl InteropCommand {
     pub fn is_process_local(&self) -> bool {
-        matches!(self, Self::QuitLocal | Self::GetProcessStatus | Self::ConnectPeer { .. } | Self::InspectAuthoring { .. } | Self::NavigatePreferences { .. })
+        matches!(self, Self::QuitLocal | Self::GetProcessStatus | Self::ConnectPeer { .. } | Self::InspectAuthoring { .. } | Self::NavigatePreferences { .. } | Self::OpenAbout { .. })
     }
 
     pub fn query_result(&self) -> Option<Value> {
@@ -626,6 +633,7 @@ impl InteropCommand {
             Self::ConfigureAddressableStrip { pixels } if *pixels == 0 => {
                 Err("addressable strip pixel count must be greater than zero".to_string())
             }
+            Self::SetAddressableStripColorOrder {order} if !matches!(order.as_str(),"RGB"|"RBG"|"GRB"|"GBR"|"BRG"|"BGR") => Err("Invalid strip color order".into()),
             Self::SetAddressableStripPixel { pixel, pixels, .. }
                 if *pixels == 0 || *pixel >= *pixels =>
             {
@@ -873,6 +881,7 @@ pub fn command_catalog() -> Value {
         "messaging": { "contract": "pealayer.messages.v1", "snapshot": "/api/messages", "subscription": "/ws", "publish": "pealayer.toast.show", "dismiss": "pealayer.toast.dismiss", "invoke": "pealayer.toast.invoke", "max_actions": 4, "default_action": "bound action ID", "state": "pealayer.messages.state", "surfaces": ["egui", "web", "terminal"], "persistent_timeout_ms": 0 },
         "remote_folders": { "browse": "pealayer.remote.browse", "select": "pealayer.remote.select", "sort": "pealayer.remote.sort", "close": "pealayer.remote.close", "state": "/api/remote/state", "thumbnail": "/api/remote/thumbnail", "subscription": "/ws" },
         "preferences_navigation": { "method": "pealayer.preferences.navigate", "command": "navigate_preferences", "section": "optional schema section ID", "scroll_y": "absolute logical pixel offset, clamped to content", "scope": "local native process, including its Preferences helper", "accepted": "queued, not confirmation that a frame has rendered" },
+        "about_navigation": { "method": "pealayer.about.open", "command": "open_about", "tab": ["overview", "build", "board", "libraries"], "scope": "local native process, never relayed to authority", "accepted": "queued, not confirmation that a frame has rendered" },
         "commands": [
             "open", "play", "pause", "toggle_pause", "stop", "next", "previous",
             "browse_remote", "select_remote", "sort_remote", "close_remote_browser",
@@ -881,6 +890,7 @@ pub fn command_catalog() -> Value {
             "set_rate", "set_fullscreen", "toggle_fullscreen", "activate", "minimize",
             "maximize", "restore", "open_preferences", "navigate_preferences", "open_media_information", "open_media_folder", "edit_configuration", "open_board_information", "show_message", "show_osd", "hide_osd", "set_workspace",
             "create_workspace_profile", "update_workspace_profile", "delete_workspace_profile",
+            "open_about",
             "move_workspace_profile", "timeline.track.update", "timeline.track.manage", "update_config",
             "reload_config", "add_effect_cue", "update_effect_cue", "remove_effect_cue", "set_recording",
             "get_status", "publish_toast", "dismiss_toast", "invoke_toast_action", "quit", "controller_effect_cue.add", "controller_effect.play",
@@ -894,6 +904,7 @@ pub fn command_catalog() -> Value {
             "send_addressable_strip_frame", "start_addressable_strip_rainbow",
             "start_addressable_strip_effect", "stop_addressable_strip",
             "refresh_addressable_strip_status", "clear_addressable_strip",
+            "hardware.strip.color_order", "controller_effect.restore_examples", "controller_effect.strip.edit",
             "press_front_panel_key", "board_information", "rf_control", "open_rf_manager"
         ],
         "json_rpc_prefix": "pealayer",
@@ -1618,7 +1629,7 @@ impl WebControllerEffectDraft {
                         "lighting effect requires a safe id and a program object".to_string()
                     );
                 }
-                Ok(())
+                crate::four_d::strip_program::validate_definition(&self.program,self.default_pixels,self.default_fps,self.duration_ms)
             }
             _ => Err("effect kind must be sequence, strip-stream or audio".to_string()),
         }
@@ -1869,6 +1880,12 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         }
         "navigate_preferences" | "pealayer.preferences.navigate" => Some(InteropCommand::NavigatePreferences {
             navigation: serde_json::from_value(request.params.clone()).map_err(|error| error.to_string())?,
+        }),
+        "pealayer.about.open" => Some(InteropCommand::OpenAbout {
+            tab: match request.params.get("tab") {
+                Some(value) => serde_json::from_value(value.clone()).map_err(|error| error.to_string())?,
+                None => crate::ui::about::AboutTab::default(),
+            },
         }),
         "media_information" | "open_media_information" | "pealayer.media.information" => {
             Some(InteropCommand::OpenMediaInformation)
@@ -2292,6 +2309,9 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
                 .ok_or_else(|| "missing valid addressable strip pixel count".to_string())?;
             Some(InteropCommand::ConfigureAddressableStrip { pixels })
         }
+        "hardware.strip.color_order" => Some(InteropCommand::SetAddressableStripColorOrder {order:request.params.get("order").and_then(Value::as_str).ok_or("Missing strip color order")?.to_owned()}),
+        "controller_effect.restore_examples" => Some(InteropCommand::RestoreControllerEffectExamples),
+        "controller_effect.strip.edit" => Some(InteropCommand::OpenStripDesigner {reference:request.params.get("reference").and_then(Value::as_str).map(str::to_owned)}),
         "hardware.strip.fill" | "pealayer.hardware.strip.fill" => {
             let byte = |name: &str| {
                 request
@@ -3896,7 +3916,7 @@ mod tests {
         ));
 
         let save: JsonRpcRequest = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","id":3,"method":"controller_effect.save","params":{"id":"lighting-primary","name":"Lighting primary","icon":"lightning","category":"Lighting","kind":"strip-stream","program":{"primitive":"police"},"default_fps":30,"duration_ms":5000,"default_pixels":100,"is_new":true}}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"controller_effect.save","params":{"id":"lighting-primary","name":"Lighting primary","icon":"lightning","category":"Lighting","kind":"strip-stream","program":{"primitive":"alternating-zones","period_ms":1000,"step_ms":100,"swap_after_steps":5},"default_fps":30,"duration_ms":5000,"default_pixels":100,"is_new":true}}"#,
         )
         .unwrap();
         assert!(matches!(
@@ -3904,8 +3924,14 @@ mod tests {
             Some(InteropCommand::SaveControllerEffect { effect })
                 if effect.id == "lighting-primary"
                     && effect.icon == "lightning"
-                    && effect.program["primitive"] == "police"
+                    && effect.program["primitive"] == "alternating-zones"
         ));
+
+        // Demo names are user effects, not executable primitive IDs. Keep the
+        // public API strict rather than restoring the removed built-in alias.
+        let mut invalid_program = save.clone();
+        invalid_program.params["program"] = serde_json::json!({"primitive":"police"});
+        assert!(command_from_json_rpc(&invalid_program).is_err());
 
         let invalid: JsonRpcRequest = serde_json::from_str(
             r#"{"jsonrpc":"2.0","id":4,"method":"controller_effect.play","params":{"reference":"effect; delete all"}}"#,

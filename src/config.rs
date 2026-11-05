@@ -21,6 +21,8 @@ pub enum PwmIndicatorAction {
 pub struct PwmCardPreferences {
     pub show_on: bool,
     pub show_off: bool,
+    pub show_toggle: bool,
+    pub show_step_buttons: bool,
     pub show_increase: bool,
     pub show_decrease: bool,
     pub show_other: bool,
@@ -29,7 +31,7 @@ pub struct PwmCardPreferences {
 
 impl Default for PwmCardPreferences {
     fn default() -> Self {
-        Self { show_on: true, show_off: true, show_increase: true,
+        Self { show_on: true, show_off: true, show_toggle: true, show_step_buttons: false, show_increase: true,
             show_decrease: true, show_other: true,
             indicator_action: PwmIndicatorAction::Toggle }
     }
@@ -40,6 +42,7 @@ impl PwmCardPreferences {
         match verb.to_ascii_lowercase().as_str() {
             "on" => self.show_on,
             "off" => self.show_off,
+            "toggle" => self.show_toggle,
             "increase" => self.show_increase,
             "decrease" => self.show_decrease,
             _ => self.show_other,
@@ -637,6 +640,7 @@ pub struct HardwareKeyBinding {
     pub id: String,
     pub channel_key: String,
     pub chord: KeyChord,
+    pub then: Vec<KeyChord>,
     pub action: HardwareKeyBindingAction,
     pub global: bool,
     pub enabled: bool,
@@ -648,10 +652,18 @@ impl Default for HardwareKeyBinding {
             id: uuid::Uuid::new_v4().to_string(),
             channel_key: String::new(),
             chord: KeyChord::default(),
+            then: Vec::new(),
             action: HardwareKeyBindingAction::default(),
             global: false,
             enabled: true,
         }
+    }
+}
+
+impl HardwareKeyBinding {
+    pub fn display_shortcut(&self) -> String {
+        std::iter::once(&self.chord).chain(&self.then)
+            .map(KeyChord::display_name).collect::<Vec<_>>().join(" → ")
     }
 }
 
@@ -1160,6 +1172,7 @@ pub struct AppConfig {
     /// Allows bindings explicitly marked global to be registered with the OS
     /// and invoked while another application has focus.
     pub global_hardware_hotkeys_enabled: bool,
+    pub hardware_number_shortcuts_enabled: bool,
     pub hardware_key_bindings: Vec<HardwareKeyBinding>,
     pub show_estop_control: bool,
     pub confirm_estop_release: bool,
@@ -1354,6 +1367,7 @@ impl Default for AppConfig {
             media_keys_background_enabled: true,
             application_shortcuts: crate::application_shortcuts::ApplicationShortcuts::default(),
             global_hardware_hotkeys_enabled: true,
+            hardware_number_shortcuts_enabled: true,
             hardware_key_bindings: Vec::new(),
             show_estop_control: true,
             confirm_estop_release: true,
@@ -2351,6 +2365,16 @@ impl AppConfig {
         }
         let mut binding_ids = std::collections::BTreeSet::new();
         for binding in &self.hardware_key_bindings {
+            if binding.then.len() > 3 {
+                return Err("Hardware shortcuts support at most four steps".into());
+            }
+            if !binding.then.is_empty() && (binding.global || matches!(binding.action, HardwareKeyBindingAction::Hold { .. })) {
+                return Err("Multi-step hardware shortcuts are app-local and cannot hold outputs".into());
+            }
+            for chord in &binding.then {
+                chord.native_hotkey_string().parse::<global_hotkey::hotkey::HotKey>()
+                    .map_err(|error| format!("hardware binding {}: {error}", binding.id))?;
+            }
             if binding.id.trim().is_empty() || !binding_ids.insert(binding.id.as_str()) {
                 return Err("hardware_key_bindings contains an empty or duplicate ID".to_string());
             }
@@ -3087,6 +3111,7 @@ mod tests {
             },
             global: true,
             enabled: true,
+            then: Vec::new(),
         };
         let config = AppConfig {
             hardware_key_bindings: vec![binding.clone()],

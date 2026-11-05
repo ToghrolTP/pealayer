@@ -759,7 +759,7 @@ impl ControllerPushTarget {
         if matches!(method, "controller.state" | "controller.event")
             && matches!(
                 params.get("kind").and_then(serde_json::Value::as_str),
-                Some("peripherals.changed" | "melodies.changed" | "output")
+                Some("peripherals.changed" | "melodies.changed" | "output" | "strip-order")
             )
         {
             // Output start/finish edges carry no typed buzzer snapshot. Pull

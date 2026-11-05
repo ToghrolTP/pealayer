@@ -321,9 +321,13 @@ body {
 .server-file-picker__files .ant-table-row { cursor: pointer; }
 .preference-control { min-width: 0; min-height: 56px; padding: 10px 0; display: grid; grid-template-columns: minmax(170px, .8fr) minmax(180px, 1.2fr); align-items: center; gap: 12px; border-bottom: 1px solid color-mix(in srgb, var(--line) 64%, transparent); color: var(--text); }
 .preference-control:last-child { border-bottom: 0; }
-.preference-choice-slider { min-width: 0; display: grid; grid-template-columns: minmax(48px, 1fr) 12ch; align-items: center; gap: 12px; }
-.preference-choice-slider .ant-slider { margin: 0 6px; }
-.preference-choice-slider__value { font-size: 13px; text-align: start; }
+.preference-choice-slider { min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 10px 12px; }
+.preference-choice-slider .ant-slider { flex: 1 1 112px; min-width: 64px; margin: 0 6px; }
+.preference-choice-slider__value { display: inline-grid; flex: 0 1 auto; max-width: 100%; min-width: 0; min-height: var(--control-height, 24px); align-items: center; padding: 0 12px; border: 1px solid var(--line); border-radius: 6px; background: var(--surface-2); color: var(--text); font-size: 13px; line-height: min(20px, calc(var(--control-height, 24px) - 2px)); font-weight: 600; text-align: center; }
+.preference-choice-slider__measure, .preference-choice-slider__caption { grid-area: 1 / 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.preference-choice-slider__measure { visibility: hidden; pointer-events: none; }
+.preference-choice-slider:focus-within .preference-choice-slider__value { border-color: var(--accent); }
+.preference-choice-slider[data-disabled='true'] .preference-choice-slider__value { opacity: .45; }
 .preference-control--boolean { grid-template-columns: minmax(0, 1fr) auto; }
 .preference-control__label { min-width: 0; display: flex; align-items: center; justify-content: flex-start; gap: 7px; font-size: 13px; font-weight: 600; text-align: start; }
 .preference-control__label .anticon { flex: 0 0 16px; width: 16px; color: var(--accent); text-align: center; }
@@ -767,6 +771,8 @@ body {
 .hardware-control__actions .ant-btn { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hardware-power-action--on { --hardware-power-tone: var(--green); }
 .hardware-power-action--off { --hardware-power-tone: var(--red); }
+.hardware-power-action--up { --hardware-power-tone: var(--orange); }
+.hardware-power-action--down { --hardware-power-tone: var(--blue); }
 .hardware-power-action.ant-btn:not(:disabled) { color: var(--hardware-power-tone); border-color: color-mix(in srgb, var(--hardware-power-tone) 65%, var(--line)); background: color-mix(in srgb, var(--hardware-power-tone) 7%, var(--surface-2)); box-shadow: none; }
 .hardware-power-action.ant-btn.is-selected:not(:disabled) { background: color-mix(in srgb, var(--hardware-power-tone) 20%, var(--surface-2)); }
 .hardware-power-action.ant-btn:not(:disabled):hover { border-color: var(--hardware-power-tone); background: color-mix(in srgb, var(--hardware-power-tone) 14%, var(--surface-2)); }
@@ -1099,11 +1105,13 @@ html[data-motion="disabled"] *, html[data-motion="disabled"] *::before, html[dat
 .statusbar-primary, .statusbar-end { display: flex; align-items: center; gap: 3px; min-width: 24px; overflow-x: auto; overflow-y: hidden; scrollbar-width: none; }
 .statusbar-primary { flex: 1 1 0; }
 .statusbar-end { flex: 0 1 auto; margin-inline-start: auto; max-width: calc(100% - 48px); }
-.app-statusbar.has-dividers .status-widget + .status-widget { border-inline-start: 1px solid var(--line); }
+.status-widget-divider { flex: 0 0 1px; width: 1px; height: 12px; align-self: center; background: var(--line); pointer-events: none; }
 .statusbar-primary::-webkit-scrollbar { display: none; }
 .app-statusbar .status-widget { flex: 0 0 auto; position: relative; height: 22px; padding-inline: 3px; cursor: grab; min-width: 0; display: inline-flex; align-items: center; gap: 5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .app-statusbar .status-widget--fps { width: 88px; }
-.app-statusbar .status-widget--connection { width: 148px; font-weight: 600; }
+.app-statusbar .status-widget--connection { flex: 0 1 auto; width: max-content; min-width: 148px; max-width: 100%; font-weight: 600; }
+.status-connection-caption { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.status-widget--connection > .anticon { flex: 0 0 auto; }
 .app-statusbar .status-widget--voltage, .app-statusbar .status-widget--current { width: 58px; justify-content: flex-end; }
 .app-statusbar .status-widget--temperature { width: 64px; justify-content: flex-end; }
 .app-statusbar .status-widget--timeline { width: 148px; }

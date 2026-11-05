@@ -833,6 +833,8 @@ pub struct PealayerApp {
     pub(crate) application_shortcuts: crate::application_shortcuts::ApplicationShortcuts,
     pub(crate) global_hardware_hotkeys_enabled: bool,
     pub(crate) hardware_key_bindings: Vec<crate::config::HardwareKeyBinding>,
+    pub(crate) hardware_number_shortcuts_enabled: bool,
+    pub(crate) hardware_sequence_matcher: crate::hardware_shortcuts::SequenceMatcher,
     pub(crate) hardware_binding_dialog_channel: Option<String>,
     pub(crate) hardware_binding_draft: Option<crate::config::HardwareKeyBinding>,
     pub(crate) hardware_binding_capturing: bool,
@@ -2697,6 +2699,10 @@ impl PealayerApp {
         else {
             return;
         };
+        self.dispatch_hardware_binding_value(binding, pressed);
+    }
+
+    fn dispatch_hardware_binding_value(&mut self, binding: crate::config::HardwareKeyBinding, pressed: bool) {
         if pressed {
             if !self.active_hardware_bindings.insert(binding.id.clone()) {
                 return;
@@ -2746,9 +2752,16 @@ impl PealayerApp {
                 off_action_id,
             } => {
                 if pressed {
-                    let active = control.as_ref().is_some_and(|control| {
-                        crate::ui::hardware_control::channel_is_active(&capabilities, control)
-                    });
+                    let Some(control) = control.as_ref() else { return; };
+                    if let Some(toggle) = control.actions.iter().find(|action| action.verb.eq_ignore_ascii_case("toggle")) {
+                        invoke(self, &toggle.id);
+                        return;
+                    }
+                    let active = crate::ui::layout::hardware_action_selected(&capabilities, control, "on");
+                    if !active && !crate::ui::layout::hardware_action_selected(&capabilities, control, "off") {
+                        self.set_osd(self.tr("Keyboard shortcut ignored: channel state is unknown"));
+                        return;
+                    }
                     invoke(
                         self,
                         if active {
@@ -2811,15 +2824,44 @@ impl PealayerApp {
         }
 
         let events = ctx.input(|input| input.events.clone());
-        let bindings = self
+        let allow_local = allow_local && ctx.input(|input| input.focused);
+        if !allow_local || self.hardware_binding_capturing {
+            self.hardware_sequence_matcher = Default::default();
+        }
+        if !events.iter().any(|event| matches!(event, egui::Event::Key { .. })) {
+            return;
+        }
+        let mut bindings = self
             .hardware_key_bindings
             .iter()
             .filter(|binding| binding.enabled && !binding.global)
             .cloned()
             .collect::<Vec<_>>();
+        if self.hardware_number_shortcuts_enabled && let Some(capabilities) = self.advertised_hardware() {
+            for binding in crate::hardware_shortcuts::number_shortcuts(&capabilities) {
+                if !bindings.iter().any(|user| user.chord == binding.chord && (user.then.is_empty() || user.then == binding.then)) {
+                    bindings.push(binding);
+                }
+            }
+        }
+        let now = ctx.input(|input| input.time);
+        if !allow_local || self.hardware_binding_capturing {
+            self.hardware_sequence_matcher = Default::default();
+        }
         for event in &events {
             let mut matched = false;
             for binding in &bindings {
+                if !binding.then.is_empty() {
+                    if allow_local && !self.hardware_binding_capturing {
+                        let (consumed, complete) = self.hardware_sequence_matcher.advance(binding, event, now);
+                        matched |= consumed;
+                        if complete {
+                            self.dispatch_hardware_binding_value(binding.clone(), true);
+                            self.dispatch_hardware_binding_value(binding.clone(), false);
+                        }
+                    }
+                    continue;
+                }
                 if let Some(pressed) =
                     crate::hardware_shortcuts::event_matches_chord(event, &binding.chord)
                     && (!pressed || (allow_local && !self.hardware_binding_capturing))
@@ -3101,19 +3143,15 @@ impl PealayerApp {
             sample.rate = self.playback_rate.clamp(0.25, 4.0);
             }
         }
-        let taskbar_state = crate::platform::windows::compute_taskbar_state_with_error(
+        let taskbar_state = crate::platform::windows::compute_taskbar_state_with_update(
             self.playback_time,
             self.duration,
             self.is_paused,
             self.show_error.is_some(),
+            &crate::update::manager().status(),
         );
-        if self.last_taskbar_state != Some(taskbar_state) {
-            crate::platform::windows::update_windows_taskbar_state_ext(
-                self.playback_time,
-                self.duration,
-                self.is_paused,
-                self.show_error.is_some(),
-            );
+        if self.last_taskbar_state != Some(taskbar_state)
+            && crate::platform::windows::apply_windows_taskbar_state(taskbar_state) {
             self.last_taskbar_state = Some(taskbar_state);
         }
 
@@ -3479,6 +3517,12 @@ impl PealayerApp {
         self.request_hardware_effect_command("strip-config", format!("strip config {pixels}"))
     }
 
+    pub(crate) fn set_addressable_strip_color_order(&mut self,order:&str)->Result<(),String>{
+        let strip=self.addressable_strip_contract("")?;
+        if !strip.color_orders.iter().any(|v|v==order) || !order.bytes().all(|b|b.is_ascii_uppercase()) {return Err("Color order is not advertised by this controller".into());}
+        self.request_hardware_effect_command("strip-order",format!("strip order {order}"))
+    }
+
     pub(crate) fn fill_addressable_strip(
         &mut self,
         red: u8,
@@ -3663,6 +3707,8 @@ impl PealayerApp {
             }
             let program: serde_json::Value = serde_json::from_str(&draft.program_json)
                 .map_err(|error| format!("Invalid lighting program JSON: {error}"))?;
+            crate::four_d::strip_program::validate_definition(&program,draft.default_pixels,draft.default_fps,draft.duration_ms)?;
+            if let Some(strip)=self.advertised_hardware().and_then(|h|h.strip_control){Self::validate_strip_settings(&strip,draft.default_pixels,Some(draft.default_fps))?;}
             serde_json::json!({
                 "reference": format!("effect:{id}"),
                 "id": id,
@@ -4215,7 +4261,7 @@ impl PealayerApp {
                             self.engine_handle.request_catalog_refresh();
                         }
                         "strip-config" | "strip-fill" | "strip-frame" | "strip-pixel"
-                        | "strip-status" => {
+                        | "strip-status" | "strip-order" | "effect-examples" => {
                             self.engine_handle.request_catalog_refresh();
                         }
                         _ => {}
@@ -4524,6 +4570,12 @@ impl PealayerApp {
             }
             InteropCommand::NavigatePreferences { navigation } => {
                 crate::ui::preferences::navigate(self, ctx, navigation);
+            }
+            InteropCommand::OpenAbout { tab } => {
+                self.about_tab = tab.index();
+                self.show_about_dialog = true;
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             }
             InteropCommand::OpenMediaInformation => {
                 self.open_or_focus_tab(crate::ui::layout::PealayerTab::MediaInspector);
@@ -5151,6 +5203,16 @@ impl PealayerApp {
                     self.set_osd(error);
                     return;
                 }
+            }
+            InteropCommand::SetAddressableStripColorOrder {order} => {if let Err(error)=self.set_addressable_strip_color_order(&order){self.set_osd(error);}}
+            InteropCommand::RestoreControllerEffectExamples => {if let Err(error)=self.request_hardware_effect_command("effect-examples","effect restore-examples".into()){self.set_osd(error);}}
+            InteropCommand::OpenStripDesigner {reference} => {
+                if crate::ui::effects_library::unsaved_designer(self,ctx)!=Some(false) || self.hardware_effect_authoring.pending_operation.is_some() || self.hardware_effect_authoring.active {
+                    self.set_osd("Finish the current effect edit or recording first".to_string());
+                } else if let Some(reference)=reference {
+                    let effect=self.advertised_hardware().and_then(|h|h.strip_effects.into_iter().find(|e|format!("effect:{}",e.id)==reference));
+                    if let Some(effect)=effect {crate::ui::effects_library::select_strip(self,&effect);self.show_effect_library_editor=true;}else{self.set_osd("Strip effect is no longer advertised".to_string());}
+                } else {crate::ui::effects_library::start_new_lighting(self,&[]);self.show_effect_library_editor=true;}
             }
             InteropCommand::FillAddressableStrip {
                 red,
@@ -7423,6 +7485,7 @@ impl PealayerApp {
         cfg.application_shortcuts = self.application_shortcuts.clone();
         cfg.global_hardware_hotkeys_enabled = self.global_hardware_hotkeys_enabled;
         cfg.hardware_key_bindings = self.hardware_key_bindings.clone();
+        cfg.hardware_number_shortcuts_enabled = self.hardware_number_shortcuts_enabled;
         cfg.show_estop_control = self.show_estop_control;
         cfg.confirm_estop_release = self.confirm_estop_release;
         cfg.single_instance = self.single_instance;
@@ -7808,6 +7871,8 @@ impl PealayerApp {
         self.application_shortcuts = config.application_shortcuts.clone();
         self.global_hardware_hotkeys_enabled = config.global_hardware_hotkeys_enabled;
         self.hardware_key_bindings = config.hardware_key_bindings.clone();
+        self.hardware_number_shortcuts_enabled = config.hardware_number_shortcuts_enabled;
+        self.hardware_sequence_matcher = Default::default();
         self.show_estop_control = config.show_estop_control;
         self.confirm_estop_release = config.confirm_estop_release;
         self.single_instance = config.single_instance;
@@ -9598,6 +9663,7 @@ fn web_hardware_details(
             "modes": strip.modes,
             "running": strip.running,
             "active_name": strip.active_name,
+            "color_order":strip.color_order,"color_orders":strip.color_orders,"stream":strip.stream,
         })
     });
     serde_json::json!({
@@ -10031,6 +10097,8 @@ impl Default for PealayerApp {
             application_shortcuts: crate::application_shortcuts::ApplicationShortcuts::default(),
             global_hardware_hotkeys_enabled: true,
             hardware_key_bindings: Vec::new(),
+            hardware_number_shortcuts_enabled: true,
+            hardware_sequence_matcher: Default::default(),
             hardware_binding_dialog_channel: None,
             hardware_binding_draft: None,
             hardware_binding_capturing: false,

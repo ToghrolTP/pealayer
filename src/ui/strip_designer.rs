@@ -4,62 +4,7 @@ use crate::app::ControllerEffectDraft;
 use eframe::egui;
 use serde_json::{Value, json};
 
-pub(crate) fn valid(program: &Value) -> bool {
-    if !program["dim_intensity"].is_null()
-        && !program["dim_intensity"].as_u64().is_some_and(|v| v <= 255)
-    {
-        return false;
-    }
-    let Some(period) = program["period_ms"]
-        .as_u64()
-        .filter(|v| (50..=3_600_000).contains(v))
-    else {
-        return false;
-    };
-    for color in ["primary", "secondary"] {
-        if !program[color].is_null()
-            && ["red", "green", "blue"]
-                .iter()
-                .any(|key| !program[color][key].as_u64().is_some_and(|v| v <= 255))
-        {
-            return false;
-        }
-    }
-    match program["primitive"].as_str() {
-        Some("alternating-zones") => {
-            program["step_ms"]
-                .as_u64()
-                .is_some_and(|v| v >= 10 && v <= period)
-                && program["swap_after_steps"]
-                    .as_u64()
-                    .is_some_and(|v| (1..=1024).contains(&v))
-        }
-        Some("converging-points") => {
-            program["tail_pixels"].is_null()
-                || program["tail_pixels"].as_u64().is_some_and(|v| v <= 100)
-        }
-        Some("envelope") => {
-            let Some(points) = program["envelope"]
-                .as_array()
-                .filter(|p| (2..=256).contains(&p.len()))
-            else {
-                return false;
-            };
-            let mut previous = None;
-            points.iter().all(|p| {
-                let Some(at) = p["at_ms"].as_u64() else {
-                    return false;
-                };
-                let ok = at < period
-                    && previous.is_none_or(|v| at > v)
-                    && p["intensity"].as_u64().is_some_and(|v| v <= 255);
-                previous = Some(at);
-                ok
-            })
-        }
-        _ => false,
-    }
-}
+pub(crate) use crate::four_d::strip_program::valid;
 
 fn preset(index: usize) -> Value {
     let red = json!({"red":255,"green":0,"blue":0});
@@ -87,6 +32,16 @@ fn color(program: &Value, name: &str, intensity: u64) -> egui::Color32 {
 }
 
 pub(crate) fn preview(program: &Value, count: usize, at: u64) -> Vec<egui::Color32> {
+    if program["primitive"] == "layers" {
+        return serde_json::from_value::<crate::four_d::strip_program::Program>(program.clone())
+            .map(|p| {
+                p.frame(count, at)
+                    .iter()
+                    .map(|c| egui::Color32::from_rgb(c.red, c.green, c.blue))
+                    .collect()
+            })
+            .unwrap_or_default();
+    }
     if !valid(program) || !(1..=100).contains(&count) {
         return Vec::new();
     }
@@ -157,28 +112,51 @@ pub(crate) fn preview(program: &Value, count: usize, at: u64) -> Vec<egui::Color
 }
 
 pub(crate) fn draw(ui: &mut egui::Ui, draft: &mut ControllerEffectDraft) {
+    if serde_json::from_str::<Value>(&draft.program_json).is_ok_and(|v| v["primitive"] == "layers")
+    {
+        super::strip_layers::draw(ui, draft);
+        return;
+    }
+    if ui
+        .button(format!(
+            "{} {}",
+            crate::ui::icons::PLUS,
+            tr(ui, "Segmented design")
+        ))
+        .clicked()
+    {
+        draft.program_json =
+            serde_json::to_string_pretty(&crate::four_d::strip_program::Program::new(
+                draft.default_pixels.clamp(1, 100) as usize,
+            ))
+            .unwrap();
+        return;
+    }
     let parsed = serde_json::from_str::<Value>(&draft.program_json);
     let mut program = parsed.unwrap_or(Value::Null);
     let writable = valid(&program) || draft.program_json.trim().is_empty();
     let mut changed = false;
     ui.add_enabled_ui(writable, |ui| {
-        ui.horizontal_wrapped(|ui| {
-            for (index, name) in [
-                "Police red / blue",
-                "White thunder",
-                "Converging red dots",
-                "Fade",
-                "Pulse",
-            ]
-            .iter()
-            .enumerate()
-            {
-                if ui.button(tr(ui, name)).clicked() {
-                    program = preset(index);
-                    changed = true;
+        crate::ui::dropdown::ComboBox::from_id_salt("strip-examples")
+            .selected_text(tr(ui, "Examples…"))
+            .show_ui(ui, |ui| {
+                for (index, name) in [
+                    "Police red / blue",
+                    "White thunder",
+                    "Converging red dots",
+                    "Fade",
+                    "Pulse",
+                ]
+                .iter()
+                .enumerate()
+                {
+                    if ui.selectable_label(false, tr(ui, name)).clicked() {
+                        program = preset(index);
+                        changed = true;
+                        ui.close();
+                    }
                 }
-            }
-        });
+            });
     });
     if !valid(&program) {
         ui.colored_label(
@@ -310,10 +288,45 @@ pub(crate) fn draw(ui: &mut egui::Ui, draft: &mut ControllerEffectDraft) {
         return;
     }
     ui.separator();
-    ui.label(tr(ui, "Preview"));
-    let id = ui.id().with("strip-preview-phase");
+    ui.label(tr(ui, "Offline preview"));
+    let id = ui.scope_id().with("strip-preview-phase");
     let mut phase = ui.data(|d| d.get_temp::<u64>(id)).unwrap_or(0);
-    ui.add(egui::Slider::new(&mut phase, 0..=999).show_value(false));
+    let playing_id = id.with("playing");
+    let clock_id = id.with("clock");
+    let mut playing = ui.data(|d| d.get_temp::<bool>(playing_id)).unwrap_or(false);
+    let now = ui.input(|i| i.time);
+    let previous = ui.data(|d| d.get_temp::<f64>(clock_id)).unwrap_or(now);
+    if playing {
+        phase = (phase
+            + ((now - previous).clamp(0., 0.25) * 1_000_000.
+                / program["period_ms"].as_u64().unwrap() as f64) as u64)
+            % 1000;
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_millis(33));
+    }
+    ui.horizontal(|ui| {
+        if ui
+            .button(if playing {
+                crate::ui::icons::PAUSE
+            } else {
+                crate::ui::icons::PLAY
+            })
+            .on_hover_text(tr(ui, "Animate preview without sending to hardware"))
+            .clicked()
+        {
+            playing = !playing;
+        }
+        if ui
+            .add(egui::Slider::new(&mut phase, 0..=999).show_value(false))
+            .changed()
+        {
+            playing = false;
+        }
+    });
+    ui.data_mut(|d| {
+        d.insert_temp(playing_id, playing);
+        d.insert_temp(clock_id, now);
+    });
     ui.data_mut(|d| d.insert_temp(id, phase));
     let colors = preview(
         &program,

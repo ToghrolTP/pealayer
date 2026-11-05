@@ -71,7 +71,7 @@ fn draft_can_publish(draft: &ControllerEffectDraft) -> bool {
     let name = draft.name.trim();
     !name.is_empty() && name.chars().count() <= 64 && !name.chars().any(char::is_control)
         && if draft.kind == "sequence" { repeated_sequence_duration_ms(&draft.steps,draft.repeat_count,draft.repeat_interval_ms).is_ok() }
-        else if draft.kind == "strip-stream" { serde_json::from_str::<serde_json::Value>(&draft.program_json).is_ok_and(|program| super::strip_designer::valid(&program)) }
+        else if draft.kind == "strip-stream" { serde_json::from_str::<serde_json::Value>(&draft.program_json).is_ok_and(|program| crate::four_d::strip_program::validate_definition(&program,draft.default_pixels,draft.default_fps,draft.duration_ms).is_ok()) }
         else { serde_json::from_str::<serde_json::Value>(&draft.program_json).is_ok_and(|program| program.is_object()) }
 }
 
@@ -489,18 +489,16 @@ pub(crate) fn empty_library_context_menu(
     response
 }
 
-fn start_new_lighting(
+pub(crate) fn start_new_lighting(
     app: &mut PealayerApp,
-    effects: &[crate::four_d::controller::HardwareStripEffect],
+    _effects: &[crate::four_d::controller::HardwareStripEffect],
 ) {
-    if let Some(template) = effects.first() {
-        select_strip(app, template);
-        app.effect_library_draft.reference.clear();
-        app.effect_library_draft.id.clear();
-        app.effect_library_draft.name.clear();
-    } else {
-        app.effect_library_draft = ControllerEffectDraft::default();
+    app.effect_library_draft = ControllerEffectDraft::default();
+    if let Some(strip)=app.advertised_hardware().and_then(|h|h.strip_control){
+        app.effect_library_draft.default_pixels=strip.default_pixels;
+        app.effect_library_draft.default_fps=strip.default_fps;
     }
+    app.effect_library_draft.program_json=serde_json::to_string_pretty(&crate::four_d::strip_program::Program::new(app.effect_library_draft.default_pixels as usize)).unwrap();
     app.effect_library_selection = None;
     app.effect_library_draft.is_new = true;
 }
@@ -3181,6 +3179,119 @@ fn draw_capture_selection(app: &mut PealayerApp, ui: &mut egui::Ui) {
     app.hardware_effect_authoring.show_capture_selection = open;
 }
 
+fn draw_designer_actions(app: &mut PealayerApp, ui: &mut egui::Ui, capture_locked: bool, board_connected: bool) -> bool {
+    let mut discard_requested = false;
+    let reference = app.effect_library_draft.reference.clone();
+    let saved = !app.effect_library_draft.is_new;
+    let published = app.controller_effect_is_advertised(&reference);
+    let controller_reachable = app
+        .engine_handle
+        .is_connected
+        .load(std::sync::atomic::Ordering::Relaxed);
+    let phase = app.controller_effect_preview_phase(&reference);
+    let stop_preview = matches!(phase, crate::app::ControllerEffectPreviewPhase::Stop);
+    let publishable = draft_can_publish(&app.effect_library_draft);
+    let runnable = draft_can_run(&app.effect_library_draft);
+    ui.add_enabled_ui(!capture_locked, |ui| { ui.horizontal_wrapped(|ui| {
+        if ui.button(format!("{} {}", crate::ui::icons::X, app.tr("Discard"))).clicked() {
+            discard_designer_draft(app, ui.ctx()); discard_requested = true;
+        }
+        if ui
+            .add_enabled(!controller_reachable || publishable, egui::Button::new(if controller_reachable {
+                format!(
+                    "{} {}",
+                    crate::ui::icons::FLOPPY_DISK,
+                    app.tr("Publish")
+                )
+            } else {
+                format!(
+                    "{} {}",
+                    crate::ui::icons::FLOPPY_DISK,
+                    app.tr("Keep offline draft")
+                )
+            }))
+            .clicked()
+        {
+            if controller_reachable {
+                if let Err(error) = app.save_controller_effect() {
+                    app.set_osd(error);
+                } else { mark_designer_saved(app, ui.ctx());
+                }
+            } else {
+                app.save_config();
+                app.hardware_effect_authoring.status =
+                    "Offline working copy saved".to_string();
+            }
+        }
+        if ui
+            .add_enabled(
+                controller_reachable && app.hardware_effect_authoring.pending_operation.is_none()
+                    && (stop_preview || (runnable && !app.estop_active && board_connected)),
+                egui::Button::new(format!(
+                    "{} {}",
+                    if stop_preview { crate::ui::icons::STOP_CIRCLE } else { crate::ui::icons::PLAY },
+                    app.tr(if stop_preview { "Stop" } else { "Publish & Run" })
+                )),
+            )
+            .clicked()
+        {
+            if stop_preview {
+                if let Err(error) = app.stop_controller_effect(&reference) { app.set_osd(error); }
+            } else if let Err(error) = app.save_controller_effect() {
+                app.set_osd(error);
+            } else {
+                // Play only after the exact edited definition is acknowledged.
+                mark_designer_saved(app, ui.ctx());
+                app.hardware_effect_authoring.run_after_publish = true;
+            }
+        }
+        if ui
+            .add_enabled(
+                saved,
+                egui::Button::new(format!(
+                    "{} {}",
+                    crate::ui::icons::COPY,
+                    app.tr("Duplicate")
+                )),
+            )
+            .clicked()
+        {
+            duplicate_selected(app);
+        }
+        if ui
+            .add_enabled(
+                published,
+                egui::Button::new(format!(
+                    "{} {}",
+                    crate::ui::icons::TRASH,
+                    app.tr("Delete")
+                )),
+            )
+            .clicked()
+        {
+            if let Err(error) = app.delete_controller_effect() {
+                app.set_osd(error);
+            }
+        }
+    });
+    });
+    if saved && !published {
+        ui.label(
+            egui::RichText::new(
+                designer_tr(ui, "Publish & Run saves this draft before playing it; Delete requires a published effect."),
+            )
+            .small()
+            .weak(),
+        );
+    }
+    if !app.hardware_effect_authoring.status.is_empty() {
+        ui.add_space(8.0);
+        designer_status(ui, &app.hardware_effect_authoring.status);
+    }
+    discard_requested
+}
+
+
 pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let _timing = crate::performance::span(crate::performance::Phase::Designer);
     ui.data_mut(|data| data.insert_temp(egui::Id::new("effects-designer-language"), app.language));
@@ -3273,6 +3384,9 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             .clicked()
                         {
                             start_new_lighting(app, &strips);
+                        }
+                        if ui.button(format!("{} {}",crate::ui::icons::SPARKLE,app.tr("Add example effects"))).clicked(){
+                            app.apply_interop_command(&ui.ctx().clone(),crate::platform::interop::InteropCommand::RestoreControllerEffectExamples,"Examples");
                         }
                     });
                     ui.add_space(8.0);
@@ -3395,6 +3509,13 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 egui::vec2(ui.available_width(), height),
                 egui::Layout::top_down(egui::Align::Min),
                 |ui| {
+                    let footer = egui::Panel::bottom("controller_effect_editor_actions")
+                        .resizable(false)
+                        .show_inside(ui, |ui| {
+                            discard_requested |= draw_designer_actions(app, ui, capture_locked,
+                                capabilities.as_ref().is_some_and(|hardware| hardware.board_connected));
+                        });
+                    ui.data_mut(|data| data.insert_temp(egui::Id::unique("effects-designer-actions-rect"), footer.response.rect));
                     egui::ScrollArea::vertical()
                         .id_salt("controller_effect_editor_details")
                         .auto_shrink([false, false])
@@ -3480,13 +3601,13 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                         ui.label(&labels.7);
                                         ui.add(
                                             egui::DragValue::new(&mut draft.default_fps)
-                                                .range(1..=30),
+                                                .range(capabilities.as_ref().and_then(|h|h.strip_control.as_ref()).map_or(1..=120,|s|s.minimum_fps..=s.maximum_fps)),
                                         );
                                         ui.end_row();
                                         ui.label(&labels.8);
                                         ui.add(
                                             egui::DragValue::new(&mut draft.default_pixels)
-                                                .range(1..=100),
+                                                .range(capabilities.as_ref().and_then(|h|h.strip_control.as_ref()).map_or(1..=100,|s|s.minimum_pixels..=s.maximum_pixels)),
                                         );
                                         ui.end_row();
                                     }
@@ -3669,114 +3790,6 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     .desired_rows(3),
                                 );
                                 });
-                            }
-                            ui.add_space(12.0);
-                            let reference = app.effect_library_draft.reference.clone();
-                            let saved = !app.effect_library_draft.is_new;
-                            let published = app.controller_effect_is_advertised(&reference);
-                            let controller_reachable = app
-                                .engine_handle
-                                .is_connected
-                                .load(std::sync::atomic::Ordering::Relaxed);
-                            let phase = app.controller_effect_preview_phase(&reference);
-                            let stop_preview = matches!(phase, crate::app::ControllerEffectPreviewPhase::Stop);
-                            let publishable = draft_can_publish(&app.effect_library_draft);
-                            let runnable = draft_can_run(&app.effect_library_draft);
-                            ui.add_enabled_ui(!capture_locked, |ui| { ui.horizontal_wrapped(|ui| {
-                                if ui.button(format!("{} {}", crate::ui::icons::X, app.tr("Discard"))).clicked() {
-                                    discard_designer_draft(app, ui.ctx()); discard_requested = true;
-                                }
-                                if ui
-                                    .add_enabled(!controller_reachable || publishable, egui::Button::new(if controller_reachable {
-                                        format!(
-                                            "{} {}",
-                                            crate::ui::icons::FLOPPY_DISK,
-                                            app.tr("Publish")
-                                        )
-                                    } else {
-                                        format!(
-                                            "{} {}",
-                                            crate::ui::icons::FLOPPY_DISK,
-                                            app.tr("Keep offline draft")
-                                        )
-                                    }))
-                                    .clicked()
-                                {
-                                    if controller_reachable {
-                                        if let Err(error) = app.save_controller_effect() {
-                                            app.set_osd(error);
-                                        } else { mark_designer_saved(app, ui.ctx());
-                                        }
-                                    } else {
-                                        app.save_config();
-                                        app.hardware_effect_authoring.status =
-                                            "Offline working copy saved".to_string();
-                                    }
-                                }
-                                if ui
-                                    .add_enabled(
-                                        controller_reachable && app.hardware_effect_authoring.pending_operation.is_none()
-                                            && (stop_preview || (runnable && !app.estop_active && capabilities.as_ref().is_some_and(|hardware| hardware.board_connected))),
-                                        egui::Button::new(format!(
-                                            "{} {}",
-                                            if stop_preview { crate::ui::icons::STOP_CIRCLE } else { crate::ui::icons::PLAY },
-                                            app.tr(if stop_preview { "Stop" } else { "Publish & Run" })
-                                        )),
-                                    )
-                                    .clicked()
-                                {
-                                    if stop_preview {
-                                        if let Err(error) = app.stop_controller_effect(&reference) { app.set_osd(error); }
-                                    } else if let Err(error) = app.save_controller_effect() {
-                                        app.set_osd(error);
-                                    } else {
-                                        // Play only after the exact edited definition is acknowledged.
-                                        mark_designer_saved(app, ui.ctx());
-                                        app.hardware_effect_authoring.run_after_publish = true;
-                                    }
-                                }
-                                if ui
-                                    .add_enabled(
-                                        saved,
-                                        egui::Button::new(format!(
-                                            "{} {}",
-                                            crate::ui::icons::COPY,
-                                            app.tr("Duplicate")
-                                        )),
-                                    )
-                                    .clicked()
-                                {
-                                    duplicate_selected(app);
-                                }
-                                if ui
-                                    .add_enabled(
-                                        published,
-                                        egui::Button::new(format!(
-                                            "{} {}",
-                                            crate::ui::icons::TRASH,
-                                            app.tr("Delete")
-                                        )),
-                                    )
-                                    .clicked()
-                                {
-                                    if let Err(error) = app.delete_controller_effect() {
-                                        app.set_osd(error);
-                                    }
-                                }
-                            });
-                            });
-                            if saved && !published {
-                                ui.label(
-                                    egui::RichText::new(
-                                        designer_tr(ui, "Publish & Run saves this draft before playing it; Delete requires a published effect."),
-                                    )
-                                    .small()
-                                    .weak(),
-                                );
-                            }
-                            if !app.hardware_effect_authoring.status.is_empty() {
-                                ui.add_space(8.0);
-                                designer_status(ui, &app.hardware_effect_authoring.status);
                             }
                         });
                 },
@@ -4501,8 +4514,32 @@ mod tests {
         start_new_lighting(&mut app, &[]);
         assert!(app.effect_library_draft.is_new);
         assert_eq!(app.effect_library_draft.kind, "strip-stream");
-        assert!(app.effect_library_draft.program_json.is_empty());
+        let program: crate::four_d::strip_program::Program =
+            serde_json::from_str(&app.effect_library_draft.program_json).unwrap();
+        assert!(program.validate(app.effect_library_draft.default_pixels as usize).is_ok());
         assert!(app.effect_library_selection.is_none());
+    }
+
+    #[test]
+    fn strip_designer_actions_remain_inside_short_viewport() {
+        for (width,height) in [(900.,620.),(1280.,800.)] {
+            let context=egui::Context::default();
+            let mut app=PealayerApp::default();
+            app.engine_handle=crate::four_d::engine::memory_only_test_engine();
+            start_new_lighting(&mut app,&[]);
+            app.show_effect_library_editor=true;
+            for _ in 0..2 {
+                let mut output=context.run_ui(egui::RawInput{
+                    screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(width,height))),
+                    ..Default::default()
+                },|ui|draw_editor(&mut app,ui));
+                output.textures_delta.clear();
+            }
+            let footer=context.data(|data|data.get_temp::<egui::Rect>(egui::Id::unique("effects-designer-actions-rect"))).unwrap();
+            assert!(footer.is_finite() && footer.top()>=0. && footer.bottom()<=height,
+                "actions escaped {width}x{height}: {footer:?}");
+            assert!(footer.height()>16.);
+        }
     }
 
     #[test]
