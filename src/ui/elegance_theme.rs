@@ -36,8 +36,13 @@ pub fn sync_elegance_theme(ctx: &Context) {
     }
     let theme = from_style(&style, source);
     if elegance::Theme::current(ctx) != theme {
+        // Elegance installs into both egui themes. Restoring only the active
+        // one corrupts the inactive palette when the system theme next flips.
+        let light = ctx.style_of(eframe::egui::Theme::Light);
+        let dark = ctx.style_of(eframe::egui::Theme::Dark);
         theme.install(ctx);
-        ctx.set_global_style(style.clone());
+        ctx.set_style_of(eframe::egui::Theme::Light, light);
+        ctx.set_style_of(eframe::egui::Theme::Dark, dark);
     }
     ctx.data_mut(|data| {
         data.insert_temp(
