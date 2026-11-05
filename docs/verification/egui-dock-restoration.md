@@ -117,3 +117,41 @@ The overflow fixture checks actual paint clipping and the absence of a visible
 close-all left rule, including hover. Existing pointer tests continue to cover
 menus, collapse/reveal, hidden-panel restoration, floating layers and modal
 ownership. These are rendered fixtures, not an installed screenshot claim.
+
+## New native visual verification
+
+The full native suite passed: **1,106 passed, one ignored**. Clean-source package
+`5532e2776804032e45b5738ee0fee063a08b5d28` passed Web/PWA bundle integrity,
+Windows resources, all seven quick-action icon checks, libmpv smoke and the
+standalone downloader resource/headless smoke. Packaging skipped duplicate
+native/Web regression runs; the native suite above was run separately. No
+new Web behavior change is claimed for this native-only adapter correction.
+
+Executable SHA-256:
+`afe5ea4a5085eb3dc7260f31cd5f616bf395eba6c05c13403548c2217e8120db`.
+The isolated review API reported that exact source, clean authoring state, no
+playback or hardware connection and disabled automatic hardware connection.
+The minimized review window was restored through the application's own API;
+captures use the maintained read-only Win32 utility. Theme/renderer changes
+were made through the isolated profile's config API, not the regular instance.
+
+These are fresh native captures from the same executable, inspected after
+capture. They are not mockups, old images relabelled as new, or hardware proof.
+
+### egui Dock: dark
+
+![Compact egui Dock headers, aligned controls and no close-all rule](../screenshots/egui-dock-header-parity.png)
+
+### egui Dock: light
+
+![The corrected egui Dock header in the light palette](../screenshots/egui-dock-header-parity-light.png)
+
+### CraftUI: control capture
+
+![Unchanged CraftUI header and panel styling in the same review executable](../screenshots/craft-ui-header-parity-control.png)
+
+The regular application's config still reports CraftUI with System theme. Its
+preceding repeat-projection update is verified installed. This Dock package's
+local updater launch was policy-blocked; the user has been given the same
+graceful updater path. Installed replacement requires manifest readback, not
+only these review captures. Cafe deployment remains user-deferred while offline.
