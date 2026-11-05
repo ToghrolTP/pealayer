@@ -96,6 +96,9 @@ windows = { version = "0.62", features = [
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSFont", "objc2-core-foundation"] }
+
 [profile.dev]
 # Routine builds reuse dependencies without large symbol files or incremental snapshots.
 # Opt in to symbols only for a specific diagnosis; see LOCAL-WORKSPACE-HYGIENE.md.

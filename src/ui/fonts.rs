@@ -198,10 +198,22 @@ fn desktop_name(mono: bool) -> Option<String> {
     ))
 }
 
-#[cfg(not(any(windows, target_os = "linux")))]
+#[cfg(target_os = "macos")]
+fn desktop_name(mono: bool) -> Option<String> {
+    // AppKit owns the user's fixed-pitch choice. Fontique's generic monospace
+    // fallback is Courier; that is not the macOS preferred fixed-pitch face.
+    let font = if mono {
+        objc2_app_kit::NSFont::userFixedPitchFontOfSize(0.0)?
+    } else {
+        objc2_app_kit::NSFont::systemFontOfSize(0.0)
+    };
+    font.familyName().map(|name| name.to_string())
+}
+
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 fn desktop_name(_mono: bool) -> Option<String> {
     None
-} // CoreText generic UI/fixed-width families.
+}
 
 #[cfg(any(target_os = "linux", test))]
 fn without_point_size(text: &str) -> String {

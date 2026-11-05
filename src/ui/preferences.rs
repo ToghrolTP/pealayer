@@ -1749,6 +1749,7 @@ fn preference_control_icon(name: &str) -> &'static str {
         "gauge" => GAUGE,
         "film-strip" => FILM_STRIP,
         "palette" => PALETTE,
+        "tabs" => TABS,
         "swatches" => SWATCHES,
         "translate" => TRANSLATE,
         "frame-corners" => FRAME_CORNERS,
@@ -2217,6 +2218,12 @@ mod tests {
             .split_once("fn draw_contract_section(")
             .unwrap().0;
         assert_eq!(editor.matches("outcome.request_save()").count(), 2);
+    }
+
+    #[test]
+    fn workspace_interface_uses_its_tabs_icon_not_the_generic_fallback() {
+        assert_eq!(preference_control_icon("tabs"), egui_phosphor::regular::TABS);
+        assert_ne!(preference_control_icon("tabs"), egui_phosphor::regular::GEAR);
     }
 
     #[test]

@@ -17,7 +17,9 @@ discarding a draft. Narrow windows use the compact section selector. The rail
 scrolls independently in short windows. PakarController's DEVICE, CONNECTIONS
 and CONTROLLERS labels were already present in Device Settings; they had not
 been removed. The companion change makes grouping configurable there and in
-Pakar's application Preferences.
+Pakar's application Preferences. Both applications offer both workspace
+presentations; Pakar keeps egui Dock as its default. Its adapter pins CraftUI's
+egui 0.36 line to avoid mixing incompatible egui runtimes.
 
 Typography provides independent **UI font** and **Monospace font** choices.
 System font is the default for both; Choose installed font opens a searchable
@@ -31,7 +33,8 @@ otherwise it retains native CSS fallbacks rather than downloading private fonts.
 - Monospace previously defaulted to bundled Hack. System selection relied on
   hard-coded files, including one Linux monospace path, rather than the DE choice.
 - Fontique now resolves installed fonts via DirectWrite, CoreText or fontconfig.
-  Windows uses NONCLIENTMETRICS for its UI family. Linux checks the active
+  Windows uses NONCLIENTMETRICS for its UI family; AppKit supplies the macOS UI
+  and user fixed-pitch families (not Fontique's generic Courier fallback). Linux checks the active
   GNOME/Cinnamon/MATE, KDE or XFCE preference first, with bounded helper calls,
   then native generic fallback. TTC face indices are retained. No copied font
   files, downloaded font packages or replacement application theme are needed.
@@ -54,8 +57,12 @@ unchanged accordion/fixed split preservation, monospace advances, icon fallback,
 preview/discard and semantic preference icons. Web build and appearance tests
 are recorded with the publishing checkpoint.
 
-Native Windows screenshots, package identity and deployment receipts belong in
-the final checkpoint; compiler/model checks alone are not visual acceptance.
+An isolated Windows review instance rendered the actual CraftUI workspace and
+grouped Preferences. Read-only Win32 captures were inspected for nonblank native
+content, legible labels, consistent grouped navigation and footer placement.
+Private captures: `verification/craftui-preferences.png` (workspace) and
+`verification/grouped-preferences.png` under the canonical program root.
+These are review-build visuals, not a production deployment receipt.
 Linux DE and macOS font resolution require native desktop verification.
 Cafe's configured SSH endpoint refused connections during this pass. No hardware
 outputs were changed. Pakar's build remains gated by stale donor comparisons;
