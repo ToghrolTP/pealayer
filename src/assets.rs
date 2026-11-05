@@ -991,8 +991,11 @@ mod tests {
         app.asset_import.reviews.push_back(review);app.publish_asset_snapshot();
         for width in [390.0,768.0,1440.0] {
             let ctx=egui::Context::default();
+            // Centered popup/scroll geometry settles after the sizing pass.
+            for _ in 0..2 {let mut output=ctx.run_ui(egui::RawInput{screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(width,850.0))),..Default::default()},|_|app.draw_asset_review(&ctx));output.textures_delta.clear();}
             let mut output=ctx.run_ui(egui::RawInput{screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(width,850.0))),..Default::default()},|_|app.draw_asset_review(&ctx));
-            assert!(output.shapes.iter().any(|shape|matches!(&shape.shape,egui::epaint::Shape::Text(t) if t.galley.job.text.contains("pwm.0 · 35.000%"))));
+            let text=output.shapes.iter().filter_map(|shape|if let egui::epaint::Shape::Text(t)=&shape.shape{Some(t.galley.job.text.clone())}else{None}).collect::<Vec<_>>();
+            assert!(text.iter().any(|t|t.contains("pwm.0 · 35.000%")),"Missing actual scene values: {text:?}");
             assert_eq!(app.timeline,original);assert_eq!(app.playback_time,14.429);assert!(app.asset_import.awaiting_review());
             output.textures_delta.clear();
         }

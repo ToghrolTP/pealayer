@@ -556,6 +556,10 @@ fn valid_timeline_track_key(value: &str) -> bool {
 
 impl InteropCommand {
     pub fn is_process_local(&self) -> bool {
+        // A native sender owns unuploaded paths. Let its local importer
+        // transfer them; owner-stamped browser receipts already belong to the
+        // authority and follow normal session forwarding instead.
+        matches!(self,Self::ImportAssets{request} if request.owner_id.is_none()) ||
         matches!(self, Self::QuitLocal | Self::GetProcessStatus | Self::ConnectPeer { .. } | Self::InspectAuthoring { .. } | Self::NavigatePreferences { .. } | Self::OpenAbout { .. })
     }
 

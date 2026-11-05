@@ -4382,7 +4382,7 @@ impl PealayerApp {
         // that operates the session goes through the authority's unified engine.
         if let Some(client)=crate::peer::client() && !crate::peer::mirroring()
             && !command.is_process_local()
-            && !matches!(&command,InteropCommand::ImportAssets{..}|InteropCommand::QuitLocal|InteropCommand::OpenPreferences|InteropCommand::OpenMediaInformation|InteropCommand::OpenBoardInformation{..}|InteropCommand::OpenRfManager|InteropCommand::Activate|InteropCommand::Minimize|InteropCommand::Maximize|InteropCommand::Restore|InteropCommand::SetFullscreen{..}|InteropCommand::ToggleFullscreen|InteropCommand::GetStatus) {
+            && !matches!(&command,InteropCommand::QuitLocal|InteropCommand::OpenPreferences|InteropCommand::OpenMediaInformation|InteropCommand::OpenBoardInformation{..}|InteropCommand::OpenRfManager|InteropCommand::Activate|InteropCommand::Minimize|InteropCommand::Maximize|InteropCommand::Restore|InteropCommand::SetFullscreen{..}|InteropCommand::ToggleFullscreen|InteropCommand::GetStatus) {
             if matches!(&command,InteropCommand::OpenMediaFolder){crate::ui::peer_browser::open(ctx,crate::ui::peer_browser::Purpose::Media,None);return;}
             if let Err(error)=serde_json::to_value(&command).map_err(|error|error.to_string()).and_then(|value|client.queue("/api/player/command",value)){self.show_error=Some(error);}
             return;

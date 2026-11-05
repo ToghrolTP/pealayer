@@ -1867,6 +1867,8 @@ fn mime_for_path(path: &std::path::Path) -> &'static str {
 mod tests {
     #[test]
     fn remote_consumer_updates_stay_local_while_session_commands_relay() {
+        assert!(local_process_payload(br#"{"command":"import_assets","request":{"paths":["client.wav"],"destination":{"surface":"library"}}}"#));
+        assert!(!local_process_payload(br#"{"command":"import_assets","request":{"paths":["server.wav"],"owner_id":"00000000-0000-4000-8000-000000000001","destination":{"surface":"library"}}}"#));
         for target in ["/api/update/manifest", "/api/update/begin", "/api/update/chunk?id=one", "/api/update/finish", "/api/update/status", "/api/update/from-url", "/api/client/status"] {
             assert!(!super::peer_relay_route(target), "{target}");
         }
