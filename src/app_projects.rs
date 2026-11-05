@@ -15,9 +15,15 @@ pub(crate) struct ProjectSession {
     pub restore_scroll:Option<[f32;2]>,
     pub pending_media:Option<Media>,
     pending_commit:Option<(Project,PathBuf,bool,egui::Context)>,
+    rollback_media:Option<Media>,
+    pending_started:Option<std::time::Instant>,
+    pending_external_revision:Option<u64>,
     pub pending_discovery:Option<(String,Vec<PathBuf>)>,
     pub bypass_discovery:bool,
     pub discovery_error:Option<String>,
+    pub scene_operation:Option<crate::scene_apply::Operation>,
+    scene_ticket:Option<crate::scene_apply::Ticket>,
+    scene_deadline:Option<std::time::Instant>,
 }
 
 impl PealayerApp {
@@ -33,15 +39,18 @@ impl PealayerApp {
         Project {title:self.project.title.clone(),notes:self.project.notes.clone(),load:Components::default(),
             scene:self.project.scene.clone().or_else(||self.advertised_hardware().filter(|c|c.board_connected).map(|c|Scene::capture(&c))).map(Part::embedded),
             timeline:Some(Part::embedded(self.capture_timeline_document())),
-            media:self.current_video_path.as_ref().map(|path|Part::embedded(Media {target:path.to_string_lossy().into_owned(),position_ms:milliseconds(self.playback_time),duration_ms:milliseconds(self.duration),paused:self.is_paused,
-                speed:self.mpv.get_property::<f64>("speed").unwrap_or(1.0),video_track:track(&self.mpv,"vid"),audio_track:track(&self.mpv,"aid"),subtitle_track:track(&self.mpv,"sid"),information:self.media_file_info.clone()})),
+            media:self.capture_project_media().map(Part::embedded),
             workspace:Some(Part::embedded(self.capture_workspace_profile(ctx)))}
+    }
+    fn capture_project_media(&self)->Option<Media> {
+        self.current_video_path.as_ref().map(|path|Media {target:path.to_string_lossy().into_owned(),position_ms:milliseconds(self.playback_time),duration_ms:milliseconds(self.duration),paused:self.is_paused,
+            speed:self.mpv.get_property::<f64>("speed").unwrap_or(1.0),video_track:track(&self.mpv,"vid"),audio_track:track(&self.mpv,"aid"),subtitle_track:track(&self.mpv,"sid"),information:self.media_file_info.clone()})
     }
     pub(crate) fn document_request(&mut self,ctx:&egui::Context,request:Request)->Result<Value,String> {
         if crate::peer::active() { return Err("Document operations belong to the connected Pealayer authority".into()); }
         match request {
             Request::Validate {document}=>{document.validate()?;Ok(json!({"document":document}))},
-            Request::Snapshot=>Ok(json!({"document":Document::Project(self.capture_project(ctx)),"path":self.project.path,"staged_scene":self.project.scene})),
+            Request::Snapshot=>Ok(json!({"document":Document::Project(self.capture_project(ctx)),"path":self.project.path,"staged_scene":self.project.scene,"scene_operation":self.scene_report()})),
             Request::CaptureScene=>{
                 let cap=self.advertised_hardware().filter(|c|c.board_connected).ok_or("No connected board has sampled channel values")?;
                 let scene=Scene::capture(&cap);scene.validate()?;
@@ -67,10 +76,17 @@ impl PealayerApp {
                 self.stage_document(ctx,document,Path::new(&path),components,discard_unsaved)
             },
             Request::Stage {document,base_path,components,discard_unsaved}=>self.stage_document(ctx,document,Path::new(&base_path),components,discard_unsaved),
-            Request::ApplyScene {scene,confirm}=>{
+            Request::ApplyScene {scene,selected,confirm}=>{
                 if !confirm {return Err("Explicit confirmation is required to apply scene outputs".into());}
-                self.apply_scene(&scene)?;
-                Ok(json!({"queued":true,"channels":scene.channels.len(),"hardware_acknowledged":false}))
+                self.apply_scene(&scene,&selected)?;
+                self.poll_scene_operation();
+                Ok(json!({"scene_operation":self.scene_report()}))
+            },
+            Request::SceneStatus=>Ok(json!({"scene_operation":self.scene_report()})),
+            Request::CancelScene {operation_id}=>{
+                let operation=self.project.scene_operation.as_mut().filter(|op|op.id()==operation_id).ok_or("Scene operation no longer exists")?;
+                operation.cancel(std::time::Instant::now());
+                Ok(json!({"scene_operation":self.scene_report()}))
             },
         }
     }
@@ -100,13 +116,19 @@ impl PealayerApp {
             self.engine_handle.is_playing.store(false,std::sync::atomic::Ordering::Release);
         }
         if let Some(Part::Embedded {value:media})=&loaded.media {
+            let previous_media=self.capture_project_media();
+            let external_revision=crate::mpv::external::active().then(||crate::mpv::external::status().loaded_revision);
             // Supply start with loadfile, before decode. FileLoaded reasserts the
             // exact target (including positions below one second) and track selection.
             let options=format!("pause=yes,start={},speed={}",media.position_ms as f64/1000.0,media.speed);
             self.mpv.command("loadfile",&[&media.target,"replace","-1",&options]).map_err(|e|format!("Load project media: {e}"))?;
+            self.show_error=None;
             self.reset_project_media_state();
             self.current_video_path=Some(PathBuf::from(&media.target));self.last_media_target=self.current_video_path.clone();
             self.pending_resume_position=None; self.project.pending_media=Some(media.clone());
+            self.project.rollback_media=previous_media;
+            self.project.pending_started=Some(std::time::Instant::now());
+            self.project.pending_external_revision=external_revision;
             self.playback_time=media.position_ms as f64/1000.0;self.duration=0.0;self.is_seekable=false;self.is_eof=false;
             self.media_file_info=crate::media_info::MediaFileInfo::default();
             self.project.pending_commit=Some((loaded,path.to_path_buf(),is_project,ctx.clone()));
@@ -159,6 +181,11 @@ impl PealayerApp {
     }
     pub(crate) fn finish_project_media_load(&mut self) {
         let Some(expected)=self.project.pending_media.as_ref() else {return;};
+        if let Some(before)=self.project.pending_external_revision {
+            let status=crate::mpv::external::status();
+            if !status.connected || status.loaded_revision<=before {return;}
+            self.is_seekable=status.properties.get("seekable").and_then(Value::as_bool).unwrap_or(false);
+        }
         // Queued FileLoaded from the preceding decoder must not commit this
         // project's authoring state. A different explicit Open cancels it too.
         let current=self.mpv.get_property::<String>("path").unwrap_or_default();
@@ -178,13 +205,36 @@ impl PealayerApp {
             Ok::<(),String>(())
         })();
         self.is_paused=true;
-        if let Err(e)=result {self.project.pending_commit=None;self.show_error=Some(format!("Project media restoration: {e}. The existing timeline and workspace were kept."));}
-        else if let Some((loaded,path,is_project,ctx))=self.project.pending_commit.take() {
-            self.add_recent_media(PathBuf::from(&media.target));
-            if let Err(error)=self.commit_project(&ctx,loaded,&path,is_project) {self.show_error=Some(error);}
+        if let Err(e)=result {self.fail_project_media_load(&e);}
+        else {
+            self.project.pending_started=None;self.project.rollback_media=None;self.project.pending_external_revision=None;
+            if let Some((loaded,path,is_project,ctx))=self.project.pending_commit.take() {
+                self.add_recent_media(PathBuf::from(&media.target));
+                if let Err(error)=self.commit_project(&ctx,loaded,&path,is_project) {self.show_error=Some(error);}
+            }
         }
     }
-    pub(crate) fn cancel_project_media_load(&mut self) {self.project.pending_media=None;self.project.pending_commit=None;}
+    pub(crate) fn cancel_project_media_load(&mut self) {self.project.pending_media=None;self.project.pending_commit=None;self.project.rollback_media=None;self.project.pending_started=None;self.project.pending_external_revision=None;}
+    pub(crate) fn fail_project_media_load(&mut self,error:&str) {
+        let previous=self.project.rollback_media.take();
+        self.cancel_project_media_load();
+        self.is_paused=true;
+        self.show_error=Some(format!("Project media restoration: {error}. Existing timeline/workspace retained; playback remains paused."));
+        if let Some(media)=previous {
+            let external_revision=crate::mpv::external::active().then(||crate::mpv::external::status().loaded_revision);
+            let options=format!("pause=yes,start={},speed={}",media.position_ms as f64/1000.0,media.speed);
+            if self.mpv.command("loadfile",&[&media.target,"replace","-1",&options]).is_ok() {
+                self.current_video_path=Some(PathBuf::from(&media.target));self.last_media_target=self.current_video_path.clone();
+                self.playback_time=media.position_ms as f64/1000.0;
+                self.project.pending_media=Some(media);self.project.pending_started=Some(std::time::Instant::now());
+                self.project.pending_external_revision=external_revision;
+                return;
+            }
+            self.show_error=Some(format!("Project restoration failed: {error}; reopening the previous media also failed. Timeline/workspace retained."));
+        }
+        let _=self.mpv.command("stop",&[]);
+        self.current_video_path=None;self.playback_time=0.0;self.duration=0.0;
+    }
     pub(crate) fn discover_media_project(&mut self,target:&str)->bool {
         if self.project.bypass_discovery || crate::peer::active() {return false;}
         let candidates=crate::platform::interop::get_live_config().project_discovery.candidates(target);
@@ -192,9 +242,17 @@ impl PealayerApp {
         self.project.pending_discovery=Some((target.into(),candidates));true
     }
     pub(crate) fn poll_project_discovery(&mut self,ctx:&egui::Context) {
+        self.poll_scene_operation();
+        if self.scene_operation_busy() {ctx.request_repaint_after(std::time::Duration::from_millis(100));}
+        if self.project.pending_external_revision.is_some() {self.finish_project_media_load();}
+        if let Some(started)=self.project.pending_started {
+            if started.elapsed()>=std::time::Duration::from_secs(30) {self.fail_project_media_load("decoder confirmation timed out");}
+            else {ctx.request_repaint_after(std::time::Duration::from_millis(250));}
+        }
         let Some((target,candidates))=self.project.pending_discovery.take() else {return};
         if candidates.len()==1 {
-            let result=self.document_request(ctx,Request::Load {path:candidates[0].to_string_lossy().into_owned(),components:None,discard_unsaved:false});
+            let result=discovered_project(&candidates[0],&target).and_then(|project|
+                self.stage_document(ctx,Document::Project(project),&candidates[0],None,false));
             if result.is_ok() {return;}
             self.project.discovery_error=result.err();
         } else {self.project.discovery_error=Some("Multiple associated projects found. Choose which project to open.".into());}
@@ -203,38 +261,53 @@ impl PealayerApp {
         // media, discard edits, or recurse into association discovery on failure.
         self.project.bypass_discovery=true;self.load_media_target(&target);self.project.bypass_discovery=false;
     }
-    fn apply_scene(&self,scene:&Scene)->Result<(),String> {
-        scene.validate()?;
-        if !self.is_paused || self.estop_active || self.board_operation.is_some() || self.hardware_effect_authoring.active {return Err("Pause playback and finish board operations before applying a scene; E-STOP must be clear".into());}
+    pub(crate) fn scene_operation_busy(&self)->bool {
+        self.project.scene_ticket.is_some() || self.project.scene_operation.as_ref().is_some_and(|operation|!operation.is_finished())
+    }
+    fn scene_report(&self)->Option<crate::scene_apply::Report> {self.project.scene_operation.as_ref().map(|op|op.report())}
+    fn scene_interlocks_clear(&self)->bool {
+        self.is_paused && !self.estop_active && self.board_operation.is_none() && !self.hardware_effect_authoring.active
+            && self.hardware_effect_authoring.pending_operation.is_none() && !self.is_recording
+            && self.project.pending_media.is_none() && !crate::peer::active()
+    }
+    fn apply_scene(&mut self,scene:&Scene,selected:&[String])->Result<(),String> {
+        if self.scene_operation_busy() {return Err("A scene operation is already running".into());}
+        if !self.scene_interlocks_clear() {return Err("Pause playback and finish pending media/board operations; E-STOP must be clear".into());}
         let cap=self.advertised_hardware().filter(|c|c.board_connected).ok_or("No connected board")?;
-        if scene.board_identity.is_empty() || cap.board_profile.as_ref().is_none_or(|p|p.board_identity!=scene.board_identity) {return Err("Scene belongs to a different or unidentified board; rebind it explicitly before applying".into());}
-        // Validate the whole set before queueing any edge. The coordinator still
-        // owns authority, safety and ACKs; queued is not physical completion.
-        let mut intents=Vec::new();
-        for (key,value) in &scene.channels {
-            let control=cap.controls.iter().find(|c|c.key==*key).ok_or_else(||format!("Channel {key} is not advertised"))?;
-            if control.locked {return Err(format!("Channel {key} is locked"));}
-            let (method,params)=match value {
-                ChannelValue::Pwm {percent_milli}=>{
-                    let channel=cap.pwm_channels.iter().find(|p|p.key==*key).ok_or("Scene value does not match channel type")?.id;
-                    ("controller.pwm.set",json!({"channel":channel,"percent":f64::from(*percent_milli)/1000.0}))
-                },
-                ChannelValue::Boolean {on}=>{
-                    let output=cap.relays.iter().find(|p|p.key==*key).ok_or("Scene value does not match channel type")?;
-                    if output.control!="relay-user" {return Err("Raw motion relays cannot be applied by a scene; use the logical motion channel".into());}
-                    ("controller.command.execute",json!({"command":format!("relay {} {}",output.id,if *on {"on"} else {"off"})}))
-                },
-                ChannelValue::Motion {..}=>return Err("Motion scene values are staged for editing only; use the dedicated motion controls to actuate safely".into()),
-            };intents.push((key.clone(),method,params));
-        }
-        for (key,method,params) in intents {self.engine_handle.queue_controller_intent(key,method,params,false)?;}
+        let plan=crate::scene_apply::preflight(scene,selected,&cap,Some(&cap.pwm_configuration_revision)).map_err(|e|e.to_string())?;
+        let now=std::time::Instant::now();
+        self.project.scene_operation=Some(crate::scene_apply::Operation::new(plan,now));
+        self.project.scene_ticket=None;self.project.scene_deadline=Some(now+crate::scene_apply::DEADLINE);
         Ok(())
     }
-}
-fn same_media_target(left:&str,right:&str)->bool {
-    if left==right {return true;}
-    if crate::media::is_remote_media_target(left) || crate::media::is_remote_media_target(right) {return false;}
-    match (std::fs::canonicalize(left),std::fs::canonicalize(right)) {(Ok(a),Ok(b))=>a==b,_=>false}
+    fn poll_scene_operation(&mut self) {
+        if !self.scene_operation_busy() {return;}
+        let now=std::time::Instant::now();
+        let cap=self.advertised_hardware().unwrap_or_default();
+        let safe=self.scene_interlocks_clear();
+        let Some(operation)=self.project.scene_operation.as_mut() else {return;};
+        if !safe {operation.cancel(now);}
+        let request=operation.next_request(now,&cap,Some(&cap.pwm_configuration_revision));
+        if let Some(request)=request {
+            let key=format!("project-scene:{}:{}",request.ticket.operation_id,request.ticket.index);
+            self.project.scene_ticket=Some(request.ticket);
+            if self.engine_handle.request_controller_call_before(key,request.method,request.params,self.project.scene_deadline).is_err() {
+                operation.complete(request.ticket,crate::scene_apply::Completion::Rejected,now);
+                self.project.scene_ticket=None;
+            }
+        }
+    }
+    pub(crate) fn complete_scene_call(&mut self,result:crate::four_d::engine::ControllerCallResult) {
+        let Some(ticket)=self.project.scene_ticket else {return;};
+        if result.operation!=format!("project-scene:{}:{}",ticket.operation_id,ticket.index) {return;}
+        let completion=match &result.result {
+            Ok(value)=>crate::scene_apply::Completion::from_success(value),
+            Err(_)=>crate::scene_apply::Completion::from_error_data(result.error_detail.as_ref()),
+        };
+        if let Some(operation)=self.project.scene_operation.as_mut() {operation.complete(ticket,completion,std::time::Instant::now());}
+        self.project.scene_ticket=None;
+        self.poll_scene_operation();
+    }
 }
 fn milliseconds(value:f64)->u64 {if value.is_finite() { (value.max(0.0)*1000.0).round().min(MAX_TIME_MS as f64) as u64 } else {0}}
 fn track(mpv:&crate::mpv::player::Player,key:&str)->String {mpv.get_property::<String>(key).ok().filter(|s|matches!(s.as_str(),"auto"|"no")||s.parse::<u32>().is_ok()).unwrap_or_else(||"auto".into())}

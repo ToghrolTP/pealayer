@@ -108,7 +108,9 @@ pub enum Request {
     Load { path:String, #[serde(default)] components:Option<Components>, #[serde(default)] discard_unsaved:bool },
     Stage { document:Document, #[serde(default)] base_path:String, #[serde(default)] components:Option<Components>, #[serde(default)] discard_unsaved:bool },
     CaptureScene,
-    ApplyScene { scene:Scene, confirm:bool },
+    ApplyScene { scene:Scene, selected:Vec<String>, confirm:bool },
+    SceneStatus,
+    CancelScene { operation_id:uuid::Uuid },
 }
 
 pub(crate) fn rpc_payload(payload:&str,web:bool)->Option<String> {
@@ -136,17 +138,23 @@ impl Scene {
         bounded_text(&self.name, 1024, "scene name")?;
         bounded_text(&self.board_identity, 512, "board identity")?;
         if self.channels.len() > 1024 || self.unsampled.len() > 1024 { return Err("Scene has too many channels".into()); }
+        let valid_key=|key:&str|!key.is_empty() && key.len()<=128 && key.bytes().all(|c|c.is_ascii_alphanumeric() || b"._-".contains(&c));
+        let mut unknown=BTreeSet::new();
+        for key in &self.unsampled {
+            if !valid_key(key) || self.channels.contains_key(key) || !unknown.insert(key) {return Err("Unsampled channels must be valid, unique and separate from sampled values".into());}
+        }
         for (key, value) in &self.channels {
-            if key.is_empty() || key.len()>128 || !key.bytes().all(|c| c.is_ascii_alphanumeric() || b"._-".contains(&c)) { return Err("Invalid channel key".into()); }
+            if !valid_key(key) { return Err("Invalid channel key".into()); }
             if matches!(value, ChannelValue::Pwm { percent_milli } if *percent_milli > 100_000) { return Err(format!("PWM value for {key} must be between 0 and 100 percent")); }
         }
         Ok(())
     }
     pub fn capture(cap: &crate::four_d::controller::HardwareCapabilities) -> Self {
         let mut scene = Self { name: cap.board_name.clone(), board_identity: cap.board_profile.as_ref().map(|p|p.board_identity.clone()).unwrap_or_default(), ..Self::default() };
-        for control in &cap.controls {
-            let value = if let Some(output) = cap.relays.iter().find(|o|o.key==control.key) {
-                cap.board_connected.then_some(ChannelValue::Boolean { on: cap.active_relays.contains(&output.id) })
+        for control in crate::ui::hardware_control::managed_controls(cap) {
+            let value = if !cap.board_connected {None}
+            else if let Some(output) = cap.relays.iter().find(|o|o.key==control.key) {
+                cap.relays_sampled.then_some(ChannelValue::Boolean { on: cap.active_relays.contains(&output.id) })
             } else if let Some(output) = cap.pwm_channels.iter().find(|o|o.key==control.key) {
                 cap.telemetry.pwm_logical_percent_milli.get(output.id as usize).copied().flatten().map(|percent_milli|ChannelValue::Pwm { percent_milli })
             } else if control.kind == "motion" {
@@ -156,6 +164,16 @@ impl Scene {
             if let Some(value)=value { scene.channels.insert(control.key.clone(),value); } else { scene.unsampled.push(control.key.clone()); }
         }
         scene
+    }
+}
+
+/// Presentation eligibility only; authority preflight additionally checks the
+/// exact board catalog, locks and owner/configuration revision pins.
+pub fn scene_output_selectable(key:&str,value:&ChannelValue)->bool {
+    match value {
+        ChannelValue::Boolean{..}=>key.strip_prefix("relay.").and_then(|v|v.parse::<u8>().ok()).is_some_and(|id|(5..=8).contains(&id)),
+        ChannelValue::Pwm{..}=>key.strip_prefix("pwm.").and_then(|v|v.parse::<u8>().ok()).is_some_and(|id|id<=10),
+        ChannelValue::Motion{..}=>false,
     }
 }
 
@@ -174,6 +192,7 @@ impl TimelineDocument {
             bounded_text(&effect.name,4096,"effect name")?;
             if effect.actions.len()>100_000 { return Err("Too many effect actions".into()); }
             for action in &effect.actions { time(action.offset_ms)?; }
+            if let Some(audio)=&effect.audio_effect {audio.program.validate()?;time(audio.duration_ms)?;}
             if let Some(direct)=&effect.direct_control {
                 if direct.value_basis_points>10000 || direct.end_value_basis_points>10000 {return Err("Direct channel value exceeds 100 percent".into());}
             }
@@ -283,6 +302,18 @@ pub fn resolve(project:&Project,path:&Path,load:Components)->Result<Project,Stri
         } else {result.$field=None;}
     };}
     resolve!(scene,Scene); resolve!(timeline,Timeline); resolve!(media,Media); resolve!(workspace,Workspace);
+    if let Some(Part::Embedded {value:timeline})=&mut result.timeline {
+        let base=match &project.timeline {Some(Part::File {path:p})=>resolve_path(path,p),_=>path.to_path_buf()};
+        for effect in &mut timeline.timeline.templates {
+            if let Some(audio)=&mut effect.audio_effect {
+                audio.program.validate()?;
+                if !crate::media::is_remote_media_target(&audio.program.source) {
+                    audio.program.source=resolve_path(&base,&audio.program.source).to_string_lossy().into_owned();
+                    if !Path::new(&audio.program.source).is_file() {return Err(format!("Missing SFX dependency for {}",effect.name));}
+                }
+            }
+        }
+    }
     if let Some(Part::Embedded {value:media})=&mut result.media {
         if !crate::media::is_remote_media_target(&media.target) {
             let base=match &project.media {Some(Part::File {path:p})=>resolve_path(path,p),_=>path.to_path_buf()};
@@ -291,6 +322,30 @@ pub fn resolve(project:&Project,path:&Path,load:Components)->Result<Project,Stri
         }
     }
     Ok(result)
+}
+
+/// Discovery is a hint, not permission to substitute a different media file.
+/// Resolve the association even when the project excludes its media component.
+pub fn discovered_project(path:&Path,target:&str)->Result<Project,String> {
+    let Document::Project(project)=Document::read(path)? else {return Err("Associated file is not a project".into());};
+    let identity=resolve(&project,path,Components {scene:false,timeline:false,media:true,workspace:false})?;
+    let Some(Part::Embedded {value:media})=identity.media else {return Err("Associated project has no media identity; choose it explicitly".into());};
+    if !same_media_target(&media.target,target) {return Err("Associated project refers to different media; choose it explicitly".into());}
+    let mut loaded=resolve(&project,path,project.load)?;
+    if loaded.media.is_none() {
+        // Opening a file must still open that file. Excluding saved media means
+        // discard its saved position/tracks/speed, not ignore the user's Open.
+        loaded.media=Some(Part::embedded(Media {target:target.into(),paused:true,speed:1.0,
+            video_track:"auto".into(),audio_track:"auto".into(),subtitle_track:"auto".into(),..Media::default()}));
+        loaded.load.media=true;
+    }
+    Ok(loaded)
+}
+
+pub(crate) fn same_media_target(left:&str,right:&str)->bool {
+    if left==right {return true;}
+    if crate::media::is_remote_media_target(left) || crate::media::is_remote_media_target(right) {return false;}
+    match (std::fs::canonicalize(left),std::fs::canonicalize(right)) {(Ok(a),Ok(b))=>a==b,_=>false}
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -323,6 +378,37 @@ mod tests {
         std::fs::create_dir(&path).unwrap();path
     }
     #[test]
+    fn discovery_requires_identity_and_preserves_requested_media_when_excluded() {
+        let dir=temp_dir();let path=dir.join("project.json");
+        let target="https://example.invalid/movie.mkv";
+        let mut project=Project {media:Some(Part::embedded(Media {target:target.into(),paused:false,speed:2.0,position_ms:351,
+            video_track:"auto".into(),audio_track:"auto".into(),subtitle_track:"no".into(),..Media::default()})),..Project::default()};
+        project.load.media=false;
+        Document::Project(project.clone()).write(&path).unwrap();
+        assert!(discovered_project(&path,"https://example.invalid/other.mkv").is_err());
+        let loaded=discovered_project(&path,target).unwrap();
+        let Some(Part::Embedded {value})=loaded.media else {panic!("requested media lost");};
+        assert_eq!(value.target,target);assert_eq!(value.position_ms,0);assert_eq!(value.speed,1.0);assert!(value.paused);
+        project.media=None;Document::Project(project).write(&path).unwrap();
+        assert!(discovered_project(&path,target).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
+    fn linked_timeline_audio_is_relative_to_its_own_document() {
+        let dir=temp_dir();std::fs::create_dir(dir.join("parts")).unwrap();
+        let audio=crate::mpv::sfx::AudioEffect {id:uuid::Uuid::new_v4(),name:"Fixture".into(),group:String::new(),icon:String::new(),description:String::new(),duration_ms:351,
+            program:crate::mpv::sfx::AudioProgram {source:"sound.wav".into(),..Default::default()}};
+        let mut timeline=Timeline::default();timeline.templates.push(audio.template());
+        Document::Timeline(TimelineDocument{timeline,view:TimelineView::default()}).write(&dir.join("parts/timeline.json")).unwrap();
+        let project=Project {timeline:Some(Part::File {path:"parts/timeline.json".into()}),..Default::default()};
+        assert!(resolve(&project,&dir.join("project.json"),Components::default()).unwrap_err().contains("Missing SFX"));
+        std::fs::write(dir.join("parts/sound.wav"),b"fixture-not-played").unwrap();
+        let loaded=resolve(&project,&dir.join("project.json"),Components::default()).unwrap();
+        let Some(Part::Embedded{value})=loaded.timeline else {panic!("timeline missing");};
+        assert_eq!(PathBuf::from(&value.timeline.templates.last().unwrap().audio_effect.as_ref().unwrap().program.source),dir.join("parts/sound.wav"));
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+    #[test]
     fn exact_timeline_view_round_trip() {
         let mut view=TimelineView::default();
         view.position_ms=351;view.scroll=[12.5,99.25];view.zoom=123.5;
@@ -331,6 +417,15 @@ mod tests {
         doc.validate().unwrap();
         let copy:Document=serde_json::from_slice(&serde_json::to_vec(&doc).unwrap()).unwrap();
         assert_eq!(doc,copy);
+    }
+    #[test]
+    fn unknown_scene_channels_cannot_also_publish_values() {
+        let mut scene=Scene::default();scene.unsampled=vec!["pwm.1".into()];
+        scene.validate().unwrap();
+        scene.channels.insert("pwm.1".into(),ChannelValue::Pwm{percent_milli:0});
+        assert!(scene.validate().is_err());
+        scene.channels.clear();scene.unsampled.push("pwm.1".into());
+        assert!(scene.validate().is_err());
     }
     #[test]
     fn timeline_validation_rejects_invalid_selection_and_nonfinite_view() {

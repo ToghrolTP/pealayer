@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Checkbox, Collapse, Flex, Form, Input, InputNumber, Modal, Select, Space, Typography } from 'antd';
 import { DownloadOutlined, FolderOpenOutlined, SaveOutlined } from '@ant-design/icons';
 import { ServerFilePicker } from './ServerFilePicker';
@@ -18,6 +18,11 @@ export function ProjectDialog({ base, locale, onClose }: { base: string; locale:
   const [include, setInclude] = useState<Selection>(all);
   const [discard, setDiscard] = useState(false);
   const [confirmOutputs, setConfirmOutputs] = useState(false);
+  const [selectedOutputs, setSelectedOutputs] = useState<string[]>([]);
+  const [sceneReport, setSceneReport] = useState<any>(null);
+  const [documentBase, setDocumentBase] = useState(base);
+  const currentBase = useRef(base); currentBase.current = base;
+  const applying = sceneReport?.status === 'running';
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
@@ -29,12 +34,22 @@ export function ProjectDialog({ base, locale, onClose }: { base: string; locale:
     return result;
   };
   async function request(value: object) {
+    const operation = (value as { operation?: string }).operation;
+    if (documentBase !== base && !['read', 'snapshot', 'capture_scene', 'validate', 'scene_status'].includes(operation ?? '')) {
+      setError('Authority changed. Read or capture from the selected authority before changing its session or files.'); return null;
+    }
+    if (['read', 'snapshot', 'capture_scene', 'validate'].includes(operation ?? '') && document && JSON.stringify(selected()) !== baseline && !discard) {
+      setError('Save or download the current document, or explicitly enable replacement before reading/capturing another.');
+      return null;
+    }
     setBusy(true); setError(''); setNotice('');
     try {
       const response = await fetch(`${base}/api/peer/documents`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) });
       const result = await response.json();
+      if (currentBase.current !== base) return null;
       if (!response.ok || result.error) throw new Error(result.error || `Document request failed (${response.status})`);
-      if (result.document) { setDocument(result.document); setBaseline(JSON.stringify(result.document)); setInclude(all); }
+      if (result.document) { setDocumentBase(base); setConfirmOutputs(false); setSelectedOutputs([]); setDocument(result.document); setBaseline(JSON.stringify(result.document)); setInclude(all); }
+      if ('scene_operation' in result) { setSceneReport(result.scene_operation); setConfirmOutputs(false); }
       if (typeof result.path === 'string') setPath(result.path);
       if (result.saved) { setBaseline(JSON.stringify(selected())); setNotice('Saved on the Pealayer authority.'); }
       if (result.loaded) setNotice('Loaded paused. Scene values are staged, not applied.');
@@ -44,10 +59,18 @@ export function ProjectDialog({ base, locale, onClose }: { base: string; locale:
     } catch (reason) { setError(reason instanceof Error ? reason.message : String(reason)); return null; }
     finally { setBusy(false); }
   }
-  useEffect(() => { void request({ operation: 'snapshot' }); }, [base]);
-  const edit = (apply: (document: Document) => void) => setDocument(current => { if (!current) return current; const next = structuredClone(current); apply(next); return next; });
+  useEffect(() => { setConfirmOutputs(false); setSceneReport(null); void request({ operation: 'snapshot' }); }, [base]);
+  useEffect(() => {
+    if (!applying || busy) return;
+    const timer = window.setTimeout(() => void request({ operation: 'scene_status' }), 500);
+    return () => window.clearTimeout(timer);
+  }, [sceneReport, busy, base]);
+  const edit = (apply: (document: Document) => void) => { setConfirmOutputs(false); setDocument(current => { if (!current) return current; const next = structuredClone(current); apply(next); return next; }); };
   const browse = (title: string, select: (path: string) => void, extensions = ['json']) => setPicker({ title, select, extensions });
-  const close = () => JSON.stringify(selected()) !== baseline ? setCloseConfirm(true) : onClose();
+  const close = () => {
+    if (busy || applying) { setError('Wait for the current document operation to finish, or cancel after the current output.'); return; }
+    if (JSON.stringify(selected()) !== baseline) setCloseConfirm(true); else onClose();
+  };
   const project = document?.kind === 'pealayer-project' ? document.data : null;
   const part = (key: Key) => project?.[key]?.source === 'embedded' ? project[key].value : document?.kind === `pealayer-${key}` ? document.data : null;
   const scene = part('scene'), media = part('media');
@@ -61,10 +84,10 @@ export function ProjectDialog({ base, locale, onClose }: { base: string; locale:
       footer={<Flex gap={8} wrap justify="end">
         <Button onClick={close}>Close</Button>
         <Button disabled={!document || busy} icon={<DownloadOutlined />} onClick={() => download(selected()!, 'Project.pealayer.json')}>Download JSON</Button>
-        <Button disabled={!document || busy} onClick={() => void request({ operation: 'stage', document: selected(), base_path: path, discard_unsaved: discard })}>Load selected</Button>
-        <Button type="primary" icon={<SaveOutlined />} loading={busy} disabled={!document || !path.trim()} onClick={() => void request({ operation: 'write', path, document: selected() })}>Save to server</Button>
+        <Button disabled={!document || busy || applying || documentBase !== base} onClick={() => void request({ operation: 'stage', document: selected(), base_path: path, discard_unsaved: discard })}>Load selected</Button>
+        <Button type="primary" icon={<SaveOutlined />} loading={busy} disabled={!document || !path.trim() || applying || documentBase !== base} onClick={() => void request({ operation: 'write', path, document: selected() })}>Save to server</Button>
       </Flex>}>
-      <Form layout="vertical" disabled={busy}>
+      <Form layout="vertical" disabled={busy || applying}>
         <Form.Item label="Document path on the Pealayer authority"><Flex gap={8}>
           <Input value={path} onChange={e => setPath(e.target.value)} placeholder="Project.pealayer.json" />
           <Button icon={<FolderOpenOutlined />} onClick={() => browse('Open Pealayer document', value => { setPath(value); void request({ operation: 'read', path: value }); })}>Browse</Button>
@@ -110,19 +133,26 @@ export function ProjectDialog({ base, locale, onClose }: { base: string; locale:
         </> }]} />}
         {scene && <Collapse items={[{ key: 'scene', label: `Scene · ${Object.keys(scene.channels).length} channels`, children: <>
           <Form.Item label="Scene name"><Input value={scene.name} onChange={e => editPart('scene', s => { s.name = e.target.value; })} /></Form.Item>
-          {Object.entries(scene.channels).map(([key, value]: [string, any]) => <Flex key={key} align="center" justify="space-between" gap={12} className="project-dialog__scene-row"><Typography.Text>{key}</Typography.Text>
+          {Object.entries(scene.channels).map(([key, value]: [string, any]) => <Flex key={key} align="center" justify="space-between" gap={12} className="project-dialog__scene-row">
+            <Checkbox checked={selectedOutputs.includes(key)} disabled={value.type === 'boolean' ? !/^relay\.[5-8]$/.test(key) : value.type === 'pwm' ? !/^pwm\.(?:[0-9]|10)$/.test(key) : true}
+              onChange={e => { setConfirmOutputs(false); setSelectedOutputs(current => e.target.checked ? [...current, key] : current.filter(item => item !== key)); }}>{key}</Checkbox>
             {value.type === 'boolean' ? <Checkbox checked={value.on} onChange={e => editPart('scene', s => { s.channels[key].on = e.target.checked; })}>On</Checkbox> : value.type === 'pwm' ?
               <InputNumber min={0} max={100} precision={3} suffix="%" value={value.percent_milli / 1000} onChange={v => editPart('scene', s => { s.channels[key].percent_milli = Math.round((v ?? 0) * 1000); })} /> :
               <Select value={value.direction} options={['stop', 'up', 'down'].map(value => ({ value, label: value }))} onChange={direction => editPart('scene', s => { s.channels[key].direction = direction; })} />}
           </Flex>)}
           <Typography.Paragraph type="secondary">Unsampled channels are omitted, not assumed Off. Motion values are staged only.</Typography.Paragraph>
           <Checkbox checked={confirmOutputs} onChange={e => setConfirmOutputs(e.target.checked)}>Confirm hardware outputs</Checkbox>
-          <Button danger disabled={!confirmOutputs} onClick={() => void request({ operation: 'apply_scene', scene, confirm: true })}>Apply scene outputs</Button>
+          <Button danger disabled={!confirmOutputs || !selectedOutputs.length || documentBase !== base} onClick={() => void request({ operation: 'apply_scene', scene, selected: selectedOutputs, confirm: true })}>Apply selected outputs</Button>
         </> }]} />}
         {document?.kind === 'pealayer-timeline' && <Typography.Paragraph>{document.data.timeline.instances.length} cues · {document.data.timeline.analog_tracks.length} curves. Load to edit in Timeline.</Typography.Paragraph>}
-        <Checkbox checked={discard} onChange={e => setDiscard(e.target.checked)}>Replace unsaved session edits when loading</Checkbox>
+        <Checkbox checked={discard} onChange={e => setDiscard(e.target.checked)}>Allow replacing unsaved document / session edits</Checkbox>
         <Typography.Paragraph type="secondary">Loading restores media paused and stages scene values without actuating outputs. Separate file paths belong to the connected Pealayer authority.</Typography.Paragraph>
       </Form>
+      {sceneReport && <div role="status">
+        <Typography.Title level={5}>Scene: {sceneReport.status}</Typography.Title>
+        {sceneReport.outputs.map((item: any) => <div key={item.output.target}>{item.output.target} · {item.status}</div>)}
+        {applying && <Button disabled={busy} onClick={() => void request({ operation: 'cancel_scene', operation_id: sceneReport.id })}>Cancel after current output</Button>}
+      </div>}
       {error && <Alert type="error" showIcon title={error} />}{notice && <Alert type="success" showIcon title={notice} />}
     </Modal>
     <Modal open={closeConfirm} title="Unsaved document changes" onCancel={() => setCloseConfirm(false)} onOk={onClose} okText="Discard and close" okButtonProps={{ danger: true }}><Typography.Paragraph>Save or download to keep your changes.</Typography.Paragraph></Modal>

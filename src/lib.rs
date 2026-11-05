@@ -18,6 +18,7 @@ pub mod network;
 pub mod peer;
 pub mod projects;
 mod app_projects;
+mod scene_apply;
 pub mod performance;
 pub mod process_control;
 pub mod platform;

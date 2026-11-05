@@ -4069,6 +4069,7 @@ impl PealayerApp {
             .map(|mut queue| queue.drain(..).collect::<Vec<_>>())
             .unwrap_or_default();
         for result in results {
+            if result.operation.starts_with("project-scene:") {self.complete_scene_call(result);continue;}
             if result.operation=="rf-received" {
                 if let Ok(event)=result.result {self.rf.receive(event);}
                 continue;
@@ -5621,7 +5622,7 @@ impl PealayerApp {
                 },
                 Some(Ok(Event::EndFile(reason))) => {
                     if reason == 4 {
-                        self.cancel_project_media_load();
+                        if self.project.pending_media.is_some() {self.fail_project_media_load("decoder rejected the media");continue;}
                         if crate::peer::active(){
                             // Decoder failure is only a preview failure. Do not
                             // stop or advance the server or its hardware cues.
@@ -5656,7 +5657,7 @@ impl PealayerApp {
                         sample.buffering = false;
                         sample.sampled_at = std::time::Instant::now();
                     }
-                    self.show_error = None;
+                    if self.project.pending_media.is_none() {self.show_error = None;}
                     self.is_eof = false;
                     self.playback_time = 0.0;
                     self.duration = 0.0;
@@ -5898,7 +5899,7 @@ impl PealayerApp {
 
     /// Restarts playback of the current video from the beginning (0.0s).
     pub fn replay(&mut self) {
-        if self.project.pending_media.is_some() {return;}
+        if self.project.pending_media.is_some() || self.scene_operation_busy() {return;}
         if self.current_video_path.is_none() {
             return;
         }
@@ -5925,7 +5926,7 @@ impl PealayerApp {
 
     /// Resumes playback, or restarts if playback finished.
     pub fn play(&mut self) {
-        if self.project.pending_media.is_some() {return;}
+        if self.project.pending_media.is_some() || self.scene_operation_busy() {return;}
         if self.current_video_path.is_none() {
             return;
         }
@@ -7405,7 +7406,7 @@ impl PealayerApp {
             ("channel_folder",self.channel_folder_pending),
             ("rf_operation",self.rf.pending),
             ("audio_import",crate::mpv::sfx::importing()),
-            ("project_operation",crate::ui::projects::busy(ctx) || self.project.pending_media.is_some()),
+            ("project_operation",crate::ui::projects::busy(ctx) || self.project.pending_media.is_some() || self.scene_operation_busy()),
         ] {items.push(Item {domain:domain.into(),state:if busy {State::Busy} else {State::Clean}});}
         Inspection::new(items)
     }
