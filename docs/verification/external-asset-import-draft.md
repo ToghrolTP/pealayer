@@ -33,7 +33,7 @@ second independent format or replace its pending application adapter blindly.
 
 ## Verification and remaining gates
 
-- Full native library suite: 1,098 passed, one ignored. Final focused asset tests
+- Full final native library suite: 1,104 passed, one ignored. Seventeen focused asset tests
   additionally cover rendered review/values, typed RPC and exact panned geometry.
 - Browser ordered transfer, failure, command rejection and cancellation checks,
   TypeScript and complete Web prebuild checks passed.
@@ -92,8 +92,45 @@ No human listening, physical board output or production CPU soak is claimed.
 
 ## Packaging/runtime checkpoint
 
-Pending the clean, source-identified package and isolated live API/decoder pass.
-No regular application was replaced during source/browser testing.
+- Clean source package: `d61401e1b6160e954290120135c9423153ec3722`, `git_dirty=false`.
+  Executable SHA-256: `90F0A9D6C748601B5F514678E4D0C06C1D0748B62657704A3BC18CC2CF4DF9E0`.
+- Reused canonical staging `staging/preferences-organization` and the existing
+  Windows host profile/runtime. libmpv smoke, Windows resources, quick actions,
+  bundled Web/PWA integrity and standalone utility smoke passed. The packager
+  skipped its regression suites because those were run separately, not twice.
+- The final compiled Rust test artifact was reused for its full library run;
+  it passed 1,104 tests with one ignored. Native wire consumer ownership check
+  and complete Web prebuild checks also passed.
+- Actual staged API/decoder run passed ordered upload/retention, one-second SFX
+  probing, exact cue placement at 10,429 ms and append at 30,429 ms, deferred mixed
+  movie/subtitle loading after explicit Discard of this test's exported cues,
+  subtitle track discovery and the real scene review values.
+- Two actual loopback Pealayer processes passed the native-consumer import. The
+  authority stored/probed transferred bytes at a new authoring path, not the
+  consumer's supplied path. Hardware stayed disconnected and playback stayed
+  paused. Consumer authoring inspection reported clean. It quit normally through
+  the process-local API while the authority remained running. The authority's
+  generated scene review was cancelled and it also exited cleanly through API.
+- The earlier consumer fixture's missing baseline blocked graceful exit. After
+  diagnostics, only that owned isolated fixture process was stopped; it contained
+  generated mirrored test data, not user edits. The final build's normal-exit
+  proof supersedes this failure. No regular application was terminated/replaced.
+- Native scene review screenshot is from the actual final consumer executable,
+  using read-only Win32 capture. Phone images use actual Web controls with an
+  explicitly isolated fixture transport. Neither is physical board proof.
+- Cafe deployment remains deferred by the user. The canonical installed binary
+  was not replaced by this pass; this is a verified staging/runtime checkpoint.
+
+![Actual native consumer review](../assets/external-assets/native-consumer.png)
+![Web phone dark](../assets/external-assets/phone-dark.png)
+![Web phone light](../assets/external-assets/phone-light.png)
+
+## Separate observed follow-up
+
+The native consumer status caption still labels its Pealayer peer transport as
+PCController connectivity. The screenshot preserves that real observation;
+API checks confirmed PCController/board disconnected. Correct this caption in
+the existing connection/parity tracker, not by inventing hardware state here.
 
 The connected production application, its private configuration and hardware
 outputs were not used as fixtures. No successful Cafe deployment is claimed.
