@@ -12,6 +12,7 @@ pub mod dialog;
 pub mod dropdown;
 pub mod effects_library;
 pub(crate) mod strip_designer;
+pub(crate) mod strip_layers;
 pub(crate) mod pixel_diagnostic;
 mod elegance_theme;
 pub use elegance_theme::sync_elegance_theme;
@@ -21,6 +22,8 @@ pub mod group_picker;
 pub mod hardware_control;
 pub(crate) mod pwm_policy;
 pub mod i18n;
+pub(crate) mod fonts;
+pub(crate) mod egui_dock;
 pub mod icons;
 pub mod layout;
 mod timeline_toolbar;
@@ -492,3 +495,4 @@ mod tests {
         assert_eq!(dark_style.visuals.widgets.inactive.bg_stroke.color, tokens.field_border);
     }
 }
+pub(crate) mod validated_input;

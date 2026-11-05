@@ -4,7 +4,11 @@ use crate::config::UiControlDensity;
 
 pub fn configure(style: &mut egui::Style, density: UiControlDensity) {
     style.spacing.interact_size.y = density.base_height();
-    style.spacing.button_padding.y = ((style.spacing.interact_size.y - style.spacing.icon_width) * 0.5).max(0.0);
+    // Before 88741e3, egui 0.36.2 supplied an 18-point minimum and 1-point
+    // vertical padding. Deriving padding from icon width would inflate that
+    // restored size again when the text is taller than the icon.
+    style.spacing.button_padding.y = if density == UiControlDensity::ExtraCompact { 1.0 }
+        else { ((style.spacing.interact_size.y - style.spacing.icon_width) * 0.5).max(0.0) };
     // Stroke changes must never expand a field, chevron or neighboring widget.
     for visuals in [&mut style.visuals.widgets.inactive, &mut style.visuals.widgets.hovered,
         &mut style.visuals.widgets.active, &mut style.visuals.widgets.open] {
@@ -27,22 +31,247 @@ pub fn paint_chevron(ui: &egui::Ui, rect: egui::Rect, color: egui::Color32) {
     ], egui::Stroke::new(1.5, color)));
 }
 
-pub fn paint_choice_ticks(ui: &egui::Ui, rect: egui::Rect, count: usize, selected: usize) {
-    if count < 2 { return; }
-    let radius = rect.height() / 2.5;
-    let left = rect.left() + radius;
-    let right = rect.right().min(rect.left() + ui.spacing().slider_width) - radius;
-    for index in 0..count {
-        let x = egui::lerp(left..=right, index as f32 / (count - 1) as f32);
-        let color = if index == selected { ui.visuals().selection.stroke.color } else { ui.visuals().weak_text_color() };
-        // Visible notches flank the rail without covering its pointer target.
-        ui.painter().line_segment([egui::pos2(x, rect.bottom() - 3.0), egui::pos2(x, rect.bottom())], egui::Stroke::new(1.0, color));
+/// Discrete choices retain egui's pointer, keyboard and accessibility behavior.
+/// The value capsule reserves the widest translated label, never the active one.
+pub fn choice_slider(
+    ui: &mut egui::Ui,
+    index: &mut usize,
+    labels: &[String],
+    caption: &str,
+    width: f32,
+) -> egui::Response {
+    assert!(!labels.is_empty());
+    *index = (*index).min(labels.len() - 1);
+    let width = width.min(ui.available_width()).max(1.0);
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let label_width = labels.iter().map(|label| ui.painter()
+        .layout_no_wrap(label.clone(), font.clone(), ui.visuals().text_color()).size().x)
+        .fold(0.0_f32, f32::max);
+    let row_height = height(ui).max(ui.text_style_height(&egui::TextStyle::Body));
+    let badge_width = (label_width + 24.0).min(width);
+    let stacked = width < badge_width + 84.0;
+    let total_height = if stacked { row_height * 2.0 + 6.0 } else { row_height };
+    let (bounds, _) = ui.allocate_exact_size(egui::vec2(width, total_height), egui::Sense::hover());
+    let badge = egui::Rect::from_min_size(
+        egui::pos2(bounds.right() - badge_width, bounds.bottom() - row_height),
+        egui::vec2(badge_width, row_height));
+    let rail_slot = egui::Rect::from_min_size(bounds.min,
+        egui::vec2(if stacked {width} else {width - badge_width - 12.0}, row_height))
+        .shrink2(egui::vec2(2.0_f32.min(width / 4.0), 0.0));
+    let response = {
+        // The parent has allocated bounds already. A non-allocating child avoids
+        // advancing the surrounding Preferences row a second time.
+        let mut slider_ui = ui.new_child(egui::UiBuilder::new().max_rect(rail_slot)
+            .layout(egui::Layout::left_to_right(egui::Align::Center)));
+        slider_ui.spacing_mut().slider_width = rail_slot.width();
+        // Inner rail/handle geometry and reserved slot have the same height.
+        slider_ui.spacing_mut().interact_size.y = row_height;
+        // Fixed geometry through hover, dragging and keyboard focus.
+        let widgets = &mut slider_ui.visuals_mut().widgets;
+        for visuals in [&mut widgets.inactive, &mut widgets.hovered, &mut widgets.active] {
+            visuals.expansion = 0.0;
+            visuals.fg_stroke.width = 1.25;
+        }
+        slider_ui.add(egui::Slider::new(index, 0..=labels.len() - 1)
+            .step_by(1.0).show_value(false).trailing_fill(true)
+            .handle_shape(egui::style::HandleShape::Circle))
+    };
+    let painter = ui.painter().with_clip_rect(ui.clip_rect().intersect(bounds));
+    // egui's explicit Circle handle travels within height/2.5 of the endpoints.
+    // Test this against actual painted handle centers, not just this calculation.
+    let travel = response.rect.x_range().shrink(response.rect.height() / 2.5);
+    if labels.len() > 1 {
+        for position in 0..labels.len() {
+            if position == *index { continue; } // Never paint over the handle.
+            let x = egui::lerp(travel, position as f32 / (labels.len() - 1) as f32);
+            let color = if position < *index { ui.visuals().selection.stroke.color }
+                else { ui.visuals().weak_text_color() };
+            painter.circle_filled(egui::pos2(x, response.rect.center().y), 1.25, color);
+        }
     }
+    let focused = response.has_focus();
+    let border = if focused { ui.visuals().selection.bg_fill }
+        else { ui.visuals().widgets.noninteractive.bg_stroke.color };
+    painter.rect(badge.shrink(0.5), egui::CornerRadius::same(6),
+        ui.visuals().widgets.inactive.weak_bg_fill, egui::Stroke::new(1.0, border), egui::StrokeKind::Inside);
+    let mut job = egui::text::LayoutJob::simple(labels[*index].clone(), font,
+        ui.visuals().text_color(), (badge.width() - 16.0).max(1.0));
+    job.wrap.max_rows = 1;
+    let galley = ui.fonts_mut(|fonts| fonts.layout_job(job));
+    let ink_center_y = if galley.mesh_bounds.is_finite() {galley.mesh_bounds.center().y}
+        else {galley.rect.center().y};
+    painter.with_clip_rect(badge.shrink2(egui::vec2(6.0, 0.0)))
+        .galley(egui::pos2(badge.center().x - galley.size().x / 2.0,
+            badge.center().y - ink_center_y), galley, ui.visuals().text_color());
+    ui.interact(badge, response.id.with("value"), egui::Sense::hover())
+        .on_hover_text(&labels[*index]);
+    response.widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), *index as f64,
+        format!("{caption}: {}", labels[*index])));
+    #[cfg(test)]
+    ui.data_mut(|data| data.insert_temp(response.id.with("choice-geometry"), (bounds, response.rect, badge)));
+    response.on_hover_text(format!("{caption}: {} ({}/{})", labels[*index], *index + 1, labels.len()))
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn choices() -> Vec<String> {
+        ["Extra compact", "Compact", "Regular", "Comfortable", "Spacious"].map(str::to_string).to_vec()
+    }
+
+    #[test]
+    fn choice_slider_allocates_its_row_only_once() {
+        for horizontal in [false,true] {
+            let ctx = egui::Context::default();
+            ctx.run_ui(egui::RawInput::default(),|ui| {
+                let layout = if horizontal {egui::Layout::left_to_right(egui::Align::Center)}
+                    else {egui::Layout::top_down(egui::Align::Min)};
+                ui.with_layout(layout,|ui| {
+                    let response = choice_slider(ui,&mut 1,&choices(),"Control density",300.0);
+                    let (bounds,_,_) = ui.data(|data| data.get_temp::<(egui::Rect,egui::Rect,egui::Rect)>(response.id.with("choice-geometry"))).unwrap();
+                    let (next,_) = ui.allocate_exact_size(egui::vec2(10.0,10.0),egui::Sense::hover());
+                    if horizontal {assert!((next.left()-bounds.right()-ui.spacing().item_spacing.x).abs()<0.1);}
+                    else {assert!((next.top()-bounds.bottom()-ui.spacing().item_spacing.y).abs()<0.1);}
+                });
+            }).drop_without_applying_deltas();
+        }
+    }
+
+    #[test]
+    fn choice_slider_detents_match_painted_thumb_and_all_content_stays_inside() {
+        for density in UiControlDensity::ALL {
+            for dark in [false, true] {
+                for scale in [1.0, 1.25, 2.0] {
+                    for font_size in [14.0, 24.0] {
+                        for width in [180.0, 260.0, 420.0] {
+                            let ctx = egui::Context::default();
+                            ctx.set_pixels_per_point(scale);
+                            ctx.set_visuals(if dark {egui::Visuals::dark()} else {egui::Visuals::light()});
+                            ctx.all_styles_mut(|style| {
+                                configure(style, density);
+                                for text in [egui::TextStyle::Body, egui::TextStyle::Button] {
+                                    style.text_styles.insert(text, egui::FontId::proportional(font_size));
+                                }
+                            });
+                            let mut initial = None;
+                            for selected in 0..5 {
+                                for state in 0..4 {
+                                    let mut index = selected;
+                                    let mut geometry = None;
+                                    let mut output = ctx.run_ui(egui::RawInput {
+                                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width+32.0, 180.0))),
+                                        events: if state == 1 {vec![egui::Event::PointerMoved(egui::pos2(30.0,15.0))]}
+                                            else {vec![egui::Event::PointerGone]}, ..Default::default()
+                                    }, |ui| {
+                                        ui.set_width(width);
+                                        ui.add_enabled_ui(state != 3, |ui| {
+                                            let response = choice_slider(ui, &mut index, &choices(), "Control density", width);
+                                            if state == 2 { response.request_focus(); }
+                                            geometry = ui.data(|data| data.get_temp::<(egui::Rect,egui::Rect,egui::Rect)>(response.id.with("choice-geometry")));
+                                        });
+                                    });
+                                    let (bounds, rail, badge) = geometry.unwrap();
+                                    assert_eq!(index, selected);
+                                    assert!(bounds.contains_rect(rail) && bounds.contains_rect(badge), "{density:?}/{width}: {geometry:?}");
+                                    assert!(!rail.intersects(badge));
+                                    if let Some(initial) = initial { assert_eq!((bounds,rail,badge), initial); }
+                                    else { initial = Some((bounds,rail,badge)); }
+                                    let circles: Vec<_> = output.shapes.iter().filter_map(|shape| match &shape.shape {
+                                        egui::Shape::Circle(circle) => Some(circle), _ => None,
+                                    }).collect();
+                                    let thumb = circles.iter().find(|circle| circle.radius > 2.0).unwrap();
+                                    assert!(bounds.contains_rect(egui::Rect::from_center_size(thumb.center,
+                                        egui::Vec2::splat(2.0*thumb.radius+thumb.stroke.width))));
+                                    let travel = rail.x_range().shrink(rail.height()/2.5);
+                                    let expected_x = egui::lerp(travel, selected as f32/4.0);
+                                    assert!((thumb.center.x - expected_x).abs() < 0.01, "thumb and ticks disagree: {rail:?}");
+                                    let ticks: Vec<_> = circles.iter().filter(|circle| circle.radius <= 2.0).collect();
+                                    assert_eq!(ticks.len(), 4);
+                                    for (tick, position) in ticks.iter().zip((0..5).filter(|position| *position != selected)) {
+                                        assert!((tick.center.x - egui::lerp(travel,position as f32/4.0)).abs() < 0.01);
+                                        assert_eq!(tick.center.y, thumb.center.y);
+                                        assert!(rail.contains_rect(egui::Rect::from_center_size(tick.center,egui::Vec2::splat(tick.radius*2.0))));
+                                    }
+                                    for shape in &output.shapes {
+                                        if let egui::Shape::Text(text) = &shape.shape {
+                                            if text.galley.text() == choices()[selected] && text.galley.mesh_bounds.is_finite() {
+                                                assert!((text.pos.y + text.galley.mesh_bounds.center().y - badge.center().y).abs() < 0.1);
+                                            }
+                                        }
+                                    }
+                                    output.textures_delta.clear();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn choice_slider_keyboard_pointer_and_disabled_behavior_is_retained() {
+        let ctx = egui::Context::default();
+        let mut index = 1;
+        let mut rect = egui::Rect::NOTHING;
+        let render = |index: &mut usize, rect: &mut egui::Rect, events, enabled| {
+            ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
+                ui.add_enabled_ui(enabled, |ui| {
+                    let response = choice_slider(ui,index,&choices(),"Control density",420.0);
+                    *rect = response.rect;
+                    response.request_focus();
+                });
+            }).drop_without_applying_deltas();
+        };
+        render(&mut index,&mut rect,vec![],true);
+        let arrow = |key| egui::Event::Key {key,physical_key:None,pressed:true,repeat:false,modifiers:egui::Modifiers::NONE};
+        render(&mut index,&mut rect,vec![arrow(egui::Key::ArrowRight)],true);
+        assert_eq!(index,2);
+        render(&mut index,&mut rect,vec![arrow(egui::Key::ArrowLeft)],true);
+        assert_eq!(index,1);
+        let point = rect.right_center() - egui::vec2(rect.height()/2.5,0.0);
+        render(&mut index,&mut rect,vec![egui::Event::PointerMoved(point),egui::Event::PointerButton {
+            pos:point,button:egui::PointerButton::Primary,pressed:true,modifiers:egui::Modifiers::NONE}],true);
+        assert_eq!(index,4);
+        render(&mut index,&mut rect,vec![egui::Event::PointerButton {
+            pos:point,button:egui::PointerButton::Primary,pressed:false,modifiers:egui::Modifiers::NONE}],true);
+        render(&mut index,&mut rect,vec![arrow(egui::Key::ArrowLeft)],false);
+        assert_eq!(index,4);
+    }
+
+    #[test]
+    fn extra_compact_restores_the_historical_eighteen_point_controls() {
+        for dark in [false, true] {
+            for scale in [1.0, 1.25, 1.5, 2.0] {
+                let ctx = egui::Context::default();
+                ctx.set_pixels_per_point(scale);
+                ctx.set_visuals(if dark { egui::Visuals::dark() } else { egui::Visuals::light() });
+                ctx.all_styles_mut(|style| configure(style, UiControlDensity::ExtraCompact));
+                let mut value = "Compact".to_owned();
+                let mut previous = None;
+                for hovered in [false, true, false] {
+                    ctx.run_ui(egui::RawInput {
+                        events: if hovered { vec![egui::Event::PointerMoved(egui::pos2(40.0, 10.0))] }
+                            else { vec![egui::Event::PointerGone] },
+                        ..Default::default()
+                    }, |ui| {
+                        assert_eq!(ui.spacing().interact_size.y, 18.0);
+                        assert_eq!(ui.spacing().button_padding.y, 1.0);
+                        assert_eq!(height(ui), 18.0);
+                        let output = crate::ui::dialog::singleline_text_edit(ui, &mut value).show(ui);
+                        assert_eq!(output.response.rect.height(), 18.0);
+                        assert!((output.galley_pos.y + output.galley.size().y / 2.0
+                            - output.response.rect.center().y).abs() <= 1.0);
+                        let geometry = (output.response.rect, output.galley_pos);
+                        if let Some(previous) = previous { assert_eq!(geometry, previous); }
+                        previous = Some(geometry);
+                    }).drop_without_applying_deltas();
+                }
+            }
+        }
+    }
 
     #[test]
     fn inputs_combos_color_triggers_and_menu_rows_share_density_in_both_themes() {

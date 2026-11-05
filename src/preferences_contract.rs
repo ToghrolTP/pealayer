@@ -1,5 +1,26 @@
 use serde::Serialize;
 
+/// Process-local navigation only; never saves or changes a preference value.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct PreferencesNavigation {
+    #[serde(default)]
+    pub section: Option<String>,
+    pub scroll_y: f32,
+}
+
+impl PreferencesNavigation {
+    pub fn validate(&self) -> Result<(), String> {
+        if !self.scroll_y.is_finite() || !(0.0..=1_000_000.0).contains(&self.scroll_y) {
+            return Err("scroll_y must be a finite offset between 0 and 1000000 logical pixels".into());
+        }
+        if self.section.as_ref().is_some_and(|id| !preference_sections().iter().any(|s| s.id == id)) {
+            return Err("Unknown Preferences section; use an ID from /api/preferences".into());
+        }
+        Ok(())
+    }
+}
+
 fn timeline_wheel_control(key: &'static str, label: &'static str) -> PreferenceControl {
     let mut control = PreferenceControl::select(key, "input", "Timeline navigation", label, &[
         ("zoom", "Zoom"),
@@ -109,6 +130,7 @@ pub struct PreferenceSection {
     pub id: &'static str,
     pub label: &'static str,
     pub icon: &'static str,
+    pub navigation_group: &'static str,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -294,31 +316,37 @@ pub fn preference_sections() -> Vec<PreferenceSection> {
     vec![
         PreferenceSection {
             id: "appearance",
+            navigation_group: "Personalization",
             label: "Appearance",
             icon: "sparkle",
         },
         PreferenceSection {
             id: "playback",
+            navigation_group: "Experience",
             label: "Playback",
             icon: "play",
         },
         PreferenceSection {
             id: "hardware",
+            navigation_group: "Connections",
             label: "Hardware",
             icon: "plug",
         },
         PreferenceSection {
             id: "input",
+            navigation_group: "Connections",
             label: "Input",
             icon: "sliders",
         },
         PreferenceSection {
             id: "web",
+            navigation_group: "Connections",
             label: "Web UI",
             icon: "globe",
         },
         PreferenceSection {
             id: "advanced",
+            navigation_group: "Application",
             label: "Advanced",
             icon: "gear",
         },
@@ -395,23 +423,23 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "Theme",
             &[("system", "System"), ("light", "Light"), ("dark", "Dark")],
         ),
-        PreferenceControl::accent(config),
-        PreferenceControl::choice_slider("ui_control_density", "appearance", "Interface", "Control density",
-            &[("compact", "Compact"), ("regular", "Regular"),
-              ("comfortable", "Comfortable"), ("spacious", "Spacious")]),
-        PreferenceControl::select("ui_font_family", "appearance", "Typography", "UI font",
-            &[("system", "System font"), ("bundled", "Bundled font"), ("vazirmatn", "Vazirmatn")]),
-        PreferenceControl::select("monospace_font_family", "appearance", "Typography", "Monospace font",
-            &[("system", "System font"), ("bundled", "Bundled font")]),
-        PreferenceControl::select("ui_animation_mode", "appearance", "Interface", "Animations and transitions",
-            &[("system", "System default"), ("enabled", "Enabled"), ("disabled", "Disabled")]),
         PreferenceControl::select(
-            "color_palette",
-            "appearance",
-            "Interface",
-            "Color palette",
+            "color_palette", "appearance", "Interface", "Color palette",
             &[("native", "Neutral (default)"), ("studio", "Studio")],
         ),
+        PreferenceControl::accent(config),
+        PreferenceControl::select("workspace_ui", "appearance", "Interface", "Workspace interface",
+            &[("craft_ui", "CraftUI"), ("egui_dock", "egui Dock")]),
+        PreferenceControl::boolean("preferences_grouped_navigation", "appearance", "Interface", "Group Preferences navigation"),
+        PreferenceControl::choice_slider("ui_control_density", "appearance", "Interface", "Control density",
+            &[("extra_compact", "Extra compact"), ("compact", "Compact"), ("regular", "Regular"),
+              ("comfortable", "Comfortable"), ("spacious", "Spacious")]),
+        PreferenceControl::select("ui_font_family", "appearance", "Typography", "UI font",
+            &[("system", "System font"), ("bundled", "Bundled font"), ("vazirmatn", "Vazirmatn"), ("custom", "Choose installed font")]),
+        PreferenceControl::select("monospace_font_family", "appearance", "Typography", "Monospace font",
+            &[("system", "System font"), ("bundled", "Bundled font"), ("custom", "Choose installed font")]),
+        PreferenceControl::select("ui_animation_mode", "appearance", "Interface", "Animations and transitions",
+            &[("system", "System default"), ("enabled", "Enabled"), ("disabled", "Disabled")]),
         application_icon_control("app_icon", "Default icon", "Bundled application icon"),
         PreferenceControl::select(
             "app_icon_preset", "appearance", "Interface", "Application icon",
@@ -865,7 +893,10 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "Update PWM outputs while dragging",
         ),
         PreferenceControl::boolean("pwm_card.show_on", "hardware", "MOSFET cards", "Show On button"),
+        PreferenceControl::boolean("hardware_number_shortcuts_enabled", "input", "Hardware shortcuts", "R / P then digit toggles channel (0 = 10)"),
         PreferenceControl::boolean("pwm_card.show_off", "hardware", "MOSFET cards", "Show Off button"),
+        PreferenceControl::boolean("pwm_card.show_toggle", "hardware", "MOSFET cards", "Show Toggle button"),
+        PreferenceControl::boolean("pwm_card.show_step_buttons", "hardware", "MOSFET cards", "Show slider step buttons"),
         PreferenceControl::boolean("pwm_card.show_decrease", "hardware", "MOSFET cards", "Show Decrease button"),
         PreferenceControl::boolean("pwm_card.show_increase", "hardware", "MOSFET cards", "Show Increase button"),
         PreferenceControl::boolean("pwm_card.show_other", "hardware", "MOSFET cards", "Show other action buttons"),
@@ -1223,6 +1254,22 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
     );
     recent_click.inverted = true;
     controls.insert(14, recent_click);
+    for (key, label, choice, selected) in [
+        ("ui_font_name", "Installed UI font", config.ui_font_family, &config.ui_font_name),
+        ("monospace_font_name", "Installed monospace font", config.monospace_font_family, &config.monospace_font_name),
+    ] {
+        if choice != crate::config::UiFontFamily::Custom { continue; }
+        let mut control = PreferenceControl::select(key, "appearance", "Typography", label, &[]);
+        control.description = Some("Fonts installed on the application host. Unavailable families fall back to the system font.");
+        let mut names = crate::ui::fonts::family_names();
+        if !selected.is_empty() && !names.contains(selected) { names.insert(0, selected.clone()); }
+        control.options = names.into_iter().map(|name| PreferenceOption {
+            value: serde_json::json!(name), label: "Installed font", description: Some(name), color: None, icon: Some("text-t"),
+        }).collect();
+        let after = if key == "ui_font_name" { "ui_font_family" } else { "monospace_font_family" };
+        let index = controls.iter().position(|control| control.key == after).unwrap() + 1;
+        controls.insert(index, control);
+    }
     let mut hints = std::collections::HashSet::new();
     for control in &mut controls {
         control.icon = semantic_preference_icon(control);
@@ -1243,7 +1290,9 @@ fn semantic_preference_icon(control: &PreferenceControl) -> &'static str {
         "color_palette" => "swatches",
         "ui_animation_mode" => "waveform",
         "ui_control_density" => "sliders-horizontal",
-        "ui_font_family" | "monospace_font_family" => "text-t",
+        "workspace_ui" => "tabs",
+        "preferences_grouped_navigation" => "list-checks",
+        "ui_font_family" | "monospace_font_family" | "ui_font_name" | "monospace_font_name" => "text-t",
         "language" => "translate",
         "fullscreen_video_background" => "frame-corners",
         "always_on_top" => "push-pin",
@@ -1328,9 +1377,9 @@ mod tests {
         let contract = super::preferences_contract(&crate::config::AppConfig::default());
         let control = contract.controls.iter().find(|control| control.key == "ui_control_density").unwrap();
         assert!(matches!(control.kind, super::PreferenceControlKind::ChoiceSlider));
-        assert_eq!(control.options.len(), 4);
+        assert_eq!(control.options.len(), 5);
         assert_eq!(contract.values["ui_control_density"], serde_json::json!("compact"));
-        for ((density, option), height) in UiControlDensity::ALL.into_iter().zip(&control.options).zip([24.0, 28.0, 32.0, 36.0]) {
+        for ((density, option), height) in UiControlDensity::ALL.into_iter().zip(&control.options).zip([18.0, 24.0, 28.0, 32.0, 36.0]) {
             assert_eq!(serde_json::to_value(density).unwrap(), option.value);
             assert_eq!(serde_json::from_value::<UiControlDensity>(option.value.clone()).unwrap(), density);
             assert_eq!(density.base_height(), height);
@@ -1342,9 +1391,9 @@ mod tests {
         let controls = preference_controls(&crate::config::AppConfig::default());
         let interface: Vec<_> = controls.iter().filter(|control| control.section == "appearance" && control.group == "Interface").collect();
         assert_eq!(interface.iter().map(|control| control.key).collect::<Vec<_>>(),
-            ["theme", "accent_color", "ui_control_density", "ui_animation_mode", "color_palette", "app_icon_preset", "fullscreen_video_background", "language"]);
+            ["theme", "color_palette", "accent_color", "workspace_ui", "preferences_grouped_navigation", "ui_control_density", "ui_animation_mode", "app_icon_preset", "fullscreen_video_background", "language"]);
         assert_eq!(interface.iter().map(|control| control.icon).collect::<Vec<_>>(),
-            ["circle-half", "palette", "sliders-horizontal", "waveform", "swatches", "image", "frame-corners", "translate"]);
+            ["circle-half", "swatches", "palette", "tabs", "list-checks", "sliders-horizontal", "waveform", "image", "frame-corners", "translate"]);
         for (key, icon) in [("always_on_top", "push-pin"), ("osd_position", "target"), ("osd_timeout_seconds", "clock"),
             ("app_icon_playing", "play"), ("app_icon_paused", "pause"), ("app_icon_stopped", "stop-circle")] {
             assert_eq!(controls.iter().find(|control| control.key == key).unwrap().icon, icon);

@@ -27,7 +27,7 @@ import { useWebPlatform } from './webPlatform';
 import './styles.css';
 import './shared-toasts.css';
 import palettes from '../../assets/themes/palettes.json';
-import { accentForeground, controlDensityHeight, mergeAppearance, paletteName as resolvePaletteName, resolvedAccent, resolvedAppearanceTheme, uiFontCss, monoFontCss } from './appearance';
+import { accentForeground, controlDensityHeight, controlDensityText, mergeAppearance, paletteName as resolvePaletteName, resolvedAccent, resolvedAppearanceTheme, uiFontCss, monoFontCss } from './appearance';
 
 const { Sider, Content } = Layout;
 const RemoteControlTab = React.lazy(() => import('./components/RemoteControlTab').then((module) => ({ default: module.RemoteControlTab })));
@@ -147,8 +147,8 @@ const App: React.FC = () => {
   const animationsEnabled = motionMode === 'enabled' || (motionMode === 'system' && !systemReducedMotion);
   const controlDensity = appearance?.ui_control_density ?? appConfig?.ui_control_density ?? 'compact';
   const controlHeight = controlDensityHeight(controlDensity);
-  const uiFont = uiFontCss(appearance?.ui_font_family ?? appConfig?.ui_font_family ?? 'system');
-  const monoFont = monoFontCss(appearance?.monospace_font_family ?? appConfig?.monospace_font_family ?? 'bundled');
+  const uiFont = uiFontCss(appearance?.ui_font_family ?? appConfig?.ui_font_family ?? 'system', appearance?.ui_font_name ?? appConfig?.ui_font_name);
+  const monoFont = monoFontCss(appearance?.monospace_font_family ?? appConfig?.monospace_font_family ?? 'system', appearance?.monospace_font_name ?? appConfig?.monospace_font_name);
   useEffect(() => {
     document.documentElement.style.setProperty('--ui-font', uiFont);
     document.documentElement.style.setProperty('--mono-font', monoFont);
@@ -261,13 +261,17 @@ const App: React.FC = () => {
         && previous?.ui_animation_mode === appearance.ui_animation_mode
         && previous?.ui_control_density === appearance.ui_control_density
         && previous?.ui_font_family === appearance.ui_font_family
+        && previous?.ui_font_name === appearance.ui_font_name
+        && previous?.monospace_font_name === appearance.monospace_font_name
+        && previous?.workspace_ui === appearance.workspace_ui
+        && previous?.preferences_grouped_navigation === appearance.preferences_grouped_navigation
         && previous?.monospace_font_family === appearance.monospace_font_family) return previous;
         // Motion is part of the shared appearance contract, not a browser-only toggle.
       const next = mergeAppearance(previous ?? {}, appearance);
       persistJson(STORAGE.config, next);
       return next;
     });
-  }, [appearance?.theme, appearance?.color_palette, appearance?.accent_color, appearance?.custom_accent_color, appearance?.ui_animation_mode, appearance?.ui_control_density, appearance?.ui_font_family, appearance?.monospace_font_family]);
+  }, [appearance?.theme, appearance?.color_palette, appearance?.accent_color, appearance?.custom_accent_color, appearance?.ui_animation_mode, appearance?.ui_control_density, appearance?.ui_font_family, appearance?.monospace_font_family, appearance?.ui_font_name, appearance?.monospace_font_name, appearance?.workspace_ui, appearance?.preferences_grouped_navigation]);
 
   const accentColor = resolvedAccent(runtime, appConfig, appearance);
   const accentTextColor = accentForeground(accentColor);
@@ -638,7 +642,7 @@ const App: React.FC = () => {
 
   return (
     <ConfigProvider direction={runtime?.direction}
-      componentSize={controlDensity === 'compact' ? 'small' : 'middle'}
+      componentSize={controlHeight <= 24 ? 'small' : 'middle'}
       theme={{
         algorithm: resolvedTheme === 'light' ? theme.defaultAlgorithm : theme.darkAlgorithm,
           token: {
@@ -664,8 +668,11 @@ const App: React.FC = () => {
           fontFamily: uiFont,
         },
         components: {
-          Select: { optionHeight: controlHeight, optionPadding: '0 8px' },
-          Menu: { itemHeight: controlHeight },
+          Input: controlDensityText(controlDensity),
+          InputNumber: controlDensityText(controlDensity),
+          Button: controlDensityText(controlDensity),
+          Select: { ...controlDensityText(controlDensity), optionHeight: controlHeight, optionPadding: '0 8px' },
+          Menu: { ...controlDensityText(controlDensity), itemHeight: controlHeight },
           Modal: {
             contentBg: palette['surface-1'],
             headerBg: 'transparent',

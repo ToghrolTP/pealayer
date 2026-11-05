@@ -1218,6 +1218,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "duplicate"
+version = "2.0.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8e92f10a49176cbffacaedabfaa11d51db1ea0f80a83c26e1873b43cd1742c24"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "proc-macro2-diagnostics",
+]
+
+[[package]]
 name = "ecolor"
 version = "0.37.0"
 source = "git+https://github.com/storytold/egui.git?rev=6d518fc799681571963842f95b55a6b68431b15a#6d518fc799681571963842f95b55a6b68431b15a"
@@ -1355,6 +1366,18 @@ dependencies = [
  "webbrowser",
  "windows-sys 0.61.2",
  "winit",
+]
+
+[[package]]
+name = "egui_dock"
+version = "0.21.1"
+source = "git+https://github.com/crumblingstatue/egui_dock.git?rev=4bd1dcd90c7a71ed3bf38159f49a2992fa653c2c#4bd1dcd90c7a71ed3bf38159f49a2992fa653c2c"
+dependencies = [
+ "duplicate",
+ "egui",
+ "paste",
+ "serde",
+ "thiserror 2.0.18",
 ]
 
 [[package]]
@@ -3657,6 +3680,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "73072a9470554c8e794778acece2312661218aaabb635600957d952cf01c716e"
 
 [[package]]
+name = "paste"
+version = "1.0.15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57c0d7b74b563b49d38dae00a0c37d4d6de9b432382b2892f0574ddcae73fd0a"
+
+[[package]]
 name = "pealayer"
 version = "0.2.0"
 dependencies = [
@@ -3666,9 +3695,11 @@ dependencies = [
  "eframe",
  "egui-elegance",
  "egui-phosphor",
+ "egui_dock",
  "egui_extras",
  "env_logger",
  "flate2",
+ "fontique",
  "global-hotkey",
  "httparse",
  "httpdate",
@@ -3683,6 +3714,7 @@ dependencies = [
  "mdns-sd",
  "network-interface",
  "notify",
+ "objc2-app-kit 0.3.2",
  "open",
  "pealayer-downloads",
  "raw-window-handle",
@@ -4048,6 +4080,18 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "985e7ec9bb745e6ce6535b544d84d6cd6f7ad8bd711c398938ae983b91a766d9"
 dependencies = [
  "unicode-ident",
+]
+
+[[package]]
+name = "proc-macro2-diagnostics"
+version = "0.10.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "af066a9c399a26e020ada66a034357a868728e72cd426f3adcd35f80d88d88c8"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn 2.0.117",
+ "version_check",
 ]
 
 [[package]]

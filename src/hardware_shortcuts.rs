@@ -5,6 +5,60 @@ use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 use std::collections::BTreeMap;
 use std::hash::{Hash, Hasher};
 
+#[derive(Default)]
+pub struct SequenceMatcher {
+    pending: BTreeMap<String, (usize, f64)>,
+}
+
+impl SequenceMatcher {
+    /// Key-up and auto-repeat cannot advance or restart a sequence. Unrelated
+    /// keys, Escape, timeout, focus loss and entering a text field cancel it.
+    pub fn advance(&mut self, binding: &HardwareKeyBinding, event: &egui::Event, now: f64) -> (bool, bool) {
+        let Some(chord) = chord_from_egui_event(event) else { return (false, false); };
+        self.pending.retain(|_, (_, at)| now - *at <= 1.25);
+        let position = self.pending.remove(&binding.id).map_or(0, |(position, _)| position);
+        let expected = if position == 0 { &binding.chord } else { &binding.then[position - 1] };
+        let next = if &chord == expected { position + 1 }
+            else if chord == binding.chord { 1 } else { return (false, false); };
+        let complete = next > binding.then.len();
+        if !complete { self.pending.insert(binding.id.clone(), (next, now)); }
+        (true, complete)
+    }
+}
+
+/// Bind numbered shortcuts only to the coordinator's currently advertised
+/// output identities/actions. Raw relays reserved by semantic seats are not
+/// advertised as managed controls and therefore never receive shortcuts.
+pub fn number_shortcuts(capabilities: &crate::four_d::controller::HardwareCapabilities) -> Vec<HardwareKeyBinding> {
+    let controls = &capabilities.controls;
+    let mut bindings = Vec::new();
+    for (prefix, outputs, zero_based) in [
+        ("KeyR", &capabilities.relays, false),
+        ("KeyP", &capabilities.pwm_channels, true),
+    ] {
+        for output in outputs {
+            let number = u16::from(output.id) + u16::from(zero_based);
+            if !(1..=10).contains(&number) { continue; }
+            let Some(control) = controls.iter().find(|control| control.key == output.key) else { continue; };
+            let action = if let Some(toggle) = control.actions.iter().find(|action| action.verb.eq_ignore_ascii_case("toggle")) {
+                crate::config::HardwareKeyBindingAction::Invoke { action_id: toggle.id.clone(), label: toggle.name.clone() }
+            } else if let (Some(on), Some(off)) = (
+                control.actions.iter().find(|action| action.verb.eq_ignore_ascii_case("on")),
+                control.actions.iter().find(|action| action.verb.eq_ignore_ascii_case("off"))) {
+                crate::config::HardwareKeyBindingAction::Toggle { on_action_id:on.id.clone(), off_action_id:off.id.clone() }
+            } else { continue; };
+            bindings.push(HardwareKeyBinding {
+                id: format!("number-shortcut:{}", control.key), channel_key: control.key.clone(),
+                chord: KeyChord { key: prefix.into(), ..Default::default() },
+                then: vec![KeyChord { key: format!("Digit{}", number % 10), ..Default::default() }],
+                action,
+                ..Default::default()
+            });
+        }
+    }
+    bindings
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct HardwareShortcutEvent {
     pub binding_id: String,
@@ -55,7 +109,7 @@ impl GlobalHardwareShortcutRuntime {
 
         let globals = bindings
             .iter()
-            .filter(|binding| binding.enabled && binding.global)
+            .filter(|binding| binding.enabled && binding.global && binding.then.is_empty())
             .collect::<Vec<_>>();
         if globals.is_empty() {
             return;
@@ -270,6 +324,41 @@ pub(crate) fn egui_key_code(key: egui::Key) -> Option<&'static str> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn key(key: egui::Key) -> egui::Event {
+        egui::Event::Key { key, physical_key: Some(key), pressed: true, repeat: false, modifiers: egui::Modifiers::NONE }
+    }
+
+    #[test]
+    fn sequence_requires_order_and_expires_and_cancels() {
+        let binding = HardwareKeyBinding { chord: KeyChord { key: "KeyR".into(), ..Default::default() },
+            then: vec![KeyChord { key: "Digit5".into(), ..Default::default() }], ..Default::default() };
+        let mut matcher = SequenceMatcher::default();
+        assert_eq!(matcher.advance(&binding, &key(egui::Key::Num5), 0.0), (false, false));
+        assert_eq!(matcher.advance(&binding, &key(egui::Key::R), 0.1), (true, false));
+        assert_eq!(matcher.advance(&binding, &key(egui::Key::Num5), 0.2), (true, true));
+        assert_eq!(matcher.advance(&binding, &key(egui::Key::Num5), 0.3), (false, false));
+        matcher.advance(&binding, &key(egui::Key::R), 1.0);
+        assert_eq!(matcher.advance(&binding, &key(egui::Key::Num5), 3.0), (false, false));
+        matcher.advance(&binding, &key(egui::Key::R), 4.0);
+        matcher.advance(&binding, &key(egui::Key::Escape), 4.1);
+        assert_eq!(matcher.advance(&binding, &key(egui::Key::Num5), 4.2), (false, false));
+    }
+
+    #[test]
+    fn numbered_shortcuts_use_advertised_actions_and_zero_means_ten() {
+        use crate::four_d::controller::{HardwareCapabilities, HardwareControl, HardwareOutput, HardwareAction};
+        let mut caps = HardwareCapabilities::default();
+        caps.pwm_channels.push(HardwareOutput {id:9, key:"named-output".into(), name:String::new(), role:String::new(), control:String::new()});
+        caps.controls.push(HardwareControl { key:"named-output".into(), kind:"pwm".into(),
+            actions:vec![HardwareAction {id:"advertised-toggle".into(), verb:"toggle".into(), ..Default::default()}], ..Default::default() });
+        let bindings = number_shortcuts(&caps);
+        assert_eq!(bindings.len(), 1);
+        assert_eq!(bindings[0].display_shortcut(), "P → 0");
+        assert!(!bindings[0].global);
+        caps.controls[0].actions.clear();
+        assert!(number_shortcuts(&caps).is_empty());
+    }
 
     #[test]
     fn capture_and_match_use_one_portable_physical_chord() {

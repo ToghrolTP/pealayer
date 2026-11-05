@@ -1,7 +1,7 @@
 # Shared control density and contextual buzzer actions
 
-Preferences / Appearance / Control density uses a four-step slider: Compact
-(24 points), Regular (28), Comfortable (32), and Spacious (36). Configuration
+Preferences / Appearance / Control density uses a five-step slider: Extra compact
+(18 points), Compact (24), Regular (28), Comfortable (32), and Spacious (36). Configuration
 stores the semantic choice, not a slider index; existing Compact/Comfortable
 settings retain their sizing. Web commits the choice on release or keyboard
 completion rather than persisting every drag update. Native edits preview in
@@ -12,6 +12,74 @@ them together. Web follows the same shared appearance setting through Ant
 Design tokens and the custom color menu's shared height variable. Saving,
 preview, discarding and cross-client appearance reconciliation use the existing
 preferences path, not a separate per-widget setting.
+
+## Aligned discrete-choice control
+
+The density selector now uses an explicit circular thumb and five subtle detents
+inside the rail. The former notches were painted at the bottom edge of the whole
+Slider response, with endpoint calculations assuming a circle even when the theme
+used a narrow rectangular thumb. That made marks disagree with the thumb and
+stick below the control. Labels were also captured before slider input was applied.
+
+The replacement gives the inner slider and its reserved slot the same height,
+including with large fonts. Detents share the actual travel range and centerline;
+the active marker is covered by the thumb. Fixed stroke widths, inset endpoints
+and clipping prevent hover/focus bleed. The selected label updates in the same
+frame, in a rounded neutral capsule whose width reserves the longest translated
+choice. Text ink is vertically centered. Narrow layouts stack the capsule below
+the rail instead of shrinking the rail into an unusable target.
+
+This changes presentation, not stored values, density heights, live preview or
+Save/Discard semantics. The stock slider still owns drag, keyboard and accessibility
+interaction. Web uses the same five-choice contract and matching stable capsule;
+hidden measurement labels are excluded from accessibility navigation.
+
+Native regression tests compare actual painted thumb/marker positions and text
+origins at all five densities, light/dark themes, three scales, two font sizes and
+180/260/420-point control widths, through idle/hover/focus/disabled states. Pointer,
+keyboard and disabled input behavior are covered separately. All 13 density-related
+Rust tests pass, alongside TypeScript, 53 Web parity guards and responsive guards.
+
+The packaged Windows build passed the host-specific libmpv smoke test and resource
+checks. The actual native Preferences window was opened and positioned through its
+API in an isolated, hardware-disconnected review profile, then captured using the
+read-only Windows capture helper. The capture confirms contained markers and
+centered capsule text; it is not a mock-up. No preference was changed for this capture.
+
+![Control density in the running native application](../screenshots/control-density-native-detail.png)
+
+[Full Preferences screenshot](../screenshots/control-density-native.png)
+
+Production activation is a separate gate: the canonical updater awaits the user's
+approved launch, and Cafe's configured SSH endpoint refused connection during this
+pass. These screenshots prove the review build, not installation on either host.
+
+## Restored original density
+
+The parent of `88741e3` pinned egui 0.36.2 and did not override its spacing:
+`Spacing::default` supplied `interact_size.y = 18` and `button_padding.y = 1`.
+Earlier `2b079a9` had explicitly removed the 30-point theme override. The
+unification in `88741e3` then introduced a 24-point Compact floor; `b455f59`
+added the 28/32/36 choices without restoring the original minimum.
+
+Extra compact restores that 18-point minimum **and** 1-point padding. Using the
+new icon-derived padding would enlarge the restored controls again. These are
+logical points, not physical screen pixels. Large fonts may expand the height.
+Existing saved choices and the Compact default are unchanged. Native and Web
+share the `extra_compact` value; Web control line-height also accommodates 18px
+instead of its default 22px text line forcing inputs taller.
+The exact-size test checks actual input rectangles and text origins across hover,
+both themes and fractional scales. The shared input/selector/menu matrix and
+serialization tests now include all five choices. Repository instructions retain
+the historical baseline so future theme work cannot silently drop it again.
+
+The restored-size pass also exposed PWM step buttons reserving a square but
+allocating additional horizontal text padding. Their measured width now matches
+the font-aware square reserved by the row, including narrow cards. Ten focused
+native density tests, six Web appearance tests, responsive/parity guards and
+TypeScript checking pass. This is source/geometry evidence, not a deployment
+receipt: Cafe's SSH endpoint was unreachable during this pass, and launching
+the isolated native review app remains blocked by execution policy.
 
 The mismatch was introduced in `277647be`: the integrated Custom color selector
 used the fixed 32-point dropdown `ROW_HEIGHT` for its closed trigger. Other
@@ -40,7 +108,7 @@ not proof of owned melody/tone playback.
 ## Verification and delivery boundary
 
 Rendered tests compare input/ComboBox/color-trigger/color-field/menu heights in
-all four densities, both themes, four scales and 12/14/20-point fonts. Hover/selected
+all five densities, both themes, four scales and 12/14/20-point fonts. Hover/selected
 and focused loop states retain exact caption and neighbor geometry. Existing
 rename, dropdown keyboard, Custom expansion, swatches and cancellation coverage
 is retained. Native tests use inert fixtures; Web guards verify the shared policy.

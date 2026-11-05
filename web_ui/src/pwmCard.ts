@@ -1,11 +1,15 @@
-export type PwmCardPreferences = { show_on: boolean; show_off: boolean; show_decrease: boolean;
+export type PwmCardPreferences = { show_on: boolean; show_off: boolean; show_toggle: boolean; show_step_buttons: boolean; show_decrease: boolean;
   show_increase: boolean; show_other: boolean; indicator_action: 'toggle' | 'on' | 'off' };
 type Action = { id: string; verb: string };
 export function observedControlActive(control: {active?:boolean|null}): boolean | undefined {
   return typeof control.active === 'boolean' ? control.active : undefined;
 }
-export function powerActionSelected(verb: string, active: boolean | undefined) {
-  return (verb.toLowerCase() === 'on' && active === true) || (verb.toLowerCase() === 'off' && active === false);
+export function powerActionSelected(verb: string, active: boolean | undefined, direction?: string | null) {
+  return (verb.toLowerCase() === 'on' && active === true) || (verb.toLowerCase() === 'off' && active === false)
+    || (['up', 'down'].includes(verb.toLowerCase()) && verb.toLowerCase() === direction);
+}
+export function pwmAdjustment(modifiers: {ctrlKey?:boolean;metaKey?:boolean;shiftKey?:boolean}) {
+  return modifiers.ctrlKey || modifiers.metaKey ? 0.1 : modifiers.shiftKey ? 10 : 1;
 }
 /** rc-slider starts changes on any mousedown. Stop non-primary starts in capture,
  * before its rail/handle handlers, without cancelling the separate contextmenu. */
@@ -13,11 +17,13 @@ export function guardHardwarePointerStart(event: {button:number;stopPropagation:
   if (event.button !== 0) event.stopPropagation();
 }
 export const defaultPwmCard: PwmCardPreferences = { show_on: true, show_off: true,
+  show_toggle: true, show_step_buttons: false,
   show_decrease: true, show_increase: true, show_other: true, indicator_action: 'toggle' };
 export function pwmActionVisible(preferences: PwmCardPreferences, verb: string): boolean {
   switch (verb.toLowerCase()) {
     case 'on': return preferences.show_on;
     case 'off': return preferences.show_off;
+    case 'toggle': return preferences.show_toggle;
     case 'increase': return preferences.show_increase;
     case 'decrease': return preferences.show_decrease;
     default: return preferences.show_other;
@@ -30,5 +36,8 @@ export function pwmIndicatorAction<T extends Action>(preferences: PwmCardPrefere
 }
 export function pwmRowActions<T extends Action>(preferences: PwmCardPreferences, actions: T[]): T[] {
   return actions.filter(action => !['increase', 'decrease'].includes(action.verb.toLowerCase())
-    && pwmActionVisible(preferences, action.verb));
+    && pwmActionVisible(preferences, action.verb)).sort((a, b) => {
+      const rank = (verb:string) => ({off:0,toggle:1,on:2}[verb.toLowerCase()] ?? 3);
+      return rank(a.verb) - rank(b.verb);
+    });
 }

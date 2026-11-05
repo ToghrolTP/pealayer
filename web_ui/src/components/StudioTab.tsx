@@ -31,6 +31,8 @@ import type { PlayerState } from './RemoteControlTab';
 import { tr, UiLocale } from '../i18n';
 import { EffectIconPicker, effectGlyph as configuredEffectGlyph } from '../effectIcons';
 import { SoundEffectFields } from './SoundEffectFields';
+import { StripDesigner } from './StripDesigner';
+import { stripDraftError } from '../stripProgram';
 import { Typography } from 'antd';
 import { GroupSelect } from './GroupSelect';
 import { EffectRecorder } from './EffectRecorder';
@@ -574,10 +576,10 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
         closable={!captureBusy && !savingEffect}
         maskClosable={!captureBusy && !savingEffect}
         keyboard={!captureBusy && !savingEffect}
-        okButtonProps={{ disabled: captureBusy || savingEffect }}
+        okButtonProps={{ disabled: captureBusy || savingEffect || !effectDraft?.name.trim() || (effectDraft?.kind === 'strip-stream' && !!stripDraftError(effectDraft)) }}
         cancelButtonProps={{ disabled: captureBusy || savingEffect }}
         confirmLoading={savingEffect}
-        okText={tr(locale, 'Save')}
+        okText={tr(locale, effectDraft?.kind === 'audio' ? 'Save' : 'Publish')}
         width={640}
         onOk={async () => {
           if (!effectDraft || savingEffect) return;
@@ -604,8 +606,11 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
             <label className="effect-editor-grid__wide"><DesignerFieldLabel label="Description" locale={locale} /><Input value={effectDraft.description} onChange={(event) => setEffectDraft({ ...effectDraft, description: event.target.value })} /></label>
             <label><DesignerFieldLabel label="Length" locale={locale} />{effectDraft.kind === 'audio' ? <Typography.Text type="secondary">{formatTimeMs(effectDraft.duration_ms, state.human_readable_time_units !== false)}</Typography.Text> : effectDraft.kind === 'sequence' ? <Typography.Text type="secondary">{repeatedSequenceDurationMs(effectDraft.steps, effectDraft.repeat_count, effectDraft.repeat_interval_ms) === null ? '—' : formatTimeMs(repeatedSequenceDurationMs(effectDraft.steps, effectDraft.repeat_count, effectDraft.repeat_interval_ms)!, state.human_readable_time_units !== false)}</Typography.Text> : <TimeValueField min={1} value={effectDraft.duration_ms} human={state.human_readable_time_units !== false} onChange={duration_ms => setEffectDraft({ ...effectDraft, duration_ms: Math.round(duration_ms) })} />}</label>
             {effectDraft.kind === 'audio' && <SoundEffectFields program={JSON.parse(effectDraft.programText || '{}')} onChange={(patch) => setEffectDraft({ ...effectDraft, programText: JSON.stringify({ ...JSON.parse(effectDraft.programText || '{}'), ...patch }) })} state={state} reference={effectDraft.reference} apiBaseUrl={apiBaseUrl} locale={locale} sendCmd={sendCmd} />}
-            {effectDraft.kind === 'strip-stream' && <label><DesignerFieldLabel label="Frames per second" locale={locale} /><InputNumber min={1} max={120} value={effectDraft.default_fps} onChange={(default_fps) => setEffectDraft({ ...effectDraft, default_fps: default_fps ?? 20 })} /></label>}
-            {effectDraft.kind === 'strip-stream' && <label><DesignerFieldLabel label="Pixels" locale={locale} /><InputNumber min={1} value={effectDraft.default_pixels} onChange={(default_pixels) => setEffectDraft({ ...effectDraft, default_pixels: default_pixels ?? 100 })} /></label>}
+            {effectDraft.kind === 'strip-stream' && <label><DesignerFieldLabel label="Frames per second" locale={locale} /><InputNumber min={state.hardware_details?.strip?.minimum_fps ?? 1} max={state.hardware_details?.strip?.maximum_fps ?? 120} value={effectDraft.default_fps} onChange={(default_fps) => setEffectDraft({ ...effectDraft, default_fps: default_fps ?? 20 })} /></label>}
+            {effectDraft.kind === 'strip-stream' && <label><DesignerFieldLabel label="Pixels" locale={locale} /><InputNumber min={state.hardware_details?.strip?.minimum_pixels ?? 1} max={state.hardware_details?.strip?.maximum_pixels ?? 100} value={effectDraft.default_pixels} onChange={(default_pixels) => setEffectDraft({ ...effectDraft, default_pixels: default_pixels ?? 100 })} /></label>}
+            {effectDraft.kind === 'strip-stream' && <div className="effect-editor-grid__wide"><StripDesigner value={effectDraft.programText} pixels={effectDraft.default_pixels} locale={locale} disabled={captureBusy||savingEffect} onChange={programText=>setEffectDraft({...effectDraft,programText})}/>
+              <Space wrap><Button icon={<CaretRightFilled/>} disabled={captureBusy||savingEffect||!hardwareOutputsAvailable(state)||Boolean(state.estop_active)||!effectDraft.name.trim()||!!stripDraftError(effectDraft)} onClick={()=>{void sendCmd('controller_effect.publish_and_run',effectPayload(effectDraft));}}>{tr(locale,'Publish & Run')}</Button><Button icon={<StopOutlined/>} disabled={!state.hardware_details?.strip?.running} onClick={()=>{void sendCmd('hardware.strip.stop');}}>{tr(locale,'Stop')}</Button></Space>
+            </div>}
             {effectDraft.kind === 'sequence' && <label><DesignerFieldLabel label="Color" locale={locale} /><ColorDropdown disabled={captureBusy} locale={locale}
               value={effectDraft.color.startsWith('#') ? 'custom' : effectDraft.color}
               customHex={effectDraft.color.startsWith('#') ? effectDraft.color : (recordingColors.find(color => color.id === effectDraft.color)?.hex ?? '#38D27A')}

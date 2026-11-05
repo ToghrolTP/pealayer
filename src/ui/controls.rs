@@ -649,8 +649,22 @@ pub fn draw_elapsed_editor(
     }
     let mut escape = false;
     let mut enter = false;
+    let mut rejected = false;
     let before_edit = app.elapsed_time_input.clone();
     for event in &timecode_events {
+        match event {
+            egui::Event::Text(text) | egui::Event::Ime(egui::ImeEvent::Commit(text)) => {
+                if !normalize_timecode_digits(text).chars().all(|c| c.is_ascii_digit() || c == ':' || c == '.') {
+                    rejected = true;
+                    continue;
+                }
+            }
+            egui::Event::Paste(text) if parse_elapsed_edit_time(text).is_none() => {
+                rejected = true;
+                continue;
+            }
+            _ => {}
+        }
         match event {
             egui::Event::Key { key: egui::Key::Escape, pressed: true, .. } => escape = true,
             egui::Event::Key { key: egui::Key::Enter, pressed: true, .. } => enter = true,
@@ -673,6 +687,7 @@ pub fn draw_elapsed_editor(
         }
     }
     let mut display_buffer = rendered;
+    let invalid_flash = crate::ui::validated_input::invalid_feedback(ui, edit_id, rejected);
     let buffer = if editing {
         &mut app.elapsed_time_input
     } else {
@@ -692,7 +707,7 @@ pub fn draw_elapsed_editor(
         .interactive(editing)
         .frame(if editing {
             egui::Frame::new()
-                .fill(ui.visuals().extreme_bg_color)
+                .fill(if invalid_flash { egui::Color32::from_rgb(125, 35, 40) } else { ui.visuals().extreme_bg_color })
                 .stroke(ui.visuals().widgets.active.bg_stroke)
                 .corner_radius(ui.visuals().widgets.active.corner_radius)
         } else {

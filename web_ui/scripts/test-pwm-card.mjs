@@ -35,8 +35,11 @@ assert.equal(hardwareControlIdentity({key:'seat.a',kind:'motion'}),'A');
 const rf = readFileSync(new URL('../src/components/RfManager.tsx',import.meta.url),'utf8');
 assert.match(rf, /<Modal key=\{assignment\?\.nonce \?\? 'rf-general'\} zIndex=\{1200\}/,
   'A reused RF portal must be above channel detail, with a fresh body for each explicit assignment.');
-assert.deepEqual(pwmRowActions(defaultPwmCard, actions).map(a => a.verb), ['on','off','toggle']);
-assert.deepEqual(pwmRowActions({...defaultPwmCard, show_on:false, show_other:false}, actions).map(a => a.verb), ['off']);
+assert.deepEqual(pwmRowActions(defaultPwmCard, actions).map(a => a.verb), ['off','toggle','on']);
+assert.deepEqual(pwmRowActions({...defaultPwmCard, show_on:false, show_other:false, show_toggle:false}, actions).map(a => a.verb), ['off']);
+assert.equal(defaultPwmCard.show_step_buttons, false);
+assert(powerActionSelected('up', true, 'up'));
+assert(!powerActionSelected('down', true, 'up'));
 assert.equal(pwmActionVisible({...defaultPwmCard,show_decrease:false}, 'decrease'),false);
 assert.equal(pwmActionVisible({...defaultPwmCard,show_decrease:false}, 'increase'),true);
 assert.equal(pwmIndicatorAction(defaultPwmCard,actions)?.id,'pwm.1.toggle');

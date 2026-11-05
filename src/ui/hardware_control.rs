@@ -334,7 +334,7 @@ fn channel_binding_summary(app: &PealayerApp, channel_key: &str) -> Option<(Stri
     let short = bindings
         .iter()
         .take(2)
-        .map(|binding| binding.chord.display_name())
+        .map(|binding| binding.display_shortcut())
         .collect::<Vec<_>>()
         .join(" · ");
     let short = if bindings.len() > 2 {
@@ -347,7 +347,7 @@ fn channel_binding_summary(app: &PealayerApp, channel_key: &str) -> Option<(Stri
         .map(|binding| {
             format!(
                 "{} — {}{}",
-                binding.chord.display_name(),
+                binding.display_shortcut(),
                 hardware_binding_action_label(binding, app),
                 if binding.global {
                     format!(" ({})", app.tr("Global"))
@@ -1793,7 +1793,7 @@ fn draw_binding_action_editor(
             .iter()
             .any(|action| action.verb.eq_ignore_ascii_case("off"));
     let is_pwm = matches!(control.kind.as_str(), "pwm" | "mosfet");
-    let has_hold_pair = control.actions.len() >= 2;
+    let has_hold_pair = control.actions.len() >= 2 && draft.then.is_empty();
     let mut mode = binding_editor_mode(&draft.action);
     crate::ui::dropdown::ComboBox::from_id_salt(("hardware-binding-mode", &draft.id))
         .selected_text(match mode {
@@ -1952,7 +1952,8 @@ fn draw_hardware_binding_dialog(
             .find_map(crate::hardware_shortcuts::chord_from_egui_event)
             && let Some(binding) = draft.as_mut()
         {
-            binding.chord = chord;
+            let append = ctx.data_mut(|data| data.remove_temp::<bool>(egui::Id::new("hardware-binding-append"))).unwrap_or(false);
+            if append { binding.then.push(chord); } else { binding.chord = chord; binding.then.clear(); }
             app.hardware_binding_capturing = false;
         }
     }
@@ -2057,14 +2058,25 @@ fn draw_hardware_binding_dialog(
                             let label = if app.hardware_binding_capturing {
                                 app.tr("Press a key or key combination…")
                             } else {
-                                binding.chord.display_name()
+                                binding.display_shortcut()
                             };
                             let button = egui::Button::new(
                                 egui::RichText::new(label).size(16.0).strong(),
                             )
                             .min_size(egui::vec2(270.0, 42.0));
                             if ui.add(button).clicked() {
+                                ctx.data_mut(|data| data.insert_temp(egui::Id::new("hardware-binding-append"), false));
                                 app.hardware_binding_capturing = true;
+                            }
+                            if ui.add_enabled(!binding.global && binding.then.len() < 3
+                                && !matches!(binding.action, crate::config::HardwareKeyBindingAction::Hold { .. }),
+                                egui::Button::new(format!("{} {}", crate::ui::icons::PLUS, app.tr("Record next key"))))
+                                .clicked() {
+                                ctx.data_mut(|data| data.insert_temp(egui::Id::new("hardware-binding-append"), true));
+                                app.hardware_binding_capturing = true;
+                            }
+                            if !binding.then.is_empty() && ui.button(app.tr("Clear sequence")).clicked() {
+                                binding.then.clear();
                             }
                             if app.hardware_binding_capturing
                                 && ui
@@ -2101,14 +2113,14 @@ fn draw_hardware_binding_dialog(
                     &app.tr("Availability"),
                     |ui| {
                         ui.checkbox(&mut binding.enabled, app.tr("Binding enabled"));
-                        ui.checkbox(
+                        ui.add_enabled_ui(binding.then.is_empty(), |ui| ui.checkbox(
                             &mut binding.global,
                             format!(
                                 "{} ({})",
                                 app.tr("Work when Pealayer is not in the foreground"),
                                 hardware_binding_platform_label(app)
                             ),
-                        );
+                        ));
                         ui.label(
                             egui::RichText::new(if binding.global {
                                 app.tr("The operating system registers and delivers this hotkey to Pealayer.")
@@ -2218,7 +2230,7 @@ fn draw_hardware_binding_dialog(
                                         toggle_binding = Some((binding.id.clone(), enabled));
                                     }
                                     ui.label(
-                                        egui::RichText::new(binding.chord.display_name())
+                                        egui::RichText::new(binding.display_shortcut())
                                             .strong()
                                             .color(accent),
                                     );
@@ -2429,7 +2441,7 @@ fn draw_channel_live_control(
 ) {
     if let Some(channel) = capabilities.pwm_channels.iter().find(|channel| channel.key == control.key) {
         crate::ui::layout::draw_pwm_card_editor(app, ui, capabilities, control, channel, ui.available_width());
-        crate::ui::layout::draw_pwm_power_actions(app, ui, control);
+        crate::ui::layout::draw_pwm_power_actions(app, ui, capabilities, control);
         return;
     }
     if !control.actions.is_empty() {
@@ -2450,13 +2462,14 @@ fn draw_channel_live_control(
         for row in actions.chunks(columns) {
             ui.columns(columns, |uis| {
                 for (index, action) in row.iter().enumerate() {
+                    let enabled = !app.estop_active && !control.locked && !app.hardware_programming_blocked();
+                    let button = crate::ui::layout::hardware_action_button(&uis[index], format!(
+                        "{}  {}", crate::ui::icons::action(&action.verb),
+                        crate::ui::i18n::visual_text(app.language, &action.name)), &action.verb,
+                        crate::ui::layout::hardware_action_selected(capabilities, control, &action.verb), enabled);
                     let response = uis[index].add_enabled(
-                        !app.estop_active && !control.locked && !app.hardware_programming_blocked(),
-                        egui::Button::new(format!(
-                            "{}  {}",
-                            crate::ui::icons::action(&action.verb),
-                            crate::ui::i18n::visual_text(app.language, &action.name)
-                        ))
+                        enabled,
+                        button
                         .corner_radius(7.0)
                         .min_size(egui::vec2(uis[index].available_width(), 34.0)),
                     );
@@ -2969,11 +2982,11 @@ fn draw_channel_detail_page(
                                 } else {
                                     for binding in &bindings {
                                         let state = if binding.enabled {
-                                            binding.chord.display_name()
+                                            binding.display_shortcut()
                                         } else {
                                             format!(
                                                 "{} ({})",
-                                                binding.chord.display_name(),
+                                                binding.display_shortcut(),
                                                 app.tr("disabled")
                                             )
                                         };

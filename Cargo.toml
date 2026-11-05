@@ -14,6 +14,9 @@ resolver = "3"
 [dependencies]
 pealayer-downloads = { path = "crates/download-core", features = ["ui"] }
 craft-ui = { git = "https://github.com/storytold/craft-libs.git", features = ["serde"] }
+# Upstream egui 0.37 port (anhosh/egui_dock#354), pinned for reproducible builds.
+egui_dock = { git = "https://github.com/crumblingstatue/egui_dock.git", rev = "4bd1dcd90c7a71ed3bf38159f49a2992fa653c2c", features = ["serde"] }
+fontique = "0.11.1"
 eframe = { version = "0.37", features = ["glow", "persistence"] }
 egui-elegance = "=0.17.0"
 winit = { version = "0.30", default-features = false }
@@ -75,6 +78,7 @@ windows = { version = "0.62", features = [
     "Win32_UI_Shell_Common",
     "Win32_UI_Shell_PropertiesSystem",
     "Win32_System_Com",
+    "Win32_System_Diagnostics_Debug",
     "Win32_System_DataExchange",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_Variant",
@@ -92,6 +96,9 @@ windows = { version = "0.62", features = [
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSFont", "objc2-core-foundation"] }
 
 [profile.dev]
 # Routine builds reuse dependencies without large symbol files or incremental snapshots.
