@@ -63,6 +63,8 @@ No previews, publishing, hardware outputs or media seeking are involved.
 
 Cafe deployment is deferred at the user's request while it is unavailable.
 Local source, fixture and package verification are not installed Cafe acceptance.
+The [delivery receipt](repeat-projection-delivery.md) preserves the tested
+package identity and current local installation boundary.
 
 Preferences → Hardware → Effect designer colors exposes background colors for
 motion, relays, PWM, buzzer, status RGB, strip pixels, RF, displays, front-panel
@@ -87,5 +89,5 @@ contract tests; the paired controller owns its stable-path Go suites.
 Private existing effects are not automatically folded or decompiled into loops.
 Preserve previously reauthored explicit schedules and any current working draft.
 Source tests and non-actuating save/catalog checks are not human motion, firmware
-timing or sustained output acceptance. Cafe Pealayer deployment retains its
-existing smoke-launch-denial boundary; a local package is not Cafe delivery.
+timing or sustained output acceptance. A local package is not Cafe delivery;
+the current installation boundary is recorded in the delivery receipt above.
