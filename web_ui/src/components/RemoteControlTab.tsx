@@ -115,7 +115,7 @@ export interface PlayerState {
     pwm_revision?: number;
     pwm_available?: boolean | null;
     motion_control_mode?: 'hold' | 'toggle';
-    pwm_card?: { show_on: boolean; show_off: boolean; show_decrease: boolean; show_increase: boolean;
+    pwm_card?: { show_on: boolean; show_off: boolean; show_toggle: boolean; show_step_buttons: boolean; show_decrease: boolean; show_increase: boolean;
       show_other: boolean; indicator_action: 'toggle' | 'on' | 'off' };
     profile?: { key: string; mode: string; configured: boolean; attached: boolean; revision: string; expose_raw_relays: boolean } | null;
     port?: { name: string; display_name: string; friendly_name: string; product: string; manufacturer: string; vid: string; pid: string; serial_number: string };

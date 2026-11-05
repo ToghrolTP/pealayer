@@ -767,6 +767,8 @@ body {
 .hardware-control__actions .ant-btn { min-width: 0; flex: 1 1 auto; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .hardware-power-action--on { --hardware-power-tone: var(--green); }
 .hardware-power-action--off { --hardware-power-tone: var(--red); }
+.hardware-power-action--up { --hardware-power-tone: var(--orange); }
+.hardware-power-action--down { --hardware-power-tone: var(--blue); }
 .hardware-power-action.ant-btn:not(:disabled) { color: var(--hardware-power-tone); border-color: color-mix(in srgb, var(--hardware-power-tone) 65%, var(--line)); background: color-mix(in srgb, var(--hardware-power-tone) 7%, var(--surface-2)); box-shadow: none; }
 .hardware-power-action.ant-btn.is-selected:not(:disabled) { background: color-mix(in srgb, var(--hardware-power-tone) 20%, var(--surface-2)); }
 .hardware-power-action.ant-btn:not(:disabled):hover { border-color: var(--hardware-power-tone); background: color-mix(in srgb, var(--hardware-power-tone) 14%, var(--surface-2)); }

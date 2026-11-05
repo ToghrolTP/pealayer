@@ -2210,7 +2210,7 @@ fn pwm_step_action<'a>(
     control: &'a crate::four_d::controller::HardwareControl,
     verb: &str,
 ) -> Option<&'a crate::four_d::controller::HardwareAction> {
-    app.pwm_card.shows(verb).then(|| control.actions.iter()
+    (app.pwm_card.show_step_buttons && app.pwm_card.shows(verb)).then(|| control.actions.iter()
         .find(|action| action.verb.eq_ignore_ascii_case(verb))).flatten()
 }
 
@@ -2218,7 +2218,7 @@ fn draw_pwm_step_button(
     ui: &mut egui::Ui, app: &PealayerApp,
     control: &crate::four_d::controller::HardwareControl,
     action: &crate::four_d::controller::HardwareAction, enabled: bool,
-) {
+) -> bool {
     let size = crate::ui::control_density::height(ui);
     let response = ui.scope(|ui| {
         // The row reserves a square, not a text button plus horizontal padding.
@@ -2228,9 +2228,18 @@ fn draw_pwm_step_button(
             .min_size(egui::vec2(size, size)))
             .on_hover_text(crate::ui::i18n::visual_text(app.language, &action.name))
     }).inner;
-    if hardware_control_activated(app, ui, &response) {
-        crate::ui::hardware_control::invoke_action(app, control, action);
-    }
+    let _ = control;
+    hardware_control_activated(app, ui, &response)
+}
+
+/// One percentage point normally, a tenth with Ctrl, ten with Shift.
+/// Ctrl wins when both modifiers are held; all input methods share the policy.
+pub(crate) fn pwm_adjustment(modifiers: egui::Modifiers) -> f64 {
+    if modifiers.ctrl || modifiers.mac_cmd { 0.1 } else if modifiers.shift { 10.0 } else { 1.0 }
+}
+
+fn adjusted_pwm(value: f64, steps: f64, modifiers: egui::Modifiers) -> f64 {
+    ((value + steps * pwm_adjustment(modifiers)).clamp(0.0, 100.0) * 10.0).round() / 10.0
 }
 
 fn draw_pwm_editor_row_with_buttons(
@@ -2265,6 +2274,8 @@ fn draw_pwm_editor_row_with_buttons(
             session.at_frame(ui.ctx().cumulative_frame_nr());
             *percent = session.begin(*percent);
             let before_controls = *percent;
+            let modifiers = ui.input(|input| input.modifiers);
+            let mut stepped = false;
             let gap = ui.spacing().item_spacing.x;
             let decrease = buttons.and_then(|(app, control)| pwm_step_action(app, control, "decrease"));
             let increase = buttons.and_then(|(app, control)| pwm_step_action(app, control, "increase"));
@@ -2273,7 +2284,10 @@ fn draw_pwm_editor_row_with_buttons(
             let (slider_width, number_width) = pwm_editor_widths((row_width - reserved).max(60.0), gap);
             if let Some(action) = decrease {
                 let (app, control) = buttons.expect("action has a source");
-                draw_pwm_step_button(ui, app, control, action, editable);
+                if draw_pwm_step_button(ui, app, control, action, editable) {
+                    *percent = adjusted_pwm(*percent, -1.0, modifiers);
+                    stepped = true;
+                }
             }
             let slider = ui
                 .scope(|ui| {
@@ -2294,13 +2308,16 @@ fn draw_pwm_editor_row_with_buttons(
                             // step and reports changed even without user input.
                             .clamping(egui::SliderClamping::Edits)
                             .show_value(false)
-                            .step_by(0.1),
+                            .step_by(pwm_adjustment(modifiers)),
                     )
                 })
                 .inner;
             if let Some(action) = increase {
                 let (app, control) = buttons.expect("action has a source");
-                draw_pwm_step_button(ui, app, control, action, editable);
+                if draw_pwm_step_button(ui, app, control, action, editable) {
+                    *percent = adjusted_pwm(*percent, 1.0, modifiers);
+                    stepped = true;
+                }
             }
             let wheel_steps = if editable {
                 pwm_wheel_steps(ui, &slider)
@@ -2308,20 +2325,25 @@ fn draw_pwm_editor_row_with_buttons(
                 0.0
             };
             if wheel_steps != 0.0 {
-                *percent = (*percent + wheel_steps).clamp(0.0, 100.0);
+                *percent = adjusted_pwm(*percent, wheel_steps, modifiers);
             }
             let before_number = *percent;
             let value = ui
                 .add_enabled_ui(editable, |ui| {
                     ui.add_sized(
                         [number_width, 24.0],
-                        egui::DragValue::new(percent)
+                        crate::ui::validated_input::ValidatedDrag {
+                            alphabet: crate::ui::validated_input::InputAlphabet::Decimal,
+                            inner: egui::DragValue::new(percent)
                             .range(0.0..=100.0)
                             .clamp_existing_to_range(false)
-                            .speed(0.1)
+                            .speed(pwm_adjustment(modifiers))
                             .fixed_decimals(1)
                             .suffix("%")
-                            .max_decimals(1),
+                            .max_decimals(1)
+                            .update_while_editing(false)
+                            .custom_parser(crate::ui::validated_input::parse_percentage),
+                        },
                     )
                 })
                 .inner;
@@ -2343,9 +2365,9 @@ fn draw_pwm_editor_row_with_buttons(
                 *percent = before_number;
             }
             let dragging = slider.dragged() || value.dragged();
-            let changed = slider.changed() || numeric_changed || wheel_steps != 0.0;
+            let changed = slider.changed() || numeric_changed || wheel_steps != 0.0 || stepped;
             let commit = slider.drag_stopped() || value.drag_stopped()
-                || value.lost_focus() || enter || wheel_steps != 0.0
+                || value.lost_focus() || enter || wheel_steps != 0.0 || stepped
                 || (slider.changed() && !slider.dragged());
             outcome = session.finish(*percent, changed,
                 value.has_focus() || dragging, dragging, commit, escape);
@@ -6117,10 +6139,14 @@ pub(crate) fn pwm_card_actions<'a>(
     preferences: &crate::config::PwmCardPreferences,
     control: &'a crate::four_d::controller::HardwareControl,
 ) -> Vec<&'a crate::four_d::controller::HardwareAction> {
-    control.actions.iter().filter(|action| {
+    let mut actions: Vec<_> = control.actions.iter().filter(|action| {
         !matches!(action.verb.to_ascii_lowercase().as_str(), "increase" | "decrease")
             && preferences.shows(&action.verb)
-    }).collect()
+    }).collect();
+    actions.sort_by_key(|action| match action.verb.to_ascii_lowercase().as_str() {
+        "off" => 0, "toggle" => 1, "on" => 2, _ => 3,
+    });
+    actions
 }
 
 pub(crate) fn pwm_indicator_action<'a>(
@@ -6149,6 +6175,7 @@ fn hardware_indicator_action<'a>(
 
 pub(crate) fn draw_pwm_power_actions(
     app: &PealayerApp, ui: &mut egui::Ui,
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
     control: &crate::four_d::controller::HardwareControl,
 ) {
     let actions = pwm_card_actions(&app.pwm_card, control);
@@ -6159,7 +6186,8 @@ pub(crate) fn draw_pwm_power_actions(
             let label = format!("{} {}", crate::ui::icons::action(&action.verb),
                 crate::ui::i18n::visual_text(app.language, &action.name));
             let response = ui.add_enabled(enabled,
-                hardware_action_button(ui, label, &action.verb, false, enabled));
+                hardware_action_button(ui, label, &action.verb,
+                    hardware_action_selected(capabilities, control, &action.verb), enabled));
             if hardware_control_activated(app, ui, &response) {
                 crate::ui::hardware_control::invoke_action(app, control, action);
             }
@@ -7548,7 +7576,7 @@ fn hardware_card_header<R>(ui: &mut egui::Ui, compact: bool, render: impl FnOnce
         egui::Layout::left_to_right(egui::Align::Center), render).inner
 }
 
-fn hardware_action_button(ui: &egui::Ui, label: impl Into<String>, verb: &str,
+pub(crate) fn hardware_action_button(ui: &egui::Ui, label: impl Into<String>, verb: &str,
     selected: bool, enabled: bool) -> egui::Button<'static> {
     let label = label.into();
     let tone = match verb.to_ascii_lowercase().as_str() {
@@ -7556,6 +7584,10 @@ fn hardware_action_button(ui: &egui::Ui, label: impl Into<String>, verb: &str,
             else { egui::Color32::from_rgb(21, 128, 61) }),
         "off" => Some(if ui.visuals().dark_mode { egui::Color32::from_rgb(248, 113, 113) }
             else { egui::Color32::from_rgb(185, 28, 28) }),
+        "up" => Some(if ui.visuals().dark_mode { egui::Color32::from_rgb(251, 191, 36) }
+            else { egui::Color32::from_rgb(146, 64, 14) }),
+        "down" => Some(if ui.visuals().dark_mode { egui::Color32::from_rgb(96, 165, 250) }
+            else { egui::Color32::from_rgb(29, 78, 216) }),
         _ => None,
     };
     let Some(tone) = tone else { return egui::Button::new(label).truncate().selected(selected); };
@@ -7570,6 +7602,19 @@ fn hardware_action_button(ui: &egui::Ui, label: impl Into<String>, verb: &str,
         // egui's atomic button frame includes stroke width in its geometry.
         // Recolor the theme's stroke without changing the selected row height.
         .stroke(egui::Stroke::new(ui.visuals().widgets.inactive.bg_stroke.width, tone.gamma_multiply(0.8)))
+}
+
+pub(crate) fn hardware_action_selected(
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
+    control: &crate::four_d::controller::HardwareControl, verb: &str,
+) -> bool {
+    match verb.to_ascii_lowercase().as_str() {
+        "on" => control_indicator_state(capabilities, control) == ControlIndicatorState::Active,
+        "off" => control_indicator_state(capabilities, control) == ControlIndicatorState::Inactive,
+        "up" => motion_control_direction(capabilities, control) == MotionDirectionState::Up,
+        "down" => motion_control_direction(capabilities, control) == MotionDirectionState::Down,
+        _ => false,
+    }
 }
 
 /// Keep transformable card layers attached to their workspace panel rather
@@ -7783,8 +7828,7 @@ fn draw_compact_control_card(
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         for action in ordered.into_iter().rev() {
                             let enabled = !app.estop_active && !control.locked && !app.hardware_programming_blocked();
-                            let selected = (action.verb.eq_ignore_ascii_case("on") && indicator_state == ControlIndicatorState::Active)
-                                || (action.verb.eq_ignore_ascii_case("off") && indicator_state == ControlIndicatorState::Inactive);
+                            let selected = hardware_action_selected(capabilities, control, &action.verb);
                             let response = ui
                                 .add_enabled(
                                     enabled,
@@ -7848,7 +7892,7 @@ fn draw_compact_control_card(
             if is_pwm_control(control) && let Some(channel) = capabilities.pwm_channels.iter()
                 .find(|channel| channel.key == control.key) {
                 draw_pwm_card_editor(app, ui, capabilities, control, channel, card_content_width);
-                draw_pwm_power_actions(app, ui, control);
+                draw_pwm_power_actions(app, ui, capabilities, control);
             }
         })
     }).inner;
@@ -8146,7 +8190,7 @@ fn draw_control_card(
                     }
 
                     if is_pwm_control(control) {
-                        draw_pwm_power_actions(app, ui, control);
+                        draw_pwm_power_actions(app, ui, capabilities, control);
                     } else if !control.actions.is_empty() {
                         ui.add_space(if app.compact_hardware_controls {
                             3.0
@@ -8174,13 +8218,7 @@ fn draw_control_card(
                                         let label =
                                             responsive_action_label(action, ui.available_width());
                                         let verb = action.verb.to_ascii_lowercase();
-                                        let selected = relay_id.is_some()
-                                            && ((verb == "on"
-                                                && indicator_state
-                                                    == ControlIndicatorState::Active)
-                                                || (verb == "off"
-                                                    && indicator_state
-                                                        == ControlIndicatorState::Inactive));
+                                        let selected = hardware_action_selected(capabilities, control, &verb);
                                         let enabled = !app.estop_active && !control.locked && !app.hardware_programming_blocked();
                                         let button = hardware_action_button(ui, label, &verb, selected, enabled);
                                         let response = ui
@@ -8580,6 +8618,33 @@ mod timeline_row_tests {
     use super::*;
 
     #[test]
+    fn pwm_modifier_steps_are_consistent_and_bounded() {
+        assert_eq!(adjusted_pwm(25.0, 1.0, egui::Modifiers::NONE), 26.0);
+        assert_eq!(adjusted_pwm(25.0, -1.0, egui::Modifiers::CTRL), 24.9);
+        assert_eq!(adjusted_pwm(25.0, 1.0, egui::Modifiers::SHIFT), 35.0);
+        assert_eq!(adjusted_pwm(99.9, 1.0, egui::Modifiers::SHIFT), 100.0);
+        assert_eq!(adjusted_pwm(0.0, -1.0, egui::Modifiers::CTRL), 0.0);
+        assert_eq!(pwm_adjustment(egui::Modifiers {ctrl:true, shift:true, ..Default::default()}), 0.1);
+    }
+
+    #[test]
+    fn motion_buttons_follow_authoritative_direction_not_boolean_activity() {
+        use crate::four_d::controller::{HardwareControl, HardwareCapabilities, HardwareMotionState};
+        let control = HardwareControl {key:"seat.a".into(), kind:"motion".into(), ..Default::default()};
+        let mut caps = HardwareCapabilities::default();
+        assert!(!hardware_action_selected(&caps, &control, "up"));
+        let mut motion = HardwareMotionState::default();
+        motion.left.applied = "down".into();
+        caps.motion = Some(motion);
+        assert!(hardware_action_selected(&caps, &control, "down"));
+        assert!(!hardware_action_selected(&caps, &control, "up"));
+        caps.motion.as_mut().unwrap().left.transitioning = true;
+        caps.motion.as_mut().unwrap().left.requested = "up".into();
+        assert!(hardware_action_selected(&caps, &control, "up"));
+        assert!(!hardware_action_selected(&caps, &control, "down"));
+    }
+
+    #[test]
     fn pwm_card_actions_have_distinct_icons_and_independent_visibility() {
         let control = crate::four_d::controller::HardwareControl {
             key: "pwm.1".into(), kind: "mosfet".into(),
@@ -8591,9 +8656,10 @@ mod timeline_row_tests {
         let mut preferences = crate::config::PwmCardPreferences::default();
         assert_ne!(crate::ui::icons::action("increase"), crate::ui::icons::action("decrease"));
         assert_eq!(pwm_card_actions(&preferences, &control).iter().map(|action| action.verb.as_str())
-            .collect::<Vec<_>>(), ["on", "off", "toggle"]);
+            .collect::<Vec<_>>(), ["off", "toggle", "on"]);
         preferences.show_on = false;
         preferences.show_other = false;
+        preferences.show_toggle = false;
         assert_eq!(pwm_card_actions(&preferences, &control).iter().map(|action| action.verb.as_str())
             .collect::<Vec<_>>(), ["off"]);
         let serialized = serde_json::to_value(&preferences).unwrap();

@@ -832,6 +832,8 @@ pub struct PealayerApp {
     pub(crate) application_shortcuts: crate::application_shortcuts::ApplicationShortcuts,
     pub(crate) global_hardware_hotkeys_enabled: bool,
     pub(crate) hardware_key_bindings: Vec<crate::config::HardwareKeyBinding>,
+    pub(crate) hardware_number_shortcuts_enabled: bool,
+    pub(crate) hardware_sequence_matcher: crate::hardware_shortcuts::SequenceMatcher,
     pub(crate) hardware_binding_dialog_channel: Option<String>,
     pub(crate) hardware_binding_draft: Option<crate::config::HardwareKeyBinding>,
     pub(crate) hardware_binding_capturing: bool,
@@ -2694,6 +2696,10 @@ impl PealayerApp {
         else {
             return;
         };
+        self.dispatch_hardware_binding_value(binding, pressed);
+    }
+
+    fn dispatch_hardware_binding_value(&mut self, binding: crate::config::HardwareKeyBinding, pressed: bool) {
         if pressed {
             if !self.active_hardware_bindings.insert(binding.id.clone()) {
                 return;
@@ -2743,9 +2749,16 @@ impl PealayerApp {
                 off_action_id,
             } => {
                 if pressed {
-                    let active = control.as_ref().is_some_and(|control| {
-                        crate::ui::hardware_control::channel_is_active(&capabilities, control)
-                    });
+                    let Some(control) = control.as_ref() else { return; };
+                    if let Some(toggle) = control.actions.iter().find(|action| action.verb.eq_ignore_ascii_case("toggle")) {
+                        invoke(self, &toggle.id);
+                        return;
+                    }
+                    let active = crate::ui::layout::hardware_action_selected(&capabilities, control, "on");
+                    if !active && !crate::ui::layout::hardware_action_selected(&capabilities, control, "off") {
+                        self.set_osd(self.tr("Keyboard shortcut ignored: channel state is unknown"));
+                        return;
+                    }
                     invoke(
                         self,
                         if active {
@@ -2808,15 +2821,44 @@ impl PealayerApp {
         }
 
         let events = ctx.input(|input| input.events.clone());
-        let bindings = self
+        let allow_local = allow_local && ctx.input(|input| input.focused);
+        if !allow_local || self.hardware_binding_capturing {
+            self.hardware_sequence_matcher = Default::default();
+        }
+        if !events.iter().any(|event| matches!(event, egui::Event::Key { .. })) {
+            return;
+        }
+        let mut bindings = self
             .hardware_key_bindings
             .iter()
             .filter(|binding| binding.enabled && !binding.global)
             .cloned()
             .collect::<Vec<_>>();
+        if self.hardware_number_shortcuts_enabled && let Some(capabilities) = self.advertised_hardware() {
+            for binding in crate::hardware_shortcuts::number_shortcuts(&capabilities) {
+                if !bindings.iter().any(|user| user.chord == binding.chord && (user.then.is_empty() || user.then == binding.then)) {
+                    bindings.push(binding);
+                }
+            }
+        }
+        let now = ctx.input(|input| input.time);
+        if !allow_local || self.hardware_binding_capturing {
+            self.hardware_sequence_matcher = Default::default();
+        }
         for event in &events {
             let mut matched = false;
             for binding in &bindings {
+                if !binding.then.is_empty() {
+                    if allow_local && !self.hardware_binding_capturing {
+                        let (consumed, complete) = self.hardware_sequence_matcher.advance(binding, event, now);
+                        matched |= consumed;
+                        if complete {
+                            self.dispatch_hardware_binding_value(binding.clone(), true);
+                            self.dispatch_hardware_binding_value(binding.clone(), false);
+                        }
+                    }
+                    continue;
+                }
                 if let Some(pressed) =
                     crate::hardware_shortcuts::event_matches_chord(event, &binding.chord)
                     && (!pressed || (allow_local && !self.hardware_binding_capturing))
@@ -7410,6 +7452,7 @@ impl PealayerApp {
         cfg.application_shortcuts = self.application_shortcuts.clone();
         cfg.global_hardware_hotkeys_enabled = self.global_hardware_hotkeys_enabled;
         cfg.hardware_key_bindings = self.hardware_key_bindings.clone();
+        cfg.hardware_number_shortcuts_enabled = self.hardware_number_shortcuts_enabled;
         cfg.show_estop_control = self.show_estop_control;
         cfg.confirm_estop_release = self.confirm_estop_release;
         cfg.single_instance = self.single_instance;
@@ -7795,6 +7838,8 @@ impl PealayerApp {
         self.application_shortcuts = config.application_shortcuts.clone();
         self.global_hardware_hotkeys_enabled = config.global_hardware_hotkeys_enabled;
         self.hardware_key_bindings = config.hardware_key_bindings.clone();
+        self.hardware_number_shortcuts_enabled = config.hardware_number_shortcuts_enabled;
+        self.hardware_sequence_matcher = Default::default();
         self.show_estop_control = config.show_estop_control;
         self.confirm_estop_release = config.confirm_estop_release;
         self.single_instance = config.single_instance;
@@ -10016,6 +10061,8 @@ impl Default for PealayerApp {
             application_shortcuts: crate::application_shortcuts::ApplicationShortcuts::default(),
             global_hardware_hotkeys_enabled: true,
             hardware_key_bindings: Vec::new(),
+            hardware_number_shortcuts_enabled: true,
+            hardware_sequence_matcher: Default::default(),
             hardware_binding_dialog_channel: None,
             hardware_binding_draft: None,
             hardware_binding_capturing: false,
