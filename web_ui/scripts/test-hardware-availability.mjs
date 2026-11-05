@@ -45,3 +45,19 @@ const hardwareSource=read('../src/components/HardwareTab.tsx');
 assert.ok(hardwareSource.includes('if (!details || !hardwareMonitorReady(state))'));
 assert.ok(hardwareSource.includes('{hardwareMonitorRfAvailable(state) && <RfManager'));
 console.log('Hardware Monitor: disconnected, connecting, missing catalog, missing board, stale state and advertised RF gates passed.');
+const diagnostic='embedded PCController unavailable (PEALAYER_PCCONTROLLER_LIBRARY); external coordinator unavailable (connection timed out)';
+for (const input of [
+  {controller_connected:false},
+  {controller_connected:true},
+  {controller_connected:true,hardware_details:{outputs_available:false}},
+]) {
+  const empty=hardwareMonitorEmpty({...input,hardware_error:diagnostic});
+  assert.equal(empty.diagnostics,diagnostic,'full diagnostic is preserved for the info hint');
+  assert.ok(!empty.detail.includes('PEALAYER_')&&!empty.detail.includes('embedded'),'default copy must be plain English, not diagnostic parsing');
+}
+assert.ok(hardwareMonitorEmpty({controller_connected:false,hardware_error:diagnostic}).detail.startsWith("Couldn't connect"));
+assert.ok(hardwareMonitorEmpty({controller_connected:true,hardware_error:diagnostic}).detail.startsWith("Couldn't load"));
+assert.equal(hardwareMonitorEmpty({controller_connected:false,hardware_error:'  '}).diagnostics,null);
+assert.ok(hardwareSource.includes('<InfoCircleOutlined />')&&hardwareSource.includes("trigger={['hover', 'click']}"));
+assert.ok(hardwareSource.includes('{empty.diagnostics}</Typography.Paragraph>'),'diagnostics belong only in the opt-in popover');
+console.log('Connection summaries: plain default copy, retained diagnostics and hover/click info passed.');

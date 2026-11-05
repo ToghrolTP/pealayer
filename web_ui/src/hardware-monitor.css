@@ -5,3 +5,6 @@
 .hardware-empty-state .ant-card-body { min-width: 0; }
 .hardware-empty-state .ant-typography { overflow-wrap: anywhere; }
 .hardware-empty-state .ant-btn { display: inline-flex; align-items: center; justify-content: center; }
+.hardware-empty-state__message { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 16px; min-width: 0; }
+.hardware-empty-state__message .ant-typography { flex: 1; min-width: 0; margin: 0; }
+.hardware-empty-state__message > .ant-btn { flex: 0 0 auto; color: var(--muted); }

@@ -30,6 +30,12 @@ required checks are not passed while the user's test/CI skip remains in effect.
 
 ## Delivered source and deployment
 
+- [Hardware connection hints](hardware-connection-hint.md) replace raw nested
+  diagnostics with plain-language card copy and an opt-in circled information
+  control in native/Web UI. Native/browser checks, packaging and local graceful
+  installation are verified. A separately observed startup-size issue was
+  recovered through Maximize, not declared fixed; Cafe remains user-deferred.
+
 - [The updater console](updater-console.md) now has semantic progress phases,
   factual transfer speed/ETA, clean redirected logs and explicit JSON output.
   Full native tests, packaged CLI fixtures and local graceful installation are

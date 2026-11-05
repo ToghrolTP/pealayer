@@ -25,6 +25,9 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         return english.to_owned();
     }
     let translated = match english {
+        "Couldn't connect to PCController. Check that it is running, then try again." => "اتصال به PCController برقرار نشد. مطمئن شوید برنامه در حال اجراست، سپس دوباره تلاش کنید.",
+        "Couldn't load the hardware controls. Try refreshing the connection." => "کنترل‌های سخت‌افزار بارگیری نشد. اتصال را تازه‌سازی کنید.",
+        "Connection details" => "جزئیات اتصال",
         "Connecting to PCController…" => "در حال اتصال به PCController…",
         "Hardware catalog unavailable" => "فهرست سخت‌افزار در دسترس نیست",
         "No board connected" => "بردی متصل نیست",
