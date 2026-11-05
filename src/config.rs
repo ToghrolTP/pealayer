@@ -2466,7 +2466,7 @@ pub fn parse_rgb_hex(value: &str) -> Option<[u8; 3]> {
 static CONFIG_TEMP_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
 
 #[cfg(target_os = "windows")]
-fn replace_file(source: &std::path::Path, destination: &std::path::Path) -> Result<(), String> {
+pub(crate) fn replace_file(source: &std::path::Path, destination: &std::path::Path) -> Result<(), String> {
     use std::os::windows::ffi::OsStrExt;
     use windows::Win32::Storage::FileSystem::{
         MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
@@ -2494,7 +2494,7 @@ fn replace_file(source: &std::path::Path, destination: &std::path::Path) -> Resu
 }
 
 #[cfg(not(target_os = "windows"))]
-fn replace_file(source: &std::path::Path, destination: &std::path::Path) -> Result<(), String> {
+pub(crate) fn replace_file(source: &std::path::Path, destination: &std::path::Path) -> Result<(), String> {
     std::fs::rename(source, destination)
         .map_err(|error| format!("replace configuration {}: {error}", destination.display()))
 }

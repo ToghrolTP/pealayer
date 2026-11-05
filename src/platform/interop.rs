@@ -306,6 +306,9 @@ pub enum InteropCommand {
         reference: String,
         start_time_ms: u64,
     },
+    ImportAssets { request: crate::assets::ImportRequest },
+    ReviewAsset { id: uuid::Uuid, accept: bool },
+    ResolveTimelineClose {decision:crate::app::TimelineCloseDecision},
     PlayControllerEffect {
         reference: String,
     },
@@ -554,6 +557,10 @@ fn valid_timeline_track_key(value: &str) -> bool {
 
 impl InteropCommand {
     pub fn is_process_local(&self) -> bool {
+        // A native sender owns unuploaded paths. Let its local importer
+        // transfer them; owner-stamped browser receipts already belong to the
+        // authority and follow normal session forwarding instead.
+        matches!(self,Self::ImportAssets{request} if request.owner_id.is_none()) ||
         matches!(self, Self::QuitLocal | Self::GetProcessStatus | Self::ConnectPeer { .. } | Self::InspectAuthoring { .. } | Self::NavigatePreferences { .. } | Self::OpenAbout { .. })
     }
 
@@ -568,6 +575,7 @@ impl InteropCommand {
 
     pub fn validate(&self) -> Result<(), String> {
         match self {
+            Self::ImportAssets { request } => request.validate(),
             Self::ConnectPeer { request } => request.validate(),
             Self::NavigatePreferences { navigation } => navigation.validate(),
             Self::RfControl { operation, params } => {
@@ -874,7 +882,8 @@ impl InteropCommand {
 }
 
 pub fn command_catalog() -> Value {
-    serde_json::json!({
+    let assets=serde_json::json!({"import":"pealayer.assets.import","review":"pealayer.assets.review","snapshot":"/api/assets","upload":"/api/assets/upload","chunk_bytes":crate::server::asset_upload::CHUNK_BYTES,"destinations":["player","library","timeline","audio-source"],"placement":"integer milliseconds; scene/timeline imports append after review, never replace the session","ownership":"transfer receipts pinned to the receiving session owner; hardware effect programs remain with PCController"});
+    let mut catalog=serde_json::json!({
         "contract": "pealayer.control",
         "transports": ["native", "http", "json-rpc", "websocket"],
         "process": { "status": "/api/process/status", "authoring": "/api/process/authoring", "command": "/api/process/command", "methods": ["pealayer.process.status", "pealayer.process.connect", "pealayer.process.quit"], "scope": "local process, never relayed to authority", "connect": "validated, idempotent, graceful restart; poll local status after reconnect" },
@@ -883,6 +892,7 @@ pub fn command_catalog() -> Value {
         "preferences_navigation": { "method": "pealayer.preferences.navigate", "command": "navigate_preferences", "section": "optional schema section ID", "scroll_y": "absolute logical pixel offset, clamped to content", "scope": "local native process, including its Preferences helper", "accepted": "queued, not confirmation that a frame has rendered" },
         "about_navigation": { "method": "pealayer.about.open", "command": "open_about", "tab": ["overview", "build", "board", "libraries"], "scope": "local native process, never relayed to authority", "accepted": "queued, not confirmation that a frame has rendered" },
         "commands": [
+            "import_assets", "review_asset", "resolve_timeline_close",
             "open", "play", "pause", "toggle_pause", "stop", "next", "previous",
             "browse_remote", "select_remote", "sort_remote", "close_remote_browser",
             "chapter_previous", "chapter_next", "set_chapter",
@@ -912,7 +922,9 @@ pub fn command_catalog() -> Value {
         "transport": { "nudge": "pealayer.transport.nudge", "directions": [-1,1],
             "paused_step": "frame_step_count", "playing_step": "quick_seek_seconds" },
         "discovery": "/api/player/commands"
-    })
+    });
+    catalog.as_object_mut().unwrap().insert("assets".into(),assets);
+    catalog
 }
 
 pub fn parse_text_command(input: &str) -> Result<InteropCommand, String> {
@@ -1279,6 +1291,9 @@ pub struct PlayerStatusResponse {
     pub application: ApplicationIdentity,
     #[serde(default)]
     pub runtime: RuntimeIdentity,
+    #[serde(default)]
+    pub asset_imports: Value,
+    pub pending_timeline_change: bool,
     #[serde(default)] pub rf: Value,
     #[serde(default)]
     pub remote_browser: crate::remote_location::BrowserState,
@@ -1591,11 +1606,9 @@ impl WebControllerEffectDraft {
             let value = value.trim();
             (!value.is_empty()
                 && value.len() <= 64
-                && value
-                    .chars()
-                    .all(|character| character.is_alphanumeric() || " -_".contains(character)))
+                && !value.chars().any(char::is_control))
             .then_some(())
-            .ok_or_else(|| format!("{label} must contain 1 to 64 safe characters"))
+            .ok_or_else(|| format!("{label} must contain 1 to 64 printable characters"))
         };
         field("effect name", &self.name)?;
         field("effect category", &self.category)?;
@@ -1650,6 +1663,8 @@ impl Default for PlayerStatusResponse {
             external_mpv: crate::mpv::external::Status::default(),
             application: ApplicationIdentity::default(),
             runtime: RuntimeIdentity::default(),
+            asset_imports: crate::assets::snapshot(),
+            pending_timeline_change: false,
             rf: Value::Null,
             status: String::new(),
             messages: crate::messaging::MessageSnapshot::default(),
@@ -2116,6 +2131,14 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
                     .unwrap_or_default(),
             })
         }
+        "pealayer.assets.import" => Some(InteropCommand::ImportAssets {
+            request: serde_json::from_value(request.params.clone()).map_err(|e|format!("Invalid asset import: {e}"))?,
+        }),
+        "pealayer.assets.review" => Some(InteropCommand::ReviewAsset {
+            id: serde_json::from_value(request.params.get("id").cloned().unwrap_or_default()).map_err(|_|"Asset review requires a UUID".to_string())?,
+            accept: request.params.get("accept").and_then(Value::as_bool).ok_or("Asset review requires accept: true or false")?,
+        }),
+        "pealayer.timeline.resolve_pending"=>Some(InteropCommand::ResolveTimelineClose{decision:serde_json::from_value(request.params.get("decision").cloned().ok_or("A save, discard or cancel decision is required")?).map_err(|e|format!("Invalid timeline decision: {e}"))?}),
         "controller_effect.play" | "pealayer.controller_effect.play" => {
             Some(InteropCommand::PlayControllerEffect {
                 reference: string(&["reference", "effect"])?,

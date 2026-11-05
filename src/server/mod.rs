@@ -1,4 +1,5 @@
 pub mod fs_api;
+pub mod asset_upload;
 mod fs_locations;
 mod media_stream;
 mod download_media;
@@ -859,6 +860,9 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
     if let Some(capability) = denied_web_capability(&request.method, path, &web) {
         return permission_denied(capability);
     }
+    if path.starts_with("/api/assets/upload") && query_value(&request.target,"owner_id").is_some_and(|id|id != crate::peer::instance_id()) {
+        return HttpResponse::json(409,"Conflict",serde_json::json!({"error":"Asset session owner changed; retry the transfer"}).to_string());
+    }
     match (request.method.as_str(), path) {
         ("GET", "/api/peer/session") => {
             match crate::peer::server_session() {
@@ -1084,6 +1088,21 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
             player_seek_thumbnail_response(&request.target, state)
         }
         ("GET", "/api/fs/browse") => browse_response(&request.target),
+        ("GET", "/api/assets") => HttpResponse::json(200,"OK",crate::assets::snapshot().to_string()),
+        ("POST", "/api/assets/upload/begin") => peer_result(serde_json::from_slice::<asset_upload::Begin>(&request.body).map_err(|e|e.to_string()).and_then(asset_upload::begin)),
+        ("PUT", "/api/assets/upload/chunk") => peer_result((||{
+            let id=query_value(&request.target,"id").and_then(|s|uuid::Uuid::parse_str(&s).ok()).ok_or("Asset upload UUID is required")?;
+            let offset=query_value(&request.target,"offset").and_then(|s|s.parse::<u64>().ok()).ok_or("Asset upload offset is required")?;
+            asset_upload::chunk(id,offset,&request.body)
+        })()),
+        ("POST", "/api/assets/upload/finish") => peer_result(query_value(&request.target,"id").and_then(|s|uuid::Uuid::parse_str(&s).ok()).ok_or_else(||"Asset upload UUID is required".to_string()).and_then(asset_upload::finish)),
+        ("DELETE", "/api/assets/upload") => peer_result(query_value(&request.target,"id").and_then(|s|uuid::Uuid::parse_str(&s).ok()).ok_or_else(||"Asset upload UUID is required".to_string()).and_then(asset_upload::cancel)),
+        ("DELETE", "/api/assets/upload/batch") => peer_result(query_value(&request.target,"batch_id").and_then(|s|uuid::Uuid::parse_str(&s).ok()).ok_or_else(||"Asset batch UUID is required".to_string()).and_then(asset_upload::abort_batch)),
+        ("POST", "/api/assets/upload/retain") => peer_result(serde_json::from_slice::<serde_json::Value>(&request.body).map_err(|e|e.to_string()).and_then(|value| {
+            let paths:Vec<String>=serde_json::from_value(value.get("paths").cloned().ok_or("Asset paths are required")?).map_err(|e|e.to_string())?;
+            if paths.is_empty() || paths.len()>crate::assets::MAX_FILES{return Err("Choose 1–64 asset paths".into());}
+            asset_upload::retain_paths(&paths);Ok(serde_json::json!({"retained":true}))
+        })),
         ("GET", "/api/fs/locations") => HttpResponse::json(200, "OK",
             serde_json::json!({"locations": fs_locations::locations(&web.recent_media)}).to_string()),
         ("GET", "/api/fs/thumbnail") => thumbnail_response(&request.target),
@@ -1116,6 +1135,7 @@ fn denied_web_capability(
         || matches!(path, "/api/player/frame" | "/api/player/seek-thumbnail"
             | "/api/player/taskbar-preview" | "/api/player/taskbar-preview.png" | "/api/player/taskbar-icons.png");
     let update_route = path.starts_with("/api/update/");
+    if path.starts_with("/api/assets") && (!web.web_allow_file_access || !web.web_allow_control || !web.web_allow_configuration) {return Some("asset import (file, control and configuration)");}
     if configuration_route && !web.web_allow_configuration {
         return Some("configuration");
     }
@@ -1198,6 +1218,10 @@ fn permission_denied(capability: &str) -> HttpResponse {
 
 fn remote_command_permission(command: &crate::platform::interop::InteropCommand) -> Option<&'static str> {
     use crate::platform::interop::InteropCommand;
+    if matches!(command,InteropCommand::ImportAssets{..}|InteropCommand::ReviewAsset{..}|InteropCommand::ResolveTimelineClose{..}) {
+        let config=crate::platform::interop::get_live_config();
+        if !config.web_allow_file_access || !config.web_allow_configuration || !config.web_allow_control {return Some("Asset import requires file, configuration and control permissions");}
+    }
     if crate::platform::interop::get_live_config().web_allow_file_access { return None; }
     match command {
         InteropCommand::BrowseRemote { .. } | InteropCommand::SelectRemote { .. } | InteropCommand::Open { .. } => Some("Web host file access permission is disabled"),
@@ -1843,6 +1867,8 @@ fn mime_for_path(path: &std::path::Path) -> &'static str {
 mod tests {
     #[test]
     fn remote_consumer_updates_stay_local_while_session_commands_relay() {
+        assert!(local_process_payload(br#"{"command":"import_assets","request":{"paths":["client.wav"],"destination":{"surface":"library"}}}"#));
+        assert!(!local_process_payload(br#"{"command":"import_assets","request":{"paths":["server.wav"],"owner_id":"00000000-0000-4000-8000-000000000001","destination":{"surface":"library"}}}"#));
         for target in ["/api/update/manifest", "/api/update/begin", "/api/update/chunk?id=one", "/api/update/finish", "/api/update/status", "/api/update/from-url", "/api/client/status"] {
             assert!(!super::peer_relay_route(target), "{target}");
         }
@@ -2001,6 +2027,7 @@ mod tests {
         assert_eq!(denied_web_capability("GET", "/", &restricted), None);
         assert_eq!(denied_web_capability("POST", "/api/messages", &restricted), Some("control"));
         assert_eq!(denied_web_capability("GET", "/api/messages", &restricted), None);
+        for path in ["/api/assets","/api/assets/upload/begin","/api/assets/upload/retain","/api/assets/upload/batch"] {assert!(denied_web_capability("POST",path,&restricted).is_some());}
     }
 
     #[test]

@@ -14178,6 +14178,9 @@ impl<'a> PealayerTabViewer<'a> {
                         draw_effect_controls(self.app, ui, true);
                     }
                     PealayerTab::EffectsLibrary => {
+                        let drop_rect=ui.max_rect().intersect(ui.clip_rect());
+                        ui.ctx().data_mut(|data|data.insert_temp(egui::Id::new("external-assets-library"),drop_rect));
+                        crate::assets::paint_drop_target(ui,drop_rect,&self.app.tr("Import assets"));
                         // Fixed rows and scrolling cards share one trailing edge.
                         let effects_width = effects_panel_content_width(sidebar_content_width(ui.available_width()));
                         effects_library_toolbar(self.app, ui, effects_width);
@@ -19445,6 +19448,13 @@ impl<'a> PealayerTabViewer<'a> {
                             }
 
                             let tracks_top = rect.min.y + TIMELINE_RULER_HEIGHT;
+                            let asset_drop_area=crate::assets::TimelineDropArea {
+                                viewport:egui::Rect::from_min_max(egui::pos2(timeline_viewport.left(),timeline_viewport.top()+TIMELINE_RULER_HEIGHT),timeline_viewport.max),
+                                content_origin:egui::pos2(rect.left(),tracks_top),zoom,row_height:timeline_track_height,
+                                keys:timeline_track_rows(self.app).iter().map(|row|row.key.clone()).collect(),
+                            };
+                            ui.ctx().data_mut(|data|data.insert_temp(egui::Id::new("external-assets-timeline"),asset_drop_area));
+                            crate::assets::paint_drop_target(ui,timeline_viewport,&self.app.tr("Add to timeline"));
 
                             // Successful drop logic
                             if let Some(payload) = take_effect_drop_on_rect(ui.ctx(), rect) {

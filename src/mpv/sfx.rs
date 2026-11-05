@@ -120,6 +120,7 @@ enum Command {
 }
 pub enum Completion {
     Imported(AudioEffect),
+    ImportFailed { id: Uuid, error: String },
     Error(String),
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -328,6 +329,7 @@ pub fn import(mut effect: AudioEffect) -> Result<(), String> {
     std::thread::Builder::new()
         .name("sfx-import".into())
         .spawn(move || {
+            let id=effect.id;
             let result = probe_duration(&effect.program).map(|duration| {
                 effect.duration_ms = duration;
                 effect
@@ -335,7 +337,7 @@ pub fn import(mut effect: AudioEffect) -> Result<(), String> {
             if let Ok(mut events) = results.lock() {
                 events.push(match result {
                     Ok(effect) => Completion::Imported(effect),
-                    Err(error) => Completion::Error(error),
+                    Err(error) => Completion::ImportFailed { id, error },
                 });
             }
             importing.store(false, Ordering::SeqCst);

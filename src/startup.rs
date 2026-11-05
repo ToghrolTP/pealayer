@@ -783,6 +783,7 @@ pub fn run() -> eframe::Result {
                     .clone()
                     .unwrap_or_default(),
                 effect_group_draft: None,
+                asset_import: Default::default(),
                 track_muted: std::collections::BTreeSet::new(),
                 track_soloed: std::collections::BTreeSet::new(),
                 track_locked: std::collections::BTreeSet::new(),
