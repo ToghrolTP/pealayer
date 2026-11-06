@@ -108,3 +108,26 @@ CPU/GPU acceptance remain separate gates in #64/#62.
 References: [live-preview bitmap contract](https://learn.microsoft.com/en-us/windows/win32/api/dwmapi/nf-dwmapi-dwmseticoniclivepreviewbitmap),
 [taskbar membership](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-itaskbarlist-addtab),
 [relaunch artwork](https://learn.microsoft.com/en-us/windows/win32/properties/props-system-appusermodel-relaunchiconresource).
+
+## Installed completion checkpoint
+
+The final canonical update acknowledged clean source
+`afb5761b791fb93ee8925538dda0d727089b6da6`, executable SHA-256
+`efd474f2fd873174a17511343f5fd6f82fcc18ff75f0fe8d15661c6c4cd53231`.
+The existing host libmpv remains
+`e56ce67cd00f06a59dc7ed5b97a49a9182a381554c755dc4570a52af1ef30e65`.
+The packaged executable—not just debug—passed the expanded three-launch
+placement, four-change branding, visible/full UI and minimized-cache publication
+test. The library run passed 1,123 tests with one existing ignored; the excluded
+updater URL fixture passed separately. Packaging's test flag remains honestly
+skipped because those checks ran before packaging, not inside it.
+
+The running process reports clean native authoring and the user's selected
+Modern preset. Its native full-UI cache is **3110 × 1713**, with non-uniform
+pixels and no preview/branding error. A bounded 5.01-second paused sample used
+0.94% of one CPU core, with both full-UI and video capture counts unchanged.
+That confirms no snapshot loop in this sample, not sustained playing/GPU/soak
+acceptance. The app remains running. The user has been asked to verify repeated
+visible icon changes, normal Restore size and Windows Task View while restored
+and minimized. Those human-visible shell outcomes remain pending, not inferred
+from successful API calls. Cafe remains user-deferred while offline.
