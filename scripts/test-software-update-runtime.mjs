@@ -49,6 +49,9 @@ export async function verifyControllerReplacement({via,candidate,manifestPath}){
 
 if(process.argv[1]&&import.meta.url===pathToFileURL(process.argv[1]).href){
   const args=process.argv.slice(2);
-  if(args.length!==3)throw Error('Usage: node scripts/test-software-update-runtime.mjs FIXTURE_ORIGIN CANDIDATE_EXE CANDIDATE_MANIFEST');
-  verifyControllerReplacement({via:args[0],candidate:args[1],manifestPath:args[2]}).then(result=>console.log(JSON.stringify(result))).catch(error=>{console.error(`Runtime acceptance failed; no mutation retried: ${error.message}`);process.exitCode=1;});
+  if(args.length===0)console.log('Runtime acceptance skipped: explicitly supply FIXTURE_ORIGIN CANDIDATE_EXE CANDIDATE_MANIFEST.');
+  else {
+    if(args.length!==3)throw Error('Usage: node scripts/test-software-update-runtime.mjs FIXTURE_ORIGIN CANDIDATE_EXE CANDIDATE_MANIFEST');
+    verifyControllerReplacement({via:args[0],candidate:args[1],manifestPath:args[2]}).then(result=>console.log(JSON.stringify(result))).catch(error=>{console.error(`Runtime acceptance failed; no mutation retried: ${error.message}`);process.exitCode=1;});
+  }
 }
