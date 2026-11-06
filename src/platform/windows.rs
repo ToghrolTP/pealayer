@@ -2411,6 +2411,25 @@ pub fn shell_command_diagnostics() -> serde_json::Value {
     })
 }
 
+/// Explorer caches a running group's relaunch icon. Re-create only our taskbar
+/// membership after an actual artwork change, then restore its existing media
+/// toolbar immediately. This never hides, activates, restores or resizes the HWND.
+#[cfg(target_os = "windows")]
+pub(crate) fn refresh_taskbar_application_icon(hwnd_raw: isize) -> Result<(),String> {
+    use windows::Win32::{Foundation::HWND,System::Com::{CoCreateInstance,CLSCTX_INPROC_SERVER},UI::Shell::{ITaskbarList3,TaskbarList}};
+    let hwnd=HWND(hwnd_raw as *mut _);
+    unsafe {
+        let taskbar: ITaskbarList3=CoCreateInstance(&TaskbarList,None,CLSCTX_INPROC_SERVER).map_err(|error|error.to_string())?;
+        taskbar.HrInit().map_err(|error|error.to_string())?;
+        taskbar.DeleteTab(hwnd).map_err(|error|error.to_string())?;
+        // Always attempt to restore membership before returning any failure.
+        taskbar.AddTab(hwnd).or_else(|_|taskbar.AddTab(hwnd)).map_err(|error|error.to_string())?;
+    }
+    THUMBNAIL_TOOLBAR_ADDED_HWND.store(0,Ordering::Release);
+    init_taskbar_thumbnail_toolbar(hwnd_raw,SHELL_PAUSED.load(Ordering::Relaxed),SHELL_MUTED.load(Ordering::Relaxed),
+        SHELL_FULLSCREEN.load(Ordering::Relaxed),SHELL_HAS_MEDIA.load(Ordering::Relaxed),THUMBNAIL_TOOLBAR_ENABLED.load(Ordering::Relaxed))
+}
+
 pub fn take_shell_reinitialize_request() -> bool {
     let requested = SHELL_REINITIALIZE.swap(false, Ordering::AcqRel);
     if requested && let Ok(mut cached) = TASKBAR_THUMBNAIL_CLIP.lock() {

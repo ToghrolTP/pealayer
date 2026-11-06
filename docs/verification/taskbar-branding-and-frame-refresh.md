@@ -32,8 +32,10 @@ counterpart was a span. Neither implemented the requested next-value action.
   FBO, pixel packing, renderbuffer and scissor state around downsample/readback.
 - After a rate-limited dirty frame, schedule its eligible refresh even if no next
   decoder callback arrives. Unchanged paused frames do not invalidate DWM again;
-  delivering a cached bitmap does not schedule another UI repaint. Full-size Peek
-  remains DWM-owned, not a low-resolution bitmap over the application's UI.
+  delivering a cached small bitmap does not schedule another UI repaint. The
+  initial candidate wrongly left full-size Peek unhandled; the
+  [follow-up](window-placement-and-task-view.md) supplies its separate full-UI
+  composite rather than projecting the low-resolution video bitmap over the UI.
 - Native/Web capsule clicks advance through all five semantic density choices
   and wrap. Native pointer activation retains the slider's keyboard focus. The
   Web control disables input during persistence and rolls back a rejected save.
@@ -66,10 +68,12 @@ backend does not render cannot provide new frames through this path. Dedicated
 surface/offscreen rendering and sustained CPU/GPU acceptance remain in
 [#64](https://github.com/ToghrolTP/pealayer/issues/64) and
 [#62](https://github.com/ToghrolTP/pealayer/issues/62); no synthetic frame or
-extra decoder was added to disguise that limit. Long-hover installed acceptance
-and the actual Windows taskbar icon must be checked after deployment.
+extra decoder was added to disguise that limit. The user confirmed the installed
+long-hover refresh fix. Repeated icon changes and Task View required the
+[additional shell corrections](window-placement-and-task-view.md); property
+readback alone did not establish dynamic icon acceptance.
 
-## Installed checkpoint
+## First installed checkpoint
 
 The canonical local executable acknowledged the graceful update to source
 `97761d7d2bfac30a236857984b73f5e639daae95`, clean, executable SHA-256

@@ -10,6 +10,12 @@ retroactively attributed to an older download.
 
 - Changing the application icon also updates Explorer's taskbar group artwork
   and matching pinned launcher, not just the titlebar and notification area.
+  Repeated changes refresh the running taskbar button without changing its
+  application identity or losing its playback actions.
+- Closing while minimized no longer reopens a tiny window. Valid normal placement
+  has one owner; maximized/fullscreen clients do not replace the Restore size.
+- Task View and Peek receive a separate full-resolution application composite
+  when Windows requests it, instead of being left black in custom-thumbnail mode.
 - Video-only taskbar thumbnails follow new rendered frames instead of stopping
   when a short hover refresh timer expires. Paused frames remain unchanged;
   the full-window Peek preview is not replaced by the thumbnail bitmap.

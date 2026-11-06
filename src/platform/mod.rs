@@ -12,6 +12,7 @@ pub mod taskbar_preview;
 pub mod taskbar_branding;
 pub mod tray_board;
 pub mod windows;
+pub(crate) mod window_placement;
 #[cfg(target_os = "windows")]
 pub(crate) mod window_icons;
 pub(crate) mod windows_quick_actions;

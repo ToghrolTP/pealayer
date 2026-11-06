@@ -1380,20 +1380,7 @@ impl eframe::App for PealayerApp {
         // an NLE restore target with the forced Simple workspace.
         let viewport = ctx.input(|input| input.viewport().clone());
         let is_fullscreen = viewport.fullscreen.unwrap_or(false);
-        if !is_fullscreen && !viewport.minimized.unwrap_or(false) {
-            if let (Some(inner), Some(outer)) = (viewport.inner_rect, viewport.outer_rect) {
-                let geometry = crate::config::WindowGeometry {
-                    x: outer.min.x,
-                    y: outer.min.y,
-                    width: inner.width(),
-                    height: inner.height(),
-                    maximized: viewport.maximized.unwrap_or(false),
-                };
-                if geometry.is_valid() {
-                    self.window_geometry = Some(geometry);
-                }
-            }
-        }
+        self.window_geometry = crate::platform::window_placement::observe(self.window_geometry, &viewport);
         self.observe_fullscreen_state(is_fullscreen);
         if !self.consistent_video_aspect_ratio || self.show_four_d_editor || is_fullscreen {
             crate::platform::windows::set_simple_video_aspect_constraint(

@@ -300,6 +300,9 @@ required checks are not passed while the user's test/CI skip remains in effect.
   [Taskbar branding and frame refresh](taskbar-branding-and-frame-refresh.md)
   fixes the bitmap refresh lease and shell-artwork contract separately; it is
   not proof of minimized/offscreen or zero-copy rendering acceptance.
+  [Placement and Task View follow-up](window-placement-and-task-view.md)
+  records the reproduced minimized-zero persistence cause, native restart tests,
+  full-UI DWM preview path and repeated live branding/toolbar checks.
 - [ ] Clear applicable platform CI/runtime/package checks and privacy-safe
   screenshots before selecting the next release version and publishing packages.
 

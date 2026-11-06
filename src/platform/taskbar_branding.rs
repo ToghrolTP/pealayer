@@ -11,8 +11,8 @@ const ICON: PROPERTYKEY = PROPERTYKEY { fmtid: MODEL, pid: 3 };
 const NAME: PROPERTYKEY = PROPERTYKEY { fmtid: MODEL, pid: 4 };
 const ID: PROPERTYKEY = PROPERTYKEY { fmtid: MODEL, pid: 5 };
 #[derive(Default)]
-struct Applied { stamp: Option<(isize, u64, String)>, icon: String, shortcuts_updated: u64, error: Option<String> }
-static APPLIED: Mutex<Applied> = Mutex::new(Applied { stamp: None, icon: String::new(), shortcuts_updated: 0, error: None });
+struct Applied { stamp: Option<(isize, u64, String)>, icon: String, shortcuts_updated: u64, refreshes: u64, error: Option<String> }
+static APPLIED: Mutex<Applied> = Mutex::new(Applied { stamp: None, icon: String::new(), shortcuts_updated: 0, refreshes: 0, error: None });
 
 pub fn app_id() -> String {
     let mut id = "Pealayer.Desktop".to_owned();
@@ -47,14 +47,25 @@ fn prune_cache(directory: &Path, keep: &[&Path]) {
         if !keep.contains(&entry.path().as_path()) { let _ = std::fs::remove_file(entry.path()); }
     }
 }
-unsafe fn set_window_properties(hwnd: HWND, icon: &Path, name: &str, executable: &Path) -> windows::core::Result<()> {
+unsafe fn set_window_properties(hwnd: HWND, icon: &Path, name: &str, executable: &Path) -> windows::core::Result<bool> {
     let store: IPropertyStore = unsafe { SHGetPropertyStoreForWindow(hwnd)? };
+    let resource = format!("{},0", icon.display());
+    // Reassigning the same ID is a no-op to Explorer's group cache. Remove only
+    // this window's association before changing its relaunch artwork, then
+    // restore the exact same stable ID. No global icon-cache reset/Explorer
+    // restart, new identity, or pin/unpin operation is involved.
+    let changed = unsafe { store.GetValue(&ID)? }.to_string() == app_id()
+        && unsafe { store.GetValue(&ICON)? }.to_string() != resource;
+    if changed {
+        unsafe { store.SetValue(&ID, &PROPVARIANT::default())?; store.Commit()?; }
+    }
     // ID last: Windows refreshes the taskbar group at this point.
     for (key, value) in [(COMMAND, format!("\"{}\" --activate", executable.display())),
-        (NAME, name.to_owned()), (ICON, format!("{},0", icon.display())), (ID, app_id())] {
+        (NAME, name.to_owned()), (ICON, resource), (ID, app_id())] {
         unsafe { store.SetValue(&key, &PROPVARIANT::from(value.as_str()))?; }
     }
-    unsafe { store.Commit() }
+    unsafe { store.Commit()?; }
+    Ok(changed)
 }
 pub fn clear_window(hwnd: isize) {
     // Window properties are not shortcut properties: release only this HWND's
@@ -109,13 +120,13 @@ pub fn apply(hwnd: isize, source: u64, config: &crate::config::AppConfig, state:
     let name = crate::config::resolved_app_name(config);
     let stamp = (hwnd, source, name.clone());
     if APPLIED.lock().is_ok_and(|value| value.stamp.as_ref() == Some(&stamp)) { return; }
-    let result = (|| -> Result<(PathBuf, u64), String> {
+    let result = (|| -> Result<(PathBuf, u64, bool), String> {
         let directory = crate::config::AppConfig::get_config_path().with_file_name("shell-icons");
         let icon = cache_icon(&directory, &crate::branding::native_icon_bytes(config, state)?)?;
         let default = cache_icon(&directory, &crate::branding::native_icon_bytes(config, crate::branding::PlaybackIconState::Stopped)?)?;
         let executable = std::env::current_exe().map_err(|e| e.to_string())?;
         let initialized = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }.is_ok();
-        let result = (|| -> windows::core::Result<u64> {
+        let result = (|| -> windows::core::Result<(u64,bool)> {
             let mut updated = 0;
             if std::env::var_os("PEALAYER_INSTANCE_ID").is_none()
                 && let Some(roaming) = std::env::var_os("APPDATA") {
@@ -130,19 +141,24 @@ pub fn apply(hwnd: isize, source: u64, config: &crate::config::AppConfig, state:
                     }
                 }
             }
-            unsafe { set_window_properties(HWND(hwnd as *mut _), &icon, &name, &executable)?; }
-            Ok(updated)
+            let changed=unsafe { set_window_properties(HWND(hwnd as *mut _), &icon, &name, &executable)? };
+            if changed {
+                crate::platform::windows::refresh_taskbar_application_icon(hwnd)
+                    .map_err(|error| windows::core::Error::new(windows::core::HRESULT(0x80004005u32 as i32),error))?;
+            }
+            Ok((updated,changed))
         })();
         if initialized { unsafe { CoUninitialize(); } }
         prune_cache(&directory, &[&icon, &default]);
-        result.map(|updated| (icon, updated)).map_err(|e| e.to_string())
+        result.map(|(updated,changed)| (icon, updated, changed)).map_err(|e| e.to_string())
     })();
     if let Ok(mut applied) = APPLIED.lock() {
         match result {
-            Ok((icon, updated)) => {
+            Ok((icon, updated, changed)) => {
                 applied.stamp = Some(stamp);
                 applied.icon = icon.file_name().unwrap_or_default().to_string_lossy().into_owned();
                 applied.shortcuts_updated += updated;
+                applied.refreshes += u64::from(changed);
                 applied.error = None;
             }
             Err(error) => { log::warn!("Refresh taskbar application branding: {error}"); applied.error = Some(error); }
@@ -151,7 +167,7 @@ pub fn apply(hwnd: isize, source: u64, config: &crate::config::AppConfig, state:
 }
 pub fn diagnostics() -> serde_json::Value {
     APPLIED.lock().map(|value| serde_json::json!({"applied":value.stamp.is_some(),
-        "icon":value.icon,"pinned_shortcuts_updated":value.shortcuts_updated,"error":value.error})).unwrap_or_default()
+        "icon":value.icon,"app_id":app_id(),"refreshes":value.refreshes,"pinned_shortcuts_updated":value.shortcuts_updated,"error":value.error})).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -170,6 +186,11 @@ mod tests {
             assert_eq!(store.GetValue(&ID).unwrap().to_string(), app_id());
             assert_eq!(store.GetValue(&NAME).unwrap().to_string(), "Fixture");
             assert_eq!(store.GetValue(&COMMAND).unwrap().to_string(), r#""C:\fixture\pealayer.exe" --activate"#);
+            for icon in [r"C:\fixture\modern.ico", r"C:\fixture\classic.ico", r"C:\fixture\modern.ico"] {
+                set_window_properties(window,Path::new(icon),"Fixture",Path::new(r"C:\fixture\pealayer.exe")).unwrap();
+                assert_eq!(store.GetValue(&ICON).unwrap().to_string(),format!("{icon},0"));
+                assert_eq!(store.GetValue(&ID).unwrap().to_string(),app_id());
+            }
             clear_window(window.0 as isize);
             for key in [COMMAND, ICON, NAME, ID] { assert!(store.GetValue(&key).unwrap().to_string().is_empty()); }
             DestroyWindow(window).unwrap();

@@ -1,4 +1,5 @@
-//! DWM consumes an MPV-only bitmap, not a screenshot/crop of egui.
+//! Small taskbar cards consume the MPV-only bitmap. Full-size Task View/Peek
+//! consumes a separate, on-demand composite of the actual application UI.
 //! Readback follows new video frames at up to 30 Hz, not a guessed hover lease.
 //! No decoding, disk I/O or GL runs
 //! in the window procedure, and the real Pealayer window remains untouched.
@@ -34,6 +35,89 @@ static PREVIEW: Mutex<Preview> = Mutex::new(Preview {
 });
 static REPAINT: OnceLock<eframe::egui::Context> = OnceLock::new();
 static REPAINT_WAKE: OnceLock<SyncSender<()>> = OnceLock::new();
+#[cfg(target_os = "windows")]
+static FULL_REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+#[cfg(target_os = "windows")]
+#[derive(Default)]
+struct FullPreview {
+    frame: Option<std::sync::Arc<image::RgbaImage>>,
+    captured: Option<Instant>,
+    pending: Option<Instant>,
+    requests: u64,
+    captures: u64,
+    delivered: u64,
+    non_uniform: bool,
+    error: Option<String>,
+}
+#[cfg(target_os = "windows")]
+static FULL: std::sync::LazyLock<Mutex<FullPreview>> = std::sync::LazyLock::new(|| Mutex::new(FullPreview::default()));
+
+#[cfg(target_os = "windows")]
+fn full_rgba(image: &eframe::egui::ColorImage) -> Option<image::RgbaImage> {
+    if image.size[0]==0 || image.size[1]==0 {return None;}
+    let bytes: Vec<_> = image.pixels.iter().flat_map(|pixel| pixel.to_array()).collect();
+    image::RgbaImage::from_raw(image.size[0] as u32,image.size[1] as u32,bytes)
+}
+
+#[cfg(target_os = "windows")]
+fn capture_full_if_requested(ctx: &eframe::egui::Context) {
+    use std::sync::atomic::Ordering;
+    if !FULL_REQUESTED.swap(false,Ordering::AcqRel) {return;}
+    let hwnd = crate::platform::windows::get_registered_hwnd();
+    // The backend reads the finished egui+video framebuffer after painting.
+    // No PrintWindow recursion, video-only replacement or GL in the WndProc.
+    ctx.request_screenshot(move |image| {
+        let Some(frame) = full_rgba(&image).map(std::sync::Arc::new) else {
+            if let Ok(mut state)=FULL.lock() {state.pending=None;state.error=Some("The preview surface has no drawable extent".into());}
+            return;
+        };
+        if let Ok(mut state)=FULL.lock() {
+            state.frame=Some(frame.clone());state.captured=Some(Instant::now());
+            state.pending=None;state.captures+=1;
+            state.non_uniform=frame.pixels().skip(1).step_by(64).any(|pixel|pixel!=frame.get_pixel(0,0));
+        }
+        publish_full(hwnd,&frame);
+    });
+}
+
+#[cfg(target_os = "windows")]
+fn publish_full(hwnd: isize, frame: &image::RgbaImage) {
+    use windows::Win32::{Foundation::{HWND,RECT},Graphics::{Dwm::DwmSetIconicLivePreviewBitmap,Gdi::DeleteObject},UI::WindowsAndMessaging::GetClientRect};
+    let mut client=RECT::default();
+    if unsafe {GetClientRect(HWND(hwnd as *mut _),&mut client)}.is_err() || client.right<=0 || client.bottom<=0 {return;}
+    // DWM requires a 32-bit bitmap no larger than the current client area.
+    let (w,h)=fit_size(frame.width(),frame.height(),client.right as u32,client.bottom as u32);
+    let resized;
+    let image=if w!=frame.width() || h!=frame.height() {
+        resized=image::imageops::resize(frame,w,h,image::imageops::FilterType::Triangle);&resized
+    }else{frame};
+    let result=bitmap(image).and_then(|bitmap| unsafe {
+        let result=DwmSetIconicLivePreviewBitmap(HWND(hwnd as *mut _),bitmap,None,1); // DWM_SIT_DISPLAYFRAME
+        let _=DeleteObject(bitmap.into());result
+    });
+    if let Ok(mut state)=FULL.lock() {match result {Ok(())=>{state.delivered+=1;state.error=None;},Err(error)=>state.error=Some(error.to_string())}}
+}
+
+#[cfg(target_os = "windows")]
+fn handle_full_request(hwnd: isize) -> bool {
+    if !PREVIEW.lock().is_ok_and(|state|state.enabled) {return false;}
+    let (frame,capture)=if let Ok(mut state)=FULL.lock() {
+        state.requests+=1;
+        // A snapshot is enough for Task View; do not read the entire 4K UI on
+        // every video-frame invalidation. Paused previews cannot create loops.
+        let capture=state.captured.is_none_or(|at|at.elapsed()>=Duration::from_secs(1))
+            && state.pending.is_none_or(|at|at.elapsed()>=Duration::from_secs(2));
+        if capture {state.pending=Some(Instant::now());}
+        (state.frame.clone(),capture)
+    }else{(None,false)};
+    if let Some(frame)=frame {publish_full(hwnd,&frame);}
+    if capture {
+        FULL_REQUESTED.store(true,std::sync::atomic::Ordering::Release);
+        request_repaint();
+    }
+    true
+}
 
 #[cfg(target_os = "windows")]
 fn wake_native_window() {
@@ -80,6 +164,8 @@ pub fn register_repaint(ctx: &eframe::egui::Context) {
             .name("pealayer-shell-wake".to_owned())
             .spawn(move || {
                 while receiver.recv().is_ok() {
+                    #[cfg(target_os = "windows")]
+                    capture_full_if_requested(&repaint);
                     repaint.request_repaint();
                     wake_native_window();
                     // A second edge publishes the state that results from the
@@ -159,6 +245,11 @@ pub fn configure(hwnd: isize, enabled: bool) -> Result<(), String> {
     state.frame = None;
     state.captured = None;
     state.frame_dirty = false;
+    #[cfg(target_os = "windows")]
+    {
+        FULL_REQUESTED.store(false,std::sync::atomic::Ordering::Release);
+        if let Ok(mut full)=FULL.lock() {*full=FullPreview::default();}
+    }
     Ok(())
 }
 
@@ -392,11 +483,10 @@ pub fn bitmap(
 pub fn handle_request(hwnd: isize, message: u32, lparam: isize) -> bool {
     use windows::Win32::UI::WindowsAndMessaging::WM_DWMSENDICONICLIVEPREVIEWBITMAP;
 
-    // Video-only is correct for the small taskbar thumbnail, but a Peek/live
-    // preview is projected over the real desktop window. Leave that full-size
-    // preview to DWM so Pealayer keeps its complete UI while being hovered.
+    // With forced iconic representation Windows also asks us for this surface.
+    // Ignoring it leaves Task View black. Never use the small video bitmap here.
     if message == WM_DWMSENDICONICLIVEPREVIEWBITMAP {
-        return false;
+        return handle_full_request(hwnd);
     }
     if !is_static_thumbnail_request(message) {
         return false;
@@ -457,7 +547,14 @@ pub fn diagnostics() -> serde_json::Value {
     let branding = crate::platform::taskbar_branding::diagnostics();
     #[cfg(not(target_os = "windows"))]
     let branding = serde_json::Value::Null;
+    #[cfg(target_os = "windows")]
+    let full = FULL.lock().map(|state|serde_json::json!({"requests":state.requests,"captures":state.captures,
+        "delivered":state.delivered,"non_uniform":state.non_uniform,"frame_size":state.frame.as_ref().map(|frame|[frame.width(),frame.height()]),
+        "frame_age_ms":state.captured.map(|at|at.elapsed().as_millis() as u64),"error":state.error})).unwrap_or_default();
+    #[cfg(not(target_os = "windows"))]
+    let full = serde_json::Value::Null;
     serde_json::json!({"video_only":state.enabled,"branding":branding,
+        "full_preview":full,
         "dwm_configuration":{"supported":cfg!(target_os="windows"),
             "force_iconic":state.enabled,"has_iconic_bitmap":state.enabled,
             "source":"successful DwmSetWindowAttribute calls","error":state.configuration_error},
@@ -478,6 +575,19 @@ pub fn frame_png() -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn full_preview_preserves_composited_pixels_and_orientation() {
+        assert!(super::full_rgba(&eframe::egui::ColorImage::new([0,0],Vec::new())).is_none());
+        let pixels=[eframe::egui::Color32::RED,eframe::egui::Color32::GREEN,eframe::egui::Color32::BLUE,eframe::egui::Color32::WHITE];
+        let image=eframe::egui::ColorImage::new([2,2],pixels.to_vec());
+        let full=super::full_rgba(&image).unwrap();
+        assert_eq!(full.dimensions(),(2,2));
+        for (pixel,expected) in full.pixels().zip(pixels) {assert_eq!(pixel.0,expected.to_array());}
+        let source=include_str!("taskbar_preview.rs");
+        assert!(source.contains("ctx.request_screenshot(move |image|"));
+        assert!(source.contains("return handle_full_request(hwnd)"));
+    }
     #[test]
     fn video_only_bitmap_is_never_used_for_full_size_peek() {
         assert!(super::is_static_thumbnail_request(0x0323));
