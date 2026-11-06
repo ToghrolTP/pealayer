@@ -8,6 +8,8 @@ pub mod media_controls;
 mod windows_media_session;
 pub mod registry;
 pub mod taskbar_preview;
+#[cfg(target_os = "windows")]
+pub mod taskbar_branding;
 pub mod tray_board;
 pub mod windows;
 #[cfg(target_os = "windows")]

@@ -330,6 +330,9 @@ body {
 .preference-choice-slider__measure, .preference-choice-slider__caption { grid-area: 1 / 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .preference-choice-slider__measure { visibility: hidden; pointer-events: none; }
 .preference-choice-slider:focus-within .preference-choice-slider__value { border-color: var(--accent); }
+.preference-choice-slider__value { font-family: inherit; }
+.preference-choice-slider__value:not(:disabled) { cursor: pointer; }
+.preference-choice-slider__value:hover:not(:disabled), .preference-choice-slider__value:focus-visible { border-color: var(--accent); transform: none; }
 .preference-choice-slider[data-disabled='true'] .preference-choice-slider__value { opacity: .45; }
 .preference-control--boolean { grid-template-columns: minmax(0, 1fr) auto; }
 .preference-control__label { min-width: 0; display: flex; align-items: center; justify-content: flex-start; gap: 7px; font-size: 13px; font-weight: 600; text-align: start; }

@@ -1474,6 +1474,9 @@ fn build_windows_jump_list(include_quick_actions: bool) -> Result<(), String> {
         let destination_list: ICustomDestinationList =
             CoCreateInstance(&DestinationList, None, CLSCTX_INPROC_SERVER)
                 .map_err(|error| format!("create Windows Jump List: {error}"))?;
+        let identity: Vec<u16> = super::taskbar_branding::app_id().encode_utf16().chain(Some(0)).collect();
+        destination_list.SetAppID(PCWSTR(identity.as_ptr()))
+            .map_err(|error| format!("set Windows Jump List identity: {error}"))?;
         let mut minimum_slots = 0;
         let _: IObjectArray = destination_list
             .BeginList(&mut minimum_slots)
@@ -2175,10 +2178,14 @@ unsafe extern "system" fn shell_window_proc(
 ) -> windows::Win32::Foundation::LRESULT {
     use windows::Win32::Foundation::LRESULT;
     use windows::Win32::UI::WindowsAndMessaging::{
-        WM_APPCOMMAND, WM_COMMAND, WM_CONTEXTMENU, WM_LBUTTONDBLCLK, WM_RBUTTONUP, WM_SETICON,
+        WM_APPCOMMAND, WM_COMMAND, WM_CONTEXTMENU, WM_LBUTTONDBLCLK, WM_RBUTTONUP, WM_SETICON, WM_NCDESTROY,
     };
 
     observe_native_window_message(message);
+
+    if message == WM_NCDESTROY {
+        crate::platform::taskbar_branding::clear_window(hwnd.0 as isize);
+    }
 
     if message == WM_SETICON {
         // eframe owns the HICON lifetime. Shell copies it; do not destroy it.

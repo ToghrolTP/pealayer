@@ -1,6 +1,6 @@
 //! DWM consumes an MPV-only bitmap, not a screenshot/crop of egui.
-//! Readback is demand-driven: one seed frame, then up to 30 Hz only while
-//! Windows is actively requesting previews. No decoding, disk I/O or GL runs
+//! Readback follows new video frames at up to 30 Hz, not a guessed hover lease.
+//! No decoding, disk I/O or GL runs
 //! in the window procedure, and the real Pealayer window remains untouched.
 
 use std::sync::{Mutex, OnceLock, mpsc::SyncSender};
@@ -12,8 +12,8 @@ struct Preview {
     media: String,
     frame: Option<image::RgbaImage>,
     captured: Option<Instant>,
-    requested: Option<Instant>,
-    capture_refresh_requested: Option<Instant>,
+    frame_dirty: bool,
+    captured_frames: u64,
     requests: u64,
     delivered: u64,
     last_error: Option<String>,
@@ -25,8 +25,8 @@ static PREVIEW: Mutex<Preview> = Mutex::new(Preview {
     media: String::new(),
     frame: None,
     captured: None,
-    requested: None,
-    capture_refresh_requested: None,
+    frame_dirty: false,
+    captured_frames: 0,
     requests: 0,
     delivered: 0,
     last_error: None,
@@ -158,8 +158,7 @@ pub fn configure(hwnd: isize, enabled: bool) -> Result<(), String> {
     state.configuration_error = None;
     state.frame = None;
     state.captured = None;
-    state.requested = None;
-    state.capture_refresh_requested = None;
+    state.frame_dirty = false;
     Ok(())
 }
 
@@ -173,10 +172,9 @@ enum CapturePlan {
 fn capture_plan(
     enabled: bool,
     has_frame: bool,
-    requested_age: Option<Duration>,
+    frame_dirty: bool,
     captured_age: Option<Duration>,
 ) -> CapturePlan {
-    const ACTIVE_WINDOW: Duration = Duration::from_secs(1);
     const FRAME_INTERVAL: Duration = Duration::from_millis(33);
     if !enabled {
         return CapturePlan::Idle;
@@ -184,23 +182,13 @@ fn capture_plan(
     if !has_frame {
         return CapturePlan::Capture;
     }
-    if !requested_age.is_some_and(|age| age < ACTIVE_WINDOW) {
+    if !frame_dirty {
         return CapturePlan::Idle;
     }
     match captured_age {
         Some(age) if age < FRAME_INTERVAL => CapturePlan::RetryAfter(FRAME_INTERVAL - age),
         _ => CapturePlan::Capture,
     }
-}
-
-fn is_capture_refresh(request_age: Option<Duration>) -> bool {
-    // DwmInvalidateIconicBitmaps normally causes a prompt
-    // WM_DWMSENDICONICTHUMBNAIL callback. That callback acknowledges the frame
-    // we just captured; it is not fresh evidence that the user is still
-    // hovering the taskbar preview. Treat only the bounded, immediate callback
-    // as our own refresh so a single shell request cannot renew the one-second
-    // capture lease forever.
-    request_age.is_some_and(|age| age < Duration::from_millis(250))
 }
 
 pub fn reset_shell() {
@@ -218,6 +206,7 @@ pub unsafe fn capture(
     width: i32,
     height: i32,
     media: &str,
+    frame_updated: bool,
 ) {
     use eframe::glow::{self, HasContext};
     let plan = if let Ok(mut state) = PREVIEW.lock() {
@@ -229,10 +218,11 @@ pub unsafe fn capture(
             state.frame = None;
             state.captured = None;
         }
+        state.frame_dirty |= frame_updated;
         capture_plan(
             state.enabled,
             state.frame.is_some(),
-            state.requested.map(|at| at.elapsed()),
+            state.frame_dirty,
             state.captured.map(|at| at.elapsed()),
         )
     } else {
@@ -256,6 +246,8 @@ pub unsafe fn capture(
     unsafe {
         // Preserve split FBO bindings and pixel packing. Never read the egui
         // framebuffer, which would include controls/OSD and leak through panels.
+        let scissor = gl.is_enabled(glow::SCISSOR_TEST);
+        gl.disable(glow::SCISSOR_TEST);
         let read = gl.get_parameter_i32(glow::READ_FRAMEBUFFER_BINDING) as u32;
         let draw = gl.get_parameter_i32(glow::DRAW_FRAMEBUFFER_BINDING) as u32;
         let pack = gl.get_parameter_i32(glow::PIXEL_PACK_BUFFER_BINDING) as u32;
@@ -264,10 +256,12 @@ pub unsafe fn capture(
         let skip_rows = gl.get_parameter_i32(glow::PACK_SKIP_ROWS);
         let skip_pixels = gl.get_parameter_i32(glow::PACK_SKIP_PIXELS);
         let Ok(fbo) = gl.create_framebuffer() else {
+            if scissor { gl.enable(glow::SCISSOR_TEST); }
             return;
         };
         let Ok(texture) = gl.create_renderbuffer() else {
             gl.delete_framebuffer(fbo);
+            if scissor { gl.enable(glow::SCISSOR_TEST); }
             return;
         };
         let rb = gl.get_parameter_i32(glow::RENDERBUFFER_BINDING) as u32;
@@ -339,6 +333,7 @@ pub unsafe fn capture(
         );
         gl.delete_renderbuffer(texture);
         gl.delete_framebuffer(fbo);
+        if scissor { gl.enable(glow::SCISSOR_TEST); }
         if !complete {
             return;
         }
@@ -349,7 +344,8 @@ pub unsafe fn capture(
         if let Ok(mut state) = PREVIEW.lock() {
             state.frame = image::RgbaImage::from_raw(w, h, rgba);
             state.captured = Some(Instant::now());
-            state.capture_refresh_requested = Some(Instant::now());
+            state.frame_dirty = false;
+            state.captured_frames += 1;
         }
         let _ = windows::Win32::Graphics::Dwm::DwmInvalidateIconicBitmaps(
             windows::Win32::Foundation::HWND(hwnd as *mut _),
@@ -413,22 +409,10 @@ pub fn handle_request(hwnd: isize, message: u32, lparam: isize) -> bool {
             return false;
         }
         state.requests += 1;
-        let now = Instant::now();
-        let capture_refresh = is_capture_refresh(
-            state
-                .capture_refresh_requested
-                .take()
-                .map(|requested| now.saturating_duration_since(requested)),
-        );
-        if !capture_refresh {
-            state.requested = Some(now);
-        }
         state.frame.clone()
     };
-    if let Some(ctx) = REPAINT.get() {
-        ctx.request_repaint();
-    }
     let Some(frame) = frame else {
+        request_repaint();
         return true;
     };
     let (max_w, max_h) = (
@@ -469,14 +453,18 @@ pub fn diagnostics() -> serde_json::Value {
     };
     // These two attributes are documented for Set, not Get. Report the
     // successfully accepted configuration, not fabricated read-back values.
-    serde_json::json!({"video_only":state.enabled,
+    #[cfg(target_os = "windows")]
+    let branding = crate::platform::taskbar_branding::diagnostics();
+    #[cfg(not(target_os = "windows"))]
+    let branding = serde_json::Value::Null;
+    serde_json::json!({"video_only":state.enabled,"branding":branding,
         "dwm_configuration":{"supported":cfg!(target_os="windows"),
             "force_iconic":state.enabled,"has_iconic_bitmap":state.enabled,
             "source":"successful DwmSetWindowAttribute calls","error":state.configuration_error},
         "toolbar_icon_size":crate::platform::windows::thumbnail_toolbar_metrics(crate::platform::windows::get_registered_hwnd()).0,
         "frame_size":state.frame.as_ref().map(|f| [f.width(),f.height()]),
         "frame_age_ms":state.captured.map(|at| at.elapsed().as_millis() as u64),
-        "capture_refresh_pending_ms":state.capture_refresh_requested.map(|at| at.elapsed().as_millis() as u64),
+        "captured_frames":state.captured_frames,"frame_dirty":state.frame_dirty,
         "dwm_requests":state.requests,"dwm_delivered":state.delivered,"last_error":state.last_error,
         "shell_commands":crate::platform::windows::shell_command_diagnostics()})
 }
@@ -510,7 +498,7 @@ mod tests {
             super::capture_plan(
                 true,
                 true,
-                Some(Duration::from_millis(5)),
+                true,
                 Some(Duration::from_millis(20)),
             ),
             super::CapturePlan::RetryAfter(Duration::from_millis(13))
@@ -519,7 +507,7 @@ mod tests {
             super::capture_plan(
                 true,
                 true,
-                Some(Duration::from_millis(40)),
+                true,
                 Some(Duration::from_millis(33)),
             ),
             super::CapturePlan::Capture
@@ -528,7 +516,7 @@ mod tests {
             super::capture_plan(
                 true,
                 true,
-                Some(Duration::from_secs(2)),
+                false,
                 Some(Duration::from_secs(1)),
             ),
             super::CapturePlan::Idle
@@ -536,12 +524,12 @@ mod tests {
     }
 
     #[test]
-    fn capture_generated_thumbnail_request_does_not_renew_preview_lease() {
+    fn new_video_frames_never_expire_but_paused_unchanged_frames_do_not_loop() {
         use std::time::Duration;
-        assert!(super::is_capture_refresh(Some(Duration::from_millis(10))));
-        assert!(super::is_capture_refresh(Some(Duration::from_millis(249))));
-        assert!(!super::is_capture_refresh(Some(Duration::from_millis(250))));
-        assert!(!super::is_capture_refresh(Some(Duration::from_secs(2))));
-        assert!(!super::is_capture_refresh(None));
+        for age in [Duration::from_secs(2), Duration::from_secs(60)] {
+            assert_eq!(super::capture_plan(true, true, true, Some(age)), super::CapturePlan::Capture);
+            assert_eq!(super::capture_plan(true, true, false, Some(age)), super::CapturePlan::Idle);
+        }
+        assert_eq!(super::capture_plan(false, false, true, None), super::CapturePlan::Idle);
     }
 }

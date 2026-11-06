@@ -193,13 +193,13 @@ function patchForPath(values: JsonObject, path: string): JsonObject {
   return { [root]: values[root] };
 }
 
-function ChoiceSlider({ options, value, label, locale, disabled, onCommit }: {
+export function ChoiceSlider({ options, value, label, locale, disabled, onCommit }: {
   options: PreferenceOption[]; value: unknown; label: string; locale: 'en' | 'fa';
   disabled: boolean; onCommit: (value: PreferenceOption['value']) => void;
 }) {
   const selected = Math.max(0, options.findIndex(option => option.value === value));
   const [index, setIndex] = useState(selected);
-  useEffect(() => setIndex(selected), [selected]);
+  useEffect(() => { if (!disabled) setIndex(selected); }, [selected, disabled]);
   if (!options.length) return null;
   return <div className="preference-choice-slider" data-disabled={disabled}>
     <Slider min={0} max={options.length - 1} step={1} value={index} disabled={disabled}
@@ -210,10 +210,12 @@ function ChoiceSlider({ options, value, label, locale, disabled, onCommit }: {
       onChange={setIndex} onChangeComplete={position => {
         if (options[position].value !== value) onCommit(options[position].value);
       }} />
-    <span className="preference-choice-slider__value" title={tr(locale, options[index]?.label ?? '')}>
+    <button type="button" className="preference-choice-slider__value" disabled={disabled}
+      aria-label={tr(locale, label)} title={`${tr(locale, options[index]?.label ?? '')} → ${tr(locale, options[(index + 1) % options.length].label)}`}
+      onClick={() => { const next = (index + 1) % options.length; setIndex(next); onCommit(options[next].value); }}>
       {options.map((option, position) => <span key={position} aria-hidden="true" className="preference-choice-slider__measure">{tr(locale, option.label)}</span>)}
       <span className="preference-choice-slider__caption">{tr(locale, options[index]?.label ?? '')}</span>
-    </span>
+    </button>
   </div>;
 }
 

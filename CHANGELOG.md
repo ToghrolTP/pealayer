@@ -6,6 +6,17 @@ retroactively attributed to an older download.
 
 ## Next milestone · unreleased
 
+### 🖥️ Windows taskbar and appearance
+
+- Changing the application icon also updates Explorer's taskbar group artwork
+  and matching pinned launcher, not just the titlebar and notification area.
+- Video-only taskbar thumbnails follow new rendered frames instead of stopping
+  when a short hover refresh timer expires. Paused frames remain unchanged;
+  the full-window Peek preview is not replaced by the thumbnail bitmap.
+- Click the control-density value capsule to advance through all five sizes,
+  wrapping back to Extra compact. Native and Web controls retain stable layout,
+  keyboard adjustment and disabled-state behavior.
+
 ### 📦 Updating Pealayer
 
 - The command-line updater shows clear upload/download, verification, restart

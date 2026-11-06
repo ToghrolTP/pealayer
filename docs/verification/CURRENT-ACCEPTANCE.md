@@ -297,6 +297,9 @@ required checks are not passed while the user's test/CI skip remains in effect.
   applications in two separated live samples. Keep #62 open until its gates pass.
 - [ ] Resolve remaining GPU/native-surface and exact-navigation gates in
   #64–#66; experimental D3D11 must remain optional/default-off until accepted.
+  [Taskbar branding and frame refresh](taskbar-branding-and-frame-refresh.md)
+  fixes the bitmap refresh lease and shell-artwork contract separately; it is
+  not proof of minimized/offscreen or zero-copy rendering acceptance.
 - [ ] Clear applicable platform CI/runtime/package checks and privacy-safe
   screenshots before selecting the next release version and publishing packages.
 

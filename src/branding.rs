@@ -214,6 +214,8 @@ pub fn sync_native_window_icon(ctx: &egui::Context, state: PlaybackIconState) {
     // copies the borrowed HWND icon; WM_SETICON updates it again after eframe
     // processes the viewport command below.
     if hwnd != 0 {
+        #[cfg(target_os = "windows")]
+        crate::platform::taskbar_branding::apply(hwnd, source, &config, state);
         let _ = crate::platform::windows::update_system_tray_icon(
             hwnd, &crate::config::resolved_app_name(&config),
         );
