@@ -240,20 +240,9 @@ pub fn run() -> eframe::Result {
             eframe::icon_data::from_png_bytes(include_bytes!("../assets/pealayer-icon.png")).ok()
         });
 
-    let mut viewport = egui::ViewportBuilder::default()
-        .with_inner_size([800.0, 600.0])
+    let initial_geometry = crate::platform::window_placement::initial(&launch_config, crate::peer::active());
+    let mut viewport = crate::platform::window_placement::builder(egui::ViewportBuilder::default(), initial_geometry, cli_options.fullscreen)
         .with_clamp_size_to_monitor_size(true);
-    if !crate::peer::active() && let Some(geometry) = launch_config
-        .workspace_session
-        .window_geometry
-        .or(launch_config.window_geometry)
-        .filter(|geometry| geometry.is_valid())
-    {
-        viewport = viewport
-            .with_inner_size([geometry.width, geometry.height])
-            .with_position([geometry.x, geometry.y])
-            .with_maximized(geometry.maximized);
-    }
     if cli_options.fullscreen {
         viewport = viewport.with_fullscreen(true);
     }
@@ -271,7 +260,10 @@ pub fn run() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport,
         renderer: eframe::Renderer::Glow,
-        persist_window: !crate::peer::active(),
+        // The application owns placement. Keep eframe's widget memory, not a
+        // second, possibly minimized WindowSettings geometry authority.
+        persist_window: false,
+        window_builder: Some(Box::new(move |builder| crate::platform::window_placement::builder(builder, initial_geometry, cli_options.fullscreen))),
         persistence_path: (!crate::peer::active()).then(||
             crate::config::AppConfig::get_config_path().with_file_name("workspace-state.ron"),
         ),
@@ -304,6 +296,9 @@ pub fn run() -> eframe::Result {
         &initial_window_title,
         options,
         Box::new(move |cc| {
+            if let Some(window) = cc.winit_window() {
+                crate::platform::window_placement::restore(window, initial_geometry, cli_options.fullscreen, cc.egui_ctx.zoom_factor());
+            }
             let loaded_config = launch_config.clone();
             crate::platform::windows::start_window_move_frame_pump(cc.egui_ctx.clone());
             crate::ui::i18n::configure_ui_fonts(
@@ -639,10 +634,7 @@ pub fn run() -> eframe::Result {
                 app_publisher: crate::config::resolved_app_publisher(&loaded_config),
                 app_copyright: crate::config::resolved_app_copyright(&loaded_config),
                 last_window_title: String::new(),
-                window_geometry: loaded_config
-                    .workspace_session
-                    .window_geometry
-                    .or(loaded_config.window_geometry),
+                window_geometry: initial_geometry,
                 language_preference,
                 language,
                 direction_preference,

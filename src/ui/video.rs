@@ -861,6 +861,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         // the valid texture without entering MPV or querying,
                         // resetting and restoring GL state on every such frame.
                         if !update_pending && !needs_resize && rtt.has_rendered_frame {
+                            #[cfg(target_os = "windows")]
+                            if let Some(media) = taskbar_media.as_deref() {
+                                unsafe { crate::platform::taskbar_preview::capture(gl, hwnd, video_fbo,
+                                    target_phys_w, target_phys_h, media, false); }
+                            }
                             MPV_RENDER_SKIPPED_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             return;
                         }
@@ -900,6 +905,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             // Bypass redundant rendering if no new frame arrived, dimensions are unchanged,
                             // and the FBO already holds a valid rendered frame.
                             if !needs_resize && !has_new_frame && rtt.has_rendered_frame {
+                                #[cfg(target_os = "windows")]
+                                if let Some(media) = taskbar_media.as_deref() {
+                                    crate::platform::taskbar_preview::capture(gl, hwnd, video_fbo,
+                                        target_phys_w, target_phys_h, media, false);
+                                }
                                 MPV_RENDER_SKIPPED_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                 return;
                             }
@@ -938,6 +948,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     target_phys_w,
                                     target_phys_h,
                                     media,
+                                    true,
                                 );
                             }
 

@@ -274,6 +274,15 @@ fn timeline_frozen_ruler_rect(content: egui::Rect, viewport: egui::Rect) -> egui
     )
 }
 
+/// Keep the timestamp's center on its tick. Omit partially visible labels at
+/// the edges rather than shifting them away from the time they identify.
+pub(super) fn timeline_ruler_label_rect(
+    center: egui::Pos2, size: egui::Vec2, clip: egui::Rect,
+) -> Option<egui::Rect> {
+    let label = egui::Rect::from_center_size(center, size);
+    clip.contains_rect(label).then_some(label)
+}
+
 fn timeline_content_height(
     track_rows: usize,
     analog_rows: usize,
@@ -9095,6 +9104,40 @@ mod timeline_row_tests {
             assert_eq!(ruler.left(), 300.0 - offset.x);
             assert_eq!(timeline_track_row_top(content.top(), 0, 40.0), 80.0 + TIMELINE_RULER_HEIGHT - offset.y);
             assert!(ruler.contains(timeline_keyframe_marker_center(ruler, 350.0)));
+        }
+    }
+
+    #[test]
+    fn timeline_ruler_labels_are_centered_on_ticks_without_edge_reanchoring() {
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            let ctx = egui::Context::default();
+            ctx.set_pixels_per_point(scale);
+            let mut expected = Vec::new();
+            let output = ctx.run_ui(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(700.0, 100.0))),
+                ..Default::default()
+            }, |ui| {
+                let clip = egui::Rect::from_min_max(egui::pos2(20.0, 10.0), egui::pos2(660.0, 50.0));
+                let painter = ui.painter().with_clip_rect(clip);
+                for (index, text) in ["0", "14:14", "1:00:00", "100:00:00"].iter().enumerate() {
+                    let x = 90.25 + index as f32 * 150.5;
+                    let galley = painter.layout_no_wrap((*text).to_owned(), egui::FontId::monospace(9.0), egui::Color32::WHITE);
+                    let rect = timeline_ruler_label_rect(egui::pos2(x, 30.0), galley.size(), clip).unwrap();
+                    assert!((rect.center().x - x).abs() < 0.001);
+                    assert!(timeline_ruler_label_rect(egui::pos2(clip.left(), 30.0), galley.size(), clip).is_none());
+                    assert!(timeline_ruler_label_rect(egui::pos2(clip.right(), 30.0), galley.size(), clip).is_none());
+                    painter.galley(rect.min, galley, egui::Color32::WHITE);
+                    expected.push((text.to_string(), x));
+                }
+            });
+            for (caption, tick_x) in expected {
+                let text = output.shapes.iter().find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == caption => Some(text),
+                    _ => None,
+                }).expect("actual painted timestamp");
+                assert!((text.pos.x + text.galley.size().x * 0.5 - tick_x).abs() < 0.001);
+            }
+            discard_ui_output(output);
         }
     }
 
@@ -18423,9 +18466,12 @@ impl<'a> PealayerTabViewer<'a> {
                                                         egui::FontId::monospace(9.0),
                                                         craft_tokens.tl_ruler_text,
                                                     );
-                                                    if grid_x + 4.0 + label.size().x <= rect.max.x - 8.0 {
+                                                    if let Some(label_rect) = timeline_ruler_label_rect(
+                                                        egui::pos2(grid_x, ruler_rect.min.y + 13.0),
+                                                        label.size(), ruler_painter.clip_rect(),
+                                                    ) {
                                                         ruler_painter.galley(
-                                                            egui::pos2(grid_x + 4.0, ruler_rect.min.y + 13.0 - label.size().y / 2.0),
+                                                            label_rect.min,
                                                             label,
                                                             craft_tokens.tl_ruler_text,
                                                         );

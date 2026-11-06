@@ -518,6 +518,12 @@ fn timecode_groups(value: &str) -> Vec<std::ops::Range<usize>> {
     groups
 }
 
+fn timecode_group_at_cursor(value: &str, index: usize) -> usize {
+    let groups = timecode_groups(value);
+    groups.iter().position(|range| index <= range.end)
+        .unwrap_or_else(|| groups.len().saturating_sub(1))
+}
+
 /// A segment editor never inserts or deletes punctuation: every edit replaces
 /// digits inside an existing group, and a completed group advances itself.
 fn edit_timecode_segment(value: &mut String, group: &mut usize, digits: &mut usize, event: &egui::Event) {
@@ -713,9 +719,22 @@ pub fn draw_elapsed_editor(
         } else {
             egui::Frame::NONE
         });
-    let widget_response =
-        ui.add_enabled_ui(enabled, |ui| ui.add_sized([desired_width, 22.0], editor));
-    let mut response = widget_response.inner;
+    // Keep add_sized's exact allocation, but retain TextEdit's actual painted
+    // galley. Its stored cursor is not a pointer hit test: restoring the group
+    // before painting can overwrite the mouse-down cursor on the release frame.
+    let layout = egui::Layout::centered_and_justified(ui.layout().main_dir());
+    let output = ui.add_enabled_ui(enabled, |ui| {
+        ui.allocate_ui_with_layout(egui::vec2(desired_width, 22.0), layout,
+            |ui| editor.show(ui)).inner
+    }).inner;
+    let pointer_group = ui.input(|input| input.pointer.interact_pos()).map(|position| {
+        // TextEdit paints a centered galley at galley_pos - rect.left(),
+        // not galley_pos itself. Use that same origin for glyph hit testing.
+        let cursor = output.galley.cursor_from_pos(position - output.galley_pos
+            + egui::vec2(output.galley.rect.left(), 0.0));
+        timecode_group_at_cursor(output.galley.text(), cursor.index.0)
+    });
+    let mut response = output.response.response;
 
     if editing {
         response =
@@ -727,14 +746,15 @@ pub fn draw_elapsed_editor(
         if response.has_focus() {
             if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), edit_id) {
                 let groups = timecode_groups(&app.elapsed_time_input);
-                if response.clicked() {
-                    if let Some(cursor) = state.cursor.char_range() {
-                        let index = cursor.primary.index.0;
-                        if let Some(selected) = groups.iter().position(|range| index <= range.end) {
-                            app.elapsed_time_group = selected;
-                            app.elapsed_time_group_digits = 0;
-                        }
-                    }
+                let pointer_pressed = response.contains_pointer()
+                    && ui.input(|input| input.pointer.primary_pressed());
+                // Only a new press may retarget an existing editor. The click
+                // that activates display mode may be replayed in a layout
+                // pass after its shorter galley becomes the full edit mask.
+                if pointer_pressed && let Some(selected) = pointer_group {
+                    app.elapsed_time_group = selected;
+                    app.elapsed_time_group_digits = 0;
+                    ui.ctx().request_repaint();
                 }
                 if let Some(range) = groups.get(app.elapsed_time_group) {
                     state.cursor.set_char_range(Some(egui::text::CCursorRange::two(
@@ -779,6 +799,9 @@ pub fn draw_elapsed_editor(
         response = response.on_hover_text(app.tr("Click to enter an exact playback time."));
         if response.clicked() {
             begin_elapsed_edit(app);
+            // The display text may omit milliseconds, so hit-test the galley
+            // that was actually clicked, before switching to the full mask.
+            app.elapsed_time_group = pointer_group.unwrap_or(0);
             ui.data_mut(|data| data.insert_temp(owner_key, edit_id));
             ui.ctx().request_repaint();
         }
@@ -1487,6 +1510,73 @@ mod tests {
         assert!(elapsed_edit_should_commit(value, value, true, false, false));
         assert!(elapsed_edit_should_commit(value, "00:01:02.004", false, true, false));
         assert!(!elapsed_edit_should_commit(value, "00:01:02.004", true, true, true));
+    }
+
+    #[test]
+    fn elapsed_pointer_selects_clicked_group_in_display_and_edit_modes() {
+        let _guard = crate::app::tests::lock_app_tests();
+        fn frame(ctx: &egui::Context, app: &mut PealayerApp, events: Vec<egui::Event>) -> egui::FullOutput {
+            let mut output = ctx.run_ui(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 200.0))),
+                events, ..Default::default()
+            }, |ui| {
+                let response = draw_elapsed_editor(app, ui, "pointer-elapsed-fixture", true);
+                ui.data_mut(|data| data.insert_temp(egui::Id::new("elapsed-pointer-test-id"), response.id));
+            });
+            output.textures_delta.clear();
+            output
+        }
+        fn point(output: &egui::FullOutput, value: &str, group: usize) -> egui::Pos2 {
+            let range = timecode_groups(value)[group].clone();
+            output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == value => {
+                    let cursor = egui::text::CCursor::new(range.start + 1);
+                    Some(text.pos + text.galley.pos_from_cursor(cursor).center().to_vec2())
+                }
+                _ => None,
+            }).expect("actual painted timecode")
+        }
+        fn click(ctx: &egui::Context, app: &mut PealayerApp, position: egui::Pos2) {
+            frame(ctx, app, vec![egui::Event::PointerMoved(position)]);
+            for pressed in [true, false] {
+                frame(ctx, app, vec![egui::Event::PointerButton {
+                    pos: position, button: egui::PointerButton::Primary, pressed,
+                    modifiers: egui::Modifiers::NONE,
+                }]);
+            }
+            frame(ctx, app, vec![]);
+            let id = ctx.data(|data| data.get_temp::<egui::Id>(egui::Id::new("elapsed-pointer-test-id"))).unwrap();
+            let selection = egui::TextEdit::load_state(ctx, id).unwrap().cursor.char_range().unwrap();
+            let selection = selection.as_sorted_char_range();
+            assert_eq!(selection.start.0..selection.end.0,
+                timecode_groups(&app.elapsed_time_input)[app.elapsed_time_group],
+                "the whole clicked group must remain highlighted after repaint");
+        }
+        for scale in [1.0, 1.5, 2.0] {
+            for subseconds in [false, true] {
+                for initial_group in 0..(if subseconds { 4 } else { 3 }) {
+                    let ctx = egui::Context::default();
+                    ctx.set_pixels_per_point(scale);
+                    let mut app = PealayerApp::default();
+                    app.playback_time = 3723.456;
+                    app.show_subseconds = subseconds;
+                    frame(&ctx, &mut app, vec![]);
+                    let output = frame(&ctx, &mut app, vec![]);
+                    let shown = format_player_time(app.playback_time, true, subseconds);
+                    click(&ctx, &mut app, point(&output, &shown, initial_group));
+                    assert!(app.editing_elapsed_time);
+                    assert_eq!(app.elapsed_time_group, initial_group, "display click at scale {scale}");
+                    for group in [3, 1, 2, 0] {
+                        let output = frame(&ctx, &mut app, vec![]);
+                        let value = app.elapsed_time_input.clone();
+                        click(&ctx, &mut app, point(&output, &value, group));
+                        assert_eq!(app.elapsed_time_group, group, "edit click at scale {scale}");
+                        assert_eq!(app.elapsed_time_input, app.elapsed_time_original);
+                        assert!(app.seek_pos.is_none(), "selection must never seek");
+                    }
+                }
+            }
+        }
     }
 
     #[test]

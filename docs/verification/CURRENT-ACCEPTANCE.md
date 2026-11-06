@@ -30,6 +30,19 @@ required checks are not passed while the user's test/CI skip remains in effect.
 
 ## Delivered source and deployment
 
+- [Live branding API](../BRANDING-API.md) shares temporary/persistent name,
+  tagline and icon updates across REST/RPC/native commands. Focused native
+  tests and isolated real-window checks pass: unrelated autosaves do not leak
+  temporary branding, selected fields persist, open Preferences follows events,
+  and Web runtime metadata refreshes. [Elapsed pointer selection](elapsed-pointer-selection.md)
+  and [centered ruler labels](timeline-ruler-labels.md) now pass their native
+  rendered regressions too. [Combined release and guarded canonical installation](branding-api-delivery.md)
+  are verified, including four actual displayed taskbar-artwork transitions on
+  the installed app. Cafe remains user-deferred. One debug native-minimize
+  fixture timeout was not reproduced by a fresh three-launch debug recheck or
+  the exact release; retain its failure diagnostics instead of calling the
+  original run a pass. Human Win+Tab and native/Web pointer walkthrough remain.
+
 - [Hardware connection hints](hardware-connection-hint.md) replace raw nested
   diagnostics with plain-language card copy and an opt-in circled information
   control in native/Web UI. Native/browser checks, packaging and local graceful
@@ -297,6 +310,15 @@ required checks are not passed while the user's test/CI skip remains in effect.
   applications in two separated live samples. Keep #62 open until its gates pass.
 - [ ] Resolve remaining GPU/native-surface and exact-navigation gates in
   #64–#66; experimental D3D11 must remain optional/default-off until accepted.
+  [Taskbar branding and frame refresh](taskbar-branding-and-frame-refresh.md)
+  fixes the bitmap refresh lease and shell-artwork contract separately; it is
+  not proof of minimized/offscreen or zero-copy rendering acceptance.
+  [Placement and Task View follow-up](window-placement-and-task-view.md)
+  records the reproduced minimized-zero persistence cause, native restart tests,
+  full-UI DWM preview path and repeated live branding/toolbar checks.
+  The user rejected the installed dynamic icon appearance again; native read-only
+  capture confirmed stale taskbar artwork despite correct HWND icons. The
+  follow-up must pass actual displayed-artwork comparisons, not property readback.
 - [ ] Clear applicable platform CI/runtime/package checks and privacy-safe
   screenshots before selecting the next release version and publishing packages.
 

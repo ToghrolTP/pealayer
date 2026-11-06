@@ -1474,6 +1474,9 @@ fn build_windows_jump_list(include_quick_actions: bool) -> Result<(), String> {
         let destination_list: ICustomDestinationList =
             CoCreateInstance(&DestinationList, None, CLSCTX_INPROC_SERVER)
                 .map_err(|error| format!("create Windows Jump List: {error}"))?;
+        let identity: Vec<u16> = super::taskbar_branding::app_id().encode_utf16().chain(Some(0)).collect();
+        destination_list.SetAppID(PCWSTR(identity.as_ptr()))
+            .map_err(|error| format!("set Windows Jump List identity: {error}"))?;
         let mut minimum_slots = 0;
         let _: IObjectArray = destination_list
             .BeginList(&mut minimum_slots)
@@ -2175,10 +2178,22 @@ unsafe extern "system" fn shell_window_proc(
 ) -> windows::Win32::Foundation::LRESULT {
     use windows::Win32::Foundation::LRESULT;
     use windows::Win32::UI::WindowsAndMessaging::{
-        WM_APPCOMMAND, WM_COMMAND, WM_CONTEXTMENU, WM_LBUTTONDBLCLK, WM_RBUTTONUP, WM_SETICON,
+        WM_APPCOMMAND, WM_COMMAND, WM_CONTEXTMENU, WM_LBUTTONDBLCLK, WM_RBUTTONUP, WM_SETICON, WM_NCDESTROY, WM_SYSCOMMAND,
     };
 
     observe_native_window_message(message);
+
+    if message==WM_SYSCOMMAND {
+        match wparam.0 & 0xfff0 {
+            0xf020 if crate::platform::taskbar_preview::defer_system_minimize(hwnd.0 as isize)=>return LRESULT(0),
+            0xf120|0xf030=>crate::platform::taskbar_preview::cancel_minimize(),
+            _=>{},
+        }
+    }
+
+    if message == WM_NCDESTROY {
+        crate::platform::taskbar_branding::clear_window(hwnd.0 as isize);
+    }
 
     if message == WM_SETICON {
         // eframe owns the HICON lifetime. Shell copies it; do not destroy it.
@@ -2402,6 +2417,37 @@ pub fn shell_command_diagnostics() -> serde_json::Value {
             "last_error": THUMBNAIL_TOOLBAR_LAST_ERROR.lock().ok().and_then(|error| error.clone()),
         },
     })
+}
+
+/// Complete a branding refresh by adding our taskbar membership and restoring
+/// its media toolbar. Removal happens in a separate shell turn. This never
+/// hides, activates, restores or resizes the actual application HWND.
+#[cfg(target_os = "windows")]
+pub(crate) fn refresh_taskbar_application_icon(hwnd_raw: isize) -> Result<(),String> {
+    use windows::Win32::{Foundation::HWND,System::Com::{CoCreateInstance,CLSCTX_INPROC_SERVER},UI::Shell::{ITaskbarList3,TaskbarList}};
+    let hwnd=HWND(hwnd_raw as *mut _);
+    unsafe {
+        let taskbar: ITaskbarList3=CoCreateInstance(&TaskbarList,None,CLSCTX_INPROC_SERVER).map_err(|error|error.to_string())?;
+        taskbar.HrInit().map_err(|error|error.to_string())?;
+        // Always attempt to restore membership before returning any failure.
+        taskbar.AddTab(hwnd).or_else(|_|taskbar.AddTab(hwnd)).map_err(|error|error.to_string())?;
+    }
+    THUMBNAIL_TOOLBAR_ADDED_HWND.store(0,Ordering::Release);
+    init_taskbar_thumbnail_toolbar(hwnd_raw,SHELL_PAUSED.load(Ordering::Relaxed),SHELL_MUTED.load(Ordering::Relaxed),
+        SHELL_FULLSCREEN.load(Ordering::Relaxed),SHELL_HAS_MEDIA.load(Ordering::Relaxed),THUMBNAIL_TOOLBAR_ENABLED.load(Ordering::Relaxed))
+}
+
+/// Remove only our shell button. The HWND-owned branding timer restores it in
+/// a separate shell turn; immediate DeleteTab/AddTab can be coalesced by Explorer
+/// and retain a previous group image. Never hide or activate the actual window.
+#[cfg(target_os = "windows")]
+pub(crate) fn detach_taskbar_application_icon(hwnd_raw: isize) -> Result<(),String> {
+    use windows::Win32::{Foundation::HWND,System::Com::{CoCreateInstance,CLSCTX_INPROC_SERVER},UI::Shell::{ITaskbarList3,TaskbarList}};
+    unsafe {
+        let taskbar: ITaskbarList3=CoCreateInstance(&TaskbarList,None,CLSCTX_INPROC_SERVER).map_err(|error|error.to_string())?;
+        taskbar.HrInit().map_err(|error|error.to_string())?;
+        taskbar.DeleteTab(HWND(hwnd_raw as *mut _)).map_err(|error|error.to_string())
+    }
 }
 
 pub fn take_shell_reinitialize_request() -> bool {

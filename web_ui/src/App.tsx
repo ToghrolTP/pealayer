@@ -112,6 +112,7 @@ function surfaceFromLocation(): SurfaceId {
 
 export interface RuntimeConfig {
   appName: string;
+  appDescription: string;
   version: string;
   websocketPath: string;
   appIconPath: string;
@@ -244,6 +245,9 @@ const App: React.FC = () => {
       library: 'Media Library', downloads: 'Downloads', about: 'About and system', preferences: 'Preferences',
     };
     document.title = `${tr(runtime.locale, surfaceNames[activeTab])} — ${runtime.appName}`;
+    let description = document.querySelector<HTMLMetaElement>('meta[name="description"]');
+    if (!description) { description = document.createElement('meta'); description.name = 'description'; document.head.append(description); }
+    description.content = runtime.appDescription;
     const media = window.matchMedia('(prefers-color-scheme: light)');
     const applyTheme = () => {
       const preference = appConfig?.theme ?? runtime.theme;
@@ -697,6 +701,7 @@ const App: React.FC = () => {
           connected={connected}
           connectionMode={connectionMode}
           appName={runtime?.appName}
+          appDescription={runtime?.appDescription}
           appIconPath={stateAppIconPath}
           locale={runtime?.locale || 'en'}
           connectionTarget={connectionTarget}

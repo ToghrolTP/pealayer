@@ -78,6 +78,7 @@ fn web_asset_path(root: &std::path::Path, request_path: &str) -> Option<std::pat
 #[serde(rename_all = "camelCase")]
 pub struct WebRuntimeConfig {
     pub app_name: String,
+    pub app_description: String,
     pub version: String,
     pub websocket_path: String,
     pub app_icon_path: String,
@@ -97,6 +98,7 @@ impl WebRuntimeConfig {
     ) -> Self {
         Self {
             app_name,
+            app_description: String::new(),
             version: env!("CARGO_PKG_VERSION").to_string(),
             websocket_path: "/ws".to_string(),
             app_icon_path: "/api/runtime/app-icon".to_string(),
@@ -688,6 +690,9 @@ fn handle_websocket_text(state: &ControlState, text: &str) -> Option<String> {
             match crate::platform::interop::command_from_json_rpc(&request) {
                 Ok(Some(command)) => {
                     if let Some(error) = remote_command_permission(&command) { return Some(crate::platform::interop::json_rpc_error(&request.id, -32003, error)); }
+                    if matches!(&command, crate::platform::interop::InteropCommand::GetBranding) {
+                        return Some(crate::platform::interop::json_rpc_result(&request.id, command.query_result().expect("branding query")));
+                    }
                     if !crate::platform::interop::get_live_config().web_allow_control {
                         return Some(crate::platform::interop::json_rpc_error(
                             &request.id,
@@ -946,6 +951,16 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
             .unwrap_or_else(|_| "{}".to_string()),
         ),
         ("POST", "/api/config") => config_update_response(&request.body, state),
+        ("GET", "/api/branding") => HttpResponse::json(200, "OK", crate::branding::snapshot().to_string()),
+        ("POST", "/api/branding") => branding_update_response(&request.body, state),
+        ("DELETE", "/api/branding") => {
+            if !web.web_allow_control || !web.web_allow_configuration { return permission_denied("control and configuration"); }
+            if state.command_tx.send(crate::platform::interop::InteropCommand::ClearBranding).is_err() {
+                return HttpResponse::text(503, "Service Unavailable", "Dispatcher unavailable");
+            }
+            state.egui_ctx.request_repaint();
+            HttpResponse::json(202, "Accepted", r#"{"accepted":true}"#)
+        }
         ("GET", "/api/update/manifest") => match crate::update::current_manifest() {
             Ok(manifest) => HttpResponse::json(
                 200,
@@ -1120,7 +1135,7 @@ fn denied_web_capability(
 ) -> Option<&'static str> {
     let configuration_route = matches!(
         (method, path),
-        ("GET", "/api/config") | ("GET", "/api/preferences") | ("POST", "/api/config") | ("GET", "/api/peer/session") | ("GET", "/api/peer/hardware") | ("POST", "/api/peer/config") | ("POST", "/api/peer/files")
+        ("GET", "/api/config") | ("GET", "/api/preferences") | ("POST", "/api/config") | ("GET" | "POST", "/api/branding") | ("GET", "/api/peer/session") | ("GET", "/api/peer/hardware") | ("POST", "/api/peer/config") | ("POST", "/api/peer/files")
     );
     let control_route = matches!(
         (method, path),
@@ -1218,12 +1233,18 @@ fn permission_denied(capability: &str) -> HttpResponse {
 
 fn remote_command_permission(command: &crate::platform::interop::InteropCommand) -> Option<&'static str> {
     use crate::platform::interop::InteropCommand;
+    if matches!(command, InteropCommand::UpdateBranding { .. } | InteropCommand::GetBranding | InteropCommand::ClearBranding)
+        && !crate::platform::interop::get_live_config().web_allow_configuration {
+        return Some("Web configuration permission is disabled");
+    }
     if matches!(command,InteropCommand::ImportAssets{..}|InteropCommand::ReviewAsset{..}|InteropCommand::ResolveTimelineClose{..}) {
         let config=crate::platform::interop::get_live_config();
         if !config.web_allow_file_access || !config.web_allow_configuration || !config.web_allow_control {return Some("Asset import requires file, configuration and control permissions");}
     }
     if crate::platform::interop::get_live_config().web_allow_file_access { return None; }
     match command {
+        InteropCommand::UpdateBranding { update } if update.values.as_object().is_some_and(|values|
+            values.iter().any(|(key,value)| key.starts_with("app_icon") && key != "app_icon_preset" && value.is_string())) => Some("Web host file access permission is disabled"),
         InteropCommand::BrowseRemote { .. } | InteropCommand::SelectRemote { .. } | InteropCommand::Open { .. } => Some("Web host file access permission is disabled"),
         InteropCommand::Launch { request } => if request.target.is_some() || request.commands.iter().any(|c| remote_command_permission(c).is_some()) { Some("Web host file access permission is disabled") } else { None },
         _ => None,
@@ -1301,7 +1322,7 @@ fn live_runtime_config() -> WebRuntimeConfig {
 fn runtime_config_for(config: &crate::config::AppConfig) -> WebRuntimeConfig {
     let language = crate::config::resolve_language(crate::config::resolved_language_preference(config));
     let rtl = crate::config::resolve_rtl(crate::config::resolved_direction_preference(config), language);
-    WebRuntimeConfig::production(
+    let mut runtime = WebRuntimeConfig::production(
         crate::config::resolved_app_name(config),
         if language == crate::config::AppLanguage::Persian { "fa" } else { "en" }.into(),
         if rtl { "rtl" } else { "ltr" }.into(),
@@ -1311,7 +1332,9 @@ fn runtime_config_for(config: &crate::config::AppConfig) -> WebRuntimeConfig {
             crate::config::AppTheme::System => "system",
         }.into(),
         crate::ui::platform_accent_rgb(config),
-    )
+    );
+    runtime.app_description = crate::config::resolved_app_description(config);
+    runtime
 }
 
 fn pwa_manifest_response() -> HttpResponse {
@@ -1327,7 +1350,7 @@ fn pwa_manifest_response() -> HttpResponse {
             "name": app_name,
             "short_name": app_name,
             "id": "/",
-            "description": "Media, timeline, effects, and live PCController hardware workspace",
+            "description": if runtime.app_description.is_empty() { env!("CARGO_PKG_DESCRIPTION").to_owned() } else { runtime.app_description },
             "start_url": "/#/player",
             "scope": "/",
             "display": "standalone",
@@ -1397,6 +1420,9 @@ fn json_rpc_response(body: &[u8], state: &ControlState) -> HttpResponse {
         Ok(request) => match crate::platform::interop::command_from_json_rpc(&request) {
             Ok(Some(command)) => {
                 if let Some(error) = remote_command_permission(&command) { return HttpResponse::json(403,"Forbidden",crate::platform::interop::json_rpc_error(&request.id,-32003,error)); }
+                if matches!(&command, crate::platform::interop::InteropCommand::GetBranding) {
+                    return HttpResponse::json(200, "OK", crate::platform::interop::json_rpc_result(&request.id, command.query_result().expect("branding query")));
+                }
                 if !crate::platform::interop::get_live_config().web_allow_control {
                     return HttpResponse::json(
                         403,
@@ -1465,6 +1491,23 @@ fn config_update_response(body: &[u8], state: &ControlState) -> HttpResponse {
             "Bad Request",
             serde_json::json!({"error": error}).to_string(),
         ),
+    }
+}
+
+fn branding_update_response(body: &[u8], state: &ControlState) -> HttpResponse {
+    let request = serde_json::from_slice::<crate::branding::BrandingUpdate>(body)
+        .map_err(|error| format!("Invalid branding request: {error}"))
+        .and_then(|update| { update.validate()?; Ok(update) });
+    match request {
+        Ok(update) => {
+            let command = crate::platform::interop::InteropCommand::UpdateBranding { update };
+            if let Some(error) = remote_command_permission(&command) { return permission_denied(error); }
+            if !crate::platform::interop::get_live_config().web_allow_control { return permission_denied("control"); }
+            if state.command_tx.send(command).is_err() { return HttpResponse::text(503, "Service Unavailable", "Dispatcher unavailable"); }
+            state.egui_ctx.request_repaint();
+            HttpResponse::json(202, "Accepted", r#"{"accepted":true}"#)
+        }
+        Err(error) => HttpResponse::json(400, "Bad Request", serde_json::json!({"error":error}).to_string()),
     }
 }
 
@@ -1865,6 +1908,52 @@ fn mime_for_path(path: &std::path::Path) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn branding_endpoints_share_validation_dispatch_and_permissions() {
+        use crate::platform::interop::{InteropCommand, get_live_config, set_live_config};
+        let _lock = crate::app::tests::lock_app_tests();
+        struct Restore(crate::config::AppConfig);
+        impl Drop for Restore { fn drop(&mut self) { set_live_config(self.0.clone()); } }
+        let _restore = Restore(get_live_config());
+        let mut config = crate::config::AppConfig::default();
+        config.web_allow_configuration = true;
+        config.web_allow_control = true;
+        config.web_allow_file_access = false;
+        set_live_config(config.clone());
+        let (tx, rx) = channel();
+        let state = ControlState {
+            command_tx:tx, latest_status:Arc::new(Mutex::new(None)),
+            websocket_clients:Arc::new(Mutex::new(vec![])), egui_ctx:eframe::egui::Context::default(),
+            web_dist_root:std::path::PathBuf::new(),
+            launch_receipts:Arc::new(Mutex::new(LaunchReceiptCache::default())),
+            application_identity:"Branding fixture".into(), expected_session_id:None,
+        };
+        let body = br#"{"values":{"app_name":"Stage","app_description":"Preview"}}"#;
+        assert_eq!(branding_update_response(body, &state).status, 202);
+        let InteropCommand::UpdateBranding { update } = rx.try_recv().unwrap() else { panic!("typed branding command") };
+        assert!(!update.persist);
+        assert_eq!(update.values["app_name"], "Stage");
+        assert_eq!(branding_update_response(br#"{"values":{"volume":10}}"#, &state).status, 400);
+        assert_eq!(branding_update_response(br#"{"values":{"app_icon":"C:\\private.ico"}}"#, &state).status, 403);
+        let query = br#"{"jsonrpc":"2.0","id":7,"method":"pealayer.branding.get","params":{}}"#;
+        let response = json_rpc_response(query, &state);
+        assert_eq!(response.status, 200);
+        let value:serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert!(value["result"]["effective"].is_object());
+        assert!(rx.try_recv().is_err(), "queries do not queue writes");
+        config.web_allow_control = false;
+        set_live_config(config.clone());
+        assert_eq!(json_rpc_response(query, &state).status, 200);
+        let socket_query = handle_websocket_text(&state, std::str::from_utf8(query).unwrap()).unwrap();
+        assert!(serde_json::from_str::<serde_json::Value>(&socket_query).unwrap()["result"]["effective"].is_object());
+        assert_eq!(branding_update_response(body, &state).status, 403);
+        config.web_allow_configuration = false;
+        set_live_config(config.clone());
+        assert_eq!(json_rpc_response(query, &state).status, 403);
+        assert_eq!(branding_update_response(body, &state).status, 403);
+        assert_eq!(denied_web_capability("GET", "/api/branding", &config), Some("configuration"));
+    }
+
     #[test]
     fn remote_consumer_updates_stay_local_while_session_commands_relay() {
         assert!(local_process_payload(br#"{"command":"import_assets","request":{"paths":["client.wav"],"destination":{"surface":"library"}}}"#));

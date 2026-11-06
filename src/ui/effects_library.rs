@@ -1786,13 +1786,20 @@ fn draw_sequence_timeline(
                                     .gamma_multiply(0.55),
                             ),
                         );
-                        painter.text(
-                            egui::pos2(x + 4.0, canvas.top() + 12.0),
-                            egui::Align2::LEFT_CENTER,
+                        let label = painter.layout_no_wrap(
                             crate::duration::format_timeline_time_ms(tick, major_ms < 1_000),
                             egui::FontId::proportional(10.5),
                             visuals.weak_text_color(),
                         );
+                        let label_clip = painter.clip_rect().intersect(egui::Rect::from_min_max(
+                            egui::pos2(timeline_left, canvas.top()),
+                            egui::pos2(canvas.right(), canvas.top() + ruler_height),
+                        ));
+                        if let Some(label_rect) = super::layout::timeline_ruler_label_rect(
+                            egui::pos2(x, canvas.top() + 12.0), label.size(), label_clip,
+                        ) {
+                            painter.galley(label_rect.min, label, visuals.weak_text_color());
+                        }
                         tick = tick.saturating_add(major_ms);
                     }
 

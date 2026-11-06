@@ -330,6 +330,9 @@ body {
 .preference-choice-slider__measure, .preference-choice-slider__caption { grid-area: 1 / 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .preference-choice-slider__measure { visibility: hidden; pointer-events: none; }
 .preference-choice-slider:focus-within .preference-choice-slider__value { border-color: var(--accent); }
+.preference-choice-slider__value { font-family: inherit; }
+.preference-choice-slider__value:not(:disabled) { cursor: pointer; }
+.preference-choice-slider__value:hover:not(:disabled), .preference-choice-slider__value:focus-visible { border-color: var(--accent); transform: none; }
 .preference-choice-slider[data-disabled='true'] .preference-choice-slider__value { opacity: .45; }
 .preference-control--boolean { grid-template-columns: minmax(0, 1fr) auto; }
 .preference-control__label { min-width: 0; display: flex; align-items: center; justify-content: flex-start; gap: 7px; font-size: 13px; font-weight: 600; text-align: start; }
@@ -667,7 +670,10 @@ body {
 .timeline-panel-web { grid-column: 1 / -1; display: grid; grid-template-rows: auto minmax(0, 1fr); }
 .timeline-toolbar { min-height: 60px; padding: 10px 14px; display: flex; align-items: center; justify-content: space-between; gap: 12px; border-bottom: 1px solid var(--line); }
 .timeline-toolbar__actions { display: flex; align-items: center; gap: 7px; }
-.timeline-ruler { position: sticky; top: 0; z-index: 3; height: 28px; padding-inline: var(--timeline-label-width) var(--timeline-end-width); display: flex; align-items: center; justify-content: space-between; color: var(--subtle); background: var(--surface-0); border-bottom: 1px solid var(--line); font: 10px var(--mono-font, monospace); }
+.timeline-ruler { position: sticky; top: 0; z-index: 3; height: 28px; color: var(--subtle); background: var(--surface-0); border-bottom: 1px solid var(--line); font: 10px var(--mono-font, monospace); }
+.timeline-ruler-track { position: absolute; inset: 0 var(--timeline-end-width) 0 var(--timeline-label-width); direction: ltr; }
+.timeline-ruler-track > span { position: absolute; top: 0; height: 100%; display: flex; align-items: center; transform: translateX(-50%); white-space: nowrap; }
+.timeline-ruler-track > span::after { content: ''; position: absolute; bottom: 0; left: 50%; width: 1px; height: 6px; background: var(--line); transform: translateX(-50%); }
 .timeline-grid { position: relative; min-height: 0; overflow: auto; overscroll-behavior: contain; touch-action: none; }
 .timeline-grid.is-panning { cursor: grabbing; user-select: none; }
 .timeline-content { --timeline-label-width: 250px; --timeline-end-width: 82px; min-width: max(100%, 760px); }

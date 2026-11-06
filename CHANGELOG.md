@@ -6,6 +6,23 @@ retroactively attributed to an older download.
 
 ## Next milestone · unreleased
 
+### 🖥️ Windows taskbar and appearance
+
+- Changing the application icon also updates Explorer's taskbar group artwork
+  and matching pinned launcher, not just the titlebar and notification area.
+  Repeated changes refresh the running taskbar button without changing its
+  application identity or losing its playback actions.
+- Closing while minimized no longer reopens a tiny window. Valid normal placement
+  has one owner; maximized/fullscreen clients do not replace the Restore size.
+- Task View and Peek receive a separate full-resolution application composite
+  when Windows requests it, instead of being left black in custom-thumbnail mode.
+- Video-only taskbar thumbnails follow new rendered frames instead of stopping
+  when a short hover refresh timer expires. Paused frames remain unchanged;
+  the full-window Peek preview is not replaced by the thumbnail bitmap.
+- Click the control-density value capsule to advance through all five sizes,
+  wrapping back to Extra compact. Native and Web controls retain stable layout,
+  keyboard adjustment and disabled-state behavior.
+
 ### 📦 Updating Pealayer
 
 - The command-line updater shows clear upload/download, verification, restart
