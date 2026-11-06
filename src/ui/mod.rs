@@ -34,7 +34,6 @@ pub mod preferences;
 pub mod peer_browser;
 pub mod seek_preview;
 pub mod status_bar;
-pub mod sidebar_rail;
 pub(crate) mod action_customization;
 pub(crate) mod control_bar;
 pub mod subtitles;
