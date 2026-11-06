@@ -299,26 +299,15 @@ fn draw_timeline(app: &mut PealayerApp, ui: &mut egui::Ui) {
             false,
         ),
     };
-    let total_text = if finite_timeline {
-        crate::ui::controls::timecode_text(total_label)
-    } else {
-        egui::RichText::new(total_label)
-    };
-
     // Anchor the duration and fullscreen affordance to the right
     // edge first, then give the seekbar the exact remaining width.
     // A former fixed 180 px reservation was wider than these
     // controls and left a visible, useless tail after fullscreen.
     let response = ui
         .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let total_response = ui
-                .add(egui::Label::new(total_text).sense(if finite_timeline {
-                    egui::Sense::click()
-                } else {
-                    egui::Sense::hover()
-                }))
-                .on_hover_text(total_tooltip);
-            total_response.context_menu(|ui| crate::ui::controls::transport_context_menu(app, ui));
+            let total_response = crate::ui::controls::draw_duration_label(
+                app, ui, total_label, total_tooltip, finite_timeline,
+            );
             if finite_timeline && total_response.clicked() {
                 app.show_remaining_time = !app.show_remaining_time;
                 app.save_config();
