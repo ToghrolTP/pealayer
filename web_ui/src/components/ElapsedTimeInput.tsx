@@ -10,6 +10,7 @@ export function ElapsedTimeInput({ seconds, disabled, mediaIdentity, locale, onC
   const input = useRef<HTMLInputElement>(null);
   const original = useRef('');
   const editing = useRef<TimecodeDraft | null>(null);
+  const pointerSelecting = useRef(false);
   const [draft, setDraft] = useState<TimecodeDraft | null>(null);
   const update = (next: TimecodeDraft | null) => { editing.current = next; setDraft(next); };
   const begin = () => {
@@ -28,7 +29,7 @@ export function ElapsedTimeInput({ seconds, disabled, mediaIdentity, locale, onC
   };
   useEffect(() => { update(null); }, [mediaIdentity, disabled]);
   useLayoutEffect(() => {
-    if (draft && document.activeElement === input.current) {
+    if (draft && !pointerSelecting.current && document.activeElement === input.current) {
       const [start, end] = timecodeGroups[draft.group];
       input.current?.setSelectionRange(start, end);
     }
@@ -46,17 +47,24 @@ export function ElapsedTimeInput({ seconds, disabled, mediaIdentity, locale, onC
     readOnly={!draft}
     value={draft?.value ?? formatEditTime(seconds)}
     onFocus={begin}
-    onBlur={() => finish(false)}
+    // Focus runs before click. Do not select hours during focus and thereby
+    // overwrite the browser's caret hit-test before onClick can read it.
+    onPointerDown={() => { pointerSelecting.current = true; }}
+    onPointerUp={() => { pointerSelecting.current = false; }}
+    onPointerCancel={() => { pointerSelecting.current = false; }}
+    onBlur={() => { pointerSelecting.current = false; finish(false); }}
     onClick={() => {
+      const index = input.current?.selectionStart ?? 0;
+      pointerSelecting.current = false;
       begin();
       const current = editing.current;
       if (current) {
-        const index = input.current?.selectionStart ?? 0;
         const group = timecodeGroups.findIndex(([, end]) => index <= end);
         update({ ...current, group: group < 0 ? 3 : group, digits: 0 });
       }
     }}
     onKeyDown={(event) => {
+      pointerSelecting.current = false;
       if (!editing.current || event.key === 'Tab') return;
       event.stopPropagation();
       if ((event.ctrlKey || event.metaKey) && ['c', 'v', 'a'].includes(event.key.toLowerCase())) return;
