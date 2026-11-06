@@ -693,7 +693,7 @@ fn rf_icon_button(ui: &mut egui::Ui, icon: &str, tooltip: &str, enabled: bool) -
         let visuals=ui.style().interact(&response);
         ui.painter().rect(rect,visuals.corner_radius,visuals.weak_bg_fill,visuals.bg_stroke,egui::StrokeKind::Inside);
         ui.painter().text(rect.center(),egui::Align2::CENTER_CENTER,icon,egui::TextStyle::Button.resolve(ui.style()),visuals.fg_stroke.color);
-        response.widget_info(||egui::WidgetInfo::labeled(egui::WidgetType::Button,response.enabled(),tooltip));
+        response.widget_info(||egui::WidgetInfo::labeled(egui::Role::Button,response.enabled(),tooltip));
         response.on_hover_text(tooltip)
     }).inner
 }

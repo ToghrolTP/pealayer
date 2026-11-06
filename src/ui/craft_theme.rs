@@ -628,6 +628,48 @@ pub fn paint_widget_focus(painter: &egui::Painter, response: &egui::Response, t:
     }
 }
 
+/// Shows an `IconButton` using FilmCraft tokens and standard widget radius (4px).
+pub fn icon_button(
+    ui: &mut egui::Ui,
+    label: &str,
+    size: egui::Vec2,
+    selected: bool,
+    frame: bool,
+    paint_icon: impl FnOnce(&egui::Ui, egui::Rect, egui::Color32),
+) -> egui::Response {
+    let tokens = current(ui.ctx());
+    let style = icon_button_style(&tokens, frame);
+    let mut btn = craft_ui::buttons::IconButton::new(label, size, &style).selected(selected);
+    if frame {
+        btn = btn.single_shape_frame();
+    }
+    btn.show(ui, paint_icon)
+}
+
+/// Shows an `IconButton` with a text or Phosphor icon glyph.
+pub fn icon_button_glyph(
+    ui: &mut egui::Ui,
+    label: &str,
+    glyph: &str,
+    size: egui::Vec2,
+    selected: bool,
+    frame: bool,
+) -> egui::Response {
+    icon_button(ui, label, size, selected, frame, |ui, rect, color| {
+        let mut font = egui::TextStyle::Button.resolve(ui.style());
+        if !frame {
+            font.size = 14.0;
+        }
+        ui.painter().text(
+            rect.center(),
+            egui::Align2::CENTER_CENTER,
+            glyph,
+            font,
+            color,
+        );
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -742,5 +784,21 @@ mod tests {
         assert_eq!(framed.normal.fill, dark.panel_bg);
         assert_eq!(framed.normal.stroke.color, dark.field_border);
         assert_eq!(framed.hovered.stroke.color, dark.field_border);
+    }
+
+    #[test]
+    fn icon_button_helpers_render_with_filmcraft_metrics() {
+        let ctx = egui::Context::default();
+        let config = crate::config::AppConfig::default();
+        crate::ui::configure_native_visuals(&ctx, &config);
+
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let res = icon_button_glyph(ui, "Test Mute", "M", egui::vec2(28.0, 28.0), false, true);
+            assert_eq!(res.rect.size(), egui::vec2(28.0, 28.0));
+
+            let res_selected = icon_button_glyph(ui, "Test Mute Active", "M", egui::vec2(24.0, 24.0), true, false);
+            assert_eq!(res_selected.rect.size(), egui::vec2(24.0, 24.0));
+        });
+        output.textures_delta.clear();
     }
 }

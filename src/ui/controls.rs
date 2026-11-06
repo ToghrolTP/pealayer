@@ -5,24 +5,6 @@ const CONTROL_FADE_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::
 
 /// Transport intent is independent of the user's accent. All interaction
 /// states keep the same stroke width, so hover/focus cannot shift the glyph.
-pub(crate) fn transport_button<'a>(
-    palette: crate::config::ColorPalette,
-    ui: &egui::Ui,
-    icon: &'a str,
-    role: &str,
-) -> egui::Button<'a> {
-    let dark = ui.visuals().dark_mode;
-    let intent = crate::ui::palette::color(palette, dark, role);
-    let surface = crate::ui::palette::color(palette, dark, "surface-2");
-    egui::Button::new(egui::RichText::new(icon).color(intent))
-        .fill(egui::Color32::from_rgb(
-            ((surface.r() as u16 * 88 + intent.r() as u16 * 12) / 100) as u8,
-            ((surface.g() as u16 * 88 + intent.g() as u16 * 12) / 100) as u8,
-            ((surface.b() as u16 * 88 + intent.b() as u16 * 12) / 100) as u8,
-        ))
-        .stroke(egui::Stroke::new(1.0, intent.gamma_multiply(0.45)))
-}
-
 pub(crate) fn playback_button_role(app: &PealayerApp) -> &'static str {
     if app.is_paused || app.is_playback_finished() { "green" } else { "amber" }
 }
@@ -57,36 +39,6 @@ pub(crate) fn contextual_transport_style(
     if active { tint(&mut style.visuals.widgets.inactive); }
 }
 
-pub(crate) fn draw_contextual_transport_button(
-    palette: crate::config::ColorPalette,
-    ui: &mut egui::Ui,
-    icon: &str,
-    role: &str,
-    active: bool,
-) -> egui::Response {
-    ui.scope(|ui| {
-        let enabled = ui.is_enabled();
-        contextual_transport_style(ui.style_mut(), palette, role, active, enabled);
-        ui.add_sized([30.0, 22.0], egui::Button::new(icon))
-    }).inner
-}
-
-/// A bounded horizontal volume strip, shared by responsive monitor layouts.
-/// Session commands also control the authority when this app is a consumer.
-pub(crate) fn draw_volume_strip(app: &mut PealayerApp, ui: &mut egui::Ui) {
-    let (toggle_mute, volume_update) = draw_volume_widgets(
-        ui, app.color_palette, app.is_muted, app.volume,
-        &app.tr(if app.is_muted { "Unmute" } else { "Mute" }), &app.tr("Volume"));
-    if toggle_mute {
-        app.apply_interop_command(&ui.ctx().clone(), crate::platform::interop::InteropCommand::ToggleMute,
-            "Volume control");
-    }
-    if let Some(volume) = volume_update {
-        app.apply_interop_command(&ui.ctx().clone(), crate::platform::interop::InteropCommand::SetVolume { value: volume },
-            "Volume control");
-    }
-}
-
 /// The customizable bar owns Mute; keep its slider and percentage independent.
 pub(crate) fn draw_volume_slider(app: &mut PealayerApp, ui: &mut egui::Ui) {
     if let Some(value) = volume_slider_widgets(ui, app.volume, &app.tr("Volume")) {
@@ -95,11 +47,30 @@ pub(crate) fn draw_volume_slider(app: &mut PealayerApp, ui: &mut egui::Ui) {
     }
 }
 
-pub(super) fn draw_volume_widgets(ui: &mut egui::Ui, palette: crate::config::ColorPalette,
-    muted: bool, volume: f64, mute_tooltip: &str, volume_label: &str) -> (bool, Option<f64>) {
-    let icon = if muted { crate::ui::icons::SPEAKER_SLASH } else { crate::ui::icons::SPEAKER_HIGH };
-    let toggle_mute = ui.add_sized([30.0, 22.0], transport_button(palette, ui, icon,
-        if muted { "amber" } else { "muted" })).on_hover_text(mute_tooltip).clicked();
+pub(super) fn draw_volume_widgets(
+    ui: &mut egui::Ui,
+    _palette: crate::config::ColorPalette,
+    muted: bool,
+    volume: f64,
+    mute_tooltip: &str,
+    volume_label: &str,
+) -> (bool, Option<f64>) {
+    let icon = if muted {
+        crate::ui::icons::SPEAKER_SLASH
+    } else {
+        crate::ui::icons::SPEAKER_HIGH
+    };
+    let h = super::control_density::height(ui);
+    let toggle_mute = super::craft_theme::icon_button_glyph(
+        ui,
+        mute_tooltip,
+        icon,
+        egui::vec2(h, h),
+        muted,
+        true,
+    )
+    .on_hover_text(mute_tooltip)
+    .clicked();
     (toggle_mute, volume_slider_widgets(ui, volume, volume_label))
 }
 
@@ -117,7 +88,8 @@ fn volume_slider_widgets(ui: &mut egui::Ui, mut volume: f64, volume_label: &str)
         volume = (volume + f64::from(wheel.signum()) * 2.0).clamp(0.0, 130.0);
         ui.input_mut(|input| input.smooth_scroll_delta.y = 0.0);
     }
-    ui.add_sized([44.0, 22.0], egui::Label::new(timecode_text(format!("{:.0}%", volume))))
+    let h = super::control_density::height(ui);
+    ui.add_sized([44.0, h], egui::Label::new(timecode_text(format!("{:.0}%", volume))))
         .on_hover_text(volume_label);
     (response.changed() || wheel != 0.0).then_some(volume)
 }

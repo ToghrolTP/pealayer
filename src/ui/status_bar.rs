@@ -372,7 +372,7 @@ fn workspace_trigger(ui: &mut egui::Ui, name: &str, icon: &str, rtl: bool,
         rect.center().y - galley.size().y * 0.5), galley, visuals.text_color());
     crate::ui::control_density::paint_chevron(ui,
         egui::Rect::from_center_size(chevron_center, egui::vec2(14.0, 14.0)), visuals.text_color());
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::ComboBox, ui.is_enabled(), name));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, ui.is_enabled(), name));
     response.on_hover_text(format!("{tooltip} · {name}"))
 }
 

@@ -33,6 +33,7 @@ pub(super) struct Metrics {
     gap_y: f32,
 }
 
+#[cfg(test)]
 fn button_width(ui: &egui::Ui, label: &str) -> f32 {
     let font_id = egui::TextStyle::Button.resolve(ui.style());
     let color = ui.visuals().widgets.inactive.text_color();
