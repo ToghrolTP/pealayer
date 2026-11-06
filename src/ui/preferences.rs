@@ -418,8 +418,11 @@ impl StandalonePreferencesApp {
             self.config_reload_due = None;
             return;
         }
-        let path = AppConfig::get_config_path();
         if self.config_watcher.is_none() {
+            // Resolve storage mode only when attaching the watcher. Without an
+            // explicit config override it probes portable markers on disk;
+            // doing that on every wheel frame can block on the filesystem.
+            let path = AppConfig::get_config_path();
             let repaint = ctx.clone();
             match crate::config::ConfigFileWatcher::new(&path, move || {
                 repaint.request_repaint();
@@ -453,7 +456,7 @@ impl StandalonePreferencesApp {
             return;
         }
         self.config_reload_due = None;
-        match AppConfig::load_from_path(&path) {
+        match AppConfig::load_from_path(&AppConfig::get_config_path()) {
             Ok(config) if config == self.draft.saved_config => {}
             Ok(config) => {
                 let language = self.draft.config.language;
@@ -791,9 +794,12 @@ fn draw_preferences_editor(draft: &mut PreferencesDraft, ui: &mut egui::Ui) -> P
         if let Some(index) = preference_sections().iter().position(|item| item.id == section) { draft.tab = index; }
     }
     crate::ui::sync_elegance_theme(ui.ctx());
-    let language = crate::config::resolved_language_preference(&draft.config);
-    let tr = |key: &'static str| native_tr(language, key);
-    let rtl = crate::config::resolve_language(language) == AppLanguage::Persian;
+    // Resolve System once per pass, not once per caption. On Windows that
+    // resolution reads the locale Registry key. Scrolling repaints many rows.
+    // Keep it frame-local so live language changes still apply immediately.
+    let language = crate::config::resolve_language(crate::config::resolved_language_preference(&draft.config));
+    let tr = |key: &'static str| crate::ui::i18n::tr(language, key);
+    let rtl = language == AppLanguage::Persian;
     let mut outcome = PreferencesOutcome::default();
     let now = std::time::Instant::now();
     if draft.status_until.is_some_and(|until| now >= until) {
@@ -917,7 +923,7 @@ fn draw_preferences_editor(draft: &mut PreferencesDraft, ui: &mut egui::Ui) -> P
             draft.scroll_y = crate::ui::dialog::scroll_column_at(ui, ("preferences_contract_content", section_id), navigation.as_ref().map(|request| request.scroll_y), |ui| {
                 ui.set_max_width((detail_width - 10.0).max(180.0));
                 ui.spacing_mut().item_spacing.y = 8.0;
-                let _ = draw_contract_section(draft, ui, &tr, &sections, rtl);
+                let _ = draw_contract_section(draft, ui, &tr, &sections, language, rtl);
             });
         });
     });
@@ -958,6 +964,7 @@ fn draw_contract_section(
     ui: &mut egui::Ui,
     tr: &impl Fn(&'static str) -> String,
     sections: &[crate::preferences_contract::PreferenceSection],
+    language: AppLanguage,
     rtl_ui: bool,
 ) -> bool {
     let section = &sections[draft.tab.min(sections.len() - 1)];
@@ -984,7 +991,7 @@ fn draw_contract_section(
             ui.spacing_mut().item_spacing.y = PREFERENCE_ROW_GAP;
             for control in group_controls {
                 changed |=
-                    render_contract_control(ui, control, &mut values, tr, label_width, rtl_ui);
+                    render_contract_control(ui, control, &mut values, tr, label_width, language, rtl_ui);
             }
             if group == "Typography" {
                 ui.add_space(6.0);
@@ -1068,12 +1075,21 @@ fn unique_preference_groups(controls: &[PreferenceControl], section: &str) -> Ve
         .into_iter().filter(|group| group.section == section).map(|group| group.name).collect()
 }
 
+fn preference_defaults() -> &'static serde_json::Value {
+    // Reset values are immutable, not live config. Serializing the entire
+    // document for every numeric row on every wheel-animation frame is wasted
+    // work, including rows outside the current viewport.
+    static DEFAULTS: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
+    DEFAULTS.get_or_init(|| serde_json::to_value(AppConfig::default()).expect("serialize preference defaults"))
+}
+
 fn render_contract_control(
     ui: &mut egui::Ui,
     control: &PreferenceControl,
     values: &mut serde_json::Value,
     tr: &impl Fn(&'static str) -> String,
     label_width: f32,
+    language: AppLanguage,
     rtl_ui: bool,
 ) -> bool {
     let current = value_at_path(values, control.key)
@@ -1257,12 +1273,10 @@ fn render_contract_control(
         PreferenceControlKind::Number => {
             let mut number = current.as_f64().unwrap_or_default();
             let range = control.minimum.unwrap_or(0.0)..=control.maximum.unwrap_or(100.0);
-            let defaults = serde_json::to_value(AppConfig::default()).unwrap_or_default();
-            let reset = value_at_path(&defaults, control.key).and_then(serde_json::Value::as_f64).unwrap_or(*range.start());
+            let reset = value_at_path(preference_defaults(), control.key).and_then(serde_json::Value::as_f64).unwrap_or(*range.start());
             let mut steps: std::collections::BTreeMap<String, crate::config::NumericInputSteps> =
                 serde_json::from_value(values["numeric_input_steps"].clone()).unwrap_or_default();
             let previous_steps = steps.clone();
-            let language = crate::config::resolve_language(serde_json::from_value(values["language"].clone()).unwrap_or_default());
             let (_, changed) =
                 preference_row(ui, control_icon, &tr(control.label), label_width, |ui| {
                     let mut changed = crate::ui::dialog::receive_numeric_paste(ui, control.key, &mut number, &range, "");
@@ -2067,7 +2081,7 @@ mod tests {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0,800.0))),
             time: Some(ctx.cumulative_frame_nr() as f64 * 0.5),
             events, ..Default::default()
-        }, |ui| { render_contract_control(ui, control, values, &str::to_string, 160.0, false); });
+        }, |ui| { render_contract_control(ui, control, values, &str::to_string, 160.0, AppLanguage::English, false); });
         output.textures_delta.clear();
         output
     }
@@ -2193,6 +2207,85 @@ mod tests {
     }
 
     #[test]
+    fn preferences_scrolling_does_not_edit_or_reverse_the_draft() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let mut draft = PreferencesDraft::new(AppConfig::default(), 0);
+        let ctx = egui::Context::default();
+        crate::ui::configure_native_appearance(&ctx, &draft.config);
+        let mut offsets = Vec::new();
+        let started = std::time::Instant::now();
+        for frame in 0..120 {
+            let mut events = vec![egui::Event::PointerMoved(egui::pos2(390.0, 310.0))];
+            if (5..65).contains(&frame) {
+                events.push(egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, -5.0),
+                    modifiers: egui::Modifiers::NONE,
+                    source: egui::MouseWheelSource::Wheel,
+                    phase: egui::TouchPhase::Move,
+                });
+            }
+            ctx.run_ui(egui::RawInput {
+                time: Some(frame as f64 / 60.0),
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(700.0, 450.0))),
+                events,
+                ..Default::default()
+            }, |ui| { draw_preferences_editor(&mut draft, ui); }).drop_without_applying_deltas();
+            offsets.push(draft.scroll_y);
+        }
+        eprintln!("Preferences 120 scroll frames: {:?}", started.elapsed());
+        assert!(offsets.last().copied().unwrap() >= 250.0);
+        assert!(offsets.windows(2).all(|pair| pair[1] >= pair[0]));
+        assert!(!draft.is_dirty(), "scrolling must not trigger live configuration previews");
+    }
+
+    #[test]
+    fn preferences_mouse_notch_smoothing_continues_until_settled() {
+        let _guard = crate::app::tests::lock_app_tests();
+        for width in [440.0, 700.0] {
+            let mut draft = PreferencesDraft::new(AppConfig::default(), 0);
+            let ctx = egui::Context::default();
+            crate::ui::configure_native_appearance(&ctx, &draft.config);
+            let mut offsets = Vec::new();
+            for frame in 0..60 {
+                let mut events = vec![egui::Event::PointerMoved(egui::pos2(300.0, 280.0))];
+                if frame == 5 {
+                    events.push(egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Line,
+                        delta: egui::vec2(0.0, -3.0),
+                        modifiers: egui::Modifiers::NONE,
+                        source: egui::MouseWheelSource::Unknown, // Windows/winit
+                        phase: egui::TouchPhase::Move,
+                    });
+                }
+                let output = ctx.run_ui(egui::RawInput {
+                    time: Some(frame as f64 / 60.0),
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 450.0))),
+                    events,
+                    ..Default::default()
+                }, |ui| { draw_preferences_editor(&mut draft, ui); });
+                if (6..10).contains(&frame) {
+                    assert_eq!(output.viewport_output[&egui::ViewportId::ROOT].repaint_delay,
+                        std::time::Duration::ZERO, "wheel tail must schedule another paint");
+                }
+                output.drop_without_applying_deltas();
+                offsets.push(draft.scroll_y);
+            }
+            assert!(offsets[6] > offsets[5], "a notch must animate between frames");
+            assert!(offsets.windows(2).all(|pair| pair[1] >= pair[0]), "no backward jumps");
+            assert_eq!(offsets[45], offsets[59], "scrolling settles instead of repainting forever");
+            assert!(!draft.is_dirty());
+        }
+    }
+
+    #[test]
+    fn cached_numeric_resets_match_current_config_defaults() {
+        let expected = serde_json::to_value(AppConfig::default()).unwrap();
+        assert_eq!(preference_defaults(), &expected);
+        assert!(std::ptr::eq(preference_defaults(), preference_defaults()));
+    }
+
+    #[test]
     fn navigation_changes_scroll_and_section_without_editing_preferences() {
         let _guard = crate::app::tests::lock_app_tests();
         let mut draft = PreferencesDraft::new(AppConfig::default(), 1);
@@ -2295,7 +2388,7 @@ mod tests {
             ctx.run_ui(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width + 32.0, 900.0))), ..Default::default() }, |ui| {
                 ui.set_width(width);
                 let right = ui.max_rect().right();
-                draw_contract_section(&mut draft, ui, &str::to_string, &sections, false);
+                draw_contract_section(&mut draft, ui, &str::to_string, &sections, AppLanguage::English, false);
                 assert!(ui.min_rect().right() <= right + 0.5, "{width}: content {} > column {right}", ui.min_rect().right());
             }).drop_without_applying_deltas();
         }
