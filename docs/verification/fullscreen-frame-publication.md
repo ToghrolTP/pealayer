@@ -4,8 +4,9 @@ Owner: [issue #80](https://github.com/ToghrolTP/pealayer/issues/80).
 
 ## Report and confirmed defect
 
-The user reports occasional black flashes while watching fullscreen video.
-The exact trigger and whether audio continued are not established yet. Do not
+The user reports occasional black flashes in the regular application while
+watching fullscreen video, with audio continuing normally. The exact trigger
+is not established yet. Do not
 attribute every flash to a decoder, driver, display or timing fault without
 reproduction evidence.
 
@@ -69,3 +70,17 @@ counters with the event before changing decoding or operating-system settings.
 Do not replace the regular app or comparison while native Preferences reports
 an unknown draft. Preserve those edits and the retained October 10 executable.
 Cafe deployment remains user-deferred until its normal connection returns.
+
+During delivery, both Preferences windows were closed by the user and their
+helper processes had exited, but the older apps still reported an unknown helper
+because inspection tested only whether a controller handle existed. A hidden
+Preferences editor also returned before reaping that exited controller.
+
+The follow-up checks confirmed process exit independently of window visibility.
+The existing Windows exit watcher records only a signaled process handle; a
+running or uninspectable child remains unknown. Read-only inspection can report
+the exited helper as closed without saving/discarding config. Normal UI lifecycle
+cleanup reaps it even when preview reconciliation has hidden the editor. The
+existing exited-helper regression verifies that unverified and confirmed exit
+remain distinct. This does not authorize ignoring other dirty/busy/unknown
+editors during deployment.

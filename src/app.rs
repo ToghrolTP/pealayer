@@ -7399,7 +7399,7 @@ impl PealayerApp {
             ("effect_group",self.effect_group_draft.is_some()),
             ("channel_properties",self.hardware_control_dialog_key.is_some()),
             ("hardware_binding",self.hardware_binding_draft.is_some()),
-            ("preferences_helper",self.native_preferences.is_some()),
+            ("preferences_helper",self.native_preferences.as_ref().is_some_and(|helper| !helper.confirmed_exited())),
         ] {items.push(Item {domain:domain.into(),state:if open {State::Unknown} else {State::Clean}});}
         for (domain,busy) in [
             ("effect_publish",self.hardware_effect_authoring.pending_operation.is_some() || self.hardware_effect_authoring.pending_saved_macro_id.is_some()),

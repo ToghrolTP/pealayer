@@ -26,6 +26,7 @@ pub(crate) struct NativePreferencesController {
     child: std::process::Child,
     navigation: std::sync::mpsc::SyncSender<PreferencesHelperMessage>,
     branding_revision: Option<u64>,
+    exit_verified: std::sync::Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -190,9 +191,10 @@ impl NativePreferencesController {
             return Err(format!("start Preferences navigation: {error}"));
         }
         crate::diagnostics::record_shell_action("helper_spawned", "preferences");
+        let exit_verified = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         #[cfg(target_os = "windows")]
         {
-            use windows::Win32::{Foundation::CloseHandle, System::Threading::{
+            use windows::Win32::{Foundation::{CloseHandle, WAIT_OBJECT_0}, System::Threading::{
                 OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject, INFINITE,
             }};
             // A closed helper must cause a parent frame even when playback is
@@ -201,11 +203,16 @@ impl NativePreferencesController {
             if let Ok(handle) = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, child.id()) } {
                 let process_handle = handle.0 as usize;
                 let repaint = ctx.clone();
+                let exited = exit_verified.clone();
                 let watcher = std::thread::Builder::new()
                     .name("pealayer-preferences-exit".to_owned())
                     .spawn(move || {
                         let handle = windows::Win32::Foundation::HANDLE(process_handle as *mut _);
-                        unsafe { WaitForSingleObject(handle, INFINITE); let _ = CloseHandle(handle); }
+                        let status = unsafe { WaitForSingleObject(handle, INFINITE) };
+                        if status == WAIT_OBJECT_0 {
+                            exited.store(true, std::sync::atomic::Ordering::Release);
+                        }
+                        unsafe { let _ = CloseHandle(handle); }
                         crate::platform::interop::wake_command_dispatcher(&repaint);
                     });
                 if watcher.is_err() { unsafe { let _ = CloseHandle(handle); } }
@@ -213,11 +220,21 @@ impl NativePreferencesController {
         }
         #[cfg(not(target_os = "windows"))]
         let _ = ctx;
-        Ok(Self { child, navigation, branding_revision: None })
+        Ok(Self { child, navigation, branding_revision: None, exit_verified })
     }
 
     fn is_open(&mut self) -> bool {
-        self.child.try_wait().is_ok_and(|status| status.is_none())
+        match self.child.try_wait() {
+            Ok(Some(_)) => {
+                self.exit_verified.store(true, std::sync::atomic::Ordering::Release);
+                false
+            }
+            Ok(None) | Err(_) => true, // An uninspectable child is not closed.
+        }
+    }
+
+    pub(crate) fn confirmed_exited(&self) -> bool {
+        self.exit_verified.load(std::sync::atomic::Ordering::Acquire)
     }
 
     fn close(&mut self) {
@@ -614,6 +631,13 @@ pub(crate) fn run_native_preferences(owner_hwnd: isize) -> eframe::Result {
 }
 
 pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    // Preview/config reconciliation can hide this dialog before its helper
+    // exits. Reap independently of visibility, otherwise inspection retains a
+    // permanently unknown draft even after the native window was closed.
+    if reap_exited_controller(&mut app.native_preferences) {
+        if let Err(error) = app.cancel_preference_preview(ui.ctx()) { app.config_status = error; }
+        app.show_preferences_dialog = false;
+    }
     if !app.show_preferences_dialog {
         app.preferences_draft = None;
         return;
@@ -2183,7 +2207,11 @@ mod tests {
         let mut command = std::process::Command::new("true");
         let mut child = command.spawn().unwrap();
         child.wait().unwrap();
-        let mut controller = Some(NativePreferencesController { child, navigation: std::sync::mpsc::sync_channel(1).0, branding_revision: None });
+        let mut controller = Some(NativePreferencesController { child, navigation: std::sync::mpsc::sync_channel(1).0,
+            branding_revision: None, exit_verified: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)) });
+        assert!(!controller.as_ref().unwrap().confirmed_exited(), "unverified is still unknown");
+        assert!(!controller.as_mut().unwrap().is_open());
+        assert!(controller.as_ref().unwrap().confirmed_exited(), "confirmed process exit is not an open draft");
         assert!(reap_exited_controller(&mut controller));
         assert!(controller.is_none());
         assert!(!reap_exited_controller(&mut controller));
