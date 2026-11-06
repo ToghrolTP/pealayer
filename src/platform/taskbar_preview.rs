@@ -37,6 +37,10 @@ static REPAINT: OnceLock<eframe::egui::Context> = OnceLock::new();
 static REPAINT_WAKE: OnceLock<SyncSender<()>> = OnceLock::new();
 #[cfg(target_os = "windows")]
 static FULL_REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+#[cfg(target_os = "windows")]
+static MINIMIZE_REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static MINIMIZE_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static MINIMIZE_WAITING: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 #[cfg(target_os = "windows")]
 #[derive(Default)]
@@ -61,6 +65,61 @@ fn full_rgba(image: &eframe::egui::ColorImage) -> Option<image::RgbaImage> {
 }
 
 #[cfg(target_os = "windows")]
+fn remember_full(image: &eframe::egui::ColorImage) -> Option<std::sync::Arc<image::RgbaImage>> {
+    let frame=full_rgba(image).map(std::sync::Arc::new)?;
+    if let Ok(mut state)=FULL.lock() {
+        state.frame=Some(frame.clone());state.captured=Some(Instant::now());state.pending=None;state.captures+=1;
+        state.non_uniform=frame.pixels().skip(1).step_by(64).any(|pixel|pixel!=frame.get_pixel(0,0));
+    }
+    Some(frame)
+}
+
+pub fn cancel_minimize() {
+    MINIMIZE_WAITING.store(0,std::sync::atomic::Ordering::Release);
+    #[cfg(target_os="windows")]
+    MINIMIZE_REQUESTED.store(false,std::sync::atomic::Ordering::Release);
+}
+
+/// Preserve the last complete UI before minimizing, without polling/capturing
+/// it continuously or ever restoring the window merely to produce a preview.
+pub fn minimize(ctx: &eframe::egui::Context) {
+    #[cfg(target_os="windows")]
+    if PREVIEW.lock().is_ok_and(|state|state.enabled) {
+        use std::sync::atomic::Ordering;
+        let token=MINIMIZE_SEQUENCE.fetch_add(1,Ordering::AcqRel)+1;
+        MINIMIZE_WAITING.store(token,Ordering::Release);
+        let completed=ctx.clone();
+        ctx.request_screenshot(move |image| {
+            let _=remember_full(&image);
+            if MINIMIZE_WAITING.compare_exchange(token,0,Ordering::AcqRel,Ordering::Acquire).is_ok() {
+                completed.send_viewport_cmd(eframe::egui::ViewportCommand::Minimized(true));
+            }
+        });
+        // A lost/failed paint must never leave the user's minimize request
+        // waiting forever. This short-lived fallback exists only for this action.
+        let fallback=ctx.clone();
+        let fallback_started=std::thread::Builder::new().name("pealayer-minimize".into()).spawn(move || {
+            std::thread::sleep(Duration::from_millis(500));
+            if MINIMIZE_WAITING.compare_exchange(token,0,Ordering::AcqRel,Ordering::Acquire).is_ok() {
+                fallback.send_viewport_cmd(eframe::egui::ViewportCommand::Minimized(true));
+            }
+        });
+        if fallback_started.is_err() && MINIMIZE_WAITING.compare_exchange(token,0,Ordering::AcqRel,Ordering::Acquire).is_ok() {
+            ctx.send_viewport_cmd(eframe::egui::ViewportCommand::Minimized(true));
+        }
+        return;
+    }
+    ctx.send_viewport_cmd(eframe::egui::ViewportCommand::Minimized(true));
+}
+
+#[cfg(target_os="windows")]
+pub fn defer_system_minimize(hwnd: isize) -> bool {
+    if hwnd!=crate::platform::windows::get_registered_hwnd() || !PREVIEW.lock().is_ok_and(|state|state.enabled) {return false;}
+    MINIMIZE_REQUESTED.store(true,std::sync::atomic::Ordering::Release);
+    request_repaint();true
+}
+
+#[cfg(target_os = "windows")]
 fn capture_full_if_requested(ctx: &eframe::egui::Context) {
     use std::sync::atomic::Ordering;
     if !FULL_REQUESTED.swap(false,Ordering::AcqRel) {return;}
@@ -68,15 +127,10 @@ fn capture_full_if_requested(ctx: &eframe::egui::Context) {
     // The backend reads the finished egui+video framebuffer after painting.
     // No PrintWindow recursion, video-only replacement or GL in the WndProc.
     ctx.request_screenshot(move |image| {
-        let Some(frame) = full_rgba(&image).map(std::sync::Arc::new) else {
+        let Some(frame) = remember_full(&image) else {
             if let Ok(mut state)=FULL.lock() {state.pending=None;state.error=Some("The preview surface has no drawable extent".into());}
             return;
         };
-        if let Ok(mut state)=FULL.lock() {
-            state.frame=Some(frame.clone());state.captured=Some(Instant::now());
-            state.pending=None;state.captures+=1;
-            state.non_uniform=frame.pixels().skip(1).step_by(64).any(|pixel|pixel!=frame.get_pixel(0,0));
-        }
         publish_full(hwnd,&frame);
     });
 }
@@ -85,7 +139,10 @@ fn capture_full_if_requested(ctx: &eframe::egui::Context) {
 fn publish_full(hwnd: isize, frame: &image::RgbaImage) {
     use windows::Win32::{Foundation::{HWND,RECT},Graphics::{Dwm::DwmSetIconicLivePreviewBitmap,Gdi::DeleteObject},UI::WindowsAndMessaging::GetClientRect};
     let mut client=RECT::default();
-    if unsafe {GetClientRect(HWND(hwnd as *mut _),&mut client)}.is_err() || client.right<=0 || client.bottom<=0 {return;}
+    if unsafe {GetClientRect(HWND(hwnd as *mut _),&mut client)}.is_err() {return;}
+    // A minimized HWND reports a zero client. DWM still accepts its cached
+    // normal-size iconic representation; do not discard that valid bitmap.
+    if client.right<=0 || client.bottom<=0 {client.right=frame.width() as i32;client.bottom=frame.height() as i32;}
     // DWM requires a 32-bit bitmap no larger than the current client area.
     let (w,h)=fit_size(frame.width(),frame.height(),client.right as u32,client.bottom as u32);
     let resized;
@@ -106,7 +163,8 @@ fn handle_full_request(hwnd: isize) -> bool {
         state.requests+=1;
         // A snapshot is enough for Task View; do not read the entire 4K UI on
         // every video-frame invalidation. Paused previews cannot create loops.
-        let capture=state.captured.is_none_or(|at|at.elapsed()>=Duration::from_secs(1))
+        let drawable=!unsafe {windows::Win32::UI::WindowsAndMessaging::IsIconic(windows::Win32::Foundation::HWND(hwnd as *mut _))}.as_bool();
+        let capture=drawable && state.captured.is_none_or(|at|at.elapsed()>=Duration::from_secs(1))
             && state.pending.is_none_or(|at|at.elapsed()>=Duration::from_secs(2));
         if capture {state.pending=Some(Instant::now());}
         (state.frame.clone(),capture)
@@ -164,6 +222,8 @@ pub fn register_repaint(ctx: &eframe::egui::Context) {
             .name("pealayer-shell-wake".to_owned())
             .spawn(move || {
                 while receiver.recv().is_ok() {
+                    #[cfg(target_os = "windows")]
+                    if MINIMIZE_REQUESTED.swap(false,std::sync::atomic::Ordering::AcqRel) {minimize(&repaint);}
                     #[cfg(target_os = "windows")]
                     capture_full_if_requested(&repaint);
                     repaint.request_repaint();
@@ -249,6 +309,14 @@ pub fn configure(hwnd: isize, enabled: bool) -> Result<(), String> {
     {
         FULL_REQUESTED.store(false,std::sync::atomic::Ordering::Release);
         if let Ok(mut full)=FULL.lock() {*full=FullPreview::default();}
+    }
+    drop(state);
+    #[cfg(target_os="windows")]
+    if enabled {
+        // One seed also covers shell/desktop minimize routes that bypass
+        // WM_SYSCOMMAND. Later explicit minimization refreshes the last UI.
+        FULL_REQUESTED.store(true,std::sync::atomic::Ordering::Release);
+        request_repaint();
     }
     Ok(())
 }

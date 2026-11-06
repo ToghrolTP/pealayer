@@ -2178,10 +2178,18 @@ unsafe extern "system" fn shell_window_proc(
 ) -> windows::Win32::Foundation::LRESULT {
     use windows::Win32::Foundation::LRESULT;
     use windows::Win32::UI::WindowsAndMessaging::{
-        WM_APPCOMMAND, WM_COMMAND, WM_CONTEXTMENU, WM_LBUTTONDBLCLK, WM_RBUTTONUP, WM_SETICON, WM_NCDESTROY,
+        WM_APPCOMMAND, WM_COMMAND, WM_CONTEXTMENU, WM_LBUTTONDBLCLK, WM_RBUTTONUP, WM_SETICON, WM_NCDESTROY, WM_SYSCOMMAND,
     };
 
     observe_native_window_message(message);
+
+    if message==WM_SYSCOMMAND {
+        match wparam.0 & 0xfff0 {
+            0xf020 if crate::platform::taskbar_preview::defer_system_minimize(hwnd.0 as isize)=>return LRESULT(0),
+            0xf120|0xf030=>crate::platform::taskbar_preview::cancel_minimize(),
+            _=>{},
+        }
+    }
 
     if message == WM_NCDESTROY {
         crate::platform::taskbar_branding::clear_window(hwnd.0 as isize);

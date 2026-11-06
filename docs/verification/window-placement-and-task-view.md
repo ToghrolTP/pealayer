@@ -73,6 +73,22 @@ Classic → Modern → Classic → Modern through the configuration API and chec
 resource changes, stable identity, refresh counts and retained toolbar state.
 Actual icon appearance still requires the requested Windows-shell check.
 
+## Minimized Task View
+
+Windows reports a zero client extent while minimized. Full-preview publication
+now reuses the cached normal-size composite rather than discarding it or trying
+to read a zero-sized GL surface. The first visible frame seeds this cache once.
+API and native `SC_MINIMIZE` actions refresh it immediately before minimizing;
+the action is bounded by a 500 ms fallback and Restore/Maximize cancels a pending
+minimize. No window is restored or focused merely to make a preview, and no
+continuous full-UI capture or second decoder is added.
+
+The native fixture exercises both API and system-command minimization. DWM
+accepts the last-visible full UI while minimized, with no new zero-size capture;
+the subsequent normal-size restart remains correct. This gives Task View its
+normal last-visible-window snapshot. It does not assert continuously advancing
+video while minimized: that offscreen-rendering gate remains separate.
+
 ## Repeatable verification
 
 `scripts/test-window-placement-windows.ps1 -Executable <verified-exe>

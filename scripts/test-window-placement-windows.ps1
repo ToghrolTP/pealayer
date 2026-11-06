@@ -14,7 +14,7 @@ catch { if ($_.Exception.Message -like '*already owned*') {throw} }
 $fixtureDirectory=Join-Path $OutputDirectory ('window-placement-'+[guid]::NewGuid().ToString('N'))
 $null=New-Item -ItemType Directory -Path $fixtureDirectory
 $fixtureConfig=Join-Path $fixtureDirectory 'config.json'
-@{app_name='Pealayer window placement test';auto_connect_hardware=$false;restore_last_media=$false;last_media_target=$null;
+@{app_name='Pealayer window placement test';auto_connect_hardware=$false;clipboard_url_detection=$false;restore_last_media=$false;last_media_target=$null;
     window_geometry=@{x=100;y=100;width=900;height=650;maximized=$false}} | ConvertTo-Json -Depth 4 | Set-Content -LiteralPath $fixtureConfig -Encoding utf8
 $fixtureMedia=Join-Path $fixtureDirectory 'test-pattern.mp4'
 if($TestFullPreview){
@@ -29,6 +29,7 @@ public static class PealayerPlacementFixture {
   [DllImport("user32.dll")] public static extern bool GetClientRect(IntPtr hwnd,out Rect rect);
   [DllImport("user32.dll")] public static extern uint GetDpiForWindow(IntPtr hwnd);
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+  [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hwnd);
   [DllImport("user32.dll", SetLastError=true)] public static extern IntPtr SendMessageTimeout(IntPtr hwnd,uint message,IntPtr wp,IntPtr lp,uint flags,uint timeout,out IntPtr result);
 }
 '@
@@ -102,8 +103,24 @@ try {
             if($diagnostic.full_preview.frame_size[0] -lt 900 -or $diagnostic.full_preview.frame_size[1] -lt 650){throw 'Full preview used a small video bitmap instead of the complete UI.'}
         }
         if($pass -lt 3){
-            $null=Invoke-RestMethod "http://127.0.0.1:$Port/api/player/command" -Method Post -ContentType application/json -Body '{"command":"minimize"}'
-            Start-Sleep -Milliseconds 400
+            if($TestFullPreview -and $pass -eq 2){
+                $messageResult=[IntPtr]::Zero
+                $null=[PealayerPlacementFixture]::SendMessageTimeout($handle,0x112,[IntPtr]0xf020,[IntPtr]::Zero,2,2000,[ref]$messageResult)
+            }else{
+                $null=Invoke-RestMethod "http://127.0.0.1:$Port/api/player/command" -Method Post -ContentType application/json -Body '{"command":"minimize"}'
+            }
+            $deadline=[DateTime]::UtcNow.AddSeconds(3)
+            while(![PealayerPlacementFixture]::IsIconic($handle) -and [DateTime]::UtcNow -lt $deadline){Start-Sleep -Milliseconds 50}
+            if(![PealayerPlacementFixture]::IsIconic($handle)){throw 'Minimize request did not complete.'}
+            if($TestFullPreview){
+                $before=Invoke-RestMethod "http://127.0.0.1:$Port/api/player/taskbar-preview"
+                $messageResult=[IntPtr]::Zero
+                $null=[PealayerPlacementFixture]::SendMessageTimeout($handle,0x326,[IntPtr]::Zero,[IntPtr]::Zero,2,2000,[ref]$messageResult)
+                $after=Invoke-RestMethod "http://127.0.0.1:$Port/api/player/taskbar-preview"
+                if($after.full_preview.delivered -le $before.full_preview.delivered -or $after.full_preview.error){throw 'Minimized Task View cache publication failed.'}
+                if($after.full_preview.captures -ne $before.full_preview.captures){throw 'Minimized preview tried reading a zero-size framebuffer.'}
+                "Minimized full preview delivered from the last visible UI; no zero-size recapture"
+            }
         }
         Stop-Fixture $process
         $process=$null

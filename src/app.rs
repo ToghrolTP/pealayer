@@ -4530,16 +4530,19 @@ impl PealayerApp {
             InteropCommand::SetFullscreen { enabled } => self.set_fullscreen(ctx, enabled),
             InteropCommand::ToggleFullscreen => self.toggle_fullscreen(ctx),
             InteropCommand::Activate => {
+                crate::platform::taskbar_preview::cancel_minimize();
                 ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             }
             InteropCommand::Minimize => {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(true));
+                crate::platform::taskbar_preview::minimize(ctx);
             }
             InteropCommand::Maximize => {
+                crate::platform::taskbar_preview::cancel_minimize();
                 ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
             }
             InteropCommand::Restore => {
+                crate::platform::taskbar_preview::cancel_minimize();
                 ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
