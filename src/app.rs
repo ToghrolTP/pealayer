@@ -5282,12 +5282,61 @@ impl PealayerApp {
             }
             InteropCommand::UpdateConfig { values } => {
                 match self.apply_config_patch(ctx, &values) {
-                    Ok(()) => self.set_osd(self.tr("Preferences updated")),
+                    Ok(()) => {
+                        if values.as_object().is_some_and(|values| values.keys().any(|key| crate::branding::BRANDING_KEYS.contains(&key.as_str()))) {
+                            let config = crate::platform::interop::get_live_config();
+                            crate::branding::clear_runtime_values(&values);
+                            self.app_name = crate::config::resolved_app_name(&config);
+                            self.last_window_title.clear();
+                            if let Some(draft) = self.preferences_draft.as_mut() { draft.sync_external_branding(&crate::branding::configured_values(&config)); }
+                            if let Some(original) = self.preference_preview_original.as_mut() {
+                                if let Ok(updated) = original.apply_patch(&crate::branding::configured_values(&config)) { *original = updated; }
+                            }
+                        }
+                        self.set_osd(self.tr("Preferences updated"));
+                    }
                     Err(error) => {
                         self.config_status = error.clone();
                         self.set_osd(format!("{}: {error}", self.tr("Preferences update failed")));
                     }
                 }
+                return;
+            }
+            InteropCommand::UpdateBranding { update } => {
+                let result = (|| -> Result<(), String> {
+                    update.validate()?;
+                    crate::branding::validate_artwork(&update.values)?;
+                    if update.persist {
+                        // Save only requested branding, never an open preview.
+                        let path = crate::config::AppConfig::get_config_path();
+                        let baseline = if path.exists() {
+                            crate::config::AppConfig::load_from_path(&path)?
+                        } else {
+                            self.preference_preview_original.clone().unwrap_or_else(|| self.runtime_config_snapshot())
+                        };
+                        let live = self.runtime_config_snapshot().apply_patch(&update.values)?;
+                        baseline.apply_patch(&update.values)?.save()?;
+                        if let Some(original) = self.preference_preview_original.as_mut() {
+                            *original = original.apply_patch(&update.values)?;
+                        }
+                        if let Some(draft) = self.preferences_draft.as_mut() {
+                            draft.sync_external_branding(&update.values);
+                        }
+                        crate::platform::interop::set_live_config(live);
+                        self.config_fingerprint = crate::config::AppConfig::fingerprint(&path).ok();
+                        crate::branding::clear_runtime_values(&update.values);
+                    } else {
+                        crate::branding::set_runtime_values(&update.values)?;
+                    }
+                    self.refresh_branding_surfaces(ctx);
+                    Ok(())
+                })();
+                if let Err(error) = result { self.config_status = error.clone(); self.show_error = Some(error); }
+                return;
+            }
+            InteropCommand::ClearBranding => {
+                crate::branding::clear_runtime_values(&crate::branding::configured_values(&crate::platform::interop::get_live_config()));
+                self.refresh_branding_surfaces(ctx);
                 return;
             }
             InteropCommand::PreviewConfig { config } => {
@@ -5319,7 +5368,7 @@ impl PealayerApp {
                     return;
                 }
             },
-            InteropCommand::GetStatus | InteropCommand::GetProcessStatus => {}
+            InteropCommand::GetStatus | InteropCommand::GetProcessStatus | InteropCommand::GetBranding => {}
         }
         if !matches!(source, "keyboard" | "menu") {
             self.set_osd(format!("{source}: command applied"));
@@ -8279,6 +8328,14 @@ impl PealayerApp {
                 log::warn!("Could not reload changed Pealayer configuration: {error}");
             }
         }
+    }
+
+    fn refresh_branding_surfaces(&mut self, ctx: &egui::Context) {
+        self.app_name = crate::config::resolved_app_name(&crate::platform::interop::get_live_config());
+        self.last_window_title.clear();
+        crate::branding::sync_native_window_icon(ctx,
+            crate::branding::PlaybackIconState::from_player(self.current_video_path.is_some(), self.is_paused, self.is_eof));
+        ctx.request_repaint();
     }
 
     fn apply_config_patch(

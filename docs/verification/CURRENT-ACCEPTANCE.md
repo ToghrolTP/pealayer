@@ -30,6 +30,18 @@ required checks are not passed while the user's test/CI skip remains in effect.
 
 ## Delivered source and deployment
 
+- [Live branding API](../BRANDING-API.md) shares temporary/persistent name,
+  tagline and icon updates across REST/RPC/native commands. Focused native
+  tests and isolated real-window checks pass: unrelated autosaves do not leak
+  temporary branding, selected fields persist, open Preferences follows events,
+  and Web runtime metadata refreshes. [Elapsed pointer selection](elapsed-pointer-selection.md)
+  and [centered ruler labels](timeline-ruler-labels.md) now pass their native
+  rendered regressions too. Combined release packaging and guarded canonical
+  installation are pending; Cafe remains user-deferred. One native-minimize
+  fixture timeout was not reproduced by a fresh three-launch recheck; retain
+  the failure diagnostics and rerun against the release, rather than calling
+  the first run a pass.
+
 - [Hardware connection hints](hardware-connection-hint.md) replace raw nested
   diagnostics with plain-language card copy and an opt-in circled information
   control in native/Web UI. Native/browser checks, packaging and local graceful

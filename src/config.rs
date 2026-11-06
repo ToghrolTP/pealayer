@@ -1095,6 +1095,7 @@ pub struct AppConfig {
     pub playback_position_history_limit: u32,
     pub playback_positions: Vec<PlaybackPositionEntry>,
     pub app_name: Option<String>,
+    pub app_description: Option<String>,
     pub app_icon: Option<PathBuf>,
     pub app_icon_preset: AppIconPreset,
     pub app_icon_playing: Option<PathBuf>,
@@ -1302,6 +1303,7 @@ impl Default for AppConfig {
             playback_position_history_limit: DEFAULT_PLAYBACK_POSITION_HISTORY_LIMIT,
             playback_positions: Vec::new(),
             app_name: None,
+            app_description: None,
             app_icon: None,
             app_icon_preset: AppIconPreset::Current,
             app_icon_playing: None,
@@ -1704,9 +1706,8 @@ pub fn resolve_rtl(preference: AppDirection, language: AppLanguage) -> bool {
 }
 
 pub fn resolved_app_name(config: &AppConfig) -> String {
-    std::env::var("APP_NAME")
-        .ok()
-        .or_else(|| config.app_name.clone())
+    crate::branding::runtime_value("app_name", config.app_name.clone())
+        .or_else(|| std::env::var("APP_NAME").ok())
         .or_else(|| application_brand_string("applicationName"))
         .map(|name| name.trim().to_string())
         .filter(|name| !name.is_empty())
@@ -1714,11 +1715,17 @@ pub fn resolved_app_name(config: &AppConfig) -> String {
 }
 
 pub fn resolved_app_icon(config: &AppConfig) -> Option<PathBuf> {
-    std::env::var_os("APP_ICON")
-        .map(PathBuf::from)
-        .or_else(|| config.app_icon.clone())
+    crate::branding::runtime_value("app_icon", config.app_icon.clone())
+        .or_else(|| std::env::var_os("APP_ICON").map(PathBuf::from))
         .or_else(application_brand_app_icon)
         .filter(|path| !path.as_os_str().is_empty())
+}
+
+pub fn resolved_app_description(config: &AppConfig) -> String {
+    crate::branding::runtime_value("app_description", config.app_description.clone())
+        .or_else(|| std::env::var("APP_DESCRIPTION").ok())
+        .or_else(|| application_brand_string("description"))
+        .unwrap_or_default().trim().to_owned()
 }
 
 fn application_brand() -> Option<(PathBuf, serde_json::Value)> {
@@ -2149,6 +2156,11 @@ impl AppConfig {
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        for (key, value, limit) in [("app_name", &self.app_name, 128), ("app_description", &self.app_description, 512)] {
+            if value.as_ref().is_some_and(|text| text.chars().count() > limit || text.chars().any(char::is_control)) {
+                return Err(format!("{key} must be printable text of at most {limit} characters"));
+            }
+        }
         self.external_mpv.validate()?;
         if self.audio_effects.len() > 256 { return Err("At most 256 audio effects may be saved".into()); }
         let mut audio_ids = std::collections::HashSet::new();

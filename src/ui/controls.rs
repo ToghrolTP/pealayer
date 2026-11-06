@@ -728,7 +728,10 @@ pub fn draw_elapsed_editor(
             |ui| editor.show(ui)).inner
     }).inner;
     let pointer_group = ui.input(|input| input.pointer.interact_pos()).map(|position| {
-        let cursor = output.galley.cursor_from_pos(position - output.galley_pos);
+        // TextEdit paints a centered galley at galley_pos - rect.left(),
+        // not galley_pos itself. Use that same origin for glyph hit testing.
+        let cursor = output.galley.cursor_from_pos(position - output.galley_pos
+            + egui::vec2(output.galley.rect.left(), 0.0));
         timecode_group_at_cursor(output.galley.text(), cursor.index.0)
     });
     let mut response = output.response.response;
@@ -745,7 +748,10 @@ pub fn draw_elapsed_editor(
                 let groups = timecode_groups(&app.elapsed_time_input);
                 let pointer_pressed = response.contains_pointer()
                     && ui.input(|input| input.pointer.primary_pressed());
-                if (response.clicked() || pointer_pressed) && let Some(selected) = pointer_group {
+                // Only a new press may retarget an existing editor. The click
+                // that activates display mode may be replayed in a layout
+                // pass after its shorter galley becomes the full edit mask.
+                if pointer_pressed && let Some(selected) = pointer_group {
                     app.elapsed_time_group = selected;
                     app.elapsed_time_group_digits = 0;
                     ui.ctx().request_repaint();

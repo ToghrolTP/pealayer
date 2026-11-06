@@ -423,6 +423,9 @@ pub enum InteropCommand {
     UpdateConfig {
         values: Value,
     },
+    UpdateBranding {
+        update: crate::branding::BrandingUpdate,
+    },
     PreviewConfig {
         config: Box<crate::config::AppConfig>,
     },
@@ -431,6 +434,8 @@ pub enum InteropCommand {
     },
     CancelPreviewConfig,
     ReloadConfig,
+    GetBranding,
+    ClearBranding,
     GetStatus,
 }
 
@@ -569,6 +574,7 @@ impl InteropCommand {
             Self::GetStatus => Some(serde_json::to_value(get_live_status())
                 .unwrap_or_else(|_| serde_json::json!({"status":"initializing"}))),
             Self::GetProcessStatus => Some(crate::process_control::status()),
+            Self::GetBranding => Some(crate::branding::snapshot()),
             _ => None,
         }
     }
@@ -873,6 +879,7 @@ impl InteropCommand {
                 Err("workspace profile direction must be -1 or 1".to_string())
             }
             Self::UpdateConfig { values } => crate::config::AppConfig::validate_patch_shape(values),
+            Self::UpdateBranding { update } => update.validate(),
             Self::PreviewConfig { config } | Self::CommitPreviewConfig { config } => {
                 config.validate()
             }
@@ -924,6 +931,14 @@ pub fn command_catalog() -> Value {
         "discovery": "/api/player/commands"
     });
     catalog.as_object_mut().unwrap().insert("assets".into(),assets);
+    catalog.as_object_mut().unwrap().insert("branding".into(), serde_json::json!({
+        "get":"pealayer.branding.get", "update":"pealayer.branding.update", "http":"/api/branding",
+        "persist":"optional boolean; false by default", "values":crate::branding::BRANDING_KEYS,
+        "accepted":"queued; read effective/configured branding to confirm application"
+    }));
+    catalog["commands"].as_array_mut().unwrap().extend([serde_json::json!("update_branding"), serde_json::json!("get_branding")]);
+    catalog["branding"]["clear"] = serde_json::json!("pealayer.branding.clear");
+    catalog["commands"].as_array_mut().unwrap().push(serde_json::json!("clear_branding"));
     catalog
 }
 
@@ -1115,6 +1130,7 @@ impl AppearanceState {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ApplicationIdentity {
     pub name: String,
+    pub description: String,
     pub version: String,
     pub commit: String,
     pub dirty: bool,
@@ -1126,6 +1142,7 @@ impl ApplicationIdentity {
     pub fn current(name: &str) -> Self {
         Self {
             name: name.to_string(),
+            description: live_app_description(),
             version: env!("CARGO_PKG_VERSION").to_string(),
             commit: env!("PEALAYER_GIT_COMMIT").to_string(),
             dirty: env!("PEALAYER_GIT_DIRTY") == "true",
@@ -2455,6 +2472,11 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
                 values: request.params.clone(),
             })
         }
+        "pealayer.branding.update" => Some(InteropCommand::UpdateBranding {
+            update: serde_json::from_value(request.params.clone()).map_err(|error| format!("Invalid branding request: {error}"))?,
+        }),
+        "pealayer.branding.get" => Some(InteropCommand::GetBranding),
+        "pealayer.branding.clear" => Some(InteropCommand::ClearBranding),
         "config.reload" | "pealayer.config.reload" => Some(InteropCommand::ReloadConfig),
         "get_status" | "player.status" | "pealayer.status" | "pealayer.messages.state" => None,
         method => return Err(format!("unknown Pealayer JSON-RPC method: {method}")),
@@ -2526,6 +2548,10 @@ pub fn live_config_revision() -> u64 {
     LIVE_CONFIG_REVISION.load(std::sync::atomic::Ordering::Acquire)
 }
 
+pub(crate) fn invalidate_live_config_revision() {
+    LIVE_CONFIG_REVISION.fetch_add(1, std::sync::atomic::Ordering::Release);
+}
+
 #[derive(Clone)]
 pub struct LiveFrameConfig {
     pub web_enabled: bool,
@@ -2567,6 +2593,11 @@ pub fn get_live_config() -> crate::config::AppConfig {
         .ok()
         .and_then(|config| config.clone())
         .unwrap_or_else(crate::config::AppConfig::load)
+}
+
+pub(crate) fn live_app_description() -> String {
+    LIVE_CONFIG.read().ok().and_then(|config| config.as_ref().map(crate::config::resolved_app_description))
+        .unwrap_or_else(|| crate::config::resolved_app_description(&crate::config::AppConfig::default()))
 }
 
 /// Small live-policy read for the media observer; no config/disk clone per tick.

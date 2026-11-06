@@ -21,8 +21,7 @@ the sticky ruler remain intact.
   guards and TypeScript `--noEmit` pass.
 - Added a native painted-label regression for short, minute and hour timestamps,
   fractional tick positions and 1×–2× scales, including edge omission without
-  reanchoring. It is not yet compiled/run: the user requested batching fixes
-  without waiting on builds.
+  reanchoring. It now compiles and passes in the combined native test build.
 - Native/Web live visual verification and guarded deployment remain queued for
   the next combined build, along with the elapsed-segment selection correction.
   No running application was replaced or restarted. Cafe deployment remains

@@ -7,6 +7,7 @@ param(
     [switch]$ObserveOnly,
     [switch]$TestFullPreview,
     [switch]$TestBranding,
+    [switch]$TestBrandingApi,
     # Requires a visible primary Windows taskbar. Only matching icon crops are
     # retained; no desktop input or private production media is captured.
     [switch]$TestDisplayedBranding
@@ -35,6 +36,18 @@ public static class PealayerPlacementFixture {
   [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
   [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr hwnd);
   [DllImport("user32.dll", SetLastError=true)] public static extern IntPtr SendMessageTimeout(IntPtr hwnd,uint message,IntPtr wp,IntPtr lp,uint flags,uint timeout,out IntPtr result);
+  private delegate bool EnumProc(IntPtr hwnd,IntPtr parameter);
+  [DllImport("user32.dll")] private static extern bool EnumWindows(EnumProc callback,IntPtr parameter);
+  [DllImport("user32.dll")] private static extern uint GetWindowThreadProcessId(IntPtr hwnd,out uint processId);
+  [DllImport("user32.dll",CharSet=CharSet.Unicode)] private static extern int GetWindowText(IntPtr hwnd,System.Text.StringBuilder text,int count);
+  public static IntPtr TitledWindow(uint processId,string title) {
+    IntPtr found=IntPtr.Zero;
+    EnumWindows((hwnd,parameter)=>{uint owner;GetWindowThreadProcessId(hwnd,out owner);
+      if(owner==processId){var text=new System.Text.StringBuilder(512);GetWindowText(hwnd,text,text.Capacity);
+        if(text.ToString()==title){found=hwnd;return false;}}
+      return true;},IntPtr.Zero);
+    return found;
+  }
 }
 '@
 [void][PealayerPlacementFixture]::SetProcessDPIAware()
@@ -78,6 +91,50 @@ try {
         $width=($rect.Right-$rect.Left)/$scale;$height=($rect.Bottom-$rect.Top)/$scale
         "Launch $pass client: $width x $height logical points"
         if(!$ObserveOnly -and ([Math]::Abs($width-900) -gt 3 -or [Math]::Abs($height-650) -gt 3)){throw 'Saved normal placement did not survive restart.'}
+        if($TestBrandingApi -and $pass -eq 1){
+            $base="http://127.0.0.1:$Port"
+            $original=(Invoke-RestMethod "$base/api/branding").configured
+            $null=Invoke-RestMethod "$base/api/player/command" -Method Post -ContentType application/json -Body '{"command":"navigate_preferences","section":"appearance","scroll_y":0}'
+            $deadline=[DateTime]::UtcNow.AddSeconds(10)
+            do {$helper=Get-CimInstance Win32_Process -Filter "ParentProcessId=$($process.Id)" | Where-Object {$_.CommandLine -like '*--preferences-helper*'};if($helper){break};Start-Sleep -Milliseconds 100}while([DateTime]::UtcNow -lt $deadline)
+            if(@($helper).Count -ne 1){throw 'Isolated native Preferences helper did not open.'}
+            function Wait-Branding([scriptblock]$condition){
+                $deadline=[DateTime]::UtcNow.AddSeconds(8)
+                do {
+                    $value=Invoke-RestMethod "$base/api/branding"
+                    if(&$condition $value){return $value}
+                    Start-Sleep -Milliseconds 80
+                }while([DateTime]::UtcNow -lt $deadline)
+                throw 'Branding API application timed out.'
+            }
+            $null=Invoke-RestMethod "$base/api/branding" -Method Post -ContentType application/json -Body '{"values":{"app_name":"Temporary cinema","app_description":"Live session","app_icon_preset":"classic"}}'
+            $null=Wait-Branding {param($value) $value.effective.app_name -eq 'Temporary cinema' -and $value.effective.app_description -eq 'Live session' -and $value.temporary.app_icon_preset -eq 'classic'}
+            $deadline=[DateTime]::UtcNow.AddSeconds(8)
+            do {$helperWindow=[PealayerPlacementFixture]::TitledWindow($helper.ProcessId,'Preferences — Temporary cinema');if($helperWindow -ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 100}while([DateTime]::UtcNow -lt $deadline)
+            if($helperWindow -eq [IntPtr]::Zero){throw 'Open Preferences did not receive live temporary branding.'}
+            $runtime=Invoke-RestMethod "$base/api/runtime/config"
+            if($runtime.appName -ne 'Temporary cinema' -or $runtime.appDescription -ne 'Live session'){throw 'Web runtime metadata did not follow temporary branding.'}
+            $null=Invoke-RestMethod "$base/api/player/command" -Method Post -ContentType application/json -Body '{"command":"set_volume","value":37}'
+            $deadline=[DateTime]::UtcNow.AddSeconds(8)
+            do {$disk=Get-Content -LiteralPath $fixtureConfig -Raw | ConvertFrom-Json;if($disk.volume -eq 37){break};Start-Sleep -Milliseconds 80}while([DateTime]::UtcNow -lt $deadline)
+            if($disk.volume -ne 37 -or $disk.app_name -ne $original.app_name -or $disk.app_description -ne $original.app_description -or $disk.app_icon_preset -ne $original.app_icon_preset){throw 'Unrelated autosave leaked temporary branding or did not finish.'}
+            $null=Invoke-RestMethod "$base/api/branding" -Method Post -ContentType application/json -Body '{"values":{"app_name":"Saved cinema","app_description":"Saved tagline"},"persist":true}'
+            $null=Wait-Branding {param($value) $value.configured.app_name -eq 'Saved cinema' -and $value.effective.app_description -eq 'Saved tagline' -and $value.temporary.app_icon_preset -eq 'classic'}
+            $disk=Get-Content -LiteralPath $fixtureConfig -Raw | ConvertFrom-Json
+            if($disk.app_name -ne 'Saved cinema' -or $disk.app_description -ne 'Saved tagline' -or $disk.app_icon_preset -ne $original.app_icon_preset -or $disk.volume -ne 37){throw 'Selective branding persistence changed an unrelated field.'}
+            $null=Invoke-RestMethod "$base/api/branding" -Method Delete
+            $null=Wait-Branding {param($value) @($value.temporary.PSObject.Properties).Count -eq 0 -and $value.effective.app_name -eq 'Saved cinema' -and $value.effective.app_icon_preset -eq $original.app_icon_preset}
+            $null=Invoke-RestMethod "$base/api/branding" -Method Post -ContentType application/json -Body (@{values=$original;persist=$true}|ConvertTo-Json -Depth 5)
+            $null=Wait-Branding {param($value) $value.configured.app_name -eq $original.app_name}
+            $deadline=[DateTime]::UtcNow.AddSeconds(8)
+            do {$helperWindow=[PealayerPlacementFixture]::TitledWindow($helper.ProcessId,"Preferences — $($original.app_name)");if($helperWindow -ne [IntPtr]::Zero){break};Start-Sleep -Milliseconds 100}while([DateTime]::UtcNow -lt $deadline)
+            if($helperWindow -eq [IntPtr]::Zero){throw 'Preferences title did not restore after branding reset.'}
+            $messageResult=[IntPtr]::Zero
+            $null=[PealayerPlacementFixture]::SendMessageTimeout($helperWindow,0x10,[IntPtr]::Zero,[IntPtr]::Zero,2,2000,[ref]$messageResult)
+            $helperProcess=Get-Process -Id $helper.ProcessId -ErrorAction SilentlyContinue
+            if($helperProcess -and !$helperProcess.WaitForExit(8000)){throw 'Clean isolated Preferences did not close normally.'}
+            'Branding API: temporary overlay survives autosave without leaking; selective persistence and reset passed'
+        }
         if($TestBranding -and $pass -eq 1){
             $artworkBox=$null
             $artworkPass=0
@@ -126,13 +183,17 @@ try {
         if($pass -lt 3){
             if($TestFullPreview -and $pass -eq 2){
                 $messageResult=[IntPtr]::Zero
-                $null=[PealayerPlacementFixture]::SendMessageTimeout($handle,0x112,[IntPtr]0xf020,[IntPtr]::Zero,2,2000,[ref]$messageResult)
+                if([PealayerPlacementFixture]::SendMessageTimeout($handle,0x112,[IntPtr]0xf020,[IntPtr]::Zero,2,2000,[ref]$messageResult) -eq [IntPtr]::Zero){throw 'Native system-minimize message timed out.'}
             }else{
                 $null=Invoke-RestMethod "http://127.0.0.1:$Port/api/player/command" -Method Post -ContentType application/json -Body '{"command":"minimize"}'
             }
             $deadline=[DateTime]::UtcNow.AddSeconds(3)
             while(![PealayerPlacementFixture]::IsIconic($handle) -and [DateTime]::UtcNow -lt $deadline){Start-Sleep -Milliseconds 50}
-            if(![PealayerPlacementFixture]::IsIconic($handle)){throw 'Minimize request did not complete.'}
+            if(![PealayerPlacementFixture]::IsIconic($handle)){
+                $state=Invoke-RestMethod "http://127.0.0.1:$Port/api/player/taskbar-preview"
+                $state | ConvertTo-Json -Depth 12 | Set-Content -LiteralPath (Join-Path $fixtureDirectory "minimize-failure-$pass.json")
+                throw "Minimize request did not complete on pass $pass; diagnostics retained."
+            }
             if($TestFullPreview){
                 $before=Invoke-RestMethod "http://127.0.0.1:$Port/api/player/taskbar-preview"
                 $messageResult=[IntPtr]::Zero

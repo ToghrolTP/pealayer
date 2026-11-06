@@ -1,5 +1,9 @@
 # Live application branding
 
+For the current temporary/persistent REST, RPC and IPC contract, see
+[Live application branding API](../BRANDING-API.md). The receipt below records
+the earlier cross-surface implementation, not acceptance of later changes.
+
 Custom names, Current/Classic presets, and custom playback-state icons resolve
 through the existing Rust branding/configuration contract. Changing a caption
 does not rename Pealayer's protocol methods, legal attribution, or stable IDs.

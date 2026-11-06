@@ -4,6 +4,110 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU8, Ordering};
 
+/// Branding patches use the existing configuration keys, not a second schema.
+/// The overlay is deliberately separate from LIVE_CONFIG and serializable
+/// AppConfig: volume/workspace autosaves must never persist session branding.
+pub const BRANDING_KEYS: &[&str] = &[
+    "app_name", "app_description", "app_icon", "app_icon_preset",
+    "app_icon_playing", "app_icon_paused", "app_icon_stopped",
+];
+static RUNTIME_VALUES: std::sync::LazyLock<std::sync::RwLock<serde_json::Map<String, serde_json::Value>>> =
+    std::sync::LazyLock::new(Default::default);
+
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+#[serde(deny_unknown_fields)]
+pub struct BrandingUpdate {
+    pub values: serde_json::Value,
+    #[serde(default)]
+    pub persist: bool,
+}
+
+impl BrandingUpdate {
+    pub fn validate(&self) -> Result<(), String> {
+        validate_branding_values(&self.values)
+    }
+}
+
+pub fn validate_branding_values(values: &serde_json::Value) -> Result<(), String> {
+    let values = values.as_object().ok_or("Branding values must be an object")?;
+    if values.is_empty() || values.keys().any(|key| !BRANDING_KEYS.contains(&key.as_str())) {
+        return Err("Provide only application name, description or icon configuration keys".into());
+    }
+    let patch = serde_json::Value::Object(values.clone());
+    crate::config::AppConfig::default().apply_patch(&patch)?;
+    Ok(())
+}
+
+pub(crate) fn validate_artwork(values: &serde_json::Value) -> Result<(), String> {
+    for key in ["app_icon", "app_icon_playing", "app_icon_paused", "app_icon_stopped"] {
+        let Some(path) = values.get(key).and_then(serde_json::Value::as_str) else { continue; };
+        let path = Path::new(path);
+        if !path.is_absolute() { return Err("Application icon paths must be absolute paths on the serving host".into()); }
+        let metadata = std::fs::metadata(path).map_err(|_| "Application icon file is unavailable")?;
+        if !metadata.is_file() || metadata.len() > 16 * 1024 * 1024 {
+            return Err("Application icon must be a file of at most 16 MiB".into());
+        }
+        use std::io::Read;
+        let mut bytes = Vec::new();
+        std::fs::File::open(path).map_err(|_| "Application icon could not be read")?
+            .take(16 * 1024 * 1024 + 1).read_to_end(&mut bytes).map_err(|_| "Application icon could not be read")?;
+        if bytes.len() > 16 * 1024 * 1024 { return Err("Application icon exceeds 16 MiB".into()); }
+        let (width, height) = image::ImageReader::new(std::io::Cursor::new(&bytes))
+            .with_guessed_format().map_err(|_| "Application icon format is invalid")?
+            .into_dimensions().map_err(|_| "Application icon is invalid")?;
+        if width == 0 || height == 0 || width > 4096 || height > 4096 {
+            return Err("Application icon dimensions must be within 1–4096 pixels".into());
+        }
+        image::load_from_memory(&bytes).map_err(|_| "Application icon cannot be decoded")?;
+    }
+    Ok(())
+}
+
+pub(crate) fn runtime_value<T: serde::de::DeserializeOwned>(key: &str, configured: T) -> T {
+    RUNTIME_VALUES.read().ok().and_then(|values| values.get(key).cloned())
+        .and_then(|value| serde_json::from_value(value).ok()).unwrap_or(configured)
+}
+
+pub(crate) fn set_runtime_values(values: &serde_json::Value) -> Result<(), String> {
+    validate_branding_values(values)?;
+    RUNTIME_VALUES.write().map_err(|_| "Runtime branding is unavailable")?
+        .extend(values.as_object().unwrap().clone());
+    crate::platform::interop::invalidate_live_config_revision();
+    Ok(())
+}
+
+pub(crate) fn clear_runtime_values(values: &serde_json::Value) {
+    if let Ok(mut runtime) = RUNTIME_VALUES.write() {
+        for key in values.as_object().into_iter().flat_map(|values| values.keys()) { runtime.remove(key); }
+    }
+    crate::platform::interop::invalidate_live_config_revision();
+}
+
+pub fn visible_values(config: &AppConfig) -> serde_json::Value {
+    serde_json::json!({
+        "app_name": crate::config::resolved_app_name(config),
+        "app_description": crate::config::resolved_app_description(config),
+        "app_icon": crate::config::resolved_app_icon(config),
+        "app_icon_preset": runtime_value("app_icon_preset", config.app_icon_preset),
+        "app_icon_playing": runtime_value("app_icon_playing", config.app_icon_playing.clone()),
+        "app_icon_paused": runtime_value("app_icon_paused", config.app_icon_paused.clone()),
+        "app_icon_stopped": runtime_value("app_icon_stopped", config.app_icon_stopped.clone()),
+    })
+}
+
+pub fn snapshot() -> serde_json::Value {
+    let config = crate::platform::interop::get_live_config();
+    serde_json::json!({"effective": visible_values(&config), "configured": configured_values(&config),
+        "temporary": RUNTIME_VALUES.read().map(|values| values.clone()).unwrap_or_default(),
+        "revision": crate::platform::interop::live_config_revision()})
+}
+
+pub fn configured_values(config: &AppConfig) -> serde_json::Value {
+    let stored = serde_json::to_value(config).unwrap_or_default();
+    serde_json::Value::Object(BRANDING_KEYS.iter()
+        .map(|key| ((*key).into(), stored[*key].clone())).collect())
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PlaybackIconState {
@@ -77,14 +181,12 @@ fn state_env(state: PlaybackIconState) -> &'static str {
 /// Resolve a state-specific runtime icon. A missing state falls back to the
 /// deployment's ordinary application icon, then the compiled Pealayer icon.
 pub fn resolved_icon_path(config: &AppConfig, state: PlaybackIconState) -> Option<PathBuf> {
-    non_empty_path(std::env::var_os(state_env(state)).map(PathBuf::from))
-        .or_else(|| {
-            non_empty_path(match state {
-                PlaybackIconState::Stopped => config.app_icon_stopped.clone(),
-                PlaybackIconState::Paused => config.app_icon_paused.clone(),
-                PlaybackIconState::Playing => config.app_icon_playing.clone(),
+    non_empty_path(match state {
+                PlaybackIconState::Stopped => runtime_value("app_icon_stopped", config.app_icon_stopped.clone()),
+                PlaybackIconState::Paused => runtime_value("app_icon_paused", config.app_icon_paused.clone()),
+                PlaybackIconState::Playing => runtime_value("app_icon_playing", config.app_icon_playing.clone()),
             })
-        })
+        .or_else(|| non_empty_path(std::env::var_os(state_env(state)).map(PathBuf::from)))
         .or_else(|| crate::config::resolved_app_icon(config))
 }
 
@@ -95,7 +197,7 @@ pub fn icon_bytes(config: &AppConfig, state: PlaybackIconState) -> Option<(PathB
     {
         return Some((path, bytes));
     }
-    let (name, bytes) = builtin_icon_bytes(config.app_icon_preset);
+    let (name, bytes) = builtin_icon_bytes(runtime_value("app_icon_preset", config.app_icon_preset));
     Some((PathBuf::from(name), bytes.to_vec()))
 }
 
@@ -222,7 +324,11 @@ pub fn sync_native_window_icon(ctx: &egui::Context, state: PlaybackIconState) {
         #[cfg(target_os = "windows")]
         crate::platform::taskbar_branding::apply(hwnd, source, &config, state);
         let _ = crate::platform::windows::update_system_tray_icon(
-            hwnd, &crate::config::resolved_app_name(&config),
+            hwnd, &{
+                let name = crate::config::resolved_app_name(&config);
+                let description = crate::config::resolved_app_description(&config);
+                if description.is_empty() { name } else { format!("{name}\n{description}") }
+            },
         );
     }
 }
@@ -255,7 +361,7 @@ pub(crate) fn apply_native_window_icon(ctx: &egui::Context, config: &AppConfig, 
 pub(crate) fn icon_source_signature(config: &AppConfig, state: PlaybackIconState) -> u64 {
     use std::hash::{Hash, Hasher};
     let mut hash = std::collections::hash_map::DefaultHasher::new();
-    format!("{:?}", config.app_icon_preset).hash(&mut hash);
+    format!("{:?}", runtime_value("app_icon_preset", config.app_icon_preset)).hash(&mut hash);
     let path = resolved_icon_path(config, state);
     path.hash(&mut hash);
     if let Some(path) = path && let Ok(metadata) = std::fs::metadata(path) {
@@ -268,6 +374,54 @@ pub(crate) fn icon_source_signature(config: &AppConfig, state: PlaybackIconState
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn branding_api_has_one_bounded_patch_schema_and_explicit_persistence() {
+        let temporary: BrandingUpdate = serde_json::from_value(serde_json::json!({
+            "values":{"app_name":"Screen A","app_description":"Live workspace","app_icon_preset":"classic"}
+        })).unwrap();
+        assert!(!temporary.persist);
+        temporary.validate().unwrap();
+        let persistent: BrandingUpdate = serde_json::from_value(serde_json::json!({
+            "values":{"app_name":null,"app_description":""},"persist":true
+        })).unwrap();
+        assert!(persistent.persist);
+        persistent.validate().unwrap();
+        for values in [serde_json::json!({}), serde_json::json!({"volume":5}),
+            serde_json::json!({"app_name":12}), serde_json::json!({"app_name":"bad\nname"}),
+            serde_json::json!({"app_description":"x".repeat(513)}), serde_json::json!({"app_icon_preset":"unknown"})] {
+            assert!(validate_branding_values(&values).is_err(), "{values}");
+        }
+        assert!(serde_json::from_value::<BrandingUpdate>(serde_json::json!({"values":{"app_name":"A"},"persist":"yes"})).is_err());
+        assert!(serde_json::from_value::<BrandingUpdate>(serde_json::json!({"values":{"app_name":"A"},"typo":true})).is_err());
+    }
+
+    #[test]
+    fn branding_rpc_and_native_commands_share_the_typed_request() {
+        let update = BrandingUpdate { values:serde_json::json!({"app_name":"Stage","app_description":"Preview"}), persist:false };
+        let command = crate::platform::interop::InteropCommand::UpdateBranding { update: update.clone() };
+        let serialized = serde_json::to_value(&command).unwrap();
+        assert_eq!(serialized["update"]["persist"], false);
+        assert_eq!(serde_json::from_value::<crate::platform::interop::InteropCommand>(serialized).unwrap(), command);
+        let rpc = crate::platform::interop::JsonRpcRequest { jsonrpc:Some("2.0".into()), id:serde_json::json!(1),
+            method:"pealayer.branding.update".into(), params:serde_json::to_value(update).unwrap() };
+        assert_eq!(crate::platform::interop::command_from_json_rpc(&rpc).unwrap(), Some(command));
+        let read = crate::platform::interop::JsonRpcRequest { method:"pealayer.branding.get".into(), params:serde_json::json!({}), ..rpc.clone() };
+        assert_eq!(crate::platform::interop::command_from_json_rpc(&read).unwrap(), Some(crate::platform::interop::InteropCommand::GetBranding));
+        let clear = crate::platform::interop::JsonRpcRequest { method:"pealayer.branding.clear".into(), ..read };
+        assert_eq!(crate::platform::interop::command_from_json_rpc(&clear).unwrap(), Some(crate::platform::interop::InteropCommand::ClearBranding));
+    }
+
+    #[test]
+    fn branding_projection_contains_only_branding_not_session_or_hardware() {
+        let config = AppConfig { app_name:Some("Stage".into()), app_description:Some("Preview".into()), ..AppConfig::default() };
+        let values = configured_values(&config);
+        validate_branding_values(&values).unwrap();
+        assert_eq!(values.as_object().unwrap().len(), BRANDING_KEYS.len());
+        assert!(values.get("volume").is_none());
+        assert!(values.get("hardware_endpoint").is_none());
+        assert_eq!(values["app_name"], "Stage");
+    }
 
     #[test]
     fn unrelated_settings_do_not_force_icon_decoding() {

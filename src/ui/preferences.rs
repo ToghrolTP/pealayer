@@ -24,7 +24,15 @@ const REPLACEMENT_ROW_MIN_WIDTH: f32 = REPLACEMENT_ARROW_WIDTH
 
 pub(crate) struct NativePreferencesController {
     child: std::process::Child,
-    navigation: std::sync::mpsc::SyncSender<PreferencesNavigation>,
+    navigation: std::sync::mpsc::SyncSender<PreferencesHelperMessage>,
+    branding_revision: Option<u64>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum PreferencesHelperMessage {
+    Navigate { navigation: PreferencesNavigation },
+    Branding { effective: serde_json::Value, configured: serde_json::Value },
 }
 
 #[derive(Clone)]
@@ -130,6 +138,18 @@ impl PreferencesDraft {
         }
     }
 
+    pub(crate) fn sync_external_branding(&mut self, values: &serde_json::Value) {
+        let Ok(source) = AppConfig::default().apply_patch(values) else { return; };
+        for target in [&mut self.config, &mut self.saved_config, &mut self.previewed_config] {
+            // Do not validate unrelated in-progress fields: a partial draft
+            // must not prevent a committed branding update reaching this UI.
+            macro_rules! copy {
+                ($($field:ident),*) => { $(if values.get(stringify!($field)).is_some() { target.$field = source.$field.clone(); })* };
+            }
+            copy!(app_name, app_description, app_icon, app_icon_preset, app_icon_playing, app_icon_paused, app_icon_stopped);
+        }
+    }
+
     fn from_live_config() -> Self {
         Self::new(
             crate::platform::interop::get_live_config(),
@@ -154,9 +174,9 @@ impl NativePreferencesController {
             .spawn()
             .map_err(|error| format!("open native Preferences window: {error}"))?;
         let mut input = child.stdin.take().expect("piped Preferences input");
-        let (navigation, requests) = std::sync::mpsc::sync_channel::<PreferencesNavigation>(8);
+        let (navigation, requests) = std::sync::mpsc::sync_channel::<PreferencesHelperMessage>(8);
         // Never block the UI on the child or a full OS pipe. Only typed,
-        // bounded navigation requests travel here, not arbitrary commands.
+        // bounded navigation/branding messages travel here, not commands.
         if let Err(error) = std::thread::Builder::new().name("preferences-navigation".into()).spawn(move || {
             use std::io::Write;
             for request in requests {
@@ -193,7 +213,7 @@ impl NativePreferencesController {
         }
         #[cfg(not(target_os = "windows"))]
         let _ = ctx;
-        Ok(Self { child, navigation })
+        Ok(Self { child, navigation, branding_revision: None })
     }
 
     fn is_open(&mut self) -> bool {
@@ -227,20 +247,26 @@ pub(crate) fn navigate(app: &mut PealayerApp, ctx: &egui::Context, navigation: P
     app.preferences_draft.as_mut().unwrap().pending_navigation = Some(navigation);
 }
 
-fn receive_navigation(ctx: egui::Context) -> std::sync::mpsc::Receiver<PreferencesNavigation> {
+fn receive_navigation(ctx: egui::Context) -> std::sync::mpsc::Receiver<PreferencesHelperMessage> {
     let (sender, receiver) = std::sync::mpsc::sync_channel(8);
     std::thread::spawn(move || {
         use std::io::{BufRead, Read};
         let input = std::io::stdin();
         let mut input = input.lock();
         loop {
-            // The parent sends < 256-byte records. Bound manual helper input too.
+            // Navigation and branding are bounded typed records, never commands
+            // or arbitrary config. Artwork travels as a path, not image bytes.
             let mut bytes = Vec::new();
-            let mut bounded = (&mut input).take(4097);
+            let mut bounded = (&mut input).take(65537);
             if bounded.read_until(b'\n', &mut bytes).ok().filter(|n| *n > 0).is_none() { break; }
-            if bytes.len() > 4096 { break; }
-            let Ok(request) = serde_json::from_slice::<PreferencesNavigation>(&bytes) else { continue; };
-            if request.validate().is_ok() {
+            if bytes.len() > 65536 { break; }
+            let Ok(request) = serde_json::from_slice::<PreferencesHelperMessage>(&bytes) else { continue; };
+            let valid = match &request {
+                PreferencesHelperMessage::Navigate { navigation } => navigation.validate(),
+                PreferencesHelperMessage::Branding { effective, configured } =>
+                    crate::branding::validate_branding_values(effective).and_then(|()| crate::branding::validate_branding_values(configured)),
+            };
+            if valid.is_ok() {
                 if sender.send(request).is_err() { break; }
                 ctx.request_repaint();
             }
@@ -304,7 +330,7 @@ struct StandalonePreferencesApp {
     config_watcher: Option<crate::config::ConfigFileWatcher>,
     config_reload_due: Option<std::time::Instant>,
     branding_config: Option<AppConfig>,
-    navigation: std::sync::mpsc::Receiver<PreferencesNavigation>,
+    navigation: std::sync::mpsc::Receiver<PreferencesHelperMessage>,
 }
 
 impl StandalonePreferencesApp {
@@ -466,9 +492,19 @@ impl eframe::App for StandalonePreferencesApp {
             self.native_window_initialized = true;
         }
 
+        for request in self.navigation.try_iter().take(8) {
+            match request {
+                PreferencesHelperMessage::Navigate { navigation } => self.draft.pending_navigation = Some(navigation),
+                PreferencesHelperMessage::Branding { effective, configured } => {
+                    if crate::branding::set_runtime_values(&effective).is_ok() {
+                        self.draft.sync_external_branding(&configured);
+                        self.branding_config = None;
+                    }
+                }
+            }
+        }
         self.apply_appearance(ui.ctx());
         self.watch_external_config(ui.ctx());
-        for request in self.navigation.try_iter().take(8) { self.draft.pending_navigation = Some(request); }
         let close_requested = ui.ctx().input(|input| input.viewport().close_requested());
         if close_requested && self.draft.is_dirty() {
             ui.ctx()
@@ -603,8 +639,22 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             .is_some_and(NativePreferencesController::is_open)
         {
             if let Some(request) = app.preferences_draft.as_mut().and_then(|draft| draft.pending_navigation.take()) {
-                if let Err(error) = app.native_preferences.as_ref().unwrap().navigation.try_send(request) {
+                if let Err(error) = app.native_preferences.as_ref().unwrap().navigation.try_send(PreferencesHelperMessage::Navigate { navigation: request }) {
                     app.config_status = format!("Preferences navigation not delivered: {error}");
+                }
+            }
+            let controller = app.native_preferences.as_mut().unwrap();
+            let revision = crate::platform::interop::live_config_revision();
+            if controller.branding_revision != Some(revision) {
+                let config = crate::platform::interop::get_live_config();
+                let message = PreferencesHelperMessage::Branding {
+                    effective: crate::branding::visible_values(&config),
+                    configured: crate::branding::configured_values(&config),
+                };
+                match controller.navigation.try_send(message) {
+                    Ok(()) => controller.branding_revision = Some(revision),
+                    Err(std::sync::mpsc::TrySendError::Full(_)) => ui.ctx().request_repaint_after(std::time::Duration::from_millis(20)),
+                    Err(_) => {},
                 }
             }
             return;
@@ -2119,7 +2169,7 @@ mod tests {
         let mut command = std::process::Command::new("true");
         let mut child = command.spawn().unwrap();
         child.wait().unwrap();
-        let mut controller = Some(NativePreferencesController { child, navigation: std::sync::mpsc::sync_channel(1).0 });
+        let mut controller = Some(NativePreferencesController { child, navigation: std::sync::mpsc::sync_channel(1).0, branding_revision: None });
         assert!(reap_exited_controller(&mut controller));
         assert!(controller.is_none());
         assert!(!reap_exited_controller(&mut controller));
@@ -2209,6 +2259,28 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn external_branding_updates_do_not_save_or_discard_other_draft_fields() {
+        let mut draft = PreferencesDraft::new(AppConfig::default(), 0);
+        draft.config.volume = 17.0;
+        let saved_volume = draft.saved_config.volume;
+        let values = serde_json::json!({"app_name":"Stage","app_description":"Preview","app_icon_preset":"classic"});
+        draft.sync_external_branding(&values);
+        for config in [&draft.config, &draft.saved_config, &draft.previewed_config] {
+            assert_eq!(config.app_name.as_deref(), Some("Stage"));
+            assert_eq!(config.app_description.as_deref(), Some("Preview"));
+            assert_eq!(config.app_icon_preset, crate::config::AppIconPreset::Classic);
+        }
+        assert_eq!(draft.config.volume, 17.0);
+        assert_eq!(draft.saved_config.volume, saved_volume);
+        assert!(draft.is_dirty());
+        let message = PreferencesHelperMessage::Branding {
+            effective: crate::branding::configured_values(&draft.config),
+            configured: crate::branding::configured_values(&draft.saved_config),
+        };
+        assert!(matches!(serde_json::from_slice::<PreferencesHelperMessage>(&serde_json::to_vec(&message).unwrap()).unwrap(), PreferencesHelperMessage::Branding { .. }));
     }
 
     #[test]
