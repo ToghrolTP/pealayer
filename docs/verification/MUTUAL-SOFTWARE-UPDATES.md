@@ -53,6 +53,14 @@ API Quit when its historical-result bug blocked another update; the final
 measured transaction then exercised the fixed API path without a manual
 replacement during that acceptance run.
 
+Final cleanup also found retained full-size controller helper executables.
+Terminal cleanup is now bounded and exact-path fenced, preserves small journals,
+and refuses prepared/unrelated transactions. Complete artifact/RPC package tests
+passed after this cleanup follow-up. Closing the isolated processes succeeded
+through their APIs. Tool policy denied deletion of their generated executables;
+the operator was given a narrowly scoped cleanup script. No alternate deletion
+path was used to bypass that denial.
+
 ## Preservation and coordination
 
 All unrelated controller desktop work remains in its owner's working tree.
