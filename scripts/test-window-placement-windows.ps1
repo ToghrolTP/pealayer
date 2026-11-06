@@ -136,6 +136,11 @@ try {
             'Branding API: temporary overlay survives autosave without leaking; selective persistence and reset passed'
         }
         if($TestBranding -and $pass -eq 1){
+            # The API reset above can still have a coalesced Explorer refresh
+            # pending. Establish this phase's baseline only after it finishes.
+            $deadline=[DateTime]::UtcNow.AddSeconds(5)
+            do {$diagnostic=Invoke-RestMethod "http://127.0.0.1:$Port/api/player/taskbar-preview";if(!$diagnostic.branding.refresh_pending){break};Start-Sleep -Milliseconds 80}while([DateTime]::UtcNow -lt $deadline)
+            if($diagnostic.branding.refresh_pending -or $diagnostic.branding.error){throw 'Previous branding phase did not settle.'}
             $artworkBox=$null
             $artworkPass=0
             $previousIcon=$diagnostic.branding.icon

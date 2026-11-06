@@ -35,10 +35,10 @@ group. Pointer-up/cancel, blur and keyboard input clear the pointer guard.
   elapsed tests now pass, including this rendered regression. The first run
   exposed the centered-galley origin mismatch; correcting it made all cases pass.
 - Browser pointer interaction and installed-native acceptance remain pending.
-  A combined build and isolated native verification are now in progress.
+  The [combined release](branding-api-delivery.md) is now installed locally;
+  this does not substitute for an installed pointer walkthrough.
 - The previously completed taskbar-artwork package does not contain this later
   source change. Cafe deployment remains user-deferred while offline.
 
-Continuation: include this source in the next combined build, run
-`ui::controls::tests::elapsed_` with an isolated configuration, verify native and
-Web pointer interactions, then deploy through the normal guarded updater.
+Continuation: verify native and Web pointer interactions on the delivered build;
+the isolated native rendered regression and guarded local deployment are complete.

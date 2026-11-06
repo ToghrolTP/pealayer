@@ -36,11 +36,12 @@ required checks are not passed while the user's test/CI skip remains in effect.
   temporary branding, selected fields persist, open Preferences follows events,
   and Web runtime metadata refreshes. [Elapsed pointer selection](elapsed-pointer-selection.md)
   and [centered ruler labels](timeline-ruler-labels.md) now pass their native
-  rendered regressions too. Combined release packaging and guarded canonical
-  installation are pending; Cafe remains user-deferred. One native-minimize
-  fixture timeout was not reproduced by a fresh three-launch recheck; retain
-  the failure diagnostics and rerun against the release, rather than calling
-  the first run a pass.
+  rendered regressions too. [Combined release and guarded canonical installation](branding-api-delivery.md)
+  are verified, including four actual displayed taskbar-artwork transitions on
+  the installed app. Cafe remains user-deferred. One debug native-minimize
+  fixture timeout was not reproduced by a fresh three-launch debug recheck or
+  the exact release; retain its failure diagnostics instead of calling the
+  original run a pass. Human Win+Tab and native/Web pointer walkthrough remain.
 
 - [Hardware connection hints](hardware-connection-hint.md) replace raw nested
   diagnostics with plain-language card copy and an opt-in circled information

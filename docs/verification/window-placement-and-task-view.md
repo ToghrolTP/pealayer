@@ -1,5 +1,10 @@
 # Window restoration, live taskbar branding and Task View
 
+The latest [combined release receipt](branding-api-delivery.md) supersedes the
+old installed-candidate section below. It records canonical installation and
+four independent displayed-artwork transitions, while retaining human Task View
+and sustained-rendering acceptance gates.
+
 ## The reproducible tiny-window cause
 
 The first fixes recovered a tiny window by maximizing it. That did not correct

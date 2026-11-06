@@ -22,7 +22,6 @@ the sticky ruler remain intact.
 - Added a native painted-label regression for short, minute and hour timestamps,
   fractional tick positions and 1×–2× scales, including edge omission without
   reanchoring. It now compiles and passes in the combined native test build.
-- Native/Web live visual verification and guarded deployment remain queued for
-  the next combined build, along with the elapsed-segment selection correction.
-  No running application was replaced or restarted. Cafe deployment remains
-  user-deferred while offline.
+- The [combined release](branding-api-delivery.md), including elapsed selection,
+  is installed locally through the guarded updater. Native/Web live visual
+  walkthrough remains separate; Cafe deployment is user-deferred while offline.
