@@ -12,24 +12,28 @@ statements are not the present product state.
 
 [Measured cross-transport acceptance](window-media-control-results.md) records
 the complete eight-transport Windows fixture and final-source native tests.
-The verified candidate is running in the isolated current Dock comparison.
-The regular installation is still gated by an unknown Preferences draft; Cafe
-deployment remains user-deferred. Keep those boundaries separate from API/runtime
-acceptance and retain the October 10 comparison until the user requests removal.
+The verified candidate is installed in the regular app and running in the
+isolated current Dock comparison; see the [installed checkpoint](fullscreen-frame-publication.md#installed-checkpoint).
+Both authoring endpoints report clean. Cafe deployment remains user-deferred.
+Keep runtime acceptance separate from all platform/physical gates, and retain
+the October 10 comparison until the user requests removal.
 
 ## Preferences wheel responsiveness
 
 [Native scroll performance](preferences-scroll-performance.md) records the
 removed per-frame locale, default-document and filesystem work and real editor
-wheel regressions. Keep measured renderer improvement separate from installed
-mouse-wheel acceptance; the regular Preferences draft still gates replacement.
+wheel regressions. The fix is now installed in both current apps. Keep measured
+renderer improvement separate from human native mouse-wheel acceptance, which
+remains open.
 
 ## Intermittent fullscreen black flashes
 
 [GPU frame publication](fullscreen-frame-publication.md) records the confirmed
 clear-before-render failure path and a passing real OpenGL injected-failure test.
-Keep the last valid frame until replacement succeeds. Installed long-playback
-acceptance is still open; the exact trigger of the user's report is unconfirmed.
+Keep the last valid frame until replacement succeeds. The package is installed
+and its paused first frame published without render/update failures. Installed
+long-playback acceptance is still open; the exact trigger of the user's report
+is unconfirmed.
 
 ## Fresh audit: 13 October 2026
 

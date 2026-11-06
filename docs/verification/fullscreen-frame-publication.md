@@ -104,7 +104,43 @@ editors during deployment.
   proceed despite that older-build stale flag was requested, not assumed.
 
 Private final-test, GPU and optimized-build logs remain under the canonical
-program root's `verification` directory. The normal apps are still running
-their previous executables; no movie playback, board output or historical
-comparison was changed to obtain this candidate evidence. Packaging, graceful
-installation and sustained fullscreen movie acceptance remain open.
+program root's `verification` directory. No movie playback, board output or
+historical comparison was changed to obtain the candidate evidence.
+
+## Installed checkpoint
+
+The user explicitly approved proceeding despite the older builds' stale helper
+flag. A fresh pre-install inspection again found only that flag unknown; every
+other editor/operation was clean, and no Preferences helper child remained for
+either current app. The current Dock comparison closed through `quit_local`
+before reusing its package directory. The retained historical app was untouched.
+
+- Clean package source: `0f573a2082ef98e7eff75e94f19d097edd1d274f`.
+- Packaged/installed executable SHA-256:
+  `8b5ff034ce954787f38e195ded5d04c6b507be6731a6676304954f8c68903e2c`.
+  This supersedes the raw build-cache digest above; packaging embeds its own
+  clean source identity and freshly compiled Web assets.
+- Packaging passed Web compilation/PWA integrity, Windows resources, seven
+  distinct Jump List icon resources, standalone utility identity/smoke and
+  native libmpv smoke. It reused the previously verified native suite rather
+  than rerunning it. The final optimized application build took 5m 34s.
+- Existing host runtime retained, SHA-256:
+  `e56ce67cd00f06a59dc7ed5b97a49a9182a381554c755dc4570a52af1ef30e65`.
+- The canonical app restarted through its peer updater. Fresh local status
+  reported the exact package digest and source, a responsive native window,
+  loaded media and the unchanged paused position/duration. No Play command or
+  output actuation was sent. Bounds were nonzero and normal, not minimized.
+- The current isolated egui Dock comparison was relaunched with the same
+  package; no media loaded. Both local authoring endpoints now report `clean`,
+  including the Preferences helper item.
+- Initial installed GPU diagnostics: one actual video render, 74 unchanged-frame
+  reuses, one target resize, zero render/update failures. This is paused-start
+  evidence, not a sustained playback measurement.
+- Historical executable SHA-256 remains
+  `e76b61a657fe4ba604c42724ac164632ec1e51689cf7be22005cabdbaf32c345`;
+  its root and Preferences helper remain running.
+
+This installs the stacked window/media automation and Preferences scroll fixes
+as well. Long fullscreen playback (including OSD, seeks and taskbar hover) and
+human native mouse-wheel smoothness remain open. Cafe deployment remains
+user-deferred until its normal connection returns.
