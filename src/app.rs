@@ -507,6 +507,8 @@ pub struct RttState {
     pub texture_width: u32,
     pub texture_height: u32,
     pub has_rendered_frame: bool,
+    pub(crate) render_target: Option<crate::mpv::render::VideoRenderTarget>,
+    pub(crate) consecutive_render_failures: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -7397,7 +7399,7 @@ impl PealayerApp {
             ("effect_group",self.effect_group_draft.is_some()),
             ("channel_properties",self.hardware_control_dialog_key.is_some()),
             ("hardware_binding",self.hardware_binding_draft.is_some()),
-            ("preferences_helper",self.native_preferences.is_some()),
+            ("preferences_helper",self.native_preferences.as_ref().is_some_and(|helper| !helper.confirmed_exited())),
         ] {items.push(Item {domain:domain.into(),state:if open {State::Unknown} else {State::Clean}});}
         for (domain,busy) in [
             ("effect_publish",self.hardware_effect_authoring.pending_operation.is_some() || self.hardware_effect_authoring.pending_saved_macro_id.is_some()),
@@ -10070,6 +10072,8 @@ impl Default for PealayerApp {
                 texture_width: 1920,
                 texture_height: 1080,
                 has_rendered_frame: false,
+                render_target: None,
+                consecutive_render_failures: 0,
             })),
             current_video_path: None,
             show_remaining_time: false,
