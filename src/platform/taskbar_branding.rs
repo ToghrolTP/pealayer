@@ -11,8 +11,59 @@ const ICON: PROPERTYKEY = PROPERTYKEY { fmtid: MODEL, pid: 3 };
 const NAME: PROPERTYKEY = PROPERTYKEY { fmtid: MODEL, pid: 4 };
 const ID: PROPERTYKEY = PROPERTYKEY { fmtid: MODEL, pid: 5 };
 #[derive(Default)]
-struct Applied { stamp: Option<(isize, u64, String)>, icon: String, shortcuts_updated: u64, refreshes: u64, error: Option<String> }
-static APPLIED: Mutex<Applied> = Mutex::new(Applied { stamp: None, icon: String::new(), shortcuts_updated: 0, refreshes: 0, error: None });
+struct Applied { stamp: Option<(isize, u64, String)>, icon: String, shortcuts_updated: u64, refreshes: u64, refresh_pending: bool, detached: bool, error: Option<String> }
+static APPLIED: Mutex<Applied> = Mutex::new(Applied { stamp: None, icon: String::new(), shortcuts_updated: 0, refreshes: 0, refresh_pending: false, detached: false, error: None });
+const REFRESH_TIMER: usize = 0x5042_5249;
+
+// WM_SETICON/property notifications are asynchronous in Explorer. Re-registering
+// in the same UI turn lets its taskbar group reuse the preceding artwork. A
+// single HWND-owned timer allows those notifications to settle, coalesces rapid
+// changes, and works even when paused/minimized without egui painting or polling.
+fn schedule_refresh(hwnd: HWND) -> Result<(), String> {
+    let timer = unsafe { windows::Win32::UI::WindowsAndMessaging::SetTimer(Some(hwnd), REFRESH_TIMER, 200, Some(refresh_timer)) };
+    if timer == 0 { return Err(windows::core::Error::from_thread().to_string()); }
+    Ok(())
+}
+unsafe extern "system" fn refresh_timer(hwnd: HWND, _message: u32, id: usize, _time: u32) {
+    use windows::Win32::UI::WindowsAndMessaging::KillTimer;
+    if id != REFRESH_TIMER { return; }
+    let _ = unsafe { KillTimer(Some(hwnd), REFRESH_TIMER) };
+    let detached = APPLIED.lock().ok().and_then(|value| (value.refresh_pending && value.stamp.as_ref().is_some_and(|stamp| stamp.0 == hwnd.0 as isize)).then_some(value.detached));
+    let Some(detached) = detached else { return; };
+    let initialized = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }.is_ok();
+    let mut deferred_error = None;
+    if !detached {
+        // Schedule restoration BEFORE removing anything. Keep the shell's
+        // remove/add operations in separate turns so it cannot coalesce them.
+        let timer = unsafe { windows::Win32::UI::WindowsAndMessaging::SetTimer(Some(hwnd), REFRESH_TIMER, 100, Some(refresh_timer)) };
+        if timer != 0 {
+            match crate::platform::windows::detach_taskbar_application_icon(hwnd.0 as isize) {
+                Ok(()) => {
+                    if let Ok(mut applied) = APPLIED.lock() { applied.detached = true; }
+                    if initialized { unsafe { CoUninitialize(); } }
+                    return;
+                }
+                Err(error) => deferred_error = Some(error),
+            }
+            let _ = unsafe { KillTimer(Some(hwnd), REFRESH_TIMER) };
+        } else {
+            deferred_error = Some(windows::core::Error::from_thread().to_string());
+        }
+        // Scheduling/removal failure must not leave the application's button
+        // missing: run the existing Add/retry/toolbar recovery immediately.
+    }
+    let result = crate::platform::windows::refresh_taskbar_application_icon(hwnd.0 as isize)
+        .and_then(|()| deferred_error.map_or(Ok(()), Err));
+    if initialized { unsafe { CoUninitialize(); } }
+    if let Ok(mut applied) = APPLIED.lock() {
+        applied.refresh_pending = false;
+        applied.detached = false;
+        match result {
+            Ok(()) => { applied.refreshes += 1; applied.error = None; }
+            Err(error) => { log::warn!("Refresh displayed taskbar artwork: {error}"); applied.error = Some(error); }
+        }
+    }
+}
 
 pub fn app_id() -> String {
     let mut id = "Pealayer.Desktop".to_owned();
@@ -71,13 +122,14 @@ pub fn clear_window(hwnd: isize) {
     // Window properties are not shortcut properties: release only this HWND's
     // values when it is destroyed, never its saved launcher's branding.
     unsafe {
+        let _ = windows::Win32::UI::WindowsAndMessaging::KillTimer(Some(HWND(hwnd as *mut _)), REFRESH_TIMER);
         if let Ok(store) = SHGetPropertyStoreForWindow::<IPropertyStore>(HWND(hwnd as *mut _)) {
             for key in [COMMAND, ICON, NAME, ID] { let _ = store.SetValue(&key, &PROPVARIANT::default()); }
             let _ = store.Commit();
         }
     }
     if let Ok(mut applied) = APPLIED.lock()
-        && applied.stamp.as_ref().is_some_and(|stamp| stamp.0 == hwnd) { applied.stamp = None; }
+        && applied.stamp.as_ref().is_some_and(|stamp| stamp.0 == hwnd) { applied.stamp = None; applied.refresh_pending = false; applied.detached = false; }
 }
 fn same_executable(left: &Path, right: &Path) -> bool {
     let normalize = |path: &Path| path.to_string_lossy().trim_start_matches(r"\\?\").replace('/', "\\").to_ascii_lowercase();
@@ -143,7 +195,7 @@ pub fn apply(hwnd: isize, source: u64, config: &crate::config::AppConfig, state:
             }
             let changed=unsafe { set_window_properties(HWND(hwnd as *mut _), &icon, &name, &executable)? };
             if changed {
-                crate::platform::windows::refresh_taskbar_application_icon(hwnd)
+                schedule_refresh(HWND(hwnd as *mut _))
                     .map_err(|error| windows::core::Error::new(windows::core::HRESULT(0x80004005u32 as i32),error))?;
             }
             Ok((updated,changed))
@@ -158,7 +210,7 @@ pub fn apply(hwnd: isize, source: u64, config: &crate::config::AppConfig, state:
                 applied.stamp = Some(stamp);
                 applied.icon = icon.file_name().unwrap_or_default().to_string_lossy().into_owned();
                 applied.shortcuts_updated += updated;
-                applied.refreshes += u64::from(changed);
+                applied.refresh_pending |= changed;
                 applied.error = None;
             }
             Err(error) => { log::warn!("Refresh taskbar application branding: {error}"); applied.error = Some(error); }
@@ -167,7 +219,7 @@ pub fn apply(hwnd: isize, source: u64, config: &crate::config::AppConfig, state:
 }
 pub fn diagnostics() -> serde_json::Value {
     APPLIED.lock().map(|value| serde_json::json!({"applied":value.stamp.is_some(),
-        "icon":value.icon,"app_id":app_id(),"refreshes":value.refreshes,"pinned_shortcuts_updated":value.shortcuts_updated,"error":value.error})).unwrap_or_default()
+        "icon":value.icon,"app_id":app_id(),"refreshes":value.refreshes,"refresh_pending":value.refresh_pending,"pinned_shortcuts_updated":value.shortcuts_updated,"error":value.error})).unwrap_or_default()
 }
 
 #[cfg(test)]

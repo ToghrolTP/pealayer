@@ -71,7 +71,61 @@ restart, global cache flush, synthetic new identity or pin/unpin operation is
 performed. Unrelated settings do not rebuild membership. The fixture exercises
 Classic → Modern → Classic → Modern through the configuration API and checks
 resource changes, stable identity, refresh counts and retained toolbar state.
-Actual icon appearance still requires the requested Windows-shell check.
+The user rejected this candidate's actual icon appearance. A read-only native
+capture reproduced the missed gate: Classic was in both `WM_GETICON` slots while
+the visible taskbar still displayed Modern. The metadata and toolbar tests had
+passed, but did not establish shell artwork acceptance.
+
+### Icon notification ordering follow-up
+
+The old order published relaunch properties and re-registered membership before
+installing the new owned HICONs. Explorer could retain the preceding artwork.
+Installing both window icons first is necessary but, experimentally, not
+sufficient: re-registering in the same UI turn also left stale taskbar artwork.
+A separate probe that re-registered after Explorer had processed those changes
+made the actual displayed Classic icon appear; the reverse transition also
+worked, without restarting Explorer or flushing its global cache.
+
+The refresh now installs HWND icons first, publishes relaunch metadata, then uses
+a single HWND-owned timer to coalesce changes for 200 ms, remove the shell button
+and restore it 100 ms later. A same-turn remove/add was experimentally unreliable
+even after the first delay; Explorer could combine the operations and keep the
+old artwork on a later repeat. Restoration is scheduled before removal, and a
+scheduling/removal failure attempts immediate Add/toolbar recovery while reporting
+the failure. The actual window is never hidden or activated. The timer is killed
+before handling it and on window destruction; no worker, recurring poll, forced
+repaint or focus/size change is added. Diagnostics distinguish pending and
+completed refreshes. Existing media-toolbar recovery is retained. This is an
+observed asynchronous shell cache
+ordering issue, not evidence that a successful property-store call refreshes the
+visible button.
+
+`-TestDisplayedBranding` extends the native fixture with a read-only primary
+taskbar capture. It matches the first Classic icon and holds that exact slot
+through Modern → Classic → Modern, rejecting the alternate artwork at the same
+position. Only icon-sized crops are saved; the notification area is excluded.
+An unavailable/hidden/vertical taskbar or mismatched image fails rather than
+being counted as acceptance. Keep other Pealayer taskbar icons on Modern while
+running this isolated Classic-first fixture, to avoid ambiguous initial matches.
+The old candidate fails this visual check despite passing its API assertions.
+
+The updated debug fixture passed all four displayed transitions in the same
+taskbar slot. Classic matching error was 19.24 versus 53.08 for Modern; Modern
+was 25.28 versus 56.65 for Classic (per-channel pixel RMSE). The threshold allows
+Explorer's size-tuned ICO frame versus a resampled master but requires clear
+separation from the alternate design. These are actual taskbar crops from that
+isolated build, not reconstructed icon previews:
+
+| Classic selected | Modern selected |
+| --- | --- |
+| ![Classic displayed in taskbar](../screenshots/taskbar-classic-live.png) | ![Modern displayed in taskbar](../screenshots/taskbar-modern-live.png) |
+
+The same run retained media-toolbar registration, three normal-size restarts,
+full UI composites and cached minimized previews. Installed-build verification
+is a separate gate, recorded after packaging and graceful deployment.
+The focused native branding, shortcut/cache, HICON ownership/alpha and placement
+unit run passed 17 tests. No Web contract or video render path changed in this
+slice; the earlier broad-suite evidence remains historical, not a claimed rerun.
 
 ## Minimized Task View
 
@@ -109,9 +163,9 @@ References: [live-preview bitmap contract](https://learn.microsoft.com/en-us/win
 [taskbar membership](https://learn.microsoft.com/en-us/windows/win32/api/shobjidl_core/nf-shobjidl_core-itaskbarlist-addtab),
 [relaunch artwork](https://learn.microsoft.com/en-us/windows/win32/properties/props-system-appusermodel-relaunchiconresource).
 
-## Installed completion checkpoint
+## Previous installed candidate (dynamic artwork rejected)
 
-The final canonical update acknowledged clean source
+The previous canonical update acknowledged clean source
 `afb5761b791fb93ee8925538dda0d727089b6da6`, executable SHA-256
 `efd474f2fd873174a17511343f5fd6f82fcc18ff75f0fe8d15661c6c4cd53231`.
 The existing host libmpv remains

@@ -2419,9 +2419,9 @@ pub fn shell_command_diagnostics() -> serde_json::Value {
     })
 }
 
-/// Explorer caches a running group's relaunch icon. Re-create only our taskbar
-/// membership after an actual artwork change, then restore its existing media
-/// toolbar immediately. This never hides, activates, restores or resizes the HWND.
+/// Complete a branding refresh by adding our taskbar membership and restoring
+/// its media toolbar. Removal happens in a separate shell turn. This never
+/// hides, activates, restores or resizes the actual application HWND.
 #[cfg(target_os = "windows")]
 pub(crate) fn refresh_taskbar_application_icon(hwnd_raw: isize) -> Result<(),String> {
     use windows::Win32::{Foundation::HWND,System::Com::{CoCreateInstance,CLSCTX_INPROC_SERVER},UI::Shell::{ITaskbarList3,TaskbarList}};
@@ -2429,13 +2429,25 @@ pub(crate) fn refresh_taskbar_application_icon(hwnd_raw: isize) -> Result<(),Str
     unsafe {
         let taskbar: ITaskbarList3=CoCreateInstance(&TaskbarList,None,CLSCTX_INPROC_SERVER).map_err(|error|error.to_string())?;
         taskbar.HrInit().map_err(|error|error.to_string())?;
-        taskbar.DeleteTab(hwnd).map_err(|error|error.to_string())?;
         // Always attempt to restore membership before returning any failure.
         taskbar.AddTab(hwnd).or_else(|_|taskbar.AddTab(hwnd)).map_err(|error|error.to_string())?;
     }
     THUMBNAIL_TOOLBAR_ADDED_HWND.store(0,Ordering::Release);
     init_taskbar_thumbnail_toolbar(hwnd_raw,SHELL_PAUSED.load(Ordering::Relaxed),SHELL_MUTED.load(Ordering::Relaxed),
         SHELL_FULLSCREEN.load(Ordering::Relaxed),SHELL_HAS_MEDIA.load(Ordering::Relaxed),THUMBNAIL_TOOLBAR_ENABLED.load(Ordering::Relaxed))
+}
+
+/// Remove only our shell button. The HWND-owned branding timer restores it in
+/// a separate shell turn; immediate DeleteTab/AddTab can be coalesced by Explorer
+/// and retain a previous group image. Never hide or activate the actual window.
+#[cfg(target_os = "windows")]
+pub(crate) fn detach_taskbar_application_icon(hwnd_raw: isize) -> Result<(),String> {
+    use windows::Win32::{Foundation::HWND,System::Com::{CoCreateInstance,CLSCTX_INPROC_SERVER},UI::Shell::{ITaskbarList3,TaskbarList}};
+    unsafe {
+        let taskbar: ITaskbarList3=CoCreateInstance(&TaskbarList,None,CLSCTX_INPROC_SERVER).map_err(|error|error.to_string())?;
+        taskbar.HrInit().map_err(|error|error.to_string())?;
+        taskbar.DeleteTab(HWND(hwnd_raw as *mut _)).map_err(|error|error.to_string())
+    }
 }
 
 pub fn take_shell_reinitialize_request() -> bool {

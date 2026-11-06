@@ -6,9 +6,13 @@ param(
     [int]$Port=18090,
     [switch]$ObserveOnly,
     [switch]$TestFullPreview,
-    [switch]$TestBranding
+    [switch]$TestBranding,
+    # Requires a visible primary Windows taskbar. Only matching icon crops are
+    # retained; no desktop input or private production media is captured.
+    [switch]$TestDisplayedBranding
 )
 $ErrorActionPreference='Stop'
+if($TestDisplayedBranding){$TestBranding=$true;. (Join-Path $PSScriptRoot 'taskbar-artwork-fixture.ps1')}
 try { $null=Invoke-RestMethod "http://127.0.0.1:$Port/api/process/authoring" -TimeoutSec 1; throw 'The fixture port is already owned; refusing to touch that process.' }
 catch { if ($_.Exception.Message -like '*already owned*') {throw} }
 $fixtureDirectory=Join-Path $OutputDirectory ('window-placement-'+[guid]::NewGuid().ToString('N'))
@@ -75,18 +79,35 @@ try {
         "Launch $pass client: $width x $height logical points"
         if(!$ObserveOnly -and ([Math]::Abs($width-900) -gt 3 -or [Math]::Abs($height-650) -gt 3)){throw 'Saved normal placement did not survive restart.'}
         if($TestBranding -and $pass -eq 1){
+            $artworkBox=$null
+            $artworkPass=0
             $previousIcon=$diagnostic.branding.icon
             $identity=$diagnostic.branding.app_id
             $refreshes=$diagnostic.branding.refreshes
             foreach($preset in 'classic','current','classic','current'){
                 $null=Invoke-RestMethod "http://127.0.0.1:$Port/api/config" -Method Post -ContentType application/json -Body (@{app_icon_preset=$preset}|ConvertTo-Json)
                 $deadline=[DateTime]::UtcNow.AddSeconds(5)
-                do {$diagnostic=Invoke-RestMethod "http://127.0.0.1:$Port/api/player/taskbar-preview";if($diagnostic.branding.icon -ne $previousIcon){break};Start-Sleep -Milliseconds 100}while([DateTime]::UtcNow -lt $deadline)
+                do {$diagnostic=Invoke-RestMethod "http://127.0.0.1:$Port/api/player/taskbar-preview";if($diagnostic.branding.icon -ne $previousIcon -and !$diagnostic.branding.refresh_pending -and !$diagnostic.shell_commands.thumbnail_toolbar.last_error -and $diagnostic.shell_commands.thumbnail_toolbar.added_hwnd -eq $handle.ToInt64()){break};Start-Sleep -Milliseconds 100}while([DateTime]::UtcNow -lt $deadline)
                 if($diagnostic.branding.icon -eq $previousIcon -or $diagnostic.branding.error){throw 'Live icon change failed.'}
                 if($diagnostic.branding.app_id -ne $identity -or $diagnostic.branding.refreshes -ne ++$refreshes){throw 'Icon refresh changed identity or failed to rebuild membership.'}
-                if($diagnostic.shell_commands.thumbnail_toolbar.last_error -or $diagnostic.shell_commands.thumbnail_toolbar.added_hwnd -ne $handle.ToInt64()){throw 'Icon refresh lost the media toolbar.'}
+                if($diagnostic.shell_commands.thumbnail_toolbar.last_error -or $diagnostic.shell_commands.thumbnail_toolbar.added_hwnd -ne $handle.ToInt64()){throw "Icon refresh lost the media toolbar: $($diagnostic.shell_commands.thumbnail_toolbar | ConvertTo-Json -Compress)"}
                 $previousIcon=$diagnostic.branding.icon
-                "Live $preset icon applied; stable identity; toolbar retained"
+                "Live $preset icon metadata applied; stable identity; toolbar retained (not visual proof)"
+                if($TestDisplayedBranding){
+                    Start-Sleep -Milliseconds 800
+                    $assets=Join-Path $PSScriptRoot '..\assets'
+                    $expected=if($preset -eq 'classic'){Join-Path $assets 'icons\classic.ico'}else{Join-Path $assets 'icon.ico'}
+                    $alternate=if($preset -eq 'classic'){Join-Path $assets 'icon.ico'}else{Join-Path $assets 'icons\classic.ico'}
+                    $artworkPass++
+                    $artworkBox=Assert-TaskbarArtwork -IconPath $expected -OtherIconPath $alternate -Box $artworkBox -OutputPath (Join-Path $fixtureDirectory "taskbar-$artworkPass-$preset.png")
+                }
+            }
+            if($TestDisplayedBranding){
+                $completed=$diagnostic.branding.refreshes
+                Start-Sleep -Milliseconds 500
+                $idle=Invoke-RestMethod "http://127.0.0.1:$Port/api/player/taskbar-preview"
+                if($idle.branding.refresh_pending -or $idle.branding.refreshes -ne $completed){throw 'Branding refresh timer did not stop after completion.'}
+                'Completed branding refresh remains idle; no recurring shell refresh'
             }
         }
         if($TestFullPreview){

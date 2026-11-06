@@ -210,9 +210,14 @@ pub fn sync_native_window_icon(ctx: &egui::Context, state: PlaybackIconState) {
     ctx.data_mut(|data| {
         data.insert_temp(egui::Id::new("pealayer-playback-window-icon-stamp"), stamp);
     });
-    // Title-only changes still update the notification area's tooltip. Windows
-    // copies the borrowed HWND icon; WM_SETICON updates it again after eframe
-    // processes the viewport command below.
+    // Install both HWND icon slots BEFORE Explorer is notified/re-registers the
+    // taskbar button. Explorer may fetch WM_GETICON while handling those shell
+    // notifications; publishing the relaunch properties first let it retain the
+    // preceding artwork even though our later WM_GETICON readback was correct.
+    if changed {
+        apply_native_window_icon(ctx, &config, state);
+    }
+    // Title-only changes still update the notification area's tooltip.
     if hwnd != 0 {
         #[cfg(target_os = "windows")]
         crate::platform::taskbar_branding::apply(hwnd, source, &config, state);
@@ -220,11 +225,6 @@ pub fn sync_native_window_icon(ctx: &egui::Context, state: PlaybackIconState) {
             hwnd, &crate::config::resolved_app_name(&config),
         );
     }
-    if !changed {
-        return;
-    }
-
-    apply_native_window_icon(ctx, &config, state);
 }
 
 /// Main and independently hosted Preferences use the same shell-quality path.

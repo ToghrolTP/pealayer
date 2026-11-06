@@ -303,6 +303,9 @@ required checks are not passed while the user's test/CI skip remains in effect.
   [Placement and Task View follow-up](window-placement-and-task-view.md)
   records the reproduced minimized-zero persistence cause, native restart tests,
   full-UI DWM preview path and repeated live branding/toolbar checks.
+  The user rejected the installed dynamic icon appearance again; native read-only
+  capture confirmed stale taskbar artwork despite correct HWND icons. The
+  follow-up must pass actual displayed-artwork comparisons, not property readback.
 - [ ] Clear applicable platform CI/runtime/package checks and privacy-safe
   screenshots before selecting the next release version and publishing packages.
 
