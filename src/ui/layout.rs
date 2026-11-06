@@ -9025,6 +9025,38 @@ mod timeline_row_tests {
     }
 
     #[test]
+    fn filmcraft_ruler_ladder_and_playhead_geometry_render_without_jitter() {
+        let ctx = egui::Context::default();
+        let config = crate::config::AppConfig::default();
+        crate::ui::configure_native_visuals(&ctx, &config);
+        let tokens = crate::ui::craft_theme::current(&ctx);
+
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let ruler_rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(800.0, 26.0));
+            let painter = ui.painter().clone();
+            let ruler_painter = ui.painter().with_clip_rect(ruler_rect);
+
+            // Test ruler strides for 30 fps at normal zoom
+            let (minor, label) = crate::ui::craft_theme::ruler_steps(2.5, 30);
+            assert!(minor > 0);
+            assert!(label >= minor);
+            assert_eq!(label % minor, 0);
+
+            // Test precision playhead drawing
+            crate::ui::craft_theme::paint_filmcraft_playhead(
+                &painter,
+                &ruler_painter,
+                150.0,
+                ruler_rect.bottom() - 13.0,
+                ruler_rect.bottom(),
+                300.0,
+                tokens.playhead,
+            );
+        });
+        output.textures_delta.clear();
+    }
+
+    #[test]
     fn middle_pan_axis_modifiers_preserve_free_and_constrained_modes() {
         let delta = egui::vec2(15.0, -9.0);
         assert_eq!(constrain_middle_pan_delta(delta, false, false, true), delta);
@@ -18123,59 +18155,53 @@ impl<'a> PealayerTabViewer<'a> {
                                             egui::Stroke::new(1.0_f32, craft_tokens.separator),
                                         );
 
-                                        let label_step: i32 = if zoom < 30.0 {
-                                            5
-                                        } else if zoom < 60.0 {
-                                            2
+                                        let fps = if self.app.media_fps.is_finite() && self.app.media_fps > 0.0 {
+                                            self.app.media_fps
                                         } else {
-                                            1
+                                            30.0
                                         };
-                                        // Clock labels grow after minute/hour boundaries. Keep
-                                        // them apart rather than retaining seconds-only widths.
-                                        let longest_label = ruler_painter.layout_no_wrap(
-                                            crate::duration::format_timeline_time_ms(total_seconds.ceil().max(0.0) as u64 * 1_000, false),
-                                            egui::FontId::monospace(9.0),
-                                            craft_tokens.tl_ruler_text,
-                                        );
-                                        let label_step = label_step.max(((longest_label.size().x + 10.0) / zoom).ceil().max(1.0) as i32);
+                                        let base_fps = fps.clamp(12.0, 120.0).round() as i64;
+                                        let frame_px = zoom as f64 / base_fps as f64;
+                                        let (minor_frames, label_step_frames) = crate::ui::craft_theme::ruler_steps(frame_px, base_fps);
 
-                                        for i in visible_start_i..=visible_end_i {
-                                            let grid_x = rect.min.x + (i as f32 * zoom);
-                                            if grid_x >= viewport_clip.min.x - 100.0 && grid_x <= rect.max.x - 8.0 {
-                                                // Major second tick
+                                        let tick_base = ruler_rect.max.y;
+                                        let label_y = ruler_rect.min.y + 11.0;
+                                        let f0 = ((visible_start_sec * base_fps as f64).floor() as i64).max(0);
+                                        let f1 = ((visible_end_sec * base_fps as f64).ceil() as i64) + 1;
+                                        let mut f = (f0 / minor_frames) * minor_frames;
+
+                                        while f <= f1 {
+                                            let time_s = f as f64 / base_fps as f64;
+                                            let grid_x = rect.min.x + (time_s as f32 * zoom);
+                                            if grid_x >= viewport_clip.min.x - 60.0 && grid_x <= rect.max.x + 60.0 {
+                                                let is_major = f % label_step_frames == 0;
+                                                let h = if is_major { 10.0 } else { 4.0 };
+                                                let tick_color = if is_major {
+                                                    craft_tokens.tl_ruler_tick
+                                                } else {
+                                                    craft_tokens.tl_ruler_tick.gamma_multiply(0.65)
+                                                };
                                                 ruler_painter.line_segment(
-                                                    [egui::pos2(grid_x, ruler_rect.max.y - 8.0), egui::pos2(grid_x, ruler_rect.max.y)],
-                                                    egui::Stroke::new(1.0_f32, craft_tokens.tl_ruler_tick),
+                                                    [egui::pos2(grid_x, tick_base - h), egui::pos2(grid_x, tick_base)],
+                                                    egui::Stroke::new(1.0_f32, tick_color),
                                                 );
-                                                // Sub-second frame notches
-                                                if zoom >= 50.0 {
-                                                    for sub in 1..10 {
-                                                        let sub_x = grid_x + (sub as f32 * (zoom / 10.0));
-                                                        if sub_x >= viewport_clip.min.x - 20.0 && sub_x <= rect.max.x - 8.0 {
-                                                            let notch_h = if sub == 5 { 5.0 } else { 3.0 };
-                                                            ruler_painter.line_segment(
-                                                                [egui::pos2(sub_x, ruler_rect.max.y - notch_h), egui::pos2(sub_x, ruler_rect.max.y)],
-                                                                egui::Stroke::new(1.0_f32, craft_tokens.tl_ruler_tick.gamma_multiply(0.6)),
-                                                            );
-                                                        }
-                                                    }
-                                                }
-                                                // Time label inside ruler
-                                                if i % label_step == 0 {
-                                                    let label = ruler_painter.layout_no_wrap(
-                                                        crate::duration::format_timeline_time_ms(i as u64 * 1_000, false),
-                                                        egui::FontId::monospace(9.0),
+
+                                                if is_major {
+                                                    let label_text = if label_step_frames < base_fps {
+                                                        crate::duration::format_timeline_time_ms((time_s * 1000.0).round() as u64, true)
+                                                    } else {
+                                                        crate::duration::format_timeline_time_ms((time_s * 1000.0).round() as u64, false)
+                                                    };
+                                                    ruler_painter.text(
+                                                        egui::pos2(grid_x + 1.0, label_y),
+                                                        egui::Align2::CENTER_CENTER,
+                                                        label_text,
+                                                        egui::FontId::monospace(9.5),
                                                         craft_tokens.tl_ruler_text,
                                                     );
-                                                    if grid_x + 4.0 + label.size().x <= rect.max.x - 8.0 {
-                                                        ruler_painter.galley(
-                                                            egui::pos2(grid_x + 4.0, ruler_rect.min.y + 13.0 - label.size().y / 2.0),
-                                                            label,
-                                                            craft_tokens.tl_ruler_text,
-                                                        );
-                                                    }
                                                 }
                                             }
+                                            f = f.saturating_add(minor_frames);
                                         }
 
                                         // Media chapters are file-owned navigation landmarks,
@@ -18263,25 +18289,19 @@ impl<'a> PealayerTabViewer<'a> {
                                             ));
                                         }
 
-                                        // Draw Playhead
+                                        // Draw Playhead (FilmCraft pentagon head + continuous subpixel anti-jitter path)
                                         let current_playhead_time = self.app.seek_pos.unwrap_or(self.app.playback_time);
                                         let playhead_x = rect.min.x + (current_playhead_time as f32 * zoom);
                                         if playhead_x <= rect.max.x {
-                                            // Keep the playhead handle wholly inside the ruler.
-                                            // The timeline line begins at the track boundary so it
-                                            // cannot make the first media lane look like the ruler.
-                                            painter.line_segment(
-                                                [egui::pos2(playhead_x, tracks_top), egui::pos2(playhead_x, rect.max.y)],
-                                                egui::Stroke::new(1.5_f32, egui::Color32::RED),
+                                            crate::ui::craft_theme::paint_filmcraft_playhead(
+                                                &painter,
+                                                &ruler_painter,
+                                                playhead_x,
+                                                ruler_rect.bottom() - 13.0,
+                                                ruler_rect.bottom(),
+                                                rect.max.y,
+                                                craft_tokens.playhead,
                                             );
-                                            // Downward handle terminating exactly at the bottom of
-                                            // the ruler, immediately above the first track.
-                                            let points = vec![
-                                                egui::pos2(playhead_x - 7.0, ruler_rect.bottom() - 12.0),
-                                                egui::pos2(playhead_x + 7.0, ruler_rect.bottom() - 12.0),
-                                                egui::pos2(playhead_x, ruler_rect.bottom()),
-                                            ];
-                                            ruler_painter.add(egui::Shape::convex_polygon(points, egui::Color32::RED, egui::Stroke::NONE));
                                         }
 
                                         // Draw Snap line if active

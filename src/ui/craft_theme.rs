@@ -670,6 +670,151 @@ pub fn icon_button_glyph(
     })
 }
 
+/// The Ruler's two strides, in frames: `(minor_stride, label_stride)`.
+///
+/// `label_step` is the first ladder step wide enough to keep timestamps apart (110 pt); `minor` is the
+/// finest divisor of `label_step` that still leaves ticks 12 pt apart. Deriving the tick stride as a
+/// divisor puts every label on a tick and keeps the ticks between labels evenly spaced.
+pub fn ruler_steps(frame_px: f64, base: i64) -> (i64, i64) {
+    let base = base.max(1);
+    let big = |k: i64| base.saturating_mul(k);
+    let steps = [
+        1, 2, 5, 10,
+        (base / 2).max(1),
+        base,
+        big(2), big(5), big(10), big(15), big(30), big(60),
+        big(120), big(300), big(600), big(1800), big(3600),
+    ];
+    let label_step = (*steps.iter().find(|s| **s as f64 * frame_px >= 110.0).unwrap_or(&big(3600))).max(1);
+    let minor = (1..=9)
+        .rev()
+        .filter(|k| label_step.rem_euclid(*k) == 0)
+        .map(|k| label_step / k)
+        .find(|m| *m as f64 * frame_px >= 12.0)
+        .unwrap_or(label_step)
+        .max(1);
+    (minor, label_step)
+}
+
+/// How far the Timeline reaches, in seconds: ten minutes past the end of the sequence (FilmCraft standard).
+pub fn timeline_extent(sequence_seconds: f64) -> f64 {
+    sequence_seconds.max(0.0) + 600.0
+}
+
+/// The least `pps` (points a second) the Timeline zooms out to.
+pub fn min_pps(sequence_seconds: f64, width: f32) -> f64 {
+    (f64::from(width.max(0.0)) / timeline_extent(sequence_seconds)).clamp(1e-6, 24_000.0)
+}
+
+/// The narrowest the zoom scroll bar's thumb gets: room for its two handles and a part between them to grab.
+pub const MIN_THUMB_W: f32 = 34.0;
+
+/// What a pointer is over on a zoom scroll bar (the Timeline's and the monitors'): the circular
+/// handle at either end of the thumb zooms, the middle scrolls, and a press beside the thumb brings
+/// it there. The press and the hover cursor ask the same question here, so they cannot disagree.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ZoomThumbPart {
+    Beside,
+    Left,
+    Middle,
+    Right,
+}
+
+impl ZoomThumbPart {
+    pub fn at(thumb: egui::Rect, pos: egui::Pos2) -> Self {
+        if !thumb.expand2(egui::vec2(0.0, 4.0)).contains(pos) {
+            Self::Beside
+        } else if (pos.x - thumb.min.x).abs() < 9.0 {
+            Self::Left
+        } else if (pos.x - thumb.max.x).abs() < 9.0 {
+            Self::Right
+        } else {
+            Self::Middle
+        }
+    }
+}
+
+/// The horizontal resize cursor of a zoom scroll bar: over either handle of its `thumb`, and for as
+/// long as a drag of a handle goes on (`handle_grabbed`), which the pointer can take off the bar.
+pub fn zoom_thumb_cursor(ui: &egui::Ui, resp: &egui::Response, thumb: egui::Rect, handle_grabbed: bool) {
+    let on_handle = if resp.dragged() {
+        handle_grabbed
+    } else {
+        resp.hover_pos().is_some_and(|pos| matches!(ZoomThumbPart::at(thumb, pos), ZoomThumbPart::Left | ZoomThumbPart::Right))
+    };
+    if on_handle {
+        ui.ctx().set_cursor_icon(egui::CursorIcon::ResizeHorizontal);
+    }
+}
+
+/// Where the zoom scroll bar's thumb is: (left edge, width, seconds of scroll per point of thumb travel).
+pub fn zoom_thumb(bar: egui::Rect, seq_seconds: f64, scroll: f64, pps: f64) -> (f32, f32, f64) {
+    let vis = bar.width() as f64 / pps.max(1e-9);
+    let total = timeline_extent(seq_seconds).max(vis);
+    let w = ((vis / total) as f32 * bar.width()).clamp(MIN_THUMB_W.min(bar.width()), bar.width());
+    let travel = (bar.width() - w).max(0.0);
+    let range = (total - vis).max(0.0);
+    let at = if range > 0.0 { (scroll / range).clamp(0.0, 1.0) as f32 * travel } else { 0.0 };
+    (bar.min.x + at, w, if travel > 0.5 { range / travel as f64 } else { 0.0 })
+}
+
+/// Paint FilmCraft's zoom scroll bar thumb with dual-circle handles.
+pub fn paint_zoom_thumb(
+    p: &egui::Painter,
+    bar: egui::Rect,
+    thumb: egui::Rect,
+    hover: bool,
+    tokens: &Tokens,
+) {
+    // track
+    p.rect_filled(bar, bar.height() / 2.0, tokens.separator);
+    // thumb
+    p.rect_filled(
+        thumb,
+        thumb.height() / 2.0,
+        if hover { tokens.scroll_thumb_hover } else { tokens.scroll_thumb },
+    );
+    // dual circular handles
+    for x in [
+        thumb.min.x + thumb.height() / 2.0,
+        thumb.max.x - thumb.height() / 2.0,
+    ] {
+        p.circle_filled(egui::pos2(x, thumb.center().y), 4.5, tokens.panel_bg);
+        p.circle_stroke(
+            egui::pos2(x, thumb.center().y),
+            4.5,
+            Stroke::new(1.5, tokens.icon_active),
+        );
+    }
+}
+
+/// Paint FilmCraft's precision pentagon playhead and continuous subpixel stem line.
+pub fn paint_filmcraft_playhead(
+    painter: &egui::Painter,
+    ruler_painter: &egui::Painter,
+    px: f32,
+    top: f32,
+    tip: f32,
+    track_bottom: f32,
+    color: Color32,
+) {
+    // 10 pt wide, 13 pt tall pentagonal head with 5 pt downward tip
+    let head = [
+        egui::pos2(px - 5.0, top),
+        egui::pos2(px + 5.0, top),
+        egui::pos2(px + 5.0, tip - 5.0),
+        egui::pos2(px, tip),
+        egui::pos2(px - 5.0, tip - 5.0),
+    ];
+    ruler_painter.add(egui::Shape::convex_polygon(head.to_vec(), color, Stroke::NONE));
+    // A path, not a line segment: egui rounds line segments to whole pixels, so while playing
+    // the line would move in uneven pixel steps and part from its head
+    painter.add(egui::Shape::line(
+        vec![egui::pos2(px, tip), egui::pos2(px, track_bottom)],
+        Stroke::new(1.0, color),
+    ));
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -800,5 +945,56 @@ mod tests {
             assert_eq!(res_selected.rect.size(), egui::vec2(24.0, 24.0));
         });
         output.textures_delta.clear();
+    }
+
+    #[test]
+    fn ruler_steps_computes_filmcraft_tick_and_label_ladder() {
+        // High zoom: 20 pixels per frame at 30 fps
+        let (minor, label) = ruler_steps(20.0, 30);
+        assert!(minor >= 1);
+        assert!(label >= minor);
+        assert_eq!(label % minor, 0);
+        assert!(label as f64 * 20.0 >= 110.0);
+        assert!(minor as f64 * 20.0 >= 12.0);
+
+        // Medium zoom: 1 pixel per frame at 30 fps (30 px / sec)
+        let (minor, label) = ruler_steps(1.0, 30);
+        assert_eq!(label % minor, 0);
+        assert!(label as f64 * 1.0 >= 110.0);
+        assert!(minor as f64 * 1.0 >= 12.0);
+
+        // Low zoom: 0.05 pixels per frame at 30 fps (1.5 px / sec)
+        let (minor, label) = ruler_steps(0.05, 30);
+        assert_eq!(label % minor, 0);
+        assert!(label as f64 * 0.05 >= 110.0);
+        assert!(minor as f64 * 0.05 >= 12.0);
+    }
+
+    #[test]
+    fn zoom_thumb_part_resolves_handles_middle_and_beside() {
+        let thumb = egui::Rect::from_min_max(egui::pos2(100.0, 10.0), egui::pos2(200.0, 30.0));
+
+        // Outside vertically or far horizontally
+        assert_eq!(ZoomThumbPart::at(thumb, egui::pos2(50.0, 20.0)), ZoomThumbPart::Beside);
+        assert_eq!(ZoomThumbPart::at(thumb, egui::pos2(250.0, 20.0)), ZoomThumbPart::Beside);
+
+        // Near left edge (within 9 pt)
+        assert_eq!(ZoomThumbPart::at(thumb, egui::pos2(103.0, 20.0)), ZoomThumbPart::Left);
+
+        // Near right edge (within 9 pt)
+        assert_eq!(ZoomThumbPart::at(thumb, egui::pos2(196.0, 20.0)), ZoomThumbPart::Right);
+
+        // In the middle
+        assert_eq!(ZoomThumbPart::at(thumb, egui::pos2(150.0, 20.0)), ZoomThumbPart::Middle);
+    }
+
+    #[test]
+    fn zoom_thumb_travel_and_width_bounds() {
+        let bar = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(500.0, 20.0));
+        let (left, w, per_point) = zoom_thumb(bar, 60.0, 0.0, 100.0);
+        assert_eq!(left, 0.0);
+        assert!(w >= MIN_THUMB_W);
+        assert!(w <= 500.0);
+        assert!(per_point >= 0.0);
     }
 }
