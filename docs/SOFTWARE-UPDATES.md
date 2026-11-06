@@ -186,6 +186,20 @@ timestamps or a different hash are never interpreted as proof of a newer version
 Bundled DLL replacement remains owned by the containing product package, not a
 running-library unload or a controller executable update.
 
+## Windows service bootstrap
+
+The paired controller now supports SCM-owned replacement using its normal
+artifact/update API. It checks its installed service name, executable and running
+PID before staging, stops/starts through SCM and uses the same verified file
+replacement and rollback owner. Its administrative install/repair grants the
+dedicated service SID only the necessary self-control and installation-directory
+permissions; update RPC does not elevate or rewrite service configuration.
+
+An old service that explicitly refuses self-update requires a one-time
+administrative upgrade and service repair. Neither forwarding port can bypass
+that refusal safely. This is distinct from an older interactive controller,
+which can be bootstrapped through its already-supported artifact/update API.
+
 ## Verification boundary
 
 Focused native/Go/reference-client checks cover both owners, established bootstrap
@@ -194,3 +208,6 @@ target revision/expiry, redirects, bounded pinned reads and confined bundles.
 Current package, running-instance, cross-product restart and remote deployment
 receipts belong in the linked verification ledger; source checks alone do not
 establish those outcomes. Cafe remains user-deferred while offline.
+
+See [the current mutual-update verification receipt](verification/MUTUAL-SOFTWARE-UPDATES.md)
+for tested restart, pull and deployment results and the remaining acceptance gates.
