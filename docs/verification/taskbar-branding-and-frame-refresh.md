@@ -69,6 +69,26 @@ surface/offscreen rendering and sustained CPU/GPU acceptance remain in
 extra decoder was added to disguise that limit. Long-hover installed acceptance
 and the actual Windows taskbar icon must be checked after deployment.
 
+## Installed checkpoint
+
+The canonical local executable acknowledged the graceful update to source
+`97761d7d2bfac30a236857984b73f5e639daae95`, clean, executable SHA-256
+`235a33f79e4abb665ac8fd084fa42323cc4a3c06addcab809608642abfefc802`.
+The existing host libmpv SHA-256 remains
+`e56ce67cd00f06a59dc7ed5b97a49a9182a381554c755dc4570a52af1ef30e65`.
+Packaging verified the Web/PWA bundle, native resources, seven distinct quick
+action icons, the downloader identity/smoke check and libmpv loading. Package
+test flags are honestly `skipped`: library/focused Web tests ran separately as
+recorded above, not silently inside packaging.
+
+Live process readback reports clean native authoring, selected Classic icon,
+Compact density and the video-thumbnail preference retained. Shell branding
+application succeeded with no error; no matching production pin needed a write.
+The media remains paused at the saved position. The video panel had not rendered
+after restart at the first sample (no captured frame), so long-hover and visible
+taskbar-icon acceptance await the requested user interaction. This is not a claim
+of moving-video acceptance. Cafe deployment remains user-deferred while offline.
+
 ## Platform references
 
 - [RelaunchIconResource](https://learn.microsoft.com/en-us/windows/win32/properties/props-system-appusermodel-relaunchiconresource)
