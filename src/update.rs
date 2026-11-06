@@ -8,6 +8,8 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 pub mod console;
+pub mod rpc;
+pub mod bundle;
 
 /// Local presentation events; the updater's API/wire status remains unchanged.
 pub enum UpdateProgress<'a> {
@@ -111,6 +113,7 @@ pub struct UpdateManifest {
     pub sha256: String,
     pub size: u64,
     pub artifact_url: String,
+    pub health_state: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub libmpv_runtime: Option<LibmpvRuntimeIdentity>,
 }
@@ -122,6 +125,7 @@ pub struct LibmpvRuntimeIdentity {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BeginUploadRequest {
     pub sha256: String,
     pub size: u64,
@@ -136,11 +140,13 @@ pub struct BeginUploadRequest {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FinishUploadRequest {
     pub operation_id: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct FetchUpdateRequest {
     pub url: String,
     #[serde(default)]
@@ -186,6 +192,7 @@ struct UpdateInner {
 pub struct UpdateManager {
     inner: Arc<Mutex<UpdateInner>>,
     gui_context: Arc<Mutex<Option<eframe::egui::Context>>>,
+    dispatcher: Arc<Mutex<Option<std::sync::mpsc::Sender<crate::platform::interop::InteropCommand>>>>,
 }
 
 static GLOBAL_MANAGER: OnceLock<UpdateManager> = OnceLock::new();
@@ -195,10 +202,11 @@ pub fn manager() -> UpdateManager {
 }
 
 impl UpdateManager {
-    pub fn register_gui_context(&self, context: eframe::egui::Context) {
+    pub fn register_gui_context(&self, context: eframe::egui::Context, dispatcher: std::sync::mpsc::Sender<crate::platform::interop::InteropCommand>) {
         if let Ok(mut current) = self.gui_context.lock() {
             *current = Some(context);
         }
+        if let Ok(mut current) = self.dispatcher.lock() { *current = Some(dispatcher); }
     }
 
     fn wake_gui(&self) {
@@ -760,7 +768,7 @@ fn resolve_update_source(
         let manifest: UpdateManifest = probe
             .json()
             .map_err(|error| format!("decode update manifest: {error}"))?;
-        if manifest.format != "pealayer-update" {
+        if manifest.format != "pealayer-update" || !manifest.service.eq_ignore_ascii_case("pealayer") {
             return Err("unsupported update manifest format".to_string());
         }
         if manifest.platform != std::env::consts::OS || manifest.arch != std::env::consts::ARCH {
@@ -958,6 +966,7 @@ pub fn current_manifest() -> Result<UpdateManifest, String> {
         sha256: sha256_file(&executable)?,
         size: metadata.len(),
         artifact_url: "/api/update/artifact".to_string(),
+        health_state: startup_health_state().into(),
         libmpv_runtime: adjacent_libmpv_runtime_identity()?,
     })
 }
@@ -976,6 +985,8 @@ pub fn push_current_to_peer(
     let manifest = current_manifest()?;
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
     let client = reqwest::blocking::Client::builder()
+        .no_proxy()
+        .redirect(reqwest::redirect::Policy::none())
         .connect_timeout(Duration::from_secs(8))
         .timeout(Duration::from_secs(60))
         .user_agent(format!(
@@ -1007,6 +1018,7 @@ pub fn push_current_to_peer(
         .operation_id
         .clone()
         .ok_or_else(|| "peer omitted update operation id".to_string())?;
+    validate_upload_ack(&status, &operation_id, &manifest, 0)?;
     let mut file = File::open(executable).map_err(|error| error.to_string())?;
     let mut offset = 0_u64;
     let mut buffer = vec![0_u8; UPDATE_CHUNK_BYTES];
@@ -1037,6 +1049,10 @@ pub fn push_current_to_peer(
             }
         };
         offset += count as u64;
+        if let Err(error) = validate_upload_ack(&status, &operation_id, &manifest, offset) {
+            abort_peer_upload(&client, &target, &operation_id);
+            return Err(error);
+        }
         progress(UpdateProgress::Status(&status));
     }
     progress(UpdateProgress::Phase("Requesting verification and graceful restart"));
@@ -1065,6 +1081,12 @@ pub fn push_current_to_peer(
         }
     };
     progress(UpdateProgress::Status(&status));
+    if status.operation_id.as_deref() != Some(&operation_id)
+        || status.sha256.as_deref() != Some(&manifest.sha256)
+        || status.bytes_done != manifest.size || status.bytes_total != Some(manifest.size)
+        || !matches!(status.state.as_str(), "current" | "restarting") {
+        return Err("Peer update finish acknowledgement mismatched; replacement outcome is unknown, do not replay it".into());
+    }
     if status.state == "current" {
         return Ok(status);
     }
@@ -1074,11 +1096,13 @@ pub fn push_current_to_peer(
     while Instant::now() < deadline {
         progress(UpdateProgress::Phase("Waiting for peer build acknowledgement"));
         std::thread::sleep(Duration::from_millis(350));
-        let response = client.get(format!("{target}/api/update/manifest")).send();
+        let response = client.get(format!("{target}/api/update/manifest"))
+            .timeout(deadline.saturating_duration_since(Instant::now()).min(Duration::from_secs(3))).send();
         match response.and_then(reqwest::blocking::Response::error_for_status) {
             Ok(response) => {
                 if let Ok(peer_manifest) = response.json::<UpdateManifest>()
-                    && peer_manifest.sha256 == manifest.sha256
+                    && verified_peer_manifest(&peer_manifest, &manifest.sha256)
+                    && peer_manifest.size == manifest.size
                 {
                     status.state = "completed".to_string();
                     status.message = format!(
@@ -1096,6 +1120,22 @@ pub fn push_current_to_peer(
     } else {
         "peer never restarted with the expected build".to_string()
     })
+}
+
+fn validate_upload_ack(status: &UpdateStatus, id: &str, manifest: &UpdateManifest, offset: u64) -> Result<(), String> {
+    if id.is_empty() || id.len() > 128 || !id.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        || status.operation_id.as_deref() != Some(id) || status.sha256.as_deref() != Some(&manifest.sha256)
+        || status.state != "receiving" || status.error.is_some() || status.bytes_done != offset
+        || status.bytes_total != Some(manifest.size) {
+        return Err("Peer update chunk acknowledgement mismatched; upload was not retried".into());
+    }
+    Ok(())
+}
+
+fn verified_peer_manifest(manifest: &UpdateManifest, expected: &str) -> bool {
+    manifest.format == "pealayer-update" && manifest.service.eq_ignore_ascii_case("pealayer")
+        && manifest.sha256 == expected && manifest.health_state == "healthy"
+        && manifest.platform == std::env::consts::OS && manifest.arch == std::env::consts::ARCH
 }
 
 fn abort_peer_upload(client: &reqwest::blocking::Client, target: &str, operation_id: &str) {
@@ -1146,7 +1186,9 @@ pub fn request_update_from_url(
             replacement_sha256 = status.sha256.clone();
         }
         match status.state.as_str() {
-            "current" | "completed" => return Ok(status),
+            "current" | "completed" if replacement_sha256.is_none() => {
+                return Err("Peer reported completion without the replacement identity".into());
+            }
             "failed" => {
                 return Err(status
                     .error
@@ -1177,7 +1219,7 @@ pub fn request_update_from_url(
                 .send()
                 .and_then(reqwest::blocking::Response::error_for_status)
             && let Ok(manifest) = response.json::<UpdateManifest>()
-            && manifest.sha256 == expected
+            && verified_peer_manifest(&manifest, expected)
         {
             status.state = "completed".to_string();
             status.sha256 = Some(expected.to_string());
@@ -1416,6 +1458,14 @@ fn rollback_update(journal: &UpdateJournal) -> Result<(), String> {
     verify_file_sha256(&journal.current_path, &journal.current_sha256)
 }
 
+static HEALTH_ACKNOWLEDGED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+fn startup_health_state() -> &'static str {
+    if std::env::var_os(HEALTH_PATH_ENV).is_none() || HEALTH_ACKNOWLEDGED.load(std::sync::atomic::Ordering::Acquire) {
+        "healthy"
+    } else { "pending" }
+}
+
 pub fn schedule_startup_health_acknowledgement() {
     cleanup_orphaned_downloads();
     let Ok(path) = std::env::var(HEALTH_PATH_ENV) else {
@@ -1426,7 +1476,19 @@ pub fn schedule_startup_health_acknowledgement() {
     };
     let helper = std::env::var(HELPER_PATH_ENV).ok();
     std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(900));
+        // Allow the replacement to stabilize before committing rollback, then
+        // require a fresh local UI reply, not just a bound HTTP listener.
+        std::thread::sleep(Duration::from_secs(10));
+        let manager = manager();
+        let dispatcher = manager.dispatcher.lock().ok().and_then(|value|value.clone());
+        let context = manager.gui_context.lock().ok().and_then(|value|value.clone());
+        let (Some(dispatcher),Some(context)) = (dispatcher,context) else { return; };
+        let deadline = Instant::now()+Duration::from_secs(15);
+        loop {
+            if crate::authoring::inspect(&dispatcher,&context).is_ok() { break; }
+            if Instant::now()>=deadline {return;}
+            std::thread::sleep(Duration::from_millis(500));
+        }
         let acknowledgement = create_update_file(Path::new(&path), true).and_then(|mut file| {
             file.write_all(token.as_bytes())?;
             file.sync_all()
@@ -1435,6 +1497,7 @@ pub fn schedule_startup_health_acknowledgement() {
             crate::cli_eprintln!("write update health acknowledgement: {error}");
             return;
         }
+        HEALTH_ACKNOWLEDGED.store(true, std::sync::atomic::Ordering::Release);
         if let Some(helper) = helper {
             std::thread::sleep(Duration::from_secs(3));
             let _ = fs::remove_file(helper);
@@ -1841,6 +1904,26 @@ mod tests {
     use super::*;
 
     #[test]
+    fn peer_update_requires_exact_chunk_ack_and_committed_product_health() {
+        let manifest=UpdateManifest {format:"pealayer-update".into(),service:"pealayer".into(),
+            version:"fixture".into(),git_commit:"fixture".into(),git_dirty:false,
+            platform:std::env::consts::OS.into(),arch:std::env::consts::ARCH.into(),sha256:"a".repeat(64),size:32,
+            artifact_url:"/api/update/artifact".into(),health_state:"healthy".into(),libmpv_runtime:None};
+        let good=UpdateStatus {operation_id:Some("update-test".into()),state:"receiving".into(),
+            sha256:Some(manifest.sha256.clone()),bytes_done:16,bytes_total:Some(32),..Default::default()};
+        validate_upload_ack(&good,"update-test",&manifest,16).unwrap();
+        for status in [UpdateStatus {operation_id:Some("other".into()),..good.clone()},
+            UpdateStatus {bytes_done:15,..good.clone()},UpdateStatus {bytes_total:Some(33),..good.clone()},
+            UpdateStatus {sha256:Some("b".repeat(64)),..good.clone()}] {
+            assert!(validate_upload_ack(&status,"update-test",&manifest,16).is_err());
+        }
+        assert!(validate_upload_ack(&good,"bad?id=other",&manifest,16).is_err());
+        assert!(verified_peer_manifest(&manifest,&manifest.sha256));
+        assert!(!verified_peer_manifest(&UpdateManifest {health_state:"pending".into(),..manifest.clone()},&manifest.sha256));
+        assert!(!verified_peer_manifest(&UpdateManifest {service:"pccontroller".into(),..manifest.clone()},&manifest.sha256));
+    }
+
+    #[test]
     fn url_update_reports_authoritative_phases_and_waits_for_matching_build() {
         use std::net::TcpListener;
         let listener = TcpListener::bind("127.0.0.1:0").unwrap();
@@ -1854,7 +1937,7 @@ mod tests {
                 format: "pealayer-update".into(), service: "Pealayer".into(), version: "fixture".into(),
                 git_commit: "fixture".into(), git_dirty: false, platform: std::env::consts::OS.into(),
                 arch: std::env::consts::ARCH.into(), sha256, size: 10,
-                artifact_url: "/api/update/artifact".into(), libmpv_runtime: None,
+                artifact_url: "/api/update/artifact".into(), health_state:"healthy".into(), libmpv_runtime: None,
             }).unwrap();
             let status = |state: &str, done| serde_json::to_value(UpdateStatus {
                 state: state.into(), bytes_done: done, bytes_total: Some(10),
@@ -2049,7 +2132,8 @@ mod tests {
         context.set_request_repaint_callback(move |_| {
             observed.fetch_add(1, Ordering::Relaxed);
         });
-        manager.register_gui_context(context.clone());
+        let (sender, receiver) = std::sync::mpsc::channel();
+        manager.register_gui_context(context.clone(),sender.clone());
         manager.replace_status(UpdateStatus {
             state: "receiving".into(),
             ..Default::default()
@@ -2062,7 +2146,6 @@ mod tests {
             output.textures_delta.clear();
         }
         let previous = wakeups.load(Ordering::Relaxed);
-        let (sender, receiver) = std::sync::mpsc::channel();
         manager.dispatch_quit(&sender);
         assert!(matches!(
             receiver.try_recv(),

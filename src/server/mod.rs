@@ -323,7 +323,7 @@ fn spawn_control_server_on_listeners_with_channel(
     state_tx: Sender<String>,
     state_rx: Receiver<String>,
 ) -> Sender<String> {
-    crate::update::manager().register_gui_context(egui_ctx.clone());
+    crate::update::manager().register_gui_context(egui_ctx.clone(),command_tx.clone());
     let latest_status = Arc::new(Mutex::new(None));
     let websocket_clients: Arc<Mutex<Vec<Sender<String>>>> = Arc::new(Mutex::new(Vec::new()));
 
@@ -520,7 +520,7 @@ fn local_process_payload(body: &[u8]) -> bool {
     // Invalid parameters still belong to this process and must receive its
     // validation error, not be sent to the authority by the gateway.
     if let Some(method) = value.get("method").and_then(serde_json::Value::as_str) {
-        return matches!(method, "pealayer.process.status" | "pealayer.process.connect" | "pealayer.process.quit" | "pealayer.preferences.navigate" | "navigate_preferences" | "pealayer.about.open");
+        return crate::update::rpc::is_method(method) || matches!(method, "pealayer.process.status" | "pealayer.process.connect" | "pealayer.process.quit" | "pealayer.preferences.navigate" | "navigate_preferences" | "pealayer.about.open");
     }
     if matches!(value.get("command").and_then(serde_json::Value::as_str), Some("navigate_preferences" | "open_about")) { return true; }
     serde_json::from_value::<crate::platform::interop::InteropCommand>(value)
@@ -632,6 +632,7 @@ fn handle_websocket(stream: TcpStream, state: ControlState) {
 }
 
 fn handle_websocket_text(state: &ControlState, text: &str) -> Option<String> {
+    if let Some(response) = crate::update::rpc::payload(text, true, &state.command_tx) { return Some(response); }
     if local_process_payload(text.as_bytes()) {
         if !crate::platform::interop::get_live_config().web_allow_control {
             return Some(crate::platform::interop::format_interop_error(None, -32003, "Web control permission is disabled"));
@@ -862,6 +863,10 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
     if media_stream::header(&request.headers, "x-pealayer-route").is_some_and(|route| route.split(',').any(|id| id.trim() == crate::peer::instance_id()) || route.split(',').count() > 8) {
         return HttpResponse::text(508, "Loop Detected", "Pealayer peer routing loop");
     }
+    if request.method=="POST" && matches!(path,"/api/ipc"|"/api/player/command")
+        && let Some(response)=crate::update::rpc::payload(&String::from_utf8_lossy(&request.body),true,&state.command_tx) {
+        return HttpResponse::json(200,"OK",response);
+    }
     if let Some(capability) = denied_web_capability(&request.method, path, &web) {
         return permission_denied(capability);
     }
@@ -898,6 +903,9 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
         ("POST", "/api/peer/controller") => {
             let result = serde_json::from_slice::<serde_json::Value>(&request.body).map_err(|error|error.to_string()).and_then(|value| {
                 let method=value.get("method").and_then(serde_json::Value::as_str).ok_or("A controller method is required")?;
+                if controller_update_request(method,value.get("params"),0) && !web.web_allow_updates {
+                    return Err("Web application update permission is disabled".into());
+                }
                 crate::peer::controller_call(method.into(),value.get("params").cloned().unwrap_or_else(||serde_json::json!({})))
             });
             peer_result(result)
@@ -1166,6 +1174,16 @@ fn denied_web_capability(
     None
 }
 
+fn controller_update_request(method: &str, params: Option<&serde_json::Value>, depth: usize) -> bool {
+    if depth > 4 { return true; }
+    if method.starts_with("controller.software.") || method.starts_with("controller.artifact.")
+        || method.starts_with("controller.update.") || method == "controller.peer.update.host" { return true; }
+    if method == "controller.bridge.call" && let Some(request) = params.and_then(|p|p.get("request")) {
+        return request.get("method").and_then(|m|m.as_str()).is_some_and(|m| controller_update_request(m,request.get("params"),depth+1));
+    }
+    false
+}
+
 fn peer_result(result: Result<serde_json::Value,String>) -> HttpResponse {
     match result {
         Ok(value)=>HttpResponse::json(200,"OK",value.to_string()),
@@ -1389,6 +1407,9 @@ fn pwa_manifest_response() -> HttpResponse {
 }
 
 fn json_rpc_response(body: &[u8], state: &ControlState) -> HttpResponse {
+    if let Some(response) = crate::update::rpc::payload(&String::from_utf8_lossy(body), true, &state.command_tx) {
+        return HttpResponse::json(200, "OK", response);
+    }
     if let Some(response) = crate::downloads::rpc_payload(&String::from_utf8_lossy(body), true) {
         return HttpResponse::json(200, "OK", response);
     }
@@ -1512,6 +1533,9 @@ fn branding_update_response(body: &[u8], state: &ControlState) -> HttpResponse {
 }
 
 fn player_command_response(body: &[u8], state: &ControlState) -> HttpResponse {
+    if let Some(response) = crate::update::rpc::payload(&String::from_utf8_lossy(body), true, &state.command_tx) {
+        return HttpResponse::json(200, "OK", response);
+    }
     if local_process_payload(body) {
         if !crate::platform::interop::get_live_config().web_allow_control { return permission_denied("control"); }
         return HttpResponse::json(200, "OK", dispatch_ipc_payload(state, &String::from_utf8_lossy(body)));
@@ -1621,6 +1645,7 @@ fn parse_player_command(body: &[u8]) -> Result<crate::platform::interop::Interop
 }
 
 fn dispatch_ipc_payload(state: &ControlState, payload: &str) -> String {
+    if let Some(response) = crate::update::rpc::payload(payload, true, &state.command_tx) { return response; }
     if let Some(response) = discovery::rpc_payload(payload) { return response; }
     if let Some(response) = crate::downloads::rpc_payload(payload, true) { return response; }
     use crate::platform::interop::InteropCommand;
@@ -1908,6 +1933,35 @@ fn mime_for_path(path: &std::path::Path) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn update_rpc_is_process_local_permission_guarded_and_query_only_until_explicit_upload() {
+        use crate::platform::interop::{get_live_config,set_live_config};
+        let _lock=crate::app::tests::lock_app_tests();
+        struct Restore(crate::config::AppConfig);
+        impl Drop for Restore {fn drop(&mut self){set_live_config(self.0.clone());}}
+        let _restore=Restore(get_live_config());
+        let mut config=crate::config::AppConfig::default();config.web_allow_updates=false;set_live_config(config.clone());
+        let (tx,rx)=channel();
+        let state=ControlState {command_tx:tx,latest_status:Arc::new(Mutex::new(None)),websocket_clients:Arc::new(Mutex::new(vec![])),
+            egui_ctx:eframe::egui::Context::default(),web_dist_root:std::path::PathBuf::new(),
+            launch_receipts:Arc::new(Mutex::new(LaunchReceiptCache::default())),application_identity:"Update fixture".into(),expected_session_id:None};
+        let request=r#"{"jsonrpc":"2.0","id":1,"method":"pealayer.update.status","params":{}}"#;
+        assert!(local_process_payload(request.as_bytes()));
+        let denied:serde_json::Value=serde_json::from_slice(&json_rpc_response(request.as_bytes(),&state).body).unwrap();
+        assert_eq!(denied["error"]["code"],-32003);
+        config.web_allow_updates=true;config.web_allow_control=false;set_live_config(config);
+        let read:serde_json::Value=serde_json::from_slice(&json_rpc_response(request.as_bytes(),&state).body).unwrap();
+        assert!(read.get("result").is_some());
+        let socket:serde_json::Value=serde_json::from_str(&handle_websocket_text(&state,request).unwrap()).unwrap();
+        assert!(socket.get("result").is_some());
+        for method in crate::update::rpc::METHODS {
+            assert!(local_process_payload(serde_json::json!({"method":method,"params":{"invalid":true}}).to_string().as_bytes()));
+        }
+        assert!(controller_update_request("controller.bridge.call",Some(&serde_json::json!({"request":{"method":"controller.update.host"}})),0));
+        assert!(!controller_update_request("controller.relay.set",None,0));
+        assert!(rx.try_recv().is_err(),"queries must not quit or actuate outputs");
+    }
+
     #[test]
     fn branding_endpoints_share_validation_dispatch_and_permissions() {
         use crate::platform::interop::{InteropCommand, get_live_config, set_live_config};

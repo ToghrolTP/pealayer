@@ -939,6 +939,9 @@ pub fn command_catalog() -> Value {
     catalog["commands"].as_array_mut().unwrap().extend([serde_json::json!("update_branding"), serde_json::json!("get_branding")]);
     catalog["branding"]["clear"] = serde_json::json!("pealayer.branding.clear");
     catalog["commands"].as_array_mut().unwrap().push(serde_json::json!("clear_branding"));
+    catalog["updates"] = serde_json::json!({"http":"/api/update/", "methods":crate::update::rpc::METHODS,
+        "scope":"local process, never implicitly relayed to authority", "chunk_bytes":crate::update::rpc::CHUNK_BYTES,
+        "encoding":"base64", "completion":"exact artifact and health acknowledgement, not transfer acceptance"});
     catalog
 }
 
@@ -2891,6 +2894,7 @@ fn dispatch_local_payload(
     expected_identity: &str,
     expected_session_id: Option<u32>,
 ) -> String {
+    if let Some(response) = crate::update::rpc::payload(payload, false, tx) { return response; }
     if let Some(response) = crate::downloads::rpc_payload(payload, false) { return response; }
     if let Some(response) = crate::server::discovery::rpc_payload(payload) { return response; }
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(payload)
@@ -3234,6 +3238,7 @@ pub(crate) fn controller_instance_identity(instance_id: &str, name: &str) -> Val
             "web_ui":format!("http://127.0.0.1:{port}/")}},
         "values":{"application":name,"version":env!("CARGO_PKG_VERSION"),"commit":env!("PEALAYER_GIT_COMMIT"),
             "peer_origin":peer_origin,
+            "update_contract":"pealayer.update", "update_transports":"http,json-rpc,websocket,native",
             "os":std::env::consts::OS,"arch":std::env::consts::ARCH,"host":controller_host_name(),
             "app_actions":PCCONTROLLER_ACTIONS,"control_contract":"pealayer.control",
             "control_transports":"native,http,websocket,json-rpc","coordinator":"pccontroller","serial_owner":"pccontroller"}
