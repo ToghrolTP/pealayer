@@ -84,3 +84,27 @@ cleanup reaps it even when preview reconciliation has hidden the editor. The
 existing exited-helper regression verifies that unverified and confirmed exit
 remain distinct. This does not authorize ignoring other dirty/busy/unknown
 editors during deployment.
+
+## Verified candidate checkpoint
+
+- Final native source: `ed6cc9e8962528b460fe1641b4807d204226cd18`.
+- Full native suite: 1,144 passed, zero failed, two opt-in tests ignored.
+- The real OpenGL fault test was then explicitly run and passed separately on
+  the final source, including both same-size and resized failed renders.
+- Optimized Windows executable compiled successfully; native runtime smoke
+  exited with code 0 using this host's retained runtime.
+- Build-cache executable SHA-256:
+  `3d1895dc7d82faf94cd52084e677897d26b576d6bf5f818945424a68f5636d7f`.
+  This is the raw optimized executable, not a newly published package or an
+  installed-build receipt.
+- Both Preferences windows were closed by the user; process inspection confirmed
+  that only the retained historical comparison's helper remained. Fresh API
+  checks of the two newer apps reported only the stale `preferences_helper`
+  item as unknown, with all other draft/operation items clean. Permission to
+  proceed despite that older-build stale flag was requested, not assumed.
+
+Private final-test, GPU and optimized-build logs remain under the canonical
+program root's `verification` directory. The normal apps are still running
+their previous executables; no movie playback, board output or historical
+comparison was changed to obtain this candidate evidence. Packaging, graceful
+installation and sustained fullscreen movie acceptance remain open.
