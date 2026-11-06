@@ -44,6 +44,9 @@ pub fn snapshot() -> serde_json::Value {
     serde_json::json!({"process_id":std::process::id(),"phases":phases,"renderer":RENDERER.get(),
         "mpv_render_count":crate::ui::video::MPV_RENDER_COUNT.load(Ordering::Relaxed),
         "mpv_reused_count":crate::ui::video::MPV_RENDER_SKIPPED_COUNT.load(Ordering::Relaxed),
+        "mpv_failed_count":crate::ui::video::MPV_RENDER_FAILED_COUNT.load(Ordering::Relaxed),
+        "mpv_update_failed_count":crate::ui::video::MPV_UPDATE_FAILED_COUNT.load(Ordering::Relaxed),
+        "mpv_target_resize_count":crate::ui::video::MPV_TARGET_RESIZE_COUNT.load(Ordering::Relaxed),
         "mpv_last_render_us":crate::ui::video::LAST_MPV_RENDER_MICROS.load(Ordering::Relaxed),
         "mpv_max_render_us":crate::ui::video::MAX_MPV_RENDER_MICROS.load(Ordering::Relaxed)})
 }

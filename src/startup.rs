@@ -735,6 +735,8 @@ pub fn run() -> eframe::Result {
                     texture_width: 1920,
                     texture_height: 1080,
                     has_rendered_frame: false,
+                    render_target: None,
+                    consecutive_render_failures: 0,
                 })),
                 selected_instance_ids: std::collections::HashSet::new(),
                 selected_keyframes: std::collections::HashSet::new(),

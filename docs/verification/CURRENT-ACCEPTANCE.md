@@ -24,6 +24,13 @@ removed per-frame locale, default-document and filesystem work and real editor
 wheel regressions. Keep measured renderer improvement separate from installed
 mouse-wheel acceptance; the regular Preferences draft still gates replacement.
 
+## Intermittent fullscreen black flashes
+
+[GPU frame publication](fullscreen-frame-publication.md) records the confirmed
+clear-before-render failure path and a passing real OpenGL injected-failure test.
+Keep the last valid frame until replacement succeeds. Installed long-playback
+acceptance is still open; the exact trigger of the user's report is unconfirmed.
+
 ## Fresh audit: 13 October 2026
 
 [Hardware/status interaction progress](hardware-status-interaction.md) records

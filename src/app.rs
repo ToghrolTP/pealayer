@@ -507,6 +507,8 @@ pub struct RttState {
     pub texture_width: u32,
     pub texture_height: u32,
     pub has_rendered_frame: bool,
+    pub(crate) render_target: Option<crate::mpv::render::VideoRenderTarget>,
+    pub(crate) consecutive_render_failures: u32,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -10070,6 +10072,8 @@ impl Default for PealayerApp {
                 texture_width: 1920,
                 texture_height: 1080,
                 has_rendered_frame: false,
+                render_target: None,
+                consecutive_render_failures: 0,
             })),
             current_video_path: None,
             show_remaining_time: false,
