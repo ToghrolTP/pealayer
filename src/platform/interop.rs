@@ -9,6 +9,7 @@ use std::sync::mpsc::{Receiver, channel};
 #[cfg(any(unix, windows))]
 use std::sync::{Arc, Mutex};
 use std::thread;
+static NATIVE_ENDPOINT:std::sync::OnceLock<String>=std::sync::OnceLock::new();
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LaunchRequest {
@@ -95,7 +96,7 @@ fn validate_launch_destination(
 
 #[cfg(any(unix, windows, test))]
 #[derive(Default)]
-struct LaunchReceiptCache {
+pub(crate) struct LaunchReceiptCache {
     operation_ids: std::collections::VecDeque<String>,
 }
 
@@ -185,6 +186,12 @@ pub enum InteropCommand {
     Minimize,
     Maximize,
     Restore,
+    GetWindow,
+    SetWindow { #[serde(flatten)] placement: crate::platform::window_control::Placement },
+    GetPlayback,
+    GetMedia,
+    GetChapters,
+    FrameStep { frames: i32 },
     OpenPreferences,
     NavigatePreferences {
         #[serde(flatten)]
@@ -566,11 +573,22 @@ impl InteropCommand {
         // transfer them; owner-stamped browser receipts already belong to the
         // authority and follow normal session forwarding instead.
         matches!(self,Self::ImportAssets{request} if request.owner_id.is_none()) ||
-        matches!(self, Self::QuitLocal | Self::GetProcessStatus | Self::ConnectPeer { .. } | Self::InspectAuthoring { .. } | Self::NavigatePreferences { .. } | Self::OpenAbout { .. })
+        matches!(self, Self::QuitLocal | Self::GetProcessStatus | Self::ConnectPeer { .. } | Self::InspectAuthoring { .. } | Self::NavigatePreferences { .. } | Self::OpenAbout { .. }
+            | Self::GetWindow | Self::SetWindow { .. } | Self::Activate | Self::Minimize | Self::Maximize | Self::Restore | Self::SetFullscreen { .. } | Self::ToggleFullscreen)
     }
 
     pub fn query_result(&self) -> Option<Value> {
         match self {
+            Self::GetWindow => Some(serde_json::to_value(crate::platform::window_control::snapshot()).expect("window status")),
+            Self::GetPlayback => {
+                let status=get_live_status();
+                Some(serde_json::json!({"playing":status.playing,"loaded":status.current_video.is_some(),"position_seconds":status.playback_time,
+                    "duration_seconds":status.duration,"volume":status.volume,"muted":status.muted,"rate":status.playback_rate,
+                    "seekable":status.seekable,"live":status.live,"seek_pending":status.seek_pending,"settled_seek_revision":status.settled_seek_revision,
+                    "settled_seek_target":status.settled_seek_target,"buffered_until":status.buffered_until,"buffering_percent":status.buffering_percent}))
+            },
+            Self::GetMedia => { let status=get_live_status();Some(serde_json::json!({"target":status.current_video,"information":get_live_media_information(),"tracks":status.media_tracks,"chapters":status.chapters,"current_chapter_index":status.current_chapter_index,"duration_seconds":status.duration,"media_fps":status.media_fps})) },
+            Self::GetChapters => {let status=get_live_status();Some(serde_json::json!({"chapters":status.chapters,"current_chapter_index":status.current_chapter_index}))},
             Self::GetStatus => Some(serde_json::to_value(get_live_status())
                 .unwrap_or_else(|_| serde_json::json!({"status":"initializing"}))),
             Self::GetProcessStatus => Some(crate::process_control::status()),
@@ -581,6 +599,8 @@ impl InteropCommand {
 
     pub fn validate(&self) -> Result<(), String> {
         match self {
+            Self::SetWindow { placement } => placement.validate(),
+            Self::FrameStep { frames } if *frames==0 || frames.unsigned_abs()>120 => Err("Frame step must be a nonzero count within ±120".into()),
             Self::ImportAssets { request } => request.validate(),
             Self::ConnectPeer { request } => request.validate(),
             Self::NavigatePreferences { navigation } => navigation.validate(),
@@ -892,7 +912,7 @@ pub fn command_catalog() -> Value {
     let assets=serde_json::json!({"import":"pealayer.assets.import","review":"pealayer.assets.review","snapshot":"/api/assets","upload":"/api/assets/upload","chunk_bytes":crate::server::asset_upload::CHUNK_BYTES,"destinations":["player","library","timeline","audio-source"],"placement":"integer milliseconds; scene/timeline imports append after review, never replace the session","ownership":"transfer receipts pinned to the receiving session owner; hardware effect programs remain with PCController"});
     let mut catalog=serde_json::json!({
         "contract": "pealayer.control",
-        "transports": ["native", "http", "json-rpc", "websocket"],
+        "transports": ["native", "http", "json-rpc", "websocket", "tcp-ndjson", "binary-udp"],
         "process": { "status": "/api/process/status", "authoring": "/api/process/authoring", "command": "/api/process/command", "methods": ["pealayer.process.status", "pealayer.process.connect", "pealayer.process.quit"], "scope": "local process, never relayed to authority", "connect": "validated, idempotent, graceful restart; poll local status after reconnect" },
         "messaging": { "contract": "pealayer.messages.v1", "snapshot": "/api/messages", "subscription": "/ws", "publish": "pealayer.toast.show", "dismiss": "pealayer.toast.dismiss", "invoke": "pealayer.toast.invoke", "max_actions": 4, "default_action": "bound action ID", "state": "pealayer.messages.state", "surfaces": ["egui", "web", "terminal"], "persistent_timeout_ms": 0 },
         "remote_folders": { "browse": "pealayer.remote.browse", "select": "pealayer.remote.select", "sort": "pealayer.remote.sort", "close": "pealayer.remote.close", "state": "/api/remote/state", "thumbnail": "/api/remote/thumbnail", "subscription": "/ws" },
@@ -930,6 +950,12 @@ pub fn command_catalog() -> Value {
             "paused_step": "frame_step_count", "playing_step": "quick_seek_seconds" },
         "discovery": "/api/player/commands"
     });
+    catalog["window"]=serde_json::json!({"get":"pealayer.window.get","set":"pealayer.window.set","scope":"local process, never remote authority","units":"logical_points","position":"outer origin","size":"inner client size","states":["normal","minimized","maximized","fullscreen"],"bounds_without_state":"restore to normal, then place","acknowledgement":"queued; poll observed window state"});
+    catalog["native_ipc"]=serde_json::json!({"endpoint":NATIVE_ENDPOINT.get(),"encoding":"UTF-8 JSON or JSON-RPC, newline terminated"});
+    #[cfg(windows)]
+    {catalog["transports"].as_array_mut().unwrap().push(Value::String("wm-copydata".into()));catalog["wm_copydata"]=serde_json::json!({"request_dwdata":crate::platform::copydata::REQUEST,"response_dwdata":crate::platform::copydata::RESPONSE,"encoding":"UTF-8 JSON or JSON-RPC","limit_bytes":1048576,"reply":"wParam sender HWND; asynchronous WM_COPYDATA response; same Windows session","acknowledgement":"LRESULT=1 means queued, not applied"});}
+    catalog["playback_queries"]=serde_json::json!(["pealayer.playback.get","pealayer.media.get","pealayer.chapters.get","pealayer.status"]);
+    catalog["commands"].as_array_mut().unwrap().extend(["get_window","set_window","get_playback","get_media","get_chapters","frame_step"].map(|s|Value::String(s.into())));
     catalog.as_object_mut().unwrap().insert("assets".into(),assets);
     catalog.as_object_mut().unwrap().insert("branding".into(), serde_json::json!({
         "get":"pealayer.branding.get", "update":"pealayer.branding.update", "http":"/api/branding",
@@ -1305,6 +1331,7 @@ pub fn runtime_identity() -> RuntimeIdentity {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerStatusResponse {
+    pub window: crate::platform::window_control::WindowStatus,
     #[serde(default)]
     pub external_mpv: crate::mpv::external::Status,
     #[serde(default)]
@@ -1681,6 +1708,7 @@ impl Default for PlayerStatusResponse {
     fn default() -> Self {
         Self {
             external_mpv: crate::mpv::external::Status::default(),
+            window: crate::platform::window_control::WindowStatus::default(),
             application: ApplicationIdentity::default(),
             runtime: RuntimeIdentity::default(),
             asset_imports: crate::assets::snapshot(),
@@ -1912,6 +1940,16 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         "minimize" | "pealayer.window.minimize" => Some(InteropCommand::Minimize),
         "maximize" | "pealayer.window.maximize" => Some(InteropCommand::Maximize),
         "restore" | "pealayer.window.restore" => Some(InteropCommand::Restore),
+        "get_window" | "pealayer.window.get" => Some(InteropCommand::GetWindow),
+        "set_window" | "pealayer.window.set" => Some(InteropCommand::SetWindow {
+            placement: serde_json::from_value(request.params.clone()).map_err(|error|error.to_string())?,
+        }),
+        "get_playback" | "pealayer.playback.get" => Some(InteropCommand::GetPlayback),
+        "get_media" | "pealayer.media.get" => Some(InteropCommand::GetMedia),
+        "get_chapters" | "pealayer.chapters.get" => Some(InteropCommand::GetChapters),
+        "frame_step" | "pealayer.frame.step" => Some(InteropCommand::FrameStep {
+            frames: request.params.get("frames").and_then(Value::as_i64).and_then(|n|i32::try_from(n).ok()).ok_or("frames must be an integer within ±120")?,
+        }),
         "preferences" | "open_preferences" | "pealayer.window.preferences" => {
             Some(InteropCommand::OpenPreferences)
         }
@@ -2524,6 +2562,14 @@ pub fn get_live_appearance() -> Option<AppearanceState> {
         .and_then(|status| status.as_ref().and_then(|status| status.appearance.clone()))
 }
 
+static LIVE_MEDIA_INFORMATION: std::sync::RwLock<Option<crate::media_info::MediaFileInfo>>=std::sync::RwLock::new(None);
+pub fn set_live_media_information(info:crate::media_info::MediaFileInfo) {
+    if let Ok(mut current)=LIVE_MEDIA_INFORMATION.write(){*current=Some(info);}
+}
+pub fn get_live_media_information()->crate::media_info::MediaFileInfo {
+    if let Some(client)=crate::peer::client() && let Some(view)=client.snapshot().and_then(|snapshot|snapshot.session.media_view) {return view.file.redacted();}
+    LIVE_MEDIA_INFORMATION.read().ok().and_then(|value|value.clone()).unwrap_or_default()
+}
 pub fn get_live_status() -> PlayerStatusResponse {
     if let Some(client)=crate::peer::client() && let Some(snapshot)=client.snapshot() && let Ok(status)=serde_json::from_value(snapshot.session.status){return status;}
     if let Ok(lock) = LIVE_STATUS.read() {
@@ -2821,6 +2867,7 @@ fn spawn_windows_pipe_listener(
 pub fn parse_interop_request(
     line: &str,
 ) -> Result<(Option<serde_json::Value>, InteropCommand), String> {
+    if line.len()>1024*1024 {return Err("Control request exceeds 1 MiB".into());}
     let val: serde_json::Value = serde_json::from_str(line).map_err(|e| e.to_string())?;
 
     // Check if JSON-RPC 2.0 format
@@ -2876,6 +2923,10 @@ pub fn format_interop_error(id: Option<serde_json::Value>, code: i32, message: &
     }
 }
 
+pub(crate) fn request_id(payload:&str)->Option<Value> {
+    serde_json::from_str::<Value>(payload).ok().and_then(|value|value.get("id").cloned())
+}
+
 /// Commands from IPC/HTTP must wake an inactive Windows owner as well as egui.
 /// The native edge is scheduled on the shared shell worker, never under a
 /// context transaction or on the receiving window's message callback.
@@ -2886,7 +2937,7 @@ pub(crate) fn wake_command_dispatcher(ctx: &eframe::egui::Context) {
 }
 
 #[cfg(any(unix, windows, test))]
-fn dispatch_local_payload(
+pub(crate) fn dispatch_local_payload(
     payload: &str,
     tx: &std::sync::mpsc::Sender<InteropCommand>,
     egui_ctx: &eframe::egui::Context,
@@ -2901,7 +2952,7 @@ fn dispatch_local_payload(
         && let Some(response) = crate::server::binary_udp::rpc(&value, true) { return response.to_string(); }
     let (id, command) = match parse_interop_request(payload) {
         Ok(parsed) => parsed,
-        Err(error) => return format_interop_error(None, -32600, &error),
+        Err(error) => return format_interop_error(request_id(payload), -32600, &error),
     };
     if let Some(value) = command.query_result() {
         return format_interop_response(id, &value);
@@ -2978,6 +3029,12 @@ pub fn spawn_interop_listener(
     egui_ctx: eframe::egui::Context,
     application_identity: String,
 ) {
+    #[cfg(windows)]
+    let _=NATIVE_ENDPOINT.set(windows_pipe_name(&application_identity));
+    #[cfg(unix)]
+    let _=NATIVE_ENDPOINT.set(get_socket_path().to_string_lossy().into_owned());
+    #[cfg(windows)]
+    crate::platform::copydata::start(tx.clone(),egui_ctx.clone(),application_identity.clone());
     // Keep the listening identity stable even if branding is previewed or this
     // process is a named review/remote-client instance.
     egui_ctx.data_mut(|data| data.insert_temp(eframe::egui::Id::new("native-listener-identity"), application_identity.clone()));
@@ -4026,6 +4083,27 @@ mod tests {
             rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap(),
             InteropCommand::SetRate { rate: 1.25 }
         );
+    }
+
+    #[test]
+    fn window_and_media_commands_share_json_and_rpc_contracts() {
+        let placement=serde_json::json!({"x":-50,"y":40,"width":960,"height":640,"state":"normal"});
+        let rpc=serde_json::json!({"jsonrpc":"2.0","id":"place","method":"pealayer.window.set","params":placement});
+        let (_,command)=parse_interop_request(&rpc.to_string()).unwrap();
+        let mut plain=placement;plain["command"]=Value::String("set_window".into());
+        assert_eq!(parse_interop_request(&plain.to_string()).unwrap().1,command);
+        assert!(command.is_process_local());
+        for (method,command) in [("pealayer.window.get",InteropCommand::GetWindow),("pealayer.playback.get",InteropCommand::GetPlayback),("pealayer.media.get",InteropCommand::GetMedia),("pealayer.chapters.get",InteropCommand::GetChapters)] {
+            let rpc=serde_json::json!({"jsonrpc":"2.0","id":9,"method":method,"params":{}});
+            assert_eq!(parse_interop_request(&rpc.to_string()).unwrap().1,command);
+            assert!(command.query_result().unwrap().is_object());
+        }
+        for params in [serde_json::json!({"width":0}),serde_json::json!({"state":"invalid"}),serde_json::json!({"x":"40"}),serde_json::json!({"widht":900})] {
+            assert!(parse_interop_request(&serde_json::json!({"jsonrpc":"2.0","id":1,"method":"pealayer.window.set","params":params}).to_string()).is_err());
+        }
+        assert!(InteropCommand::FrameStep{frames:0}.validate().is_err());
+        assert!(InteropCommand::FrameStep{frames:-1}.validate().is_ok());
+        assert!(InteropCommand::FrameStep{frames:121}.validate().is_err());
     }
 
     #[test]

@@ -23,6 +23,11 @@ import type { ControlBarsConfig } from '../controlBars';
 import { ElapsedTimeInput } from './ElapsedTimeInput';
 
 export interface PlayerState {
+  window?: { process_id: number; available: boolean; units: 'logical_points'; pixels_per_point: number;
+    outer_bounds: {x:number;y:number;width:number;height:number} | null;
+    inner_bounds: {x:number;y:number;width:number;height:number} | null;
+    normal_bounds: {x:number;y:number;width:number;height:number;maximized:boolean} | null;
+    minimized:boolean;maximized:boolean;fullscreen:boolean;focused:boolean;revision:number;error:string|null;native_handle:string|null };
   pending_timeline_change?: boolean;
   asset_imports?: import('../assetImports').AssetImportState;
   control_bars?: ControlBarsConfig;

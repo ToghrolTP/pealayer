@@ -1381,6 +1381,7 @@ impl eframe::App for PealayerApp {
         let viewport = ctx.input(|input| input.viewport().clone());
         let is_fullscreen = viewport.fullscreen.unwrap_or(false);
         self.window_geometry = crate::platform::window_placement::observe(self.window_geometry, &viewport);
+        crate::platform::window_control::observe(&viewport, self.window_geometry, ctx.pixels_per_point(), self.web_only);
         self.observe_fullscreen_state(is_fullscreen);
         if !self.consistent_video_aspect_ratio || self.show_four_d_editor || is_fullscreen {
             crate::platform::windows::set_simple_video_aspect_constraint(
@@ -1541,6 +1542,7 @@ impl eframe::App for PealayerApp {
             let chapters = self.media_chapters();
             let current_chapter_index = self.active_media_chapter().map(|chapter| chapter.index);
             let status_resp = crate::platform::interop::PlayerStatusResponse {
+                window: crate::platform::window_control::snapshot(),
                 human_readable_time_units: self.human_readable_time_units,
                 external_mpv: crate::mpv::external::status(),
                 application: crate::platform::interop::ApplicationIdentity::current(&self.app_name),
@@ -4539,14 +4541,46 @@ impl PealayerApp {
             }
             InteropCommand::Maximize => {
                 crate::platform::taskbar_preview::cancel_minimize();
+                self.set_fullscreen(ctx,false);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true));
             }
             InteropCommand::Restore => {
                 crate::platform::taskbar_preview::cancel_minimize();
+                self.set_fullscreen(ctx,false);
                 ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             }
+            InteropCommand::SetWindow { placement } => {
+                use crate::platform::window_control::WindowMode;
+                if self.web_only {
+                    crate::platform::window_control::set_error(Some("This process has no visible native window".into()));
+                    return;
+                }
+                crate::platform::window_control::set_error(None);
+                crate::platform::taskbar_preview::cancel_minimize();
+                if placement.has_bounds() || matches!(placement.state,Some(WindowMode::Normal|WindowMode::Maximized)) {
+                    self.set_fullscreen(ctx,false);
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(false));
+                }
+                if placement.has_bounds() {
+                    let previous=self.window_geometry.unwrap_or(crate::config::WindowGeometry{x:40.0,y:40.0,width:800.0,height:600.0,maximized:false});
+                    let geometry=placement.resolve(previous);
+                    self.window_geometry=Some(geometry);
+                    ctx.send_viewport_cmd(egui::ViewportCommand::OuterPosition(egui::pos2(geometry.x,geometry.y)));
+                    ctx.send_viewport_cmd(egui::ViewportCommand::InnerSize(egui::vec2(geometry.width,geometry.height)));
+                }
+                match placement.state {
+                    Some(WindowMode::Minimized)=>crate::platform::taskbar_preview::minimize(ctx),
+                    Some(WindowMode::Maximized)=>ctx.send_viewport_cmd(egui::ViewportCommand::Maximized(true)),
+                    Some(WindowMode::Fullscreen)=>{ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));self.set_fullscreen(ctx,true);},
+                    _=>{},
+                }
+                ctx.request_repaint();
+            }
+            InteropCommand::FrameStep { frames } => self.step_timeline_frame(frames),
             InteropCommand::OpenPreferences => {
                 crate::ui::preferences::open(self, ctx);
             }
@@ -5368,7 +5402,8 @@ impl PealayerApp {
                     return;
                 }
             },
-            InteropCommand::GetStatus | InteropCommand::GetProcessStatus | InteropCommand::GetBranding => {}
+            InteropCommand::GetStatus | InteropCommand::GetProcessStatus | InteropCommand::GetBranding
+                | InteropCommand::GetWindow | InteropCommand::GetPlayback | InteropCommand::GetMedia | InteropCommand::GetChapters => {}
         }
         if !matches!(source, "keyboard" | "menu") {
             self.set_osd(format!("{source}: command applied"));
@@ -6561,6 +6596,7 @@ impl PealayerApp {
     }
 
     pub(crate) fn set_media_file_info(&mut self, info: crate::media_info::MediaFileInfo) {
+        crate::platform::interop::set_live_media_information(info.redacted());
         self.cached_media_chapters = crate::media_info::chapters(&info);
         self.media_file_info = info;
         self.bump_media_view_revision();
