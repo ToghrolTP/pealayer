@@ -8,6 +8,15 @@ This is the current index. Older handoffs and installed-build receipts remain
 historical evidence; their old open-PR, missing-feature or disconnected-runtime
 statements are not the present product state.
 
+## Window and media automation
+
+[Measured cross-transport acceptance](window-media-control-results.md) records
+the complete eight-transport Windows fixture and final-source native tests.
+The verified candidate is running in the isolated current Dock comparison.
+The regular installation is still gated by an unknown Preferences draft; Cafe
+deployment remains user-deferred. Keep those boundaries separate from API/runtime
+acceptance and retain the October 10 comparison until the user requests removal.
+
 ## Fresh audit: 13 October 2026
 
 [Hardware/status interaction progress](hardware-status-interaction.md) records

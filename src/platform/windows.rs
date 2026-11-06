@@ -2182,6 +2182,9 @@ unsafe extern "system" fn shell_window_proc(
     };
 
     observe_native_window_message(message);
+    if message==0x004a {
+        if let Some(result)=unsafe{crate::platform::copydata::receive(hwnd,wparam,lparam)} {return result;}
+    }
 
     if message==WM_SYSCOMMAND {
         match wparam.0 & 0xfff0 {
