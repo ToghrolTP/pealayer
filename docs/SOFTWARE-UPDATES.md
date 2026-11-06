@@ -23,6 +23,11 @@ call the existing application owner. The dependency-free reference transfer clie
 is [scripts/software-update.mjs](../scripts/software-update.mjs); both ecosystems
 use that one client, not separate upload/copy implementations.
 
+Controller staging is explicitly non-terminal: the durable operation waits for
+the exact replacement helper transaction to commit, and reports rollback as
+failure. Overlapping updates are rejected during host activation. Identical
+installed executables are acknowledged as current without restarting.
+
 ## Routes and targets
 
 Pealayer accepts the following JSON-RPC methods on `/api/rpc`, `/api/ipc`, `/ws`
@@ -211,3 +216,10 @@ establish those outcomes. Cafe remains user-deferred while offline.
 
 See [the current mutual-update verification receipt](verification/MUTUAL-SOFTWARE-UPDATES.md)
 for tested restart, pull and deployment results and the remaining acceptance gates.
+
+An opt-in real-process test is available as
+`node scripts/test-software-update-runtime.mjs FIXTURE_ORIGIN CANDIDATE_EXE CANDIDATE_MANIFEST`.
+It refuses production ports/non-fixture configuration, requires an isolated
+disconnected controller, uses only the player port, checks pending/committed
+phases and verifies process replacement (or no restart when already current).
+It never launches or controls production processes.
