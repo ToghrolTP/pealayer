@@ -17,6 +17,13 @@ The regular installation is still gated by an unknown Preferences draft; Cafe
 deployment remains user-deferred. Keep those boundaries separate from API/runtime
 acceptance and retain the October 10 comparison until the user requests removal.
 
+## Preferences wheel responsiveness
+
+[Native scroll performance](preferences-scroll-performance.md) records the
+removed per-frame locale, default-document and filesystem work and real editor
+wheel regressions. Keep measured renderer improvement separate from installed
+mouse-wheel acceptance; the regular Preferences draft still gates replacement.
+
 ## Fresh audit: 13 October 2026
 
 [Hardware/status interaction progress](hardware-status-interaction.md) records
