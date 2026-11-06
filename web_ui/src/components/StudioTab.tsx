@@ -913,11 +913,13 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
         <div className="timeline-grid" ref={timelineGridRef}>
         <div className="timeline-content" style={{ width: `${timelineZoom * 100}%` }}>
         <div className="timeline-ruler">
-          <span>{formatTimelineTime(0)}</span>
-          <span>{formatTimelineTime((timelineDurationMs / 1000) * .25)}</span>
-          <span>{formatTimelineTime((timelineDurationMs / 1000) * .5)}</span>
-          <span>{formatTimelineTime((timelineDurationMs / 1000) * .75)}</span>
-          <span>{formatTimelineTime(timelineDurationMs / 1000)}</span>
+          <div className="timeline-ruler-track">
+            {[0, .25, .5, .75, 1].map(fraction => (
+              <span key={fraction} style={{ left: `${fraction * 100}%` }}>
+                {formatTimelineTime((timelineDurationMs / 1000) * fraction)}
+              </span>
+            ))}
+          </div>
         </div>
 
         <div
