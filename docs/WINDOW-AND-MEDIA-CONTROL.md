@@ -114,6 +114,9 @@ WM_COPYDATA without controlling the user's mouse/keyboard.
 
 ## Verification
 
+[Measured transport matrix and deployment boundary](verification/window-media-control-results.md)
+records the actual passing run, source/package identity and remaining installation gate.
+
 `scripts/test-window-media-control.ps1` launches an identity-fenced fixture with
 independent storage, no hardware/global keys, a synthetic silent video and two
 chapters. It exercises HTTP, RPC, HTTP IPC, raw TCP, native pipe, WM_COPYDATA,

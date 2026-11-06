@@ -1,5 +1,8 @@
 [CmdletBinding()]
-param([ValidateSet('Both', 'Historical', 'Current')][string]$Version = 'Both')
+param(
+    [ValidateSet('Both', 'Historical', 'Current')][string]$Version = 'Both',
+    [string]$CurrentExecutable
+)
 
 # Deliberately separate from start-ui-review: this historical installation is
 # retained until the user explicitly requests removal, including its edits.
@@ -28,7 +31,8 @@ foreach ($review in $reviews) {
     }
     $executable = if ($review.Kind -eq 'Historical') {
         Join-Path $directory 'pealayer.exe'
-    } else { Join-Path $programRoot 'bin\pealayer.exe' }
+    } elseif ($CurrentExecutable) { [IO.Path]::GetFullPath($CurrentExecutable) }
+    else { Join-Path $programRoot 'bin\pealayer.exe' }
     if (-not (Test-Path -LiteralPath $executable -PathType Leaf)) { throw "Missing comparison executable: $executable" }
     $previous = @{}
     foreach ($name in $names) { $previous[$name] = [Environment]::GetEnvironmentVariable($name, 'Process') }

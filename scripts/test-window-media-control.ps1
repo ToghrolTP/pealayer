@@ -151,7 +151,7 @@ try {
         if($chapters.chapters.Count -ne 2 -or $chapters.current_chapter_index -ne 1){throw "$transport chapter readback failed"}
         $null=Invoke-Control $transport stop pealayer.stop
         $null=Await-State playback {!$args[0].loaded -and !$args[0].playing} "$transport stop"
-        $report.Add(@{transport=$transport;window='passed';media='passed';minimized_playback='passed';chapters='passed';clipboard_or_hardware_actions=$false})
+        $report.Add([pscustomobject]@{transport=$transport;window='passed';media='passed';minimized_playback='passed';chapters='passed';clipboard_or_hardware_actions=$false})
         $report|ConvertTo-Json -Depth 6|Set-Content -LiteralPath (Join-Path $fixture 'results.json') -Encoding utf8
         Write-Host "$transport passed."
     }
