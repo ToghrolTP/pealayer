@@ -817,13 +817,7 @@ pub fn draw_elapsed_editor(
                 app.show_subseconds,
             )
         };
-        if ui
-            .button(format!("{} {}", crate::ui::icons::COPY, app.tr("Copy")))
-            .clicked()
-        {
-            ui.ctx().copy_text(copied_time);
-            ui.close();
-        }
+        copy_time_menu_item(ui, &app.tr("Copy"), &copied_time);
         if ui
             .add_enabled(
                 enabled,
@@ -846,6 +840,41 @@ pub fn draw_elapsed_editor(
             ui.close();
         }
         ui.separator();
+        transport_context_menu(app, ui);
+    });
+    response
+}
+
+fn copy_time_menu_item(ui: &mut egui::Ui, label: &str, value: &str) {
+    if ui.button(format!("{} {label}", crate::ui::icons::COPY)).clicked() {
+        ui.ctx().copy_text(value.to_owned());
+        ui.close();
+    }
+}
+
+/// The Simple/fullscreen and NLE transports share the same duration menu.
+/// Copy the visible timecode (including remaining-time sign and precision),
+/// never a placeholder for a live, unloaded or still-determining source.
+pub fn draw_duration_label(
+    app: &mut PealayerApp,
+    ui: &mut egui::Ui,
+    text: String,
+    tooltip: String,
+    finite: bool,
+) -> egui::Response {
+    let label = if finite {
+        timecode_text(text.clone())
+    } else {
+        egui::RichText::new(text.clone())
+    };
+    let response = ui
+        .add(egui::Label::new(label).sense(egui::Sense::click()))
+        .on_hover_text(tooltip);
+    response.context_menu(|ui| {
+        if finite {
+            copy_time_menu_item(ui, &app.tr("Copy"), &text);
+            ui.separator();
+        }
         transport_context_menu(app, ui);
     });
     response
@@ -1168,18 +1197,9 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             }
                         });
 
-                        let total_label = if total_is_toggle {
-                            timecode_text(total_text)
-                        } else {
-                            egui::RichText::new(total_text)
-                        };
-                        let total_response = ui
-                            .add(egui::Label::new(total_label).sense(if total_is_toggle {
-                                egui::Sense::click()
-                            } else {
-                                egui::Sense::hover()
-                            }))
-                            .on_hover_text(total_tooltip);
+                        let total_response = draw_duration_label(
+                            app, ui, total_text, total_tooltip, total_is_toggle,
+                        );
                         toggle_total_mode = total_is_toggle && total_response.clicked();
                     },
                 );
@@ -1319,6 +1339,63 @@ pub fn parse_timecode(value: &str) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn duration_context_menu_copies_visible_time_without_seeking_or_toggling() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.playback_time = 83.125;
+        app.duration = 3723.5;
+        for width in [320.0, 768.0, 1440.0] {
+            for remaining in [false, true] {
+                for subseconds in [false, true] {
+                    app.show_remaining_time = remaining;
+                    app.show_subseconds = subseconds;
+                    let text = format_player_time(
+                        if remaining { -(app.duration - app.playback_time) } else { app.duration },
+                        true, subseconds,
+                    );
+                    let ctx = egui::Context::default();
+                    ctx.all_styles_mut(|style| style.animation_time = 0.0);
+                    let mut render = |events| {
+                        let mut rect = egui::Rect::NOTHING;
+                        let mut output = ctx.run_ui(egui::RawInput {
+                            events,
+                            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 600.0))),
+                            ..Default::default()
+                        }, |ui| {
+                            let response = draw_duration_label(&mut app, ui, text.clone(), String::new(), true);
+                            rect = response.rect;
+                            assert!(!response.clicked(), "menu use must not toggle duration mode");
+                        });
+                        output.textures_delta.clear();
+                        (rect, output)
+                    };
+                    let press = |pos, button, pressed| egui::Event::PointerButton {
+                        pos, button, pressed, modifiers: egui::Modifiers::NONE,
+                    };
+                    let (rect, _) = render(vec![]);
+                    let point = rect.center();
+                    render(vec![egui::Event::PointerMoved(point), press(point, egui::PointerButton::Secondary, true)]);
+                    render(vec![press(point, egui::PointerButton::Secondary, false)]);
+                    let (_, output) = render(vec![]);
+                    let copy = output.shapes.iter().find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text().ends_with("Copy") =>
+                            Some(text.pos + text.galley.size() / 2.0),
+                        _ => None,
+                    }).expect("duration menu must expose Copy with its icon");
+                    render(vec![egui::Event::PointerMoved(copy), press(copy, egui::PointerButton::Primary, true)]);
+                    let (_, output) = render(vec![press(copy, egui::PointerButton::Primary, false)]);
+                    assert!(output.platform_output.commands.iter().any(|command|
+                        matches!(command, egui::OutputCommand::CopyText(value) if value == &text)
+                    ), "clipboard must match the displayed timecode: {text}");
+                    assert_eq!(app.playback_time, 83.125);
+                    assert!(app.seek_pos.is_none());
+                    assert_eq!(app.show_remaining_time, remaining);
+                }
+            }
+        }
+    }
 
     #[test]
     fn contextual_transport_uses_neutral_idle_and_untinted_disabled_states() {
