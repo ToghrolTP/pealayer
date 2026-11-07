@@ -18155,6 +18155,18 @@ impl<'a> PealayerTabViewer<'a> {
                                             egui::Stroke::new(1.0_f32, craft_tokens.separator),
                                         );
 
+                                        // FilmCraft render/preview bar at bottom of ruler
+                                        if let Some(buffered_until) = self.app.buffered_until() {
+                                            let buffered_x = (rect.min.x + (buffered_until as f32 * zoom)).min(rect.max.x);
+                                            if buffered_x > rect.min.x {
+                                                let render_bar_rect = egui::Rect::from_min_max(
+                                                    egui::pos2(rect.min.x, ruler_rect.max.y - 2.0),
+                                                    egui::pos2(buffered_x, ruler_rect.max.y),
+                                                ).intersect(ruler_rect);
+                                                ruler_painter.rect_filled(render_bar_rect, 0.0, craft_tokens.render_green);
+                                            }
+                                        }
+
                                         let fps = if self.app.media_fps.is_finite() && self.app.media_fps > 0.0 {
                                             self.app.media_fps
                                         } else {
