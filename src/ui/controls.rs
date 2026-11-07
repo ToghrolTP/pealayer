@@ -75,23 +75,63 @@ pub(super) fn draw_volume_widgets(
 }
 
 fn volume_slider_widgets(ui: &mut egui::Ui, mut volume: f64, volume_label: &str) -> Option<f64> {
-    let old_width = ui.spacing().slider_width;
-    // Reserve a stable percentage column, even when the value has fewer digits.
-    ui.spacing_mut().slider_width = (ui.available_width() - 44.0 - 2.0 * ui.spacing().item_spacing.x).max(1.0);
-    let response = ui.add(egui::Slider::new(&mut volume, 0.0..=130.0).show_value(false))
-        .on_hover_text(format!("{volume_label}: {volume:.0}%"));
-    ui.spacing_mut().slider_width = old_width;
+    let craft_tokens = crate::ui::craft_theme::current(ui.ctx());
+    let slider_width = (ui.available_width() - 44.0 - 2.0 * ui.spacing().item_spacing.x).max(20.0);
+    let h = super::control_density::height(ui);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(slider_width, h), egui::Sense::click_and_drag());
+
+    let mut changed = false;
+    if response.clicked() || response.dragged() {
+        if let Some(pos) = response.interact_pointer_pos() {
+            let frac = ((pos.x - (rect.left() + 4.0)) / (rect.width() - 8.0).max(1.0)).clamp(0.0, 1.0);
+            volume = (frac as f64 * 130.0).clamp(0.0, 130.0);
+            changed = true;
+        }
+    }
     let wheel = if response.hovered() {
         ui.input(|input| input.smooth_scroll_delta.y)
-    } else { 0.0 };
+    } else {
+        0.0
+    };
     if wheel != 0.0 {
         volume = (volume + f64::from(wheel.signum()) * 2.0).clamp(0.0, 130.0);
         ui.input_mut(|input| input.smooth_scroll_delta.y = 0.0);
+        changed = true;
     }
-    let h = super::control_density::height(ui);
+
+    // Paint FilmCraft sleek track & thumb (no default white pill thumb)
+    let track_h = 4.0;
+    let track_rect = egui::Rect::from_min_max(
+        egui::pos2(rect.left(), rect.center().y - track_h / 2.0),
+        egui::pos2(rect.right(), rect.center().y + track_h / 2.0),
+    );
+    let p = ui.painter();
+    p.rect_filled(track_rect, 2.0, craft_tokens.separator);
+
+    let frac = (volume / 130.0).clamp(0.0, 1.0) as f32;
+    let thumb_x = egui::lerp(track_rect.left() + 4.0..=track_rect.right() - 4.0, frac);
+    let active_rect = egui::Rect::from_min_max(track_rect.min, egui::pos2(thumb_x, track_rect.max.y));
+    p.rect_filled(active_rect, 2.0, craft_tokens.accent);
+
+    let hover = response.hovered() || response.dragged();
+    p.circle_filled(egui::pos2(thumb_x, rect.center().y), 4.5, craft_tokens.panel_bg);
+    p.circle_stroke(
+        egui::pos2(thumb_x, rect.center().y),
+        4.5,
+        egui::Stroke::new(
+            1.5,
+            if hover {
+                craft_tokens.tab_text_active
+            } else {
+                craft_tokens.icon_active
+            },
+        ),
+    );
+
+    let response = response.on_hover_text(format!("{volume_label}: {volume:.0}%"));
     ui.add_sized([44.0, h], egui::Label::new(timecode_text(format!("{:.0}%", volume))))
         .on_hover_text(volume_label);
-    (response.changed() || wheel != 0.0).then_some(volume)
+    (changed || response.changed()).then_some(volume)
 }
 
 pub fn timecode_text(value: impl Into<String>) -> egui::RichText {

@@ -815,6 +815,93 @@ pub fn paint_filmcraft_playhead(
     ));
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MarkerPart {
+    Whole,
+    Left,
+    Right,
+}
+
+/// Paint FilmCraft's precision pentagonal marker glyph (chapters, sequence markers, keyframes).
+pub fn marker_glyph(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    tip_height: f32,
+    part: MarkerPart,
+    color: Color32,
+) {
+    let x = rect.center().x;
+    let y = rect.top();
+    let shoulder = rect.bottom() - tip_height;
+    let points = match part {
+        MarkerPart::Whole => vec![
+            egui::pos2(rect.left(), y),
+            egui::pos2(rect.right(), y),
+            egui::pos2(rect.right(), shoulder),
+            egui::pos2(x, rect.bottom()),
+            egui::pos2(rect.left(), shoulder),
+        ],
+        MarkerPart::Left => vec![
+            egui::pos2(rect.left(), y),
+            egui::pos2(x, y),
+            egui::pos2(x, rect.bottom()),
+            egui::pos2(rect.left(), shoulder),
+        ],
+        MarkerPart::Right => vec![
+            egui::pos2(x, y),
+            egui::pos2(rect.right(), y),
+            egui::pos2(rect.right(), shoulder),
+            egui::pos2(x, rect.bottom()),
+        ],
+    };
+    painter.add(egui::Shape::convex_polygon(points, color, Stroke::NONE));
+}
+
+/// FilmCraft dropdown text selector ("Fit ▾", "1/2 ▾") with 4px corner radius and field tokens.
+pub fn dropdown_text(
+    ui: &mut egui::Ui,
+    rect: egui::Rect,
+    text: &str,
+    t: &Tokens,
+    id: egui::Id,
+) -> egui::Response {
+    let resp = ui.interact(rect, id, egui::Sense::click());
+    ui.painter().rect_filled(rect, 4.0, t.field_bg);
+    ui.painter().rect_stroke(
+        rect,
+        4.0,
+        Stroke::new(
+            1.0,
+            if resp.hovered() {
+                Color32::from_rgb(0x4b, 0x4b, 0x4b)
+            } else {
+                t.field_border
+            },
+        ),
+        egui::StrokeKind::Inside,
+    );
+    let mut font = egui::TextStyle::Body.resolve(ui.style());
+    font.size = 12.0;
+    ui.painter().text(
+        egui::pos2(rect.min.x + 9.0, rect.center().y),
+        egui::Align2::LEFT_CENTER,
+        text,
+        font,
+        t.text,
+    );
+    let chevron_pos = egui::pos2(rect.max.x - 11.0, rect.center().y);
+    let mut chevron_font = egui::TextStyle::Body.resolve(ui.style());
+    chevron_font.size = 10.0;
+    ui.painter().text(
+        chevron_pos,
+        egui::Align2::CENTER_CENTER,
+        crate::ui::icons::CARET_DOWN,
+        chevron_font,
+        t.text_dim,
+    );
+    resp
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -996,5 +1083,25 @@ mod tests {
         assert!(w >= MIN_THUMB_W);
         assert!(w <= 500.0);
         assert!(per_point >= 0.0);
+    }
+
+    #[test]
+    fn marker_glyph_and_dropdown_text_render_with_craft_tokens() {
+        let ctx = egui::Context::default();
+        let config = crate::config::AppConfig::default();
+        crate::ui::configure_native_visuals(&ctx, &config);
+        let tokens = current(&ctx);
+
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let rect = egui::Rect::from_min_size(egui::pos2(10.0, 10.0), egui::vec2(70.0, 24.0));
+            let resp = dropdown_text(ui, rect, "Fit", &tokens, egui::Id::unique("test_fit"));
+            assert_eq!(resp.rect, rect);
+
+            let marker_rect = egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(7.0, 10.0));
+            marker_glyph(ui.painter(), marker_rect, 3.0, MarkerPart::Whole, egui::Color32::from_rgb(0x38, 0x8e, 0x3c));
+            marker_glyph(ui.painter(), marker_rect, 3.0, MarkerPart::Left, egui::Color32::from_rgb(0xc2, 0x18, 0x5b));
+            marker_glyph(ui.painter(), marker_rect, 3.0, MarkerPart::Right, egui::Color32::from_rgb(0x00, 0x97, 0xa7));
+        });
+        output.textures_delta.clear();
     }
 }

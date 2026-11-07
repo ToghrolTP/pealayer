@@ -306,11 +306,9 @@ fn draw_timeline(app: &mut PealayerApp, ui: &mut egui::Ui) {
         egui::RichText::new(total_label)
     };
 
-    // Anchor the duration and fullscreen affordance to the right
-    // edge first, then give the seekbar the exact remaining width.
-    // A former fixed 180 px reservation was wider than these
-    // controls and left a visible, useless tail after fullscreen.
-    let response = ui
+    let craft_tokens = crate::ui::craft_theme::current(ui.ctx());
+
+    let (response, seek_rect) = ui
         .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
             let total_response = ui
                 .add(egui::Label::new(total_text).sense(if finite_timeline {
@@ -325,41 +323,195 @@ fn draw_timeline(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 app.save_config();
             }
 
-            let slider = egui::Slider::new(&mut current_pos, 0.0..=max_dur)
-                .show_value(false)
-                .trailing_fill(true);
-            let response = crate::ui::controls::add_fill_width_slider(ui, can_seek, slider);
-            response.context_menu(|ui| crate::ui::controls::transport_context_menu(app, ui));
-            response
+            let avail_w = ui.available_width().max(MIN_SEEK_WIDTH);
+            let seek_h = ui.available_height().max(20.0);
+            let (rect, resp) = ui.allocate_exact_size(
+                egui::vec2(avail_w, seek_h),
+                if can_seek {
+                    egui::Sense::click_and_drag()
+                } else {
+                    egui::Sense::hover()
+                },
+            );
+            (resp, rect)
         })
         .inner;
 
+    // Paint FilmCraft native mini-timeline: dark track rail, dual circular handles, ticks, pentagon markers, and downward pentagon playhead
+    let track_h = 13.0_f32;
+    let track_y = seek_rect.center().y + 2.0;
+    let track_rect = egui::Rect::from_min_max(
+        egui::pos2(seek_rect.left(), track_y - track_h / 2.0),
+        egui::pos2(seek_rect.right(), track_y + track_h / 2.0),
+    );
+    let r = track_h / 2.0;
+    let p = ui.painter();
+
+    // Track rail
+    p.rect_filled(track_rect, r, craft_tokens.separator);
+
+    // Buffered range fill
     if let Some(buffered_until) = app.buffered_until() {
-        crate::ui::controls::paint_buffered_seekbar(
-            ui,
-            &response,
-            (current_pos / app.duration).clamp(0.0, 1.0) as f32,
-            (buffered_until / app.duration).clamp(0.0, 1.0) as f32,
+        let buf_frac = (buffered_until / max_dur).clamp(0.0, 1.0) as f32;
+        let buf_w = (track_rect.width() * buf_frac).max(0.0);
+        let buf_rect = egui::Rect::from_min_max(
+            track_rect.min,
+            egui::pos2(track_rect.min.x + buf_w, track_rect.max.y),
+        );
+        p.rect_filled(buf_rect, r, craft_tokens.accent.gamma_multiply(0.25));
+    }
+
+    // Dual circular handles at track ends
+    for handle_x in [track_rect.min.x + r, track_rect.max.x - r] {
+        p.circle_filled(egui::pos2(handle_x, track_rect.center().y), 4.5, craft_tokens.panel_bg);
+        p.circle_stroke(
+            egui::pos2(handle_x, track_rect.center().y),
+            4.5,
+            egui::Stroke::new(1.5, craft_tokens.icon_active),
         );
     }
-    crate::ui::controls::paint_seekbar_ticks(ui, &response, app);
-    if let Some(chapter_time) = crate::ui::controls::paint_seekbar_markers(ui, &response, app) {
-        current_pos = chapter_time;
-    }
-    let show_seek_preview = app.nle_seekbar_hover_thumbnails;
-    crate::ui::seek_preview::draw(app, ui, &response, show_seek_preview, "nle-seekbar-preview");
 
-    if can_seek && response.changed() {
-        app.scrub_to(current_pos);
-        ui.ctx().request_repaint();
+    // Tick ladder above track
+    let fps = if app.media_fps.is_finite() && app.media_fps > 0.0 {
+        app.media_fps
+    } else {
+        30.0
+    };
+    let base = fps.clamp(12.0, 120.0).round() as i64;
+    let frame_px = (track_rect.width() as f64) / (max_dur * fps);
+    let (minor_step, major_step) = crate::ui::craft_theme::ruler_steps(frame_px, base);
+    let total_frames = (max_dur * fps).ceil() as i64;
+    let mut f = 0;
+    let mut count = 0;
+    while f <= total_frames && count < 256 {
+        let frac = (f as f64 / (max_dur * fps)).clamp(0.0, 1.0) as f32;
+        let x = track_rect.min.x + frac * track_rect.width();
+        let is_major = f % major_step == 0;
+        let h = if is_major { 8.0 } else { 3.5 };
+        p.line_segment(
+            [egui::pos2(x, track_rect.min.y - h), egui::pos2(x, track_rect.min.y)],
+            egui::Stroke::new(
+                1.0,
+                if is_major {
+                    craft_tokens.text_dim
+                } else {
+                    craft_tokens.text_faint
+                },
+            ),
+        );
+        f += minor_step;
+        count += 1;
+    }
+
+    // Pentagon markers (chapters and keyframes)
+    let mut clicked_marker_time = None;
+    let chapters = app.media_chapters();
+    for (i, chapter) in chapters.iter().enumerate() {
+        if !chapter.time_seconds.is_finite()
+            || chapter.time_seconds < 0.0
+            || chapter.time_seconds > max_dur
+        {
+            continue;
+        }
+        let frac = (chapter.time_seconds / max_dur).clamp(0.0, 1.0) as f32;
+        let x = track_rect.min.x + frac * track_rect.width();
+        let marker_rect = egui::Rect::from_min_size(
+            egui::pos2(x - 3.5, track_rect.min.y - 12.0),
+            egui::vec2(7.0, 10.0),
+        );
+        let color = match i % 4 {
+            0 => egui::Color32::from_rgb(0x38, 0x8e, 0x3c), // green
+            1 => egui::Color32::from_rgb(0xc2, 0x18, 0x5b), // magenta
+            2 => egui::Color32::from_rgb(0xf5, 0x7c, 0x00), // amber
+            _ => egui::Color32::from_rgb(0x00, 0x97, 0xa7), // cyan
+        };
+        crate::ui::craft_theme::marker_glyph(
+            p,
+            marker_rect,
+            3.0,
+            crate::ui::craft_theme::MarkerPart::Whole,
+            color,
+        );
+        if response.clicked() {
+            if let Some(pos) = response.interact_pointer_pos() {
+                if marker_rect.expand(2.0).contains(pos) {
+                    clicked_marker_time = Some(chapter.time_seconds);
+                }
+            }
+        }
+    }
+    for keyframe in &app.timeline.keyframes {
+        let time = keyframe.time_ms as f64 / 1000.0;
+        if time >= 0.0 && time <= max_dur {
+            let frac = (time / max_dur).clamp(0.0, 1.0) as f32;
+            let x = track_rect.min.x + frac * track_rect.width();
+            let k_rect = egui::Rect::from_min_size(
+                egui::pos2(x - 3.5, track_rect.min.y - 12.0),
+                egui::vec2(7.0, 10.0),
+            );
+            crate::ui::craft_theme::marker_glyph(
+                p,
+                k_rect,
+                3.0,
+                crate::ui::craft_theme::MarkerPart::Whole,
+                egui::Color32::from_rgb(0xef, 0x44, 0x44),
+            );
+            if response.clicked() {
+                if let Some(pos) = response.interact_pointer_pos() {
+                    if k_rect.expand(2.0).contains(pos) {
+                        clicked_marker_time = Some(time);
+                    }
+                }
+            }
+        }
+    }
+
+    // Playhead: precision downward pentagon and vertical stem line
+    let frac = (current_pos / max_dur).clamp(0.0, 1.0) as f32;
+    let x = track_rect.min.x + frac * track_rect.width();
+    let hy = track_rect.min.y - 11.0;
+    p.add(egui::Shape::convex_polygon(
+        vec![
+            egui::pos2(x - 5.5, hy),
+            egui::pos2(x + 5.5, hy),
+            egui::pos2(x + 5.5, hy + 5.0),
+            egui::pos2(x, hy + 9.0),
+            egui::pos2(x - 5.5, hy + 5.0),
+        ],
+        craft_tokens.playhead,
+        egui::Stroke::NONE,
+    ));
+    p.line_segment(
+        [egui::pos2(x, hy + 8.0), egui::pos2(x, track_rect.max.y)],
+        egui::Stroke::new(1.0, craft_tokens.playhead),
+    );
+
+    // Scrubbing and interaction
+    if let Some(m_time) = clicked_marker_time {
+        current_pos = m_time;
+        if can_seek {
+            app.scrub_to(current_pos);
+            app.finish_scrub(current_pos);
+            ui.ctx().request_repaint();
+        }
+    } else if can_seek && (response.dragged() || response.clicked()) {
+        if let Some(pos) = response.interact_pointer_pos() {
+            let f = ((pos.x - track_rect.left()) / track_rect.width().max(1.0)).clamp(0.0, 1.0) as f64;
+            current_pos = f * max_dur;
+            app.scrub_to(current_pos);
+            ui.ctx().request_repaint();
+        }
     }
     if can_seek
         && (response.drag_stopped()
-            || response.clicked()
             || (app.is_scrubbing && !ui.input(|i| i.pointer.primary_down())))
     {
         app.finish_scrub(current_pos);
     }
+
+    response.context_menu(|ui| crate::ui::controls::transport_context_menu(app, ui));
+    let show_seek_preview = app.nle_seekbar_hover_thumbnails;
+    crate::ui::seek_preview::draw(app, ui, &response, show_seek_preview, "nle-seekbar-preview");
 }
 
 #[cfg(test)]
@@ -540,5 +692,32 @@ mod tests {
 
         assert_eq!(tokens.pill_active_bg, egui::Color32::from_rgb(0x3a, 0x3a, 0x3a));
         assert_eq!(tokens.playhead, tokens.focus);
+    }
+
+    #[test]
+    fn filmcraft_monitor_timeline_renders_custom_handles_and_playhead() {
+        let _lock = crate::app::tests::lock_app_tests();
+        let ctx = egui::Context::default();
+        let config = crate::config::AppConfig::default();
+        crate::ui::configure_native_visuals(&ctx, &config);
+        let mut app = PealayerApp::default();
+        app.current_video_path = Some(std::path::PathBuf::from("/mock/video.mp4"));
+        app.duration = 60.0;
+        app.is_seekable = true;
+        app.playback_time = 15.0;
+
+        let mut output = ctx.run_ui(
+            egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(
+                    egui::Pos2::ZERO,
+                    egui::vec2(800.0, 100.0),
+                )),
+                ..Default::default()
+            },
+            |ui| {
+                draw_timeline(&mut app, ui);
+            },
+        );
+        output.textures_delta.clear();
     }
 }
