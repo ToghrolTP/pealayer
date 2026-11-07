@@ -191,6 +191,61 @@ pub(crate) fn paint_buffered_seekbar(
         .rect_filled(buffered_rect, buffered_rect.height() / 2.0, color);
 }
 
+/// Paint FilmCraft-style tick marks on the seekbar rail using the ruler step ladder.
+pub(crate) fn paint_seekbar_ticks(
+    ui: &egui::Ui,
+    response: &egui::Response,
+    app: &PealayerApp,
+) {
+    let duration = app.duration;
+    if duration <= 0.0 || !duration.is_finite() {
+        return;
+    }
+    let rect = response.rect;
+    let range = seekbar_value_range(rect);
+    let width = range.end() - range.start();
+    if width <= 0.0 {
+        return;
+    }
+    let craft_tokens = crate::ui::craft_theme::current(ui.ctx());
+    let fps = if app.media_fps.is_finite() && app.media_fps > 0.0 {
+        app.media_fps
+    } else {
+        30.0
+    };
+    let base = fps.clamp(12.0, 120.0).round() as i64;
+    let frame_px = (width as f64) / (duration * fps);
+    let (minor, major) = crate::ui::craft_theme::ruler_steps(frame_px, base);
+
+    let rail_height = ui.spacing().slider_rail_height;
+    let p = ui.painter();
+    let total_frames = (duration * fps).ceil() as i64;
+    let mut f = 0;
+    let max_ticks = 256;
+    let mut count = 0;
+    while f <= total_frames && count < max_ticks {
+        let frac = (f as f64 / (duration * fps)).clamp(0.0, 1.0) as f32;
+        let x = egui::lerp(range.clone(), frac);
+        let is_major = f % major == 0;
+        let h = if is_major {
+            (rail_height * 0.45).min(5.0)
+        } else {
+            (rail_height * 0.25).min(3.0)
+        };
+        let color = if is_major {
+            craft_tokens.text_dim.gamma_multiply(0.55)
+        } else {
+            craft_tokens.text_faint.gamma_multiply(0.35)
+        };
+        p.line_segment(
+            [egui::pos2(x, rect.center().y - h), egui::pos2(x, rect.center().y + h)],
+            egui::Stroke::new(1.0, color),
+        );
+        f += minor;
+        count += 1;
+    }
+}
+
 pub(crate) fn seekbar_value_range(rect: egui::Rect) -> std::ops::RangeInclusive<f32> {
     let radius = rect.height() / 2.5;
     rect.left() + radius..=rect.right() - radius
@@ -655,9 +710,11 @@ pub fn draw_elapsed_editor(
     // TextEdit swap used different font padding and allocation rules, which
     // made the time jump when editing began even though the outer row stayed
     // in place.
+    let craft_tokens = crate::ui::craft_theme::current(ui.ctx());
     let editor = crate::ui::dialog::singleline_text_edit(ui, buffer)
         .id(edit_id)
         .font(egui::TextStyle::Monospace)
+        .text_color(if editing { craft_tokens.text } else { craft_tokens.timecode })
         .horizontal_align(egui::Align::Center)
         .vertical_align(egui::Align::Center)
         .margin(egui::Margin::symmetric(4, 2))
@@ -1040,6 +1097,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 (buffered_until / app.duration).clamp(0.0, 1.0) as f32,
                             );
                         }
+                        paint_seekbar_ticks(ui, &response, app);
                         if let Some(chapter_time) = paint_seekbar_markers(ui, &response, app) { current_pos = chapter_time; }
                         let show_seek_preview = app.seekbar_hover_thumbnails;
                         crate::ui::seek_preview::draw(
@@ -1520,5 +1578,23 @@ mod tests {
             measured_width > 450.0,
             "seekbar should consume the remaining row, got {measured_width}px"
         );
+    }
+
+    #[test]
+    fn paint_seekbar_ticks_renders_without_panic() {
+        let ctx = egui::Context::default();
+        let config = crate::config::AppConfig::default();
+        crate::ui::configure_native_visuals(&ctx, &config);
+        let mut app = crate::app::PealayerApp::default();
+        app.duration = 60.0;
+        app.media_fps = 30.0;
+
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let mut val = 15.0;
+            let slider = egui::Slider::new(&mut val, 0.0..=60.0);
+            let resp = ui.add(slider);
+            paint_seekbar_ticks(ui, &resp, &app);
+        });
+        output.textures_delta.clear();
     }
 }

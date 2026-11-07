@@ -342,6 +342,7 @@ fn draw_timeline(app: &mut PealayerApp, ui: &mut egui::Ui) {
             (buffered_until / app.duration).clamp(0.0, 1.0) as f32,
         );
     }
+    crate::ui::controls::paint_seekbar_ticks(ui, &response, app);
     if let Some(chapter_time) = crate::ui::controls::paint_seekbar_markers(ui, &response, app) {
         current_pos = chapter_time;
     }
