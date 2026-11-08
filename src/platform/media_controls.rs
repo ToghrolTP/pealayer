@@ -176,6 +176,9 @@ pub fn map_media_control_event(
         MediaControlEvent::OpenUri(target) => InteropCommand::Open { target },
         MediaControlEvent::Raise => InteropCommand::Activate,
         MediaControlEvent::Quit => InteropCommand::Quit,
+        // Souvlaki's event enum is non-exhaustive. Unrecognized OS actions must
+        // not be guessed into a playback or hardware command.
+        _ => return None,
     })
 }
 

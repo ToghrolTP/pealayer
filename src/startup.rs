@@ -618,14 +618,13 @@ pub fn run() -> eframe::Result {
                 .as_deref()
                 .or(loaded_config.workspace_dock_layout.as_deref())
                 .and_then(|json| {
-                    let ws = serde_json::from_str::<
-                        craft_ui::docking::Workspace<crate::ui::layout::PealayerTab>,
-                    >(json)
-                    .ok()?;
-                    if ws.validate().is_err() {
-                        return None;
+                    match crate::ui::layout::decode_workspace(json) {
+                        Ok(workspace) => Some(workspace),
+                        Err(error) => {
+                            log::warn!("{error}; using the default workspace");
+                            None
+                        }
                     }
-                    Some(ws)
                 })
                 .unwrap_or_else(crate::ui::layout::create_initial_layout);
             let mut workspace_profiles = loaded_config.workspace_profiles.clone();
@@ -642,6 +641,16 @@ pub fn run() -> eframe::Result {
             let frame_cache = Arc::new(std::sync::RwLock::new(
                 crate::mpv::frame_cache::FrameCache::new(128 * 1024 * 1024),
             ));
+
+            let mut native_seek_client = crate::mpv::seek_completion::NativeSeekClient::new(mpv_static)
+                .expect("Failed to create seek completion client");
+            let seek_repaint = cc.egui_ctx.clone();
+            native_seek_client.set_wakeup_callback(move || {
+                if !crate::platform::windows::native_window_operation_active() {
+                    seek_repaint.request_repaint();
+                }
+            });
+            let native_seek_client = Arc::new(native_seek_client);
 
             let mut app = PealayerApp {
                 native_service_policy: crate::app::NativeServicePolicy::Production,
@@ -662,6 +671,8 @@ pub fn run() -> eframe::Result {
                 rtl,
                 mpv: crate::mpv::player::Player(mpv_static),
                 mpv_client: Arc::new(mpv_client),
+                native_seek_client: Arc::clone(&native_seek_client),
+                seek_epoch: 0,
                 external_catalog_revision: 0,
                 external_seek_revision: 0,
                 pending_external_media: None,
@@ -717,7 +728,7 @@ pub fn run() -> eframe::Result {
                 selected_timeline_track: None,
                 seek_pos: None,
                 seek_controller: crate::mpv::seek::SeekController::with_cache(
-                    crate::mpv::seek::MpvSeekBackend::new(mpv_static),
+                    crate::mpv::seek::MpvSeekBackend::new(mpv_static, Arc::clone(&native_seek_client)),
                     frame_cache.clone(),
                 ),
                 frame_cache,
@@ -734,7 +745,9 @@ pub fn run() -> eframe::Result {
                 show_error: None,
                 show_four_d_editor: loaded_config.workspace_session.nle,
 
-                timeline: startup_effect_cue_timeline,
+                timeline: startup_effect_cue_timeline.clone(),
+                timeline_saved_baseline: Some(crate::four_d::history::TimelineSnapshot::from(&startup_effect_cue_timeline)),
+                pending_timeline_close_action: None,
                 engine_handle,
                 recording_session: crate::four_d::curve_record::RecordingSession::new(),
                 input_capture: crate::four_d::input_capture::InputCaptureState::new(),
@@ -870,6 +883,8 @@ pub fn run() -> eframe::Result {
                 application_shortcuts: loaded_config.application_shortcuts.clone(),
                 global_hardware_hotkeys_enabled: loaded_config.global_hardware_hotkeys_enabled,
                 hardware_key_bindings: loaded_config.hardware_key_bindings.clone(),
+                hardware_number_shortcuts_enabled: loaded_config.hardware_number_shortcuts_enabled,
+                hardware_sequence_matcher: Default::default(),
                 hardware_binding_dialog_channel: None,
                 hardware_binding_draft: None,
                 hardware_binding_capturing: false,

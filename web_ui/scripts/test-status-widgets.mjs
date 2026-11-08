@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { selectedWorkspace } from '../src/workspaces.ts';
 import { tr } from '../src/i18n.ts';
 import { DEFAULT_VISIBILITY, WIDGETS, orderedWidgets, displayedWidgets, widgetVisible, setWidgetVisible, reorderWidgets, nextFpsMode, screenRateSelected, numericTelemetry, appendSample, chartPaths, operationTone, operationDestination } from '../src/statusWidgets.ts';
@@ -52,4 +53,24 @@ assert.equal(appendSample(samples, { time: 149501, values: [0] }).length, 240);
 const paths = chartPaths([{ time: 0, values: [1] }, { time: 500, values: [undefined] }, { time: 1000, values: [2] }], 0, 100, 20);
 assert.equal(paths.length, 2, 'missing samples break the line, never become zero');
 assert.deepEqual(chartPaths([{ time: 0, values: [undefined] }], 0, 100, 20), []);
+const styles = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
+const view = readFileSync(new URL('../src/components/ApplicationStatusBar.tsx', import.meta.url), 'utf8');
+const connectionRule = styles.match(/\.app-statusbar \.status-widget--connection\s*\{([^}]+)\}/)?.[1] ?? '';
+assert.match(connectionRule, /width:\s*max-content/, 'connection caption must use spare bar space');
+assert.match(connectionRule, /flex:\s*0 1 auto/, 'caption may shrink on narrow screens');
+assert.match(styles, /\.status-connection-caption\s*\{[^}]*min-width:\s*0[^}]*text-overflow:\s*ellipsis/);
+assert.match(view, /className="status-connection-caption"/);
+assert.doesNotMatch(view, /\{width:\s*252\}/, 'showing transport must not restore a fixed width ceiling');
+const dividerRule = styles.match(/\.status-widget-divider\s*\{([^}]+)\}/)?.[1] ?? '';
+assert.match(dividerRule, /flex:\s*0 0 1px/);
+assert.match(dividerRule, /height:\s*12px/);
+assert.match(dividerRule, /align-self:\s*center/);
+assert.match(dividerRule, /background:\s*var\(--line\)/);
+assert.match(dividerRule, /pointer-events:\s*none/);
+assert.doesNotMatch(styles, /\.status-widget\s*\+\s*\.status-widget\s*\{[^}]*border/,
+  'a full-height widget border steals text width and does not match the native inset separator');
+assert.match(view, /\.map\(widgetElement\)\.filter\(\(element\)=>element!==null\)/,
+  'only rendered widgets participate in divider placement');
+assert.match(view, /config\.dividers && index>0 && <span className="status-widget-divider" aria-hidden="true"/,
+  'no divider before the first visible item in either group');
 console.log('Status widgets: FPS modes, order, visibility, bounded logging and unavailable data checks passed.');

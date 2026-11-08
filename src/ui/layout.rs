@@ -2210,7 +2210,7 @@ fn pwm_step_action<'a>(
     control: &'a crate::four_d::controller::HardwareControl,
     verb: &str,
 ) -> Option<&'a crate::four_d::controller::HardwareAction> {
-    app.pwm_card.shows(verb).then(|| control.actions.iter()
+    (app.pwm_card.show_step_buttons && app.pwm_card.shows(verb)).then(|| control.actions.iter()
         .find(|action| action.verb.eq_ignore_ascii_case(verb))).flatten()
 }
 
@@ -2218,14 +2218,28 @@ fn draw_pwm_step_button(
     ui: &mut egui::Ui, app: &PealayerApp,
     control: &crate::four_d::controller::HardwareControl,
     action: &crate::four_d::controller::HardwareAction, enabled: bool,
-) {
-    let size = ui.spacing().interact_size.y;
-    let response = ui.add_enabled(enabled, egui::Button::new(crate::ui::icons::action(&action.verb))
-        .min_size(egui::vec2(size, size)))
-        .on_hover_text(crate::ui::i18n::visual_text(app.language, &action.name));
-    if hardware_control_activated(app, ui, &response) {
-        crate::ui::hardware_control::invoke_action(app, control, action);
-    }
+) -> bool {
+    let size = crate::ui::control_density::height(ui);
+    let response = ui.scope(|ui| {
+        // The row reserves a square, not a text button plus horizontal padding.
+        // Keep the icon inside that slot even at the original 18-point density.
+        ui.spacing_mut().button_padding.x = 0.0;
+        ui.add_enabled(enabled, egui::Button::new(crate::ui::icons::action(&action.verb))
+            .min_size(egui::vec2(size, size)))
+            .on_hover_text(crate::ui::i18n::visual_text(app.language, &action.name))
+    }).inner;
+    let _ = control;
+    hardware_control_activated(app, ui, &response)
+}
+
+/// One percentage point normally, a tenth with Ctrl, ten with Shift.
+/// Ctrl wins when both modifiers are held; all input methods share the policy.
+pub(crate) fn pwm_adjustment(modifiers: egui::Modifiers) -> f64 {
+    if modifiers.ctrl || modifiers.mac_cmd { 0.1 } else if modifiers.shift { 10.0 } else { 1.0 }
+}
+
+fn adjusted_pwm(value: f64, steps: f64, modifiers: egui::Modifiers) -> f64 {
+    ((value + steps * pwm_adjustment(modifiers)).clamp(0.0, 100.0) * 10.0).round() / 10.0
 }
 
 fn draw_pwm_editor_row_with_buttons(
@@ -2260,15 +2274,20 @@ fn draw_pwm_editor_row_with_buttons(
             session.at_frame(ui.ctx().cumulative_frame_nr());
             *percent = session.begin(*percent);
             let before_controls = *percent;
+            let modifiers = ui.input(|input| input.modifiers);
+            let mut stepped = false;
             let gap = ui.spacing().item_spacing.x;
             let decrease = buttons.and_then(|(app, control)| pwm_step_action(app, control, "decrease"));
             let increase = buttons.and_then(|(app, control)| pwm_step_action(app, control, "increase"));
             let reserved = (usize::from(decrease.is_some()) + usize::from(increase.is_some())) as f32
-                * (ui.spacing().interact_size.y + gap);
+                * (crate::ui::control_density::height(ui) + gap);
             let (slider_width, number_width) = pwm_editor_widths((row_width - reserved).max(60.0), gap);
             if let Some(action) = decrease {
                 let (app, control) = buttons.expect("action has a source");
-                draw_pwm_step_button(ui, app, control, action, editable);
+                if draw_pwm_step_button(ui, app, control, action, editable) {
+                    *percent = adjusted_pwm(*percent, -1.0, modifiers);
+                    stepped = true;
+                }
             }
             let slider = ui
                 .scope(|ui| {
@@ -2289,13 +2308,16 @@ fn draw_pwm_editor_row_with_buttons(
                             // step and reports changed even without user input.
                             .clamping(egui::SliderClamping::Edits)
                             .show_value(false)
-                            .step_by(0.1),
+                            .step_by(pwm_adjustment(modifiers)),
                     )
                 })
                 .inner;
             if let Some(action) = increase {
                 let (app, control) = buttons.expect("action has a source");
-                draw_pwm_step_button(ui, app, control, action, editable);
+                if draw_pwm_step_button(ui, app, control, action, editable) {
+                    *percent = adjusted_pwm(*percent, 1.0, modifiers);
+                    stepped = true;
+                }
             }
             let wheel_steps = if editable {
                 pwm_wheel_steps(ui, &slider)
@@ -2303,20 +2325,25 @@ fn draw_pwm_editor_row_with_buttons(
                 0.0
             };
             if wheel_steps != 0.0 {
-                *percent = (*percent + wheel_steps).clamp(0.0, 100.0);
+                *percent = adjusted_pwm(*percent, wheel_steps, modifiers);
             }
             let before_number = *percent;
             let value = ui
                 .add_enabled_ui(editable, |ui| {
                     ui.add_sized(
                         [number_width, 24.0],
-                        egui::DragValue::new(percent)
+                        crate::ui::validated_input::ValidatedDrag {
+                            alphabet: crate::ui::validated_input::InputAlphabet::Decimal,
+                            inner: egui::DragValue::new(percent)
                             .range(0.0..=100.0)
                             .clamp_existing_to_range(false)
-                            .speed(0.1)
+                            .speed(pwm_adjustment(modifiers))
                             .fixed_decimals(1)
                             .suffix("%")
-                            .max_decimals(1),
+                            .max_decimals(1)
+                            .update_while_editing(false)
+                            .custom_parser(crate::ui::validated_input::parse_percentage),
+                        },
                     )
                 })
                 .inner;
@@ -2338,9 +2365,9 @@ fn draw_pwm_editor_row_with_buttons(
                 *percent = before_number;
             }
             let dragging = slider.dragged() || value.dragged();
-            let changed = slider.changed() || numeric_changed || wheel_steps != 0.0;
+            let changed = slider.changed() || numeric_changed || wheel_steps != 0.0 || stepped;
             let commit = slider.drag_stopped() || value.drag_stopped()
-                || value.lost_focus() || enter || wheel_steps != 0.0
+                || value.lost_focus() || enter || wheel_steps != 0.0 || stepped
                 || (slider.changed() && !slider.dragged());
             outcome = session.finish(*percent, changed,
                 value.has_focus() || dragging, dragging, commit, escape);
@@ -2592,6 +2619,10 @@ fn effect_drag_source<R>(
     effect_drag_source_with_action_gutter(ui, id, payload, 0.0, add_contents)
 }
 
+fn effect_card_manage_requested(response: &egui::Response, inline_editing: bool) -> bool {
+    !inline_editing && response.double_clicked_by(egui::PointerButton::Primary)
+}
+
 fn effect_drag_source_with_action_gutter<R>(
     ui: &mut egui::Ui,
     id: egui::Id,
@@ -2650,7 +2681,7 @@ fn effect_drag_source_with_action_gutter<R>(
         let mut drag_rect = response.response.rect;
         drag_rect.max.x = (drag_rect.max.x - action_gutter).max(drag_rect.min.x);
         let drag = ui
-            .interact(drag_rect, id, egui::Sense::drag())
+            .interact(drag_rect, id, egui::Sense::click_and_drag())
             .on_hover_cursor(egui::CursorIcon::Grab);
         if drag.drag_started_by(egui::PointerButton::Primary) {
             // Establish the payload in the same input frame in which egui
@@ -6108,10 +6139,14 @@ pub(crate) fn pwm_card_actions<'a>(
     preferences: &crate::config::PwmCardPreferences,
     control: &'a crate::four_d::controller::HardwareControl,
 ) -> Vec<&'a crate::four_d::controller::HardwareAction> {
-    control.actions.iter().filter(|action| {
+    let mut actions: Vec<_> = control.actions.iter().filter(|action| {
         !matches!(action.verb.to_ascii_lowercase().as_str(), "increase" | "decrease")
             && preferences.shows(&action.verb)
-    }).collect()
+    }).collect();
+    actions.sort_by_key(|action| match action.verb.to_ascii_lowercase().as_str() {
+        "off" => 0, "toggle" => 1, "on" => 2, _ => 3,
+    });
+    actions
 }
 
 pub(crate) fn pwm_indicator_action<'a>(
@@ -6140,6 +6175,7 @@ fn hardware_indicator_action<'a>(
 
 pub(crate) fn draw_pwm_power_actions(
     app: &PealayerApp, ui: &mut egui::Ui,
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
     control: &crate::four_d::controller::HardwareControl,
 ) {
     let actions = pwm_card_actions(&app.pwm_card, control);
@@ -6150,7 +6186,8 @@ pub(crate) fn draw_pwm_power_actions(
             let label = format!("{} {}", crate::ui::icons::action(&action.verb),
                 crate::ui::i18n::visual_text(app.language, &action.name));
             let response = ui.add_enabled(enabled,
-                hardware_action_button(ui, label, &action.verb, false, enabled));
+                hardware_action_button(ui, label, &action.verb,
+                    hardware_action_selected(capabilities, control, &action.verb), enabled));
             if hardware_control_activated(app, ui, &response) {
                 crate::ui::hardware_control::invoke_action(app, control, action);
             }
@@ -6945,9 +6982,9 @@ fn draw_addressable_strip_tool(
             .unwrap_or(strip.default_fps)
             .clamp(strip.minimum_fps, strip.maximum_fps)
     });
-    let available_modes = ["solid", "pixel", "frame", "rainbow", "effect"]
+    let available_modes = ["solid", "pixel", "diagnostic", "frame", "rainbow", "effect"]
         .into_iter()
-        .filter(|mode| strip.supports(mode))
+        .filter(|mode| strip.supports(if *mode == "diagnostic" {"frame"} else {mode}))
         .collect::<Vec<_>>();
     let mut mode = ui.data_mut(|data| {
         data.get_persisted::<String>(mode_id)
@@ -7026,6 +7063,13 @@ fn draw_addressable_strip_tool(
                 .num_columns(2)
                 .spacing([10.0, 7.0])
                 .show(ui, |ui| {
+                    if !strip.color_orders.is_empty(){
+                        ui.label(app.tr("Color order"));
+                        let mut order=strip.color_order.clone();
+                        ui.add_enabled_ui(mutation_enabled,|ui|{crate::ui::dropdown::ComboBox::from_id_salt("strip-color-order").selected_text(&order).show_ui(ui,|ui|{for candidate in &strip.color_orders{ui.selectable_value(&mut order,candidate.clone(),candidate);}});});
+                        if order!=strip.color_order {if let Err(error)=app.set_addressable_strip_color_order(&order){app.set_osd(error);}}
+                        ui.end_row();
+                    }
                     ui.label(app.tr("Pixel count"));
                     ui.horizontal(|ui| {
                         ui.add(
@@ -7055,6 +7099,7 @@ fn draw_addressable_strip_tool(
                         .selected_text(match mode.as_str() {
                             "solid" => app.tr("Solid color"),
                             "pixel" => app.tr("Single pixel"),
+                            "diagnostic" => app.tr("Pixel diagnostics"),
                             "frame" => app.tr("Color frame"),
                             "rainbow" => app.tr("Rainbow"),
                             "effect" => app.tr("Effect"),
@@ -7065,6 +7110,7 @@ fn draw_addressable_strip_tool(
                                 let label = match *advertised {
                                     "solid" => app.tr("Solid color"),
                                     "pixel" => app.tr("Single pixel"),
+                                    "diagnostic" => app.tr("Pixel diagnostics"),
                                     "frame" => app.tr("Color frame"),
                                     "rainbow" => app.tr("Rainbow"),
                                     "effect" => app.tr("Effect"),
@@ -7103,6 +7149,7 @@ fn draw_addressable_strip_tool(
                         }
                     }
                 }
+                "diagnostic" => crate::ui::pixel_diagnostic::draw(app, ui, capabilities, pixels),
                 "pixel" => {
                     pixel = pixel.min(pixels.saturating_sub(1));
                     ui.horizontal_wrapped(|ui| {
@@ -7297,6 +7344,10 @@ fn draw_addressable_strip_tool(
             if !app.hardware_effect_authoring.status.is_empty() {
                 ui.add_space(5.0);
                 ui.weak(&app.hardware_effect_authoring.status);
+            }
+            if let Some(stream)=strip.stream.as_ref().filter(|s|s.pixels>0){
+                ui.horizontal_wrapped(|ui|{ui.weak(format!("{} {} · {} FPS",stream.pixels,app.tr("pixels"),stream.requested_fps));ui.separator();ui.label(format!("{} {} · {} {}",stream.frames_acked,app.tr("ACKed frames"),stream.frames_failed,app.tr("Failed frames")));});
+                if !stream.last_error.is_empty(){ui.colored_label(ui.visuals().error_fg_color,&stream.last_error);}
             }
         },
     );
@@ -7536,7 +7587,7 @@ fn hardware_card_header<R>(ui: &mut egui::Ui, compact: bool, render: impl FnOnce
         egui::Layout::left_to_right(egui::Align::Center), render).inner
 }
 
-fn hardware_action_button(ui: &egui::Ui, label: impl Into<String>, verb: &str,
+pub(crate) fn hardware_action_button(ui: &egui::Ui, label: impl Into<String>, verb: &str,
     selected: bool, enabled: bool) -> egui::Button<'static> {
     let label = label.into();
     let tone = match verb.to_ascii_lowercase().as_str() {
@@ -7544,6 +7595,10 @@ fn hardware_action_button(ui: &egui::Ui, label: impl Into<String>, verb: &str,
             else { egui::Color32::from_rgb(21, 128, 61) }),
         "off" => Some(if ui.visuals().dark_mode { egui::Color32::from_rgb(248, 113, 113) }
             else { egui::Color32::from_rgb(185, 28, 28) }),
+        "up" => Some(if ui.visuals().dark_mode { egui::Color32::from_rgb(251, 191, 36) }
+            else { egui::Color32::from_rgb(146, 64, 14) }),
+        "down" => Some(if ui.visuals().dark_mode { egui::Color32::from_rgb(96, 165, 250) }
+            else { egui::Color32::from_rgb(29, 78, 216) }),
         _ => None,
     };
     let Some(tone) = tone else { return egui::Button::new(label).truncate().selected(selected); };
@@ -7558,6 +7613,19 @@ fn hardware_action_button(ui: &egui::Ui, label: impl Into<String>, verb: &str,
         // egui's atomic button frame includes stroke width in its geometry.
         // Recolor the theme's stroke without changing the selected row height.
         .stroke(egui::Stroke::new(ui.visuals().widgets.inactive.bg_stroke.width, tone.gamma_multiply(0.8)))
+}
+
+pub(crate) fn hardware_action_selected(
+    capabilities: &crate::four_d::controller::HardwareCapabilities,
+    control: &crate::four_d::controller::HardwareControl, verb: &str,
+) -> bool {
+    match verb.to_ascii_lowercase().as_str() {
+        "on" => control_indicator_state(capabilities, control) == ControlIndicatorState::Active,
+        "off" => control_indicator_state(capabilities, control) == ControlIndicatorState::Inactive,
+        "up" => motion_control_direction(capabilities, control) == MotionDirectionState::Up,
+        "down" => motion_control_direction(capabilities, control) == MotionDirectionState::Down,
+        _ => false,
+    }
 }
 
 /// Keep transformable card layers attached to their workspace panel rather
@@ -7771,8 +7839,7 @@ fn draw_compact_control_card(
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         for action in ordered.into_iter().rev() {
                             let enabled = !app.estop_active && !control.locked && !app.hardware_programming_blocked();
-                            let selected = (action.verb.eq_ignore_ascii_case("on") && indicator_state == ControlIndicatorState::Active)
-                                || (action.verb.eq_ignore_ascii_case("off") && indicator_state == ControlIndicatorState::Inactive);
+                            let selected = hardware_action_selected(capabilities, control, &action.verb);
                             let response = ui
                                 .add_enabled(
                                     enabled,
@@ -7836,7 +7903,7 @@ fn draw_compact_control_card(
             if is_pwm_control(control) && let Some(channel) = capabilities.pwm_channels.iter()
                 .find(|channel| channel.key == control.key) {
                 draw_pwm_card_editor(app, ui, capabilities, control, channel, card_content_width);
-                draw_pwm_power_actions(app, ui, control);
+                draw_pwm_power_actions(app, ui, capabilities, control);
             }
         })
     }).inner;
@@ -8134,7 +8201,7 @@ fn draw_control_card(
                     }
 
                     if is_pwm_control(control) {
-                        draw_pwm_power_actions(app, ui, control);
+                        draw_pwm_power_actions(app, ui, capabilities, control);
                     } else if !control.actions.is_empty() {
                         ui.add_space(if app.compact_hardware_controls {
                             3.0
@@ -8162,13 +8229,7 @@ fn draw_control_card(
                                         let label =
                                             responsive_action_label(action, ui.available_width());
                                         let verb = action.verb.to_ascii_lowercase();
-                                        let selected = relay_id.is_some()
-                                            && ((verb == "on"
-                                                && indicator_state
-                                                    == ControlIndicatorState::Active)
-                                                || (verb == "off"
-                                                    && indicator_state
-                                                        == ControlIndicatorState::Inactive));
+                                        let selected = hardware_action_selected(capabilities, control, &verb);
                                         let enabled = !app.estop_active && !control.locked && !app.hardware_programming_blocked();
                                         let button = hardware_action_button(ui, label, &verb, selected, enabled);
                                         let response = ui
@@ -8568,6 +8629,33 @@ mod timeline_row_tests {
     use super::*;
 
     #[test]
+    fn pwm_modifier_steps_are_consistent_and_bounded() {
+        assert_eq!(adjusted_pwm(25.0, 1.0, egui::Modifiers::NONE), 26.0);
+        assert_eq!(adjusted_pwm(25.0, -1.0, egui::Modifiers::CTRL), 24.9);
+        assert_eq!(adjusted_pwm(25.0, 1.0, egui::Modifiers::SHIFT), 35.0);
+        assert_eq!(adjusted_pwm(99.9, 1.0, egui::Modifiers::SHIFT), 100.0);
+        assert_eq!(adjusted_pwm(0.0, -1.0, egui::Modifiers::CTRL), 0.0);
+        assert_eq!(pwm_adjustment(egui::Modifiers {ctrl:true, shift:true, ..Default::default()}), 0.1);
+    }
+
+    #[test]
+    fn motion_buttons_follow_authoritative_direction_not_boolean_activity() {
+        use crate::four_d::controller::{HardwareControl, HardwareCapabilities, HardwareMotionState};
+        let control = HardwareControl {key:"seat.a".into(), kind:"motion".into(), ..Default::default()};
+        let mut caps = HardwareCapabilities::default();
+        assert!(!hardware_action_selected(&caps, &control, "up"));
+        let mut motion = HardwareMotionState::default();
+        motion.left.applied = "down".into();
+        caps.motion = Some(motion);
+        assert!(hardware_action_selected(&caps, &control, "down"));
+        assert!(!hardware_action_selected(&caps, &control, "up"));
+        caps.motion.as_mut().unwrap().left.transitioning = true;
+        caps.motion.as_mut().unwrap().left.requested = "up".into();
+        assert!(hardware_action_selected(&caps, &control, "up"));
+        assert!(!hardware_action_selected(&caps, &control, "down"));
+    }
+
+    #[test]
     fn pwm_card_actions_have_distinct_icons_and_independent_visibility() {
         let control = crate::four_d::controller::HardwareControl {
             key: "pwm.1".into(), kind: "mosfet".into(),
@@ -8579,9 +8667,10 @@ mod timeline_row_tests {
         let mut preferences = crate::config::PwmCardPreferences::default();
         assert_ne!(crate::ui::icons::action("increase"), crate::ui::icons::action("decrease"));
         assert_eq!(pwm_card_actions(&preferences, &control).iter().map(|action| action.verb.as_str())
-            .collect::<Vec<_>>(), ["on", "off", "toggle"]);
+            .collect::<Vec<_>>(), ["off", "toggle", "on"]);
         preferences.show_on = false;
         preferences.show_other = false;
+        preferences.show_toggle = false;
         assert_eq!(pwm_card_actions(&preferences, &control).iter().map(|action| action.verb.as_str())
             .collect::<Vec<_>>(), ["off"]);
         let serialized = serde_json::to_value(&preferences).unwrap();
@@ -8619,16 +8708,16 @@ mod timeline_row_tests {
             ).collect(), ..Default::default()
         };
         for width in [180.0, 216.0, 300.0, 420.0] {
-            for height in [24.0, 28.0, 32.0, 36.0] {
+            for density in crate::config::UiControlDensity::ALL {
                 let context = egui::Context::default();
+                context.all_styles_mut(|style| crate::ui::control_density::configure(style, density));
                 let (sender, receiver) = std::sync::mpsc::channel();
                 let mut percent = 24.007;
                 let output = context.run_ui(egui::RawInput::default(), |ui| {
                     ui.set_width(width);
-                    ui.spacing_mut().interact_size.y = height;
                     let response = draw_pwm_control_editor(&app, ui, &control, &mut percent, width);
                     assert_eq!(response, PwmEditorResponse::default());
-                    assert!(ui.min_rect().width() <= width + 2.0, "width={width}, height={height}: {:?}", ui.min_rect());
+                    assert!(ui.min_rect().width() <= width + 2.0, "width={width}, density={density:?}: {:?}", ui.min_rect());
                     transmit_pwm_editor_response_with(&sender, true, ui, 1, pwm_raw(percent), response);
                 });
                 discard_ui_output(output);
@@ -9014,14 +9103,19 @@ mod timeline_row_tests {
 
     #[test]
     fn timeline_ruler_inherits_craft_theme_ruler_tokens() {
-        let ctx = egui::Context::default();
-        let config = crate::config::AppConfig::default();
-        crate::ui::configure_native_visuals(&ctx, &config);
-        let tokens = crate::ui::craft_theme::current(&ctx);
-
-        assert_eq!(tokens.tl_ruler_bg, egui::Color32::from_rgb(0x1d, 0x1d, 0x1d));
-        assert_eq!(tokens.tl_ruler_tick, egui::Color32::from_rgb(0x8d, 0x8d, 0x8d));
-        assert_eq!(tokens.tl_ruler_text, egui::Color32::from_rgb(0xb0, 0xb0, 0xb0));
+        for palette in [crate::config::ColorPalette::Native, crate::config::ColorPalette::Studio] {
+            for theme in [egui::Theme::Light, egui::Theme::Dark] {
+                let ctx = egui::Context::default();
+                ctx.set_theme(theme);
+                let config = crate::config::AppConfig { color_palette: palette, ..Default::default() };
+                crate::ui::configure_native_visuals(&ctx, &config);
+                let tokens = crate::ui::craft_theme::current(&ctx);
+                let style = ctx.style_of(theme);
+                assert_eq!(tokens.tl_ruler_bg, style.visuals.panel_fill);
+                assert_eq!(tokens.tl_ruler_tick, style.visuals.weak_text_color());
+                assert_eq!(tokens.tl_ruler_text, style.visuals.weak_text_color());
+            }
+        }
     }
 
     #[test]
@@ -9388,10 +9482,6 @@ mod timeline_row_tests {
                 TIMELINE_RULER_HEIGHT + 2.0 * track_height + analog_height
             );
         }
-    }
-
-    fn discard_ui_output(mut output: egui::FullOutput) {
-        output.textures_delta.clear();
     }
 
     #[test]
@@ -13191,6 +13281,71 @@ mod timeline_row_tests {
     }
 
     #[test]
+    fn effect_card_double_click_manages_only_the_primary_card_body() {
+        for (button, action_button, expected) in [
+            (egui::PointerButton::Primary, false, true),
+            (egui::PointerButton::Secondary, false, false),
+            (egui::PointerButton::Primary, true, false),
+        ] {
+            let context = egui::Context::default();
+            let payload = EffectDragPayload {
+                name: "Synthetic effect".into(), icon: String::new(), duration_ms: 750,
+                target: crate::four_d::models::HardwareTarget::ControllerMacro,
+                actions: Vec::new(),
+                controller_macro: Some(crate::four_d::models::ControllerMacroCue {
+                    id: 7, mode: "mcu".into(),
+                }),
+                controller_strip_effect: None,
+                controller_lane: Some(crate::four_d::models::ControllerEffectLane::Sequence),
+                audio_effect: None,
+            };
+            let card = std::cell::Cell::new(egui::Rect::NOTHING);
+            let action = std::cell::Cell::new(egui::Rect::NOTHING);
+            let requested = std::cell::Cell::new(false);
+            let editing_requested = std::cell::Cell::new(false);
+            let action_clicks = std::cell::Cell::new(0);
+            let render = |time, events| {
+                let output = context.run_ui(egui::RawInput {
+                    time: Some(time),
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(480.0, 240.0))),
+                    events, ..Default::default()
+                }, |ui| {
+                    let response = effect_drag_source_with_action_gutter(ui,
+                        egui::Id::new("double-click-effect-card"), payload.clone(), 48.0, |ui| {
+                        ui.set_width(228.0);
+                        ui.horizontal(|ui| {
+                            ui.add_sized([180.0, 40.0], egui::Label::new("Synthetic effect"));
+                            let button = ui.add_sized([40.0, 40.0], egui::Button::new("Run"));
+                            action.set(button.rect);
+                            if button.clicked() { action_clicks.set(action_clicks.get() + 1); }
+                        });
+                    });
+                    card.set(response.response.rect);
+                    requested.set(effect_card_manage_requested(&response.response, false));
+                    editing_requested.set(effect_card_manage_requested(&response.response, true));
+                });
+                discard_ui_output(output);
+            };
+            render(0.0, Vec::new());
+            render(0.01, Vec::new());
+            let point = if action_button { action.get().center() }
+                else { egui::pos2(card.get().left() + 40.0, card.get().center().y) };
+            let pointer = |pressed| egui::Event::PointerButton {
+                pos: point, button, pressed, modifiers: egui::Modifiers::NONE,
+            };
+            render(0.10, vec![egui::Event::PointerMoved(point), pointer(true)]);
+            render(0.12, vec![pointer(false)]);
+            assert!(!requested.get(), "A single click must not manage an effect");
+            render(0.20, vec![pointer(true)]);
+            render(0.22, vec![pointer(false)]);
+            assert_eq!(requested.get(), expected, "button={button:?}, action_button={action_button}");
+            assert!(!editing_requested.get(), "Double-clicking text during inline rename must not replace its draft");
+            assert_eq!(action_clicks.get(), if action_button { 2 } else { 0 });
+            assert!(egui::DragAndDrop::payload::<EffectDragPayload>(&context).is_none());
+        }
+    }
+
+    #[test]
     fn effect_card_completes_a_real_pointer_drag_and_drop_cycle() {
         let context = egui::Context::default();
         let payload = EffectDragPayload {
@@ -13781,6 +13936,96 @@ pub struct PealayerTabViewer<'a> {
     pub app: &'a mut PealayerApp,
 }
 
+#[cfg(test)]
+fn discard_ui_output(mut output: egui::FullOutput) {
+    // Headless fixtures deliberately do not upload font/image texture deltas.
+    output.textures_delta.clear();
+}
+
+/// Require the current application envelope. The upstream model's serde
+/// defaults otherwise turn an unrelated object into a valid, empty workspace.
+pub fn decode_workspace(json: &str) -> Result<craft_ui::docking::Workspace<PealayerTab>, String> {
+    #[derive(serde::Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct Envelope {
+        version: u32,
+        layout: craft_ui::docking::Layout<PealayerTab>,
+        hidden: Vec<(PealayerTab, craft_ui::docking::Location<PealayerTab>)>,
+        saved: Option<craft_ui::docking::Layout<PealayerTab>>,
+        locked: bool,
+    }
+    let parsed: Envelope = serde_json::from_str(json)
+        .map_err(|error| format!("Could not restore workspace layout: {error}"))?;
+    if parsed.version != craft_ui::docking::Workspace::<PealayerTab>::VERSION {
+        return Err("Unsupported workspace format; the saved layout was not applied".into());
+    }
+    let workspace = craft_ui::docking::Workspace {
+        version: parsed.version, layout: parsed.layout, hidden: parsed.hidden,
+        saved: parsed.saved, locked: parsed.locked,
+    };
+    workspace.validate().map_err(|error| format!("Invalid workspace layout: {error:?}"))?;
+    Ok(workspace)
+}
+
+fn panel_scroll_axes(tab: &PealayerTab) -> [bool; 2] {
+    match tab {
+        PealayerTab::ProgramMonitor | PealayerTab::EffectsLibrary
+        | PealayerTab::HardwareMonitor | PealayerTab::MediaInspector => [false, false],
+        _ => [true, true],
+    }
+}
+
+fn panel_body<R>(ui: &mut egui::Ui, panel: &PealayerTab, body: impl FnOnce(&mut egui::Ui) -> R) -> R {
+    let axes = panel_scroll_axes(panel);
+    if axes == [false, false] {
+        body(ui)
+    } else {
+        egui::ScrollArea::new(axes).id_salt(("pealayer-panel-scroll", panel))
+            .auto_shrink([false, false]).show(ui, body).inner
+    }
+}
+
+/// Host-owned Craft menu events are not layout actions. Persist their local
+/// view state with egui memory, which workspace/session snapshots already own.
+#[derive(Clone, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
+pub(crate) struct DockViewState {
+    pub maximized: Option<PealayerTab>,
+    pub auto_collapse: bool,
+}
+
+impl Default for DockViewState {
+    fn default() -> Self { Self { maximized: None, auto_collapse: true } }
+}
+
+impl DockViewState {
+    pub fn load(ctx: &egui::Context) -> Self {
+        ctx.data_mut(|data| data.get_persisted(egui::Id::new("pealayer-dock-view")))
+            .unwrap_or_default()
+    }
+
+    pub fn apply(
+        &mut self,
+        events: impl IntoIterator<Item = craft_ui::docking::DockEvent<PealayerTab>>,
+        workspace: &craft_ui::docking::Workspace<PealayerTab>,
+    ) {
+        for event in events {
+            match event {
+                craft_ui::docking::DockEvent::ToggleMaximize { panel } => {
+                    self.maximized = (self.maximized != Some(panel)).then_some(panel);
+                }
+                craft_ui::docking::DockEvent::ToggleAutoCollapse => self.auto_collapse = !self.auto_collapse,
+                _ => {}
+            }
+        }
+        self.maximized = self.maximized.filter(|panel| workspace.layout.contains(panel));
+    }
+
+    pub fn store(&self, ctx: &egui::Context) {
+        ctx.data_mut(|data| data.insert_persisted(egui::Id::new("pealayer-dock-view"), self.clone()));
+    }
+}
+
 impl<'a> PealayerTabViewer<'a> {
     pub fn draw_context_menu(&mut self, ui: &mut egui::Ui, tab: PealayerTab) {
         let title = tab.title(self.app);
@@ -14290,6 +14535,9 @@ impl<'a> PealayerTabViewer<'a> {
                                                     self.app
                                                         .place_controller_effect_at_playhead(&payload);
                                                 }
+                                                let mut manage_effect = effect_card_manage_requested(
+                                                    &response.response, inline_editing,
+                                                );
                                                 let open_effect_menu = secondary_click_inside(
                                                     ui.ctx(),
                                                     response.response.rect,
@@ -14308,13 +14556,7 @@ impl<'a> PealayerTabViewer<'a> {
                                                     ui.label(egui::RichText::new(&reference).monospace().weak().small());
                                                     ui.separator();
                                                     if ui.button(format!("{} {}", crate::ui::icons::PENCIL_SIMPLE, self.app.tr("Manage"))).clicked() {
-                                                        if crate::ui::effects_library::select_advertised_effect(
-                                                            self.app,
-                                                            source,
-                                                            preset.effect.controller_strip_effect.as_ref().map(|value| value.id.as_str()),
-                                                        ).is_some() {
-                                                            self.app.show_effect_library_editor = true;
-                                                        }
+                                                        manage_effect = true;
                                                         ui.close();
                                                     }
                                                     crate::ui::effects_library::draw_saved_effect_preview_action(
@@ -14350,6 +14592,14 @@ impl<'a> PealayerTabViewer<'a> {
                                                         ui.close();
                                                     }
                                                 });
+                                                // Double-click and context-menu Manage share the same
+                                                // selection path for sequences, strips and audio effects.
+                                                if manage_effect && crate::ui::effects_library::select_advertised_effect(
+                                                    self.app, source,
+                                                    preset.effect.controller_strip_effect.as_ref().map(|value| value.id.as_str()),
+                                                ).is_some() {
+                                                    self.app.show_effect_library_editor = true;
+                                                }
                                                 ui.add_space(5.0);
                                             }
                                         }
@@ -19918,16 +20168,7 @@ impl<'a> PealayerTabViewer<'a> {
     }
 
     pub fn scroll_bars(&self, tab: &PealayerTab) -> [bool; 2] {
-        match tab {
-            // This is a fitted video viewport with a responsive footer, not a
-            // document. The dock's pixel-rounded ScrollArea otherwise permits
-            // fractional scrolling even when all content fits its logical size.
-            PealayerTab::ProgramMonitor
-            | PealayerTab::EffectsLibrary
-            | PealayerTab::HardwareMonitor
-            | PealayerTab::MediaInspector => [false, false],
-            _ => [true, true],
-        }
+        panel_scroll_axes(tab)
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, tab: &mut PealayerTab) {
@@ -19937,7 +20178,7 @@ impl<'a> PealayerTabViewer<'a> {
 
 impl<'a> craft_ui::docking::DockContent<PealayerTab> for PealayerTabViewer<'a> {
     fn body(&mut self, ui: &mut egui::Ui, panel: &PealayerTab) {
-        self.draw_tab_body(ui, *panel);
+        panel_body(ui, panel, |ui| self.draw_tab_body(ui, *panel));
     }
 
     fn logical_label(&self, panel: &PealayerTab) -> String {
@@ -19960,6 +20201,16 @@ impl<'a> craft_ui::docking::DockContent<PealayerTab> for PealayerTabViewer<'a> {
 
     fn panel_menu(&mut self, ui: &mut egui::Ui, panel: &PealayerTab) {
         self.draw_context_menu(ui, *panel);
+    }
+
+    fn group_header_width(&self, _panels: &[PealayerTab], _active: &PealayerTab, _floating: bool, strip_width: f32) -> f32 {
+        strip_width.min(28.0)
+    }
+
+    fn group_header(&mut self, ui: &mut egui::Ui, _panels: &[PealayerTab], active: &PealayerTab, _floating: bool) {
+        let response = ui.add_sized(ui.available_size(), egui::Button::new(crate::ui::icons::DOTS_THREE).frame(false))
+            .on_hover_text(self.app.tr("Panels"));
+        egui::Popup::menu(&response).show(|ui| self.draw_context_menu(ui, *active));
     }
 }
 
@@ -20030,12 +20281,12 @@ pub fn reveal_and_focus_tab(
     workspace: &mut craft_ui::docking::Workspace<PealayerTab>,
     tab: PealayerTab,
 ) -> bool {
-    let was_open = workspace.layout.contains(&tab);
+    let before = workspace.layout.clone();
     let fallback = Some(PealayerTab::ProgramMonitor);
     let ok = workspace
         .set_visible(tab, true, fallback, |_| craft_ui::docking::Permissions::default())
         .is_ok();
-    ok && !was_open
+    ok && workspace.layout != before
 }
 
 fn format_timecode(t: f64) -> String {
@@ -20550,6 +20801,99 @@ mod dock_content_tests {
     use super::*;
 
     #[test]
+    fn malformed_workspace_objects_do_not_silently_close_every_panel() {
+        let original = create_initial_layout();
+        let json = serde_json::to_string(&original).unwrap();
+        assert_eq!(decode_workspace(&json).unwrap(), original);
+        assert!(decode_workspace("{}").is_err());
+        assert!(decode_workspace(r#"{"surfaces":[]}"#).is_err());
+        let mut missing: serde_json::Value = serde_json::from_str(&json).unwrap();
+        missing.as_object_mut().unwrap().remove("layout");
+        assert!(decode_workspace(&missing.to_string()).is_err());
+        let mut unsupported: serde_json::Value = serde_json::from_str(&json).unwrap();
+        unsupported["version"] = serde_json::json!(0);
+        assert!(decode_workspace(&unsupported.to_string()).is_err());
+    }
+
+    #[test]
+    fn tall_effect_controls_keep_their_real_wheel_scroller() {
+        let ctx = egui::Context::default();
+        let id = std::cell::Cell::new(egui::Id::new("uninitialized-panel-scroll"));
+        for (time, wheel) in [(0.0, false), (0.01, false), (0.1, true), (0.2, false)] {
+            let mut events = vec![egui::Event::PointerMoved(egui::pos2(80.0, 80.0))];
+            if wheel {
+                events.push(egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, -100.0), modifiers: egui::Modifiers::NONE,
+                    phase: egui::TouchPhase::Move, source: egui::MouseWheelSource::Wheel });
+            }
+            discard_ui_output(ctx.run_ui(egui::RawInput {
+                time: Some(time), events,
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 240.0))),
+                ..Default::default()
+            }, |ui| {
+                // ScrollArea wraps its source in IdSalt before combining it
+                // with the UI scope; use the same identity for the readback.
+                id.set(ui.make_persistent_id(egui::IdSalt::new((
+                    "pealayer-panel-scroll", &PealayerTab::EffectControls,
+                ))));
+                panel_body(ui, &PealayerTab::EffectControls, |ui| {
+                    ui.allocate_space(egui::vec2(100.0, 1000.0));
+                });
+            }));
+        }
+        assert!(egui::scroll_area::State::load(&ctx, id.get()).unwrap().offset().y > 0.0);
+        assert_eq!(panel_scroll_axes(&PealayerTab::ProgramMonitor), [false, false]);
+        assert_eq!(panel_scroll_axes(&PealayerTab::HardwareMonitor), [false, false]);
+    }
+
+    #[test]
+    fn host_owned_dock_events_roundtrip_and_closed_panels_clear_maximize() {
+        use craft_ui::docking::{DockEvent, Permissions};
+        let mut workspace = create_initial_layout();
+        let mut view = DockViewState::default();
+        view.apply([DockEvent::ToggleMaximize { panel: PealayerTab::Timeline }, DockEvent::ToggleAutoCollapse], &workspace);
+        assert_eq!(view.maximized, Some(PealayerTab::Timeline));
+        assert!(!view.auto_collapse);
+        let ctx = egui::Context::default();
+        view.store(&ctx);
+        assert_eq!(DockViewState::load(&ctx), view);
+        let encoded = serde_json::to_string(&view).unwrap();
+        assert_eq!(serde_json::from_str::<DockViewState>(&encoded).unwrap(), view);
+        workspace.set_visible(PealayerTab::Timeline, false, None, |_| Permissions::default()).unwrap();
+        view.apply([], &workspace);
+        assert_eq!(view.maximized, None);
+    }
+
+    #[test]
+    fn craft_dock_renders_valid_layouts_at_small_and_large_viewport_scales() {
+        struct Content;
+        impl craft_ui::docking::DockContent<PealayerTab> for Content {
+            fn body(&mut self, ui: &mut egui::Ui, panel: &PealayerTab) {
+                ui.label(panel.title_for_language(crate::config::AppLanguage::English));
+            }
+        }
+        for (width, height) in [(480.0, 320.0), (960.0, 600.0), (1440.0, 900.0)] {
+            for scale in [1.0, 1.5, 2.0] {
+                let ctx = egui::Context::default();
+                ctx.set_pixels_per_point(scale);
+                let workspace = create_initial_layout();
+                let mut content = Content;
+                let output = ctx.run_ui(egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, height))),
+                    ..Default::default()
+                }, |ui| {
+                    let style = craft_ui::docking::DockStyle::from_ui(ui);
+                    let dock = craft_ui::docking::DockArea::new(egui::Id::new("responsive-dock-fixture"))
+                        .show_content(ui, &workspace.layout, &style, &mut content);
+                    assert!(dock.error.is_none(), "{width}x{height} at {scale}: {:?}", dock.error);
+                });
+                assert!(workspace.validate().is_ok());
+                discard_ui_output(output);
+            }
+        }
+    }
+
+    #[test]
     fn pealayer_tab_viewer_implements_dock_content() {
         use craft_ui::docking::DockContent;
         let mut app = PealayerApp::default();
@@ -20600,6 +20944,15 @@ mod dock_content_tests {
         assert!(!changed2);
         assert!(workspace.layout.contains(&PealayerTab::EffectControls));
     }
+
+    #[test]
+    fn revealing_an_existing_inactive_tab_reports_the_changed_selection() {
+        let mut workspace = create_initial_layout();
+        assert!(reveal_and_focus_tab(&mut workspace, PealayerTab::HardwareMonitor));
+        let hardware_active = workspace.layout.clone();
+        assert!(!reveal_and_focus_tab(&mut workspace, PealayerTab::HardwareMonitor));
+        assert!(reveal_and_focus_tab(&mut workspace, PealayerTab::EffectControls));
+        assert_ne!(workspace.layout, hardware_active);
+        assert!(workspace.validate().is_ok());
+    }
 }
-
-

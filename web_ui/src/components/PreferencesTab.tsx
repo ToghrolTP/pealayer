@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ColorPicker } from './ColorPicker';
 import { ColorDropdown } from './ColorDropdown';
 import {
@@ -55,7 +55,8 @@ import {
   VideoCameraOutlined,
 } from '@ant-design/icons';
 import { tr } from '../i18n';
-import { mergeAppearance } from '../appearance';
+import { mergeAppearance, resolvedAppearanceTheme } from '../appearance';
+import palettes from '../../../assets/themes/palettes.json';
 import { NumericValueControl } from './NumericValueControl';
 import { ServerFilePicker } from './ServerFilePicker';
 import type { TimelineWheelPreferences } from '../timelineWheel';
@@ -66,6 +67,7 @@ interface PreferenceSection {
   id: string;
   label: string;
   icon: string;
+  navigation_group: string;
 }
 
 interface PreferenceOption {
@@ -199,7 +201,7 @@ function ChoiceSlider({ options, value, label, locale, disabled, onCommit }: {
   const [index, setIndex] = useState(selected);
   useEffect(() => setIndex(selected), [selected]);
   if (!options.length) return null;
-  return <div className="preference-choice-slider">
+  return <div className="preference-choice-slider" data-disabled={disabled}>
     <Slider min={0} max={options.length - 1} step={1} value={index} disabled={disabled}
       ariaLabelForHandle={tr(locale, label)}
       ariaValueTextFormatterForHandle={position => tr(locale, options[position]?.label ?? '')}
@@ -208,13 +210,27 @@ function ChoiceSlider({ options, value, label, locale, disabled, onCommit }: {
       onChange={setIndex} onChangeComplete={position => {
         if (options[position].value !== value) onCommit(options[position].value);
       }} />
-    <span className="preference-choice-slider__value">{tr(locale, options[index]?.label ?? '')}</span>
+    <span className="preference-choice-slider__value" title={tr(locale, options[index]?.label ?? '')}>
+      {options.map((option, position) => <span key={position} aria-hidden="true" className="preference-choice-slider__measure">{tr(locale, option.label)}</span>)}
+      <span className="preference-choice-slider__caption">{tr(locale, options[index]?.label ?? '')}</span>
+    </span>
   </div>;
 }
 
 export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, locale, appearance, timelineWheelPreferences, onConfigChange }) => {
   const [contract, setContract] = useState<PreferencesContract | null>(null);
   const [section, setSection] = useState('appearance');
+  const detail = useRef<HTMLElement>(null);
+  const sectionScroll = useRef<Record<string, number>>({});
+  const selectSection = (next: string) => {
+    const scroller = detail.current?.closest('.app-content');
+    if (scroller) sectionScroll.current[section] = scroller.scrollTop;
+    setSection(next);
+  };
+  useLayoutEffect(() => {
+    const scroller = detail.current?.closest('.app-content');
+    if (scroller) scroller.scrollTop = sectionScroll.current[section] ?? 0;
+  }, [section]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
   const [status, setStatus] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
@@ -263,7 +279,22 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
     setContract((current) => current
       ? { ...current, values: mergeAppearance(current.values, appearance) }
       : current);
-  }, [appearance?.theme, appearance?.color_palette, appearance?.accent_color, appearance?.custom_accent_color]);
+  }, [appearance?.theme, appearance?.color_palette, appearance?.accent_color, appearance?.custom_accent_color,
+    appearance?.ui_animation_mode, appearance?.ui_control_density, appearance?.ui_font_family, appearance?.monospace_font_family,
+    appearance?.ui_font_name, appearance?.monospace_font_name, appearance?.workspace_ui, appearance?.preferences_grouped_navigation]);
+
+  // Installed-font controls are host-owned and conditional on the font choice.
+  // Refresh on local changes and remote/native previews without overwriting drafts.
+  useEffect(() => {
+    if (!contract) return;
+    const abort = new AbortController();
+    void fetch(`${apiBaseUrl}/api/preferences`, { signal: abort.signal }).then(response => {
+      if (!response.ok) throw new Error(`Preferences request failed (${response.status})`);
+      return response.json() as Promise<PreferencesContract>;
+    }).then(next => setContract(current => current ? { ...current, controls: next.controls } : current))
+      .catch(error => { if (!abort.signal.aborted) setStatus({ kind: 'error', text: String(error) }); });
+    return () => abort.abort();
+  }, [apiBaseUrl, appearance?.ui_font_family, appearance?.monospace_font_family]);
 
   useEffect(() => {
     if (!timelineWheelPreferences) return;
@@ -419,13 +450,24 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
       </div>;
     }
     if (control.kind === 'select') {
+      const scheme = resolvedAppearanceTheme(contract?.values.theme ?? 'system', window.matchMedia('(prefers-color-scheme: light)').matches, appearance);
+      const paletteLabel = (value: unknown, label: string) => {
+        const colors = palettes[value === 'studio' ? 'studio' : 'native'][scheme];
+        return <span className="preference-palette-option"><span aria-hidden="true" className="preference-palette-preview"
+          style={{ background: colors.canvas, borderColor: colors['line-strong'], color: colors.text }}>
+          <span style={{ background: colors['surface-2'] }}><i /></span>
+        </span><span>{label}</span></span>;
+      };
       return (
         <label className="preference-control" key={control.key}>
           {commonLabel}
           <Select
             value={value}
+            showSearch={['ui_font_name', 'monospace_font_name'].includes(control.key) ? { optionFilterProp: 'label' } : undefined}
             onOpenChange={(open) => { if (open && ['audio_device', 'sfx_audio_device'].includes(control.key)) void refreshAudioOutputs(); }}
             options={(control.options ?? []).map((option) => ({ value: option.value, label: option.description || tr(locale, option.label) }))}
+            optionRender={control.key === 'color_palette' ? option => paletteLabel(option.value, String(option.label)) : undefined}
+            labelRender={control.key === 'color_palette' ? option => paletteLabel(option.value, String(option.label)) : undefined}
             onChange={(next) => void update(control, next)}
           />
         </label>
@@ -524,20 +566,24 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
       {loading && !contract ? <FujiLoader locale={locale} /> : contract && (
         <div className="preferences-layout">
           <nav className="preferences-rail" aria-label={tr(locale, 'Preference sections')}>
-            {contract.sections.map((item) => (
+            {contract.sections.map((item, index) => (
+              <React.Fragment key={item.id}>
+              {contract.values.preferences_grouped_navigation && (index === 0 || contract.sections[index - 1].navigation_group !== item.navigation_group) &&
+                <span className="preferences-rail-group">{tr(locale, item.navigation_group)}</span>}
               <button
                 key={item.id}
                 type="button"
                 className={item.id === section ? 'is-active' : ''}
                 aria-pressed={item.id === section}
-                onClick={() => setSection(item.id)}
+                onClick={() => selectSection(item.id)}
               >
                 {sectionIcons[item.id] ?? <SettingOutlined />}
                 <span>{tr(locale, item.label)}</span>
               </button>
+              </React.Fragment>
             ))}
           </nav>
-          <main className="preferences-detail">
+          <main className="preferences-detail" ref={detail}>
             {groups.map((group) => {
               const children = <div className="preferences-group__controls">
                 {controls.filter((control) => control.group === group.name).map(renderControl)}

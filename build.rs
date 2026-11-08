@@ -2,6 +2,51 @@
 mod build_metadata;
 use build_metadata::emit_build_metadata;
 
+// About reports the versions actually linked by this package, not a second
+// hand-maintained inventory that becomes stale after dependency upgrades.
+fn emit_about_library_versions() {
+    println!("cargo:rerun-if-changed=Cargo.lock");
+    let lock = include_str!("Cargo.lock");
+    for package in [
+        "egui",
+        "eframe",
+        "craft-ui",
+        "egui-phosphor",
+        "libmpv2",
+        "serde",
+        "serde_json",
+        "tungstenite",
+        "serialport",
+        "souvlaki",
+        "rfd",
+        "uuid",
+    ] {
+        let versions: Vec<String> = lock
+            .split("[[package]]")
+            .filter_map(|entry| {
+                // Cargo's generated lockfile stores package name/version as quoted
+                // strings. Read only those top-level fields, never dependencies.
+                let field = |key: &str| {
+                    entry.lines().find_map(|line| {
+                        let value = line.strip_prefix(key)?.strip_prefix(" = ")?;
+                        serde_json::from_str::<String>(value).ok()
+                    })
+                };
+                (field("name").as_deref() == Some(package))
+                    .then(|| field("version"))
+                    .flatten()
+            })
+            .collect();
+        assert_eq!(
+            versions.len(),
+            1,
+            "About inventory requires exactly one locked {package}"
+        );
+        let key = package.replace('-', "_").to_ascii_uppercase();
+        println!("cargo:rustc-env=PEALAYER_DEP_{key}={}", versions[0]);
+    }
+}
+
 #[cfg(target_os = "windows")]
 #[allow(dead_code)]
 #[path = "src/platform/windows_quick_actions.rs"]
@@ -13,6 +58,7 @@ mod windows_shell_icons;
 #[cfg(target_os = "windows")]
 fn main() {
     emit_build_metadata();
+    emit_about_library_versions();
     for name in [
         "APP_NAME",
         "APP_PUBLISHER",
@@ -164,6 +210,7 @@ fn main() {
 #[cfg(not(target_os = "windows"))]
 fn main() {
     emit_build_metadata();
+    emit_about_library_versions();
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         if let Ok(output) = std::process::Command::new("brew")
             .args(["--prefix", "mpv"])

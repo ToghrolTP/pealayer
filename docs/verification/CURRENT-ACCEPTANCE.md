@@ -53,11 +53,12 @@ required checks are not passed while the user's test/CI skip remains in effect.
   document cross-workspace persistence, scoped restoration and render-error
   validity. Compiler check passed; moving-video acceptance needs an installed build.
 
-- Appearance control density is a four-step slider (Compact, Regular,
+- Appearance control density is a five-step slider (Extra compact, Compact, Regular,
   Comfortable, Spacious), shared by native/Web inputs, selectors and menu rows.
   [Sizing and verification boundary](control-density-and-buzzer.md) preserves
-  existing choices and Save/Discard behavior. Source compiler checks pass;
-  this iteration skips tests/CI and is not yet installed.
+  existing choices and Save/Discard behavior. Extra compact restores the historical
+  18-point minimum and 1-point padding; its new source/test verification is tracked
+  in PR #225. Installed acceptance remains separate.
 
 - Relay ON/OFF controls retain semantic green/red in native/Web/mobile, and
   card header layout centers captions with their unchanged inline-editor slots.

@@ -210,8 +210,9 @@ pub fn time_value_drag<'a>(
     range: std::ops::RangeInclusive<u64>,
     speed_ms: f64,
     human_readable_units: bool,
-) -> eframe::egui::DragValue<'a> {
-    eframe::egui::DragValue::new(value_ms)
+) -> impl eframe::egui::Widget + 'a {
+    crate::ui::validated_input::ValidatedDrag { alphabet: crate::ui::validated_input::InputAlphabet::Time,
+    inner: eframe::egui::DragValue::new(value_ms)
         .range(range)
         .speed(speed_ms)
         // Parse the complete token on Enter or focus loss. Updating after each
@@ -224,7 +225,7 @@ pub fn time_value_drag<'a>(
                 human_readable_units,
             )
         })
-        .custom_parser(|text| parse_time_value_ms(text).map(|value| value as f64))
+        .custom_parser(|text| parse_time_value_ms(text).map(|value| value as f64)) }
 }
 
 /// Shared editor for microsecond-backed timing fields such as RF pulse widths
@@ -234,8 +235,9 @@ pub fn time_value_us_drag<'a>(
     range: std::ops::RangeInclusive<u64>,
     speed_us: f64,
     human_readable_units: bool,
-) -> eframe::egui::DragValue<'a> {
-    eframe::egui::DragValue::new(value_us)
+) -> impl eframe::egui::Widget + 'a {
+    crate::ui::validated_input::ValidatedDrag { alphabet: crate::ui::validated_input::InputAlphabet::Time,
+    inner: eframe::egui::DragValue::new(value_us)
         .range(range)
         .speed(speed_us)
         .update_while_editing(false)
@@ -245,7 +247,7 @@ pub fn time_value_us_drag<'a>(
                 human_readable_units,
             )
         })
-        .custom_parser(|text| parse_time_value_us(text).map(|value| value as f64))
+        .custom_parser(|text| parse_time_value_us(text).map(|value| value as f64)) }
 }
 
 pub fn format_effect_duration_for_language(

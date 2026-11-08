@@ -338,6 +338,11 @@ export function useWebPlatform(
     } catch { /* Audio feedback is best-effort and always user-configurable. */ }
   }, [audioFeedbackEnabled, hapticsEnabled]);
 
+  useEffect(() => {
+    window.addEventListener('pealayer:invalid-input', signalInteraction);
+    return () => window.removeEventListener('pealayer:invalid-input', signalInteraction);
+  }, [signalInteraction]);
+
   return {
     capabilities,
     online,

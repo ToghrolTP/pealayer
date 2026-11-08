@@ -323,6 +323,7 @@ pub struct TaskbarState {
     pub is_paused: bool,
     pub is_active: bool,
     pub has_error: bool,
+    pub is_indeterminate: bool,
 }
 
 impl Default for TaskbarState {
@@ -332,6 +333,7 @@ impl Default for TaskbarState {
             is_paused: false,
             is_active: false,
             has_error: false,
+            is_indeterminate: false,
         }
     }
 }
@@ -342,10 +344,22 @@ impl TaskbarState {
             TaskbarProgressFlag::Error
         } else if !self.is_active {
             TaskbarProgressFlag::NoProgress
+        } else if self.is_indeterminate {
+            TaskbarProgressFlag::Indeterminate
         } else if self.is_paused {
             TaskbarProgressFlag::Paused
         } else {
             TaskbarProgressFlag::Normal
+        }
+    }
+
+    // SetProgressValue cancels TBPF_INDETERMINATE. Never send a stale value for
+    // verification/restart, even when the preceding transfer reached 100%.
+    fn progress_value(&self) -> Option<u64> {
+        match self.to_progress_flag() {
+            TaskbarProgressFlag::Normal | TaskbarProgressFlag::Paused => Some(self.progress_percent.min(100) as u64),
+            TaskbarProgressFlag::Error => Some(100),
+            TaskbarProgressFlag::NoProgress | TaskbarProgressFlag::Indeterminate => None,
         }
     }
 }
@@ -357,6 +371,7 @@ pub fn compute_taskbar_state(playback_time: f64, duration: f64, is_paused: bool)
             is_paused,
             is_active: false,
             has_error: false,
+            is_indeterminate: false,
         };
     }
 
@@ -369,6 +384,7 @@ pub fn compute_taskbar_state(playback_time: f64, duration: f64, is_paused: bool)
         is_paused,
         is_active: true,
         has_error: false,
+        is_indeterminate: false,
     }
 }
 
@@ -384,11 +400,34 @@ pub fn compute_taskbar_state_with_error(
             is_paused,
             is_active: true,
             has_error: true,
+            is_indeterminate: false,
         };
     }
     let mut state = compute_taskbar_state(playback_time, duration, is_paused);
     state.has_error = false;
     state
+}
+
+/// Local installation work takes precedence over media progress, including when
+/// media is paused or absent. Remote peer updates do not impersonate local work.
+pub fn compute_taskbar_state_with_update(
+    playback_time: f64,
+    duration: f64,
+    is_paused: bool,
+    has_error: bool,
+    update: &crate::update::UpdateStatus,
+) -> TaskbarState {
+    if update.active() {
+        let percent = update.progress_percent();
+        return TaskbarState {
+            progress_percent: percent.unwrap_or(0.0).round() as u32,
+            is_active: true,
+            is_indeterminate: percent.is_none(),
+            ..Default::default()
+        };
+    }
+    compute_taskbar_state_with_error(playback_time, duration, is_paused,
+        has_error || matches!(update.state.as_str(), "failed" | "error"))
 }
 
 pub fn register_window_hwnd(hwnd: isize) {
@@ -1356,71 +1395,51 @@ pub fn apply_windows_window_decorations(_hwnd_raw: isize) {
 }
 
 #[cfg(target_os = "windows")]
+pub fn apply_windows_taskbar_state(state: TaskbarState) -> bool {
+    use windows::Win32::Foundation::HWND;
+    use windows::Win32::System::Com::{
+        CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx, CoUninitialize,
+    };
+    use windows::Win32::UI::Shell::{ITaskbarList3, TBPFLAG, TaskbarList};
+
+    let hwnd_raw = get_registered_hwnd();
+    if hwnd_raw == 0 {
+        return false;
+    }
+    let hwnd = HWND(hwnd_raw as *mut _);
+
+    unsafe {
+        let initialized = CoInitializeEx(None, COINIT_APARTMENTTHREADED).is_ok();
+        let result = (|| -> windows::core::Result<()> {
+            let taskbar = CoCreateInstance::<_, ITaskbarList3>(&TaskbarList, None, CLSCTX_INPROC_SERVER)?;
+            taskbar.HrInit()?;
+            taskbar.SetProgressState(hwnd, TBPFLAG(state.to_progress_flag() as i32))?;
+            if let Some(value) = state.progress_value() {
+                taskbar.SetProgressValue(hwnd, value, 100)?;
+            }
+            Ok(())
+        })();
+        if initialized { CoUninitialize(); }
+        result.is_ok()
+    }
+}
+
+pub fn update_windows_taskbar_state(progress: f64, duration: f64, is_paused: bool) {
+    update_windows_taskbar_state_ext(progress, duration, is_paused, false);
+}
+
 pub fn update_windows_taskbar_state_ext(
     progress: f64,
     duration: f64,
     is_paused: bool,
     has_error: bool,
 ) {
-    use windows::Win32::Foundation::HWND;
-    use windows::Win32::System::Com::{
-        CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
-    };
-    use windows::Win32::UI::Shell::{ITaskbarList3, TBPFLAG, TaskbarList};
-
-    let hwnd_raw = get_registered_hwnd();
-    if hwnd_raw == 0 {
-        return;
-    }
-    let hwnd = HWND(hwnd_raw as *mut _);
-
-    let state = compute_taskbar_state_with_error(progress, duration, is_paused, has_error);
-
-    unsafe {
-        let _ = CoInitializeEx(None, COINIT_APARTMENTTHREADED);
-        if let Ok(taskbar) =
-            CoCreateInstance::<_, ITaskbarList3>(&TaskbarList, None, CLSCTX_INPROC_SERVER)
-        {
-            match state.to_progress_flag() {
-                TaskbarProgressFlag::NoProgress => {
-                    let _ = taskbar.SetProgressState(hwnd, TBPFLAG(0));
-                }
-                TaskbarProgressFlag::Normal => {
-                    let _ = taskbar.SetProgressState(hwnd, TBPFLAG(2));
-                    let _ = taskbar.SetProgressValue(hwnd, state.progress_percent as u64, 100);
-                }
-                TaskbarProgressFlag::Paused => {
-                    let _ = taskbar.SetProgressState(hwnd, TBPFLAG(8));
-                    let _ = taskbar.SetProgressValue(hwnd, state.progress_percent as u64, 100);
-                }
-                TaskbarProgressFlag::Error => {
-                    let _ = taskbar.SetProgressState(hwnd, TBPFLAG(4));
-                    let _ = taskbar.SetProgressValue(hwnd, 100, 100);
-                }
-                _ => {}
-            }
-        }
-    }
-}
-
-#[cfg(target_os = "windows")]
-pub fn update_windows_taskbar_state(progress: f64, duration: f64, is_paused: bool) {
-    update_windows_taskbar_state_ext(progress, duration, is_paused, false);
+    apply_windows_taskbar_state(compute_taskbar_state_with_error(progress, duration, is_paused, has_error));
 }
 
 #[cfg(not(target_os = "windows"))]
-pub fn update_windows_taskbar_state_ext(
-    _progress: f64,
-    _duration: f64,
-    _is_paused: bool,
-    _has_error: bool,
-) {
-    // No-op on non-Windows platforms
-}
-
-#[cfg(not(target_os = "windows"))]
-pub fn update_windows_taskbar_state(_progress: f64, _duration: f64, _is_paused: bool) {
-    // No-op on non-Windows platforms
+pub fn apply_windows_taskbar_state(_state: TaskbarState) -> bool {
+    true
 }
 
 pub use super::windows_quick_actions::{WindowsQuickAction, WINDOWS_QUICK_ACTIONS};
@@ -2966,6 +2985,43 @@ mod tests {
         let state = TaskbarState::default();
         assert_eq!(state.progress_percent, 0);
         assert!(!state.is_paused);
+    }
+
+    #[test]
+    fn update_progress_overrides_playback_and_clears_stale_transfer_values() {
+        use crate::update::UpdateStatus;
+        let mut update = UpdateStatus {
+            state: "receiving".into(), bytes_done: 25, bytes_total: Some(100),
+            ..Default::default()
+        };
+        for (position, duration, paused) in [(30.0, 60.0, true), (30.0, 60.0, false), (0.0, 0.0, true)] {
+            let state = compute_taskbar_state_with_update(position, duration, paused, false, &update);
+            assert_eq!(state.to_progress_flag(), TaskbarProgressFlag::Normal);
+            assert_eq!(state.progress_value(), Some(25));
+        }
+        update.bytes_done = 100;
+        assert_eq!(compute_taskbar_state_with_update(30.0,60.0,true,false,&update).progress_value(), Some(100));
+        for phase in ["verifying", "staged", "restarting"] {
+            update.state = phase.into();
+            let state = compute_taskbar_state_with_update(30.0,60.0,true,false,&update);
+            assert_eq!(state.to_progress_flag(), TaskbarProgressFlag::Indeterminate);
+            assert_eq!(state.progress_value(), None);
+            assert_eq!(state.progress_percent, 0);
+        }
+        update.state = "downloading".into();
+        update.bytes_total = None;
+        assert_eq!(compute_taskbar_state_with_update(30.0,60.0,true,false,&update).to_progress_flag(), TaskbarProgressFlag::Indeterminate);
+        for phase in ["failed", "error"] {
+            update.state = phase.into();
+            assert_eq!(compute_taskbar_state_with_update(0.0,0.0,true,false,&update).to_progress_flag(), TaskbarProgressFlag::Error);
+        }
+        for phase in ["idle", "completed", "current", "aborted"] {
+            update.state = phase.into();
+            assert_eq!(compute_taskbar_state_with_update(30.0,60.0,true,false,&update), compute_taskbar_state(30.0,60.0,true));
+            let empty = compute_taskbar_state_with_update(0.0,0.0,true,false,&update);
+            assert_eq!(empty.to_progress_flag(), TaskbarProgressFlag::NoProgress);
+            assert_eq!(empty.progress_value(), None);
+        }
     }
 
     #[test]

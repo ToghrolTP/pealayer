@@ -115,7 +115,7 @@ export interface PlayerState {
     pwm_revision?: number;
     pwm_available?: boolean | null;
     motion_control_mode?: 'hold' | 'toggle';
-    pwm_card?: { show_on: boolean; show_off: boolean; show_decrease: boolean; show_increase: boolean;
+    pwm_card?: { show_on: boolean; show_off: boolean; show_toggle: boolean; show_step_buttons: boolean; show_decrease: boolean; show_increase: boolean;
       show_other: boolean; indicator_action: 'toggle' | 'on' | 'off' };
     profile?: { key: string; mode: string; configured: boolean; attached: boolean; revision: string; expose_raw_relays: boolean } | null;
     port?: { name: string; display_name: string; friendly_name: string; product: string; manufacturer: string; vid: string; pid: string; serial_number: string };
@@ -149,6 +149,8 @@ export interface PlayerState {
       minimum_pixels: number; maximum_pixels: number; default_pixels: number;
       minimum_fps: number; maximum_fps: number; default_fps: number;
       modes: string[]; running: boolean; active_name: string;
+      color_order?:string; color_orders?:string[];
+      stream?:{pixels:number;requested_fps:number;frames_acked:number;frames_failed:number;last_ack_unix_ms:number;last_error:string}|null;
     } | null;
     supports?: Record<string, boolean>;
   } | null;
@@ -262,6 +264,8 @@ export interface PlayerState {
     source?: string | null;
     bytes_done: number;
     bytes_total?: number | null;
+    progress_percent: number | null;
+    active: boolean;
     sha256?: string | null;
     version?: string | null;
     message: string;

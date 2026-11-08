@@ -21,6 +21,8 @@ pub enum PwmIndicatorAction {
 pub struct PwmCardPreferences {
     pub show_on: bool,
     pub show_off: bool,
+    pub show_toggle: bool,
+    pub show_step_buttons: bool,
     pub show_increase: bool,
     pub show_decrease: bool,
     pub show_other: bool,
@@ -29,7 +31,7 @@ pub struct PwmCardPreferences {
 
 impl Default for PwmCardPreferences {
     fn default() -> Self {
-        Self { show_on: true, show_off: true, show_increase: true,
+        Self { show_on: true, show_off: true, show_toggle: true, show_step_buttons: false, show_increase: true,
             show_decrease: true, show_other: true,
             indicator_action: PwmIndicatorAction::Toggle }
     }
@@ -40,6 +42,7 @@ impl PwmCardPreferences {
         match verb.to_ascii_lowercase().as_str() {
             "on" => self.show_on,
             "off" => self.show_off,
+            "toggle" => self.show_toggle,
             "increase" => self.show_increase,
             "decrease" => self.show_decrease,
             _ => self.show_other,
@@ -631,6 +634,7 @@ pub struct HardwareKeyBinding {
     pub id: String,
     pub channel_key: String,
     pub chord: KeyChord,
+    pub then: Vec<KeyChord>,
     pub action: HardwareKeyBindingAction,
     pub global: bool,
     pub enabled: bool,
@@ -642,10 +646,18 @@ impl Default for HardwareKeyBinding {
             id: uuid::Uuid::new_v4().to_string(),
             channel_key: String::new(),
             chord: KeyChord::default(),
+            then: Vec::new(),
             action: HardwareKeyBindingAction::default(),
             global: false,
             enabled: true,
         }
+    }
+}
+
+impl HardwareKeyBinding {
+    pub fn display_shortcut(&self) -> String {
+        std::iter::once(&self.chord).chain(&self.then)
+            .map(KeyChord::display_name).collect::<Vec<_>>().join(" → ")
     }
 }
 
@@ -873,12 +885,13 @@ pub enum UiAnimationMode { #[default] System, Enabled, Disabled }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum UiControlDensity { #[default] Compact, Regular, Comfortable, Spacious }
+pub enum UiControlDensity { ExtraCompact, #[default] Compact, Regular, Comfortable, Spacious }
 impl UiControlDensity {
-    pub const ALL: [Self; 4] = [Self::Compact, Self::Regular, Self::Comfortable, Self::Spacious];
+    pub const ALL: [Self; 5] = [Self::ExtraCompact, Self::Compact, Self::Regular, Self::Comfortable, Self::Spacious];
 
     pub const fn base_height(self) -> f32 {
         match self {
+            Self::ExtraCompact => 18.0,
             Self::Compact => 24.0,
             Self::Regular => 28.0,
             Self::Comfortable => 32.0,
@@ -889,7 +902,11 @@ impl UiControlDensity {
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum UiFontFamily { #[default] System, Bundled, Vazirmatn }
+pub enum UiFontFamily { #[default] System, Bundled, Vazirmatn, Custom }
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceUi { #[default] CraftUi, EguiDock }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
@@ -1066,6 +1083,10 @@ pub struct AppConfig {
     pub ui_control_density: UiControlDensity,
     pub ui_font_family: UiFontFamily,
     pub monospace_font_family: UiFontFamily,
+    pub ui_font_name: String,
+    pub monospace_font_name: String,
+    pub workspace_ui: WorkspaceUi,
+    pub preferences_grouped_navigation: bool,
     pub language: AppLanguage,
     pub direction: AppDirection,
     pub hardware_endpoint: Option<String>,
@@ -1142,6 +1163,7 @@ pub struct AppConfig {
     /// Allows bindings explicitly marked global to be registered with the OS
     /// and invoked while another application has focus.
     pub global_hardware_hotkeys_enabled: bool,
+    pub hardware_number_shortcuts_enabled: bool,
     pub hardware_key_bindings: Vec<HardwareKeyBinding>,
     pub show_estop_control: bool,
     pub confirm_estop_release: bool,
@@ -1264,7 +1286,11 @@ impl Default for AppConfig {
             ui_animation_mode: UiAnimationMode::System,
             ui_control_density: UiControlDensity::Compact,
             ui_font_family: UiFontFamily::System,
-            monospace_font_family: UiFontFamily::Bundled,
+            monospace_font_family: UiFontFamily::System,
+            ui_font_name: String::new(),
+            monospace_font_name: String::new(),
+            workspace_ui: WorkspaceUi::CraftUi,
+            preferences_grouped_navigation: true,
             language: AppLanguage::System,
             direction: AppDirection::Auto,
             hardware_endpoint: None,
@@ -1329,6 +1355,7 @@ impl Default for AppConfig {
             media_keys_background_enabled: true,
             application_shortcuts: crate::application_shortcuts::ApplicationShortcuts::default(),
             global_hardware_hotkeys_enabled: true,
+            hardware_number_shortcuts_enabled: true,
             hardware_key_bindings: Vec::new(),
             show_estop_control: true,
             confirm_estop_release: true,
@@ -1782,6 +1809,10 @@ impl AppConfig {
         self.ui_control_density = source.ui_control_density;
         self.ui_font_family = source.ui_font_family;
         self.monospace_font_family = source.monospace_font_family;
+        self.ui_font_name.clone_from(&source.ui_font_name);
+        self.monospace_font_name.clone_from(&source.monospace_font_name);
+        self.workspace_ui = source.workspace_ui;
+        self.preferences_grouped_navigation = source.preferences_grouped_navigation;
         self.app_icon_preset = source.app_icon_preset;
     }
 
@@ -2111,6 +2142,9 @@ impl AppConfig {
             return Err("volume must be between 0 and 130".to_string());
         }
         if self.monospace_font_family == UiFontFamily::Vazirmatn { return Err("Vazirmatn is not a monospace font".into()); }
+        for name in [&self.ui_font_name, &self.monospace_font_name] {
+            if name.len() > 256 || name.chars().any(char::is_control) { return Err("Font family names must be plain text of at most 256 bytes".into()); }
+        }
         if self.status_bar.metric_limits.iter().any(|range| matches!(range, [Some(low), Some(high)] if low > high)) {
             return Err("Status widget minimum must not exceed maximum".into());
         }
@@ -2315,6 +2349,16 @@ impl AppConfig {
         }
         let mut binding_ids = std::collections::BTreeSet::new();
         for binding in &self.hardware_key_bindings {
+            if binding.then.len() > 3 {
+                return Err("Hardware shortcuts support at most four steps".into());
+            }
+            if !binding.then.is_empty() && (binding.global || matches!(binding.action, HardwareKeyBindingAction::Hold { .. })) {
+                return Err("Multi-step hardware shortcuts are app-local and cannot hold outputs".into());
+            }
+            for chord in &binding.then {
+                chord.native_hotkey_string().parse::<global_hotkey::hotkey::HotKey>()
+                    .map_err(|error| format!("hardware binding {}: {error}", binding.id))?;
+            }
             if binding.id.trim().is_empty() || !binding_ids.insert(binding.id.as_str()) {
                 return Err("hardware_key_bindings contains an empty or duplicate ID".to_string());
             }
@@ -2823,6 +2867,14 @@ mod tests {
 
     #[test]
     fn control_density_is_persisted_and_reconciled_with_shared_appearance() {
+        for density in UiControlDensity::ALL {
+            let source = AppConfig { ui_control_density: density, ..Default::default() };
+            let restored: AppConfig = serde_json::from_value(serde_json::to_value(&source).unwrap()).unwrap();
+            assert_eq!(restored.ui_control_density, density);
+            let mut target = AppConfig::default();
+            target.copy_appearance_from(&restored);
+            assert_eq!(target.ui_control_density, density);
+        }
         let source = AppConfig { ui_control_density: UiControlDensity::Comfortable,
             ui_font_family: UiFontFamily::Vazirmatn, monospace_font_family: UiFontFamily::System, ..Default::default() };
         let values = serde_json::to_value(&source).unwrap();
@@ -3042,6 +3094,7 @@ mod tests {
             },
             global: true,
             enabled: true,
+            then: Vec::new(),
         };
         let config = AppConfig {
             hardware_key_bindings: vec![binding.clone()],

@@ -42,10 +42,10 @@ fn pealayer_tab_viewer_implements_dock_content() {
     use craft_ui::docking::DockContent;
     let mut app = PealayerApp::default();
     let mut viewer = PealayerTabViewer { app: &mut app };
-    
+
     assert_eq!(viewer.logical_label(&PealayerTab::ProgramMonitor), "Program Monitor");
     assert_eq!(viewer.logical_label(&PealayerTab::Timeline), "Timeline");
-    
+
     let permissions = viewer.permissions(&PealayerTab::ProgramMonitor);
     assert!(permissions.movable);
     assert!(permissions.closable);
@@ -147,7 +147,7 @@ fn craft_workspace_reveal_and_focus_tab() {
     // Close EffectControls
     let _ = workspace.set_visible(PealayerTab::EffectControls, false, None, |_| craft_ui::docking::Permissions::default());
     assert!(!workspace.layout.contains(&PealayerTab::EffectControls));
-    
+
     // Reveal and focus
     let changed = reveal_and_focus_tab(&mut workspace, PealayerTab::EffectControls);
     assert!(changed);
@@ -268,10 +268,10 @@ fn craft_app_workspace_profile_preserves_layout() {
     let mut app = PealayerApp::default();
     assert!(app.dock_state.validate().is_ok());
     assert!(app.is_tab_open(crate::ui::layout::PealayerTab::Timeline));
-    
+
     app.toggle_tab(crate::ui::layout::PealayerTab::Timeline);
     assert!(!app.is_tab_open(crate::ui::layout::PealayerTab::Timeline));
-    
+
     let profile = app.capture_workspace_profile(&egui::Context::default());
     assert!(profile.dock_layout.is_some());
 }

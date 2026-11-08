@@ -1,6 +1,31 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { accentForeground, mergeAppearance, paletteName, resolvedAccent, resolvedAppearanceTheme } from '../src/appearance.ts';
+import { accentForeground, controlDensityHeight, controlDensityText, mergeAppearance, paletteName, resolvedAccent, resolvedAppearanceTheme, uiFontCss, monoFontCss } from '../src/appearance.ts';
+
+test('the original 18-point density remains available without reinterpreting saved choices', () => {
+  for (const [choice, height] of Object.entries({ extra_compact: 18, compact: 24, regular: 28, comfortable: 32, spacious: 36 })) {
+    assert.equal(controlDensityHeight(choice), height);
+    assert.equal(mergeAppearance({}, { ui_control_density: choice }).ui_control_density, choice);
+  }
+  const text = controlDensityText('extra_compact');
+  assert.equal(text.fontSize * text.lineHeight + 2, 18);
+  assert.deepEqual(controlDensityText('compact'), {});
+});
+
+test('native workspace and font previews share one appearance contract', () => {
+  const preview = { ui_font_family: 'custom', ui_font_name: 'Segoe UI',
+    monospace_font_family: 'custom', monospace_font_name: 'Cascadia Mono',
+    workspace_ui: 'egui_dock', preferences_grouped_navigation: false };
+  const next = mergeAppearance({ volume: 42 }, preview);
+  for (const [key, value] of Object.entries(preview)) assert.equal(next[key], value);
+  assert.equal(next.volume, 42);
+  assert.match(uiFontCss('custom', 'Segoe UI'), /^"Segoe UI", PealayerPersian, system-ui/);
+  assert.match(uiFontCss('system'), /^PealayerPersian, system-ui/);
+  assert.equal(uiFontCss('vazirmatn'), 'Vazirmatn, sans-serif');
+  assert.match(monoFontCss('custom', 'Cascadia Mono'), /^"Cascadia Mono", ui-monospace/);
+  assert.equal(monoFontCss('custom', ''), monoFontCss('system'));
+  assert.match(uiFontCss('custom', 'A"B'), /^"A\\"B",/);
+});
 
 test('Neutral is the default; Studio remains an explicit palette', () => {
   assert.equal(paletteName(null), 'native');
