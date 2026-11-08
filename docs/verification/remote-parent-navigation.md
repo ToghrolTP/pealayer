@@ -44,3 +44,30 @@ directory limit, on the selected proxy/direct route and worker thread.
   acceptance of the user's remote host or physical hardware.
 
 Cafe deployment remains user-deferred until its connection is restored.
+
+## Installed checkpoint
+
+The clean package source is `e05eb715269d71a73bc10db97aa58bc5b87e945b`.
+Executable SHA-256:
+`418f6eadea60ef283e649b76f29839e3a7d2b54bc6d07b1eedf15e2a4f498eea`.
+The retained host libmpv SHA-256 is
+`e56ce67cd00f06a59dc7ed5b97a49a9182a381554c755dc4570a52af1ef30e65`.
+
+Packaging passed TypeScript/bundle/PWA integrity, Windows resource/seven action
+icon checks, downloader identity/smoke and native libmpv smoke. The optimized
+application build took 5m 46s. Focused native tests were not repeated during
+packaging. All Web prebuild regressions and non-bundling build guardrails pass;
+the old literal Back-label assertion was corrected in the follow-up test commit
+without changing the packaged application source.
+
+Fresh process-local authoring inspection was clean before update. The graceful
+updater acknowledged the exact executable in 16.0 seconds; the restarted regular
+app reports the matching source and clean authoring state. Installed HTTP/RPC
+verification (`scripts/verify-remote-parent-api.mjs`) passed forbidden-parent
+omission, valid empty-parent navigation and permission-change revocation while
+preserving the last good listing. It used local synthetic directory pages,
+closed its browser afterward and did not load media or command hardware.
+
+The retained historical executable was not replaced or launched by this fix.
+Acceptance against the user's original remote host and Cafe deployment remain
+separate, open gates; no private host URL was placed in fixtures or GitHub.

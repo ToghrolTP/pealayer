@@ -12,7 +12,9 @@ for (const value of ['plain text', 'file:///secret', 'https://name:secret@files.
 assert(file.includes("permission.state !== 'granted'"), 'automatic polling must not prompt for browser permission');
 const dialog = readFileSync(new URL('../src/components/RemoteLocationDialog.tsx', import.meta.url), 'utf8');
 assert(dialog.includes('delay: 250'));
-assert(dialog.includes('Back · Parent folder'));
+assert(dialog.includes("name: 'Parent folder'"));
+assert(!dialog.includes('Back · Parent folder'), 'parent navigation is not history');
+assert(dialog.includes('listing?.parent_url ?'), 'only expose the authoritative available parent');
 assert(dialog.includes('override.current'));
 assert(dialog.includes('}, 500)'));
 console.log('Clipboard URL validation, permission boundary and remote-dialog guardrails passed.');

@@ -13,7 +13,8 @@ statements are not the present product state.
 [Verified parent actions](remote-parent-navigation.md) replace the inferred Back
 row, hide unavailable parent indexes and remove irrelevant navigation metadata.
 Native discovery and Web interaction/width tests are tracked there separately
-from package installation and user-host acceptance; Cafe remains deferred.
+from user-host acceptance. The package is installed and its live HTTP/RPC checks
+passed forbidden/empty/changing-access parent cases; Cafe remains deferred.
 
 ## Window and media automation
 
