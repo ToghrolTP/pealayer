@@ -35,6 +35,39 @@ enlargement uses the maintained read-only capture utility's integer
 `-PixelScale` option (nearest-neighbor), not a mockup or a changed application
 DPI. Matching before/after crops and deployment results belong to the owning PR.
 
+### Matched native captures
+
+These are actual Win32 captures of the isolated, hardware-disconnected review
+application, in Studio/dark at the same 1200 × 800 logical window placement.
+Both source revisions use the same fonts and display scale. Only the captured
+pixel crops are enlarged (4× for Dock, 5× for CraftUI controls). They are not
+rendered mockups, edited strokes or settings/media captures from the regular app.
+The running source identity and installation receipt are in [PR #254](https://github.com/ToghrolTP/pealayer/pull/254).
+
+Dock before:
+
+![Dock: independent inset tab and panel borders before correction](../screenshots/native-dock-header-before.png)
+
+Dock after:
+
+![Dock: one connected selected-tab and body contour](../screenshots/native-dock-header-after.png)
+
+CraftUI controls before:
+
+![CraftUI: overflow control without chevron or close action](../screenshots/native-craft-header-actions-before.png)
+
+CraftUI controls after:
+
+![CraftUI: separate application chevron and close controls](../screenshots/native-craft-header-actions-after.png)
+
+All 14 focused native tests passed (12 Dock, two CraftUI header regressions).
+The clean-source package passed runtime smoke, native resource and Web/PWA
+integrity checks. Both light and dark native captures were inspected. The local
+graceful updater acknowledged the exact package, and the running process/source
+and executable digest were verified afterward. These follow-up screenshot and
+documentation changes do not alter that executable's implementation. Cafe
+deployment remains explicitly user-deferred until its normal connection returns.
+
 ## Cause
 
 The original renderer customized more than its tab content. It supplied the
