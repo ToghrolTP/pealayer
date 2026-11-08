@@ -464,6 +464,81 @@ fn workspace_selector(app: &mut PealayerApp, ui: &mut egui::Ui) -> egui::Respons
     response
 }
 
+/// Structured details are shared by the hover card and the FPS context menu.
+/// One measured column layout keeps values/units aligned across both sections.
+fn fps_details(ui: &mut egui::Ui, app: &PealayerApp, fps: &crate::app::FpsDisplayInfo, heading: bool) {
+    ui.with_layout(egui::Layout::top_down(if app.rtl {egui::Align::Max} else {egui::Align::Min}), |ui| {
+        fps_details_body(ui, app, fps, heading);
+    });
+}
+
+fn fps_details_body(ui: &mut egui::Ui, app: &PealayerApp, fps: &crate::app::FpsDisplayInfo, heading: bool) {
+    use crate::ui::icons;
+    let mut rows = vec![
+        (icons::FILE_VIDEO, app.tr("Media frame rate"), fps.media_rate, "fps", !fps.is_ui_rate),
+        (icons::GAUGE, app.tr("Screen render rate"), fps.ui_rate, "fps", fps.is_ui_rate),
+    ];
+    if let Some(render) = fps.render_time_ms {
+        rows.push((icons::CPU, app.tr("MPV render time"), Some(render), "ms", false));
+        if let Some(peak) = fps.peak_render_time_ms {
+            rows.push((icons::CLOCK, app.tr("Peak render time"), Some(peak), "ms", false));
+        }
+    }
+    let values: Vec<_> = rows.iter().map(|row| row.2.filter(|value| value.is_finite() && *value > 0.0)
+        .map(|value| format!("{value:.2}")).unwrap_or_else(|| "—".into())).collect();
+    let body = egui::TextStyle::Body.resolve(ui.style());
+    let mono = egui::TextStyle::Monospace.resolve(ui.style());
+    let measure = |text: &str, font: egui::FontId| ui.painter().layout_no_wrap(text.into(), font, ui.visuals().text_color()).size().x;
+    let value_width = values.iter().map(|value| measure(value, mono.clone())).fold(42.0_f32, f32::max) + 6.0;
+    let unit_width = measure("fps", body.clone()).max(measure("ms", body.clone()));
+    let max_width = (ui.ctx().content_rect().width() - 40.0).max(200.0);
+    let label_width = rows.iter().map(|row| measure(&row.1, body.clone())).fold(0.0_f32, f32::max)
+        .min((max_width - value_width - unit_width - 70.0).max(40.0));
+    let row_height = ui.text_style_height(&egui::TextStyle::Body).max(ui.text_style_height(&egui::TextStyle::Monospace));
+    let muted = ui.visuals().weak_text_color();
+    let width = label_width + value_width + unit_width + 70.0;
+    ui.set_max_width(max_width);
+    ui.set_min_width(width);
+    ui.spacing_mut().item_spacing.y = 7.0;
+    if heading {
+        ui.horizontal(|ui| {
+            ui.colored_label(ui.visuals().selection.bg_fill, icons::GAUGE);
+            ui.strong(app.tr("Frame rate"));
+            if app.status_bar.fps_mode == StatusBarFpsMode::Auto { ui.label(egui::RichText::new(app.tr("Auto")).small().color(muted)); }
+        });
+        ui.separator();
+    }
+    for range in [0..2, 2..rows.len()] {
+        if range.is_empty() { continue; }
+        if range.start > 0 { ui.separator(); }
+        for index in range {
+            let (icon, label, _, unit, active) = &rows[index];
+            let label_galley = ui.painter().layout(label.clone(), body.clone(), muted, (label_width - 6.0).max(1.0));
+            let (rect, response) = ui.allocate_exact_size(egui::vec2(width, row_height.max(label_galley.size().y)), egui::Sense::hover());
+            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, ui.is_enabled(), format!("{label}: {} {unit}", values[index])));
+            let accent = ui.visuals().selection.bg_fill;
+            let ink = ui.visuals().text_color();
+            let cells = [
+                (18.0, ui.painter().layout_no_wrap((*icon).into(), body.clone(), if *active {accent} else {muted}), if *active {accent} else {muted}, egui::Align::Center),
+                (label_width, label_galley, muted, if app.rtl {egui::Align::Max} else {egui::Align::Min}),
+                (value_width, ui.painter().layout_no_wrap(values[index].clone(), mono.clone(), ink), ink, egui::Align::Max),
+                (unit_width, ui.painter().layout_no_wrap((*unit).into(), egui::TextStyle::Small.resolve(ui.style()), muted), muted, egui::Align::Min),
+                (12.0, ui.painter().layout_no_wrap(if *active {icons::CHECK.into()} else {String::new()}, body.clone(), accent), accent, egui::Align::Center),
+            ];
+            let mut offset = 0.0;
+            for (cell_width, galley, color, align) in cells {
+                let left = if app.rtl {rect.right() - offset - cell_width} else {rect.left() + offset};
+                paint_centered_galley(ui, egui::Rect::from_min_size(egui::pos2(left, rect.top()), egui::vec2(cell_width, rect.height())), galley, color, align);
+                offset += cell_width + 10.0;
+            }
+        }
+    }
+    if heading {
+        ui.separator();
+        ui.horizontal(|ui| { ui.colored_label(muted, icons::HAND_TAP); ui.label(egui::RichText::new(app.tr("Click to switch frame rate source")).small().color(muted)); });
+    }
+}
+
 fn render_widget(
     app: &PealayerApp,
     ui: &mut egui::Ui,
@@ -477,11 +552,6 @@ fn render_widget(
     let (text, width, mono, color) = match item {
         Widget::Fps => {
             let fps = app.current_fps_display(Instant::now())?;
-            let mode = app.tr(match app.status_bar.fps_mode {
-                StatusBarFpsMode::Media => "Media",
-                StatusBarFpsMode::Ui => "Screen",
-                StatusBarFpsMode::Auto => "Auto",
-            });
             let text = format!(
                 "{} {}",
                 if fps.is_ui_rate {
@@ -517,7 +587,7 @@ fn render_widget(
                 status_font(ui, app.status_bar.uses_monospace(item), !fps.is_ui_rate), color);
             paint_centered_galley(ui, number_rect, galley, color, egui::Align::Max);
             return Some((
-                response.on_hover_text(format!("{mode}\n{}", fps.tooltip)),
+                response.on_hover_ui(|ui| fps_details(ui, app, &fps, true)),
                 text,
             ));
         }
@@ -743,8 +813,8 @@ fn item_menu(app: &mut PealayerApp, ui: &mut egui::Ui, item: Widget, log_id: egu
     ui.separator();
     let mut changed = false;
     if item == Widget::Fps && let Some(fps) = app.current_fps_display(Instant::now()) {
-        if ui.dropdown_choice(false, app.tr("Copy value")).clicked() { ui.ctx().copy_text(fps.formatted); ui.close(); }
-        ui.weak(fps.tooltip);
+        if ui.dropdown_choice(false, app.tr("Copy value")).clicked() { ui.ctx().copy_text(fps.formatted.clone()); ui.close(); }
+        fps_details(ui, app, &fps, false);
     }
     if item == Widget::Estop && ui.dropdown_choice(false, app.tr("Release E-STOP...")).clicked() {
         app.request_emergency_stop_change(false); ui.close();
@@ -1219,6 +1289,71 @@ mod tests {
         }
     }
     use super::*;
+
+    #[test]
+    fn fps_details_align_values_and_use_sections_without_duplicate_narration() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.engine_handle = crate::four_d::engine::memory_only_test_engine();
+        let details = crate::app::FpsDisplayInfo { value: 23.976, formatted: "23.98 fps".into(),
+            is_ui_rate: false, media_rate: Some(23.976), ui_rate: Some(30.62),
+            render_time_ms: Some(1.11), peak_render_time_ms: Some(27.71) };
+        for dark in [false, true] { for rtl in [false, true] { for scale in [1.0, 1.5] {
+            let ctx = egui::Context::default();
+            ctx.set_pixels_per_point(scale);
+            let config = crate::config::AppConfig { color_palette: crate::config::ColorPalette::Studio,
+                theme: if dark {crate::config::AppTheme::Dark} else {crate::config::AppTheme::Light}, ..Default::default() };
+            crate::ui::configure_native_appearance(&ctx, &config);
+            crate::ui::fonts::install(&ctx, &config, rtl);
+            app.rtl = rtl;
+            app.language = if rtl {crate::config::AppLanguage::Persian} else {crate::config::AppLanguage::English};
+            let mut output = None;
+            let mut bounds = egui::Rect::NOTHING;
+            for _ in 0..3 {
+                let mut frame = ctx.run_ui(egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(390.0, 650.0))),
+                    ..Default::default()
+                }, |ui| {
+                    ui.with_layout(crate::ui::i18n::layout(rtl, egui::Align::Min), |ui| {
+                        fps_details(ui, &app, &details, true);
+                        bounds = ui.min_rect();
+                    });
+                });
+                frame.textures_delta.clear(); output = Some(frame);
+            }
+            let output = output.unwrap();
+            let text: Vec<_> = output.shapes.iter().filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text), _ => None,
+            }).collect();
+            let values: Vec<_> = ["23.98", "30.62", "1.11", "27.71"].iter().map(|value| {
+                text.iter().find(|text| text.galley.text() == *value)
+                    .unwrap_or_else(|| panic!("metric {value} missing; dark={dark}, rtl={rtl}, scale={scale}; painted={:?}", text.iter().map(|t|t.galley.text()).collect::<Vec<_>>()))
+            }).collect();
+            let right = values[0].pos.x + values[0].galley.size().x;
+            for value in values { assert!((value.pos.x + value.galley.size().x - right).abs() < 0.2, "metric value column drifted"); }
+            assert_eq!(text.iter().filter(|text| text.galley.text() == app.tr("Frame rate")).count(), 1);
+            assert_eq!(text.iter().filter(|text| text.galley.text() == app.tr("Click to switch frame rate source")).count(), 1);
+            assert!(!text.iter().any(|text| text.galley.text().contains("Active mode")));
+            assert!(output.shapes.iter().filter(|shape| matches!(&shape.shape, egui::Shape::LineSegment{points,..} if (points[0].y-points[1].y).abs()<0.1)).count() >= 3);
+            assert!(bounds.width() < 390.0, "tooltip exceeds narrow viewport: {bounds:?}");
+        } } }
+    }
+
+    #[test]
+    fn fps_details_keep_unknown_samples_unknown() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.engine_handle = crate::four_d::engine::memory_only_test_engine();
+        app.current_video_path = Some("fixture.mp4".into());
+        app.media_fps = f64::INFINITY;
+        let details = app.current_fps_display(Instant::now()).unwrap();
+        assert_eq!(details.media_rate, None);
+        assert_eq!(details.ui_rate, None);
+        app.current_video_path = None;
+        let unloaded = app.current_fps_display(Instant::now()).unwrap();
+        assert_eq!(unloaded.render_time_ms, None);
+        assert_eq!(unloaded.peak_render_time_ms, None);
+    }
 
     #[test]
     fn update_progress_verification_has_no_completed_download_percentage() {

@@ -105,6 +105,7 @@ const fa: Record<string, string> = {
   'Use this instance': 'استفاده از این نمونه',
   'Close this prompt without changing publishing authority or pending requests.': 'این پیام را بدون تغییر اختیار انتشار یا درخواست‌های در انتظار ببندید.',
   'Frame rate': 'نرخ فریم',
+  'Active source': 'منبع فعال',
   'Media': 'رسانه',
   'Screen': 'صفحه',
   'Auto': 'خودکار',

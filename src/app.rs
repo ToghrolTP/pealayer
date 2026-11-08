@@ -314,9 +314,11 @@ impl FrameRateTracker {
 pub struct FpsDisplayInfo {
     pub value: f64,
     pub formatted: String,
-    pub active_mode_label: String,
-    pub tooltip: String,
     pub is_ui_rate: bool,
+    pub media_rate: Option<f64>,
+    pub ui_rate: Option<f64>,
+    pub render_time_ms: Option<f64>,
+    pub peak_render_time_ms: Option<f64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -5963,23 +5965,15 @@ impl PealayerApp {
             crate::config::StatusBarFpsMode::Media => false,
             crate::config::StatusBarFpsMode::Auto => self.is_paused || self.current_video_path.is_none(),
         };
-        let rate = if is_ui_rate { self.frame_rate_tracker.live_fps() }
-            else { (self.current_video_path.is_some() && self.media_fps.is_finite() && self.media_fps > 0.0).then_some(self.media_fps) };
-        let active_mode_label = self.tr(if is_ui_rate { "Screen render rate" } else { "Media frame rate" });
+        let media_rate = (self.current_video_path.is_some() && self.media_fps.is_finite() && self.media_fps > 0.0).then_some(self.media_fps);
+        let ui_rate = self.frame_rate_tracker.live_fps();
+        let rate = if is_ui_rate { ui_rate } else { media_rate };
         let formatted = rate.map(|rate| format!("{rate:.2} fps")).unwrap_or_else(|| "— fps".into());
-        let ui_rate = self.frame_rate_tracker.live_fps().map(|rate| format!("{rate:.2} fps")).unwrap_or_else(|| "—".into());
-        let media_rate = if self.current_video_path.is_some() && self.media_fps > 0.0 { format!("{:.2} fps", self.media_fps) } else { "—".into() };
         let render_micros = crate::ui::video::LAST_MPV_RENDER_MICROS.load(std::sync::atomic::Ordering::Relaxed);
         let max_render_micros = crate::ui::video::MAX_MPV_RENDER_MICROS.load(std::sync::atomic::Ordering::Relaxed);
-        let render_stat = if render_micros > 0 {
-            format!("\n{}: {:.2} ms (max: {:.2} ms)", self.tr("MPV render time"), render_micros as f64 / 1000.0, max_render_micros as f64 / 1000.0)
-        } else {
-            String::new()
-        };
-        let tooltip = format!("{}: {}\n{}: {}\n{}: {}{}\n{}", self.tr("Media frame rate"), media_rate,
-            self.tr("Screen render rate"), ui_rate, self.tr("Active mode"), active_mode_label, render_stat,
-            self.tr("Click to switch frame rate source"));
-        Some(FpsDisplayInfo { value: rate.unwrap_or(0.0), formatted, active_mode_label, tooltip, is_ui_rate })
+        Some(FpsDisplayInfo { value: rate.unwrap_or(0.0), formatted, is_ui_rate, media_rate, ui_rate,
+            render_time_ms: (self.current_video_path.is_some() && render_micros > 0).then_some(render_micros as f64 / 1000.0),
+            peak_render_time_ms: (self.current_video_path.is_some() && render_micros > 0 && max_render_micros > 0).then_some(max_render_micros as f64 / 1000.0) })
     }
 
     /// Restarts playback of the current video from the beginning (0.0s).
@@ -12205,8 +12199,8 @@ pub(crate) mod tests {
         let info_active = display_active.unwrap();
         assert_eq!(info_active.is_ui_rate, true, "Explicit UI mode displays measured render cadence");
         assert!(info_active.formatted.contains("60"), "Expected UI rate ~60 fps, got {}", info_active.formatted);
-        assert!(info_active.tooltip.contains("Screen render rate"));
-        assert!(info_active.tooltip.contains("23.98"));
+        assert_eq!(info_active.media_rate, Some(23.976));
+        assert!(info_active.ui_rate.is_some_and(|rate| (rate - 60.0).abs() < 0.01));
     }
 
     #[test]

@@ -5,6 +5,31 @@ Implementation: [workspace and typography PR](https://github.com/ToghrolTP/peala
 
 ## Regressions and repairs
 
+### Frame-rate detail card
+
+The FPS hover is now a compact palette-aware detail card rather than concatenated
+plain text. One heading, source icons and an active-source check replace the
+repeated mode narration. Labels/units use muted ink; measured numeric lanes share
+right-aligned, regular-weight monospace values. Horizontal dividers separate
+rates, optional mpv timing and the single interaction hint. Native hover and
+context-menu details use the same renderer and typed cached measurements, never
+parse a tooltip string or perform fresh media/GPU probes. Unavailable rates remain
+unknown, and unloaded media does not expose stale renderer timings. Counter
+weight, source selection/cycling and telemetry cadence are unchanged.
+
+The Web footer uses a matching hover/focus card with shared theme roles and
+aligned tabular values. It shows existing media/UI snapshots only: mpv render
+diagnostics are not advertised by its current status contract and are not
+invented locally. Both the button and parent widget omit the native browser
+`title`, preventing a second plain tooltip from appearing over the card.
+
+Focused native regressions check source behavior, missing/non-finite samples,
+value columns, separators, unique narration, narrow bounds, light/dark, RTL and
+display scale. Real Edge tests cover both palettes at 390/768/1440 pixels in
+light/dark and English/Persian, plus focus, source cycling and unknown samples.
+Fixture captures remain private; they are not historical screenshots or proof
+of the user's live native tooltip. Installed evidence is in the owning PR.
+
 The connection widget had a fixed 148-point slot (252 with transport shown).
 Changing the UI typeface to the native semibold face made “Hardware:
 Disconnected” wider, but the slot never used the otherwise empty bar. The slot
