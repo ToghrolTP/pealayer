@@ -64,12 +64,77 @@ pub fn apply(visuals: &mut eframe::egui::Visuals, palette: crate::config::ColorP
     visuals.widgets.hovered.bg_stroke = hover_border;
     visuals.widgets.hovered.bg_fill = hover;
     visuals.widgets.hovered.weak_bg_fill = hover;
+    // Expanded selectors/menu triggers use egui's independent open state.
+    // Leaving it untouched leaks stock grey into the selected palette.
+    visuals.widgets.open.fg_stroke = Stroke::new(1.0, text);
+    visuals.widgets.open.bg_stroke = hover_border;
+    visuals.widgets.open.bg_fill = surface;
+    visuals.widgets.open.weak_bg_fill = control;
     // Active/selection colors remain accent-aware and keep the existing light
     // theme contrast fix. Palette selection never changes geometry or sizing.
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn expanded_dropdown_paints_the_live_palette_without_changing_geometry() {
+        use crate::config::{AppConfig, AppTheme, ColorPalette};
+        use crate::ui::dropdown::{ComboBox, DropdownUiExt};
+        use eframe::egui::{self, Color32, Shape};
+        fn frame(ctx: &egui::Context, surface: Color32) -> (egui::Response, egui::FullOutput) {
+            let mut trigger = None;
+            let mut output = ctx.run_ui(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 400.0))),
+                ..Default::default()
+            }, |ui| {
+                trigger = Some(ComboBox::from_id_salt("palette-open-regression")
+                    .width(220.0).selected_text("Palette choice").show_ui(ui, |ui| {
+                        assert_eq!(ui.visuals().window_fill(), surface);
+                        ui.dropdown_choice(false, "First choice");
+                        ui.dropdown_choice(false, "Second choice");
+                    }).response);
+            });
+            output.textures_delta.clear(); // Headless paint inspection, no GPU upload.
+            (trigger.unwrap(), output)
+        }
+        fn filled(shape: &Shape, fill: Color32, target: egui::Rect) -> bool {
+            match shape {
+                Shape::Rect(rect) => rect.fill == fill && rect.rect.contains_rect(target),
+                Shape::Vec(shapes) => shapes.iter().any(|shape| filled(shape, fill, target)),
+                _ => false,
+            }
+        }
+        for dark in [false, true] {
+            let ctx = egui::Context::default();
+            let mut previous_rect = None;
+            for palette in [ColorPalette::Studio, ColorPalette::Native, ColorPalette::Studio] {
+                let config = AppConfig {
+                    color_palette: palette,
+                    theme: if dark { AppTheme::Dark } else { AppTheme::Light },
+                    ..Default::default()
+                };
+                crate::ui::configure_native_appearance(&ctx, &config);
+                let style = ctx.global_style();
+                let surface = super::color(palette, dark, "surface-1");
+                let control = super::color(palette, dark, "surface-2");
+                assert_eq!(style.visuals.widgets.open.bg_fill, surface);
+                assert_eq!(style.visuals.widgets.open.weak_bg_fill, control);
+                assert_eq!(style.visuals.widgets.open.bg_stroke.color, super::color(palette, dark, "line-strong"));
+                assert_eq!(style.visuals.widgets.open.fg_stroke.color, super::color(palette, dark, "text"));
+                // Keep the real popup open across live palette switches.
+                let (trigger, _) = frame(&ctx, surface);
+                egui::Popup::open_id(&ctx, trigger.id.with("popup"));
+                frame(&ctx, surface); // Disabled sizing pass for a newly opened popup.
+                let (trigger, output) = frame(&ctx, surface);
+                assert!(ComboBox::is_open(&ctx, trigger.id));
+                if let Some(rect) = previous_rect { assert_eq!(trigger.rect, rect); }
+                previous_rect = Some(trigger.rect);
+                assert!(output.shapes.iter().any(|shape| filled(&shape.shape, control, trigger.rect.shrink(2.0))),
+                    "expanded selector must paint the active palette, not stock grey");
+            }
+        }
+    }
+
     #[test]
     fn live_appearance_advertises_the_same_palette_preference() {
         let config = crate::config::AppConfig {

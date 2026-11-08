@@ -1,5 +1,22 @@
 # Shared control density and contextual buzzer actions
 
+## Expanded dropdown palette
+
+Expanded selectors use egui's separate `widgets.open` visuals. The shared
+palette adapter now supplies their strong/weak backgrounds, outline and text
+instead of leaving stock grey behind when Studio is selected. Popup frames
+continue to use the existing palette window surface. Accent selection,
+geometry, density and CraftUI styling are unchanged; Web elevated surfaces
+already use the same palette catalog.
+
+The native regression inspects an actually expanded selector's painted fill
+and popup surface in light/dark, including Studio → Neutral → Studio while the
+popup remains open. It checks stable trigger geometry as well as palette roles.
+Installed acceptance and deployment are recorded in the owning PR; source
+paint checks alone are not a screenshot of the user's Preferences window.
+
+## Control density
+
 Preferences / Appearance / Control density uses a five-step slider: Extra compact
 (18 points), Compact (24), Regular (28), Comfortable (32), and Spacious (36). Configuration
 stores the semantic choice, not a slider index; existing Compact/Comfortable
