@@ -467,12 +467,6 @@ fn workspace_selector(app: &mut PealayerApp, ui: &mut egui::Ui) -> egui::Respons
 /// Structured details are shared by the hover card and the FPS context menu.
 /// One measured column layout keeps values/units aligned across both sections.
 fn fps_details(ui: &mut egui::Ui, app: &PealayerApp, fps: &crate::app::FpsDisplayInfo, heading: bool) {
-    ui.with_layout(egui::Layout::top_down(if app.rtl {egui::Align::Max} else {egui::Align::Min}), |ui| {
-        fps_details_body(ui, app, fps, heading);
-    });
-}
-
-fn fps_details_body(ui: &mut egui::Ui, app: &PealayerApp, fps: &crate::app::FpsDisplayInfo, heading: bool) {
     use crate::ui::icons;
     let mut rows = vec![
         (icons::FILE_VIDEO, app.tr("Media frame rate"), fps.media_rate, "fps", !fps.is_ui_rate),
@@ -492,13 +486,17 @@ fn fps_details_body(ui: &mut egui::Ui, app: &PealayerApp, fps: &crate::app::FpsD
     let value_width = values.iter().map(|value| measure(value, mono.clone())).fold(42.0_f32, f32::max) + 6.0;
     let unit_width = measure("fps", body.clone()).max(measure("ms", body.clone()));
     let max_width = (ui.ctx().content_rect().width() - 40.0).max(200.0);
-    let label_width = rows.iter().map(|row| measure(&row.1, body.clone())).fold(0.0_f32, f32::max)
+    let label_width = (rows.iter().map(|row| measure(&row.1, body.clone())).fold(0.0_f32, f32::max) + 6.0)
         .min((max_width - value_width - unit_width - 70.0).max(40.0));
     let row_height = ui.text_style_height(&egui::TextStyle::Body).max(ui.text_style_height(&egui::TextStyle::Monospace));
     let muted = ui.visuals().weak_text_color();
     let width = label_width + value_width + unit_width + 70.0;
-    ui.set_max_width(max_width);
-    ui.set_min_width(width);
+    // Separators consume the available width. Bound the content itself, not just
+    // its minimum, before creating the RTL scope: an Align::Max child otherwise
+    // anchors its initial minimum rectangle to the desktop-wide trailing edge.
+    ui.set_width(width);
+    ui.allocate_ui_with_layout(egui::vec2(width, 0.0), egui::Layout::top_down(if app.rtl {egui::Align::Max} else {egui::Align::Min}), |ui| {
+    ui.set_width(width);
     ui.spacing_mut().item_spacing.y = 7.0;
     if heading {
         ui.horizontal(|ui| {
@@ -537,6 +535,7 @@ fn fps_details_body(ui: &mut egui::Ui, app: &PealayerApp, fps: &crate::app::FpsD
         ui.separator();
         ui.horizontal(|ui| { ui.colored_label(muted, icons::HAND_TAP); ui.label(egui::RichText::new(app.tr("Click to switch frame rate source")).small().color(muted)); });
     }
+    });
 }
 
 fn render_widget(
@@ -1298,7 +1297,7 @@ mod tests {
         let details = crate::app::FpsDisplayInfo { value: 23.976, formatted: "23.98 fps".into(),
             is_ui_rate: false, media_rate: Some(23.976), ui_rate: Some(30.62),
             render_time_ms: Some(1.11), peak_render_time_ms: Some(27.71) };
-        for dark in [false, true] { for rtl in [false, true] { for scale in [1.0, 1.5] {
+        for dark in [false, true] { for rtl in [false, true] { for scale in [1.0, 1.5] { for viewport_width in [390.0, 3002.0] {
             let ctx = egui::Context::default();
             ctx.set_pixels_per_point(scale);
             let config = crate::config::AppConfig { color_palette: crate::config::ColorPalette::Studio,
@@ -1311,13 +1310,13 @@ mod tests {
             let mut bounds = egui::Rect::NOTHING;
             for _ in 0..3 {
                 let mut frame = ctx.run_ui(egui::RawInput {
-                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(390.0, 650.0))),
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(viewport_width, 650.0))),
                     ..Default::default()
                 }, |ui| {
-                    ui.with_layout(crate::ui::i18n::layout(rtl, egui::Align::Min), |ui| {
+                    let source = ui.button("23.98 fps");
+                    bounds = egui::Tooltip::for_widget(&source).show(|ui| {
                         fps_details(ui, &app, &details, true);
-                        bounds = ui.min_rect();
-                    });
+                    }).expect("native tooltip is open").response.rect;
                 });
                 frame.textures_delta.clear(); output = Some(frame);
             }
@@ -1335,8 +1334,9 @@ mod tests {
             assert_eq!(text.iter().filter(|text| text.galley.text() == app.tr("Click to switch frame rate source")).count(), 1);
             assert!(!text.iter().any(|text| text.galley.text().contains("Active mode")));
             assert!(output.shapes.iter().filter(|shape| matches!(&shape.shape, egui::Shape::LineSegment{points,..} if (points[0].y-points[1].y).abs()<0.1)).count() >= 3);
-            assert!(bounds.width() < 390.0, "tooltip exceeds narrow viewport: {bounds:?}");
-        } } }
+            assert!(bounds.width() < 390.0, "tooltip expanded beyond its measured content on {viewport_width}-point viewport (dark={dark}, rtl={rtl}, scale={scale}): {bounds:?}");
+            assert!(bounds.left() >= 0.0 && bounds.right() <= viewport_width, "tooltip escaped viewport: {bounds:?}");
+        } } } }
     }
 
     #[test]

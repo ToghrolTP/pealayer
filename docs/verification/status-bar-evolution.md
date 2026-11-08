@@ -27,6 +27,11 @@ Focused native regressions check source behavior, missing/non-finite samples,
 value columns, separators, unique narration, narrow bounds, light/dark, RTL and
 display scale. Real Edge tests cover both palettes at 390/768/1440 pixels in
 light/dark and English/Persian, plus focus, source cycling and unknown samples.
+The installed native capture exposed a desktop-wide separator expansion that
+content-only paint tests missed. The card now bounds its actual width, with
+padding included before label wrapping. The regression renders the real egui
+tooltip container on both narrow and 3002-point viewports rather than testing
+only its inner rows.
 Fixture captures remain private; they are not historical screenshots or proof
 of the user's live native tooltip. Installed evidence is in the owning PR.
 
