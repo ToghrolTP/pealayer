@@ -318,6 +318,18 @@ fn status_font(ui: &egui::Ui, monospace: bool, strong: bool) -> egui::FontId {
             font.family = family;
         }
     }
+    if monospace {
+        // Equal point sizes do not imply equal visible digit heights across the
+        // user's UI and fixed-pitch faces. Match their optical size, keeping the
+        // configured families and their weight rather than choosing another face.
+        let reference = ui.painter().layout_no_wrap("0123456789".into(), status_font(ui, false, strong), ui.visuals().text_color());
+        let sample = ui.painter().layout_no_wrap("0123456789".into(), font.clone(), ui.visuals().text_color());
+        let reference_height = reference.mesh_bounds.height();
+        let sample_height = sample.mesh_bounds.height();
+        if reference_height.is_finite() && sample_height.is_finite() && reference_height > 0.0 && sample_height > 0.0 {
+            font.size *= (reference_height / sample_height).clamp(0.75, 1.25);
+        }
+    }
     font
 }
 
@@ -601,7 +613,7 @@ fn render_widget(
                 egui::Rect::from_min_max(rect.min + egui::vec2(19.0, 0.0), rect.max)
             };
             let galley = ui.painter().layout_no_wrap(fps.formatted.clone(),
-                status_font(ui, app.status_bar.uses_monospace(item), !fps.is_ui_rate), color);
+                status_font(ui, app.status_bar.uses_monospace(item), false), color);
             paint_centered_galley(ui, number_rect, galley, color, egui::Align::Max);
             return Some((
                 response.on_hover_ui(|ui| fps_details(ui, app, &fps, true)),
@@ -806,7 +818,6 @@ fn render_widget(
     let strong = matches!(
         item,
         Widget::Connection
-            | Widget::Fps
             | Widget::Hot
             | Widget::Estop
     );
@@ -1744,7 +1755,29 @@ mod tests {
     }
 
     #[test]
-    fn render_fps_uses_regular_font_while_media_remains_emphasized() {
+    fn status_monospace_digits_match_ui_optical_size() {
+        for ui_family in [crate::config::UiFontFamily::System, crate::config::UiFontFamily::Bundled] {
+        for mono_family in [crate::config::UiFontFamily::System, crate::config::UiFontFamily::Bundled] {
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            let ctx = egui::Context::default();
+            ctx.set_pixels_per_point(scale);
+            crate::ui::fonts::install(&ctx, &crate::config::AppConfig {
+                ui_font_family: ui_family, monospace_font_family: mono_family, ..Default::default()
+            }, false);
+            let mut output = ctx.run_ui(Default::default(), |ui| {
+                let regular = status_font(ui, true, false);
+                assert_eq!(regular.family, egui::FontFamily::Monospace, "regular numeric text must not use an emphasis face");
+                let reference = ui.painter().layout_no_wrap("0123456789".into(), status_font(ui, false, false), ui.visuals().text_color());
+                let numeric = ui.painter().layout_no_wrap("0123456789".into(), regular, ui.visuals().text_color());
+                assert!((reference.mesh_bounds.height() - numeric.mesh_bounds.height()).abs() * ui.pixels_per_point() <= 2.0,
+                    "status digits are optically larger/smaller than the UI face: ui={ui_family:?}, mono={mono_family:?}, scale={scale}");
+            });
+            output.textures_delta.clear();
+        } } }
+    }
+
+    #[test]
+    fn render_fps_uses_regular_font_in_every_source_mode() {
         let _guard = crate::app::tests::lock_app_tests();
         let context = egui::Context::default();
         crate::ui::fonts::install(&context,&crate::config::AppConfig::default(),false);
@@ -1752,11 +1785,11 @@ mod tests {
         app.engine_handle = crate::four_d::engine::memory_only_test_engine();
         app.current_video_path = Some("fixture.mp4".into());
         app.media_fps = 24.0;
-        for (mode,paused,strong) in [(StatusBarFpsMode::Ui,false,false),(StatusBarFpsMode::Media,true,true),(StatusBarFpsMode::Auto,true,false),(StatusBarFpsMode::Auto,false,true)] {
+        for (mode,paused) in [(StatusBarFpsMode::Ui,false),(StatusBarFpsMode::Media,true),(StatusBarFpsMode::Auto,true),(StatusBarFpsMode::Auto,false)] {
             app.status_bar.fps_mode=mode; app.is_paused=paused;
             let mut expected=None;
             let mut output=context.run_ui(Default::default(),|ui| {
-                expected=Some(status_font(ui,app.status_bar.uses_monospace(Widget::Fps),strong));
+                expected=Some(status_font(ui,app.status_bar.uses_monospace(Widget::Fps),false));
                 render_widget(&app,ui,Widget::Fps,None,&TelemetryLog::default(),&[],100.0);
             });
             let actual=output.shapes.iter().find_map(|s| match &s.shape {

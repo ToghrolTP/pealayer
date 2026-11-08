@@ -56,7 +56,7 @@ assert.deepEqual(chartPaths([{ time: 0, values: [undefined] }], 0, 100, 20), [])
 const styles = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
 const view = readFileSync(new URL('../src/components/ApplicationStatusBar.tsx', import.meta.url), 'utf8');
 assert.ok(view.includes("screenRate ? ' is-screen-rate' : ''"));
-assert.match(styles,/\.status-widget--fps \.app-statusbar__fps\.is-screen-rate\s*\{\s*font-weight:\s*400;/,'render FPS must be regular, including Auto mode');
+assert.match(styles,/\.status-widget--fps, \.status-widget--fps \.app-statusbar__fps\s*\{\s*font-weight:\s*400;/,'FPS must be regular for media, render and Auto modes');
 const connectionRule = styles.match(/\.app-statusbar \.status-widget--connection\s*\{([^}]+)\}/)?.[1] ?? '';
 assert.match(connectionRule, /width:\s*max-content/, 'connection caption must use spare bar space');
 assert.match(connectionRule, /flex:\s*0 1 auto/, 'caption may shrink on narrow screens');

@@ -14,8 +14,14 @@ right-aligned, regular-weight monospace values. Horizontal dividers separate
 rates, optional mpv timing and the single interaction hint. Native hover and
 context-menu details use the same renderer and typed cached measurements, never
 parse a tooltip string or perform fresh media/GPU probes. Unavailable rates remain
-unknown, and unloaded media does not expose stale renderer timings. Counter
-weight, source selection/cycling and telemetry cadence are unchanged.
+unknown, and unloaded media does not expose stale renderer timings. Source
+selection/cycling and telemetry cadence are unchanged. At the user's follow-up
+request, both media and screen FPS now use regular weight, on native and Web;
+source icons and the tooltip's check identify the active source without boldness.
+Native status monospace sizing matches the measured digit height of the selected
+UI face instead of assuming equal point sizes look equal. This is scoped to the
+status bar and retains user font choices, semantic warning/emergency emphasis
+and the existing visible-ink vertical alignment.
 
 The Web footer uses a matching hover/focus card with shared theme roles and
 aligned tabular values. It shows existing media/UI snapshots only: mpv render

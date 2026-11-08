@@ -1137,8 +1137,8 @@ html[data-motion="disabled"] *, html[data-motion="disabled"] *::before, html[dat
 .status-connection-dot { flex: 0 0 8px; width: 8px; height: 8px; border-radius: 50%; background: currentColor; }
 @font-face { font-family: PealayerPhosphor; src: url('/api/icons/font') format('opentype'); font-display: block; }
 .phosphor-icon { font-family: PealayerPhosphor; display: inline-flex; align-items: center; justify-content: center; font-size: 1em; line-height: 1; }
-.status-widget--fps, .status-widget--hot, .status-widget--estop, .status-widget--warnings { font-weight: 600; }
-.status-widget--fps .app-statusbar__fps.is-screen-rate { font-weight: 400; }
+.status-widget--hot, .status-widget--estop, .status-widget--warnings { font-weight: 600; }
+.status-widget--fps, .status-widget--fps .app-statusbar__fps { font-weight: 400; }
 .status-widget--voltage, .status-widget--current, .status-widget--temperature { font-size: 11px; font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
 .app-statusbar .status-widget.is-monospace, .status-widget.is-monospace .app-statusbar__fps { font-family: var(--mono-font, monospace); }
 .app-statusbar .status-widget { font-family: var(--ui-font, sans-serif); border-radius: 3px; transition: background-color 120ms ease; }
