@@ -10,6 +10,24 @@
 
 ## Verification
 
+### Sticky header pointer ownership
+
+The ruler's logical horizontal rectangle can extend behind the frozen left
+column after panning. Its input rectangle is now intersected with the visible
+viewport, and cursor/seeking/context-position capture use the actual response
+hover instead of raw geometric containment. Sticky buttons and fields retain
+their hand/text cursors; hidden content and higher UI layers cannot claim them.
+An existing primary ruler drag keeps capture across the toolbar or outside the
+viewport until release; a press in the hidden header cannot start that drag.
+
+Native regressions exercise the actual timeline at 640/1000-point widths after
+horizontal scrolling, including button and text-field cursors, visible-ruler
+cursor and non-seeking input focus. A real response/gesture fixture separately
+checks toolbar exclusion, clipped starts and drag capture/release. Tests use
+isolated configuration and an in-memory engine, never live media or hardware.
+The pointer-fix pass ran the complete focused `timeline_` native suite:
+**197 passed, zero failed**. Older ruler/deployment receipts below are historical.
+
 - `cargo test --lib --locked --jobs 1 timeline_ -- --test-threads=1`: 96 passed, 0 failed. Includes new frozen-origin/horizontal alignment checks, actual egui ScrollArea viewport and separate painter clips at 0/120/420 px vertical offsets, wheel routing/priority/unit normalization, defaults and persistence, plus existing track alignment, pointer-anchored zoom, pan, keyframe, cue and drag regression checks.
 - TypeScript `tsc --noEmit` passed. Web production/PWA build and canonical optimized binary deployment results follow below.
 - Tests do not activate hardware outputs. No full suite or native visual acceptance is claimed.

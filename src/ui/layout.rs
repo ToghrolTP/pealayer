@@ -998,12 +998,14 @@ struct TimelineNavigationTransition {
 }
 
 fn timeline_ruler_owns_pointer(
-    ruler: egui::Rect,
+    ruler: &egui::Response,
     toolbar: egui::Rect,
-    pointer: egui::Pos2,
-    dragging_ruler: bool,
 ) -> bool {
-    dragging_ruler || (ruler.contains(pointer) && !toolbar.contains(pointer))
+    // Response hover respects the viewport clip, higher layers and child
+    // controls. The scrolled content rectangle alone extends under the sticky
+    // track headers. Preserve capture only for a seek started on this ruler.
+    ruler.dragged_by(egui::PointerButton::Primary)
+        || ruler.hover_pos().is_some_and(|pointer| !toolbar.contains(pointer))
 }
 
 fn start_timeline_navigation_transition(
@@ -9309,14 +9311,108 @@ mod timeline_row_tests {
     }
 
     #[test]
-    fn timeline_ruler_does_not_steal_toolbar_cursor_or_seek() {
-        let ruler = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(900.0, 30.0));
-        let toolbar = egui::Rect::from_min_max(egui::pos2(650.0, 1.0), egui::pos2(897.0, 29.0));
-        assert!(!timeline_ruler_owns_pointer(ruler, toolbar, toolbar.center(), false));
-        assert!(timeline_ruler_owns_pointer(ruler, toolbar, egui::pos2(200.0, 15.0), false));
-        // A seek already started on the ruler may continue across the toolbar.
-        assert!(timeline_ruler_owns_pointer(ruler, toolbar, toolbar.center(), true));
-        assert!(!timeline_ruler_owns_pointer(ruler, toolbar, egui::pos2(200.0, 60.0), false));
+    fn timeline_ruler_does_not_steal_sticky_header_cursors_or_seek() {
+        let _guard = crate::app::tests::lock_app_tests();
+        for width in [640.0, 1000.0] {
+            let mut app = PealayerApp::default();
+            app.engine_handle = crate::four_d::engine::memory_only_test_engine();
+            app.duration = 60.0;
+            app.timeline_zoom = 100.0;
+            app.timeline_animated_navigation = false;
+            app.is_paused = true;
+            app.timeline_follow_playhead = false;
+            let ctx = egui::Context::default();
+            let mut time = 0.0;
+            let mut render = |events| {
+                time += 0.02;
+                let mut output = ctx.run_ui(egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 420.0))),
+                    time: Some(time), events, ..Default::default()
+                }, |ui| { PealayerTabViewer { app: &mut app }.ui(ui, &mut PealayerTab::Timeline); });
+                output.textures_delta.clear();
+                output
+            };
+            let initial = render(vec![]);
+            let ruler = ctx.read_response(egui::Id::new("timeline_ruler")).unwrap().rect;
+            let header_right = ruler.left();
+            let y = ruler.center().y;
+            // Locate the real header action paint slots, rather than guessing
+            // offsets across font padding and ScrollArea frame margins.
+            let mut buttons: Vec<_> = initial.shapes.iter().filter_map(|shape| match &shape.shape {
+                egui::Shape::Rect(rect) if (rect.rect.width() - 21.0).abs() < 0.2
+                    && (rect.rect.height() - 21.0).abs() < 0.2
+                    && rect.rect.right() < header_right => Some(rect.rect),
+                _ => None,
+            }).collect();
+            buttons.sort_by(|a, b| b.right().total_cmp(&a.right()));
+            assert!(buttons.len() >= 2, "missing real header action paint slots");
+            let header_y = buttons[0].center().y;
+            // Pan far enough that the logical ruler extends underneath every
+            // sticky header control, then exercise the actual Timeline UI.
+            render(vec![egui::Event::PointerMoved(egui::pos2(header_right + 45.0, y + 60.0)),
+                egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(-700.0, 0.0), modifiers: egui::Modifiers::NONE,
+                    phase: egui::TouchPhase::Move, source: egui::MouseWheelSource::Wheel }]);
+            for _ in 0..4 { render(vec![]); }
+            assert!(ctx.read_response(timeline_keyboard_focus_id()).unwrap().rect.left() < header_right - 100.0,
+                "fixture must really pan: ruler={ruler:?}, canvas={:?}", ctx.read_response(timeline_keyboard_focus_id()).unwrap().rect);
+            for (point, cursor) in [
+                (buttons[0].center(), egui::CursorIcon::Default), // no available keyframe target
+                (buttons[1].center(), egui::CursorIcon::PointingHand),
+                (egui::pos2(header_right - 130.0, header_y), egui::CursorIcon::Text),
+                (egui::pos2(header_right + 24.0, y), egui::CursorIcon::ResizeHorizontal),
+            ] {
+                let output = render(vec![egui::Event::PointerMoved(point)]);
+                assert_eq!(output.platform_output.cursor_icon, cursor, "width={width}, point={point:?}");
+            }
+            let input = egui::pos2(header_right - 130.0, header_y);
+            for pressed in [true, false] {
+                render(vec![egui::Event::PointerMoved(input), egui::Event::PointerButton {
+                    pos: input, button: egui::PointerButton::Primary, pressed,
+                    modifiers: egui::Modifiers::NONE,
+                }]);
+            }
+            drop(render);
+            assert!(!app.is_scrubbing);
+            assert!(app.seek_pos.is_none(), "hovering must never seek");
+        }
+    }
+
+    #[test]
+    fn timeline_ruler_capture_requires_a_visible_start_and_survives_toolbar_crossing() {
+        let ctx = egui::Context::default();
+        let viewport = egui::Rect::from_min_max(egui::pos2(250.0, 0.0), egui::pos2(900.0, 180.0));
+        let ruler = egui::Rect::from_min_max(egui::pos2(-500.0, 0.0), egui::pos2(1600.0, 30.0));
+        let toolbar = egui::Rect::from_min_max(egui::pos2(650.0, 0.0), egui::pos2(900.0, 30.0));
+        let header = egui::pos2(100.0, 15.0);
+        let canvas = egui::pos2(350.0, 15.0);
+        let button = |pos, pressed| egui::Event::PointerButton { pos,
+            button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        let frame = |events| {
+            let mut owns = false;
+            let mut output = ctx.run_ui(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 200.0))),
+                events, ..Default::default()
+            }, |ui| {
+                ui.set_clip_rect(viewport);
+                let response = ui.interact(ruler.intersect(viewport), egui::Id::new("ruler-capture-fixture"), egui::Sense::click_and_drag());
+                owns = timeline_ruler_owns_pointer(&response, toolbar);
+            });
+            output.textures_delta.clear();
+            owns
+        };
+        frame(vec![]);
+        assert!(!frame(vec![egui::Event::PointerMoved(header)]));
+        assert!(!frame(vec![button(header, true)]));
+        assert!(!frame(vec![egui::Event::PointerMoved(canvas)]), "hidden header must not acquire a ruler drag");
+        frame(vec![button(canvas, false)]);
+        assert!(!frame(vec![egui::Event::PointerMoved(toolbar.center())]), "toolbar hover is not ruler hover");
+        frame(vec![egui::Event::PointerMoved(canvas)]);
+        frame(vec![button(canvas, true)]);
+        assert!(frame(vec![egui::Event::PointerMoved(egui::pos2(400.0, 15.0))]));
+        assert!(frame(vec![egui::Event::PointerMoved(toolbar.center())]), "existing ruler drag retains capture over toolbar");
+        assert!(frame(vec![egui::Event::PointerMoved(header)]), "existing ruler drag retains capture outside viewport");
+        assert!(!frame(vec![button(header, false)]), "release restores header ownership");
     }
 
     #[test]
@@ -16691,7 +16787,7 @@ impl<'a> PealayerTabViewer<'a> {
                                         keyframe_context_owned = keyframe_hit || keyframe_candidates.iter()
                                             .any(|(target, _)| egui::Popup::is_id_open(ui.ctx(), target.menu_id()));
 
-                                        let ruler_response = ui.interact(ruler_rect, egui::Id::new("timeline_ruler"), egui::Sense::click_and_drag())
+                                        let ruler_response = ui.interact(ruler_rect.intersect(viewport_clip), egui::Id::new("timeline_ruler"), egui::Sense::click_and_drag())
                                             .on_hover_text(&timeline_ruler_help);
 
                                         // Capture the ruler position before opening the menu. Once
@@ -16699,7 +16795,7 @@ impl<'a> PealayerTabViewer<'a> {
                                         // not the ruler; deriving the timestamp from it made exact
                                         // keyframes jump to an unrelated (usually earlier) time.
                                         let ruler_context_requested = !keyframe_context_owned
-                                            && ruler_rect.contains(pointer_pos.unwrap_or_default())
+                                            && ruler_response.hovered()
                                             && ui.input(|input| input.pointer.button_released(egui::PointerButton::Secondary));
                                         if ruler_context_requested {
                                             if let Some(position) = pointer_pos {
@@ -16955,8 +17051,7 @@ impl<'a> PealayerTabViewer<'a> {
 
                                         if let Some(pos) = pointer_pos {
                                             if timeline_ruler_owns_pointer(
-                                                ruler_rect, toolbar_rect, pos,
-                                                ruler_response.dragged_by(egui::PointerButton::Primary),
+                                                &ruler_response, toolbar_rect,
                                             )
                                                 && !popup_was_open
                                                 && !egui::Popup::is_any_open(ui.ctx())
