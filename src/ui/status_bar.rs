@@ -483,7 +483,17 @@ fn fps_details(ui: &mut egui::Ui, app: &PealayerApp, fps: &crate::app::FpsDispla
     let body = egui::TextStyle::Body.resolve(ui.style());
     let mono = egui::TextStyle::Monospace.resolve(ui.style());
     let measure = |text: &str, font: egui::FontId| ui.painter().layout_no_wrap(text.into(), font, ui.visuals().text_color()).size().x;
-    let value_width = values.iter().map(|value| measure(value, mono.clone())).fold(42.0_f32, f32::max) + 6.0;
+    // Reserve a numeric lane independently of today's digit count. Larger real
+    // measurements can still grow rather than clip; ordinary updates cannot
+    // resize every row (including when a rate is temporarily unavailable).
+    let value_width = values.iter().map(|value| measure(value, mono.clone()))
+        .fold(measure("00000.00", mono.clone()), f32::max) + 6.0;
+    // Center a stable digit reference, not each changing value's visible ink.
+    // Native fonts have different overshoot for 0/1/9, which otherwise moves
+    // their baseline by a pixel as measurements change.
+    let numeric_reference = ui.painter().layout_no_wrap("0123456789".into(), mono.clone(), ui.visuals().text_color());
+    let numeric_center = if numeric_reference.mesh_bounds.is_finite() { numeric_reference.mesh_bounds.center().y }
+        else { numeric_reference.rect.center().y };
     let unit_width = measure("fps", body.clone()).max(measure("ms", body.clone()));
     let max_width = (ui.ctx().content_rect().width() - 40.0).max(200.0);
     let label_width = (rows.iter().map(|row| measure(&row.1, body.clone())).fold(0.0_f32, f32::max) + 6.0)
@@ -524,9 +534,17 @@ fn fps_details(ui: &mut egui::Ui, app: &PealayerApp, fps: &crate::app::FpsDispla
                 (12.0, ui.painter().layout_no_wrap(if *active {icons::CHECK.into()} else {String::new()}, body.clone(), accent), accent, egui::Align::Center),
             ];
             let mut offset = 0.0;
-            for (cell_width, galley, color, align) in cells {
+            for (cell_index, (cell_width, galley, color, align)) in cells.into_iter().enumerate() {
                 let left = if app.rtl {rect.right() - offset - cell_width} else {rect.left() + offset};
-                paint_centered_galley(ui, egui::Rect::from_min_size(egui::pos2(left, rect.top()), egui::vec2(cell_width, rect.height())), galley, color, align);
+                let cell = egui::Rect::from_min_size(egui::pos2(left, rect.top()), egui::vec2(cell_width, rect.height()));
+                if cell_index == 2 {
+                    let x = cell.right() - 3.0 - galley.size().x;
+                    let pixels_per_point = ui.pixels_per_point();
+                    let y = ((cell.center().y - numeric_center) * pixels_per_point).round() / pixels_per_point;
+                    ui.painter().with_clip_rect(cell).galley(egui::pos2(x, y), galley, color);
+                } else {
+                    paint_centered_galley(ui, cell, galley, color, align);
+                }
                 offset += cell_width + 10.0;
             }
         }
@@ -1337,6 +1355,52 @@ mod tests {
             assert!(bounds.width() < 390.0, "tooltip expanded beyond its measured content on {viewport_width}-point viewport (dark={dark}, rtl={rtl}, scale={scale}): {bounds:?}");
             assert!(bounds.left() >= 0.0 && bounds.right() <= viewport_width, "tooltip escaped viewport: {bounds:?}");
         } } } }
+    }
+
+    #[test]
+    fn fps_tooltip_updates_keep_numeric_baselines_and_columns_stationary() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.engine_handle = crate::four_d::engine::memory_only_test_engine();
+        for family in [crate::config::UiFontFamily::System, crate::config::UiFontFamily::Bundled] {
+        for rtl in [false, true] { for scale in [1.0, 1.25, 1.5, 2.0] {
+            let ctx = egui::Context::default();
+            ctx.set_pixels_per_point(scale);
+            let config = crate::config::AppConfig { monospace_font_family: family, ..Default::default() };
+            crate::ui::configure_native_appearance(&ctx, &config);
+            crate::ui::fonts::install(&ctx, &config, rtl);
+            app.rtl = rtl;
+            app.language = if rtl {crate::config::AppLanguage::Persian} else {crate::config::AppLanguage::English};
+            let mut baseline: Option<(egui::Vec2, f32, f32)> = None;
+            for rate in [Some(9.99), Some(10.0), Some(99.99), Some(100.0), Some(999.99), None, Some(1.11), Some(18.88)] {
+                let details = crate::app::FpsDisplayInfo { value: 23.976, formatted: "23.98 fps".into(),
+                    is_ui_rate: false, media_rate: Some(23.976), ui_rate: rate,
+                    render_time_ms: Some(2.22), peak_render_time_ms: Some(27.71) };
+                let mut bounds = egui::Rect::NOTHING;
+                let mut output = None;
+                for _ in 0..3 {
+                    let mut frame = ctx.run_ui(egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 650.0))),
+                        ..Default::default()
+                    }, |ui| {
+                        let source = ui.button("23.98 fps");
+                        bounds = egui::Tooltip::for_widget(&source).show(|ui| fps_details(ui, &app, &details, true)).unwrap().response.rect;
+                    });
+                    frame.textures_delta.clear(); output = Some(frame);
+                }
+                let expected = rate.map(|rate|format!("{rate:.2}")).unwrap_or_else(||"—".into());
+                let output = output.unwrap();
+                let value = output.shapes.iter().find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == expected => Some(text), _ => None,
+                }).expect("changing rate is painted");
+                let current = (bounds.size(), value.pos.y - bounds.top(), value.pos.x + value.galley.size().x - bounds.left());
+                if let Some(previous) = baseline {
+                    assert!((current.0 - previous.0).length() < 0.05, "changing rate resized popup: {family:?}, rtl={rtl}, scale={scale}");
+                    assert!((current.1 - previous.1).abs() < 0.05, "changing digits shifted numeric baseline: {family:?}, rtl={rtl}, scale={scale}");
+                    assert!((current.2 - previous.2).abs() < 0.05, "changing digits shifted numeric column: {family:?}, rtl={rtl}, scale={scale}");
+                } else { baseline = Some(current); }
+            }
+        } } }
     }
 
     #[test]

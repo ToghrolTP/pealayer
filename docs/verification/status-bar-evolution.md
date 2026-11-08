@@ -32,6 +32,12 @@ content-only paint tests missed. The card now bounds its actual width, with
 padding included before label wrapping. The regression renders the real egui
 tooltip container on both narrow and 3002-point viewports rather than testing
 only its inner rows.
+Live numeric rows reserve a measured digit lane and share a fixed font-derived,
+pixel-snapped digit baseline. Per-value glyph-ink centering can shift by a pixel
+when the displayed digits change, so it is intentionally not used for these
+updating values. A real-popup regression changes digit counts and unavailable
+samples in place with system/bundled monospace fonts, LTR/RTL and four display
+scales, checking stationary popup bounds, numeric endpoints and baselines.
 Fixture captures remain private; they are not historical screenshots or proof
 of the user's live native tooltip. Installed evidence is in the owning PR.
 
