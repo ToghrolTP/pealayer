@@ -10,6 +10,13 @@ statements are not the present product state.
 
 ## Window and media automation
 
+[Native file exchange and attention](native-data-exchange.md) is installed with
+the exact package/runtime receipt. Final native suite: 1,153 passed, zero failed,
+two opt-in tests ignored, including real Shell COM file-description delivery.
+Installed notification dispatch did not steal focus. Actual Explorer/clipboard
+and visible flashing acceptance, cross-authority/browser clipboard parity and
+the user-run historical portable-profile step remain open; Cafe is deferred.
+
 [Measured cross-transport acceptance](window-media-control-results.md) records
 the complete eight-transport Windows fixture and final-source native tests.
 The verified candidate is installed in the regular app and running in the

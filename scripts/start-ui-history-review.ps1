@@ -17,6 +17,10 @@ foreach ($review in $reviews) {
     if ($Version -ne 'Both' -and $Version -ne $review.Kind) { continue }
     $directory = Join-Path $programRoot ('investigation\' + $review.Folder)
     $configPath = Join-Path $directory 'profile\config.json'
+    $portableConfig = Join-Path $directory 'pealayer.json'
+    if ($review.Kind -eq 'Historical' -and (Test-Path -LiteralPath $portableConfig -PathType Leaf)) {
+        $configPath = $portableConfig
+    }
     $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
     if ($config.auto_connect_hardware -ne $false -or $config.hardware_endpoint -ne 'pccontroller://127.0.0.1:18999' -or
         $config.media_keys_enabled -ne $false -or $config.global_hardware_hotkeys_enabled -ne $false) {
