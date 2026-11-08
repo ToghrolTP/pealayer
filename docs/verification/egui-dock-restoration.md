@@ -1,5 +1,40 @@
 # egui Dock: restore application chrome and header interactions
 
+## Connected header contours and CraftUI controls
+
+The later enlarged native review exposed an additional problem: the Dock
+adapter combined upstream's inset tab rectangle, its two-point erase line,
+an independently offset body rectangle, its header divider and our focused
+panel rectangle. Those paths do not share coordinates or stroke widths. Their
+antialiasing produces adjacent/doubled edges and short gaps, especially at
+fractional display scale. Stock tab-strip rounding and an unmapped body fill
+also made the selected tab's join inconsistent with the square panel.
+
+The adapter now disables those competing border writers and paints one closed
+tab/body contour on physical pixel centers. The selected tab joins the body
+without a bottom rule. Focus changes its color, not its geometry; explicit
+keyboard focus on an inactive tab remains visible. Strip corners are square
+and the body uses the selected tab's live palette surface. Upstream still owns
+tabs, their close/collapse targets, overflow scrolling and layout interaction.
+The 24-point Dock baseline and independent 32-point CraftUI baseline remain.
+
+CraftUI previously reserved one 28-point group-header slot and filled it with
+the overflow glyph only. It did not draw the requested chevron or close action.
+Its application hook now supplies separate fixed-square Phosphor chevron and
+close controls. As confirmed by the user, the chevron opens the existing panel
+menu; it does not collapse a group. Close hides only the selected panel through
+the shared workspace model, retaining its restore location. Modal ownership and
+workspace locking disable the appropriate interactions without hiding glyphs.
+Trailing controls and Craft's layout direction mirror together for RTL.
+
+Native regression fixtures exercise the actual two renderers: one connected
+contour with no inset stroked rectangles; physical-pixel stroke geometry;
+palette, font size, hover, keyboard focus, overflow and floating layers; menu
+clicks, selected-panel close/restore, locking and modal shielding. Screenshot
+enlargement uses the maintained read-only capture utility's integer
+`-PixelScale` option (nearest-neighbor), not a mockup or a changed application
+DPI. Matching before/after crops and deployment results belong to the owning PR.
+
 ## Cause
 
 The original renderer customized more than its tab content. It supplied the

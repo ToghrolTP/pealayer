@@ -2058,6 +2058,7 @@ impl eframe::App for PealayerApp {
                         let mut dock_style = craft_ui::docking::DockStyle::from_ui(ui);
                         let craft_tokens = crate::ui::craft_theme::current(ui.ctx());
                         crate::ui::craft_theme::apply_dock_style(&mut dock_style, &craft_tokens);
+                        dock_style.right_to_left = self.rtl;
                         let locked = self.dock_state.locked;
                         let dock_layer = ui.layer_id();
                         let modal_blocked = !ui.ctx().memory(|memory| memory.is_above_modal_layer(dock_layer));

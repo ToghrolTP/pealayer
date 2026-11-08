@@ -14258,7 +14258,7 @@ impl<'a> PealayerTabViewer<'a> {
         }
         ui.separator();
         ui.label(egui::RichText::new(self.app.tr("Panels")).strong());
-        draw_workspace_tab_menu(self.app, ui);
+        ui.add_enabled_ui(!self.app.dock_state.locked, |ui| draw_workspace_tab_menu(self.app, ui));
         ui.separator();
         if ui
             .button(format!(
@@ -20336,13 +20336,25 @@ impl<'a> craft_ui::docking::DockContent<PealayerTab> for PealayerTabViewer<'a> {
     }
 
     fn group_header_width(&self, _panels: &[PealayerTab], _active: &PealayerTab, _floating: bool, strip_width: f32) -> f32 {
-        strip_width.min(28.0)
+        strip_width.min(52.0)
     }
 
     fn group_header(&mut self, ui: &mut egui::Ui, _panels: &[PealayerTab], active: &PealayerTab, _floating: bool) {
-        let response = ui.add_sized(ui.available_size(), egui::Button::new(crate::ui::icons::DOTS_THREE).frame(false))
-            .on_hover_text(self.app.tr("Panels"));
+        let [menu, close] = super::panel_chrome::craft_actions(ui.max_rect(), self.app.rtl);
+        let response = super::panel_chrome::button(ui, menu, ui.id().with("panel-menu"),
+            crate::ui::icons::CARET_DOWN, &self.app.tr("Panels"));
         egui::Popup::menu(&response).show(|ui| self.draw_context_menu(ui, *active));
+        let close = ui.add_enabled_ui(!self.app.dock_state.locked, |ui| {
+            super::panel_chrome::button(ui, close, ui.id().with("panel-close"),
+                crate::ui::icons::X, &self.app.tr("Close panel"))
+        }).inner;
+        if close.clicked() && !self.app.dock_state.locked {
+            match self.app.dock_state.set_visible(*active, false, Some(PealayerTab::ProgramMonitor),
+                |_| craft_ui::docking::Permissions::default()) {
+                Ok(()) => { self.app.deferred_config_save = true; ui.ctx().request_repaint(); }
+                Err(error) => log::warn!("Cannot close workspace panel: {error:?}"),
+            }
+        }
     }
 }
 

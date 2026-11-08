@@ -25,6 +25,7 @@ pub(crate) mod pwm_policy;
 pub mod i18n;
 pub(crate) mod fonts;
 pub(crate) mod egui_dock;
+pub(crate) mod panel_chrome;
 pub mod icons;
 pub mod layout;
 mod timeline_toolbar;
