@@ -16,6 +16,12 @@ widths, and has been exercised against live state rather than sample data.
 
 ## Current product ledger
 
+Remote folder navigation now uses a verified parent listing rather than an
+inferred URL. Native and Web hide unavailable parents, omit fabricated file
+metadata on navigation rows and browse folders on a single click. See
+[availability and interaction evidence](verification/remote-parent-navigation.md)
+for fixture, packaging and installed-runtime acceptance boundaries.
+
 Native file exchange now has contextual Shell drop descriptions, cue/sequence/
 strip clipboard actions and bounded taskbar attention. [Native exchange evidence](verification/native-data-exchange.md)
 keeps installed, Explorer and cross-authority acceptance separate. Browser

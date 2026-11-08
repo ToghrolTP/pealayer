@@ -60,7 +60,7 @@ pub fn draw(app: &mut PealayerApp, ctx: &egui::Context) {
                 if let Some(listing) = &state.listing {
                     ui.separator(); ui.label(format!("{} {}", icons::GLOBE, listing.host));
                     if let Some(server) = &listing.server { ui.label(egui::RichText::new(server).weak()); }
-                    if let Some(parent) = &listing.parent_url { if ui.button(format!("{} Parent folder", icons::ARROW_UP)).clicked() { navigate = Some(parent.clone()); } }
+                    if let Some(parent) = &listing.parent_url { if ui.add_enabled(!state.loading,egui::Button::new(format!("{} Parent folder", icons::ARROW_UP))).clicked() { navigate = Some(parent.clone()); } }
                 }
             });
             if proxy != state.use_proxy && !view.target.is_empty() { navigate = Some(view.target.clone()); }
@@ -84,11 +84,12 @@ pub fn draw(app: &mut PealayerApp, ctx: &egui::Context) {
                     }
                     ui.label(egui::RichText::new(if state.descending { "Descending" } else { "Ascending" }).weak());
                 });
-                let parent = listing.parent_url.as_ref().map(|url| remote::RemoteEntry { name: "Back · Parent folder".into(), url: url.clone(), is_dir: true, playable: false, size_bytes: None, modified: None });
+                let parent = listing.parent_url.as_ref().map(|url| remote::RemoteEntry { name: "Parent folder".into(), url: url.clone(), is_dir: true, playable: false, size_bytes: None, modified: None });
                 let entries: Vec<_> = parent.iter().chain(listing.entries.iter().filter(|e| e.name.to_lowercase().contains(&view.filter.to_lowercase()))).collect();
                 egui::ScrollArea::vertical().id_salt("remote-files").max_height((ui.available_height()-95.0).clamp(100.0,500.0)).auto_shrink([false,false]).show_rows(ui, 52.0, entries.len(), |ui, range| {
                     for index in range {
                         let entry = entries[index];
+                        let is_parent=parent.as_ref().is_some_and(|p|p.url==entry.url);
                         ui.push_id(&entry.url, |ui| {
                             let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 50.0), egui::Sense::click());
                             if state.selected.as_deref() == Some(&entry.url) { ui.painter().rect_filled(rect, 6.0, ui.visuals().selection.bg_fill); }
@@ -105,22 +106,22 @@ pub fn draw(app: &mut PealayerApp, ctx: &egui::Context) {
                                     if let Some(texture) = texture { ui.painter().image(texture.id(),thumb_rect,egui::Rect::from_min_max(egui::Pos2::ZERO,egui::pos2(1.0,1.0)),egui::Color32::WHITE); shown = true; }
                                 }
                             }
-                            if !shown { ui.painter().text(thumb_rect.center(),egui::Align2::CENTER_CENTER,if entry.is_dir {icons::FOLDER_OPEN} else {icons::FILE_VIDEO},egui::FontId::proportional(24.0),ui.visuals().weak_text_color()); }
-                            let name_rect = egui::Rect::from_min_max(rect.min+egui::vec2(82.0,7.0), egui::pos2(rect.right()-80.0,rect.bottom()));
+                            if !shown { ui.painter().text(thumb_rect.center(),egui::Align2::CENTER_CENTER,if is_parent {icons::ARROW_UP} else if entry.is_dir {icons::FOLDER_OPEN} else {icons::FILE_VIDEO},egui::FontId::proportional(24.0),ui.visuals().weak_text_color()); }
+                            let name_rect = egui::Rect::from_min_max(rect.min+egui::vec2(82.0,if is_parent {15.0}else{7.0}), egui::pos2(rect.right()-80.0,rect.bottom()));
                             ui.scope_builder(egui::UiBuilder::new().max_rect(name_rect), |ui| {
                                 ui.add(egui::Label::new(egui::RichText::new(&entry.name).strong()).truncate()).on_hover_text(&entry.name);
-                                ui.label(egui::RichText::new(format!("{}    {}",entry.modified.as_deref().unwrap_or("Date unavailable"),format_bytes(entry.size_bytes))).small().weak());
+                                if let Some(details)=entry_details(entry,is_parent){ui.label(egui::RichText::new(details).small().weak());}
                             });
                             ui.scope_builder(egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(egui::pos2(rect.right()-70.0,rect.top()+10.0),egui::vec2(65.0,30.0))), |ui| {
                                 if ui.add_enabled(!state.loading && (entry.playable || entry.is_dir),egui::Button::new(if entry.is_dir {icons::ARROW_RIGHT} else {icons::PLAY})).on_hover_text(if entry.is_dir {"Open folder"} else {"Play"}).clicked() { if entry.is_dir {navigate=Some(entry.url.clone());} else {selected=Some((entry.url.clone(),true));} }
                             });
-                            if !state.loading && response.clicked() { if parent.as_ref().is_some_and(|p| p.url == entry.url) { navigate=Some(entry.url.clone()); } else { selected=Some((entry.url.clone(),false)); } }
+                            if !state.loading && response.clicked() { if entry.is_dir { navigate=Some(entry.url.clone()); } else { selected=Some((entry.url.clone(),false)); } }
                             if !state.loading && response.double_clicked() { if entry.is_dir {navigate=Some(entry.url.clone());} else if entry.playable {selected=Some((entry.url.clone(),true));} }
                             response.context_menu(|ui| {
-                                if ui.add_enabled(entry.playable,egui::Button::new(format!("{} Play",icons::PLAY))).clicked(){selected=Some((entry.url.clone(),true));ui.close();}
-                                if entry.is_dir && ui.button(format!("{} Open folder",icons::FOLDER_OPEN)).clicked(){navigate=Some(entry.url.clone());ui.close();}
+                                if !entry.is_dir && ui.add_enabled(!state.loading && entry.playable,egui::Button::new(format!("{} Play",icons::PLAY))).clicked(){selected=Some((entry.url.clone(),true));ui.close();}
+                                if entry.is_dir && ui.add_enabled(!state.loading,egui::Button::new(format!("{} Open folder",icons::FOLDER_OPEN))).clicked(){navigate=Some(entry.url.clone());ui.close();}
                                 if ui.button(format!("{} Copy URL",icons::COPY)).clicked(){ui.ctx().copy_text(entry.url.clone());ui.close();}
-                                ui.separator();ui.label(&entry.name);ui.label(format_bytes(entry.size_bytes));if let Some(date)=&entry.modified{ui.label(date);}
+                                if !is_parent {ui.separator();ui.label(&entry.name);if let Some(details)=entry_details(entry,false){ui.label(details);}}
                             });
                         });
                     }
@@ -176,9 +177,17 @@ pub fn draw_route_errors(ui: &mut egui::Ui, errors: &[remote::RouteFailure]) {
     }
 }
 
+fn entry_details(entry:&remote::RemoteEntry,is_parent:bool)->Option<String>{
+    if is_parent{return None;}
+    let mut parts=Vec::new();
+    if let Some(date)=entry.modified.as_deref().filter(|date|!date.trim().is_empty()){parts.push(date.to_string());}
+    if let Some(bytes)=entry.size_bytes{parts.push(format_bytes(Some(bytes)));}
+    (!parts.is_empty()).then(||parts.join("    "))
+}
+
 pub fn format_bytes(bytes: Option<u64>) -> String {
     let Some(bytes) = bytes else {
-        return "Size unavailable".into();
+        return "—".into();
     };
     let mut n = bytes as f64;
     let mut unit = 0;
@@ -191,5 +200,15 @@ pub fn format_bytes(bytes: Option<u64>) -> String {
         format!("{bytes} B")
     } else {
         format!("{n:.1} {}", units[unit])
+    }
+}
+
+#[cfg(test)] mod tests {
+    #[test] fn navigation_rows_have_no_fabricated_file_metadata(){
+        let mut entry=crate::remote_location::RemoteEntry{name:"Parent folder".into(),url:"https://index.invalid/".into(),is_dir:true,playable:false,size_bytes:None,modified:None};
+        assert!(super::entry_details(&entry,true).is_none());assert!(super::entry_details(&entry,false).is_none());
+        entry.modified=Some("2026-01-02".into());entry.size_bytes=Some(2048);
+        assert!(super::entry_details(&entry,true).is_none());assert_eq!(super::entry_details(&entry,false).unwrap(),"2026-01-02    2.0 KiB");
+        assert_eq!(super::format_bytes(None),"—");
     }
 }

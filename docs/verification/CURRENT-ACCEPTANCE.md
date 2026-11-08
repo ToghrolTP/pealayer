@@ -8,6 +8,13 @@ This is the current index. Older handoffs and installed-build receipts remain
 historical evidence; their old open-PR, missing-feature or disconnected-runtime
 statements are not the present product state.
 
+## Remote folder navigation
+
+[Verified parent actions](remote-parent-navigation.md) replace the inferred Back
+row, hide unavailable parent indexes and remove irrelevant navigation metadata.
+Native discovery and Web interaction/width tests are tracked there separately
+from package installation and user-host acceptance; Cafe remains deferred.
+
 ## Window and media automation
 
 [Native file exchange and attention](native-data-exchange.md) is installed with
