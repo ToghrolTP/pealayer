@@ -3506,6 +3506,7 @@ dependencies = [
  "url",
  "uuid",
  "windows",
+ "windows-core",
  "winit",
  "winreg",
  "winres",

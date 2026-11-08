@@ -16,6 +16,13 @@ widths, and has been exercised against live state rather than sample data.
 
 ## Current product ledger
 
+Native file exchange now has contextual Shell drop descriptions, cue/sequence/
+strip clipboard actions and bounded taskbar attention. [Native exchange evidence](verification/native-data-exchange.md)
+keeps installed, Explorer and cross-authority acceptance separate. Browser
+clipboard parity remains open: reuse the validated authoring payloads and asset
+uploads, preserve focused text fields, and use browser clipboard permissions;
+never try to emulate Windows clipboard access or native taskbar flashing.
+
 Repeat projections: native and both Web designers share default-enabled step
 and whole-effect ghosts, source selection, interval/length gestures, count
 menus and Escape cancellation. [Interaction guide and verification](verification/step-repeat-ghosts.md)

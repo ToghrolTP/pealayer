@@ -1,5 +1,9 @@
 pub mod association;
 pub mod clipboard_urls;
+pub mod clipboard;
+pub mod attention;
+#[cfg(windows)]
+pub mod drop_target;
 pub mod associations;
 pub mod interop;
 #[cfg(target_os = "windows")]

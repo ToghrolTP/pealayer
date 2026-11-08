@@ -1,6 +1,7 @@
 pub mod app;
 pub mod assets;
 pub mod authoring;
+pub mod authoring_clipboard;
 pub mod audio_effects;
 pub mod application_shortcuts;
 pub mod branding;

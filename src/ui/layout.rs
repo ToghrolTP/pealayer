@@ -17155,6 +17155,7 @@ impl<'a> PealayerTabViewer<'a> {
                                         let mut edit_cue_id = None;
                                         let mut jump_to_cue_id = None;
                                         let mut delete_cue_id = None;
+                                        let mut clipboard_cue_action=None;
 
                                         // 1st Pass: Draw all non-dragged clips
                                         let active_drag_id = self.app.active_drag.as_ref().map(|d| d.instance_id);
@@ -17263,6 +17264,10 @@ impl<'a> PealayerTabViewer<'a> {
                                                 clip_response = clip_response.on_hover_text(cue_tooltip);
 
                                                 clip_response.context_menu(|ui| {
+                                                    for (action,icon,label) in [(0,crate::ui::icons::COPY,"Copy"),(1,egui_phosphor::regular::SCISSORS,"Cut"),(2,egui_phosphor::regular::CLIPBOARD,"Paste")] {
+                                                        if ui.button(format!("{icon} {}",self.app.tr(label))).clicked(){clipboard_cue_action=Some((instance.id,action));ui.close();}
+                                                    }
+                                                    ui.separator();
                                                     if ui
                                                         .button(format!(
                                                             "{} {}",
@@ -17558,6 +17563,11 @@ impl<'a> PealayerTabViewer<'a> {
                                         if let Some(effect_id) = relocate_to_primary {
                                             self.app.relocate_effect_to_primary(effect_id);
                                             ui.ctx().request_repaint();
+                                        }
+                                        if let Some((cue_id,action))=clipboard_cue_action {
+                                            if !self.app.selected_instance_ids.contains(&cue_id) {self.app.selected_instance_ids.clear();self.app.selected_instance_ids.insert(cue_id);}
+                                            let result=if action==2 {crate::platform::clipboard::text().and_then(|text|self.app.paste_timeline_cues(&text))}else{self.app.copy_timeline_cues(action==1)};
+                                            if let Err(error)=result{self.app.set_osd(error);}
                                         }
                                         if let Some(cue_id) = delete_cue_id {
                                             self.app.undo_stack.push(self.app.snapshot_timeline());

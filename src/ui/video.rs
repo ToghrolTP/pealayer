@@ -985,12 +985,10 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         ui.painter()
             .rect_filled(rect, 0.0, egui::Color32::from_black_alpha(180));
         let font_id = egui::FontId::proportional(26.0);
+        let paths=ui.input(|i|i.raw.hovered_files.iter().filter_map(|f|f.path.clone()).collect::<Vec<_>>());
+        let feedback=crate::assets::drop_feedback(&paths,&crate::assets::Destination::Player);
         let galley = ui.painter().layout_no_wrap(
-            format!(
-                "{} {}",
-                crate::ui::icons::FILE_VIDEO,
-                app.tr("Drop video file here to play")
-            ),
+            format!("{} {}",crate::ui::icons::named_control_icon(&feedback.icon).unwrap_or(crate::ui::icons::FILE_VIDEO),feedback.message),
             font_id,
             egui::Color32::WHITE,
         );

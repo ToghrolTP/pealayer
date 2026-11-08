@@ -2195,7 +2195,12 @@ unsafe extern "system" fn shell_window_proc(
     }
 
     if message == WM_NCDESTROY {
+        crate::platform::drop_target::clear(hwnd.0 as isize);
+        crate::platform::attention::stop(hwnd.0 as isize);
         crate::platform::taskbar_branding::clear_window(hwnd.0 as isize);
+    }
+    if message == 0x0006 && wparam.0 & 0xffff != 0 { // WM_ACTIVATE, not WA_INACTIVE
+        crate::platform::attention::stop(hwnd.0 as isize);
     }
 
     if message == WM_SETICON {

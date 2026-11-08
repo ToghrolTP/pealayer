@@ -17,6 +17,13 @@ fn next_id(prefix: &str, ids: impl Iterator<Item = String>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test] fn strip_layer_paste_retargets_segment_and_rejects_invalid_values_atomically(){
+        let mut p=Program::new(20);let mut layer=p.layers[0].clone();layer.name="Breathing".into();
+        let text=serde_json::json!({"format":"pealayer.strip-layer","layer":layer}).to_string();
+        paste_layer(&mut p,&text,"all",20).unwrap();assert_eq!(p.layers.len(),2);assert_ne!(p.layers[0].id,p.layers[1].id);
+        let before=p.clone();assert!(paste_layer(&mut p,&text,"missing",20).is_err());assert_eq!(p,before);
+        assert!(paste_layer(&mut p,"{}","all",20).is_err());assert_eq!(p,before);
+    }
     #[test]
     fn strip_editor_fits_phone_tablet_and_desktop_without_mutating_draft() {
         for width in [340., 768., 1200.] {
@@ -90,6 +97,33 @@ pub(crate) fn draw(ui: &mut egui::Ui, draft: &mut ControllerEffectDraft) {
         .data(|d| d.get_temp::<usize>(root.with("layer")))
         .unwrap_or(0)
         .min(p.layers.len() - 1);
+    let mut clipboard_action=None;
+    ui.horizontal_wrapped(|ui|{
+        for (action,icon,label) in [(0,icons::COPY,"Copy layer"),(1,egui_phosphor::regular::SCISSORS,"Cut layer"),(2,egui_phosphor::regular::CLIPBOARD,"Paste layer")] {
+            if ui.add_enabled(action!=1 || p.layers.len()>1,egui::Button::new(format!("{icon} {}",tr(ui,label)))).clicked(){clipboard_action=Some(action);}
+        }
+    });
+    if !ui.ctx().text_edit_focused() && !egui::Popup::is_any_open(ui.ctx()) && ui.rect_contains_pointer(ui.max_rect()) {
+        let keyboard=ui.input(|i|{
+            i.events.iter().find_map(|e|match e {egui::Event::Copy=>Some(0),egui::Event::Cut=>Some(1),egui::Event::Paste(_)=>Some(2),_=>None})
+        });
+        if keyboard.is_some(){clipboard_action=keyboard;ui.input_mut(|i|i.events.retain(|e|!matches!(e,egui::Event::Copy|egui::Event::Cut|egui::Event::Paste(_))));}
+    }
+    if let Some(action)=clipboard_action {
+        let result=(||->Result<(),String>{
+            if action==2 {
+                let text=crate::platform::clipboard::text()?;
+                paste_layer(&mut p,&text,&original.segments[selected].id,count)?;
+                layer=p.layers.len()-1;
+            } else {
+                if action==1 && p.layers.len()==1{return Err("Keep at least one strip layer".into());}
+                let text=serde_json::to_string(&serde_json::json!({"format":"pealayer.strip-layer","layer":p.layers[layer]})).map_err(|e|e.to_string())?;
+                crate::platform::clipboard::write(&text)?;
+                if action==1 {p.layers.remove(layer);layer=layer.min(p.layers.len()-1);}
+            }Ok(())
+        })();
+        if let Err(error)=result{ui.colored_label(ui.visuals().error_fg_color,error);}
+    }
     ui.horizontal_wrapped(|ui| {
         ui.label(tr(ui, "Density"));
         ui.add(
@@ -412,4 +446,14 @@ pub(crate) fn draw(ui: &mut egui::Ui, draft: &mut ControllerEffectDraft) {
         d.insert_temp(root.with("phase"), phase);
         d.insert_temp(root.with("start"), start);
     });
+}
+
+fn paste_layer(program:&mut Program,text:&str,segment:&str,count:usize)->Result<(),String>{
+    #[derive(serde::Deserialize)] #[serde(deny_unknown_fields)]
+    struct Clipboard {format:String,layer:Layer}
+    if text.len()>crate::platform::clipboard::MAX_BYTES{return Err("Clipboard selection is too large".into());}
+    let mut copy:Clipboard=serde_json::from_str(text).map_err(|_|"Copy a strip layer first")?;
+    if copy.format!="pealayer.strip-layer" || program.layers.len()>=64{return Err("Paste requires a strip layer and fewer than 64 layers".into());}
+    copy.layer.id=next_id("layer",program.layers.iter().map(|l|l.id.clone()));copy.layer.segment_id=segment.into();
+    let mut next=program.clone();next.layers.push(copy.layer);next.validate(count)?;*program=next;Ok(())
 }

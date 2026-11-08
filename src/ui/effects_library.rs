@@ -1605,6 +1605,7 @@ fn draw_sequence_timeline(
         .unwrap_or_else(|| SequenceCueSelection::single(*selected_index));
     selection.normalize(draft.steps.len(), *selected_index);
     let mut bulk_action = None;
+    let mut clipboard_action=None;
     let mut cue_has_focus = false;
     let mut focused_projection = None;
     let mut zoom = ui
@@ -1652,6 +1653,9 @@ fn draw_sequence_timeline(
                     .on_hover_text("Ctrl+D");
                 cue_has_focus |= duplicate_button.has_focus();
                 if duplicate_button.clicked() { bulk_action = Some(SequenceBulkAction::Duplicate); }
+                for (action,icon,label) in [(0,crate::ui::icons::COPY,"Copy"),(1,egui_phosphor::regular::SCISSORS,"Cut"),(2,egui_phosphor::regular::CLIPBOARD,"Paste")] {
+                    if ui.add_enabled(action==2 || !selection.indices.is_empty(),egui::Button::new(format!("{icon} {}",designer_tr(ui,label)))).clicked(){clipboard_action=Some(action);}
+                }
                 let delete_button = ui.add_enabled(!selection.indices.is_empty(), egui::Button::new(format!("{} {}", crate::ui::icons::TRASH, designer_tr(ui, "Delete selected cues"))))
                     .on_hover_text(designer_tr(ui, "Delete"));
                 cue_has_focus |= delete_button.has_focus();
@@ -2078,6 +2082,10 @@ fn draw_sequence_timeline(
                                 }
                             }
                             response.context_menu(|ui| {
+                                for (action,icon,label) in [(0,crate::ui::icons::COPY,"Copy"),(1,egui_phosphor::regular::SCISSORS,"Cut"),(2,egui_phosphor::regular::CLIPBOARD,"Paste")] {
+                                    if ui.button(format!("{icon} {}",designer_tr(ui,label))).clicked(){clipboard_action=Some(action);ui.close();}
+                                }
+                                ui.separator();
                                 *selected_index = index;
                                 if !selection.indices.contains(&index) { selection = SequenceCueSelection::single(index); }
                                 selection.primary = index;
@@ -2172,26 +2180,35 @@ fn draw_sequence_timeline(
 
             let shortcut_enabled = ui.is_enabled() && !egui::Popup::is_any_open(ui.ctx())
                 && (cue_has_focus || (!ui.ctx().egui_wants_keyboard_input() && ui.rect_contains_pointer(ui.max_rect())));
-            if shortcut_enabled {
+            if shortcut_enabled || clipboard_action.is_some() {
+                let cut=clipboard_action==Some(1) || ui.input_mut(|input| {
+                    input.consume_key(egui::Modifiers::COMMAND,egui::Key::X) || input.events.iter().any(|event|matches!(event,egui::Event::Cut))
+                });
                 let copy = ui.input_mut(|input| {
-                    let copy = input.consume_key(egui::Modifiers::COMMAND,egui::Key::C)
+                    let copy = cut || clipboard_action==Some(0) || input.consume_key(egui::Modifiers::COMMAND,egui::Key::C)
                         || input.events.iter().any(|event| matches!(event,egui::Event::Copy));
-                    if copy { input.events.retain(|event| !matches!(event,egui::Event::Copy)); } copy
+                    if copy { input.events.retain(|event| !matches!(event,egui::Event::Copy|egui::Event::Cut)); } copy
                 });
                 if copy && !selection.indices.is_empty() {
                     let steps = selection.indices.iter().filter_map(|index| draft.steps.get(*index)).cloned().collect::<Vec<_>>();
-                    if let Ok(text) = serde_json::to_string(&serde_json::json!({"format":"pealayer.sequence-cues","steps":steps})) { ui.ctx().copy_text(text); }
+                    if let Ok(text) = serde_json::to_string(&serde_json::json!({"format":"pealayer.sequence-cues","steps":steps})) {
+                        match crate::platform::clipboard::write(&text) {
+                            Ok(())=>if cut {bulk_action=Some(SequenceBulkAction::Delete);},
+                            Err(error)=>{ui.data_mut(|d|d.insert_temp(egui::Id::new("sequence-clipboard-error"),error));}
+                        }
+                    }
                 }
                 let paste = ui.input_mut(|input| {
                     input.consume_key(egui::Modifiers::COMMAND,egui::Key::V);
                     let paste = input.events.iter().find_map(|event| if let egui::Event::Paste(text)=event {Some(text.clone())} else {None});
                     if paste.is_some() { input.events.retain(|event| !matches!(event,egui::Event::Paste(_))); } paste
                 });
+                let paste=if clipboard_action==Some(2){crate::platform::clipboard::text().ok()}else{paste};
                 if let Some(text) = paste {
                     #[derive(serde::Deserialize)]
                     #[serde(deny_unknown_fields)]
                     struct Clipboard { format:String, steps:Vec<crate::four_d::controller::HardwareMacroStep> }
-                    if let Ok(clipboard) = serde_json::from_str::<Clipboard>(&text) {
+                    if let Some(clipboard) = (text.len()<=crate::platform::clipboard::MAX_BYTES).then(||serde_json::from_str::<Clipboard>(&text)).transpose().ok().flatten() {
                         if clipboard.format == "pealayer.sequence-cues" && !clipboard.steps.is_empty()
                             && clipboard.steps.len() + draft.steps.len() <= 65535 && clipboard.steps.iter().all(|step| step_repetition(step).is_ok()) {
                             let base = clipboard.steps.iter().map(|step| step.at_us).min().unwrap_or(0);

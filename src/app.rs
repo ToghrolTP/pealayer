@@ -1046,6 +1046,11 @@ pub struct MediaTrackInfo {
 }
 
 impl eframe::App for PealayerApp {
+    fn raw_input_hook(&mut self,_ctx:&egui::Context,raw:&mut egui::RawInput) {
+        #[cfg(windows)]
+        if self.native_service_policy==NativeServicePolicy::Production {crate::platform::drop_target::input(raw);}
+        #[cfg(not(windows))] let _=raw;
+    }
     fn logic(&mut self, ctx: &egui::Context, frame: &mut eframe::Frame) {
         let _timing = crate::performance::span(crate::performance::Phase::Logic);
         self.flush_timeline_toolbar_save(ctx);
@@ -1084,6 +1089,7 @@ impl eframe::App for PealayerApp {
                     if let RawWindowHandle::Win32(win32_handle) = handle.as_raw() {
                         let hwnd = win32_handle.hwnd.get() as isize;
                         crate::platform::windows::register_window_hwnd(hwnd);
+                        if let Err(error)=crate::platform::drop_target::install(hwnd,ctx) {log::warn!("Native drop target unavailable: {error}");}
                         self.window_handle = Some(hwnd);
                     }
                 }
@@ -1431,6 +1437,12 @@ impl eframe::App for PealayerApp {
         crate::remote_location::sync_options(web_config.remote_folder_auto_next, web_config.remote_folder_thumbnails);
         let remote_changed = crate::platform::interop::get_live_remote_revision() != crate::remote_location::revision();
         let messages_changed = crate::platform::interop::get_live_message_snapshot() != messages;
+        if messages_changed {
+            let previous=crate::platform::interop::get_live_message_snapshot();
+            if crate::platform::attention::important_change(&previous,&messages) {
+                crate::platform::attention::request();
+            }
+        }
         let should_broadcast = appearance_changed || messages_changed || remote_changed
             || match self.last_web_broadcast {
                 Some(last) => now.duration_since(last) >= web_sync_interval,
@@ -2362,6 +2374,8 @@ impl PealayerApp {
 
         let timeline_keyboard_active =
             ctx.memory(|memory| memory.has_focus(crate::ui::layout::timeline_keyboard_focus_id()));
+
+        self.process_clipboard_shortcuts(ctx, timeline_keyboard_active);
 
         if let Some(direction) = crate::application_shortcuts::take_frame_step_shortcut(
             ctx,

@@ -882,12 +882,20 @@ impl PealayerApp {
         }
         self.publish_asset_snapshot();
     }
-    fn append_asset_fragment(&mut self, fragment: &Timeline, time: u64) -> Result<(), String> {
+    pub(crate) fn append_asset_fragment(&mut self, fragment: &Timeline, time: u64) -> Result<(), String> {
         if self.current_video_path.is_some() && !self.is_paused {
             return Err("Pause playback before adding an asset to the timeline".into());
         }
         let mut next = self.timeline.clone();
         let ids = append_timeline(&mut next, fragment, time)?;
+        self.validate_asset_fragment_locks(fragment)?;
+        self.undo_stack.push(self.snapshot_timeline());
+        self.timeline = next;
+        self.selected_instance_ids = ids.into_iter().collect();
+        self.commit_timeline_edit();
+        Ok(())
+    }
+    pub(crate) fn validate_asset_fragment_locks(&self, fragment: &Timeline) -> Result<(), String> {
         if fragment.analog_tracks.iter().any(|curve| {
             self.timeline
                 .analog_tracks
@@ -924,10 +932,6 @@ impl PealayerApp {
         }) {
             return Err("Unlock the destination tracks before importing cues".into());
         }
-        self.undo_stack.push(self.snapshot_timeline());
-        self.timeline = next;
-        self.selected_instance_ids = ids.into_iter().collect();
-        self.commit_timeline_edit();
         Ok(())
     }
     pub(crate) fn review_asset(
@@ -1201,11 +1205,14 @@ pub fn paint_drop_target(ui: &eframe::egui::Ui, rect: eframe::egui::Rect, label:
             egui::Stroke::new(2.0, color),
             egui::StrokeKind::Inside,
         );
+        let paths=ui.input(|i|i.raw.hovered_files.iter().filter_map(|f|f.path.clone()).collect::<Vec<_>>());
+        let feedback=drop_feedback(&paths,&native_destination(ui.ctx()));
+        let label=if paths.is_empty(){label.to_string()}else{format!("{} {}",crate::ui::icons::named_control_icon(&feedback.icon).unwrap_or(crate::ui::icons::FOLDER_OPEN),feedback.message)};
         if !label.is_empty() {
             painter.text(
                 rect.left_top() + egui::vec2(12.0, 12.0),
                 egui::Align2::LEFT_TOP,
-                label,
+                &label,
                 egui::FontId::proportional(14.0),
                 ui.visuals().text_color(),
             );
@@ -1216,6 +1223,9 @@ pub fn native_destination(ctx: &eframe::egui::Context) -> Destination {
     let Some(pointer) = ctx.pointer_latest_pos() else {
         return Destination::Player;
     };
+    native_destination_at(ctx,pointer)
+}
+pub fn native_destination_at(ctx:&eframe::egui::Context,pointer:eframe::egui::Pos2)->Destination {
     if let Some((rect, draft_id)) = ctx.data(|d| {
         d.get_temp::<(eframe::egui::Rect, uuid::Uuid)>(eframe::egui::Id::new(
             "external-assets-audio-source",
@@ -1250,9 +1260,33 @@ pub fn native_destination(ctx: &eframe::egui::Context) -> Destination {
     }
 }
 
+#[derive(Clone,Debug,PartialEq)]
+pub struct DropFeedback {pub icon:String,pub message:String}
+pub fn drop_feedback(paths:&[PathBuf],destination:&Destination)->DropFeedback {
+    if paths.len()!=1 {return DropFeedback{icon:"files".into(),message:format!("Import {} assets",paths.len())};}
+    let path=&paths[0];
+    let name=path.file_name().unwrap_or_default().to_string_lossy().chars().filter(|c|!c.is_control()).take(120).collect::<String>();
+    let (icon,action)=match (destination,file_kind(path)) {
+        (Destination::AudioSource{..},FileKind::Audio)=>("speaker-high","Use audio source"),
+        (Destination::Player,FileKind::Audio)=>("play","Play"),
+        (_,FileKind::Subtitle)=>("subtitles","Load subtitle"),
+        (_,FileKind::Audio)=>("speaker-high","Add SFX"),
+        (_,FileKind::Document)=>("folder-open","Review asset"),
+        (_,FileKind::Media)=>("play","Play"),
+    };
+    DropFeedback{icon:icon.into(),message:format!("{action} {name}")}
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test] fn drop_feedback_matches_import_action_and_does_not_expose_parent_paths(){
+        for (path,action,icon) in [("C:/private/movie.mkv","Play movie.mkv","play"),("C:/private/sub.srt","Load subtitle sub.srt","subtitles"),("C:/private/tone.wav","Play tone.wav","play"),("C:/private/effect.json","Review asset effect.json","folder-open")] {
+            let feedback=drop_feedback(&[path.into()],&Destination::Player);assert_eq!(feedback.message,action);assert_eq!(feedback.icon,icon);
+        }
+        assert_eq!(drop_feedback(&["one.mkv".into(),"two.srt".into()],&Destination::Player).message,"Import 2 assets");
+        assert_eq!(drop_feedback(&["tone.wav".into()],&Destination::Library).message,"Add SFX tone.wav");
+    }
     #[test]
     fn classifies_assets_without_treating_json_as_media() {
         assert_eq!(file_kind(Path::new("a.WAV")), FileKind::Audio);
