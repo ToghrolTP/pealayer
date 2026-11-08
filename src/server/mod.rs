@@ -2142,6 +2142,11 @@ mod tests {
         assert!(local_process_payload(ipc.as_bytes()));
         assert!(local_process_payload(rpc.as_bytes()));
         assert!(matches!(parse_interop_request(ipc).unwrap().1, InteropCommand::NavigatePreferences { .. }));
+        let toolbar = r#"{"jsonrpc":"2.0","id":1,"method":"pealayer.preferences.navigate","params":{"section":"timeline_toolbar","scroll_y":0}}"#;
+        assert!(local_process_payload(toolbar.as_bytes()));
+        assert_eq!(parse_interop_request(toolbar).unwrap().1, InteropCommand::NavigatePreferences {
+            navigation: crate::preferences_contract::PreferencesNavigation::timeline_toolbar(),
+        });
         let invalid_ipc = br#"{"command":"navigate_preferences","scroll_y":"invalid"}"#;
         assert!(local_process_payload(invalid_ipc));
         assert!(parse_interop_request(std::str::from_utf8(invalid_ipc).unwrap()).is_err());

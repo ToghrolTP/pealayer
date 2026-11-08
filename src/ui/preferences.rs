@@ -514,7 +514,11 @@ impl eframe::App for StandalonePreferencesApp {
 
         for request in self.navigation.try_iter().take(8) {
             match request {
-                PreferencesHelperMessage::Navigate { navigation } => self.draft.pending_navigation = Some(navigation),
+                PreferencesHelperMessage::Navigate { navigation } => {
+                    self.draft.pending_navigation = Some(navigation);
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
+                }
                 PreferencesHelperMessage::Branding { effective, configured } => {
                     if crate::branding::set_runtime_values(&effective).is_ok() {
                         self.draft.sync_external_branding(&configured);
@@ -666,8 +670,13 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             .is_some_and(NativePreferencesController::is_open)
         {
             if let Some(request) = app.preferences_draft.as_mut().and_then(|draft| draft.pending_navigation.take()) {
-                if let Err(error) = app.native_preferences.as_ref().unwrap().navigation.try_send(PreferencesHelperMessage::Navigate { navigation: request }) {
-                    app.config_status = format!("Preferences navigation not delivered: {error}");
+                match app.native_preferences.as_ref().unwrap().navigation.try_send(PreferencesHelperMessage::Navigate { navigation: request }) {
+                    Ok(()) => {},
+                    Err(std::sync::mpsc::TrySendError::Full(PreferencesHelperMessage::Navigate { navigation })) => {
+                        app.preferences_draft.as_mut().unwrap().pending_navigation = Some(navigation);
+                        ui.ctx().request_repaint_after(std::time::Duration::from_millis(20));
+                    }
+                    Err(error) => app.config_status = format!("Preferences navigation not delivered: {error}"),
                 }
             }
             let controller = app.native_preferences.as_mut().unwrap();
@@ -894,6 +903,10 @@ fn draw_preferences_editor(draft: &mut PreferencesDraft, ui: &mut egui::Ui) -> P
     egui::CentralPanel::default().show_inside(ui, |ui| {
         let sections = preference_sections();
         let narrow = ui.available_width() < 560.0;
+        let rail_width = sections.iter().map(|section| {
+            ui.painter().layout_no_wrap(tr(section.label), egui::TextStyle::Button.resolve(ui.style()),
+                ui.visuals().text_color()).size().x + 44.0
+        }).fold(PREFERENCES_RAIL_WIDTH, f32::max);
         if narrow {
             let active = &sections[draft.tab.min(sections.len() - 1)];
             crate::ui::dropdown::ComboBox::from_id_salt("preferences_compact_tab")
@@ -914,7 +927,7 @@ fn draw_preferences_editor(draft: &mut PreferencesDraft, ui: &mut egui::Ui) -> P
         ui.horizontal_top(|ui| {
             if !narrow {
                 ui.allocate_ui_with_layout(
-                    egui::vec2(PREFERENCES_RAIL_WIDTH, ui.available_height()),
+                    egui::vec2(rail_width, ui.available_height()),
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
                         crate::ui::dialog::scroll_column(ui, "preferences_navigation", None, |ui| {
@@ -1016,6 +1029,15 @@ fn draw_contract_section(
             for control in group_controls {
                 changed |=
                     render_contract_control(ui, control, &mut values, tr, label_width, language, rtl_ui);
+            }
+            if section.id == "timeline_toolbar" {
+                let mut order = crate::config::normalize_timeline_toolbar_order(&draft.config.timeline_toolbar_order);
+                let mut hidden = draft.config.timeline_toolbar_hidden.clone();
+                if super::timeline_toolbar::customization(ui, &mut order, &mut hidden, tr) {
+                    values["timeline_toolbar_order"] = serde_json::to_value(crate::config::persisted_timeline_toolbar_order(&order)).unwrap();
+                    values["timeline_toolbar_hidden"] = serde_json::to_value(hidden).unwrap();
+                    changed = true;
+                }
             }
             if group == "Typography" {
                 ui.add_space(6.0);
@@ -2054,6 +2076,7 @@ fn section_icon(section: &str) -> &'static str {
         "playback" => crate::ui::icons::PLAY,
         "hardware" => crate::ui::icons::PLUG,
         "input" => crate::ui::icons::SLIDERS_HORIZONTAL,
+        "timeline_toolbar" => crate::ui::icons::SLIDERS_HORIZONTAL,
         "web" => crate::ui::icons::GLOBE,
         _ => crate::ui::icons::GEAR,
     }
@@ -2079,6 +2102,7 @@ fn group_icon(group: &str) -> &'static str {
         "Window movement" => crate::ui::icons::APP_WINDOW,
         "Status bar" => crate::ui::icons::GAUGE,
         "Typography" => crate::ui::icons::TEXT_T,
+        "Timeline toolbar" => crate::ui::icons::SLIDERS_HORIZONTAL,
         "Windows graphics and composition" | "Dialog windows" => crate::ui::icons::APP_WINDOW,
         _ => crate::ui::icons::GEAR,
     }
@@ -2090,6 +2114,7 @@ fn section_heading(section: &str) -> &'static str {
         "playback" => "Playback behavior",
         "hardware" => "PCController and hardware",
         "input" => "Keyboard, mouse, and gesture bindings",
+        "timeline_toolbar" => "Timeline toolbar",
         "web" => "Web UI and network APIs",
         _ => "Configuration",
     }
@@ -2348,6 +2373,37 @@ mod tests {
         render(&mut draft);
         assert_eq!(draft.scroll_y, 0.0);
         assert!(draft.take_preview_update().is_none());
+    }
+
+    #[test]
+    fn timeline_toolbar_navigation_opens_exact_page_and_preserves_draft() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let request = PreferencesNavigation::timeline_toolbar();
+        request.validate().unwrap();
+        let round_trip: PreferencesHelperMessage = serde_json::from_value(
+            serde_json::to_value(PreferencesHelperMessage::Navigate { navigation: request.clone() }).unwrap()).unwrap();
+        assert!(matches!(round_trip, PreferencesHelperMessage::Navigate { navigation } if navigation == request));
+        for width in [390.0, 700.0, 1200.0] {
+            let ctx = egui::Context::default();
+            let mut draft = PreferencesDraft::new(AppConfig::default(), 0);
+            draft.config.timeline_toolbar_hidden.clear(); // existing unsaved edits
+            let expected = draft.config.clone();
+            for _ in 0..2 {
+                draft.tab = 1; // another previously selected page
+                draft.pending_navigation = Some(request.clone());
+                for _ in 0..3 {
+                    ctx.run_ui(egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 600.0))),
+                        ..Default::default()
+                    }, |ui| { draw_preferences_editor(&mut draft, ui); }).drop_without_applying_deltas();
+                }
+                assert_eq!(preference_sections()[draft.tab].id, "timeline_toolbar");
+                assert_eq!(draft.scroll_y, 0.0);
+                assert_eq!(draft.config, expected, "navigation must not modify unsaved controls");
+                assert!(draft.is_dirty());
+                assert!(draft.pending_navigation.is_none());
+            }
+        }
     }
 
     #[test]

@@ -127,6 +127,7 @@ const sectionIcons: Record<string, React.ReactNode> = {
   playback: <PlayCircleOutlined />,
   hardware: <ExperimentOutlined />,
   input: <ControlOutlined />,
+  timeline_toolbar: <ControlOutlined />,
   web: <GlobalOutlined />,
   advanced: <SettingOutlined />,
 };

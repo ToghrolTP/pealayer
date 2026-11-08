@@ -316,66 +316,9 @@ pub(super) fn draw(
                 ui.set_max_width(250.0);
                 ui.strong(app.tr("Timeline toolbar"));
                 ui.separator();
-                for (index, action) in order.clone().into_iter().enumerate() {
-                    ui.horizontal(|ui| {
-                        let mut visible = !app.timeline_toolbar_hidden.contains(&action);
-                        let checkbox = ui.checkbox(
-                            &mut visible,
-                            egui::RichText::new(format!(
-                                "{}  {}",
-                                super::layout::timeline_toolbar_action_icon(action),
-                                app.tr(super::layout::timeline_toolbar_action_label(action))
-                            ))
-                            .size(12.0),
-                        );
-                        if checkbox.changed() {
-                            app.timeline_toolbar_hidden
-                                .retain(|candidate| *candidate != action);
-                            if !visible {
-                                app.timeline_toolbar_hidden.push(action);
-                            }
-                            changed = true;
-                        }
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            for (can_move, icon, next, tip) in [
-                                (
-                                    index + 1 < order.len(),
-                                    super::icons::ARROW_DOWN,
-                                    (index + 1).min(order.len() - 1),
-                                    "Move down",
-                                ),
-                                (
-                                    index > 0,
-                                    super::icons::ARROW_UP,
-                                    index.saturating_sub(1),
-                                    "Move up",
-                                ),
-                            ] {
-                                if ui
-                                    .add_enabled(can_move, egui::Button::new(icon).small())
-                                    .on_hover_text(app.tr(tip))
-                                    .clicked()
-                                {
-                                    order.swap(index, next);
-                                    changed = true;
-                                }
-                            }
-                        });
-                    });
-                }
-                ui.separator();
-                if ui
-                    .button(format!(
-                        "{} {}",
-                        super::icons::ARROW_COUNTER_CLOCKWISE,
-                        app.tr("Reset toolbar")
-                    ))
-                    .clicked()
-                {
-                    order = crate::config::default_timeline_toolbar_order();
-                    app.timeline_toolbar_hidden = crate::config::default_timeline_toolbar_hidden();
-                    changed = true;
-                }
+                let language = app.language;
+                changed |= customization(ui, &mut order, &mut app.timeline_toolbar_hidden,
+                    &|key| super::i18n::tr(language, key));
                 if ui
                     .button(format!(
                         "{} {}",
@@ -384,7 +327,8 @@ pub(super) fn draw(
                     ))
                     .clicked()
                 {
-                    super::preferences::open(app, ui.ctx());
+                    super::preferences::navigate(app, ui.ctx(),
+                        crate::preferences_contract::PreferencesNavigation::timeline_toolbar());
                     ui.close();
                 }
             });
@@ -403,9 +347,91 @@ pub(super) fn draw(
     output
 }
 
+/// The overflow menu and Preferences edit the same ordered/hidden action model.
+pub(super) fn customization(
+    ui: &mut egui::Ui,
+    order: &mut Vec<Action>,
+    hidden: &mut Vec<Action>,
+    tr: &impl Fn(&'static str) -> String,
+) -> bool {
+    let mut changed = false;
+    for (index, action) in order.clone().into_iter().enumerate() {
+        ui.push_id(action, |ui| ui.horizontal(|ui| {
+            let mut visible = !hidden.contains(&action);
+            if ui.checkbox(&mut visible, egui::RichText::new(format!("{}  {}",
+                super::layout::timeline_toolbar_action_icon(action),
+                tr(super::layout::timeline_toolbar_action_label(action)))).size(12.0)).changed() {
+                hidden.retain(|candidate| *candidate != action);
+                if !visible { hidden.push(action); }
+                changed = true;
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                for (enabled, icon, next, tip) in [
+                    (index + 1 < order.len(), super::icons::ARROW_DOWN, (index + 1).min(order.len() - 1), "Move down"),
+                    (index > 0, super::icons::ARROW_UP, index.saturating_sub(1), "Move up"),
+                ] {
+                    if ui.add_enabled(enabled, egui::Button::new(icon).small())
+                        .on_hover_text(tr(tip)).clicked() {
+                        order.swap(index, next);
+                        changed = true;
+                    }
+                }
+            });
+        }));
+    }
+    ui.separator();
+    if ui.button(format!("{} {}", super::icons::ARROW_COUNTER_CLOCKWISE, tr("Reset toolbar"))).clicked() {
+        *order = crate::config::default_timeline_toolbar_order();
+        *hidden = crate::config::default_timeline_toolbar_hidden();
+        changed = true;
+    }
+    changed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn overflow_preferences_click_requests_exact_toolbar_page() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.preferences_tab = 1;
+        let ctx = egui::Context::default();
+        let viewport = Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(900.0, 600.0));
+        let mut frame = |events| {
+            ctx.run_ui(egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 900.0))),
+                events, ..Default::default()
+            }, |ui| { draw(ui, &mut app, viewport, false); })
+        };
+        fn text_point(shape: &egui::epaint::Shape) -> Option<egui::Pos2> {
+            match shape {
+                egui::epaint::Shape::Text(text) if text.galley.text().contains("Preferences...") =>
+                    Some(text.pos + text.galley.size() * 0.5),
+                egui::epaint::Shape::Vec(shapes) => shapes.iter().find_map(text_point),
+                _ => None,
+            }
+        }
+        let menu = egui::pos2(viewport.right() - CELL * 0.5, viewport.top() + CELL * 0.5);
+        frame(vec![]).drop_without_applying_deltas();
+        frame(vec![egui::Event::PointerMoved(menu), pointer_button(menu, egui::PointerButton::Primary, true)]).drop_without_applying_deltas();
+        frame(vec![pointer_button(menu, egui::PointerButton::Primary, false)]).drop_without_applying_deltas();
+        let output = frame(vec![]);
+        let preferences = output.shapes.iter().find_map(|shape| text_point(&shape.shape)).expect("overflow Preferences action visible");
+        output.drop_without_applying_deltas();
+        frame(vec![egui::Event::PointerMoved(preferences), pointer_button(preferences, egui::PointerButton::Primary, true)]).drop_without_applying_deltas();
+        frame(vec![pointer_button(preferences, egui::PointerButton::Primary, false)]).drop_without_applying_deltas();
+        drop(frame);
+        assert!(app.show_preferences_dialog);
+        assert!(app.preferences_draft.is_some());
+        app.native_dialog_windows = false;
+        ctx.run_ui(egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 900.0))),
+            ..Default::default()
+        }, |ui| super::super::preferences::draw(&mut app, ui)).drop_without_applying_deltas();
+        assert_eq!(crate::preferences_contract::preference_sections()[app.preferences_tab].id, "timeline_toolbar");
+    }
 
     fn pointer_button(pos: egui::Pos2, button: egui::PointerButton, pressed: bool) -> egui::Event {
         egui::Event::PointerButton {

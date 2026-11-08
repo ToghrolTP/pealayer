@@ -10,6 +10,10 @@ pub struct PreferencesNavigation {
 }
 
 impl PreferencesNavigation {
+    pub(crate) fn timeline_toolbar() -> Self {
+        Self { section: Some("timeline_toolbar".into()), scroll_y: 0.0 }
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if !self.scroll_y.is_finite() || !(0.0..=1_000_000.0).contains(&self.scroll_y) {
             return Err("scroll_y must be a finite offset between 0 and 1000000 logical pixels".into());
@@ -131,6 +135,19 @@ pub struct PreferenceSection {
     pub label: &'static str,
     pub icon: &'static str,
     pub navigation_group: &'static str,
+}
+
+#[cfg(test)]
+#[test]
+fn timeline_toolbar_page_has_one_canonical_visibility_control() {
+    let controls = preference_controls(&crate::config::AppConfig::default());
+    let matches: Vec<_> = controls.iter().filter(|control| control.key == "timeline_toolbar_visible").collect();
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].section, "timeline_toolbar");
+    assert_eq!(matches[0].group, "Timeline toolbar");
+    // Workspace snapshots store these selections by index.
+    assert_eq!(preference_sections().iter().take(6).map(|section| section.id).collect::<Vec<_>>(),
+        ["appearance", "playback", "hardware", "input", "web", "advanced"]);
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -349,6 +366,12 @@ pub fn preference_sections() -> Vec<PreferenceSection> {
             navigation_group: "Application",
             label: "Advanced",
             icon: "gear",
+        },
+        PreferenceSection {
+            id: "timeline_toolbar",
+            navigation_group: "Application",
+            label: "Timeline toolbar",
+            icon: "sliders",
         },
     ]
 }
@@ -829,8 +852,8 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
         ),
         PreferenceControl::boolean(
             "timeline_toolbar_visible",
-            "input",
-            "Timeline navigation",
+            "timeline_toolbar",
+            "Timeline toolbar",
             "Show timeline toolbar",
         ),
         PreferenceControl::number(

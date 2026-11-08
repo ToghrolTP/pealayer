@@ -1022,6 +1022,8 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Control bar" => "نوار کنترل",
         "Show / hide actions" => "نمایش / پنهان‌کردن فرمان‌ها",
         "Reset toolbar" => "بازنشانی نوار ابزار",
+        "Timeline toolbar" => "نوار ابزار خط زمان",
+        "Show timeline toolbar" => "نمایش نوار ابزار خط زمان",
         "Play / Pause" => "پخش / مکث",
         "Pin controls" => "سنجاق‌کردن کنترل‌ها",
         "Move later" => "انتقال به بعد",
