@@ -29,3 +29,23 @@ same page; the native customization editor remains shared with its toolbar menu.
 
 Deployment receipts and native visual evidence belong to the owning PR. Cafe
 deployment remains deferred until the user restores its normal connection.
+
+## Verified delivery
+
+- Final source: `95714e3737578b3315f036af223851164640f7d7`.
+- Focused native checks: 67 Preferences tests and 19 toolbar/model/pointer tests
+  passed (the suites overlap). TypeScript and packaged Web/PWA integrity passed.
+- Windows resources, task icons, libmpv smoke and downloader resource/headless
+  smoke passed. The package skips duplicate full regression suites explicitly.
+- The separate native helper visibly opened the correct page through process-local
+  RPC; a second navigation after selecting Appearance returned to the same page.
+  This is an actual no-media, hardware-disconnected Studio/dark capture:
+
+![Native Timeline Toolbar preferences](../screenshots/timeline-toolbar-preferences.png)
+
+- The canonical local executable was gracefully updated; the running process
+  reports the source above. Installed and packaged executable SHA-256 match:
+  `b82942990ef1c46deca442aff21dbfdeb6ae93fa97630ac5a4b0a7ac0648b3de`.
+- The isolated review remains open for inspection. Its Preferences helper is
+  reported as unknown by authoring inspection, so it was not forcibly closed or
+  replaced. No review preference was saved, and regular settings were not edited.
