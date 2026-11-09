@@ -185,7 +185,7 @@ jobs:
           if (-not $asset) { throw 'No x86_64 mpv-dev archive found.' }
           $archive = Join-Path $env:RUNNER_TEMP $asset.name
           $extract = Join-Path $env:RUNNER_TEMP libmpv
-          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $archive
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $archive -MaximumRetryCount 3 -RetryIntervalSec 2 -TimeoutSec 60
           $actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
           $expected = [string]$asset.digest -replace '^sha256:', ''
           if (-not $expected -or $actual -ne $expected.ToLowerInvariant()) { throw "libmpv SHA-256 mismatch: $actual" }
@@ -207,7 +207,7 @@ jobs:
         run: |
           $archive = Join-Path $env:RUNNER_TEMP upx.zip
           $extract = Join-Path $env:RUNNER_TEMP upx
-          Invoke-WebRequest '${{ env.UPX_WINDOWS_URL }}' -OutFile $archive
+          Invoke-WebRequest '${{ env.UPX_WINDOWS_URL }}' -OutFile $archive -MaximumRetryCount 3 -RetryIntervalSec 2 -TimeoutSec 60
           $actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($actual -ne '${{ env.UPX_WINDOWS_SHA256 }}') { throw "UPX SHA-256 mismatch: $actual" }
           Expand-Archive $archive $extract

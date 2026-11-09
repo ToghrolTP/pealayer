@@ -55,7 +55,7 @@ Unsupported shuffle/repeat modes are not invented or advertised.
 
 ## Verification and limits
 
-- Full isolated local Windows library suite: **1,227 passed**, four existing
+- Full isolated local Windows library suite: **1,229 passed**, four existing
   ignored checks. It includes metadata/identity, artwork reuse, MPRIS projection,
   exact position/rate, stale seeks, command acknowledgement and scope tests.
 - TypeScript and the executable Web media-session projection checks passed.
@@ -66,17 +66,25 @@ Unsupported shuffle/repeat modes are not invented or advertised.
   and prints comparison flags rather than private titles/paths/artwork bytes.
 - A dedicated Linux workflow runs the adapter against an explicitly private
   dbus-run-session, checking actual discovery/properties, event delivery,
-  transport requests and metadata/Stop clearing. The first real-bus run passed:
-  [102 platform checks and the live private-bus case](https://github.com/ToghrolTP/pealayer/actions/runs/42570090557).
+  transport requests and metadata/Stop clearing. The strengthened real-bus run
+  [passed at the local-Quit safety checkpoint](https://github.com/ToghrolTP/pealayer/actions/runs/42571922936).
 - Final focused native checks cover the introspected Seeked signal, nonzero
   restored starts, exact paused microsecond seeks and integer paused positions
   beyond f64's exact range. All five MPRIS checks passed locally; the strengthened
-  private-bus case is rerun in CI at the final source checkpoint.
+  private-bus case also passed in the linked Linux CI run.
 - CI also caught two stale inherited guards: Web parity expected the former fixed
   Monitor volume placement, and the timeline pointer fixture constructed private
   Dock-viewer fields. The guards now check the current volume ownership and use
   the public viewer constructor. All 53 Web parity contracts and three local
   pointer regressions passed, without restyling or weakening production controls.
+- Four real-decoder playback integration checks passed. Their inherited FPS
+  assertion now checks typed metrics rather than a removed tooltip string; Play
+  during an exact seek is correctly checked after decoder acknowledgement, not
+  mistaken for synchronous completion. Production seek behavior is unchanged.
+- The general CI matrix exposed those stale fixture references and an upstream
+  UPX download HTTP 504. Downloads retain checksum verification and now use
+  bounded transport retries. A focused green Linux run is not a claim that the
+  whole cross-platform release matrix or Apple runtime has passed.
 
 A phone's real KDE Connect view is a separate acceptance gate; a viewing-only
 check has been requested. No board output or production playback was actuated.
@@ -90,5 +98,8 @@ not implement per-application volume, and its relative-seek extrapolation assume
 Pealayer still publishes truthful metadata/rate/artwork rather than inventing
 track changes to work around a consumer limitation.
 
-Linux private-bus CI, package/deployment and the current runtime receipt follow
-verification. Cafe deployment remains user-deferred while its route is offline.
+The final package/deployment receipt follows verification. Native replacement is
+blocked while the running Preferences helper reports unknown authoring state;
+its edits must be saved/discarded and the helper closed first. Cafe deployment
+remains user-deferred while its route is offline. Neither gate is waived by a
+successful package or Windows readback of the already-running build.

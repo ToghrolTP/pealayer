@@ -158,7 +158,10 @@ fn test_app_playback_finish_scrub_and_move_around() {
     // Now unpause and verify playback runs normally
     let playback_start = app.playback_time;
     app.play();
-    assert!(!app.is_paused);
+    assert!(
+        wait_for_app_state(&mut app, Duration::from_secs(3), |app| !app.is_paused),
+        "Play must resume after decoder-owned seek completion"
+    );
     assert!(
         wait_for_app_state(&mut app, Duration::from_secs(3), |app| {
             app.playback_time > playback_start + 0.1
@@ -197,22 +200,23 @@ fn test_paused_seek_clears_seek_pos_and_advances_display_time_when_playback_resu
     app.scrub_to(2.0);
     app.finish_scrub(2.0);
 
-    // Wait for the scrub commit to settle
-    assert!(
-        wait_for_app_state(&mut app, Duration::from_secs(3), |app| {
-            app.seek_pos == Some(2.0)
-        }),
-        "Scrub commit should settle with seek_pos Some(2.0)"
-    );
+    // seek_pos is the exact requested display position, not decoder completion.
+    // Exercise Play while that commit may still be pending: it must retain the
+    // resume intent instead of cancelling the seek and playing an older frame.
+    assert_eq!(app.seek_pos, Some(2.0));
 
     // Now resume playback
     app.play();
-    assert!(!app.is_paused, "App should now be playing");
+    assert!(
+        wait_for_app_state(&mut app, Duration::from_secs(3), |app| !app.is_paused),
+        "App must resume after its exact seek decoder acknowledgement"
+    );
 
     // During playback, seek_pos must be cleared and resolve_display_time must advance past 2.0s
     assert!(
         wait_for_app_state(&mut app, Duration::from_secs(3), |app| {
-            let display_time = pealayer::ui::controls::resolve_display_time(app.seek_pos, app.playback_time);
+            let display_time =
+                pealayer::ui::controls::resolve_display_time(app.seek_pos, app.playback_time);
             app.seek_pos.is_none() && display_time > 2.2
         }),
         "Playback display time must advance past seek_pos (was stuck: {:?}, playback_time: {})",
@@ -269,14 +273,15 @@ fn test_23fps_media_playback_decoupled_framerate_and_zero_timing_offset() {
 
     // Verify record_mpv_render_duration updates latency metrics correctly
     pealayer::ui::video::record_mpv_render_duration(Duration::from_micros(1500));
-    let last_micros = pealayer::ui::video::LAST_MPV_RENDER_MICROS
-        .load(std::sync::atomic::Ordering::Relaxed);
+    let last_micros =
+        pealayer::ui::video::LAST_MPV_RENDER_MICROS.load(std::sync::atomic::Ordering::Relaxed);
     assert_eq!(last_micros, 1500);
 
     // Verify skipped render pass tracking is operational
-    let skipped_before = pealayer::ui::video::MPV_RENDER_SKIPPED_COUNT
-        .load(std::sync::atomic::Ordering::Relaxed);
-    pealayer::ui::video::MPV_RENDER_SKIPPED_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    let skipped_before =
+        pealayer::ui::video::MPV_RENDER_SKIPPED_COUNT.load(std::sync::atomic::Ordering::Relaxed);
+    pealayer::ui::video::MPV_RENDER_SKIPPED_COUNT
+        .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     assert_eq!(
         pealayer::ui::video::MPV_RENDER_SKIPPED_COUNT.load(std::sync::atomic::Ordering::Relaxed),
         skipped_before + 1
@@ -285,5 +290,6 @@ fn test_23fps_media_playback_decoupled_framerate_and_zero_timing_offset() {
     let fps_info = app
         .current_fps_display(Instant::now())
         .expect("fps display available");
-    assert!(fps_info.tooltip.contains("MPV render time: 1.50 ms"));
+    assert_eq!(fps_info.render_time_ms, Some(1.5));
+    assert!(fps_info.peak_render_time_ms.is_some_and(|peak| peak >= 1.5));
 }
