@@ -21,7 +21,8 @@ passed forbidden/empty/changing-access parent cases; Cafe remains deferred.
 [Studio media strips](studio-media-strips.md) replaces native hardcoded media
 colors with palette-owned surfaces and keeps media/cue captions pinned to the
 visible strip span. Neutral styling, timeline timing and interactions remain
-intact. Focused verification and the installed receipt are tracked there.
+intact. The canonical update is installed, with real before/after captures,
+559 native UI checks and final focused paint/contrast checks recorded there.
 
 [Reveal-playhead availability](playhead-action-fade.md) adds the missing brief
 fade to the existing visibility-aware disabled state. Invocation is blocked

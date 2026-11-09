@@ -47,7 +47,35 @@ Web timeline's incomplete media-strip feature parity is finished.
 - Final focused strip suite: four passed, zero failures (overlaps the UI suite;
   includes the final Neutral-border preservation assertion). Persistence tests
   receive private config/instance identities from their parent before startup.
-- Installed-package receipt pending.
+
+## Installed checkpoint and actual native comparison
+
+The package passed Web/PWA bundle integrity, native/runtime and downloader smoke
+probes, native resources and all seven quick-action icons. The fresh authoring
+inspection was clean before the graceful peer updater. The restarted app
+acknowledged source `c99a0c2d619eb3cd82eb6eaf9dc8c11ce48e16ed`, executable
+SHA-256 `419de2dcbee79de6c777ec854252f48410f27e98261a812605e7844aa45448bd`.
+The destination libmpv remained unchanged. Independent live reads confirm the
+installed identity, Studio palette, active NLE workspace and exact unchanged
+paused position. Window, viewport and user split proportions were retained.
+
+These are actual read-only Win32 captures from the running native app, with the
+same Studio/dark palette, window geometry, horizontal pan and 1.5 display scale.
+The strip-only crops are enlarged 2x; no private media image, filename or settings
+are published. The viewport starts well after the media strips' source start.
+
+Before: fixed neutral fills and entirely offscreen names.
+
+![Old fixed media colors and invisible scrolled names](../screenshots/studio-media-strips-before.png)
+
+After: Studio's coordinated surfaces, subtle highlights and names pinned inside
+the visible strip span.
+
+![Studio media strips with visible pinned names](../screenshots/studio-media-strips-after.png)
+
+The app remains running; no additional review copy or hardware actuation was
+needed. Temporal panning, short clips and the subtitle/light/RTL cases are
+covered by the rendered tests, not inferred from this two-strip screenshot.
 
 Cafe deployment remains user-deferred while its normal connection is unavailable.
 No hardware output or production playback action is needed for these changes.
