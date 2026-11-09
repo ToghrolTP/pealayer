@@ -7,7 +7,8 @@ environment variables and nested transport errors are not default user copy.
 
 The disconnected/retrying card now says:
 
-> Couldn't connect to PCController. Check that it is running, then try again.
+> Couldn't connect to PCController.
+> Check that it is running, then try again.
 
 A connected controller whose controls could not be loaded instead says:
 
@@ -67,3 +68,28 @@ not a proven cause. The running application's window should not be manipulated
 again merely to improve this report's captures.
 
 Cafe deployment remains user-deferred until its normal connection returns.
+
+## Message alignment and deliberate line break
+
+The native card's info button was allocated first in a reversed horizontal row.
+Its following shrink-to-fit Label inherited that placement, so the entire
+English message block was right-anchored even with left-aligned glyphs inside
+it. The fix reserves the complete remaining text width and gives it its own
+application-direction layout. English starts at the card's leading margin;
+Persian stays right-aligned. The info button remains at the logical trailing
+edge, independently of caption alignment.
+
+The instruction now begins on its own logical line in English and Persian, on
+both native and Web surfaces. Narrow panels still wrap normally. Web uses
+`white-space: pre-line` and logical `text-align: start`, not a physical-left
+override. Raw diagnostics and info/copy actions are unchanged; no connection,
+authority or board output is touched by rendering or inspecting the card.
+
+Five focused native checks passed, including actual info-button clicks and a
+paint matrix at 220/390/640-point widths, 1/1.5/2 scales, both themes/directions
+and with/without diagnostics. It checks every rendered line's physical leading
+edge and the explicit two-line English layout when space permits. Web
+availability/message checks also passed. Fixtures use a transport-free engine
+and private parent-provided config/instance identities.
+
+Installed follow-up receipt and native before/after captures pending.

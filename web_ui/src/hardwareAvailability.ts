@@ -35,7 +35,7 @@ export function hardwareMonitorEmpty(state: PlayerState) {
   if (!state.controller_connected) {
     const progress = Boolean(state.hardware_connection_requested);
     return { title: progress ? 'Connecting to PCController…' : 'Hardware Disconnected',
-      detail: state.hardware_error?.trim() ? "Couldn't connect to PCController. Check that it is running, then try again." : (progress ? 'Waiting for the configured PCController connection.' : 'Connect to PCController to discover live board controls.'),
+    detail: state.hardware_error?.trim() ? "Couldn't connect to PCController.\nCheck that it is running, then try again." : (progress ? 'Waiting for the configured PCController connection.' : 'Connect to PCController to discover live board controls.'),
       diagnostics: state.hardware_error?.trim() || null,
       progress, primary: !progress && Boolean(state.hardware_endpoint?.trim()) ? 'connect' as const : null };
   }

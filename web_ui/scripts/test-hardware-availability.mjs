@@ -56,6 +56,9 @@ for (const input of [
   assert.ok(!empty.detail.includes('PEALAYER_')&&!empty.detail.includes('embedded'),'default copy must be plain English, not diagnostic parsing');
 }
 assert.ok(hardwareMonitorEmpty({controller_connected:false,hardware_error:diagnostic}).detail.startsWith("Couldn't connect"));
+assert.equal(hardwareMonitorEmpty({controller_connected:false,hardware_error:diagnostic}).detail,
+  "Couldn't connect to PCController.\nCheck that it is running, then try again.");
+assert.match(read('../src/hardware-monitor.css'), /white-space: pre-line; text-align: start;/);
 assert.ok(hardwareMonitorEmpty({controller_connected:true,hardware_error:diagnostic}).detail.startsWith("Couldn't load"));
 assert.equal(hardwareMonitorEmpty({controller_connected:false,hardware_error:'  '}).diagnostics,null);
 assert.ok(hardwareSource.includes('<InfoCircleOutlined />')&&hardwareSource.includes("trigger={['hover', 'click']}"));

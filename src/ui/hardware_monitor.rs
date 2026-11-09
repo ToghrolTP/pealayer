@@ -45,6 +45,7 @@ fn connection_hint_contents(ui: &mut egui::Ui, hint: ConnectionHint<'_>) {
 /// refreshes the board, changes authority or sends an RF/output command.
 pub(crate) fn empty_card(
     ui: &mut egui::Ui,
+    rtl: bool,
     title: &str,
     detail: &str,
     diagnostics: Option<ConnectionHint<'_>>,
@@ -85,7 +86,9 @@ pub(crate) fn empty_card(
             });
             ui.add_space(8.0);
             ui.horizontal_top(|ui| {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Min), |ui| {
+                // Allocate trailing actions first, but do not let their reverse
+                // layout right-anchor a shrink-to-fit English message block.
+                ui.with_layout(crate::ui::i18n::layout(!rtl, egui::Align::Min), |ui| {
                     if let Some(hint) = diagnostics {
                         let response = ui
                             .menu_button(crate::ui::icons::INFO, |ui| {
@@ -101,11 +104,12 @@ pub(crate) fn empty_card(
                         });
                         response.on_hover_ui(|ui| connection_hint_contents(ui, hint));
                     }
-                    ui.add(
-                        egui::Label::new(egui::RichText::new(detail).weak())
-                            .halign(egui::Align::Min)
-                            .wrap(),
-                    );
+                    let text_width = ui.available_width().max(1.0);
+                    ui.allocate_ui_with_layout(egui::vec2(text_width, 0.0),
+                        crate::ui::i18n::vertical_layout(rtl), |ui| {
+                            ui.add(egui::Label::new(egui::RichText::new(detail).weak())
+                                .halign(if rtl {egui::Align::Max} else {egui::Align::Min}).wrap());
+                        });
                 });
             });
             ui.add_space(12.0);
@@ -160,7 +164,7 @@ pub(crate) fn draw_unavailable(
                 .is_some_and(|notice| !notice.trim().is_empty())
             {
                 app.tr(
-                    "Couldn't connect to PCController. Check that it is running, then try again.",
+                    "Couldn't connect to PCController.\nCheck that it is running, then try again.",
                 )
             } else {
                 app.tr(if requested {
@@ -231,6 +235,7 @@ pub(crate) fn draw_unavailable(
     let preferences = app.tr("Hardware preferences");
     let response = empty_card(
         ui,
+        app.rtl,
         &title,
         &detail,
         diagnostic.as_deref().map(|detail| ConnectionHint {
@@ -295,6 +300,49 @@ mod tests {
         output
     }
     #[test]
+    fn connection_copy_uses_the_leading_edge_and_an_explicit_instruction_line() {
+        let english="Couldn't connect to PCController.\nCheck that it is running, then try again.";
+        for rtl in [false,true] {for width in [220.0,390.0,640.0] {for scale in [1.0,1.5,2.0] {
+        for dark in [false,true] {for diagnostic in [false,true] {
+            let ctx=egui::Context::default();ctx.set_pixels_per_point(scale);
+            ctx.set_theme(if dark {egui::Theme::Dark} else {egui::Theme::Light});
+            crate::ui::i18n::configure_ui_fonts(&ctx,rtl);
+            let screen=egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(width,500.0));
+            // Resolve pending DPI/viewport sizing before measuring the card.
+            for _ in 0..2 {
+                let mut warm=ctx.run_ui(egui::RawInput {screen_rect:Some(screen),..Default::default()},|_|{});
+                warm.textures_delta.clear();
+            }
+            let detail=crate::ui::i18n::tr(if rtl {crate::config::AppLanguage::Persian} else {crate::config::AppLanguage::English},english);
+            let mut bounds=egui::Rect::NOTHING;
+            let mut output=ctx.run_ui(egui::RawInput {
+                screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(width,500.0))),..Default::default()
+            },|ui| {
+                let response=empty_card(ui,rtl,"Connecting to PCController…",&detail,
+                    diagnostic.then_some(ConnectionHint {title:"Connection details",copy:"Copy",detail:DIAGNOSTIC}),
+                    true,None,"Hardware preferences");
+                assert_eq!(response.inner,None);bounds=response.response.rect;
+            });
+            output.textures_delta.clear();
+            let text=output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text()==detail=>Some(text),_=>None
+            }).expect("Connection summary");
+            assert!(text.galley.text().contains('\n'));
+            let expected=if rtl {bounds.right()-17.0} else {bounds.left()+17.0};
+            for row in &text.galley.rows {
+                let edge=if rtl {text.pos.x+row.rect().right()} else {text.pos.x+row.rect().left()};
+                assert!((edge-expected).abs()<1.1,"Wrong message edge: rtl={rtl}, width={width}, scale={scale}, diagnostic={diagnostic}, edge={edge}, expected={expected}");
+            }
+            if width==640.0 && !rtl {
+                assert_eq!(text.galley.rows.len(),2);
+                let instruction:String=text.galley.rows[1].glyphs.iter().map(|glyph|glyph.chr).collect();
+                assert!(instruction.starts_with("Check that"),"Instruction must begin on its own line");
+            }
+            assert!(bounds.right()<=width+0.1,"Card overflow: rtl={rtl}, width={width}, scale={scale}, diagnostic={diagnostic}, bounds={bounds:?}");
+            assert!(!has_text(&output,"PEALAYER_PCCONTROLLER_LIBRARY"));
+        } } } } }
+    }
+    #[test]
     fn connection_errors_are_plain_by_default_and_the_info_control_reveals_full_details() {
         for width in [220.0, 320.0, 640.0] {
             for light in [false, true] {
@@ -306,6 +354,7 @@ mod tests {
                 });
                 crate::ui::i18n::configure_ui_fonts(&ctx, false);
                 let mut app = crate::app::PealayerApp::default();
+                app.engine_handle = crate::four_d::engine::memory_only_test_engine();
                 app.is_connected = false;
                 app.connection_notice = Some(DIAGNOSTIC.into());
                 let _ = render(&ctx, &mut app, width, vec![]);
@@ -361,6 +410,7 @@ mod tests {
     fn catalog_errors_do_not_claim_a_lost_controller_connection() {
         let ctx = egui::Context::default();
         let mut app = crate::app::PealayerApp::default();
+        app.engine_handle = crate::four_d::engine::memory_only_test_engine();
         app.is_connected = true;
         app.connection_notice = Some(DIAGNOSTIC.into());
         let _ = render(&ctx, &mut app, 400.0, vec![]);
@@ -417,6 +467,7 @@ mod tests {
                         let clip = ui.clip_rect();
                         let response = empty_card(
                             ui,
+                            false,
                             "Hardware Disconnected",
                             "Connect to PCController to discover live board controls.",
                             None,

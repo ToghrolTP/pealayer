@@ -1,7 +1,7 @@
 export type UiLocale = 'en' | 'fa';
 
 const fa: Record<string, string> = {
-  "Couldn't connect to PCController. Check that it is running, then try again.": 'اتصال به PCController برقرار نشد. مطمئن شوید برنامه در حال اجراست، سپس دوباره تلاش کنید.',
+  "Couldn't connect to PCController.\nCheck that it is running, then try again.": 'اتصال به PCController برقرار نشد.\nمطمئن شوید برنامه در حال اجراست، سپس دوباره تلاش کنید.',
   "Couldn't load the hardware controls. Try refreshing the connection.": 'کنترل‌های سخت‌افزار بارگیری نشد. اتصال را تازه‌سازی کنید.',
   'Connection details': 'جزئیات اتصال',
   'Hardware Disconnected': 'سخت‌افزار قطع است',
