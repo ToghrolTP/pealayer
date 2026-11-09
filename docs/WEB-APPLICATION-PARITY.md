@@ -129,6 +129,13 @@ external pause/resume clock anchoring and native reveal-button availability.
 The installed local checkpoint includes real-player decoder tests and native
 captures; it does not claim new React toolbar gestures or remote deployment.
 
+[Movable monitor volume](verification/movable-monitor-volume.md) removes the
+fixed native/Web monitor slider in favor of the existing movable speaker action's
+complete volume group. NLE defaults hide redundant track pickers and place
+Fullscreen last. The saved action format and Simple workspace remain unchanged;
+native gestures/captures, Web source checks and local delivery are recorded
+separately from live browser/user acceptance and deferred Cafe deployment.
+
 Control-bar follow-up (12 October): [shared customization](verification/control-bar-customization.md)
 covers native Simple/Program Monitor and Web player/Monitor action menus,
 saved ordering, logical start/end placement and hide/restore. Native gesture

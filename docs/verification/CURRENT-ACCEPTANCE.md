@@ -20,7 +20,9 @@ passed forbidden/empty/changing-access parent cases; Cafe remains deferred.
 
 [Movable monitor volume](movable-monitor-volume.md) tracks grouped speaker/slider
 customization, hidden-by-default NLE track pickers, final Fullscreen placement
-and the requested instance's enabled hover thumbnails.
+and the requested instance's enabled hover thumbnails. The canonical local
+update is installed; native 720/1200/1800-point captures and test/receipt details
+are in PR #259. Cafe remains deferred.
 
 [Paused playback and track state](paused-playback-and-track-state.md) records
 external pause-clock anchoring, paused dual-preview stability, internal exact
