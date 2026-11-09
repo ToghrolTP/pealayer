@@ -23,7 +23,9 @@ round-tripping. Cafe delivery remains user-deferred/offline.
 crop and original before image for merged #253, superseding its pending-publication
 prose. The private full-window movie capture remains private. Merged #271 also has
 enlarged native header before/after images in its PR description. The full 12-image
-history in #228 remains intact. [Publication and merge procedure](github-publication.md)
+history in #228 remains intact. [About layout](about-dialog-layout.md) now has its
+missing real native capture too. The fresh combined native library suite passes
+1,301 tests, with six opt-in checks ignored. [Publication and merge procedure](github-publication.md)
 requires public-image verification and confirmed merges, not merely local evidence
 or a queued merge. #248 remains explicitly user-held and #227 remains unfinished.
 

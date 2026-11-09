@@ -229,7 +229,7 @@ The real before/after/editor images are embedded directly in PR #273 using
 immutable public image URLs. Public HTTP image responses and GitHub-rendered
 Markdown were checked, rather than treating local captures as publication.
 The related CraftUI header repair #271 now has its enlarged image pair in its
-description too. PortableShell #84 is merged with all 35 checks successful.
+description too. PortableShell #84 is merged with all upstream checks successful.
 
 The full Linux integration run exposed three stale assertions in
 `tests/workspace_dock_test.rs`: the catalog still expected six panes, and default
@@ -238,3 +238,6 @@ visible. Terminal is intentionally the seventh, optional, hidden-by-default pane
 The corrected suite preserves those defaults and additionally verifies explicit
 Terminal reveal and serialization beside Timeline: 14 tests passed locally.
 This changes test coverage and documentation, not the already-installed app code.
+The final combined isolated native library run also passed: 1,301 tests, zero
+failures, six opt-in checks ignored. The missing inherited About capture is now
+published in `about-dialog-layout.md`, without changing application code.
