@@ -26,7 +26,23 @@ the actual sequence view changing scale without changing cue values/timing.
 The existing designer wheel-navigation regression is retained as a separate
 check, preserving pointer anchoring and outside-canvas wheel ownership.
 
-Package, installed runtime and host-specific deployment are separate receipts;
-source/egui checks alone are not live keyboard acceptance. Cafe remains
-user-deferred offline until its connection returns. The queued native
-media-discovery work is preserved in this build, not replaced by an older base.
+## Local delivery receipt
+
+- Clean packaged source: `85993976d334eb5c858af3ec4c6d54c797c81f66`.
+- Installed canonical executable SHA-256:
+  `59a6e37c8390d4d77011f413d7eb5f25b0b082247062c9f807ffeeb969acda98`.
+- Reused canonical staging/cache; release build, native/quick-action resources,
+  libmpv smoke and Web bundle integrity passed.
+- Fresh native authoring was clean. The graceful updater restarted the existing
+  app and acknowledged the exact executable digest; its local process API
+  independently reports the packaged source. The historical comparison was
+  left untouched, and `keyboard_shortcuts_enabled` remains true.
+- Paused playback stayed at exactly 578286 ms. Native OS media-session readback
+  still matches title/state/position/duration/rate, with artwork present; the
+  queued media-discovery fixes are now installed too.
+
+Source/egui checks and installed identity are not physical keyboard acceptance;
+the user has been asked to verify the keys in the two views and a text field.
+Cafe remains user-deferred offline until its connection returns. General CI and
+the stacked PR merge are separate gates, not reasons to replace the validated
+runtime with an older base.
