@@ -18,6 +18,9 @@
 5. Update outdated claims such as "screenshots pending" after publication. For
    historical requests, retain the actual chronological builds and distinguish
    layout changes from conditional states; never fabricate missing telemetry.
+   Inspect every crop individually: a successful image response or distinct hash
+   does not prove it contains the intended UI. The capability-era history image
+   once showed the timeline instead of the status bar despite valid publication.
 
 ## Finish the authorized merge
 
