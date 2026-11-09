@@ -235,6 +235,20 @@ jobs:
         # same serial test policy as Linux/macOS; --jobs controls compilation,
         # not the number of concurrently executing tests.
         run: cargo test --locked --jobs 1 --target x86_64-pc-windows-gnu -- --test-threads=1
+      - name: "🧩 Optional workspace feature gates"
+        if: runner.os == 'Linux'
+        run: |
+          cargo check --locked --lib --no-default-features
+          cargo check --locked --lib --no-default-features --features workspace-toolbar
+          cargo check --locked --lib --no-default-features --features workspace-terminal
+      - name: "🧪 Owned terminal PTY lifecycle"
+        if: runner.os == 'Linux'
+        timeout-minutes: 3
+        env:
+          PEALAYER_CONFIG_FILE: ${{ runner.temp }}/pealayer-terminal-tests.json
+          PEALAYER_INSTANCE_ID: terminal-ci-fixture
+          PEALAYER_TEST_PTY_FIXTURE: "1"
+        run: cargo test --locked --lib portable_pty_preserves_unicode_resize_exit_and_owned_child_cancellation -- --ignored --test-threads=1
       - name: "🚀 Build release binary"
         if: runner.os != 'Windows'
         run: cargo build --release --locked -p pealayer -p pealayer-downloader

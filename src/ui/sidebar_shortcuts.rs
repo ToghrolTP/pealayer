@@ -98,14 +98,14 @@ impl RailAction {
             _ => icons::INFO,
         }
     }
-    fn available(self, app: &mut PealayerApp) -> bool {
+    pub(crate) fn available(self, app: &mut PealayerApp) -> bool {
         if self == Self::RfManager {
             let caps = app.advertised_hardware();
             return super::hardware_monitor::show_rf(app.is_connected, caps.as_ref());
         }
         true
     }
-    fn activate(self, app: &mut PealayerApp, ctx: &egui::Context) {
+    pub(crate) fn activate(self, app: &mut PealayerApp, ctx: &egui::Context) {
         if !self.available(app) {
             return;
         }

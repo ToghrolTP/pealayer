@@ -1482,7 +1482,13 @@ fn render_contract_control(
             }
         }
         PreferenceControlKind::File => {
-            let executable = control.key == "external_mpv.executable";
+            let player_executable = control.key == "external_mpv.executable";
+            let terminal_executable = matches!(control.key, "ui.terminal.shell_program" | "ui.terminal.portable_shell_program");
+            let executable = player_executable || terminal_executable;
+            let picker_title = if terminal_executable { "Choose terminal executable" }
+                else if executable { "Choose mpv executable" } else { "Choose an image file" };
+            let reset_label = if terminal_executable { "Use default shell" }
+                else if executable { "Use default player" } else { "Use default icon" };
             let mut resolving_allowed = true;
             let mut refresh_resolution = false;
             let mut text = current.as_str().unwrap_or_default().to_string();
@@ -1500,14 +1506,16 @@ fn render_contract_control(
                     edited |= text != normalized; text = normalized;
                     refresh_resolution = true;
                 }
-                if controls.1.on_hover_text(tr(if executable { "Choose mpv executable" } else { "Choose an image file" })).clicked() {
-                    if crate::peer::active() {
+                if controls.1.on_hover_text(tr(picker_title)).clicked() {
+                    if crate::peer::active() && !terminal_executable {
                         crate::ui::peer_browser::open(ui.ctx(), crate::ui::peer_browser::Purpose::PreferenceFile {
                             key: control.key.to_owned(), extensions: control.file_extensions.iter().map(|extension| (*extension).to_owned()).collect(),
                         }, None);
                     } else {
-                        let mut dialog = rfd::FileDialog::new().set_title(tr(if executable { "Choose mpv executable" } else { "Choose an image file" }))
-                            .add_filter(if executable { "Executable" } else { "Images" }, &control.file_extensions);
+                        let mut dialog = rfd::FileDialog::new().set_title(tr(picker_title));
+                        if !control.file_extensions.is_empty() {
+                            dialog = dialog.add_filter(if executable { "Executable" } else { "Images" }, &control.file_extensions);
+                        }
                         if let Some(parent) = std::path::Path::new(&text).parent().filter(|parent| parent.is_dir()) {
                             dialog = dialog.set_directory(parent);
                         }
@@ -1517,18 +1525,17 @@ fn render_contract_control(
                         }
                     }
                 }
-                if controls.2.on_hover_text(tr(if executable { "Use default player" } else { "Use default icon" })).clicked() {
-                    text = if executable { "mpv".into() } else { String::new() };
+                if controls.2.on_hover_text(tr(reset_label)).clicked() {
+                    text = if player_executable { "mpv".into() } else { String::new() };
                     edited = true;
                 }
             });
-            if executable {
+            if player_executable {
                 if refresh_resolution { ui.data_mut(|data| data.remove::<String>(ui.id().with("resolved-player-request"))); }
                 resolved_player_hint(ui, &text, resolving_allowed);
             }
             if edited {
-                replacement = Some(if text.trim().is_empty() && !executable { serde_json::Value::Null }
-                    else { serde_json::Value::String(text.trim().to_owned()) });
+                replacement = Some(preference_text_value(control.key, &text, executable));
             }
         }
         PreferenceControlKind::Color => {
@@ -1554,11 +1561,7 @@ fn render_contract_control(
                         .hint_text(control.placeholder.unwrap_or_default()),
                 ) };
                 if response.changed() {
-                    replacement = Some(if text.trim().is_empty() {
-                        serde_json::Value::Null
-                    } else {
-                        serde_json::Value::String(text.trim().to_string())
-                    });
+                    replacement = Some(preference_text_value(control.key, &text, false));
                 }
             });
         }
@@ -1569,6 +1572,12 @@ fn render_contract_control(
     replacement
         .is_some_and(|replacement| set_value_at_path(values, control.key, replacement).is_ok())
         || companion_changed
+}
+
+fn preference_text_value(key: &str, text: &str, executable: bool) -> serde_json::Value {
+    if text.trim().is_empty() && !executable && !key.starts_with("ui.terminal.") {
+        serde_json::Value::Null
+    } else { serde_json::Value::String(text.trim().to_owned()) }
 }
 
 fn resolved_player_hint(ui: &mut egui::Ui, input: &str, resolving_allowed: bool) {
@@ -2093,6 +2102,8 @@ fn preference_control_icon(name: &str) -> &'static str {
         "text-t" => TEXT_T,
         "list-checks" => LIST_CHECKS,
         "pencil-simple" => PENCIL_SIMPLE,
+        "terminal-window" => TERMINAL_WINDOW,
+        "plug" => PLUG,
         _ => GEAR,
     }
 }
@@ -2105,6 +2116,8 @@ fn preference_option_icon(icon: Option<&str>) -> &'static str {
         "virtual" => crate::ui::icons::CIRCUITRY,
         "loopback" => crate::ui::icons::ARROW_CLOCKWISE,
         "globe" => crate::ui::icons::GLOBE,
+        "plug" => crate::ui::icons::PLUG,
+        "terminal-window" => crate::ui::icons::TERMINAL_WINDOW,
         _ => crate::ui::icons::LINK,
     }
 }
@@ -2167,6 +2180,7 @@ fn section_icon(section: &str) -> &'static str {
         "input" => crate::ui::icons::SLIDERS_HORIZONTAL,
         "timeline_toolbar" => crate::ui::icons::SLIDERS_HORIZONTAL,
         "sidebar_rail" => crate::ui::icons::TABS,
+        "workspace_tools" => crate::ui::icons::TERMINAL_WINDOW,
         "web" => crate::ui::icons::GLOBE,
         _ => crate::ui::icons::GEAR,
     }
@@ -2194,6 +2208,8 @@ fn group_icon(group: &str) -> &'static str {
         "Typography" => crate::ui::icons::TEXT_T,
         "Timeline toolbar" => crate::ui::icons::SLIDERS_HORIZONTAL,
         "Sidebar rail" | "Shortcuts" => crate::ui::icons::TABS,
+        "Command toolbar" => crate::ui::icons::COMMAND,
+        "Terminal" | "Terminal connection" | "Terminal appearance" => crate::ui::icons::TERMINAL_WINDOW,
         "Windows graphics and composition" | "Dialog windows" => crate::ui::icons::APP_WINDOW,
         _ => crate::ui::icons::GEAR,
     }
@@ -2207,6 +2223,7 @@ fn section_heading(section: &str) -> &'static str {
         "input" => "Keyboard, mouse, and gesture bindings",
         "timeline_toolbar" => "Timeline toolbar",
         "sidebar_rail" => "Sidebar rail",
+        "workspace_tools" => "Workspace tools",
         "web" => "Web UI and network APIs",
         _ => "Configuration",
     }
@@ -2215,6 +2232,16 @@ fn section_heading(section: &str) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn clearing_terminal_preferences_returns_to_defaults_without_null_strings() {
+        for key in ["ui.terminal.controller_endpoint", "ui.terminal.shell_program", "ui.terminal.shell_arguments",
+            "ui.terminal.portable_shell_program", "ui.terminal.portable_shell_arguments"] {
+            assert_eq!(preference_text_value(key, "  ", false), serde_json::json!(""));
+        }
+        assert!(preference_text_value("app_icon_default", "", false).is_null());
+        assert_eq!(preference_text_value("external_mpv.executable", "mpv", true), serde_json::json!("mpv"));
+    }
 
     fn accent_frame(ctx: &egui::Context, control: &PreferenceControl, values: &mut serde_json::Value,
         events: Vec<egui::Event>) -> egui::FullOutput {
