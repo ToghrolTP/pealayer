@@ -20,8 +20,10 @@ passed forbidden/empty/changing-access parent cases; Cafe remains deferred.
 
 [Shortcut field keycaps](shortcut-keycaps.md) renders application shortcut values
 as individual keys inside their inputs, retaining normal editing on focus and
-unchanged binding/storage semantics. Native/Web tests and delivery evidence are
-tracked in the linked receipt.
+unchanged binding/storage semantics. The update is installed and its actual
+native screenshot inspected; 566 native UI checks and 24 Web browser cases
+passed. Delivery, images and the open helper's inspection caveat are tracked
+in the linked receipt.
 
 [Native icon picker header](icon-picker-header.md) unifies the search field and
 trailing List/Grid segmented control. Its magnifier is inside the input, controls
