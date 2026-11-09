@@ -32,6 +32,7 @@ pub mod icons;
 pub(crate) mod keycaps;
 pub mod layout;
 mod timeline_toolbar;
+pub(crate) mod zoom_shortcuts;
 pub(crate) mod timeline_strip;
 pub mod media_inspector;
 pub mod media_track_properties;

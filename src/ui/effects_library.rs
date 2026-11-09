@@ -2165,6 +2165,13 @@ fn draw_sequence_timeline(
                         }
                     });
                 });
+            let zoom_shortcut = crate::ui::zoom_shortcuts::take(ui,
+                crate::platform::interop::get_live_config().keyboard_shortcuts_enabled);
+            if let Some(factor) = zoom_shortcut {
+                pending_wheel = Some((super::layout::TimelineWheelAction::MultiGesture {
+                    zoom_factor: factor, translation: egui::Vec2::ZERO,
+                }, scroll.inner_rect.center().x));
+            }
             if let Some((action, pointer_x)) = pending_wheel {
                 let (new_zoom, new_offset) = sequence_wheel_navigation(zoom, scroll.state.offset(),
                     scroll.inner_rect, scroll.content_size, label_width, duration_ms, action, pointer_x);
@@ -4320,6 +4327,32 @@ mod tests {
                 unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, 30.0), modifiers: egui::Modifiers::CTRL, phase: egui::TouchPhase::Move, source: egui::MouseWheelSource::Wheel,
             }], &mut draft, &mut selected);
             assert_eq!(context.data_mut(|data| data.get_persisted::<f32>(zoom_id).unwrap()), zoom);
+        }
+    }
+
+    #[test]
+    fn designer_zoom_shortcuts_change_only_view_scale_and_preserve_cues() {
+        let context = egui::Context::default();
+        let mut draft = ControllerEffectDraft::default();
+        draft.steps = vec![crate::four_d::controller::HardwareMacroStep {
+            kind:"pwm".into(),target:Some(1),value:Some(50),duration_ms:Some(60_000),..Default::default()
+        }];
+        let original = draft.steps.clone();
+        let mut selected = 0;
+        let zoom_id = egui::Id::new((("effect-sequence-timeline",draft.reference.clone(),draft.id.clone()),"zoom"));
+        for key in [None,None,Some(egui::Key::Equals),Some(egui::Key::Minus)] {
+            let mut output = context.run_ui(egui::RawInput {
+                screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(1000.0,700.0))),
+                events:key.map(|key|vec![egui::Event::Key {key,physical_key:Some(key),pressed:true,repeat:false,modifiers:if key==egui::Key::Equals {egui::Modifiers::SHIFT} else {egui::Modifiers::NONE}}]).unwrap_or_default(),
+                ..Default::default()
+            }, |_| {
+                egui::Window::new("Effects Designer fixture").order(egui::Order::Foreground).show(&context,|ui|
+                    draw_sequence_timeline(ui,&mut draft,&mut selected,true,true,None,Default::default()));
+            });
+            output.textures_delta.clear();
+            let zoom=context.data_mut(|data|data.get_persisted::<f32>(zoom_id).unwrap());
+            assert_eq!(zoom,if key==Some(egui::Key::Equals) {112.5} else {90.0});
+            assert_eq!(draft.steps,original,"zoom must not edit cue timing/values");
         }
     }
 

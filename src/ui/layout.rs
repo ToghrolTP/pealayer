@@ -8682,6 +8682,31 @@ mod timeline_row_tests {
     use super::*;
 
     #[test]
+    fn timeline_zoom_shortcuts_work_without_canvas_focus_and_never_seek() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.engine_handle = crate::four_d::engine::memory_only_test_engine();
+        app.duration = 60.0;
+        app.timeline_zoom = 100.0;
+        app.timeline_animated_navigation = false;
+        app.timeline_follow_playhead = false;
+        app.is_paused = true;
+        app.playback_time = 12.34;
+        let ctx = egui::Context::default();
+        for key in [None, None, Some(egui::Key::Plus), Some(egui::Key::Minus)] {
+            let mut output = ctx.run_ui(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(1000.0,420.0))),
+                events: key.map(|key|vec![egui::Event::Key {key,physical_key:Some(key),pressed:true,repeat:false,modifiers:egui::Modifiers::NONE}]).unwrap_or_default(),
+                ..Default::default()
+            }, |ui|PealayerTabViewer::new(&mut app).ui(ui,&mut PealayerTab::Timeline));
+            output.textures_delta.clear();
+            assert_eq!(app.timeline_zoom, if key == Some(egui::Key::Plus) {125.0} else {100.0});
+            assert_eq!(app.playback_time,12.34);
+            assert_eq!(app.seek_pos,None);
+        }
+    }
+
+    #[test]
     fn actual_media_strip_paint_follows_palette_and_keeps_names_visible_after_panning() {
         let _guard=crate::app::tests::lock_app_tests();
         for palette in [crate::config::ColorPalette::Native,crate::config::ColorPalette::Studio] {
@@ -19064,9 +19089,16 @@ impl<'a> PealayerTabViewer<'a> {
                                 }
                             }
 
-                            // Timeline-local shortcuts mirror the visible toolbar. They only
-                            // fire while the canvas owns keyboard focus, so text fields and the
-                            // rest of the application retain their normal keys.
+                            // Zoom is available without first focusing the canvas, but a
+                            // front dialog/editor, popup or text field keeps its own input.
+                            if !self.app.show_effect_library_editor
+                                && let Some(factor) = crate::ui::zoom_shortcuts::take(ui, self.app.keyboard_shortcuts_enabled)
+                            {
+                                pending_timeline_toolbar_action = Some(if factor > 1.0 {
+                                    TimelineToolbarAction::ZoomIn
+                                } else { TimelineToolbarAction::ZoomOut });
+                            }
+                            // Other timeline-local shortcuts still require canvas focus.
                             let timeline_layer = ui.layer_id();
                             let timeline_popup_open = egui::Popup::is_any_open(ui.ctx());
                             if self.app.keyboard_shortcuts_enabled && ui.ctx().memory(|memory| {
@@ -19085,15 +19117,6 @@ impl<'a> PealayerTabViewer<'a> {
                                 if keyboard_pan != 0.0 { held_timeline_pan = keyboard_pan; }
                                 let shortcut_action = ui.input(|input| {
                                     if input.modifiers.is_none()
-                                        && (input.key_pressed(egui::Key::Plus)
-                                            || input.key_pressed(egui::Key::Equals))
-                                    {
-                                        Some(TimelineToolbarAction::ZoomIn)
-                                    } else if input.modifiers.is_none()
-                                        && input.key_pressed(egui::Key::Minus)
-                                    {
-                                        Some(TimelineToolbarAction::ZoomOut)
-                                    } else if input.modifiers.is_none()
                                         && input.key_pressed(egui::Key::C)
                                     {
                                         Some(TimelineToolbarAction::BringPlayheadIntoView)
