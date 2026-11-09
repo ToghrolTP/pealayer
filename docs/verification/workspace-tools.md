@@ -222,3 +222,19 @@ profile discovery, physical controller effects and full-screen-TUI compatibility
 are separate acceptance gates; the Windows fixtures/captures do not claim them.
 One upstream header retains its original extra blank EOF line; the file-specific
 whitespace attribute preserves its pinned bytes while keeping other checks on.
+
+## Publication and integration-test follow-up
+
+The real before/after/editor images are embedded directly in PR #273 using
+immutable public image URLs. Public HTTP image responses and GitHub-rendered
+Markdown were checked, rather than treating local captures as publication.
+The related CraftUI header repair #271 now has its enlarged image pair in its
+description too. PortableShell #84 is merged with all 35 checks successful.
+
+The full Linux integration run exposed three stale assertions in
+`tests/workspace_dock_test.rs`: the catalog still expected six panes, and default
+layout round-trip/fallback assumed every catalog pane except Media Inspector was
+visible. Terminal is intentionally the seventh, optional, hidden-by-default pane.
+The corrected suite preserves those defaults and additionally verifies explicit
+Terminal reveal and serialization beside Timeline: 14 tests passed locally.
+This changes test coverage and documentation, not the already-installed app code.
