@@ -23,6 +23,49 @@ hover/press from shifting the title or its neighbors. An inactive tab's × close
 that tab, not the group's selected panel. Lock and modal shielding remain in
 effect.
 
+## Header alignment
+
+CraftUI originally centered the combined icon/title line box while the
+application's close control centered its visible glyph. Icon fallback fonts
+and the UI text font have different baseline and line-gap metrics, so the
+three visible elements could sit at slightly different heights.
+
+The adapter now centers the final painted icon and caption independently on
+the actual tab rectangle, sharing the close button's centerline. It uses the
+visible glyph geometry after truncation, including RTL shaping, rather than a
+font-specific vertical offset. Logical text, tab widths, horizontal placement,
+hit targets and drag/close/menu behavior keep their existing ownership. Titles
+are aligned even when the optional close button is hidden. Floating tabs use
+their own layer and rectangle.
+
+The regression measures the separately painted icon and caption against the
+actual upstream tab rectangle in both languages, themes and four display scales,
+with docked/floating panels and close controls shown/hidden. Existing pointer,
+lock/modal, inactive-tab close, overflow and collapse tests remain required.
+All nine CraftUI tests and twelve egui Dock regressions passed. Actual wide and
+narrow native captures were inspected with the same Studio dark palette and
+1.5× display scale. These header crops are enlarged 4× using nearest-neighbor
+presentation; their UI pixels and geometry are otherwise unchanged.
+
+Before:
+
+![CraftUI header before vertical alignment correction](../screenshots/craft-header-alignment-before.png)
+
+After:
+
+![CraftUI header with centered icon, title and close control](../screenshots/craft-header-alignment-after.png)
+
+The clean package at `832f77b7c1ea72b247fe3c682bacdb218ca5fa05` passed its
+libmpv/runtime, resource, downloader and Web/PWA package checks. Executable SHA-256:
+`a3036be1469197c50099b10b93c892d074a465bbe5834381de2b8831ba181efb`.
+The process-local authoring gate was clean before the guarded updater ran.
+The restarted canonical application acknowledged that exact build and digest,
+retaining paused playback at 578286 ms and its existing libmpv runtime digest
+`e56ce67cd00f06a59dc7ed5b97a49a9182a381554c755dc4570a52af1ef30e65`.
+Cafe delivery remains user-deferred while its normal connection is unavailable.
+
+## Collapse behavior
+
 Collapse is not Close. Existing dock groups and floating windows use Craft's
 minimization action. Split-tree tab groups retain their panel membership and
 normal split dimensions; a persisted local view projects collapsed rows to
