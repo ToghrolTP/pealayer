@@ -9,6 +9,7 @@ import { DEFAULT_VISIBILITY, WIDGETS, orderedWidgets, displayedWidgets, widgetVi
 import type { StatusWidget, StatusBarVisibility, FpsMode, ChartMetric, ChartSample } from '../statusWidgets';
 import { workspaceGlyph } from '../workspacePresentation';
 import { selectedWorkspace } from '../workspaces';
+import {FrameRateTooltip} from './FrameRateTooltip';
 export type { StatusBarVisibility } from '../statusWidgets';
 
 interface ApplicationStatusBarProps {
@@ -120,9 +121,12 @@ export const ApplicationStatusBar: React.FC<ApplicationStatusBarProps> = ({ stat
   };
   const content = (widget: StatusWidget): React.ReactNode => {
     switch (widget) {
-      case 'fps': return <button type="button" className="app-statusbar__fps" onClick={() => changeMode(nextFpsMode(config.fps_mode))}
-        title={`${tr(locale, MODE_LABELS[config.fps_mode])} · ${tr(locale, screenRate ? 'Screen render rate' : 'Media frame rate')} · ${tr(locale, 'Click to switch frame rate source')}`}>
-        {screenRate ? <DashboardOutlined /> : <VideoCameraOutlined />}<span className="status-fps-value">{rate != null && Number.isFinite(rate) && rate > 0 && (screenRate || state.current_video) ? `${rate.toFixed(2)} fps` : '— fps'}</span></button>;
+      case 'fps': return <FrameRateTooltip mediaRate={state.current_video ? state.media_fps : undefined} uiRate={state.ui_fps}
+        screenRate={screenRate} automatic={config.fps_mode === 'auto'} locale={locale}>
+        <button type="button" className={`app-statusbar__fps${screenRate ? ' is-screen-rate' : ''}`} onClick={() => changeMode(nextFpsMode(config.fps_mode))}
+          aria-label={tr(locale, 'Frame rate')}>
+          {screenRate ? <DashboardOutlined /> : <VideoCameraOutlined />}<span className="status-fps-value">{rate != null && Number.isFinite(rate) && rate > 0 && (screenRate || state.current_video) ? `${rate.toFixed(2)} fps` : '— fps'}</span></button>
+      </FrameRateTooltip>;
       case 'connection': { const availability = hardwareAvailability(state, connected); return <>
         {config.connection_icon === 'circle' ? <i className="status-connection-dot" /> : config.connection_icon === 'none' ? null : config.connection_icon === 'controller' ? <DashboardOutlined /> : <ApiOutlined />}
         <span className="status-connection-caption">{availability === 'ok' ? state.hardware?.board_name || state.hardware_details?.board_name || 'PCController' : tr(locale, hardwareLabels[availability])}
@@ -169,7 +173,7 @@ export const ApplicationStatusBar: React.FC<ApplicationStatusBarProps> = ({ stat
           style={widget==='connection' && config.connection_mode ? {minWidth:252} : METRICS.includes(widget as ChartMetric) ? {color: config.semantic_colors && (widget==='temperature' && telemetry?.hot===true) ? 'var(--red)'
             : config.semantic_colors && (()=>{ const index=METRICS.indexOf(widget as ChartMetric), value=[voltage,current,temperature][index], [low,high]=config.metric_limits[index];
                 return value!=null && (low!=null && value<low || high!=null && value>high); })() ? 'var(--amber)' : 'var(--muted)'} : undefined}
-          data-status-widget={widget} title={label(widget)} draggable onContextMenu={(event) => event.stopPropagation()}
+          data-status-widget={widget} title={widget === 'fps' ? undefined : label(widget)} draggable onContextMenu={(event) => event.stopPropagation()}
           onClick={()=>{ if(['connection','voltage','current','temperature','status_rgb','hot','warnings'].includes(widget)) onNavigate('hardware');
             else if(widget==='timeline') onNavigate('studio');
             else if(widget==='progress') onNavigate(operationDestination(operations[0]?.source));

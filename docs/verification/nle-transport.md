@@ -19,6 +19,21 @@ eight widths, track-before-volume ordering, actual track/volume widget bounds,
 and enabled/disabled/active styling in both palettes and light/dark themes.
 The shared elapsed, seek, chapter and nudge behavior is unchanged.
 
+## Duration clipboard action
+
+Duration now exposes the same icon-labelled Copy action as Elapsed, before
+the existing playback menu. Simple/fullscreen and NLE use one shared duration
+widget. It copies the displayed total or negative remaining time, respecting
+the selected precision; live/unknown-duration placeholders are not copied.
+Left-click duration/remaining toggling is unchanged.
+
+All 24 focused native transport tests pass. The rendered pointer regression
+opens the real menu and clicks Copy at 320, 768 and 1440-point widths for both
+time modes and precisions, checking the actual clipboard command, unchanged
+playhead and no duration-mode toggle. This is automated egui interaction
+coverage, not an installed human walkthrough. Cafe deployment remains deferred
+until the user restores its connection.
+
 Twenty-two shared transport tests and four NLE tests passed. Windows packaging
 passed Web/PWA guardrails, resources/icons, libmpv smoke and downloader smoke.
 Package-wide tests and UPX were skipped for this incremental delivery.

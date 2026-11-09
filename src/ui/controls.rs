@@ -5,6 +5,24 @@ const CONTROL_FADE_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::
 
 /// Transport intent is independent of the user's accent. All interaction
 /// states keep the same stroke width, so hover/focus cannot shift the glyph.
+pub(crate) fn transport_button<'a>(
+    palette: crate::config::ColorPalette,
+    ui: &egui::Ui,
+    icon: &'a str,
+    role: &str,
+) -> egui::Button<'a> {
+    let dark = ui.visuals().dark_mode;
+    let intent = crate::ui::palette::color(palette, dark, role);
+    let surface = crate::ui::palette::color(palette, dark, "surface-2");
+    egui::Button::new(egui::RichText::new(icon).color(intent))
+        .fill(egui::Color32::from_rgb(
+            ((surface.r() as u16 * 88 + intent.r() as u16 * 12) / 100) as u8,
+            ((surface.g() as u16 * 88 + intent.g() as u16 * 12) / 100) as u8,
+            ((surface.b() as u16 * 88 + intent.b() as u16 * 12) / 100) as u8,
+        ))
+        .stroke(egui::Stroke::new(1.0, intent.gamma_multiply(0.45)))
+}
+
 pub(crate) fn playback_button_role(app: &PealayerApp) -> &'static str {
     if app.is_paused || app.is_playback_finished() { "green" } else { "amber" }
 }
@@ -39,6 +57,36 @@ pub(crate) fn contextual_transport_style(
     if active { tint(&mut style.visuals.widgets.inactive); }
 }
 
+pub(crate) fn draw_contextual_transport_button(
+    palette: crate::config::ColorPalette,
+    ui: &mut egui::Ui,
+    icon: &str,
+    role: &str,
+    active: bool,
+) -> egui::Response {
+    ui.scope(|ui| {
+        let enabled = ui.is_enabled();
+        contextual_transport_style(ui.style_mut(), palette, role, active, enabled);
+        ui.add_sized([30.0, 22.0], egui::Button::new(icon))
+    }).inner
+}
+
+/// A bounded horizontal volume strip, shared by responsive monitor layouts.
+/// Session commands also control the authority when this app is a consumer.
+pub(crate) fn draw_volume_strip(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    let (toggle_mute, volume_update) = draw_volume_widgets(
+        ui, app.color_palette, app.is_muted, app.volume,
+        &app.tr(if app.is_muted { "Unmute" } else { "Mute" }), &app.tr("Volume"));
+    if toggle_mute {
+        app.apply_interop_command(&ui.ctx().clone(), crate::platform::interop::InteropCommand::ToggleMute,
+            "Volume control");
+    }
+    if let Some(volume) = volume_update {
+        app.apply_interop_command(&ui.ctx().clone(), crate::platform::interop::InteropCommand::SetVolume { value: volume },
+            "Volume control");
+    }
+}
+
 /// The customizable bar owns Mute; keep its slider and percentage independent.
 pub(crate) fn draw_volume_slider(app: &mut PealayerApp, ui: &mut egui::Ui) {
     if let Some(value) = volume_slider_widgets(ui, app.volume, &app.tr("Volume")) {
@@ -47,91 +95,31 @@ pub(crate) fn draw_volume_slider(app: &mut PealayerApp, ui: &mut egui::Ui) {
     }
 }
 
-pub(super) fn draw_volume_widgets(
-    ui: &mut egui::Ui,
-    _palette: crate::config::ColorPalette,
-    muted: bool,
-    volume: f64,
-    mute_tooltip: &str,
-    volume_label: &str,
-) -> (bool, Option<f64>) {
-    let icon = if muted {
-        crate::ui::icons::SPEAKER_SLASH
-    } else {
-        crate::ui::icons::SPEAKER_HIGH
-    };
-    let h = super::control_density::height(ui);
-    let toggle_mute = super::craft_theme::icon_button_glyph(
-        ui,
-        mute_tooltip,
-        icon,
-        egui::vec2(h, h),
-        muted,
-        true,
-    )
-    .on_hover_text(mute_tooltip)
-    .clicked();
+pub(super) fn draw_volume_widgets(ui: &mut egui::Ui, palette: crate::config::ColorPalette,
+    muted: bool, volume: f64, mute_tooltip: &str, volume_label: &str) -> (bool, Option<f64>) {
+    let icon = if muted { crate::ui::icons::SPEAKER_SLASH } else { crate::ui::icons::SPEAKER_HIGH };
+    let toggle_mute = ui.add_sized([30.0, 22.0], transport_button(palette, ui, icon,
+        if muted { "amber" } else { "muted" })).on_hover_text(mute_tooltip).clicked();
     (toggle_mute, volume_slider_widgets(ui, volume, volume_label))
 }
 
 fn volume_slider_widgets(ui: &mut egui::Ui, mut volume: f64, volume_label: &str) -> Option<f64> {
-    let craft_tokens = crate::ui::craft_theme::current(ui.ctx());
-    let slider_width = (ui.available_width() - 44.0 - 2.0 * ui.spacing().item_spacing.x).max(20.0);
-    let h = super::control_density::height(ui);
-    let (rect, response) = ui.allocate_exact_size(egui::vec2(slider_width, h), egui::Sense::click_and_drag());
-
-    let mut changed = false;
-    if response.clicked() || response.dragged() {
-        if let Some(pos) = response.interact_pointer_pos() {
-            let frac = ((pos.x - (rect.left() + 4.0)) / (rect.width() - 8.0).max(1.0)).clamp(0.0, 1.0);
-            volume = (frac as f64 * 130.0).clamp(0.0, 130.0);
-            changed = true;
-        }
-    }
+    let old_width = ui.spacing().slider_width;
+    // Reserve a stable percentage column, even when the value has fewer digits.
+    ui.spacing_mut().slider_width = (ui.available_width() - 44.0 - 2.0 * ui.spacing().item_spacing.x).max(1.0);
+    let response = ui.add(egui::Slider::new(&mut volume, 0.0..=130.0).show_value(false))
+        .on_hover_text(format!("{volume_label}: {volume:.0}%"));
+    ui.spacing_mut().slider_width = old_width;
     let wheel = if response.hovered() {
         ui.input(|input| input.smooth_scroll_delta.y)
-    } else {
-        0.0
-    };
+    } else { 0.0 };
     if wheel != 0.0 {
         volume = (volume + f64::from(wheel.signum()) * 2.0).clamp(0.0, 130.0);
         ui.input_mut(|input| input.smooth_scroll_delta.y = 0.0);
-        changed = true;
     }
-
-    // Paint FilmCraft sleek track & thumb (no default white pill thumb)
-    let track_h = 4.0;
-    let track_rect = egui::Rect::from_min_max(
-        egui::pos2(rect.left(), rect.center().y - track_h / 2.0),
-        egui::pos2(rect.right(), rect.center().y + track_h / 2.0),
-    );
-    let p = ui.painter();
-    p.rect_filled(track_rect, 2.0, craft_tokens.separator);
-
-    let frac = (volume / 130.0).clamp(0.0, 1.0) as f32;
-    let thumb_x = egui::lerp(track_rect.left() + 4.0..=track_rect.right() - 4.0, frac);
-    let active_rect = egui::Rect::from_min_max(track_rect.min, egui::pos2(thumb_x, track_rect.max.y));
-    p.rect_filled(active_rect, 2.0, craft_tokens.accent);
-
-    let hover = response.hovered() || response.dragged();
-    p.circle_filled(egui::pos2(thumb_x, rect.center().y), 4.5, craft_tokens.panel_bg);
-    p.circle_stroke(
-        egui::pos2(thumb_x, rect.center().y),
-        4.5,
-        egui::Stroke::new(
-            1.5,
-            if hover {
-                craft_tokens.tab_text_active
-            } else {
-                craft_tokens.icon_active
-            },
-        ),
-    );
-
-    let response = response.on_hover_text(format!("{volume_label}: {volume:.0}%"));
-    ui.add_sized([44.0, h], egui::Label::new(timecode_text(format!("{:.0}%", volume))))
+    ui.add_sized([44.0, 22.0], egui::Label::new(timecode_text(format!("{:.0}%", volume))))
         .on_hover_text(volume_label);
-    (changed || response.changed()).then_some(volume)
+    (response.changed() || wheel != 0.0).then_some(volume)
 }
 
 pub fn timecode_text(value: impl Into<String>) -> egui::RichText {
@@ -229,61 +217,6 @@ pub(crate) fn paint_buffered_seekbar(
     );
     ui.painter()
         .rect_filled(buffered_rect, buffered_rect.height() / 2.0, color);
-}
-
-/// Paint FilmCraft-style tick marks on the seekbar rail using the ruler step ladder.
-pub(crate) fn paint_seekbar_ticks(
-    ui: &egui::Ui,
-    response: &egui::Response,
-    app: &PealayerApp,
-) {
-    let duration = app.duration;
-    if duration <= 0.0 || !duration.is_finite() {
-        return;
-    }
-    let rect = response.rect;
-    let range = seekbar_value_range(rect);
-    let width = range.end() - range.start();
-    if width <= 0.0 {
-        return;
-    }
-    let craft_tokens = crate::ui::craft_theme::current(ui.ctx());
-    let fps = if app.media_fps.is_finite() && app.media_fps > 0.0 {
-        app.media_fps
-    } else {
-        30.0
-    };
-    let base = fps.clamp(12.0, 120.0).round() as i64;
-    let frame_px = (width as f64) / (duration * fps);
-    let (minor, major) = crate::ui::craft_theme::ruler_steps(frame_px, base);
-
-    let rail_height = ui.spacing().slider_rail_height;
-    let p = ui.painter();
-    let total_frames = (duration * fps).ceil() as i64;
-    let mut f = 0;
-    let max_ticks = 256;
-    let mut count = 0;
-    while f <= total_frames && count < max_ticks {
-        let frac = (f as f64 / (duration * fps)).clamp(0.0, 1.0) as f32;
-        let x = egui::lerp(range.clone(), frac);
-        let is_major = f % major == 0;
-        let h = if is_major {
-            (rail_height * 0.45).min(5.0)
-        } else {
-            (rail_height * 0.25).min(3.0)
-        };
-        let color = if is_major {
-            craft_tokens.text_dim.gamma_multiply(0.55)
-        } else {
-            craft_tokens.text_faint.gamma_multiply(0.35)
-        };
-        p.line_segment(
-            [egui::pos2(x, rect.center().y - h), egui::pos2(x, rect.center().y + h)],
-            egui::Stroke::new(1.0, color),
-        );
-        f += minor;
-        count += 1;
-    }
 }
 
 pub(crate) fn seekbar_value_range(rect: egui::Rect) -> std::ops::RangeInclusive<f32> {
@@ -585,6 +518,12 @@ fn timecode_groups(value: &str) -> Vec<std::ops::Range<usize>> {
     groups
 }
 
+fn timecode_group_at_cursor(value: &str, index: usize) -> usize {
+    let groups = timecode_groups(value);
+    groups.iter().position(|range| index <= range.end)
+        .unwrap_or_else(|| groups.len().saturating_sub(1))
+}
+
 /// A segment editor never inserts or deletes punctuation: every edit replaces
 /// digits inside an existing group, and a completed group advances itself.
 fn edit_timecode_segment(value: &mut String, group: &mut usize, digits: &mut usize, event: &egui::Event) {
@@ -765,11 +704,9 @@ pub fn draw_elapsed_editor(
     // TextEdit swap used different font padding and allocation rules, which
     // made the time jump when editing began even though the outer row stayed
     // in place.
-    let craft_tokens = crate::ui::craft_theme::current(ui.ctx());
     let editor = crate::ui::dialog::singleline_text_edit(ui, buffer)
         .id(edit_id)
         .font(egui::TextStyle::Monospace)
-        .text_color(if editing { craft_tokens.text } else { craft_tokens.timecode })
         .horizontal_align(egui::Align::Center)
         .vertical_align(egui::Align::Center)
         .margin(egui::Margin::symmetric(4, 2))
@@ -782,9 +719,22 @@ pub fn draw_elapsed_editor(
         } else {
             egui::Frame::NONE
         });
-    let widget_response =
-        ui.add_enabled_ui(enabled, |ui| ui.add_sized([desired_width, 22.0], editor));
-    let mut response = widget_response.inner;
+    // Keep add_sized's exact allocation, but retain TextEdit's actual painted
+    // galley. Its stored cursor is not a pointer hit test: restoring the group
+    // before painting can overwrite the mouse-down cursor on the release frame.
+    let layout = egui::Layout::centered_and_justified(ui.layout().main_dir());
+    let output = ui.add_enabled_ui(enabled, |ui| {
+        ui.allocate_ui_with_layout(egui::vec2(desired_width, 22.0), layout,
+            |ui| editor.show(ui)).inner
+    }).inner;
+    let pointer_group = ui.input(|input| input.pointer.interact_pos()).map(|position| {
+        // TextEdit paints a centered galley at galley_pos - rect.left(),
+        // not galley_pos itself. Use that same origin for glyph hit testing.
+        let cursor = output.galley.cursor_from_pos(position - output.galley_pos
+            + egui::vec2(output.galley.rect.left(), 0.0));
+        timecode_group_at_cursor(output.galley.text(), cursor.index.0)
+    });
+    let mut response = output.response.response;
 
     if editing {
         response =
@@ -796,14 +746,15 @@ pub fn draw_elapsed_editor(
         if response.has_focus() {
             if let Some(mut state) = egui::TextEdit::load_state(ui.ctx(), edit_id) {
                 let groups = timecode_groups(&app.elapsed_time_input);
-                if response.clicked() {
-                    if let Some(cursor) = state.cursor.char_range() {
-                        let index = cursor.primary.index.0;
-                        if let Some(selected) = groups.iter().position(|range| index <= range.end) {
-                            app.elapsed_time_group = selected;
-                            app.elapsed_time_group_digits = 0;
-                        }
-                    }
+                let pointer_pressed = response.contains_pointer()
+                    && ui.input(|input| input.pointer.primary_pressed());
+                // Only a new press may retarget an existing editor. The click
+                // that activates display mode may be replayed in a layout
+                // pass after its shorter galley becomes the full edit mask.
+                if pointer_pressed && let Some(selected) = pointer_group {
+                    app.elapsed_time_group = selected;
+                    app.elapsed_time_group_digits = 0;
+                    ui.ctx().request_repaint();
                 }
                 if let Some(range) = groups.get(app.elapsed_time_group) {
                     state.cursor.set_char_range(Some(egui::text::CCursorRange::two(
@@ -848,6 +799,9 @@ pub fn draw_elapsed_editor(
         response = response.on_hover_text(app.tr("Click to enter an exact playback time."));
         if response.clicked() {
             begin_elapsed_edit(app);
+            // The display text may omit milliseconds, so hit-test the galley
+            // that was actually clicked, before switching to the full mask.
+            app.elapsed_time_group = pointer_group.unwrap_or(0);
             ui.data_mut(|data| data.insert_temp(owner_key, edit_id));
             ui.ctx().request_repaint();
         }
@@ -863,13 +817,7 @@ pub fn draw_elapsed_editor(
                 app.show_subseconds,
             )
         };
-        if ui
-            .button(format!("{} {}", crate::ui::icons::COPY, app.tr("Copy")))
-            .clicked()
-        {
-            ui.ctx().copy_text(copied_time);
-            ui.close();
-        }
+        copy_time_menu_item(ui, &app.tr("Copy"), &copied_time);
         if ui
             .add_enabled(
                 enabled,
@@ -892,6 +840,41 @@ pub fn draw_elapsed_editor(
             ui.close();
         }
         ui.separator();
+        transport_context_menu(app, ui);
+    });
+    response
+}
+
+fn copy_time_menu_item(ui: &mut egui::Ui, label: &str, value: &str) {
+    if ui.button(format!("{} {label}", crate::ui::icons::COPY)).clicked() {
+        ui.ctx().copy_text(value.to_owned());
+        ui.close();
+    }
+}
+
+/// The Simple/fullscreen and NLE transports share the same duration menu.
+/// Copy the visible timecode (including remaining-time sign and precision),
+/// never a placeholder for a live, unloaded or still-determining source.
+pub fn draw_duration_label(
+    app: &mut PealayerApp,
+    ui: &mut egui::Ui,
+    text: String,
+    tooltip: String,
+    finite: bool,
+) -> egui::Response {
+    let label = if finite {
+        timecode_text(text.clone())
+    } else {
+        egui::RichText::new(text.clone())
+    };
+    let response = ui
+        .add(egui::Label::new(label).sense(egui::Sense::click()))
+        .on_hover_text(tooltip);
+    response.context_menu(|ui| {
+        if finite {
+            copy_time_menu_item(ui, &app.tr("Copy"), &text);
+            ui.separator();
+        }
         transport_context_menu(app, ui);
     });
     response
@@ -1152,7 +1135,6 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 (buffered_until / app.duration).clamp(0.0, 1.0) as f32,
                             );
                         }
-                        paint_seekbar_ticks(ui, &response, app);
                         if let Some(chapter_time) = paint_seekbar_markers(ui, &response, app) { current_pos = chapter_time; }
                         let show_seek_preview = app.seekbar_hover_thumbnails;
                         crate::ui::seek_preview::draw(
@@ -1215,18 +1197,9 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             }
                         });
 
-                        let total_label = if total_is_toggle {
-                            timecode_text(total_text)
-                        } else {
-                            egui::RichText::new(total_text)
-                        };
-                        let total_response = ui
-                            .add(egui::Label::new(total_label).sense(if total_is_toggle {
-                                egui::Sense::click()
-                            } else {
-                                egui::Sense::hover()
-                            }))
-                            .on_hover_text(total_tooltip);
+                        let total_response = draw_duration_label(
+                            app, ui, total_text, total_tooltip, total_is_toggle,
+                        );
                         toggle_total_mode = total_is_toggle && total_response.clicked();
                     },
                 );
@@ -1366,6 +1339,63 @@ pub fn parse_timecode(value: &str) -> Option<f64> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn duration_context_menu_copies_visible_time_without_seeking_or_toggling() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.playback_time = 83.125;
+        app.duration = 3723.5;
+        for width in [320.0, 768.0, 1440.0] {
+            for remaining in [false, true] {
+                for subseconds in [false, true] {
+                    app.show_remaining_time = remaining;
+                    app.show_subseconds = subseconds;
+                    let text = format_player_time(
+                        if remaining { -(app.duration - app.playback_time) } else { app.duration },
+                        true, subseconds,
+                    );
+                    let ctx = egui::Context::default();
+                    ctx.all_styles_mut(|style| style.animation_time = 0.0);
+                    let mut render = |events| {
+                        let mut rect = egui::Rect::NOTHING;
+                        let mut output = ctx.run_ui(egui::RawInput {
+                            events,
+                            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 600.0))),
+                            ..Default::default()
+                        }, |ui| {
+                            let response = draw_duration_label(&mut app, ui, text.clone(), String::new(), true);
+                            rect = response.rect;
+                            assert!(!response.clicked(), "menu use must not toggle duration mode");
+                        });
+                        output.textures_delta.clear();
+                        (rect, output)
+                    };
+                    let press = |pos, button, pressed| egui::Event::PointerButton {
+                        pos, button, pressed, modifiers: egui::Modifiers::NONE,
+                    };
+                    let (rect, _) = render(vec![]);
+                    let point = rect.center();
+                    render(vec![egui::Event::PointerMoved(point), press(point, egui::PointerButton::Secondary, true)]);
+                    render(vec![press(point, egui::PointerButton::Secondary, false)]);
+                    let (_, output) = render(vec![]);
+                    let copy = output.shapes.iter().find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text().ends_with("Copy") =>
+                            Some(text.pos + text.galley.size() / 2.0),
+                        _ => None,
+                    }).expect("duration menu must expose Copy with its icon");
+                    render(vec![egui::Event::PointerMoved(copy), press(copy, egui::PointerButton::Primary, true)]);
+                    let (_, output) = render(vec![press(copy, egui::PointerButton::Primary, false)]);
+                    assert!(output.platform_output.commands.iter().any(|command|
+                        matches!(command, egui::OutputCommand::CopyText(value) if value == &text)
+                    ), "clipboard must match the displayed timecode: {text}");
+                    assert_eq!(app.playback_time, 83.125);
+                    assert!(app.seek_pos.is_none());
+                    assert_eq!(app.show_remaining_time, remaining);
+                }
+            }
+        }
+    }
 
     #[test]
     fn contextual_transport_uses_neutral_idle_and_untinted_disabled_states() {
@@ -1560,6 +1590,73 @@ mod tests {
     }
 
     #[test]
+    fn elapsed_pointer_selects_clicked_group_in_display_and_edit_modes() {
+        let _guard = crate::app::tests::lock_app_tests();
+        fn frame(ctx: &egui::Context, app: &mut PealayerApp, events: Vec<egui::Event>) -> egui::FullOutput {
+            let mut output = ctx.run_ui(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(600.0, 200.0))),
+                events, ..Default::default()
+            }, |ui| {
+                let response = draw_elapsed_editor(app, ui, "pointer-elapsed-fixture", true);
+                ui.data_mut(|data| data.insert_temp(egui::Id::new("elapsed-pointer-test-id"), response.id));
+            });
+            output.textures_delta.clear();
+            output
+        }
+        fn point(output: &egui::FullOutput, value: &str, group: usize) -> egui::Pos2 {
+            let range = timecode_groups(value)[group].clone();
+            output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text() == value => {
+                    let cursor = egui::text::CCursor::new(range.start + 1);
+                    Some(text.pos + text.galley.pos_from_cursor(cursor).center().to_vec2())
+                }
+                _ => None,
+            }).expect("actual painted timecode")
+        }
+        fn click(ctx: &egui::Context, app: &mut PealayerApp, position: egui::Pos2) {
+            frame(ctx, app, vec![egui::Event::PointerMoved(position)]);
+            for pressed in [true, false] {
+                frame(ctx, app, vec![egui::Event::PointerButton {
+                    pos: position, button: egui::PointerButton::Primary, pressed,
+                    modifiers: egui::Modifiers::NONE,
+                }]);
+            }
+            frame(ctx, app, vec![]);
+            let id = ctx.data(|data| data.get_temp::<egui::Id>(egui::Id::new("elapsed-pointer-test-id"))).unwrap();
+            let selection = egui::TextEdit::load_state(ctx, id).unwrap().cursor.char_range().unwrap();
+            let selection = selection.as_sorted_char_range();
+            assert_eq!(selection.start.0..selection.end.0,
+                timecode_groups(&app.elapsed_time_input)[app.elapsed_time_group],
+                "the whole clicked group must remain highlighted after repaint");
+        }
+        for scale in [1.0, 1.5, 2.0] {
+            for subseconds in [false, true] {
+                for initial_group in 0..(if subseconds { 4 } else { 3 }) {
+                    let ctx = egui::Context::default();
+                    ctx.set_pixels_per_point(scale);
+                    let mut app = PealayerApp::default();
+                    app.playback_time = 3723.456;
+                    app.show_subseconds = subseconds;
+                    frame(&ctx, &mut app, vec![]);
+                    let output = frame(&ctx, &mut app, vec![]);
+                    let shown = format_player_time(app.playback_time, true, subseconds);
+                    click(&ctx, &mut app, point(&output, &shown, initial_group));
+                    assert!(app.editing_elapsed_time);
+                    assert_eq!(app.elapsed_time_group, initial_group, "display click at scale {scale}");
+                    for group in [3, 1, 2, 0] {
+                        let output = frame(&ctx, &mut app, vec![]);
+                        let value = app.elapsed_time_input.clone();
+                        click(&ctx, &mut app, point(&output, &value, group));
+                        assert_eq!(app.elapsed_time_group, group, "edit click at scale {scale}");
+                        assert_eq!(app.elapsed_time_input, app.elapsed_time_original);
+                        assert!(app.seek_pos.is_none(), "selection must never seek");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn elapsed_mask_accepts_local_digits_and_rejects_invalid_paste() {
         assert_eq!(format_elapsed_edit_time(3.125), "00:00:03.125");
         assert_eq!(parse_elapsed_edit_time("۰۰:۰۱:۰۲.۰۰۳"), Some(62.003));
@@ -1633,23 +1730,5 @@ mod tests {
             measured_width > 450.0,
             "seekbar should consume the remaining row, got {measured_width}px"
         );
-    }
-
-    #[test]
-    fn paint_seekbar_ticks_renders_without_panic() {
-        let ctx = egui::Context::default();
-        let config = crate::config::AppConfig::default();
-        crate::ui::configure_native_visuals(&ctx, &config);
-        let mut app = crate::app::PealayerApp::default();
-        app.duration = 60.0;
-        app.media_fps = 30.0;
-
-        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            let mut val = 15.0;
-            let slider = egui::Slider::new(&mut val, 0.0..=60.0);
-            let resp = ui.add(slider);
-            paint_seekbar_ticks(ui, &resp, &app);
-        });
-        output.textures_delta.clear();
     }
 }

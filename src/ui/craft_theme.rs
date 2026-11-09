@@ -713,10 +713,7 @@ pub fn icon_button_glyph(
     frame: bool,
 ) -> egui::Response {
     icon_button(ui, label, size, selected, frame, |ui, rect, color| {
-        let mut font = egui::TextStyle::Button.resolve(ui.style());
-        if !frame {
-            font.size = 14.0;
-        }
+        let font = egui::TextStyle::Button.resolve(ui.style());
         ui.painter().text(
             rect.center(),
             egui::Align2::CENTER_CENTER,
@@ -751,6 +748,35 @@ pub fn ruler_steps(frame_px: f64, base: i64) -> (i64, i64) {
         .unwrap_or(label_step)
         .max(1);
     (minor, label_step)
+}
+
+/// FilmCraft's frame ladder positions frames at the actual media rate. The
+/// nominal rate only chooses readable strides; it does not change media timing.
+pub fn paint_frame_ruler(painter: &egui::Painter, rect: egui::Rect, origin_x: f32,
+    points_per_second: f32, media_fps: f64, tokens: &Tokens) {
+    if !points_per_second.is_finite() || points_per_second <= 0.0 { return; }
+    let fps = if media_fps.is_finite() && media_fps > 0.0 { media_fps.min(1000.0) } else { 30.0 };
+    let frame_px = f64::from(points_per_second) / fps;
+    let (minor, major) = ruler_steps(frame_px, fps.round() as i64);
+    let clip = rect.intersect(painter.clip_rect());
+    let first = (((clip.left() - origin_x).max(0.0) as f64 / frame_px) as i64 / minor) * minor;
+    let last = (((clip.right() - origin_x).max(0.0) as f64 / frame_px).ceil() as i64).saturating_add(minor);
+    let font = egui::FontId::monospace(9.0);
+    for frame in (first..=last).step_by(minor as usize).take(4096) {
+        let x = origin_x + (frame as f64 * frame_px) as f32;
+        let labeled = frame % major == 0;
+        let height = if labeled { 8.0 } else { 3.5 };
+        painter.line_segment([egui::pos2(x, rect.bottom()-height), egui::pos2(x, rect.bottom())],
+            Stroke::new(1.0, tokens.tl_ruler_tick.gamma_multiply(if labeled { 1.0 } else { 0.6 })));
+        if labeled {
+            let ms = (frame as f64 * 1000.0 / fps).round().max(0.0) as u64;
+            let text = crate::duration::format_timeline_time_ms(ms,
+                major as f64 / fps < 1.0 || fps.fract().abs() > 0.0001);
+            let galley = painter.layout_no_wrap(text, font.clone(), tokens.tl_ruler_text);
+            let bounds = egui::Rect::from_center_size(egui::pos2(x, rect.top()+13.0), galley.size());
+            if clip.contains_rect(bounds) { painter.galley(bounds.min, galley, tokens.tl_ruler_text); }
+        }
+    }
 }
 
 /// How far the Timeline reaches, in seconds: ten minutes past the end of the sequence (FilmCraft standard).
@@ -929,39 +955,89 @@ pub fn dropdown_text(
         4.0,
         Stroke::new(
             1.0,
-            if resp.hovered() {
-                Color32::from_rgb(0x4b, 0x4b, 0x4b)
-            } else {
-                t.field_border
-            },
+            if resp.hovered() { t.accent } else { t.field_border },
         ),
         egui::StrokeKind::Inside,
     );
-    let mut font = egui::TextStyle::Body.resolve(ui.style());
-    font.size = 12.0;
-    ui.painter().text(
-        egui::pos2(rect.min.x + 9.0, rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        text,
-        font,
-        t.text,
-    );
-    let chevron_pos = egui::pos2(rect.max.x - 11.0, rect.center().y);
-    let mut chevron_font = egui::TextStyle::Body.resolve(ui.style());
-    chevron_font.size = 10.0;
-    ui.painter().text(
-        chevron_pos,
-        egui::Align2::CENTER_CENTER,
-        crate::ui::icons::CARET_DOWN,
-        chevron_font,
-        t.text_dim,
-    );
+    let rtl = ui.layout().main_dir() == egui::Direction::RightToLeft;
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let label_rect = if rtl { rect.shrink2(egui::vec2(8.0, 0.0)).translate(egui::vec2(12.0, 0.0)) }
+        else { rect.shrink2(egui::vec2(8.0, 0.0)) };
+    let painter = ui.painter().with_clip_rect(label_rect.intersect(rect).intersect(ui.clip_rect()));
+    painter.text(egui::pos2(if rtl { rect.right()-9.0 } else { rect.left()+9.0 }, rect.center().y),
+        if rtl { egui::Align2::RIGHT_CENTER } else { egui::Align2::LEFT_CENTER }, text, font, t.text);
+    let chevron_x = if rtl { rect.left()+11.0 } else { rect.right()-11.0 };
+    super::control_density::paint_chevron(ui,
+        egui::Rect::from_center_size(egui::pos2(chevron_x, rect.center().y), egui::vec2(14.0,14.0)), t.text_dim);
+    resp.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, resp.enabled(), text));
     resp
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn filmcraft_ruler_labels_are_centered_and_fractional_frames_use_actual_rate() {
+        let ctx = egui::Context::default();
+        let tokens = Tokens::for_kind(ThemeKind::Dark);
+        let rect = egui::Rect::from_min_size(egui::pos2(0.0, 0.0), egui::vec2(800.0, 30.0));
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            paint_frame_ruler(&ui.painter().with_clip_rect(rect), rect, 0.0, 100.0, 23.976, &tokens);
+        });
+        let ticks: Vec<_> = output.shapes.iter().filter_map(|shape| match &shape.shape {
+            egui::Shape::LineSegment { points, .. } => Some(points[0].x), _ => None,
+        }).collect();
+        assert!(ticks.len() > 10);
+        // Nominal 24-frame major tick is slightly after 1s at 23.976fps.
+        let expected = (24.0 / 23.976 * 100.0) as f32;
+        assert!(ticks.iter().any(|x| (*x-expected).abs() < 0.01));
+        let mut labels = 0;
+        for shape in &output.shapes {
+            if let egui::Shape::Text(text) = &shape.shape {
+                let center = text.pos.x + text.galley.size().x/2.0;
+                assert!(ticks.iter().any(|x| (*x-center).abs() < 0.01));
+                assert!(rect.contains_rect(egui::Rect::from_min_size(text.pos, text.galley.size())));
+                labels += 1;
+            }
+        }
+        assert!(labels >= 3);
+        output.drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn filmcraft_playhead_head_stays_in_ruler_and_stem_begins_at_track_boundary() {
+        let ctx = egui::Context::default();
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let ruler = egui::Rect::from_min_max(egui::pos2(0.0,0.0), egui::pos2(800.0,30.0));
+            paint_filmcraft_playhead(ui.painter(), &ui.painter().with_clip_rect(ruler),
+                150.25, 17.0, 30.0, 300.0, Color32::RED);
+        });
+        let paths: Vec<_> = output.shapes.iter().filter_map(|shape| match &shape.shape {
+            egui::Shape::Path(path) => Some(path), _ => None,
+        }).collect();
+        assert_eq!(paths.len(), 2);
+        assert!(paths[0].points.iter().all(|point| point.y >= 17.0 && point.y <= 30.0));
+        assert_eq!(paths[1].points, vec![egui::pos2(150.25,30.0), egui::pos2(150.25,300.0)]);
+        output.drop_without_applying_deltas();
+    }
+
+    #[test]
+    fn filmcraft_subsecond_ruler_never_repeats_whole_second_labels() {
+        let ctx = egui::Context::default();
+        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0,30.0));
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            paint_frame_ruler(&ui.painter().with_clip_rect(rect), rect, 0.0, 500.0, 24.0,
+                &Tokens::for_kind(ThemeKind::Dark));
+        });
+        let labels: Vec<_> = output.shapes.iter().filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) => Some(text.galley.text().to_owned()), _ => None,
+        }).collect();
+        assert!(labels.len() >= 3);
+        assert!(labels.windows(2).all(|pair| pair[0] != pair[1]), "{labels:?}");
+        assert!(labels.iter().any(|label| label.contains('.')));
+        output.drop_without_applying_deltas();
+    }
 
     #[test]
     fn selected_craft_icons_contrast_with_bright_and_dark_fills() {

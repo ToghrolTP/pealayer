@@ -483,6 +483,33 @@ pub fn escape_pressed(ctx: &egui::Context) -> bool {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn built_in_window_title_background_reaches_the_window_edges() {
+        for palette in [crate::config::ColorPalette::Native, crate::config::ColorPalette::Studio] {
+        for dark in [false, true] { for rtl in [false, true] { for scale in [1.0, 1.25, 1.5, 2.0] {
+        let ctx=egui::Context::default();
+        let config=crate::config::AppConfig { color_palette:palette,
+            theme:if dark {crate::config::AppTheme::Dark} else {crate::config::AppTheme::Light},..Default::default() };
+        crate::ui::configure_native_appearance(&ctx,&config);
+        ctx.set_pixels_per_point(scale);
+        ctx.all_styles_mut(|style|style.right_to_left=rtl);
+        let mut output=None;
+        let mut outer=egui::Rect::NOTHING;
+        for frame in 0..4 {
+            let mut open=true;
+            let mut rendered=ctx.run_ui(egui::RawInput{screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(800.0,500.0))),time:Some(frame as f64*0.1),..Default::default()},|ui|{
+                outer=egui::Window::new("Header geometry").id(egui::Id::new("header-geometry-test"))
+                    .open(&mut open).default_pos(egui::pos2(40.0,40.0)).default_size(egui::vec2(480.0,240.0)).max_width(480.0)
+                    .collapsible(false).show(ui.ctx(),|ui|{ui.set_min_width(480.0);ui.label("Body");}).unwrap().response.rect;
+            });
+            rendered.textures_delta.clear();output=Some(rendered);
+        }
+        let output=output.unwrap();
+        let frames:Vec<_>=output.shapes.iter().filter_map(|shape|match &shape.shape {egui::Shape::Rect(rect) if rect.rect.top()<outer.top()+4.0 && rect.fill!=egui::Color32::TRANSPARENT=>Some((rect.rect.intersect(shape.clip_rect),rect.fill)),_=>None}).collect();
+        let header=frames.iter().filter(|(rect,_)|rect.height()<80.0 && rect.width()>100.0).max_by(|a,b|a.0.width().total_cmp(&b.0.width())).expect("painted title background").0;
+        assert!((header.left()-outer.left()).abs()<=2.0 && (header.right()-outer.right()).abs()<=2.0,"title background does not span its window: rtl={rtl}, scale={scale}, outer={outer:?}, frames={frames:?}");
+        } } } }
+    }
+    #[test]
     fn loop_toggle_hover_selection_and_focus_do_not_move_text_or_neighbors() {
         for dark in [false, true] {
             for scale in [1.0, 1.25, 1.5, 2.0] {

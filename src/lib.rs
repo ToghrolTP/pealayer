@@ -1,5 +1,7 @@
 pub mod app;
+pub mod assets;
 pub mod authoring;
+pub mod authoring_clipboard;
 pub mod audio_effects;
 pub mod application_shortcuts;
 pub mod branding;
@@ -18,6 +20,7 @@ pub mod network;
 pub mod peer;
 pub mod performance;
 pub mod process_control;
+pub mod projects;
 pub mod platform;
 pub mod preferences_contract;
 pub mod remote_location;

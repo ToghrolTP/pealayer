@@ -4,7 +4,7 @@ import { sessionActive, sessionActionEnabled, sessionPosition, sessionSeekOffset
 const state = {
   current_video: 'movie.mkv', playing: true, media_keys_enabled: true, seekable: true,
   duration: 60, playback_time: 12.345, playback_rate: 1.5, quick_seek_seconds: 7.5,
-  media_session: { title: 'Embedded title', artist: 'Artist', album: 'Album', video: true },
+  media_session: { track_id: '/org/mpris/MediaPlayer2/track/fixture', title: 'Embedded title', artist: 'Artist', album: 'Album', video: true },
   media_session_capabilities: { can_play: false, can_pause: true, can_stop: true,
     can_seek: true, can_next: true, can_previous: false },
 };

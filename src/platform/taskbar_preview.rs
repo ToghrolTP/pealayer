@@ -1,6 +1,7 @@
-//! DWM consumes an MPV-only bitmap, not a screenshot/crop of egui.
-//! Readback is demand-driven: one seed frame, then up to 30 Hz only while
-//! Windows is actively requesting previews. No decoding, disk I/O or GL runs
+//! Small taskbar cards consume the MPV-only bitmap. Full-size Task View/Peek
+//! consumes a separate, on-demand composite of the actual application UI.
+//! Readback follows new video frames at up to 30 Hz, not a guessed hover lease.
+//! No decoding, disk I/O or GL runs
 //! in the window procedure, and the real Pealayer window remains untouched.
 
 use std::sync::{Mutex, OnceLock, mpsc::SyncSender};
@@ -12,8 +13,8 @@ struct Preview {
     media: String,
     frame: Option<image::RgbaImage>,
     captured: Option<Instant>,
-    requested: Option<Instant>,
-    capture_refresh_requested: Option<Instant>,
+    frame_dirty: bool,
+    captured_frames: u64,
     requests: u64,
     delivered: u64,
     last_error: Option<String>,
@@ -25,8 +26,8 @@ static PREVIEW: Mutex<Preview> = Mutex::new(Preview {
     media: String::new(),
     frame: None,
     captured: None,
-    requested: None,
-    capture_refresh_requested: None,
+    frame_dirty: false,
+    captured_frames: 0,
     requests: 0,
     delivered: 0,
     last_error: None,
@@ -34,6 +35,147 @@ static PREVIEW: Mutex<Preview> = Mutex::new(Preview {
 });
 static REPAINT: OnceLock<eframe::egui::Context> = OnceLock::new();
 static REPAINT_WAKE: OnceLock<SyncSender<()>> = OnceLock::new();
+#[cfg(target_os = "windows")]
+static FULL_REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+#[cfg(target_os = "windows")]
+static MINIMIZE_REQUESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+static MINIMIZE_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static MINIMIZE_WAITING: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+#[cfg(target_os = "windows")]
+#[derive(Default)]
+struct FullPreview {
+    frame: Option<std::sync::Arc<image::RgbaImage>>,
+    captured: Option<Instant>,
+    pending: Option<Instant>,
+    requests: u64,
+    captures: u64,
+    delivered: u64,
+    non_uniform: bool,
+    error: Option<String>,
+}
+#[cfg(target_os = "windows")]
+static FULL: std::sync::LazyLock<Mutex<FullPreview>> = std::sync::LazyLock::new(|| Mutex::new(FullPreview::default()));
+
+#[cfg(target_os = "windows")]
+fn full_rgba(image: &eframe::egui::ColorImage) -> Option<image::RgbaImage> {
+    if image.size[0]==0 || image.size[1]==0 {return None;}
+    let bytes: Vec<_> = image.pixels.iter().flat_map(|pixel| pixel.to_array()).collect();
+    image::RgbaImage::from_raw(image.size[0] as u32,image.size[1] as u32,bytes)
+}
+
+#[cfg(target_os = "windows")]
+fn remember_full(image: &eframe::egui::ColorImage) -> Option<std::sync::Arc<image::RgbaImage>> {
+    let frame=full_rgba(image).map(std::sync::Arc::new)?;
+    if let Ok(mut state)=FULL.lock() {
+        state.frame=Some(frame.clone());state.captured=Some(Instant::now());state.pending=None;state.captures+=1;
+        state.non_uniform=frame.pixels().skip(1).step_by(64).any(|pixel|pixel!=frame.get_pixel(0,0));
+    }
+    Some(frame)
+}
+
+pub fn cancel_minimize() {
+    MINIMIZE_WAITING.store(0,std::sync::atomic::Ordering::Release);
+    #[cfg(target_os="windows")]
+    MINIMIZE_REQUESTED.store(false,std::sync::atomic::Ordering::Release);
+}
+
+/// Preserve the last complete UI before minimizing, without polling/capturing
+/// it continuously or ever restoring the window merely to produce a preview.
+pub fn minimize(ctx: &eframe::egui::Context) {
+    #[cfg(target_os="windows")]
+    if PREVIEW.lock().is_ok_and(|state|state.enabled) {
+        use std::sync::atomic::Ordering;
+        let token=MINIMIZE_SEQUENCE.fetch_add(1,Ordering::AcqRel)+1;
+        MINIMIZE_WAITING.store(token,Ordering::Release);
+        let completed=ctx.clone();
+        ctx.request_screenshot(move |image| {
+            let _=remember_full(&image);
+            if MINIMIZE_WAITING.compare_exchange(token,0,Ordering::AcqRel,Ordering::Acquire).is_ok() {
+                completed.send_viewport_cmd(eframe::egui::ViewportCommand::Minimized(true));
+            }
+        });
+        // A lost/failed paint must never leave the user's minimize request
+        // waiting forever. This short-lived fallback exists only for this action.
+        let fallback=ctx.clone();
+        let fallback_started=std::thread::Builder::new().name("pealayer-minimize".into()).spawn(move || {
+            std::thread::sleep(Duration::from_millis(500));
+            if MINIMIZE_WAITING.compare_exchange(token,0,Ordering::AcqRel,Ordering::Acquire).is_ok() {
+                fallback.send_viewport_cmd(eframe::egui::ViewportCommand::Minimized(true));
+            }
+        });
+        if fallback_started.is_err() && MINIMIZE_WAITING.compare_exchange(token,0,Ordering::AcqRel,Ordering::Acquire).is_ok() {
+            ctx.send_viewport_cmd(eframe::egui::ViewportCommand::Minimized(true));
+        }
+        return;
+    }
+    ctx.send_viewport_cmd(eframe::egui::ViewportCommand::Minimized(true));
+}
+
+#[cfg(target_os="windows")]
+pub fn defer_system_minimize(hwnd: isize) -> bool {
+    if hwnd!=crate::platform::windows::get_registered_hwnd() || !PREVIEW.lock().is_ok_and(|state|state.enabled) {return false;}
+    MINIMIZE_REQUESTED.store(true,std::sync::atomic::Ordering::Release);
+    request_repaint();true
+}
+
+#[cfg(target_os = "windows")]
+fn capture_full_if_requested(ctx: &eframe::egui::Context) {
+    use std::sync::atomic::Ordering;
+    if !FULL_REQUESTED.swap(false,Ordering::AcqRel) {return;}
+    let hwnd = crate::platform::windows::get_registered_hwnd();
+    // The backend reads the finished egui+video framebuffer after painting.
+    // No PrintWindow recursion, video-only replacement or GL in the WndProc.
+    ctx.request_screenshot(move |image| {
+        let Some(frame) = remember_full(&image) else {
+            if let Ok(mut state)=FULL.lock() {state.pending=None;state.error=Some("The preview surface has no drawable extent".into());}
+            return;
+        };
+        publish_full(hwnd,&frame);
+    });
+}
+
+#[cfg(target_os = "windows")]
+fn publish_full(hwnd: isize, frame: &image::RgbaImage) {
+    use windows::Win32::{Foundation::{HWND,RECT},Graphics::{Dwm::DwmSetIconicLivePreviewBitmap,Gdi::DeleteObject},UI::WindowsAndMessaging::GetClientRect};
+    let mut client=RECT::default();
+    if unsafe {GetClientRect(HWND(hwnd as *mut _),&mut client)}.is_err() {return;}
+    // A minimized HWND reports a zero client. DWM still accepts its cached
+    // normal-size iconic representation; do not discard that valid bitmap.
+    if client.right<=0 || client.bottom<=0 {client.right=frame.width() as i32;client.bottom=frame.height() as i32;}
+    // DWM requires a 32-bit bitmap no larger than the current client area.
+    let (w,h)=fit_size(frame.width(),frame.height(),client.right as u32,client.bottom as u32);
+    let resized;
+    let image=if w!=frame.width() || h!=frame.height() {
+        resized=image::imageops::resize(frame,w,h,image::imageops::FilterType::Triangle);&resized
+    }else{frame};
+    let result=bitmap(image).and_then(|bitmap| unsafe {
+        let result=DwmSetIconicLivePreviewBitmap(HWND(hwnd as *mut _),bitmap,None,1); // DWM_SIT_DISPLAYFRAME
+        let _=DeleteObject(bitmap.into());result
+    });
+    if let Ok(mut state)=FULL.lock() {match result {Ok(())=>{state.delivered+=1;state.error=None;},Err(error)=>state.error=Some(error.to_string())}}
+}
+
+#[cfg(target_os = "windows")]
+fn handle_full_request(hwnd: isize) -> bool {
+    if !PREVIEW.lock().is_ok_and(|state|state.enabled) {return false;}
+    let (frame,capture)=if let Ok(mut state)=FULL.lock() {
+        state.requests+=1;
+        // A snapshot is enough for Task View; do not read the entire 4K UI on
+        // every video-frame invalidation. Paused previews cannot create loops.
+        let drawable=!unsafe {windows::Win32::UI::WindowsAndMessaging::IsIconic(windows::Win32::Foundation::HWND(hwnd as *mut _))}.as_bool();
+        let capture=drawable && state.captured.is_none_or(|at|at.elapsed()>=Duration::from_secs(1))
+            && state.pending.is_none_or(|at|at.elapsed()>=Duration::from_secs(2));
+        if capture {state.pending=Some(Instant::now());}
+        (state.frame.clone(),capture)
+    }else{(None,false)};
+    if let Some(frame)=frame {publish_full(hwnd,&frame);}
+    if capture {
+        FULL_REQUESTED.store(true,std::sync::atomic::Ordering::Release);
+        request_repaint();
+    }
+    true
+}
 
 #[cfg(target_os = "windows")]
 fn wake_native_window() {
@@ -80,6 +222,10 @@ pub fn register_repaint(ctx: &eframe::egui::Context) {
             .name("pealayer-shell-wake".to_owned())
             .spawn(move || {
                 while receiver.recv().is_ok() {
+                    #[cfg(target_os = "windows")]
+                    if MINIMIZE_REQUESTED.swap(false,std::sync::atomic::Ordering::AcqRel) {minimize(&repaint);}
+                    #[cfg(target_os = "windows")]
+                    capture_full_if_requested(&repaint);
                     repaint.request_repaint();
                     wake_native_window();
                     // A second edge publishes the state that results from the
@@ -158,8 +304,20 @@ pub fn configure(hwnd: isize, enabled: bool) -> Result<(), String> {
     state.configuration_error = None;
     state.frame = None;
     state.captured = None;
-    state.requested = None;
-    state.capture_refresh_requested = None;
+    state.frame_dirty = false;
+    #[cfg(target_os = "windows")]
+    {
+        FULL_REQUESTED.store(false,std::sync::atomic::Ordering::Release);
+        if let Ok(mut full)=FULL.lock() {*full=FullPreview::default();}
+    }
+    drop(state);
+    #[cfg(target_os="windows")]
+    if enabled {
+        // One seed also covers shell/desktop minimize routes that bypass
+        // WM_SYSCOMMAND. Later explicit minimization refreshes the last UI.
+        FULL_REQUESTED.store(true,std::sync::atomic::Ordering::Release);
+        request_repaint();
+    }
     Ok(())
 }
 
@@ -173,10 +331,9 @@ enum CapturePlan {
 fn capture_plan(
     enabled: bool,
     has_frame: bool,
-    requested_age: Option<Duration>,
+    frame_dirty: bool,
     captured_age: Option<Duration>,
 ) -> CapturePlan {
-    const ACTIVE_WINDOW: Duration = Duration::from_secs(1);
     const FRAME_INTERVAL: Duration = Duration::from_millis(33);
     if !enabled {
         return CapturePlan::Idle;
@@ -184,23 +341,13 @@ fn capture_plan(
     if !has_frame {
         return CapturePlan::Capture;
     }
-    if !requested_age.is_some_and(|age| age < ACTIVE_WINDOW) {
+    if !frame_dirty {
         return CapturePlan::Idle;
     }
     match captured_age {
         Some(age) if age < FRAME_INTERVAL => CapturePlan::RetryAfter(FRAME_INTERVAL - age),
         _ => CapturePlan::Capture,
     }
-}
-
-fn is_capture_refresh(request_age: Option<Duration>) -> bool {
-    // DwmInvalidateIconicBitmaps normally causes a prompt
-    // WM_DWMSENDICONICTHUMBNAIL callback. That callback acknowledges the frame
-    // we just captured; it is not fresh evidence that the user is still
-    // hovering the taskbar preview. Treat only the bounded, immediate callback
-    // as our own refresh so a single shell request cannot renew the one-second
-    // capture lease forever.
-    request_age.is_some_and(|age| age < Duration::from_millis(250))
 }
 
 pub fn reset_shell() {
@@ -218,6 +365,7 @@ pub unsafe fn capture(
     width: i32,
     height: i32,
     media: &str,
+    frame_updated: bool,
 ) {
     use eframe::glow::{self, HasContext};
     let plan = if let Ok(mut state) = PREVIEW.lock() {
@@ -229,10 +377,11 @@ pub unsafe fn capture(
             state.frame = None;
             state.captured = None;
         }
+        state.frame_dirty |= frame_updated;
         capture_plan(
             state.enabled,
             state.frame.is_some(),
-            state.requested.map(|at| at.elapsed()),
+            state.frame_dirty,
             state.captured.map(|at| at.elapsed()),
         )
     } else {
@@ -256,6 +405,8 @@ pub unsafe fn capture(
     unsafe {
         // Preserve split FBO bindings and pixel packing. Never read the egui
         // framebuffer, which would include controls/OSD and leak through panels.
+        let scissor = gl.is_enabled(glow::SCISSOR_TEST);
+        gl.disable(glow::SCISSOR_TEST);
         let read = gl.get_parameter_i32(glow::READ_FRAMEBUFFER_BINDING) as u32;
         let draw = gl.get_parameter_i32(glow::DRAW_FRAMEBUFFER_BINDING) as u32;
         let pack = gl.get_parameter_i32(glow::PIXEL_PACK_BUFFER_BINDING) as u32;
@@ -264,10 +415,12 @@ pub unsafe fn capture(
         let skip_rows = gl.get_parameter_i32(glow::PACK_SKIP_ROWS);
         let skip_pixels = gl.get_parameter_i32(glow::PACK_SKIP_PIXELS);
         let Ok(fbo) = gl.create_framebuffer() else {
+            if scissor { gl.enable(glow::SCISSOR_TEST); }
             return;
         };
         let Ok(texture) = gl.create_renderbuffer() else {
             gl.delete_framebuffer(fbo);
+            if scissor { gl.enable(glow::SCISSOR_TEST); }
             return;
         };
         let rb = gl.get_parameter_i32(glow::RENDERBUFFER_BINDING) as u32;
@@ -339,6 +492,7 @@ pub unsafe fn capture(
         );
         gl.delete_renderbuffer(texture);
         gl.delete_framebuffer(fbo);
+        if scissor { gl.enable(glow::SCISSOR_TEST); }
         if !complete {
             return;
         }
@@ -349,7 +503,8 @@ pub unsafe fn capture(
         if let Ok(mut state) = PREVIEW.lock() {
             state.frame = image::RgbaImage::from_raw(w, h, rgba);
             state.captured = Some(Instant::now());
-            state.capture_refresh_requested = Some(Instant::now());
+            state.frame_dirty = false;
+            state.captured_frames += 1;
         }
         let _ = windows::Win32::Graphics::Dwm::DwmInvalidateIconicBitmaps(
             windows::Win32::Foundation::HWND(hwnd as *mut _),
@@ -396,11 +551,10 @@ pub fn bitmap(
 pub fn handle_request(hwnd: isize, message: u32, lparam: isize) -> bool {
     use windows::Win32::UI::WindowsAndMessaging::WM_DWMSENDICONICLIVEPREVIEWBITMAP;
 
-    // Video-only is correct for the small taskbar thumbnail, but a Peek/live
-    // preview is projected over the real desktop window. Leave that full-size
-    // preview to DWM so Pealayer keeps its complete UI while being hovered.
+    // With forced iconic representation Windows also asks us for this surface.
+    // Ignoring it leaves Task View black. Never use the small video bitmap here.
     if message == WM_DWMSENDICONICLIVEPREVIEWBITMAP {
-        return false;
+        return handle_full_request(hwnd);
     }
     if !is_static_thumbnail_request(message) {
         return false;
@@ -413,22 +567,10 @@ pub fn handle_request(hwnd: isize, message: u32, lparam: isize) -> bool {
             return false;
         }
         state.requests += 1;
-        let now = Instant::now();
-        let capture_refresh = is_capture_refresh(
-            state
-                .capture_refresh_requested
-                .take()
-                .map(|requested| now.saturating_duration_since(requested)),
-        );
-        if !capture_refresh {
-            state.requested = Some(now);
-        }
         state.frame.clone()
     };
-    if let Some(ctx) = REPAINT.get() {
-        ctx.request_repaint();
-    }
     let Some(frame) = frame else {
+        request_repaint();
         return true;
     };
     let (max_w, max_h) = (
@@ -469,14 +611,25 @@ pub fn diagnostics() -> serde_json::Value {
     };
     // These two attributes are documented for Set, not Get. Report the
     // successfully accepted configuration, not fabricated read-back values.
-    serde_json::json!({"video_only":state.enabled,
+    #[cfg(target_os = "windows")]
+    let branding = crate::platform::taskbar_branding::diagnostics();
+    #[cfg(not(target_os = "windows"))]
+    let branding = serde_json::Value::Null;
+    #[cfg(target_os = "windows")]
+    let full = FULL.lock().map(|state|serde_json::json!({"requests":state.requests,"captures":state.captures,
+        "delivered":state.delivered,"non_uniform":state.non_uniform,"frame_size":state.frame.as_ref().map(|frame|[frame.width(),frame.height()]),
+        "frame_age_ms":state.captured.map(|at|at.elapsed().as_millis() as u64),"error":state.error})).unwrap_or_default();
+    #[cfg(not(target_os = "windows"))]
+    let full = serde_json::Value::Null;
+    serde_json::json!({"video_only":state.enabled,"branding":branding,
+        "full_preview":full,
         "dwm_configuration":{"supported":cfg!(target_os="windows"),
             "force_iconic":state.enabled,"has_iconic_bitmap":state.enabled,
             "source":"successful DwmSetWindowAttribute calls","error":state.configuration_error},
         "toolbar_icon_size":crate::platform::windows::thumbnail_toolbar_metrics(crate::platform::windows::get_registered_hwnd()).0,
         "frame_size":state.frame.as_ref().map(|f| [f.width(),f.height()]),
         "frame_age_ms":state.captured.map(|at| at.elapsed().as_millis() as u64),
-        "capture_refresh_pending_ms":state.capture_refresh_requested.map(|at| at.elapsed().as_millis() as u64),
+        "captured_frames":state.captured_frames,"frame_dirty":state.frame_dirty,
         "dwm_requests":state.requests,"dwm_delivered":state.delivered,"last_error":state.last_error,
         "shell_commands":crate::platform::windows::shell_command_diagnostics()})
 }
@@ -490,6 +643,19 @@ pub fn frame_png() -> Option<Vec<u8>> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn full_preview_preserves_composited_pixels_and_orientation() {
+        assert!(super::full_rgba(&eframe::egui::ColorImage::new([0,0],Vec::new())).is_none());
+        let pixels=[eframe::egui::Color32::RED,eframe::egui::Color32::GREEN,eframe::egui::Color32::BLUE,eframe::egui::Color32::WHITE];
+        let image=eframe::egui::ColorImage::new([2,2],pixels.to_vec());
+        let full=super::full_rgba(&image).unwrap();
+        assert_eq!(full.dimensions(),(2,2));
+        for (pixel,expected) in full.pixels().zip(pixels) {assert_eq!(pixel.0,expected.to_array());}
+        let source=include_str!("taskbar_preview.rs");
+        assert!(source.contains("ctx.request_screenshot(move |image|"));
+        assert!(source.contains("return handle_full_request(hwnd)"));
+    }
     #[test]
     fn video_only_bitmap_is_never_used_for_full_size_peek() {
         assert!(super::is_static_thumbnail_request(0x0323));
@@ -510,7 +676,7 @@ mod tests {
             super::capture_plan(
                 true,
                 true,
-                Some(Duration::from_millis(5)),
+                true,
                 Some(Duration::from_millis(20)),
             ),
             super::CapturePlan::RetryAfter(Duration::from_millis(13))
@@ -519,7 +685,7 @@ mod tests {
             super::capture_plan(
                 true,
                 true,
-                Some(Duration::from_millis(40)),
+                true,
                 Some(Duration::from_millis(33)),
             ),
             super::CapturePlan::Capture
@@ -528,7 +694,7 @@ mod tests {
             super::capture_plan(
                 true,
                 true,
-                Some(Duration::from_secs(2)),
+                false,
                 Some(Duration::from_secs(1)),
             ),
             super::CapturePlan::Idle
@@ -536,12 +702,12 @@ mod tests {
     }
 
     #[test]
-    fn capture_generated_thumbnail_request_does_not_renew_preview_lease() {
+    fn new_video_frames_never_expire_but_paused_unchanged_frames_do_not_loop() {
         use std::time::Duration;
-        assert!(super::is_capture_refresh(Some(Duration::from_millis(10))));
-        assert!(super::is_capture_refresh(Some(Duration::from_millis(249))));
-        assert!(!super::is_capture_refresh(Some(Duration::from_millis(250))));
-        assert!(!super::is_capture_refresh(Some(Duration::from_secs(2))));
-        assert!(!super::is_capture_refresh(None));
+        for age in [Duration::from_secs(2), Duration::from_secs(60)] {
+            assert_eq!(super::capture_plan(true, true, true, Some(age)), super::CapturePlan::Capture);
+            assert_eq!(super::capture_plan(true, true, false, Some(age)), super::CapturePlan::Idle);
+        }
+        assert_eq!(super::capture_plan(false, false, true, None), super::CapturePlan::Idle);
     }
 }

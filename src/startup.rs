@@ -109,51 +109,30 @@ pub fn run() -> eframe::Result {
                 std::process::exit(1);
             }
         },
-        Ok(crate::cli::CliAction::PushUpdate(target)) => {
-            match crate::update::push_current_to_peer(&target) {
-                Ok(status) => {
-                    crate::cli_println!(
-                        "{}",
-                        serde_json::to_string_pretty(&status).unwrap_or_default()
-                    );
-                    return Ok(());
-                }
-                Err(error) => {
-                    crate::cli_eprintln!("Peer update failed: {error}");
-                    std::process::exit(4);
-                }
-            }
+        Ok(crate::cli::CliAction::PushUpdate { target, output }) => {
+            let mut reporter = crate::update::console::Reporter::open("Peer update", &target, output);
+            let result = crate::update::push_current_to_peer(&target, |progress| reporter.progress(progress));
+            reporter.finish(&result);
+            drop(reporter);
+            if result.is_err() { std::process::exit(4); }
+            return Ok(());
         }
-        Ok(crate::cli::CliAction::UpdateFrom { url, sha256 }) => {
+        Ok(crate::cli::CliAction::UpdateFrom { url, sha256, output }) => {
             let target = format!("http://127.0.0.1:{}", crate::config::control_port());
-            match crate::update::request_update_from_url(&target, &url, sha256.as_deref()) {
-                Ok(status) => {
-                    crate::cli_println!(
-                        "{}",
-                        serde_json::to_string_pretty(&status).unwrap_or_default()
-                    );
-                    return Ok(());
-                }
-                Err(error) => {
-                    crate::cli_eprintln!("URL update request failed: {error}");
-                    std::process::exit(4);
-                }
-            }
+            let mut reporter = crate::update::console::Reporter::open("URL update", &target, output);
+            let result = crate::update::request_update_from_url(&target, &url, sha256.as_deref(), |progress| reporter.progress(progress));
+            reporter.finish(&result);
+            drop(reporter);
+            if result.is_err() { std::process::exit(4); }
+            return Ok(());
         }
-        Ok(crate::cli::CliAction::UpdateStatus(target)) => {
-            match crate::update::peer_update_status(&target) {
-                Ok(status) => {
-                    crate::cli_println!(
-                        "{}",
-                        serde_json::to_string_pretty(&status).unwrap_or_default()
-                    );
-                    return Ok(());
-                }
-                Err(error) => {
-                    crate::cli_eprintln!("Update status request failed: {error}");
-                    std::process::exit(4);
-                }
-            }
+        Ok(crate::cli::CliAction::UpdateStatus { target, output }) => {
+            let mut reporter = crate::update::console::Reporter::open("Update status", &target, output);
+            let result = crate::update::peer_update_status(&target);
+            reporter.finish(&result);
+            drop(reporter);
+            if result.is_err() { std::process::exit(4); }
+            return Ok(());
         }
         Ok(crate::cli::CliAction::RegisterAssociations) => {
             match crate::platform::associations::register_file_associations(None) {
@@ -261,20 +240,9 @@ pub fn run() -> eframe::Result {
             eframe::icon_data::from_png_bytes(include_bytes!("../assets/pealayer-icon.png")).ok()
         });
 
-    let mut viewport = egui::ViewportBuilder::default()
-        .with_inner_size([800.0, 600.0])
+    let initial_geometry = crate::platform::window_placement::initial(&launch_config, crate::peer::active());
+    let mut viewport = crate::platform::window_placement::builder(egui::ViewportBuilder::default(), initial_geometry, cli_options.fullscreen)
         .with_clamp_size_to_monitor_size(true);
-    if !crate::peer::active() && let Some(geometry) = launch_config
-        .workspace_session
-        .window_geometry
-        .or(launch_config.window_geometry)
-        .filter(|geometry| geometry.is_valid())
-    {
-        viewport = viewport
-            .with_inner_size([geometry.width, geometry.height])
-            .with_position([geometry.x, geometry.y])
-            .with_maximized(geometry.maximized);
-    }
     if cli_options.fullscreen {
         viewport = viewport.with_fullscreen(true);
     }
@@ -292,7 +260,10 @@ pub fn run() -> eframe::Result {
     let options = eframe::NativeOptions {
         viewport,
         renderer: eframe::Renderer::Glow,
-        persist_window: !crate::peer::active(),
+        // The application owns placement. Keep eframe's widget memory, not a
+        // second, possibly minimized WindowSettings geometry authority.
+        persist_window: false,
+        window_builder: Some(Box::new(move |builder| crate::platform::window_placement::builder(builder, initial_geometry, cli_options.fullscreen))),
         persistence_path: (!crate::peer::active()).then(||
             crate::config::AppConfig::get_config_path().with_file_name("workspace-state.ron"),
         ),
@@ -325,6 +296,9 @@ pub fn run() -> eframe::Result {
         &initial_window_title,
         options,
         Box::new(move |cc| {
+            if let Some(window) = cc.winit_window() {
+                crate::platform::window_placement::restore(window, initial_geometry, cli_options.fullscreen, cc.egui_ctx.zoom_factor());
+            }
             let loaded_config = launch_config.clone();
             crate::platform::windows::start_window_move_frame_pump(cc.egui_ctx.clone());
             crate::ui::i18n::configure_ui_fonts(
@@ -333,6 +307,7 @@ pub fn run() -> eframe::Result {
             );
             crate::ui::configure_native_appearance(&cc.egui_ctx, &loaded_config);
             crate::ui::configure_main_window_style(&cc.egui_ctx);
+            egui_extras::install_image_loaders(&cc.egui_ctx);
 
             let get_proc = cc
                 .get_proc_address
@@ -659,15 +634,14 @@ pub fn run() -> eframe::Result {
                 app_publisher: crate::config::resolved_app_publisher(&loaded_config),
                 app_copyright: crate::config::resolved_app_copyright(&loaded_config),
                 last_window_title: String::new(),
-                window_geometry: loaded_config
-                    .workspace_session
-                    .window_geometry
-                    .or(loaded_config.window_geometry),
+                window_geometry: initial_geometry,
                 language_preference,
                 language,
                 direction_preference,
                 theme_preference: crate::config::resolved_theme(&loaded_config),
                 color_palette: loaded_config.color_palette,
+                native_monitor_style: loaded_config.native_monitor_style,
+                native_timeline_style: loaded_config.native_timeline_style,
                 rtl,
                 mpv: crate::mpv::player::Player(mpv_static),
                 mpv_client: Arc::new(mpv_client),
@@ -755,6 +729,8 @@ pub fn run() -> eframe::Result {
                 hardware_effect_authoring: crate::app::HardwareEffectAuthoringState::default(),
                 recording_keys: std::collections::HashMap::new(),
                 dock_state,
+                sidebar_rail_state: loaded_config.ui.sidebar_rail,
+                sidebar_shortcuts: loaded_config.ui.sidebar_shortcuts.clone(),
                 rtt_state: Arc::new(Mutex::new(crate::app::RttState {
                     video_texture: None,
                     video_fbo: None,
@@ -762,6 +738,8 @@ pub fn run() -> eframe::Result {
                     texture_width: 1920,
                     texture_height: 1080,
                     has_rendered_frame: false,
+                    render_target: None,
+                    consecutive_render_failures: 0,
                 })),
                 selected_instance_ids: std::collections::HashSet::new(),
                 selected_keyframes: std::collections::HashSet::new(),
@@ -781,6 +759,7 @@ pub fn run() -> eframe::Result {
                     .clone()
                     .unwrap_or_default(),
                 effect_group_draft: None,
+                asset_import: Default::default(),
                 track_muted: std::collections::BTreeSet::new(),
                 track_soloed: std::collections::BTreeSet::new(),
                 track_locked: std::collections::BTreeSet::new(),
@@ -906,6 +885,7 @@ pub fn run() -> eframe::Result {
                 seekbar_hover_thumbnails: loaded_config.seekbar_hover_thumbnails,
                 nle_seekbar_hover_thumbnails: loaded_config.nle_seekbar_hover_thumbnails,
                 seekbar_markers: loaded_config.seekbar_markers.clone(),
+                effect_designer_cue_colors: loaded_config.effect_designer_cue_colors.clone(),
                 seekbar_thumbnail_preview:
                     crate::ui::seek_preview::SeekbarThumbnailPreview::default(),
                 quick_seek_seconds: loaded_config.quick_seek_seconds,

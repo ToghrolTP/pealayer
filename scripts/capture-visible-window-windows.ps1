@@ -8,6 +8,9 @@ param(
     [Parameter(Mandatory = $true)][string]$OutputPath,
     # Optional window-relative pixel rectangle: x, y, width, height.
     [int[]]$CropRectangle,
+    # Integer nearest-neighbor enlargement for inspecting native pixel edges.
+    # This changes only screenshot presentation, never application DPI or layout.
+    [ValidateRange(1, 8)][int]$PixelScale = 1,
     # Read-only best effort when a test window is behind another application.
     # PrintWindow does not activate it; GPU-backed windows may not support it.
     [switch]$RenderOccludedWindow
@@ -51,6 +54,20 @@ $height = $rectangle.Bottom - $rectangle.Top
 if ($width -le 0 -or $height -le 0) { throw 'Window has no visible extent.' }
 $bitmap = New-Object System.Drawing.Bitmap $width, $height
 $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+function Save-CaptureBitmap([System.Drawing.Bitmap]$Source) {
+    if ($PixelScale -eq 1) {
+        $Source.Save([IO.Path]::GetFullPath($OutputPath), [System.Drawing.Imaging.ImageFormat]::Png)
+        return
+    }
+    $enlarged = [System.Drawing.Bitmap]::new($Source.Width * $PixelScale, $Source.Height * $PixelScale)
+    $scaledGraphics = [System.Drawing.Graphics]::FromImage($enlarged)
+    try {
+        $scaledGraphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::NearestNeighbor
+        $scaledGraphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::Half
+        $scaledGraphics.DrawImage($Source, [System.Drawing.Rectangle]::new(0,0,$enlarged.Width,$enlarged.Height))
+        $enlarged.Save([IO.Path]::GetFullPath($OutputPath), [System.Drawing.Imaging.ImageFormat]::Png)
+    } finally { $scaledGraphics.Dispose(); $enlarged.Dispose() }
+}
 try {
     if ($RenderOccludedWindow) {
         $captureDc = $graphics.GetHdc()
@@ -71,14 +88,14 @@ try {
         }
         $crop = [System.Drawing.Rectangle]::new($CropRectangle[0], $CropRectangle[1], $CropRectangle[2], $CropRectangle[3])
         $croppedBitmap = $bitmap.Clone($crop, $bitmap.PixelFormat)
-        try { $croppedBitmap.Save([IO.Path]::GetFullPath($OutputPath), [System.Drawing.Imaging.ImageFormat]::Png) }
+        try { Save-CaptureBitmap $croppedBitmap }
         finally { $croppedBitmap.Dispose() }
         $width = $crop.Width
         $height = $crop.Height
     } else {
-        $bitmap.Save([IO.Path]::GetFullPath($OutputPath), [System.Drawing.Imaging.ImageFormat]::Png)
+        Save-CaptureBitmap $bitmap
     }
-    [pscustomobject]@{ ProcessId = $windowProcess.Id; Width = $width; Height = $height; Path = [IO.Path]::GetFullPath($OutputPath) }
+    [pscustomobject]@{ ProcessId = $windowProcess.Id; Width = $width * $PixelScale; Height = $height * $PixelScale; PixelScale = $PixelScale; Path = [IO.Path]::GetFullPath($OutputPath) }
 } finally {
     $graphics.Dispose()
     $bitmap.Dispose()

@@ -7,6 +7,9 @@ pub static MPV_RENDER_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::A
 pub static MPV_RENDER_SKIPPED_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub static LAST_MPV_RENDER_MICROS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 pub static MAX_MPV_RENDER_MICROS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static MPV_RENDER_FAILED_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static MPV_TARGET_RESIZE_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static MPV_UPDATE_FAILED_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 pub fn record_mpv_render_duration(dur: std::time::Duration) {
     let micros = dur.as_micros() as u64;
@@ -826,6 +829,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     // 3. Schedule PaintCallback to render current frame at exact physical pixel size
     let render_context = app.render_context.clone();
     let rtt_state = app.rtt_state.clone();
+    let repaint = ui.ctx().clone();
     let is_operating = app.is_window_operating;
     #[cfg(target_os = "windows")]
     let taskbar_media = app
@@ -860,73 +864,80 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         // A board/hover repaint is not a decoder update. Reuse
                         // the valid texture without entering MPV or querying,
                         // resetting and restoring GL state on every such frame.
-                        if !update_pending && !needs_resize && rtt.has_rendered_frame {
+                        if !update_pending && !needs_resize && rtt.has_rendered_frame
+                            && rtt.consecutive_render_failures == 0 {
+                            #[cfg(target_os = "windows")]
+                            if let Some(media) = taskbar_media.as_deref() {
+                                unsafe { crate::platform::taskbar_preview::capture(gl, hwnd, video_fbo,
+                                    target_phys_w, target_phys_h, media, false); }
+                            }
                             MPV_RENDER_SKIPPED_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                             return;
                         }
                         unsafe {
-                            use eframe::glow::HasContext;
-
                             // Scope also restores bindings on the unchanged-frame
                             // early return. Never pass egui's blending/clip to mpv.
                             let gl_state = crate::mpv::render::MpvGlStateGuard::enter(gl);
 
-                            // Dynamic resizing of texture if physical dimensions changed
-                            if needs_resize {
-                                gl.bind_texture(eframe::glow::TEXTURE_2D, Some(tex));
-                                gl.tex_image_2d(
-                                    eframe::glow::TEXTURE_2D,
-                                    0,
-                                    eframe::glow::RGBA8 as i32,
-                                    target_phys_w,
-                                    target_phys_h,
-                                    0,
-                                    eframe::glow::RGBA,
-                                    eframe::glow::UNSIGNED_BYTE,
-                                    eframe::glow::PixelUnpackData::Slice(None),
-                                );
-                                rtt.texture_width = target_phys_w as u32;
-                                rtt.texture_height = target_phys_h as u32;
-                                rtt.has_rendered_frame = false;
-                                gl.bind_texture(eframe::glow::TEXTURE_2D, None);
-                            }
-
                             // Query MPV to see if a new video frame is ready to render
                             let has_new_frame = match rc.0.update() {
                                 Ok(flags) => (flags & libmpv2::render::mpv_render_update::Frame) != 0,
-                                Err(_) => true,
+                                Err(_) => {
+                                    MPV_UPDATE_FAILED_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                    true
+                                },
                             };
 
                             // Bypass redundant rendering if no new frame arrived, dimensions are unchanged,
                             // and the FBO already holds a valid rendered frame.
-                            if !needs_resize && !has_new_frame && rtt.has_rendered_frame {
+                            if !needs_resize && !has_new_frame && rtt.has_rendered_frame
+                                && rtt.consecutive_render_failures == 0 {
+                                #[cfg(target_os = "windows")]
+                                if let Some(media) = taskbar_media.as_deref() {
+                                    crate::platform::taskbar_preview::capture(gl, hwnd, video_fbo,
+                                        target_phys_w, target_phys_h, media, false);
+                                }
                                 MPV_RENDER_SKIPPED_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
                                 return;
                             }
 
-                            // A successful pass replaces an opaque frame in full;
-                            // no old/undefined pixels survive clipping or resize.
-                            gl_state.begin_frame(video_fbo, target_phys_w, target_phys_h);
-
-                            // Render MPV frame at physical pixel size
-                            let fbo_id = video_fbo.0.get() as i32;
+                            // Clear/draw in private GPU storage. Only a completed
+                            // frame may replace the currently displayed texture.
+                            // This also keeps the old frame during a failed resize.
+                            let displayed_size = (rtt.texture_width, rtt.texture_height);
                             let render_start = std::time::Instant::now();
-                            let render_result = rc.0.render::<GetProcAddress>(
-                                fbo_id,
-                                target_phys_w,
-                                target_phys_h,
-                                false,
-                            );
+                            let render_result = (|| {
+                                if rtt.render_target.is_none() {
+                                    rtt.render_target = Some(crate::mpv::render::VideoRenderTarget::create(gl)?);
+                                }
+                                rtt.render_target.as_mut().unwrap().render_and_publish(
+                                    &gl_state, video_fbo, tex, displayed_size, (target_phys_w, target_phys_h),
+                                    |fbo_id| rc.0.render::<GetProcAddress>(fbo_id, target_phys_w, target_phys_h, false)
+                                        .map_err(|error| error.to_string()),
+                                )
+                            })();
                             record_mpv_render_duration(render_start.elapsed());
                             if let Err(error) = render_result {
-                                // Do not cache an unsuccessful or partially drawn
-                                // frame as valid, nor log the same fault every paint.
-                                if needs_resize || rtt.has_rendered_frame {
+                                MPV_RENDER_FAILED_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                if rtt.consecutive_render_failures == 0 {
                                     log::warn!("Could not render the libmpv video target: {error}");
                                 }
-                                rtt.has_rendered_frame = false;
+                                rtt.consecutive_render_failures = rtt.consecutive_render_failures.saturating_add(1);
+                                // Retain the last successfully published frame.
+                                // Keep decoder work pending; permit three bounded
+                                // retry wakeups for paused playback, not a spin.
+                                rc.1.mark();
+                                if rtt.consecutive_render_failures <= 3 {
+                                    repaint.request_repaint_after(std::time::Duration::from_millis(50));
+                                }
                                 return;
                             }
+                            if needs_resize {
+                                MPV_TARGET_RESIZE_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            }
+                            rtt.texture_width = target_phys_w as u32;
+                            rtt.texture_height = target_phys_h as u32;
+                            rtt.consecutive_render_failures = 0;
                             rtt.has_rendered_frame = true;
 
                             #[cfg(target_os = "windows")]
@@ -938,6 +949,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     target_phys_w,
                                     target_phys_h,
                                     media,
+                                    true,
                                 );
                             }
 
@@ -973,12 +985,10 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         ui.painter()
             .rect_filled(rect, 0.0, egui::Color32::from_black_alpha(180));
         let font_id = egui::FontId::proportional(26.0);
+        let paths=ui.input(|i|i.raw.hovered_files.iter().filter_map(|f|f.path.clone()).collect::<Vec<_>>());
+        let feedback=crate::assets::drop_feedback(&paths,&crate::assets::Destination::Player);
         let galley = ui.painter().layout_no_wrap(
-            format!(
-                "{} {}",
-                crate::ui::icons::FILE_VIDEO,
-                app.tr("Drop video file here to play")
-            ),
+            format!("{} {}",crate::ui::icons::named_control_icon(&feedback.icon).unwrap_or(crate::ui::icons::FILE_VIDEO),feedback.message),
             font_id,
             egui::Color32::WHITE,
         );
@@ -1193,15 +1203,16 @@ mod tests {
         let idle_reuse = source.find("if !update_pending && !needs_resize && rtt.has_rendered_frame").unwrap();
         let update = source.find("let has_new_frame = match rc.0.update()").unwrap();
         let reuse = source.find("if !needs_resize && !has_new_frame && rtt.has_rendered_frame").unwrap();
-        let clear = source.find("gl_state.begin_frame(video_fbo, target_phys_w, target_phys_h)").unwrap();
-        let render = source.find("let render_result = rc.0.render::<GetProcAddress>").unwrap();
+        let render = source.find(".render_and_publish(").unwrap();
         let failure = source.find("if let Err(error) = render_result").unwrap();
         let valid = source.find("rtt.has_rendered_frame = true").unwrap();
-        assert!(boundary < update && update < reuse && reuse < clear && clear < render && render < failure && failure < valid);
+        assert!(boundary < update && update < reuse && reuse < render && render < failure && failure < valid);
         assert!(pending < idle_reuse && idle_reuse < boundary);
         assert!(source[idle_reuse..boundary].contains("return;"));
         assert!(!source[idle_reuse..boundary].contains("gl."));
-        assert!(source[failure..valid].contains("rtt.has_rendered_frame = false"));
+        assert!(!source[failure..valid].contains("rtt.has_rendered_frame = false"));
+        assert!(source[failure..valid].contains("rc.1.mark()"));
+        assert!(source[failure..valid].contains("rtt.consecutive_render_failures <= 3"));
         assert!(source[failure..valid].contains("return;"));
     }
 

@@ -58,7 +58,7 @@ pub fn choice_slider(
     let rail_slot = egui::Rect::from_min_size(bounds.min,
         egui::vec2(if stacked {width} else {width - badge_width - 12.0}, row_height))
         .shrink2(egui::vec2(2.0_f32.min(width / 4.0), 0.0));
-    let response = {
+    let mut response = {
         // The parent has allocated bounds already. A non-allocating child avoids
         // advancing the surrounding Preferences row a second time.
         let mut slider_ui = ui.new_child(egui::UiBuilder::new().max_rect(rail_slot)
@@ -89,7 +89,18 @@ pub fn choice_slider(
             painter.circle_filled(egui::pos2(x, response.rect.center().y), 1.25, color);
         }
     }
-    let focused = response.has_focus();
+    // The capsule is a pointer extension of the same slider, not a second
+    // directional-focus target beside it. Keep arrow keys on the rail.
+    let badge_response = ui.interact(badge, response.id.with("value"), egui::Sense::CLICK)
+        .on_hover_cursor(egui::CursorIcon::PointingHand);
+    if badge_response.clicked() {
+        *index = (*index + 1) % labels.len();
+        response.mark_changed();
+        response.request_focus();
+    }
+    badge_response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button,
+        ui.is_enabled(), format!("{caption}: {} → {}", labels[*index], labels[(*index + 1) % labels.len()])));
+    let focused = response.has_focus() || badge_response.has_focus();
     let border = if focused { ui.visuals().selection.bg_fill }
         else { ui.visuals().widgets.noninteractive.bg_stroke.color };
     painter.rect(badge.shrink(0.5), egui::CornerRadius::same(6),
@@ -103,8 +114,7 @@ pub fn choice_slider(
     painter.with_clip_rect(badge.shrink2(egui::vec2(6.0, 0.0)))
         .galley(egui::pos2(badge.center().x - galley.size().x / 2.0,
             badge.center().y - ink_center_y), galley, ui.visuals().text_color());
-    ui.interact(badge, response.id.with("value"), egui::Sense::hover())
-        .on_hover_text(&labels[*index]);
+    badge_response.on_hover_text(format!("{} → {}", labels[*index], labels[(*index + 1) % labels.len()]));
     response.widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), *index as f64,
         format!("{caption}: {}", labels[*index])));
     #[cfg(test)]
@@ -239,6 +249,42 @@ mod tests {
             pos:point,button:egui::PointerButton::Primary,pressed:false,modifiers:egui::Modifiers::NONE}],true);
         render(&mut index,&mut rect,vec![arrow(egui::Key::ArrowLeft)],false);
         assert_eq!(index,4);
+    }
+
+    #[test]
+    fn value_capsule_cycles_immediately_wraps_and_respects_disabled_state() {
+        for width in [150.0, 420.0] {
+            let ctx = egui::Context::default();
+            let mut index = 1;
+            let mut badge = egui::Rect::NOTHING;
+            let mut changed = false;
+            let mut render = |index: &mut usize, events, enabled| {
+                ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
+                    ui.add_enabled_ui(enabled, |ui| {
+                        let response = choice_slider(ui, index, &choices(), "Control density", width);
+                        changed = response.changed();
+                        badge = ui.data(|data| data.get_temp::<(egui::Rect, egui::Rect, egui::Rect)>(response.id.with("choice-geometry"))).unwrap().2;
+                    });
+                }).drop_without_applying_deltas();
+                (badge, changed)
+            };
+            let (badge, _) = render(&mut index, vec![], true);
+            for expected in [2, 3, 4, 0, 1] {
+                for pressed in [true, false] {
+                    let (_, changed) = render(&mut index, vec![egui::Event::PointerMoved(badge.center()),
+                        egui::Event::PointerButton {pos: badge.center(), button: egui::PointerButton::Primary,
+                            pressed, modifiers: egui::Modifiers::NONE}], true);
+                    if !pressed { assert!(changed); }
+                }
+                assert_eq!(index, expected);
+            }
+            for pressed in [true, false] {
+                let (_, changed) = render(&mut index, vec![egui::Event::PointerButton {pos: badge.center(),
+                    button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE}], false);
+                assert!(!changed);
+            }
+            assert_eq!(index, 1);
+        }
     }
 
     #[test]

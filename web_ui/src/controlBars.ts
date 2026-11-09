@@ -12,9 +12,9 @@ export function orderedActions(order: readonly ControlAction[]): ControlAction[]
 export function defaultLayout(surface: ControlSurface): ControlLayout {
   const visible: ControlAction[] = surface === 'simple'
     ? ['back','play_pause','forward','fullscreen','pin','audio_settings','subtitle_settings','mute']
-    : ['play_pause','stop','back','forward','fullscreen','video_track','audio_track','subtitle_track','mute'];
+    : ['play_pause','stop','back','forward','mute','fullscreen'];
   const end: ControlAction[] = ['fullscreen','pin','video_track','audio_track','subtitle_track','audio_settings','subtitle_settings','mute','preferences'];
-  return { order: surface === 'simple' ? orderedActions(['back','play_pause','forward']) : [...ACTIONS],
+  return { order: surface === 'simple' ? orderedActions(['back','play_pause','forward']) : [...ACTIONS.filter((a)=>a!=='fullscreen'),'fullscreen'],
     hidden: ACTIONS.map((a) => !visible.includes(a)), end: ACTIONS.map((a) => end.includes(a)) };
 }
 export function patchAction(layout: ControlLayout, action: ControlAction, field: 'hidden' | 'end', value: boolean): ControlLayout {

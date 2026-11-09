@@ -1,11 +1,10 @@
-//! FilmCraft 3-tier NLE program monitor controls:
-//! Tier 1: Controls row (blue timecode, zoom dropdown, res dropdown, wrench settings, duration)
-//! Tier 2: Dedicated full-width mini-timeline scrub bar with ticks, pentagon markers, dual handles, playhead
-//! Tier 3: Centered transport controls with trailing track selectors and sleek volume slider
+//! Content-measured NLE transport. Below the wide breakpoint seeking owns a
+//! complete row; actions form balanced leading/trailing clusters below it.
 use crate::app::PealayerApp;
 use eframe::egui;
 
-const VOLUME_WIDTH: f32 = 210.0;
+#[cfg(test)]
+const VOLUME_WIDTH: f32 = 160.0;
 const MIN_SEEK_WIDTH: f32 = 96.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -13,15 +12,16 @@ enum Rows {
     One,
     Two,
     Three,
-    Four,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Group {
     Transport,
     Timeline,
     Tracks,
-    Volume,
+    Elapsed,
+    Duration,
+    Seek,
 }
 
 #[derive(Clone, Copy)]
@@ -29,13 +29,15 @@ pub(super) struct Metrics {
     transport: f32,
     timeline_min: f32,
     tracks: f32,
-    volume_min: f32,
     gap: f32,
     row_height: f32,
     gap_y: f32,
+    rtl: bool,
+    style: crate::config::NativeMonitorStyle,
+    elapsed_width: f32,
+    duration_width: f32,
 }
 
-#[cfg(test)]
 fn button_width(ui: &egui::Ui, label: &str) -> f32 {
     let font_id = egui::TextStyle::Button.resolve(ui.style());
     let color = ui.visuals().widgets.inactive.text_color();
@@ -61,136 +63,176 @@ fn button_height(ui: &egui::Ui) -> f32 {
 impl Metrics {
     pub(super) fn measure(app: &PealayerApp, ui: &egui::Ui) -> Self {
         let gap = ui.spacing().item_spacing.x;
-        let gap_y = ui.spacing().item_spacing.y;
         let tracks = super::control_bar::group_width(app, ui, crate::config::ControlBarSurface::Monitor, true);
-        let transport = super::control_bar::group_width(app, ui, crate::config::ControlBarSurface::Monitor, false);
+        let total = match app.media_timeline_state() {
+            crate::media::MediaTimelineState::Determining => format!(
+                "{} {}",
+                super::icons::HOURGLASS_MEDIUM,
+                app.tr("Determining…")
+            ),
+            crate::media::MediaTimelineState::Live => {
+                format!("{} {}", super::icons::BROADCAST, app.tr("LIVE"))
+            }
+            crate::media::MediaTimelineState::NoMedia => format!("{} --:--", super::icons::CLOCK),
+            crate::media::MediaTimelineState::Finite { .. } => super::controls::format_player_time(
+                if app.show_remaining_time {
+                    -app.duration
+                } else {
+                    app.duration
+                },
+                app.duration >= 3600.0,
+                app.show_subseconds,
+            ),
+        };
+        // The total is monospace for finite timelines and body text otherwise.
+        let font = if matches!(
+            app.media_timeline_state(),
+            crate::media::MediaTimelineState::Finite { .. }
+        ) {
+            egui::TextStyle::Monospace.resolve(ui.style())
+        } else {
+            egui::TextStyle::Body.resolve(ui.style())
+        };
+        let total_width = ui.fonts_mut(|fonts| {
+            fonts
+                .layout_no_wrap(total, font, ui.visuals().text_color())
+                .size()
+                .x
+        });
         Self {
-            transport,
-            timeline_min: MIN_SEEK_WIDTH,
+            transport: super::control_bar::group_width(app, ui, crate::config::ControlBarSurface::Monitor, false),
+            timeline_min: 104.0
+                + MIN_SEEK_WIDTH
+                + total_width
+                + 2.0 * gap,
             tracks,
-            volume_min: 44.0 + 24.0 + gap,
             gap,
             row_height: button_height(ui).max(super::control_density::height(ui)),
-            gap_y,
+            gap_y: ui.spacing().item_spacing.y,
+            rtl: app.rtl,
+            style: app.native_monitor_style,
+            elapsed_width: 104.0,
+            duration_width: total_width + 2.0 * gap,
         }
     }
 
     fn rows(self, width: f32) -> Rows {
-        if width >= 540.0 {
+        let complete =
+            self.transport + self.timeline_min + self.tracks + 2.0 * self.gap;
+        if width >= complete {
             Rows::One
-        } else if width >= 500.0 {
+        } else if width >= self.transport + self.tracks + self.cluster_gap() {
             Rows::Two
-        } else if width >= 260.0 {
-            Rows::Three
         } else {
-            Rows::Four
+            Rows::Three
         }
     }
 
     pub(super) fn height(self, width: f32) -> f32 {
-        let controls_h = if width >= 540.0 { 26.0 } else { 48.0 + self.gap_y };
-        let timeline_h = 24.0;
-        let transport_h = if width >= 500.0 {
-            32.0
-        } else if width >= 260.0 {
-            56.0 + self.gap_y
-        } else {
-            82.0 + 2.0 * self.gap_y
+        if self.style == crate::config::NativeMonitorStyle::FilmCraft {
+            let rows = self.filmcraft_time_rows(width) + 1 + self.filmcraft_action_rows(width);
+            return rows as f32 * self.row_height + (rows - 1) as f32 * self.gap_y;
+        }
+        let rows = match self.rows(width) {
+            Rows::One => 1.0,
+            Rows::Two => 2.0,
+            Rows::Three => 3.0,
         };
-        controls_h + self.gap_y + timeline_h + self.gap_y + transport_h
+        rows * self.row_height + (rows - 1.0) * self.gap_y
+    }
+
+    fn cluster_gap(self) -> f32 { (2.0*self.gap).max(24.0) }
+
+    fn filmcraft_time_rows(self, width: f32) -> usize {
+        if width >= self.elapsed_width + self.duration_width + self.gap { 1 } else { 2 }
+    }
+
+    fn filmcraft_action_rows(self, width: f32) -> usize {
+        if width >= self.transport + self.tracks + self.cluster_gap() { 1 } else { 2 }
     }
 }
 
-fn draw_group(
-    ui: &mut egui::Ui,
-    metrics: Metrics,
-    group: Group,
-    width: f32,
-    draw: &mut impl FnMut(Group, &mut egui::Ui),
-) {
-    ui.allocate_ui_with_layout(
-        egui::vec2(width.max(1.0), metrics.row_height),
-        egui::Layout::left_to_right(egui::Align::Center),
-        |ui| draw(group, ui),
-    );
-}
-
-fn draw_audio_row(
-    ui: &mut egui::Ui,
-    metrics: Metrics,
-    width: f32,
-    draw: &mut impl FnMut(Group, &mut egui::Ui),
-) {
-    let audio_width = (metrics.tracks + metrics.gap + VOLUME_WIDTH).min(width);
-    ui.add_space((width - audio_width).max(0.0));
-    draw_group(ui, metrics, Group::Tracks, metrics.tracks, draw);
-    let vol_w = ui.available_width();
-    draw_group(
-        ui,
-        metrics,
-        Group::Volume,
-        vol_w,
-        draw,
-    );
-}
-
+/// Explicit bounded groups keep the elastic seekbar from forcing a wrap and
+/// reserve exactly the number of rows used before the video is allocated.
 fn draw_layout(ui: &mut egui::Ui, metrics: Metrics, mut draw: impl FnMut(Group, &mut egui::Ui)) {
     let width = ui.available_width();
-    ui.horizontal(|ui| {
-        draw_group(ui, metrics, Group::Timeline, width, &mut draw);
-    });
-    if width >= 500.0 {
-        ui.horizontal(|ui| {
-            let transport_w = metrics.transport.min(width);
-            let audio_w = (metrics.tracks + metrics.gap + VOLUME_WIDTH).min(width);
-            let left_pad = ((width - transport_w) / 2.0).min((width - audio_w - transport_w).max(0.0)).max(0.0);
-            if left_pad > 0.0 {
-                ui.add_space(left_pad);
-            }
-            draw_group(ui, metrics, Group::Transport, transport_w, &mut draw);
-            let remaining = (ui.available_width() - audio_w).max(0.0);
-            if remaining > 0.0 {
-                ui.add_space(remaining);
-            }
-            draw_group(ui, metrics, Group::Tracks, metrics.tracks, &mut draw);
-            let vol_w = ui.available_width();
-            draw_group(ui, metrics, Group::Volume, vol_w, &mut draw);
-        });
-    } else {
-        ui.horizontal(|ui| {
-            draw_group(ui, metrics, Group::Transport, metrics.transport.min(width), &mut draw);
-        });
-        ui.horizontal(|ui| {
-            draw_audio_row(ui, metrics, width, &mut draw);
-        });
+    let (bounds, _) = ui.allocate_exact_size(egui::vec2(width, metrics.height(width)), egui::Sense::hover());
+    let mut slot = |group, row: usize, x: f32, w: f32| {
+        let x = if metrics.rtl { width - x - w } else { x };
+        let rect = egui::Rect::from_min_size(bounds.min + egui::vec2(x, row as f32 * (metrics.row_height + metrics.gap_y)),
+            egui::vec2(w.max(1.0), metrics.row_height));
+        let mut child = ui.new_child(egui::UiBuilder::new().id_salt(("monitor-control-group", group))
+            .max_rect(rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        child.set_clip_rect(rect.intersect(ui.clip_rect()));
+        draw(group, &mut child);
+    };
+    if metrics.style == crate::config::NativeMonitorStyle::FilmCraft {
+        let time_rows = metrics.filmcraft_time_rows(width);
+        slot(Group::Elapsed, 0, 0.0, metrics.elapsed_width.min(width));
+        let duration_width = metrics.duration_width.min(width);
+        slot(Group::Duration, time_rows - 1, width - duration_width, duration_width);
+        // FilmCraft's middle tier gives the scrubber the entire available width.
+        slot(Group::Seek, time_rows, 0.0, width);
+        let transport = metrics.transport.min(width);
+        let tracks = metrics.tracks.min(width);
+        let action_row = time_rows + 1;
+        if metrics.filmcraft_action_rows(width) == 1 {
+            let centered = (width - transport) / 2.0;
+            let available_before_tail = width - tracks - metrics.cluster_gap() - transport;
+            slot(Group::Transport, action_row, centered.min(available_before_tail).max(0.0), transport);
+            slot(Group::Tracks, action_row, width - tracks, tracks);
+        } else {
+            slot(Group::Transport, action_row, (width - transport) / 2.0, transport);
+            slot(Group::Tracks, action_row + 1, width - tracks, tracks);
+        }
+        return;
+    }
+    match metrics.rows(width) {
+        Rows::One => {
+            let timeline = width - metrics.transport - metrics.tracks - 2.0 * metrics.gap;
+            slot(Group::Transport, 0, 0.0, metrics.transport);
+            slot(Group::Timeline, 0, metrics.transport + metrics.gap, timeline);
+            slot(Group::Tracks, 0, width - metrics.tracks, metrics.tracks);
+        }
+        Rows::Two => {
+            slot(Group::Timeline, 0, 0.0, width);
+            slot(Group::Transport, 1, 0.0, metrics.transport);
+            slot(Group::Tracks, 1, width - metrics.tracks, metrics.tracks);
+        }
+        Rows::Three => {
+            let transport = metrics.transport.min(width);
+            let tracks = metrics.tracks.min(width);
+            slot(Group::Timeline, 0, 0.0, width);
+            slot(Group::Transport, 1, 0.0, transport);
+            slot(Group::Tracks, 2, width - tracks, tracks);
+        }
     }
 }
 
 pub(super) fn draw(app: &mut PealayerApp, ui: &mut egui::Ui, metrics: Metrics) {
-    let width = ui.available_width();
-    let tokens = crate::ui::craft_theme::current(ui.ctx());
-    let control_owner = ui.make_persistent_id(("control-bar", crate::config::ControlBarSurface::Monitor));
-    let has_video = app.current_video_path.is_some();
-    let can_seek = has_video && app.is_seekable && app.duration > 0.0;
-
-    // Tier 1: Controls row
-    draw_controls_row(app, ui, width, &tokens, can_seek, metrics.gap_y);
-
-    // Tier 2: Dedicated full-width mini-timeline scrub bar
-    draw_mini_timeline(app, ui, width, &tokens, can_seek);
-
-    // Tier 3: Transport and Audio row
-    draw_transport_row(app, ui, width, metrics, &tokens, control_owner);
+    let control_owner=ui.make_persistent_id(("control-bar",crate::config::ControlBarSurface::Monitor));
+    draw_layout(ui, metrics, |group, ui| match group {
+        Group::Transport => super::control_bar::draw_group(app, ui, crate::config::ControlBarSurface::Monitor, false,control_owner),
+        Group::Timeline => draw_timeline(app, ui),
+        Group::Tracks => super::control_bar::draw_group(app, ui, crate::config::ControlBarSurface::Monitor, true,control_owner),
+        Group::Elapsed => {
+            let can_seek = app.current_video_path.is_some() && app.is_seekable && app.duration > 0.0;
+            ui.scope(|ui| {
+                let tokens = super::craft_theme::current(ui.ctx());
+                ui.visuals_mut().override_text_color = Some(tokens.timecode);
+                super::controls::draw_elapsed_editor(app, ui, "nle-elapsed-editor", can_seek);
+            });
+        }
+        Group::Duration => {
+            let layout = if app.rtl { egui::Layout::left_to_right(egui::Align::Center) }
+                else { egui::Layout::right_to_left(egui::Align::Center) };
+            ui.with_layout(layout, |ui| draw_total(app, ui));
+        }
+        Group::Seek => { draw_seekbar(app, ui, true); }
+    });
 }
 
-fn draw_controls_row(
-    app: &mut PealayerApp,
-    ui: &mut egui::Ui,
-    width: f32,
-    tokens: &crate::ui::craft_theme::Tokens,
-    can_seek: bool,
-    gap_y: f32,
-) {
+fn draw_total(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let elapsed = app.seek_pos.unwrap_or(app.playback_time);
     let include_hours = app.duration >= 3600.0;
     let displayed_total = if app.show_remaining_time {
@@ -233,524 +275,89 @@ fn draw_controls_row(
             false,
         ),
     };
-    let total_text = if finite_timeline {
-        crate::ui::controls::timecode_text(total_label.clone()).color(tokens.text_dim)
-    } else {
-        egui::RichText::new(total_label.clone()).color(tokens.text_dim)
-    };
-
-    let zoom_label = if (app.video_aspect_ratio - 16.0 / 9.0).abs() < 0.01 {
-        "16:9"
-    } else if (app.video_aspect_ratio - 4.0 / 3.0).abs() < 0.01 {
-        "4:3"
-    } else if (app.video_aspect_ratio - 2.35).abs() < 0.01 {
-        "2.35:1"
-    } else {
-        "Fit"
-    };
-
-    if width >= 540.0 {
-        let (row_rect, _) = ui.allocate_exact_size(egui::vec2(width, 26.0), egui::Sense::hover());
-        let margin = 14.0_f32;
-        let content_rect = egui::Rect::from_min_max(
-            egui::pos2(row_rect.left() + margin, row_rect.top()),
-            egui::pos2(row_rect.right() - margin, row_rect.bottom()),
-        );
-
-        // Sub-ui for left side: elapsed editor + zoom dropdown
-        let left_w = 104.0 + 8.0 + 60.0;
-        let left_rect = egui::Rect::from_min_size(content_rect.min, egui::vec2(left_w, content_rect.height()));
-        ui.scope_builder(egui::UiBuilder::new().max_rect(left_rect), |ui| {
-            ui.horizontal_centered(|ui| {
-                ui.spacing_mut().item_spacing.x = 8.0;
-                crate::ui::controls::draw_elapsed_editor(app, ui, "nle-elapsed-editor", can_seek);
-
-                let (z_rect, z_resp) = ui.allocate_exact_size(egui::vec2(60.0, 22.0), egui::Sense::click());
-                crate::ui::craft_theme::dropdown_text(ui, z_rect, zoom_label, tokens, ui.make_persistent_id("monitor-zoom-dd"));
-                let z_resp = z_resp.on_hover_text(app.tr("Zoom / Aspect Ratio"));
-                egui::Popup::menu(&z_resp).show(|ui| {
-                    if ui.selectable_label(app.video_aspect_ratio == 0.0, app.tr("Fit")).clicked() {
-                        app.video_aspect_ratio = 0.0;
-                        app.save_config();
-                        ui.close();
-                    }
-                    ui.separator();
-                    for (label, ratio) in [("16:9", 16.0 / 9.0), ("4:3", 4.0 / 3.0), ("2.35:1", 2.35)] {
-                        if ui.selectable_label((app.video_aspect_ratio - ratio).abs() < 0.01, label).clicked() {
-                            app.video_aspect_ratio = ratio;
-                            app.save_config();
-                            ui.close();
-                        }
-                    }
-                });
-            });
-        });
-
-        // Sub-ui for right side: res dropdown + wrench + duration
-        let font = if finite_timeline {
-            egui::TextStyle::Monospace.resolve(ui.style())
-        } else {
-            egui::TextStyle::Body.resolve(ui.style())
-        };
-        let dur_w = ui.fonts_mut(|fonts| {
-            fonts
-                .layout_no_wrap(total_label, font, tokens.text_dim)
-                .size()
-                .x
-        });
-        let right_w = 54.0 + 6.0 + 22.0 + 8.0 + dur_w;
-        let right_rect = egui::Rect::from_min_max(
-            egui::pos2((content_rect.right() - right_w).max(content_rect.left()), content_rect.top()),
-            content_rect.max,
-        );
-        ui.scope_builder(egui::UiBuilder::new().max_rect(right_rect), |ui| {
-            ui.horizontal_centered(|ui| {
-                ui.spacing_mut().item_spacing.x = 6.0;
-
-                let (res_rect, res_resp) = ui.allocate_exact_size(egui::vec2(54.0, 22.0), egui::Sense::click());
-                crate::ui::craft_theme::dropdown_text(ui, res_rect, "1/2", tokens, ui.make_persistent_id("monitor-res-dd"));
-                let res_resp = res_resp.on_hover_text(app.tr("Playback resolution"));
-                egui::Popup::menu(&res_resp).show(|ui| {
-                    for res in ["Full", "1/2", "1/4", "1/8"] {
-                        if ui.selectable_label(res == "1/2", res).clicked() {
-                            ui.close();
-                        }
-                    }
-                });
-
-                let w_resp = crate::ui::craft_theme::icon_button_glyph(
-                    ui,
-                    &app.tr("Settings"),
-                    crate::ui::icons::GEAR,
-                    egui::vec2(22.0, 22.0),
-                    false,
-                    false,
-                );
-                egui::Popup::menu(&w_resp).show(|ui| {
-                    crate::ui::controls::transport_context_menu(app, ui);
-                });
-
-                ui.spacing_mut().item_spacing.x = 8.0;
-                let total_resp = ui.add(egui::Label::new(total_text).sense(if finite_timeline {
-                    egui::Sense::click()
-                } else {
-                    egui::Sense::hover()
-                })).on_hover_text(total_tooltip);
-                total_resp.context_menu(|ui| crate::ui::controls::transport_context_menu(app, ui));
-                if finite_timeline && total_resp.clicked() {
-                    app.show_remaining_time = !app.show_remaining_time;
-                    app.save_config();
-                }
-            });
-        });
-    } else {
-        // Stacks to 2 sub-rows
-        let (row_rect, _) = ui.allocate_exact_size(egui::vec2(width, 48.0 + gap_y), egui::Sense::hover());
-        let margin = 14.0_f32;
-        let sub1_rect = egui::Rect::from_min_max(
-            egui::pos2(row_rect.left() + margin, row_rect.top()),
-            egui::pos2(row_rect.right() - margin, row_rect.top() + 24.0),
-        );
-        let sub2_rect = egui::Rect::from_min_max(
-            egui::pos2(row_rect.left() + margin, row_rect.top() + 24.0 + gap_y),
-            egui::pos2(row_rect.right() - margin, row_rect.bottom()),
-        );
-
-        // Sub-row 1
-        ui.scope_builder(egui::UiBuilder::new().max_rect(sub1_rect), |ui| {
-            ui.horizontal_centered(|ui| {
-                crate::ui::controls::draw_elapsed_editor(app, ui, "nle-elapsed-editor", can_seek);
-
-                if width >= 260.0 {
-                    let font = if finite_timeline {
-                        egui::TextStyle::Monospace.resolve(ui.style())
-                    } else {
-                        egui::TextStyle::Body.resolve(ui.style())
-                    };
-                    let dur_w = ui.fonts_mut(|fonts| {
-                        fonts
-                            .layout_no_wrap(total_label, font, tokens.text_dim)
-                            .size()
-                            .x
-                    });
-                    let spacer = (ui.available_width() - dur_w).max(0.0);
-                    ui.add_space(spacer);
-
-                    let total_resp = ui.add(egui::Label::new(total_text).sense(if finite_timeline {
-                        egui::Sense::click()
-                    } else {
-                        egui::Sense::hover()
-                    })).on_hover_text(total_tooltip);
-                    total_resp.context_menu(|ui| crate::ui::controls::transport_context_menu(app, ui));
-                    if finite_timeline && total_resp.clicked() {
-                        app.show_remaining_time = !app.show_remaining_time;
-                        app.save_config();
-                    }
-                }
-            });
-        });
-
-        // Sub-row 2
-        ui.scope_builder(egui::UiBuilder::new().max_rect(sub2_rect), |ui| {
-            ui.horizontal_centered(|ui| {
-                let (z_rect, z_resp) = ui.allocate_exact_size(egui::vec2(60.0, 22.0), egui::Sense::click());
-                crate::ui::craft_theme::dropdown_text(ui, z_rect, zoom_label, tokens, ui.make_persistent_id("monitor-zoom-dd"));
-                let z_resp = z_resp.on_hover_text(app.tr("Zoom / Aspect Ratio"));
-                egui::Popup::menu(&z_resp).show(|ui| {
-                    if ui.selectable_label(app.video_aspect_ratio == 0.0, app.tr("Fit")).clicked() {
-                        app.video_aspect_ratio = 0.0;
-                        app.save_config();
-                        ui.close();
-                    }
-                    ui.separator();
-                    for (label, ratio) in [("16:9", 16.0 / 9.0), ("4:3", 4.0 / 3.0), ("2.35:1", 2.35)] {
-                        if ui.selectable_label((app.video_aspect_ratio - ratio).abs() < 0.01, label).clicked() {
-                            app.video_aspect_ratio = ratio;
-                            app.save_config();
-                            ui.close();
-                        }
-                    }
-                });
-
-                let show_res = width >= 260.0;
-                let right_w = if show_res { 54.0 + 6.0 + 22.0 } else { 22.0 };
-                let spacer = (ui.available_width() - right_w).max(0.0);
-                ui.add_space(spacer);
-
-                if show_res {
-                    let (res_rect, res_resp) = ui.allocate_exact_size(egui::vec2(54.0, 22.0), egui::Sense::click());
-                    crate::ui::craft_theme::dropdown_text(ui, res_rect, "1/2", tokens, ui.make_persistent_id("monitor-res-dd"));
-                    let res_resp = res_resp.on_hover_text(app.tr("Playback resolution"));
-                    egui::Popup::menu(&res_resp).show(|ui| {
-                        for res in ["Full", "1/2", "1/4", "1/8"] {
-                            if ui.selectable_label(res == "1/2", res).clicked() {
-                                ui.close();
-                            }
-                        }
-                    });
-
-                    ui.spacing_mut().item_spacing.x = 6.0;
-                }
-
-                let w_resp = crate::ui::craft_theme::icon_button_glyph(
-                    ui,
-                    &app.tr("Settings"),
-                    crate::ui::icons::GEAR,
-                    egui::vec2(22.0, 22.0),
-                    false,
-                    false,
-                );
-                egui::Popup::menu(&w_resp).show(|ui| {
-                    crate::ui::controls::transport_context_menu(app, ui);
-                });
-            });
-        });
+    let total_response = crate::ui::controls::draw_duration_label(
+        app, ui, total_label, total_tooltip, finite_timeline,
+    );
+    if finite_timeline && total_response.clicked() {
+        app.show_remaining_time = !app.show_remaining_time;
+        app.save_config();
     }
 }
 
-pub(crate) fn draw_timeline(app: &mut PealayerApp, ui: &mut egui::Ui) {
-    let tokens = crate::ui::craft_theme::current(ui.ctx());
+fn draw_timeline(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    let can_seek = app.current_video_path.is_some() && app.is_seekable && app.duration > 0.0;
+    super::controls::draw_elapsed_editor(app, ui, "nle-elapsed-editor", can_seek);
+    // Anchor the duration and fullscreen affordance to the right
+    // edge first, then give the seekbar the exact remaining width.
+    // A former fixed 180 px reservation was wider than these
+    // controls and left a visible, useless tail after fullscreen.
+    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+        draw_total(app, ui);
+        draw_seekbar(app, ui, false);
+    });
+}
+
+fn draw_seekbar(app: &mut PealayerApp, ui: &mut egui::Ui, filmcraft: bool) -> egui::Response {
     let has_video = app.current_video_path.is_some();
     let can_seek = has_video && app.is_seekable && app.duration > 0.0;
-    let width = ui.available_width();
-    draw_mini_timeline(app, ui, width, &tokens, can_seek);
+    let mut current_pos = if has_video { app.seek_pos.unwrap_or(app.playback_time) } else { 0.0 };
+    let max_dur = if has_video && app.duration > 0.0 { app.duration } else { 1.0 };
+    let slider = egui::Slider::new(&mut current_pos, 0.0..=max_dur)
+                .show_value(false)
+                .trailing_fill(true);
+    let response = crate::ui::controls::add_fill_width_slider(ui, can_seek, slider);
+    response.context_menu(|ui| crate::ui::controls::transport_context_menu(app, ui));
+
+    if let Some(buffered_until) = app.buffered_until() {
+        crate::ui::controls::paint_buffered_seekbar(
+            ui,
+            &response,
+            (current_pos / app.duration).clamp(0.0, 1.0) as f32,
+            (buffered_until / app.duration).clamp(0.0, 1.0) as f32,
+        );
+    }
+    if filmcraft { paint_seek_ticks(ui, &response, app); }
+    if let Some(chapter_time) = crate::ui::controls::paint_seekbar_markers(ui, &response, app) {
+        current_pos = chapter_time;
+    }
+    let show_seek_preview = app.nle_seekbar_hover_thumbnails;
+    crate::ui::seek_preview::draw(app, ui, &response, show_seek_preview, "nle-seekbar-preview");
+
+    if can_seek && response.changed() {
+        app.scrub_to(current_pos);
+        ui.ctx().request_repaint();
+    }
+    if can_seek
+        && (response.drag_stopped()
+            || response.clicked()
+            || (app.is_scrubbing && !ui.input(|i| i.pointer.primary_down())))
+    {
+        app.finish_scrub(current_pos);
+    }
+    response
 }
 
-fn draw_mini_timeline(
-    app: &mut PealayerApp,
-    ui: &mut egui::Ui,
-    width: f32,
-    tokens: &crate::ui::craft_theme::Tokens,
-    can_seek: bool,
-) {
-    let has_video = app.current_video_path.is_some();
-    let mut current_pos = if has_video {
-        app.seek_pos.unwrap_or(app.playback_time)
-    } else {
-        0.0
-    };
-    let max_dur = if has_video && app.duration > 0.0 {
-        app.duration
-    } else {
-        1.0
-    };
-
-    let (row_rect, _) = ui.allocate_exact_size(egui::vec2(width, 24.0), egui::Sense::hover());
-    let margin = 14.0_f32.min((width - MIN_SEEK_WIDTH) / 2.0).max(0.0);
-    let seek_rect = egui::Rect::from_min_max(
-        egui::pos2(row_rect.left() + margin, row_rect.top()),
-        egui::pos2(row_rect.right() - margin, row_rect.bottom()),
-    );
-    let response = ui.interact(
-        seek_rect,
-        ui.make_persistent_id("nle-mini-timeline"),
-        if can_seek {
-            egui::Sense::click_and_drag()
-        } else {
-            egui::Sense::hover()
-        },
-    );
-
-    let track_h = 13.0_f32;
-    let track_y = seek_rect.bottom() - 8.5;
-    let track_rect = egui::Rect::from_min_max(
-        egui::pos2(seek_rect.left(), track_y - track_h / 2.0),
-        egui::pos2(seek_rect.right(), track_y + track_h / 2.0),
-    );
-    let r = track_h / 2.0;
-    let p = ui.painter();
-
-            // Track rail
-            p.rect_filled(track_rect, r, tokens.separator);
-
-            // Buffered range fill
-            if let Some(buffered_until) = app.buffered_until() {
-                let buf_frac = (buffered_until / max_dur).clamp(0.0, 1.0) as f32;
-                let buf_w = (track_rect.width() * buf_frac).max(0.0);
-                let buf_rect = egui::Rect::from_min_max(
-                    track_rect.min,
-                    egui::pos2(track_rect.min.x + buf_w, track_rect.max.y),
-                );
-                p.rect_filled(buf_rect, r, tokens.accent.gamma_multiply(0.25));
-            }
-
-            // Dual circular handles at track ends
-            for handle_x in [track_rect.min.x + r, track_rect.max.x - r] {
-                p.circle_filled(egui::pos2(handle_x, track_rect.center().y), 4.5, tokens.panel_bg);
-                p.circle_stroke(
-                    egui::pos2(handle_x, track_rect.center().y),
-                    4.5,
-                    egui::Stroke::new(1.5, tokens.icon_active),
-                );
-            }
-
-            // Tick ladder above track
-            let fps = if app.media_fps.is_finite() && app.media_fps > 0.0 {
-                app.media_fps
-            } else {
-                30.0
-            };
-            let base = fps.clamp(12.0, 120.0).round() as i64;
-            let frame_px = (track_rect.width() as f64) / (max_dur * fps);
-            let (minor_step, major_step) = crate::ui::craft_theme::ruler_steps(frame_px, base);
-            let total_frames = (max_dur * fps).ceil() as i64;
-            let mut f = 0;
-            let mut count = 0;
-            while f <= total_frames && count < 256 {
-                let frac = (f as f64 / (max_dur * fps)).clamp(0.0, 1.0) as f32;
-                let x = track_rect.min.x + frac * track_rect.width();
-                let is_major = f % major_step == 0;
-                let h = if is_major { 8.0 } else { 3.5 };
-                p.line_segment(
-                    [egui::pos2(x, track_rect.min.y - h), egui::pos2(x, track_rect.min.y)],
-                    egui::Stroke::new(
-                        1.0,
-                        if is_major {
-                            tokens.text_dim
-                        } else {
-                            tokens.text_faint
-                        },
-                    ),
-                );
-                f += minor_step;
-                count += 1;
-            }
-
-            // Pentagon markers (chapters and keyframes)
-            let mut clicked_marker_time = None;
-            let chapters = app.media_chapters();
-            for (i, chapter) in chapters.iter().enumerate() {
-                if !chapter.time_seconds.is_finite()
-                    || chapter.time_seconds < 0.0
-                    || chapter.time_seconds > max_dur
-                {
-                    continue;
-                }
-                let frac = (chapter.time_seconds / max_dur).clamp(0.0, 1.0) as f32;
-                let x = track_rect.min.x + frac * track_rect.width();
-                let marker_rect = egui::Rect::from_min_size(
-                    egui::pos2(x - 3.5, track_rect.min.y - 12.0),
-                    egui::vec2(7.0, 10.0),
-                );
-                let color = match i % 4 {
-                    0 => egui::Color32::from_rgb(0x38, 0x8e, 0x3c), // green
-                    1 => egui::Color32::from_rgb(0xc2, 0x18, 0x5b), // magenta
-                    2 => egui::Color32::from_rgb(0xf5, 0x7c, 0x00), // amber
-                    _ => egui::Color32::from_rgb(0x00, 0x97, 0xa7), // cyan
-                };
-                crate::ui::craft_theme::marker_glyph(
-                    p,
-                    marker_rect,
-                    3.0,
-                    crate::ui::craft_theme::MarkerPart::Whole,
-                    color,
-                );
-                if response.clicked() {
-                    if let Some(pos) = response.interact_pointer_pos() {
-                        if marker_rect.expand(2.0).contains(pos) {
-                            clicked_marker_time = Some(chapter.time_seconds);
-                        }
-                    }
-                }
-            }
-            for keyframe in &app.timeline.keyframes {
-                let time = keyframe.time_ms as f64 / 1000.0;
-                if time >= 0.0 && time <= max_dur {
-                    let frac = (time / max_dur).clamp(0.0, 1.0) as f32;
-                    let x = track_rect.min.x + frac * track_rect.width();
-                    let k_rect = egui::Rect::from_min_size(
-                        egui::pos2(x - 3.5, track_rect.min.y - 12.0),
-                        egui::vec2(7.0, 10.0),
-                    );
-                    crate::ui::craft_theme::marker_glyph(
-                        p,
-                        k_rect,
-                        3.0,
-                        crate::ui::craft_theme::MarkerPart::Whole,
-                        egui::Color32::from_rgb(0xef, 0x44, 0x44),
-                    );
-                    if response.clicked() {
-                        if let Some(pos) = response.interact_pointer_pos() {
-                            if k_rect.expand(2.0).contains(pos) {
-                                clicked_marker_time = Some(time);
-                            }
-                        }
-                    }
-                }
-            }
-
-            // Playhead: precision downward pentagon and vertical stem line
-            let frac = (current_pos / max_dur).clamp(0.0, 1.0) as f32;
-            let x = track_rect.min.x + frac * track_rect.width();
-            let hy = track_rect.min.y - 11.0;
-            p.add(egui::Shape::convex_polygon(
-                vec![
-                    egui::pos2(x - 5.5, hy),
-                    egui::pos2(x + 5.5, hy),
-                    egui::pos2(x + 5.5, hy + 5.0),
-                    egui::pos2(x, hy + 9.0),
-                    egui::pos2(x - 5.5, hy + 5.0),
-                ],
-                tokens.playhead,
-                egui::Stroke::NONE,
-            ));
-            p.line_segment(
-                [egui::pos2(x, hy + 8.0), egui::pos2(x, track_rect.max.y)],
-                egui::Stroke::new(1.0, tokens.playhead),
-            );
-
-            // Scrubbing and interaction
-            if let Some(m_time) = clicked_marker_time {
-                current_pos = m_time;
-                if can_seek {
-                    app.scrub_to(current_pos);
-                    app.finish_scrub(current_pos);
-                    ui.ctx().request_repaint();
-                }
-            } else if can_seek && (response.dragged() || response.clicked()) {
-                if let Some(pos) = response.interact_pointer_pos() {
-                    let f = ((pos.x - track_rect.left()) / track_rect.width().max(1.0)).clamp(0.0, 1.0) as f64;
-                    current_pos = f * max_dur;
-                    app.scrub_to(current_pos);
-                    ui.ctx().request_repaint();
-                }
-            }
-            if can_seek
-                && (response.drag_stopped()
-                    || (app.is_scrubbing && !ui.input(|i| i.pointer.primary_down())))
-            {
-                app.finish_scrub(current_pos);
-            }
-
-            response.context_menu(|ui| crate::ui::controls::transport_context_menu(app, ui));
-            let show_seek_preview = app.nle_seekbar_hover_thumbnails;
-            crate::ui::seek_preview::draw(app, ui, &response, show_seek_preview, "nle-seekbar-preview");
-}
-
-fn draw_transport_row(
-    app: &mut PealayerApp,
-    ui: &mut egui::Ui,
-    width: f32,
-    metrics: Metrics,
-    _tokens: &crate::ui::craft_theme::Tokens,
-    owner: egui::Id,
-) {
-    let vol_enabled = app.current_video_path.is_some();
-    if width >= 500.0 {
-        ui.allocate_ui_with_layout(
-            egui::vec2(width, 32.0),
-            egui::Layout::left_to_right(egui::Align::Center),
-            |ui| {
-                let transport_w = metrics.transport.min(width);
-                let tracks_w = metrics.tracks;
-                let vol_w = VOLUME_WIDTH.min((width - transport_w - tracks_w - 20.0).max(metrics.volume_min));
-                let audio_w = (tracks_w + metrics.gap + vol_w).min(width);
-
-                let max_transport_right = (width - audio_w - metrics.gap).max(0.0);
-                let target_center_x = (width - transport_w) / 2.0;
-                let left_pad = target_center_x.min(max_transport_right - transport_w).max(0.0);
-
-                ui.add_space(left_pad);
-                super::control_bar::draw_group(app, ui, crate::config::ControlBarSurface::Monitor, false, owner);
-
-                let trailing_space = (width - left_pad - transport_w - audio_w).max(0.0);
-                ui.add_space(trailing_space);
-
-                super::control_bar::draw_group(app, ui, crate::config::ControlBarSurface::Monitor, true, owner);
-                ui.add_enabled_ui(vol_enabled, |ui| {
-                    super::controls::draw_volume_slider(app, ui);
-                });
-            },
-        );
-    } else if width >= 260.0 {
-        ui.allocate_ui_with_layout(
-            egui::vec2(width, 30.0),
-            egui::Layout::left_to_right(egui::Align::Center),
-            |ui| {
-                let transport_w = metrics.transport.min(width);
-                let left_pad = ((width - transport_w) / 2.0).max(0.0);
-                ui.add_space(left_pad);
-                super::control_bar::draw_group(app, ui, crate::config::ControlBarSurface::Monitor, false, owner);
-            },
-        );
-        ui.allocate_ui_with_layout(
-            egui::vec2(width, 26.0),
-            egui::Layout::left_to_right(egui::Align::Center),
-            |ui| {
-                let tracks_w = metrics.tracks;
-                let vol_w = VOLUME_WIDTH.min(width - tracks_w - metrics.gap).max(metrics.volume_min);
-                let audio_w = (tracks_w + metrics.gap + vol_w).min(width);
-                ui.add_space((width - audio_w).max(0.0));
-                super::control_bar::draw_group(app, ui, crate::config::ControlBarSurface::Monitor, true, owner);
-                ui.add_enabled_ui(vol_enabled, |ui| {
-                    super::controls::draw_volume_slider(app, ui);
-                });
-            },
-        );
-    } else {
-        ui.allocate_ui_with_layout(
-            egui::vec2(width, 30.0),
-            egui::Layout::left_to_right(egui::Align::Center),
-            |ui| {
-                super::control_bar::draw_group(app, ui, crate::config::ControlBarSurface::Monitor, false, owner);
-            },
-        );
-        ui.allocate_ui_with_layout(
-            egui::vec2(width, 26.0),
-            egui::Layout::left_to_right(egui::Align::Center),
-            |ui| {
-                super::control_bar::draw_group(app, ui, crate::config::ControlBarSurface::Monitor, true, owner);
-            },
-        );
-        ui.allocate_ui_with_layout(
-            egui::vec2(width, 26.0),
-            egui::Layout::left_to_right(egui::Align::Center),
-            |ui| {
-                ui.add_enabled_ui(vol_enabled, |ui| {
-                    super::controls::draw_volume_slider(app, ui);
-                });
-            },
-        );
+/// Decorative FilmCraft ticks share the actual slider's mapping with markers,
+/// hover previews and seeks. They stay inside its rail and add no hit targets.
+fn paint_seek_ticks(ui: &egui::Ui, response: &egui::Response, app: &PealayerApp) {
+    if !app.duration.is_finite() || app.duration <= 0.0 { return; }
+    let range = super::controls::seekbar_value_range(response.rect);
+    let width = *range.end() - *range.start();
+    if width <= 0.0 { return; }
+    let fps = if app.media_fps.is_finite() && app.media_fps > 0.0 { app.media_fps } else { 30.0 };
+    let frames = app.duration * fps;
+    if !frames.is_finite() || frames <= 0.0 { return; }
+    let (minor, major) = super::craft_theme::ruler_steps(f64::from(width) / frames, fps.round().clamp(1.0, 240.0) as i64);
+    let tokens = super::craft_theme::current(ui.ctx());
+    let painter = ui.painter().with_clip_rect(response.rect.intersect(ui.clip_rect()));
+    for index in 0..256 {
+        let frame = index as f64 * minor as f64;
+        if frame > frames { break; }
+        let x = egui::lerp(range.clone(), (frame / frames) as f32);
+        let major_tick = (index as i64 * minor) % major == 0;
+        let height = (ui.spacing().slider_rail_height * if major_tick { 0.45 } else { 0.25 }).min(4.0);
+        painter.line_segment([egui::pos2(x, response.rect.center().y - height), egui::pos2(x, response.rect.center().y + height)],
+            egui::Stroke::new(1.0, tokens.text_dim.gamma_multiply(if major_tick { 0.5 } else { 0.3 })));
     }
 }
 
@@ -764,27 +371,28 @@ mod tests {
             transport: 172.0,
             timeline_min: 300.0,
             tracks: 130.0,
-            volume_min: 114.0,
             gap: 8.0,
             gap_y: 4.0,
             row_height: 24.0,
+            rtl: false,
+            style: crate::config::NativeMonitorStyle::Compact,
+            elapsed_width: 104.0,
+            duration_width: 96.0,
         }
     }
 
     #[test]
     fn smallest_number_of_rows_is_selected_at_exact_fit() {
         let m = metrics();
-        assert_eq!(m.rows(1400.0), Rows::One);
-        assert_eq!(m.rows(540.0), Rows::One);
-        assert_eq!(m.rows(539.9), Rows::Two);
-        assert_eq!(m.rows(500.0), Rows::Two);
-        assert_eq!(m.rows(499.9), Rows::Three);
-        assert_eq!(m.rows(260.0), Rows::Three);
-        assert_eq!(m.rows(259.9), Rows::Four);
-        assert_eq!(m.height(1400.0), 90.0);
-        assert_eq!(m.height(700.0), 90.0);
-        assert_eq!(m.height(400.0), 144.0);
-        assert_eq!(m.height(240.0), 174.0);
+        assert_eq!(m.rows(618.0), Rows::One);
+        assert_eq!(m.rows(617.9), Rows::Two);
+        assert_eq!(m.rows(326.0), Rows::Two);
+        assert_eq!(m.rows(325.9), Rows::Three);
+        assert_eq!(m.rows(240.0), Rows::Three);
+        assert_eq!(m.height(618.0), 24.0);
+        assert_eq!(m.height(326.0), 52.0);
+        assert_eq!(m.height(300.0), 80.0);
+        assert_eq!(m.height(240.0), 80.0);
     }
 
     #[test]
@@ -805,6 +413,7 @@ mod tests {
                     ui.spacing_mut().item_spacing = egui::vec2(metrics().gap, metrics().gap_y);
                     area = ui.available_rect_before_wrap();
                     draw_layout(ui, metrics(), |group, ui| {
+                        // Exercise the production allocator, not a mirrored layout.
                         let (rect, _) = ui.allocate_exact_size(
                             egui::vec2(ui.available_width(), 24.0),
                             egui::Sense::hover(),
@@ -814,24 +423,18 @@ mod tests {
                 },
             );
             output.textures_delta.clear();
-            assert_eq!(
-                rects.iter().map(|(group, _)| *group).collect::<Vec<_>>(),
-                vec![
-                    Group::Timeline,
-                    Group::Transport,
-                    Group::Tracks,
-                    Group::Volume
-                ]
-            );
-            let tracks = rects[2].1;
-            let volume = rects[3].1;
-            if area.width() >= 500.0 {
-                assert_eq!(tracks.top(), volume.top(), "width {width}");
-                assert!(tracks.right() <= volume.left(), "width {width}");
+            assert_eq!(rects.len(),3);
+            let find=|group|rects.iter().find(|(candidate,_)|*candidate==group).unwrap().1;
+            let tracks = find(Group::Tracks);
+            if metrics().rows(area.width()) == Rows::Two {
+                assert_eq!(find(Group::Timeline).width(),area.width());
+                assert!(find(Group::Timeline).bottom() < find(Group::Transport).top());
+                assert_eq!(find(Group::Transport).top(),tracks.top());
+                assert!(find(Group::Transport).right() <= tracks.left());
             }
             assert!(
-                (volume.right() - area.right()).abs() < 1.0,
-                "volume must trail at {width}"
+                (tracks.right() - area.right()).abs() < 1.0,
+                "configured trailing controls must trail at {width}"
             );
             for (_, rect) in &rects {
                 assert!(
@@ -839,6 +442,11 @@ mod tests {
                     "overflow at {width}: {rect:?} vs {area:?}"
                 );
             }
+            let rendered_height = rects.last().unwrap().1.bottom() - rects[0].1.top();
+            assert!(
+                (rendered_height - metrics().height(area.width())).abs() < 1.0,
+                "footer at {width}"
+            );
         }
     }
 
@@ -896,38 +504,178 @@ mod tests {
 
     #[test]
     fn customized_real_controls_fit_the_reserved_monitor_rows() {
-        let _lock = crate::app::tests::lock_app_tests();
-        for hidden in [true, false] {
-            for width in [240.0, 400.0, 700.0, 1400.0] {
-                let ctx = egui::Context::default();
-                let mut app = PealayerApp::default();
-                app.control_bars.monitor.hidden = [hidden; crate::config::ControlBarAction::COUNT];
+        let _lock=crate::app::tests::lock_app_tests();
+        for presentation in [crate::config::NativeMonitorStyle::Compact, crate::config::NativeMonitorStyle::FilmCraft] {
+        for hidden in [true,false] {
+            for width in [240.0,400.0,700.0,1400.0] {
+                let ctx=egui::Context::default();
+                let mut app=PealayerApp::default();
+                app.native_monitor_style = presentation;
+                app.control_bars.monitor.hidden=[hidden;crate::config::ControlBarAction::COUNT];
                 for _ in 0..3 {
-                    let mut output = ctx.run_ui(
-                        egui::RawInput {
-                            screen_rect: Some(egui::Rect::from_min_size(
-                                egui::Pos2::ZERO,
-                                egui::vec2(width, 600.0),
-                            )),
-                            ..Default::default()
-                        },
-                        |ui| {
-                            let available = ui.available_rect_before_wrap();
-                            let metrics = Metrics::measure(&app, ui);
-                            draw(&mut app, ui, metrics);
-                            let actual = ui.min_rect();
-                            assert!(
-                                actual.right() <= available.right() + 1.0,
-                                "width {width}, hidden={hidden}: {actual:?} vs {available:?}"
-                            );
-                            assert!(
-                                actual.height() <= metrics.height(available.width()) + 1.0,
-                                "reserved height at {width}, hidden={hidden}: {actual:?}"
-                            );
-                        },
-                    );
-                    output.textures_delta.clear();
+                    let mut output=ctx.run_ui(egui::RawInput {
+                        screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(width,600.0))),..Default::default()
+                    },|ui|{
+                        let available=ui.available_rect_before_wrap();
+                        let metrics=Metrics::measure(&app,ui);
+                        draw(&mut app,ui,metrics);
+                        let actual=ui.min_rect();
+                        assert!(actual.right()<=available.right()+1.0,"width {width}, hidden={hidden}: {actual:?} vs {available:?}");
+                        assert!(actual.height()<=metrics.height(available.width())+1.0,"reserved height at {width}, hidden={hidden}: {actual:?}");
+                    });output.textures_delta.clear();
                 }
+            }
+        }
+        }
+    }
+
+    #[test]
+    fn actual_monitor_overflow_opens_after_reflow_and_in_rtl() {
+        let _lock=crate::app::tests::lock_app_tests();
+        for presentation in [crate::config::NativeMonitorStyle::Compact, crate::config::NativeMonitorStyle::FilmCraft] {
+        for width in [260.0,400.0,700.0,1400.0] {
+            for rtl in [false,true] {
+                let ctx=egui::Context::default(); let mut app=PealayerApp::default(); app.rtl=rtl;
+                app.native_monitor_style = presentation;
+                let owner=std::cell::Cell::new(egui::Id::NULL);
+                let mut render=|app:&mut PealayerApp,events| {
+                    let mut output=ctx.run_ui(egui::RawInput {
+                        screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(width,600.0))),events,..Default::default()
+                    },|ui| {
+                        owner.set(ui.make_persistent_id(("control-bar",crate::config::ControlBarSurface::Monitor)));
+                        let metrics=Metrics::measure(app,ui); draw(app,ui,metrics);
+                    }); output.textures_delta.clear(); output
+                };
+                render(&mut app,vec![]); render(&mut app,vec![]);
+                // Match the same root UI used by the production draw call.
+                let pos=ctx.read_response(owner.get().with("overflow")).unwrap().rect.center();
+                let pointer=|pressed|egui::Event::PointerButton {pos,button:egui::PointerButton::Primary,pressed,modifiers:Default::default()};
+                render(&mut app,vec![egui::Event::PointerMoved(pos),pointer(true)]);
+                render(&mut app,vec![pointer(false)]);
+                let output=render(&mut app,vec![]);
+                assert!(output.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Text(text) if text.galley.text().contains("Show / hide actions"))),"overflow at width={width} rtl={rtl}");
+            }
+        }
+        }
+    }
+
+    #[test]
+    fn filmcraft_measured_tiers_mirror_and_keep_every_slot_inside_the_footer() {
+        for width in [180.0, 240.0, 390.0, 600.0, 1400.0] {
+            for row_height in [25.0, 36.0, 52.0] {
+                for rtl in [false, true] {
+                    let ctx = egui::Context::default();
+                    ctx.run_ui(egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 500.0))),
+                        ..Default::default()
+                    }, |ui| {
+                        let m = Metrics { style: crate::config::NativeMonitorStyle::FilmCraft, row_height, rtl, ..metrics() };
+                        let available = ui.available_rect_before_wrap();
+                        let mut slots = Vec::new();
+                        draw_layout(ui, m, |group, ui| slots.push((group, ui.max_rect())));
+                        assert_eq!(slots.len(), 5);
+                        let find = |kind| slots.iter().find(|(group, _)| *group == kind).unwrap().1;
+                        let seek = find(Group::Seek);
+                        assert_eq!(seek.width(), available.width());
+                        assert!(seek.top() >= find(Group::Elapsed).bottom());
+                        assert!(seek.top() >= find(Group::Duration).bottom());
+                        assert!(find(Group::Transport).top() > seek.bottom());
+                        let tail = find(Group::Tracks);
+                        assert!((if rtl { tail.left() - available.left() } else { tail.right() - available.right() }).abs() < 0.01);
+                        for (_, rect) in &slots {
+                            assert!(rect.left() >= available.left() && rect.right() <= available.right() + 0.01);
+                            assert_eq!(rect.height(), row_height);
+                        }
+                        let bottom = slots.iter().map(|(_, rect)| rect.bottom()).fold(0.0_f32, f32::max);
+                        assert!((bottom - available.top() - m.height(width)).abs() < 0.01);
+                    }).drop_without_applying_deltas();
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn filmcraft_seek_decoration_stays_inside_the_same_interactive_slider() {
+        let _lock = crate::app::tests::lock_app_tests();
+        for scale in [1.0, 1.25, 2.0] {
+            let ctx = egui::Context::default();
+            ctx.set_pixels_per_point(scale);
+            let mut app = PealayerApp::default();
+            app.duration = 120.0;
+            app.media_fps = 23.976;
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                let (rect, response) = ui.allocate_exact_size(egui::vec2(400.0, 25.0), egui::Sense::hover());
+                paint_seek_ticks(ui, &response, &app);
+                assert_eq!(response.rect, rect);
+            });
+            let mut count = 0;
+            for shape in &output.shapes {
+                if let egui::Shape::LineSegment { points, .. } = &shape.shape {
+                    count += 1;
+                    assert!(shape.clip_rect.contains(points[0]) && shape.clip_rect.contains(points[1]));
+                    assert!((points[0].x - points[1].x).abs() < f32::EPSILON);
+                }
+            }
+            assert!(count > 2 && count <= 256);
+            output.drop_without_applying_deltas();
+        }
+    }
+
+    #[test]
+    fn both_seek_presentations_keep_pointer_mapping_and_keyboard_adjustment() {
+        let _lock = crate::app::tests::lock_app_tests();
+        for filmcraft in [false, true] {
+            let ctx = egui::Context::default();
+            let mut app = PealayerApp::default();
+            app.current_video_path = Some(std::path::PathBuf::from("test-media.mp4"));
+            app.duration = 120.0;
+            app.playback_time = 30.0;
+            app.is_paused = true;
+            app.is_seekable = true;
+            app.nle_seekbar_hover_thumbnails = false;
+            let render = |app: &mut PealayerApp, events| {
+                let mut response = None;
+                ctx.run_ui(egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(500.0, 160.0))),
+                    events, ..Default::default()
+                }, |ui| { response = Some(draw_seekbar(app, ui, filmcraft)); }).drop_without_applying_deltas();
+                response.unwrap()
+            };
+            render(&mut app, vec![]);
+            let response = render(&mut app, vec![]);
+            let range = super::super::controls::seekbar_value_range(response.rect);
+            let pos = egui::pos2(egui::lerp(range, 0.75), response.rect.center().y);
+            let pointer = |pressed| egui::Event::PointerButton {
+                pos, button: egui::PointerButton::Primary, pressed, modifiers: Default::default(),
+            };
+            render(&mut app, vec![egui::Event::PointerMoved(pos), pointer(true)]);
+            render(&mut app, vec![pointer(false)]);
+            assert!((app.seek_pos.unwrap() - 90.0).abs() < 0.2, "presentation={filmcraft}");
+            let before = app.seek_pos.unwrap();
+            ctx.memory_mut(|memory| memory.request_focus(response.id));
+            render(&mut app, vec![egui::Event::Key {
+                key: egui::Key::ArrowRight, physical_key: Some(egui::Key::ArrowRight),
+                pressed: true, repeat: false, modifiers: Default::default(),
+            }]);
+            assert!(app.seek_pos.unwrap() > before, "keyboard seek lost in presentation={filmcraft}");
+        }
+    }
+
+    #[test]
+    fn responsive_groups_mirror_without_overlap_or_height_changes() {
+        for width in [240.0,390.0,600.0,900.0,1400.0] {
+            let render=|rtl| {
+                let ctx=egui::Context::default(); let mut rects=Vec::new();
+                ctx.run_ui(egui::RawInput {screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(width,300.0))),..Default::default()},|ui| {
+                    let m=Metrics {rtl,..metrics()};
+                    draw_layout(ui,m,|group,ui| {rects.push((group,ui.max_rect()));});
+                }).drop_without_applying_deltas(); rects
+            };
+            let left=render(false); let right=render(true);
+            for (group,a) in left {
+                let b=right.iter().find(|(candidate,_)|*candidate==group).unwrap().1;
+                assert_eq!(a.size(),b.size()); assert_eq!(a.y_range(),b.y_range());
+                assert!((a.left()+b.right()-width).abs()<1.0,"mirror at {width}: {a:?} vs {b:?}");
             }
         }
     }
@@ -949,32 +697,5 @@ mod tests {
                 assert_eq!(tokens.playhead, tokens.focus);
             }
         }
-    }
-
-    #[test]
-    fn filmcraft_monitor_timeline_renders_custom_handles_and_playhead() {
-        let _lock = crate::app::tests::lock_app_tests();
-        let ctx = egui::Context::default();
-        let config = crate::config::AppConfig::default();
-        crate::ui::configure_native_visuals(&ctx, &config);
-        let mut app = PealayerApp::default();
-        app.current_video_path = Some(std::path::PathBuf::from("/mock/video.mp4"));
-        app.duration = 60.0;
-        app.is_seekable = true;
-        app.playback_time = 15.0;
-
-        let mut output = ctx.run_ui(
-            egui::RawInput {
-                screen_rect: Some(egui::Rect::from_min_size(
-                    egui::Pos2::ZERO,
-                    egui::vec2(800.0, 100.0),
-                )),
-                ..Default::default()
-            },
-            |ui| {
-                draw_timeline(&mut app, ui);
-            },
-        );
-        output.textures_delta.clear();
     }
 }

@@ -1,0 +1,11 @@
+.asset-drop-target { min-width: 0; min-height: 0; display: flex; flex-direction: column; gap: 10px; flex: 1; position: relative; }
+.asset-drop-target.is-external-drop { outline: 2px dashed var(--accent); outline-offset: -2px; border-radius: 10px; }
+.asset-import-actions { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; min-width: 0; flex: 0 0 auto; }
+.asset-import-actions .ant-progress { flex: 1 1 120px; max-width: 260px; margin: 0; }
+.asset-import-actions > span { color: var(--muted); font-size: 12px; }
+.asset-review-items { max-height: min(40vh,320px); overflow: auto; border: 1px solid var(--line); border-radius: 8px; margin-block: 12px; }
+.asset-review-items > div { padding: 8px 12px; overflow-wrap: anywhere; }
+.asset-review-items > div + div { border-top: 1px solid var(--line); }
+.asset-import-actions .ant-btn { display: inline-flex; align-items: center; justify-content: center; }
+.asset-drop-target > .studio-page { flex: 1; min-height: 0; }
+@media (max-width: 480px) { .asset-import-actions { gap: 8px; } .asset-import-actions .ant-progress { max-width: 150px; } }

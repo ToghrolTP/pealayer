@@ -274,6 +274,15 @@ fn timeline_frozen_ruler_rect(content: egui::Rect, viewport: egui::Rect) -> egui
     )
 }
 
+/// Keep the timestamp's center on its tick. Omit partially visible labels at
+/// the edges rather than shifting them away from the time they identify.
+pub(super) fn timeline_ruler_label_rect(
+    center: egui::Pos2, size: egui::Vec2, clip: egui::Rect,
+) -> Option<egui::Rect> {
+    let label = egui::Rect::from_center_size(center, size);
+    clip.contains_rect(label).then_some(label)
+}
+
 fn timeline_content_height(
     track_rows: usize,
     analog_rows: usize,
@@ -817,6 +826,17 @@ fn timeline_offset_to_reveal_x(
     revealed.clamp(0.0, max_offset)
 }
 
+fn timeline_playhead_in_view(content: egui::Rect, viewport: egui::Rect, time: f64, zoom: f32) -> bool {
+    if !time.is_finite() || !zoom.is_finite() || zoom <= 0.0 { return false; }
+    let x = content.left() + time.max(0.0) as f32 * zoom;
+    // Include the complete seven-point ruler handle, not only its hairline.
+    // At either media boundary it cannot scroll farther to expose the half
+    // handle outside the content, so that boundary is already revealed.
+    let left = (x - 7.0).max(content.left());
+    let right = (x + 7.0).min(content.right());
+    x.is_finite() && viewport.left() <= left && right <= viewport.right()
+}
+
 fn timeline_offset_to_reveal_cue(
     current: egui::Vec2,
     cue: egui::Rect,
@@ -989,12 +1009,14 @@ struct TimelineNavigationTransition {
 }
 
 fn timeline_ruler_owns_pointer(
-    ruler: egui::Rect,
+    ruler: &egui::Response,
     toolbar: egui::Rect,
-    pointer: egui::Pos2,
-    dragging_ruler: bool,
 ) -> bool {
-    dragging_ruler || (ruler.contains(pointer) && !toolbar.contains(pointer))
+    // Response hover respects the viewport clip, higher layers and child
+    // controls. The scrolled content rectangle alone extends under the sticky
+    // track headers. Preserve capture only for a seek started on this ruler.
+    ruler.dragged_by(egui::PointerButton::Primary)
+        || ruler.hover_pos().is_some_and(|pointer| !toolbar.contains(pointer))
 }
 
 fn start_timeline_navigation_transition(
@@ -8625,8 +8647,115 @@ fn draw_control_card_grid(
 }
 
 #[cfg(test)]
+mod hardware_monitor_offline_tests {
+    use super::*;
+    #[test]
+    fn monitor_never_paints_cached_live_cards_or_rf_after_transport_loss() {
+        let _lock=crate::app::tests::lock_app_tests();
+        for connected in [false,true] {
+            let mut app=PealayerApp::default();
+            app.engine_handle=crate::four_d::engine::memory_only_test_engine();
+            app.is_connected=connected;
+            app.engine_handle.connection_requested.store(false,std::sync::atomic::Ordering::Relaxed);
+            *app.engine_handle.hardware_capabilities.lock().unwrap()=Some(crate::four_d::controller::HardwareCapabilities {
+                board_connected:!connected,supports_rf_transmit:true,board_name:"Cached fixture board".into(),..Default::default()
+            });
+            let ctx=egui::Context::default();
+            for frame in 0..2 {
+                let mut output=ctx.run_ui(egui::RawInput{screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(360.0,700.0))),time:Some(frame as f64),..Default::default()},|ui| {
+                    PealayerTabViewer::new(&mut app).ui(ui,&mut PealayerTab::HardwareMonitor);
+                });
+                let text=output.shapes.iter().filter_map(|shape|match &shape.shape {egui::Shape::Text(t)=>Some(t.galley.text()),_=>None}).collect::<Vec<_>>().join("\n");
+                assert!(text.contains(if connected {"No board connected"}else{"Hardware Disconnected"}),"{text}");
+                assert!(!text.contains("RF controls"),"RF leaked into unavailable Monitor");
+                assert!(!text.contains("Cached fixture board"),"stale connected board card was painted");
+                assert!(!text.contains("Buzzer & melodies"));
+                assert!(!app.rf.open);assert!(app.hardware_effect_authoring.pending_operation.is_none());
+                output.textures_delta.clear();
+            }
+        }
+    }
+}
+
+#[cfg(test)]
 mod timeline_row_tests {
     use super::*;
+
+    #[test]
+    fn timeline_zoom_shortcuts_work_without_canvas_focus_and_never_seek() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.engine_handle = crate::four_d::engine::memory_only_test_engine();
+        app.duration = 60.0;
+        app.timeline_zoom = 100.0;
+        app.timeline_animated_navigation = false;
+        app.timeline_follow_playhead = false;
+        app.is_paused = true;
+        app.playback_time = 12.34;
+        let ctx = egui::Context::default();
+        for key in [None, None, Some(egui::Key::Plus), Some(egui::Key::Minus)] {
+            let mut output = ctx.run_ui(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(1000.0,420.0))),
+                events: key.map(|key|vec![egui::Event::Key {key,physical_key:Some(key),pressed:true,repeat:false,modifiers:egui::Modifiers::NONE}]).unwrap_or_default(),
+                ..Default::default()
+            }, |ui|PealayerTabViewer::new(&mut app).ui(ui,&mut PealayerTab::Timeline));
+            output.textures_delta.clear();
+            assert_eq!(app.timeline_zoom, if key == Some(egui::Key::Plus) {125.0} else {100.0});
+            assert_eq!(app.playback_time,12.34);
+            assert_eq!(app.seek_pos,None);
+        }
+    }
+
+    #[test]
+    fn actual_media_strip_paint_follows_palette_and_keeps_names_visible_after_panning() {
+        let _guard=crate::app::tests::lock_app_tests();
+        for palette in [crate::config::ColorPalette::Native,crate::config::ColorPalette::Studio] {
+        for width in [640.0,1200.0] {
+            let mut app=PealayerApp::default();
+            app.engine_handle=crate::four_d::engine::memory_only_test_engine();
+            app.color_palette=palette;app.duration=60.0;app.timeline_zoom=100.0;
+            app.timeline_animated_navigation=false;app.timeline_follow_playhead=false;
+            app.is_paused=true;app.playback_time=12.34;
+            app.current_video_path=Some("strip-fixture.mkv".into());
+            app.current_vid="1".into();app.current_aid="7".into();
+            app.video_tracks=vec![crate::app::VideoTrack {id:1,title:Some("Main picture".into()),lang:None}];
+            app.audio_tracks=vec![crate::app::AudioTrack {id:7,title:Some("Main mix".into()),lang:None}];
+            let ctx=egui::Context::default();
+            crate::ui::configure_native_appearance(&ctx,&crate::config::AppConfig {
+                color_palette:palette,theme:crate::config::AppTheme::Dark,..Default::default()
+            });
+            let mut time=0.0;
+            let mut frame=|events| {
+                time+=0.02;
+                let mut output=ctx.run_ui(egui::RawInput {
+                    screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(width,420.0))),time:Some(time),events,..Default::default()
+                },|ui|PealayerTabViewer::new(&mut app).ui(ui,&mut PealayerTab::Timeline));
+                output.textures_delta.clear();output
+            };
+            for _ in 0..3 {frame(vec![]);}
+            let ruler=ctx.read_response(egui::Id::new("timeline_ruler")).unwrap().rect;
+            frame(vec![egui::Event::PointerMoved(egui::pos2(ruler.left()+45.0,ruler.bottom()+40.0)),
+                egui::Event::MouseWheel {unit:egui::MouseWheelUnit::Point,delta:egui::vec2(-700.0,0.0),modifiers:egui::Modifiers::NONE,
+                    phase:egui::TouchPhase::Move,source:egui::MouseWheelSource::Wheel}]);
+            let output=frame(vec![]);
+            for (icon,role) in [(crate::ui::icons::FILE_VIDEO,"timeline-video-fill"),(crate::ui::icons::SPEAKER_HIGH,"timeline-audio-fill")] {
+                let prefix=format!("{icon}  ");
+                let label=output.shapes.iter().find(|shape|matches!(&shape.shape,egui::Shape::Text(text) if text.galley.text().starts_with(&prefix))).expect("Actual strip name must still be painted after pan");
+                if let egui::Shape::Text(text)=&label.shape {
+                    assert!(!text.galley.elided,"Full visible lane has room for its name");
+                    assert!((text.pos.x-label.clip_rect.left()).abs()<0.1);
+                    assert!(text.pos.x>ruler.left(),"Text cannot slide under the sticky track header");
+                }
+                let fill=crate::ui::palette::color(palette,true,role);
+                assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                    egui::Shape::Rect(rect) if rect.fill==fill && rect.rect.left()<label.clip_rect.left())),
+                    "Actual scrolled strip must use its palette role, not a local color");
+            }
+            drop(frame);
+            assert_eq!(app.playback_time,12.34);assert!(app.seek_pos.is_none());
+            assert_eq!(app.current_vid,"1");assert_eq!(app.current_aid,"7");
+        } }
+    }
 
     #[test]
     fn pwm_modifier_steps_are_consistent_and_bounded() {
@@ -8999,7 +9128,7 @@ mod timeline_row_tests {
                             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, height))),
                             time: Some(frame as f64), ..Default::default()
                         }, |ui| {
-                            let mut viewer = PealayerTabViewer { app: &mut app };
+                            let mut viewer = PealayerTabViewer::new(&mut app);
                             let available = ui.available_rect_before_wrap();
                             let scroll = egui::ScrollArea::new(viewer.scroll_bars(&PealayerTab::ProgramMonitor))
                                 .show(ui, |ui| viewer.ui(ui, &mut PealayerTab::ProgramMonitor));
@@ -9068,6 +9197,40 @@ mod timeline_row_tests {
     }
 
     #[test]
+    fn timeline_ruler_labels_are_centered_on_ticks_without_edge_reanchoring() {
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            let ctx = egui::Context::default();
+            ctx.set_pixels_per_point(scale);
+            let mut expected = Vec::new();
+            let output = ctx.run_ui(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(700.0, 100.0))),
+                ..Default::default()
+            }, |ui| {
+                let clip = egui::Rect::from_min_max(egui::pos2(20.0, 10.0), egui::pos2(660.0, 50.0));
+                let painter = ui.painter().with_clip_rect(clip);
+                for (index, text) in ["0", "14:14", "1:00:00", "100:00:00"].iter().enumerate() {
+                    let x = 90.25 + index as f32 * 150.5;
+                    let galley = painter.layout_no_wrap((*text).to_owned(), egui::FontId::monospace(9.0), egui::Color32::WHITE);
+                    let rect = timeline_ruler_label_rect(egui::pos2(x, 30.0), galley.size(), clip).unwrap();
+                    assert!((rect.center().x - x).abs() < 0.001);
+                    assert!(timeline_ruler_label_rect(egui::pos2(clip.left(), 30.0), galley.size(), clip).is_none());
+                    assert!(timeline_ruler_label_rect(egui::pos2(clip.right(), 30.0), galley.size(), clip).is_none());
+                    painter.galley(rect.min, galley, egui::Color32::WHITE);
+                    expected.push((text.to_string(), x));
+                }
+            });
+            for (caption, tick_x) in expected {
+                let text = output.shapes.iter().find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == caption => Some(text),
+                    _ => None,
+                }).expect("actual painted timestamp");
+                assert!((text.pos.x + text.galley.size().x * 0.5 - tick_x).abs() < 0.001);
+            }
+            discard_ui_output(output);
+        }
+    }
+
+    #[test]
     fn timeline_frozen_ruler_uses_real_scroll_viewport_and_separate_paint_clip() {
         let context = egui::Context::default();
         let mut observed = Vec::new();
@@ -9119,38 +9282,6 @@ mod timeline_row_tests {
     }
 
     #[test]
-    fn filmcraft_ruler_ladder_and_playhead_geometry_render_without_jitter() {
-        let ctx = egui::Context::default();
-        let config = crate::config::AppConfig::default();
-        crate::ui::configure_native_visuals(&ctx, &config);
-        let tokens = crate::ui::craft_theme::current(&ctx);
-
-        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
-            let ruler_rect = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(800.0, 26.0));
-            let painter = ui.painter().clone();
-            let ruler_painter = ui.painter().with_clip_rect(ruler_rect);
-
-            // Test ruler strides for 30 fps at normal zoom
-            let (minor, label) = crate::ui::craft_theme::ruler_steps(2.5, 30);
-            assert!(minor > 0);
-            assert!(label >= minor);
-            assert_eq!(label % minor, 0);
-
-            // Test precision playhead drawing
-            crate::ui::craft_theme::paint_filmcraft_playhead(
-                &painter,
-                &ruler_painter,
-                150.0,
-                ruler_rect.bottom() - 13.0,
-                ruler_rect.bottom(),
-                300.0,
-                tokens.playhead,
-            );
-        });
-        output.textures_delta.clear();
-    }
-
-    #[test]
     fn middle_pan_axis_modifiers_preserve_free_and_constrained_modes() {
         let delta = egui::vec2(15.0, -9.0);
         assert_eq!(constrain_middle_pan_delta(delta, false, false, true), delta);
@@ -9179,6 +9310,20 @@ mod timeline_row_tests {
             timeline_offset_to_reveal_x(400.0, 50.0, 1_000.0, 400.0),
             26.0
         );
+    }
+
+    #[test]
+    fn playhead_visibility_includes_handle_and_current_scrub_position() {
+        let content = egui::Rect::from_min_size(egui::pos2(-200.0, 0.0), egui::vec2(1000.0, 200.0));
+        let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 200.0));
+        assert!(timeline_playhead_in_view(content, viewport, 3.5, 100.0));
+        assert!(!timeline_playhead_in_view(content, viewport, 1.0, 100.0));
+        assert!(!timeline_playhead_in_view(content, viewport, 7.0, 100.0));
+        assert!(!timeline_playhead_in_view(content, viewport, 2.01, 100.0));
+        assert!(!timeline_playhead_in_view(content, viewport, 5.99, 100.0));
+        assert!(!timeline_playhead_in_view(content, viewport, f64::NAN, 100.0));
+        assert!(timeline_playhead_in_view(viewport, viewport, 0.0, 100.0));
+        assert!(timeline_playhead_in_view(viewport, viewport, 4.0, 100.0));
     }
 
     #[test]
@@ -9267,14 +9412,108 @@ mod timeline_row_tests {
     }
 
     #[test]
-    fn timeline_ruler_does_not_steal_toolbar_cursor_or_seek() {
-        let ruler = egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(900.0, 30.0));
-        let toolbar = egui::Rect::from_min_max(egui::pos2(650.0, 1.0), egui::pos2(897.0, 29.0));
-        assert!(!timeline_ruler_owns_pointer(ruler, toolbar, toolbar.center(), false));
-        assert!(timeline_ruler_owns_pointer(ruler, toolbar, egui::pos2(200.0, 15.0), false));
-        // A seek already started on the ruler may continue across the toolbar.
-        assert!(timeline_ruler_owns_pointer(ruler, toolbar, toolbar.center(), true));
-        assert!(!timeline_ruler_owns_pointer(ruler, toolbar, egui::pos2(200.0, 60.0), false));
+    fn timeline_ruler_does_not_steal_sticky_header_cursors_or_seek() {
+        let _guard = crate::app::tests::lock_app_tests();
+        for width in [640.0, 1000.0] {
+            let mut app = PealayerApp::default();
+            app.engine_handle = crate::four_d::engine::memory_only_test_engine();
+            app.duration = 60.0;
+            app.timeline_zoom = 100.0;
+            app.timeline_animated_navigation = false;
+            app.is_paused = true;
+            app.timeline_follow_playhead = false;
+            let ctx = egui::Context::default();
+            let mut time = 0.0;
+            let mut render = |events| {
+                time += 0.02;
+                let mut output = ctx.run_ui(egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 420.0))),
+                    time: Some(time), events, ..Default::default()
+                }, |ui| { PealayerTabViewer::new(&mut app).ui(ui, &mut PealayerTab::Timeline); });
+                output.textures_delta.clear();
+                output
+            };
+            let initial = render(vec![]);
+            let ruler = ctx.read_response(egui::Id::new("timeline_ruler")).unwrap().rect;
+            let header_right = ruler.left();
+            let y = ruler.center().y;
+            // Locate the real header action paint slots, rather than guessing
+            // offsets across font padding and ScrollArea frame margins.
+            let mut buttons: Vec<_> = initial.shapes.iter().filter_map(|shape| match &shape.shape {
+                egui::Shape::Rect(rect) if (rect.rect.width() - 21.0).abs() < 0.2
+                    && (rect.rect.height() - 21.0).abs() < 0.2
+                    && rect.rect.right() < header_right => Some(rect.rect),
+                _ => None,
+            }).collect();
+            buttons.sort_by(|a, b| b.right().total_cmp(&a.right()));
+            assert!(buttons.len() >= 2, "missing real header action paint slots");
+            let header_y = buttons[0].center().y;
+            // Pan far enough that the logical ruler extends underneath every
+            // sticky header control, then exercise the actual Timeline UI.
+            render(vec![egui::Event::PointerMoved(egui::pos2(header_right + 45.0, y + 60.0)),
+                egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(-700.0, 0.0), modifiers: egui::Modifiers::NONE,
+                    phase: egui::TouchPhase::Move, source: egui::MouseWheelSource::Wheel }]);
+            for _ in 0..4 { render(vec![]); }
+            assert!(ctx.read_response(timeline_keyboard_focus_id()).unwrap().rect.left() < header_right - 100.0,
+                "fixture must really pan: ruler={ruler:?}, canvas={:?}", ctx.read_response(timeline_keyboard_focus_id()).unwrap().rect);
+            for (point, cursor) in [
+                (buttons[0].center(), egui::CursorIcon::Default), // no available keyframe target
+                (buttons[1].center(), egui::CursorIcon::PointingHand),
+                (egui::pos2(header_right - 130.0, header_y), egui::CursorIcon::Text),
+                (egui::pos2(header_right + 24.0, y), egui::CursorIcon::ResizeHorizontal),
+            ] {
+                let output = render(vec![egui::Event::PointerMoved(point)]);
+                assert_eq!(output.platform_output.cursor_icon, cursor, "width={width}, point={point:?}");
+            }
+            let input = egui::pos2(header_right - 130.0, header_y);
+            for pressed in [true, false] {
+                render(vec![egui::Event::PointerMoved(input), egui::Event::PointerButton {
+                    pos: input, button: egui::PointerButton::Primary, pressed,
+                    modifiers: egui::Modifiers::NONE,
+                }]);
+            }
+            drop(render);
+            assert!(!app.is_scrubbing);
+            assert!(app.seek_pos.is_none(), "hovering must never seek");
+        }
+    }
+
+    #[test]
+    fn timeline_ruler_capture_requires_a_visible_start_and_survives_toolbar_crossing() {
+        let ctx = egui::Context::default();
+        let viewport = egui::Rect::from_min_max(egui::pos2(250.0, 0.0), egui::pos2(900.0, 180.0));
+        let ruler = egui::Rect::from_min_max(egui::pos2(-500.0, 0.0), egui::pos2(1600.0, 30.0));
+        let toolbar = egui::Rect::from_min_max(egui::pos2(650.0, 0.0), egui::pos2(900.0, 30.0));
+        let header = egui::pos2(100.0, 15.0);
+        let canvas = egui::pos2(350.0, 15.0);
+        let button = |pos, pressed| egui::Event::PointerButton { pos,
+            button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+        let frame = |events| {
+            let mut owns = false;
+            let mut output = ctx.run_ui(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(900.0, 200.0))),
+                events, ..Default::default()
+            }, |ui| {
+                ui.set_clip_rect(viewport);
+                let response = ui.interact(ruler.intersect(viewport), egui::Id::new("ruler-capture-fixture"), egui::Sense::click_and_drag());
+                owns = timeline_ruler_owns_pointer(&response, toolbar);
+            });
+            output.textures_delta.clear();
+            owns
+        };
+        frame(vec![]);
+        assert!(!frame(vec![egui::Event::PointerMoved(header)]));
+        assert!(!frame(vec![button(header, true)]));
+        assert!(!frame(vec![egui::Event::PointerMoved(canvas)]), "hidden header must not acquire a ruler drag");
+        frame(vec![button(canvas, false)]);
+        assert!(!frame(vec![egui::Event::PointerMoved(toolbar.center())]), "toolbar hover is not ruler hover");
+        frame(vec![egui::Event::PointerMoved(canvas)]);
+        frame(vec![button(canvas, true)]);
+        assert!(frame(vec![egui::Event::PointerMoved(egui::pos2(400.0, 15.0))]));
+        assert!(frame(vec![egui::Event::PointerMoved(toolbar.center())]), "existing ruler drag retains capture over toolbar");
+        assert!(frame(vec![egui::Event::PointerMoved(header)]), "existing ruler drag retains capture outside viewport");
+        assert!(!frame(vec![button(header, false)]), "release restores header ownership");
     }
 
     #[test]
@@ -13832,7 +14071,7 @@ mod timeline_row_tests {
                     ..Default::default()
                 },
                 |ui| {
-                    PealayerTabViewer { app }.ui(ui, &mut PealayerTab::Timeline);
+                    PealayerTabViewer::new(app).ui(ui, &mut PealayerTab::Timeline);
                 },
             );
             output.textures_delta.clear();
@@ -13913,6 +14152,7 @@ pub fn visible_workspace_tab_count(app: &PealayerApp) -> usize {
 
 pub fn draw_workspace_tab_menu(app: &mut PealayerApp, ui: &mut egui::Ui) {
     for tab in PealayerTab::ALL {
+        let is_sidebar_open = app.is_tab_open_in_sidebar(tab);
         let is_open = app.is_tab_open(tab);
         let mut visible = is_open;
         let visibility_icon = if is_open {
@@ -13920,7 +14160,15 @@ pub fn draw_workspace_tab_menu(app: &mut PealayerApp, ui: &mut egui::Ui) {
         } else {
             crate::ui::icons::EYE_SLASH
         };
-        let label = format!("{visibility_icon}  {}  {}", tab.icon(), tab.title(app));
+        let location_suffix = if is_sidebar_open {
+            match app.language {
+                crate::config::AppLanguage::Persian => " (نوار کناری)",
+                _ => " (Sidebar)",
+            }
+        } else {
+            ""
+        };
+        let label = format!("{visibility_icon}  {}  {}{location_suffix}", tab.icon(), tab.title(app));
         if ui.checkbox(&mut visible, label).changed() {
             if visible && !is_open {
                 app.open_or_focus_tab(tab);
@@ -13934,6 +14182,9 @@ pub fn draw_workspace_tab_menu(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
 pub struct PealayerTabViewer<'a> {
     pub app: &'a mut PealayerApp,
+    pub(crate) collapsed: Vec<PealayerTab>,
+    pub(crate) header_options: super::panel_chrome::HeaderOptions,
+    pub(crate) minimum_body: f32,
 }
 
 #[cfg(test)]
@@ -13992,10 +14243,11 @@ fn panel_body<R>(ui: &mut egui::Ui, panel: &PealayerTab, body: impl FnOnce(&mut 
 pub(crate) struct DockViewState {
     pub maximized: Option<PealayerTab>,
     pub auto_collapse: bool,
+    pub collapsed: Vec<PealayerTab>,
 }
 
 impl Default for DockViewState {
-    fn default() -> Self { Self { maximized: None, auto_collapse: true } }
+    fn default() -> Self { Self { maximized: None, auto_collapse: true, collapsed: Vec::new() } }
 }
 
 impl DockViewState {
@@ -14019,6 +14271,7 @@ impl DockViewState {
             }
         }
         self.maximized = self.maximized.filter(|panel| workspace.layout.contains(panel));
+        self.collapsed.retain(|panel| workspace.layout.contains(panel));
     }
 
     pub fn store(&self, ctx: &egui::Context) {
@@ -14027,12 +14280,17 @@ impl DockViewState {
 }
 
 impl<'a> PealayerTabViewer<'a> {
+    pub fn new(app: &'a mut PealayerApp) -> Self {
+        Self{app,collapsed:Vec::new(),header_options:super::panel_chrome::HeaderOptions::current(),minimum_body:0.0}
+    }
     pub fn draw_context_menu(&mut self, ui: &mut egui::Ui, tab: PealayerTab) {
         let title = tab.title(self.app);
         ui.label(egui::RichText::new(title).strong());
         ui.separator();
         match tab {
             PealayerTab::ProgramMonitor => {
+                crate::ui::player_mode::menu(self.app, ui);
+                ui.separator();
                 let is_fullscreen = self.app.fullscreen_intent(ui.ctx());
                 let label = if is_fullscreen {
                     self.app.tr("Exit Fullscreen")
@@ -14111,7 +14369,7 @@ impl<'a> PealayerTabViewer<'a> {
         }
         ui.separator();
         ui.label(egui::RichText::new(self.app.tr("Panels")).strong());
-        draw_workspace_tab_menu(self.app, ui);
+        ui.add_enabled_ui(!self.app.dock_state.locked, |ui| draw_workspace_tab_menu(self.app, ui));
         ui.separator();
         if ui
             .button(format!(
@@ -14170,6 +14428,9 @@ impl<'a> PealayerTabViewer<'a> {
                         draw_effect_controls(self.app, ui, true);
                     }
                     PealayerTab::EffectsLibrary => {
+                        let drop_rect=ui.max_rect().intersect(ui.clip_rect());
+                        ui.ctx().data_mut(|data|data.insert_temp(egui::Id::new("external-assets-library"),drop_rect));
+                        crate::assets::paint_drop_target(ui,drop_rect,&self.app.tr("Import assets"));
                         // Fixed rows and scrolling cards share one trailing edge.
                         let effects_width = effects_panel_content_width(sidebar_content_width(ui.available_width()));
                         effects_library_toolbar(self.app, ui, effects_width);
@@ -14729,12 +14990,12 @@ impl<'a> PealayerTabViewer<'a> {
                             }
                     }
                     PealayerTab::HardwareMonitor => {
-                        crate::four_d::authority::draw_controls(self.app,ui);
+                        if self.app.is_connected {crate::four_d::authority::draw_controls(self.app,ui);}
                         let capabilities = self.app.advertised_hardware();
                         if let Some(capabilities) = &capabilities {
                             channel_folders::draw_dialogs(self.app, ui, capabilities);
                         }
-                        ui.horizontal(|ui| {
+                        ui.horizontal_wrapped(|ui| {
                             ui.heading(self.app.tr("Hardware Monitor Dashboard"));
                             if crate::ui::hardware_control::channel_manager_available(
                                 self.app.is_connected,
@@ -14764,19 +15025,23 @@ impl<'a> PealayerTabViewer<'a> {
                         ui.add_space(8.0);
 
                         hardware_monitor_scroll(ui, |ui| {
-                        if crate::four_d::controller::is_demo_endpoint(&self.app.serial_port)
-                            || self.app.advertised_hardware().as_ref().is_some_and(|c| c.board_name.contains("Virtual"))
+                        if crate::ui::hardware_monitor::live_board(self.app.is_connected,capabilities.as_ref()) && (crate::four_d::controller::is_demo_endpoint(&self.app.serial_port)
+                            || capabilities.as_ref().is_some_and(|c| c.board_name.contains("Virtual")))
                         {
                             crate::ui::digital_twin::draw_digital_twin_card(self.app, ui);
                             ui.add_space(10.0);
                         }
-                        if self.app.advertised_hardware().is_some_and(|caps| caps.supports_rf_transmit) {
+                        // A retained catalog is not a live RF connection. Offline
+                        // authoring remains separate from the Hardware Monitor.
+                        if crate::ui::hardware_monitor::show_rf(self.app.is_connected,capabilities.as_ref()) {
                             if ui.button(format!("{} {}",crate::ui::icons::RADIO,self.app.tr("RF controls…"))).clicked() {
                                 self.app.rf.open = true;
-                                if let Err(error) = self.app.request_rf("catalog",serde_json::json!({"read_board":true})) { self.app.rf.error = error; }
+                                if self.app.is_connected {
+                                    if let Err(error) = self.app.request_rf("catalog",serde_json::json!({"read_board":true})) { self.app.rf.error = error; }
+                                }
                             }
                         }
-                        if self.app.estop_active {
+                        if self.app.is_connected && self.app.estop_active {
                             let estop_banner_label =
                                 self.app.tr("EMERGENCY STOP ACTIVE - ALL OUTPUTS DISABLED");
                             ui.horizontal(|ui| {
@@ -14797,56 +15062,17 @@ impl<'a> PealayerTabViewer<'a> {
                             ui.add_space(8.0);
                         }
 
-                        let availability = crate::four_d::programming::hardware_availability(self.app.is_connected, false, capabilities.as_ref());
-                        if matches!(availability, crate::four_d::programming::HardwareAvailability::Programming | crate::four_d::programming::HardwareAvailability::ProgrammingLatch | crate::four_d::programming::HardwareAvailability::ProgrammingRecovery) {
-                            ui.colored_label(ui.visuals().warn_fg_color,
-                                format!("{} {}", crate::ui::icons::LOCK, self.app.tr(availability.label())));
+                        let availability=crate::four_d::programming::hardware_availability(self.app.is_connected,false,capabilities.as_ref());
+                        if crate::ui::hardware_monitor::live_board(self.app.is_connected,capabilities.as_ref())
+                            && matches!(availability,crate::four_d::programming::HardwareAvailability::Programming|crate::four_d::programming::HardwareAvailability::ProgrammingLatch|crate::four_d::programming::HardwareAvailability::ProgrammingRecovery) {
+                            ui.colored_label(ui.visuals().warn_fg_color,format!("{} {}",crate::ui::icons::LOCK,self.app.tr(availability.label())));
                         }
-                        if !self.app.is_connected {
-                            ui.label(egui::RichText::new(
-                                self.app.tr("Hardware Disconnected")
-                            ).weak());
-                        } else if crate::four_d::controller::is_controller_endpoint(&self.app.serial_port)
-                            && capabilities.is_none()
-                        {
-                            if self.app.connection_notice.is_some() {
-                                ui.horizontal_wrapped(|ui| {
-                                    ui.colored_label(
-                                        ui.visuals().warn_fg_color,
-                                        crate::ui::icons::WARNING,
-                                    );
-                                    ui.label(
-                                        egui::RichText::new(
-                                            self.app.hardware_unavailable_detail(None),
-                                        )
-                                        .weak(),
-                                    );
-                                });
-                            } else {
-                                ui.label(egui::RichText::new(
-                                    self.app.tr("Loading hardware…")
-                                ).weak());
-                            }
-                        } else if capabilities
-                            .as_ref()
-                            .is_some_and(|capabilities| !capabilities.board_connected)
-                        {
-                            ui.horizontal_wrapped(|ui| {
-                                ui.colored_label(
-                                    ui.visuals().warn_fg_color,
-                                    crate::ui::icons::WARNING,
-                                );
-                                ui.label(
-                                    egui::RichText::new(
-                                        self.app.hardware_unavailable_detail(capabilities.as_ref()),
-                                    )
-                                    .weak(),
-                                );
-                            });
+                        if !crate::ui::hardware_monitor::live_board(self.app.is_connected,capabilities.as_ref()) {
+                            crate::ui::hardware_monitor::draw_unavailable(self.app,ui,capabilities.as_ref());
                         }
 
                         if let Some(capabilities) = capabilities
-                            .filter(|capabilities| capabilities.board_connected)
+                            .filter(|capabilities| self.app.is_connected && capabilities.board_connected)
                         {
                             let (board_card_title, board_card_subtitle) = board_card_labels(
                                 display_language,
@@ -15299,22 +15525,20 @@ impl<'a> PealayerTabViewer<'a> {
                                         .max_rect(header_rect.shrink2(egui::vec2(4.0, 1.0)))
                                         .layout(egui::Layout::right_to_left(egui::Align::Center)),
                                 );
-                                if header_ui
-                                    .add_enabled(
-                                        can_add_keyframe,
-                                        egui::Button::new(crate::ui::icons::DIAMOND),
-                                    )
-                                    .on_hover_text(self.app.tr("Add exact timeline keyframe at playhead (K)"))
+                                header_ui.set_clip_rect(ui.clip_rect().intersect(header_rect));
+                                if crate::ui::media_tracks::header_button(
+                                    &mut header_ui,"timeline-add-keyframe",crate::ui::icons::DIAMOND,
+                                    false,can_add_keyframe,false,&self.app.tr("Add exact timeline keyframe at playhead (K)"))
                                     .clicked()
                                 {
                                     let time_ms = self.app.timeline_playhead_time_ms();
                                     self.app.insert_timeline_keyframe(time_ms);
                                     ui.ctx().request_repaint();
                                 }
-                                egui::containers::menu::MenuButton::from_button(
-                                    egui::Button::new(crate::ui::icons::LIST_CHECKS),
-                                )
-                                .ui(&mut header_ui, |ui| {
+                                let track_manager = crate::ui::media_tracks::header_button(
+                                    &mut header_ui,"timeline-track-manager",crate::ui::icons::LIST_CHECKS,
+                                    false,true,false,&self.app.tr("Timeline tracks"));
+                                egui::Popup::menu(&track_manager).show(|ui| {
                                     ui.set_min_width(245.0);
                                     ui.strong(self.app.tr("Timeline tracks"));
                                     ui.label(
@@ -15407,6 +15631,7 @@ impl<'a> PealayerTabViewer<'a> {
                                 let filter_response = header_ui.add_sized(
                                     [158.0, 22.0],
                                     crate::ui::dialog::singleline_text_edit(ui, &mut timeline_track_filter)
+                                        .font(egui::FontId::proportional(13.0))
                                         .hint_text(self.app.tr("Tracks"))
                                         .frame(egui::Frame::NONE)
                                         .margin(egui::Margin::symmetric(4, 2)),
@@ -15574,7 +15799,15 @@ impl<'a> PealayerTabViewer<'a> {
                                             egui::FontId::proportional(14.0),
                                             icon_color,
                                         );
-                                        let label_width = if !track_row.relay_ids.is_empty() {
+                                        let media_actions_width = match track_row.kind {
+                                            TimelineTrackKind::Video(_) => Some(crate::ui::media_tracks::HEADER_SELECTOR_WIDTH),
+                                            TimelineTrackKind::Audio(_) | TimelineTrackKind::Subtitle(_) => Some(
+                                                crate::ui::media_tracks::HEADER_SELECTOR_WIDTH + TIMELINE_TRACK_STATE_BUTTON_SIZE + ui.spacing().item_spacing.x),
+                                            _ => None,
+                                        };
+                                        let label_width = if let Some(actions) = media_actions_width {
+                                            (ui.available_width() - actions - ui.spacing().item_spacing.x - 4.0).max(0.0)
+                                        } else if !track_row.relay_ids.is_empty() {
                                             116.0
                                         } else {
                                             158.0
@@ -15707,7 +15940,7 @@ impl<'a> PealayerTabViewer<'a> {
                                             None => track_row.name.clone(),
                                         });
                                         ui.allocate_ui_with_layout(
-                                            ui.available_size(),
+                                            egui::vec2((ui.available_width()-4.0).max(0.0),ui.available_height()),
                                             egui::Layout::right_to_left(egui::Align::Center),
                                             |ui| {
                                         if let Some(control) = reorder_control.as_ref() {
@@ -15758,20 +15991,11 @@ impl<'a> PealayerTabViewer<'a> {
                                                 );
                                                 media_control_clicked |= selector.clicked();
                                                 let visible = track_row.active && track_row.enabled;
-                                                let visibility = ui
-                                                    .dropdown_choice(
-                                                        visible,
-                                                        if visible {
-                                                            crate::ui::icons::EYE
-                                                        } else {
-                                                            crate::ui::icons::EYE_SLASH
-                                                        },
-                                                    )
-                                                    .on_hover_text(if visible {
-                                                        self.app.tr("Hide subtitles")
-                                                    } else {
-                                                        self.app.tr("Show subtitles")
-                                                    });
+                                                let visibility = crate::ui::media_tracks::header_button(ui,
+                                                    ("timeline-subtitle-visibility",&track_row.key),
+                                                    if visible {crate::ui::icons::EYE} else {crate::ui::icons::EYE_SLASH},
+                                                    false,true,visible,
+                                                    &self.app.tr(if visible {"Hide subtitles"} else {"Show subtitles"}));
                                                 if visibility.clicked() {
                                                     media_control_clicked = true;
                                                     if track_row.active {
@@ -16674,7 +16898,7 @@ impl<'a> PealayerTabViewer<'a> {
                                         keyframe_context_owned = keyframe_hit || keyframe_candidates.iter()
                                             .any(|(target, _)| egui::Popup::is_id_open(ui.ctx(), target.menu_id()));
 
-                                        let ruler_response = ui.interact(ruler_rect, egui::Id::new("timeline_ruler"), egui::Sense::click_and_drag())
+                                        let ruler_response = ui.interact(ruler_rect.intersect(viewport_clip), egui::Id::new("timeline_ruler"), egui::Sense::click_and_drag())
                                             .on_hover_text(&timeline_ruler_help);
 
                                         // Capture the ruler position before opening the menu. Once
@@ -16682,7 +16906,7 @@ impl<'a> PealayerTabViewer<'a> {
                                         // not the ruler; deriving the timestamp from it made exact
                                         // keyframes jump to an unrelated (usually earlier) time.
                                         let ruler_context_requested = !keyframe_context_owned
-                                            && ruler_rect.contains(pointer_pos.unwrap_or_default())
+                                            && ruler_response.hovered()
                                             && ui.input(|input| input.pointer.button_released(egui::PointerButton::Secondary));
                                         if ruler_context_requested {
                                             if let Some(position) = pointer_pos {
@@ -16739,11 +16963,12 @@ impl<'a> PealayerTabViewer<'a> {
                                             }
                                             ui.separator();
                                             if ui
-                                                .button(format!(
+                                                .add_enabled(!timeline_playhead_in_view(rect, viewport_clip,
+                                                    self.app.seek_pos.unwrap_or(self.app.playback_time), zoom), egui::Button::new(format!(
                                                     "{} {}",
                                                     crate::ui::icons::TARGET,
                                                     self.app.tr("Bring playhead into view")
-                                                ))
+                                                )))
                                                 .clicked()
                                             {
                                                 pending_timeline_toolbar_action = Some(
@@ -16753,8 +16978,11 @@ impl<'a> PealayerTabViewer<'a> {
                                             }
                                         }); }
 
+                                        let playhead_in_view = timeline_playhead_in_view(rect, viewport_clip,
+                                            self.app.seek_pos.unwrap_or(self.app.playback_time), zoom);
                                         let toolbar = crate::ui::timeline_toolbar::draw(
                                             ui, self.app, viewport_clip, can_add_keyframe,
+                                            playhead_in_view,
                                         );
                                         let toolbar_rect = toolbar.rect;
                                         if toolbar.action.is_some() {
@@ -16938,8 +17166,7 @@ impl<'a> PealayerTabViewer<'a> {
 
                                         if let Some(pos) = pointer_pos {
                                             if timeline_ruler_owns_pointer(
-                                                ruler_rect, toolbar_rect, pos,
-                                                ruler_response.dragged_by(egui::PointerButton::Primary),
+                                                &ruler_response, toolbar_rect,
                                             )
                                                 && !popup_was_open
                                                 && !egui::Popup::is_any_open(ui.ctx())
@@ -17094,17 +17321,15 @@ impl<'a> PealayerTabViewer<'a> {
 
                                         if self.app.duration > 0.0 {
                                             for (row_index, track_row) in timeline_rows.iter().enumerate() {
-                                                let (icon, color) = match track_row.kind {
-                                                    TimelineTrackKind::Video(_) => (crate::ui::icons::FILE_VIDEO, egui::Color32::from_rgb(41, 128, 185)),
-                                                    TimelineTrackKind::Audio(_) => (crate::ui::icons::SPEAKER_HIGH, egui::Color32::from_rgb(39, 174, 96)),
-                                                    TimelineTrackKind::Subtitle(_) => (crate::ui::icons::SUBTITLES, egui::Color32::from_rgb(124, 92, 190)),
+                                                use crate::ui::timeline_strip::MediaKind;
+                                                let (icon, kind) = match track_row.kind {
+                                                    TimelineTrackKind::Video(_) => (crate::ui::icons::FILE_VIDEO, MediaKind::Video),
+                                                    TimelineTrackKind::Audio(_) => (crate::ui::icons::SPEAKER_HIGH, MediaKind::Audio),
+                                                    TimelineTrackKind::Subtitle(_) => (crate::ui::icons::SUBTITLES, MediaKind::Subtitle),
                                                     TimelineTrackKind::ControllerEffect(_)
                                                     | TimelineTrackKind::Relay(_)
                                                     | TimelineTrackKind::Hardware(_) => continue,
                                                 };
-                                                let color = color.gamma_multiply(
-                                                    if track_row.active && track_row.enabled { 1.0 } else { 0.52 },
-                                                );
                                                 let row_y = timeline_track_row_top(
                                                     rect.min.y,
                                                     row_index,
@@ -17117,16 +17342,11 @@ impl<'a> PealayerTabViewer<'a> {
                                                         row_y + timeline_track_height - 4.0,
                                                     ),
                                                 );
-                                                painter.rect_filled(clip_rect, 4.0, color);
-                                                painter.rect_stroke(clip_rect, 4.0, egui::Stroke::new(1.0_f32, egui::Color32::WHITE), egui::StrokeKind::Inside);
-                                                painter.text(
-                                                    clip_rect.left_center() + egui::vec2(10.0, 0.0),
-                                                    egui::Align2::LEFT_CENTER,
-                                                    format!("{icon}  {}", track_row.name),
-                                                    egui::FontId::proportional(11.0),
-                                                    egui::Color32::WHITE.gamma_multiply(
-                                                        if track_row.enabled { 1.0 } else { 0.68 },
-                                                    ),
+                                                crate::ui::timeline_strip::paint_media(
+                                                    &painter, clip_rect, kind,
+                                                    format!("{icon}  {}", crate::ui::i18n::visual_text(display_language, &track_row.name)),
+                                                    self.app.color_palette, ui.visuals().dark_mode,
+                                                    track_row.active, track_row.enabled, self.app.rtl,
                                                 );
                                             }
                                         }
@@ -17138,6 +17358,7 @@ impl<'a> PealayerTabViewer<'a> {
                                         let mut edit_cue_id = None;
                                         let mut jump_to_cue_id = None;
                                         let mut delete_cue_id = None;
+                                        let mut clipboard_cue_action=None;
 
                                         // 1st Pass: Draw all non-dragged clips
                                         let active_drag_id = self.app.active_drag.as_ref().map(|d| d.instance_id);
@@ -17246,6 +17467,10 @@ impl<'a> PealayerTabViewer<'a> {
                                                 clip_response = clip_response.on_hover_text(cue_tooltip);
 
                                                 clip_response.context_menu(|ui| {
+                                                    for (action,icon,label) in [(0,crate::ui::icons::COPY,"Copy"),(1,egui_phosphor::regular::SCISSORS,"Cut"),(2,egui_phosphor::regular::CLIPBOARD,"Paste")] {
+                                                        if ui.button(format!("{icon} {}",self.app.tr(label))).clicked(){clipboard_cue_action=Some((instance.id,action));ui.close();}
+                                                    }
+                                                    ui.separator();
                                                     if ui
                                                         .button(format!(
                                                             "{} {}",
@@ -17431,6 +17656,7 @@ impl<'a> PealayerTabViewer<'a> {
                                                     egui::Color32::from_rgba_unmultiplied(255, 255, 255, alpha),
                                                     self.app.timeline_hide_cue_text_overflow,
                                                     duration_resizable,
+                                                    self.app.rtl,
                                                 );
                                             }
                                         }
@@ -17480,6 +17706,7 @@ impl<'a> PealayerTabViewer<'a> {
                                                 egui::Color32::WHITE,
                                                 self.app.timeline_hide_cue_text_overflow,
                                                 effect.duration_resizable(),
+                                                self.app.rtl,
                                             );
                                         }
 
@@ -17541,6 +17768,11 @@ impl<'a> PealayerTabViewer<'a> {
                                         if let Some(effect_id) = relocate_to_primary {
                                             self.app.relocate_effect_to_primary(effect_id);
                                             ui.ctx().request_repaint();
+                                        }
+                                        if let Some((cue_id,action))=clipboard_cue_action {
+                                            if !self.app.selected_instance_ids.contains(&cue_id) {self.app.selected_instance_ids.clear();self.app.selected_instance_ids.insert(cue_id);}
+                                            let result=if action==2 {crate::platform::clipboard::text().and_then(|text|self.app.paste_timeline_cues(&text))}else{self.app.copy_timeline_cues(action==1)};
+                                            if let Err(error)=result{self.app.set_osd(error);}
                                         }
                                         if let Some(cue_id) = delete_cue_id {
                                             self.app.undo_stack.push(self.app.snapshot_timeline());
@@ -18405,65 +18637,69 @@ impl<'a> PealayerTabViewer<'a> {
                                             egui::Stroke::new(1.0_f32, craft_tokens.separator),
                                         );
 
-                                        // FilmCraft render/preview bar at bottom of ruler
-                                        if let Some(buffered_until) = self.app.buffered_until() {
-                                            let buffered_x = (rect.min.x + (buffered_until as f32 * zoom)).min(rect.max.x);
-                                            if buffered_x > rect.min.x {
-                                                let render_bar_rect = egui::Rect::from_min_max(
-                                                    egui::pos2(rect.min.x, ruler_rect.max.y - 2.0),
-                                                    egui::pos2(buffered_x, ruler_rect.max.y),
-                                                ).intersect(ruler_rect);
-                                                ruler_painter.rect_filled(render_bar_rect, 0.0, craft_tokens.render_green);
+                                        let filmcraft_ruler = self.app.native_timeline_style == crate::config::NativeTimelineStyle::FilmCraft;
+                                        if filmcraft_ruler {
+                                            super::craft_theme::paint_frame_ruler(&ruler_painter, ruler_rect,
+                                                rect.left(), zoom, self.app.media_fps, &craft_tokens);
+                                        } else {
+                                        let label_step: i32 = if zoom < 30.0 {
+                                            5
+                                        } else if zoom < 60.0 {
+                                            2
+                                        } else {
+                                            1
+                                        };
+                                        // Clock labels grow after minute/hour boundaries. Keep
+                                        // them apart rather than retaining seconds-only widths.
+                                        let longest_label = ruler_painter.layout_no_wrap(
+                                            crate::duration::format_timeline_time_ms(total_seconds.ceil().max(0.0) as u64 * 1_000, false),
+                                            egui::FontId::monospace(9.0),
+                                            craft_tokens.tl_ruler_text,
+                                        );
+                                        let label_step = label_step.max(((longest_label.size().x + 10.0) / zoom).ceil().max(1.0) as i32);
+
+                                        for i in visible_start_i..=visible_end_i {
+                                            let grid_x = rect.min.x + (i as f32 * zoom);
+                                            if grid_x >= viewport_clip.min.x - 100.0 && grid_x <= rect.max.x - 8.0 {
+                                                // Major second tick
+                                                ruler_painter.line_segment(
+                                                    [egui::pos2(grid_x, ruler_rect.max.y - 8.0), egui::pos2(grid_x, ruler_rect.max.y)],
+                                                    egui::Stroke::new(1.0_f32, craft_tokens.tl_ruler_tick),
+                                                );
+                                                // Sub-second frame notches
+                                                if zoom >= 50.0 {
+                                                    for sub in 1..10 {
+                                                        let sub_x = grid_x + (sub as f32 * (zoom / 10.0));
+                                                        if sub_x >= viewport_clip.min.x - 20.0 && sub_x <= rect.max.x - 8.0 {
+                                                            let notch_h = if sub == 5 { 5.0 } else { 3.0 };
+                                                            ruler_painter.line_segment(
+                                                                [egui::pos2(sub_x, ruler_rect.max.y - notch_h), egui::pos2(sub_x, ruler_rect.max.y)],
+                                                                egui::Stroke::new(1.0_f32, craft_tokens.tl_ruler_tick.gamma_multiply(0.6)),
+                                                            );
+                                                        }
+                                                    }
+                                                }
+                                                // Time label inside ruler
+                                                if i % label_step == 0 {
+                                                    let label = ruler_painter.layout_no_wrap(
+                                                        crate::duration::format_timeline_time_ms(i as u64 * 1_000, false),
+                                                        egui::FontId::monospace(9.0),
+                                                        craft_tokens.tl_ruler_text,
+                                                    );
+                                                    if let Some(label_rect) = timeline_ruler_label_rect(
+                                                        egui::pos2(grid_x, ruler_rect.min.y + 13.0),
+                                                        label.size(), ruler_painter.clip_rect(),
+                                                    ) {
+                                                        ruler_painter.galley(
+                                                            label_rect.min,
+                                                            label,
+                                                            craft_tokens.tl_ruler_text,
+                                                        );
+                                                    }
+                                                }
                                             }
                                         }
 
-                                        let fps = if self.app.media_fps.is_finite() && self.app.media_fps > 0.0 {
-                                            self.app.media_fps
-                                        } else {
-                                            30.0
-                                        };
-                                        let base_fps = fps.clamp(12.0, 120.0).round() as i64;
-                                        let frame_px = zoom as f64 / base_fps as f64;
-                                        let (minor_frames, label_step_frames) = crate::ui::craft_theme::ruler_steps(frame_px, base_fps);
-
-                                        let tick_base = ruler_rect.max.y;
-                                        let label_y = ruler_rect.min.y + 11.0;
-                                        let f0 = ((visible_start_sec * base_fps as f64).floor() as i64).max(0);
-                                        let f1 = ((visible_end_sec * base_fps as f64).ceil() as i64) + 1;
-                                        let mut f = (f0 / minor_frames) * minor_frames;
-
-                                        while f <= f1 {
-                                            let time_s = f as f64 / base_fps as f64;
-                                            let grid_x = rect.min.x + (time_s as f32 * zoom);
-                                            if grid_x >= viewport_clip.min.x - 60.0 && grid_x <= rect.max.x + 60.0 {
-                                                let is_major = f % label_step_frames == 0;
-                                                let h = if is_major { 10.0 } else { 4.0 };
-                                                let tick_color = if is_major {
-                                                    craft_tokens.tl_ruler_tick
-                                                } else {
-                                                    craft_tokens.tl_ruler_tick.gamma_multiply(0.65)
-                                                };
-                                                ruler_painter.line_segment(
-                                                    [egui::pos2(grid_x, tick_base - h), egui::pos2(grid_x, tick_base)],
-                                                    egui::Stroke::new(1.0_f32, tick_color),
-                                                );
-
-                                                if is_major {
-                                                    let label_text = if label_step_frames < base_fps {
-                                                        crate::duration::format_timeline_time_ms((time_s * 1000.0).round() as u64, true)
-                                                    } else {
-                                                        crate::duration::format_timeline_time_ms((time_s * 1000.0).round() as u64, false)
-                                                    };
-                                                    ruler_painter.text(
-                                                        egui::pos2(grid_x + 1.0, label_y),
-                                                        egui::Align2::CENTER_CENTER,
-                                                        label_text,
-                                                        egui::FontId::monospace(9.5),
-                                                        craft_tokens.tl_ruler_text,
-                                                    );
-                                                }
-                                            }
-                                            f = f.saturating_add(minor_frames);
                                         }
 
                                         // Media chapters are file-owned navigation landmarks,
@@ -18551,19 +18787,31 @@ impl<'a> PealayerTabViewer<'a> {
                                             ));
                                         }
 
-                                        // Draw Playhead (FilmCraft pentagon head + continuous subpixel anti-jitter path)
+                                        // Draw Playhead
                                         let current_playhead_time = self.app.seek_pos.unwrap_or(self.app.playback_time);
                                         let playhead_x = rect.min.x + (current_playhead_time as f32 * zoom);
                                         if playhead_x <= rect.max.x {
-                                            crate::ui::craft_theme::paint_filmcraft_playhead(
-                                                &painter,
-                                                &ruler_painter,
-                                                playhead_x,
-                                                ruler_rect.bottom() - 13.0,
-                                                ruler_rect.bottom(),
-                                                rect.max.y,
-                                                craft_tokens.playhead,
+                                            if filmcraft_ruler {
+                                                super::craft_theme::paint_filmcraft_playhead(&painter, &ruler_painter,
+                                                    playhead_x, ruler_rect.bottom() - 13.0, ruler_rect.bottom(),
+                                                    rect.bottom(), craft_tokens.playhead);
+                                            } else {
+                                            // Keep the playhead handle wholly inside the ruler.
+                                            // The timeline line begins at the track boundary so it
+                                            // cannot make the first media lane look like the ruler.
+                                            painter.line_segment(
+                                                [egui::pos2(playhead_x, tracks_top), egui::pos2(playhead_x, rect.max.y)],
+                                                egui::Stroke::new(1.5_f32, egui::Color32::RED),
                                             );
+                                            // Downward handle terminating exactly at the bottom of
+                                            // the ruler, immediately above the first track.
+                                            let points = vec![
+                                                egui::pos2(playhead_x - 7.0, ruler_rect.bottom() - 12.0),
+                                                egui::pos2(playhead_x + 7.0, ruler_rect.bottom() - 12.0),
+                                                egui::pos2(playhead_x, ruler_rect.bottom()),
+                                            ];
+                                            ruler_painter.add(egui::Shape::convex_polygon(points, egui::Color32::RED, egui::Stroke::NONE));
+                                            }
                                         }
 
                                         // Draw Snap line if active
@@ -18854,9 +19102,16 @@ impl<'a> PealayerTabViewer<'a> {
                                 }
                             }
 
-                            // Timeline-local shortcuts mirror the visible toolbar. They only
-                            // fire while the canvas owns keyboard focus, so text fields and the
-                            // rest of the application retain their normal keys.
+                            // Zoom is available without first focusing the canvas, but a
+                            // front dialog/editor, popup or text field keeps its own input.
+                            if !self.app.show_effect_library_editor
+                                && let Some(factor) = crate::ui::zoom_shortcuts::take(ui, self.app.keyboard_shortcuts_enabled)
+                            {
+                                pending_timeline_toolbar_action = Some(if factor > 1.0 {
+                                    TimelineToolbarAction::ZoomIn
+                                } else { TimelineToolbarAction::ZoomOut });
+                            }
+                            // Other timeline-local shortcuts still require canvas focus.
                             let timeline_layer = ui.layer_id();
                             let timeline_popup_open = egui::Popup::is_any_open(ui.ctx());
                             if self.app.keyboard_shortcuts_enabled && ui.ctx().memory(|memory| {
@@ -18875,15 +19130,6 @@ impl<'a> PealayerTabViewer<'a> {
                                 if keyboard_pan != 0.0 { held_timeline_pan = keyboard_pan; }
                                 let shortcut_action = ui.input(|input| {
                                     if input.modifiers.is_none()
-                                        && (input.key_pressed(egui::Key::Plus)
-                                            || input.key_pressed(egui::Key::Equals))
-                                    {
-                                        Some(TimelineToolbarAction::ZoomIn)
-                                    } else if input.modifiers.is_none()
-                                        && input.key_pressed(egui::Key::Minus)
-                                    {
-                                        Some(TimelineToolbarAction::ZoomOut)
-                                    } else if input.modifiers.is_none()
                                         && input.key_pressed(egui::Key::C)
                                     {
                                         Some(TimelineToolbarAction::BringPlayheadIntoView)
@@ -18951,7 +19197,7 @@ impl<'a> PealayerTabViewer<'a> {
                                     TimelineToolbarAction::BringPlayheadIntoView => {
                                         ui.data_mut(|data| data.remove::<TimelineCueReveal>(timeline_cue_reveal_id()));
                                         let playhead_x =
-                                            (self.app.playback_time.max(0.0) as f32 * current_zoom)
+                                            (self.app.seek_pos.unwrap_or(self.app.playback_time).max(0.0) as f32 * current_zoom)
                                                 .min(timeline_content_size.x);
                                         let target_x = timeline_offset_to_reveal_x(
                                             current_offset.x,
@@ -19474,6 +19720,13 @@ impl<'a> PealayerTabViewer<'a> {
                             }
 
                             let tracks_top = rect.min.y + TIMELINE_RULER_HEIGHT;
+                            let asset_drop_area=crate::assets::TimelineDropArea {
+                                viewport:egui::Rect::from_min_max(egui::pos2(timeline_viewport.left(),timeline_viewport.top()+TIMELINE_RULER_HEIGHT),timeline_viewport.max),
+                                content_origin:egui::pos2(rect.left(),tracks_top),zoom,row_height:timeline_track_height,
+                                keys:timeline_track_rows(self.app).iter().map(|row|row.key.clone()).collect(),
+                            };
+                            ui.ctx().data_mut(|data|data.insert_temp(egui::Id::new("external-assets-timeline"),asset_drop_area));
+                            crate::assets::paint_drop_target(ui,timeline_viewport,&self.app.tr("Add to timeline"));
 
                             // Successful drop logic
                             if let Some(payload) = take_effect_drop_on_rect(ui.ctx(), rect) {
@@ -20172,21 +20425,40 @@ impl<'a> PealayerTabViewer<'a> {
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, tab: &mut PealayerTab) {
+        super::sidebar_shortcuts::drop_target(self.app, ui, Some(*tab));
         self.draw_tab_body(ui, *tab);
     }
 }
 
 impl<'a> craft_ui::docking::DockContent<PealayerTab> for PealayerTabViewer<'a> {
     fn body(&mut self, ui: &mut egui::Ui, panel: &PealayerTab) {
+        if self.collapsed.contains(panel) {
+            let rect=ui.max_rect();
+            ui.ctx().data_mut(|data|data.get_temp_mut_or_default::<Vec<egui::Rect>>(
+                egui::Id::new("workspace_dock_area").with("collapsed-bodies")).push(rect));
+            return;
+        }
+        super::sidebar_shortcuts::drop_target(self.app, ui, Some(*panel));
         panel_body(ui, panel, |ui| self.draw_tab_body(ui, *panel));
+    }
+
+    fn limits(&self, panel: &PealayerTab) -> craft_ui::docking::PanelLimits {
+        let collapsed=self.collapsed.contains(panel);
+        craft_ui::docking::PanelLimits {min:egui::vec2(self.minimum_body,if collapsed {0.0}else{self.minimum_body}),..Default::default()}
     }
 
     fn logical_label(&self, panel: &PealayerTab) -> String {
         panel.title(self.app)
     }
 
-    fn label(&mut self, _ui: &egui::Ui, panel: &PealayerTab, logical: &str, _font: &egui::FontId, _color: egui::Color32) -> egui::WidgetText {
-        format!("{} {logical}", panel.icon()).into()
+    fn label(&mut self, _ui: &egui::Ui, panel: &PealayerTab, logical: &str, font: &egui::FontId, color: egui::Color32) -> egui::WidgetText {
+        let close=self.header_options.close;
+        let mut job=egui::text::LayoutJob::default();
+        let gutter=egui::TextFormat{font_id:font.clone(),color:egui::Color32::TRANSPARENT,..Default::default()};
+        if close && self.app.rtl {job.append("\u{200b}",24.0,gutter.clone());}
+        job.append(&format!("{} {logical}",panel.icon()),0.0,egui::TextFormat{font_id:font.clone(),color,..Default::default()});
+        if close && !self.app.rtl {job.append("\u{200b}",24.0,gutter);}
+        job.into()
     }
 
     fn permissions(&self, _panel: &PealayerTab) -> craft_ui::docking::Permissions {
@@ -20204,13 +20476,33 @@ impl<'a> craft_ui::docking::DockContent<PealayerTab> for PealayerTabViewer<'a> {
     }
 
     fn group_header_width(&self, _panels: &[PealayerTab], _active: &PealayerTab, _floating: bool, strip_width: f32) -> f32 {
-        strip_width.min(28.0)
+        strip_width.min(if self.header_options.collapse {52.0}else{28.0})
     }
 
-    fn group_header(&mut self, ui: &mut egui::Ui, _panels: &[PealayerTab], active: &PealayerTab, _floating: bool) {
-        let response = ui.add_sized(ui.available_size(), egui::Button::new(crate::ui::icons::DOTS_THREE).frame(false))
-            .on_hover_text(self.app.tr("Panels"));
-        egui::Popup::menu(&response).show(|ui| self.draw_context_menu(ui, *active));
+    fn group_header(&mut self, ui: &mut egui::Ui, panels: &[PealayerTab], active: &PealayerTab, _floating: bool) {
+        let slots = super::panel_chrome::craft_actions(ui.max_rect(), self.app.rtl,self.header_options.collapse);
+        let response = super::panel_chrome::button(ui, slots[0], ui.id().with("panel-menu"),
+            crate::ui::icons::DOTS_THREE, &self.app.tr("Panel menu"));
+        egui::Popup::menu(&response).show(|ui| {
+            self.draw_context_menu(ui, *active);
+            ui.separator();
+            let collapsed=super::panel_chrome::group_collapsed(self.app,ui.ctx(),panels,*active);
+            if ui.add_enabled(!self.app.dock_state.locked,egui::Button::new(format!("{} {}",
+                if collapsed {crate::ui::icons::CARET_RIGHT}else{crate::ui::icons::CARET_DOWN},
+                self.app.tr(if collapsed {"Expand panel"}else{"Collapse panel"})))).clicked() {
+                super::panel_chrome::toggle_collapse(self.app,ui.ctx(),panels);ui.close();
+            }
+        });
+        if let Some(rect)=slots.get(1) {
+            let collapsed=super::panel_chrome::group_collapsed(self.app,ui.ctx(),panels,*active);
+            let glyph=if collapsed {if self.app.rtl {crate::ui::icons::CARET_LEFT}else{crate::ui::icons::CARET_RIGHT}}else{crate::ui::icons::CARET_DOWN};
+            let response=ui.add_enabled_ui(!self.app.dock_state.locked,|ui|
+                super::panel_chrome::button(ui,*rect,ui.id().with("panel-collapse"),glyph,
+                    &self.app.tr(if collapsed {"Expand panel"}else{"Collapse panel"}))).inner;
+            if response.clicked() {
+                super::panel_chrome::toggle_collapse(self.app,ui.ctx(),panels);
+            }
+        }
     }
 }
 
@@ -20748,9 +21040,8 @@ fn render_clip_move_grip(painter: &egui::Painter, clip_rect: egui::Rect, alpha: 
     }
 }
 
-/// Renders a cue label with native egui elision while preserving the opt-in
-/// legacy overflow mode. The painter is constrained to the cue interior so
-/// glyphs never leak through rounded borders in ellipsis mode.
+/// Cue captions share media strips' visible-span pinning and native elision,
+/// while retaining explicit overflow and the resize/move handle gutters.
 fn render_timeline_cue_label(
     painter: &egui::Painter,
     clip_rect: egui::Rect,
@@ -20759,41 +21050,12 @@ fn render_timeline_cue_label(
     color: egui::Color32,
     hide_overflow: bool,
     duration_resizable: bool,
+    rtl: bool,
 ) {
     let left_padding = if duration_resizable { 12.0 } else { 22.0 };
-    if !hide_overflow {
-        painter.text(
-            clip_rect.left_center() + egui::vec2(left_padding, 0.0),
-            egui::Align2::LEFT_CENTER,
-            title,
-            font_id,
-            color,
-        );
-        return;
-    }
-
     let right_padding = if duration_resizable { 12.0 } else { 6.0 };
-    let content_rect = egui::Rect::from_min_max(
-        egui::pos2(clip_rect.left() + left_padding, clip_rect.top() + 2.0),
-        egui::pos2(clip_rect.right() - right_padding, clip_rect.bottom() - 2.0),
-    );
-    if content_rect.width() < 2.0 || content_rect.height() < 2.0 {
-        return;
-    }
-
-    let mut job = egui::text::LayoutJob {
-        wrap: egui::text::TextWrapping::truncate_at_width(content_rect.width()),
-        ..Default::default()
-    };
-    job.append(&title, 0.0, egui::TextFormat::simple(font_id, color));
-    let galley = painter.layout_job(job);
-    let position = egui::pos2(
-        content_rect.left(),
-        content_rect.center().y - galley.size().y / 2.0,
-    );
-    painter
-        .with_clip_rect(content_rect)
-        .galley(position, galley, color);
+    crate::ui::timeline_strip::paint_label(painter, clip_rect, title, font_id, color,
+        hide_overflow, left_padding, right_padding, rtl);
 }
 
 #[cfg(test)]
@@ -20897,7 +21159,7 @@ mod dock_content_tests {
     fn pealayer_tab_viewer_implements_dock_content() {
         use craft_ui::docking::DockContent;
         let mut app = PealayerApp::default();
-        let viewer = PealayerTabViewer { app: &mut app };
+        let viewer = PealayerTabViewer::new(&mut app);
 
         assert_eq!(viewer.logical_label(&PealayerTab::ProgramMonitor), "Program Monitor");
         assert_eq!(viewer.logical_label(&PealayerTab::Timeline), "Timeline");
