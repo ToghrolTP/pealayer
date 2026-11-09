@@ -136,9 +136,9 @@ required checks are not passed while the user's test/CI skip remains in effect.
   control in native/Web UI. Native/browser checks, packaging and local graceful
   installation are verified. The alignment follow-up gives the summary its own
   direction-aware slot and puts the Check instruction on a deliberate new line;
-  focused native/Web verification is recorded in the linked receipt.
-  A separately observed startup-size issue was
-  recovered through Maximize, not declared fixed; Cafe remains user-deferred.
+  focused native/Web checks, installed delivery and actual before/after captures
+  are recorded in the linked receipt. Its early startup-size observation is
+  historical; use the current window-placement receipt. Cafe remains deferred.
 
 - [The updater console](updater-console.md) now has semantic progress phases,
   factual transfer speed/ETA, clean redirected logs and explicit JSON output.

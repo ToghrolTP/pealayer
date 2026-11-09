@@ -92,4 +92,34 @@ edge and the explicit two-line English layout when space permits. Web
 availability/message checks also passed. Fixtures use a transport-free engine
 and private parent-provided config/instance identities.
 
-Installed follow-up receipt and native before/after captures pending.
+The isolated headless Web fixture also passed its five unavailable states at
+390/768/1440 widths in both themes, including diagnostic disclosure and
+command-free rendering. Its dedicated development server and browser were
+closed after the check; no normal browser profile was used.
+
+The package passed native/Web/PWA/runtime/resource verification and was installed
+through the guarded updater after a fresh clean authoring inspection. The
+restarted app acknowledged source `30acd5c21ddb4236d40473624eb7136ffa852c00`,
+executable SHA-256
+`4d235eb88e54f8615d8c6bf3a488045c7af9b4a3a6be6c4df0d342cc4f8a7813`.
+Independent live reads confirm this identity and the unchanged paused position.
+The existing workspace RPC temporarily revealed Hardware Monitor for the
+captures, then restored the original active tab, split proportions and complete
+named-profile metadata. No mouse automation, resize, hardware command or
+connection-policy change was used.
+
+Actual read-only native captures, at the same Studio/dark palette, 1.5 display
+scale and panel width. Only the connection card is published, not private
+media, file paths, runtime settings or raw diagnostics.
+
+Before:
+
+![Right-anchored message block and accidental instruction wrapping](../screenshots/hardware-message-alignment-before.png)
+
+After:
+
+![Left-aligned English summary and deliberate second instruction line](../screenshots/hardware-message-alignment-after.png)
+
+Cafe deployment remains user-deferred while unavailable. The earlier startup
+size observation above is historical; current placement ownership/verification
+is recorded in [Window placement and Task View](window-placement-and-task-view.md).
