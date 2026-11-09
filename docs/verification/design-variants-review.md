@@ -85,28 +85,83 @@ Studio dark palette and compact controls without a toast overlay. Both isolated
 processes exited through the process-local API after clean authoring inspection.
 Executable SHA-256:
 `59a6e37c8390d4d77011f413d7eb5f25b0b082247062c9f807ffeeb969acda98`.
-The images and manifests remain private pending the final comparison gallery.
+The images and capture manifests are published in `../screenshots/pr248/`.
 
-Final reviewed-build captures and publication remain pending. Do not relabel
-historical screenshots as a capture of this PR.
+The clean reviewed build `dbfc34a64d15040c0eb1252e1ce725f2328cae70`
+has eight inspected native captures at the same two dimensions: Compact/Standard
+and FilmCraft/FilmCraft in each workspace renderer. Executable SHA-256:
+`2c475243b1082a0ff16d5014577e74e123fa8fa248a005fc3ee9c95faae3a501`.
+The existing presentation retains the matched baseline layout; FilmCraft uses
+separate clock, full-width seek and transport tiers. Sidebar shortcuts, pane
+chrome, hidden track pickers, volume and trailing Fullscreen remain visible as
+configured. No new monitor/ruler cutoff or paint bleed was observed in these
+captures. Existing narrow side-panel text elision also appears in the baseline.
+
+All four reviewed-build fixture processes confirmed live presentation values
+through the configuration API, saved the corresponding values to their isolated
+configuration files, and exited normally after clean authoring inspection. The
+fixture port was no longer listening afterward. Production settings and hardware
+were untouched. These are full-resolution native screenshots, not mockups.
+The capture manifests retain their original automated `inspected: false` field;
+the subsequent visual review is recorded here rather than rewriting capture
+provenance. Screenshot inspection alone does not establish hardware acceptance.
 
 | Comparison | egui Dock | CraftUI |
 | --- | --- | --- |
-| Existing presentation before | Pending | Pending |
-| Existing presentation after integration | Pending | Pending |
-| Optional FilmCraft monitor and timeline | Pending | Pending |
-| Narrow transport and ruler details | Pending | Pending |
+| Existing presentation before | [Wide](../screenshots/pr248/before-clean-egui_dock-1200.png) · [Narrow](../screenshots/pr248/before-clean-egui_dock-720.png) | [Wide](../screenshots/pr248/before-clean-craft_ui-1200.png) · [Narrow](../screenshots/pr248/before-clean-craft_ui-720.png) |
+| Existing presentation after integration | [Wide](../screenshots/pr248/after-compact-egui_dock-1200.png) · [Narrow](../screenshots/pr248/after-compact-egui_dock-720.png) | [Wide](../screenshots/pr248/after-compact-craft_ui-1200.png) · [Narrow](../screenshots/pr248/after-compact-craft_ui-720.png) |
+| Optional FilmCraft monitor and timeline | [Wide](../screenshots/pr248/after-filmcraft-egui_dock-1200.png) · [Narrow](../screenshots/pr248/after-filmcraft-egui_dock-720.png) | [Wide](../screenshots/pr248/after-filmcraft-craft_ui-1200.png) · [Narrow](../screenshots/pr248/after-filmcraft-craft_ui-720.png) |
+
+### CraftUI: before → optional FilmCraft
+
+![CraftUI existing presentation before integration](../screenshots/pr248/before-clean-craft_ui-1200.png)
+
+![CraftUI optional FilmCraft presentation after integration](../screenshots/pr248/after-filmcraft-craft_ui-1200.png)
+
+### egui Dock: before → optional FilmCraft
+
+![egui Dock existing presentation before integration](../screenshots/pr248/before-clean-egui_dock-1200.png)
+
+![egui Dock optional FilmCraft presentation after integration](../screenshots/pr248/after-filmcraft-egui_dock-1200.png)
+
+## Regression and package results
+
+Reviewed source: `dbfc34a64d15040c0eb1252e1ce725f2328cae70`, clean build.
+
+| Check | Result |
+| --- | --- |
+| Full native suite | 1,248 passed, 0 failed, 4 opt-in tests ignored |
+| Actual decoder thumbnail without seeking | Separately enabled and passed |
+| Actual internal playback resume at pending exact frame | Separately enabled and passed |
+| Web appearance tests | 7 passed |
+| Shared application parity | All 53 contracts passed |
+| Web control-bar checks and TypeScript | Passed |
+| Windows release package | Built; libmpv smoke, resource identity, seven Jump List icons, downloader smoke and PWA integrity passed |
+| Native visual fixtures | 12 inspected captures, two renderers, two widths, matching palette/media/DPI |
+
+Coverage includes native pointer/keyboard seek, shared preview coordinates,
+volume and overflow controls, RTL/tier geometry, palette and font-size behavior,
+independent configuration round trips and live appearance preview/reversion.
+Frame-ruler tests also cover fractional rates and distinct subsecond labels.
+The other two opt-in tests (external mpv duplex and GPU failed-render recovery)
+were not run in this pass; those implementation paths were not changed.
+
+The package is an isolated review build, not a production deployment. The regular
+installation and preserved historical comparison were not replaced. Cross-platform
+CI was still running when this evidence was published; local Windows results do
+not substitute for completion of that matrix.
 
 ## Acceptance ledger
 
-- [ ] Preserve sidebar implementation, configuration and saved workspace behavior.
-- [ ] Verify both presentation selections persist independently of workspace renderer.
-- [ ] Compare matched native captures and enlarged monitor/ruler details.
-- [ ] Check density, font growth, RTL, palette and narrow-width rendering.
-- [ ] Exercise seeking, thumbnail time agreement, markers and exact paused position.
-- [ ] Exercise keyboard/accessibility volume, action ordering, visibility and overflow.
-- [ ] Reconcile removed or weakened tests and run meaningful regression coverage.
-- [ ] Record source/package/runtime identity and deployment status separately.
+- [x] Preserve sidebar implementation, configuration and saved workspace behavior.
+- [x] Verify both presentation selections persist independently of workspace renderer.
+- [x] Inspect matched full-resolution native captures, including monitor and ruler.
+- [x] Check density/font/RTL geometry in tests and Studio/narrow rendering in captures.
+- [x] Exercise seek/marker mapping and actual decoder thumbnail/exact resume paths.
+- [x] Retain native accessible volume and test keyboard/action/overflow behavior.
+- [x] Reconcile removed or weakened tests and run meaningful regression coverage.
+- [x] Record source/package/runtime identity and deployment status separately.
+- [ ] Complete the remaining cross-platform CI matrix.
 - [ ] Obtain the user's explicit approval before merging PR #248.
 
 Cafe deployment remains a separate acceptance gate while its connection is

@@ -1,0 +1,44 @@
+{
+  "palette": "studio",
+  "monitor_style": "compact",
+  "workspace_ui": "egui_dock",
+  "density": "compact",
+  "media": "Generated 12-second 24-fps test pattern and silent audio",
+  "theme": "dark",
+  "timeline_style": "standard",
+  "executable_sha256": "2c475243b1082a0ff16d5014577e74e123fa8fa248a005fc3ee9c95faae3a501",
+  "accent": "#6362c7",
+  "acceptance": "Captured only; human inspection and interaction evidence remain separate",
+  "source_commit": "dbfc34a64d15040c0eb1252e1ce725f2328cae70",
+  "baseline": false,
+  "source_dirty": false,
+  "label": "after-compact",
+  "captured_at_utc": "2026-11-09T20:22:30.3665441Z",
+  "locale": "en",
+  "format": "pealayer-native-design-review",
+  "hardware_connected": false,
+  "captures": [
+    {
+      "sha256": "ddd25d03701b74a23373f471135e0c3fe8e36091cc1abf3bed12aef138ab6425",
+      "pixels_per_point": 1.5,
+      "logical_height": 800,
+      "pixel_height": 1256,
+      "image": "after-compact-egui_dock-1200.png",
+      "inspected": false,
+      "method": "PrintWindow-PW_RENDERFULLCONTENT",
+      "logical_width": 1200,
+      "pixel_width": 1822
+    },
+    {
+      "sha256": "79523c26d805426db7a275342f3e07bd8d1beae4ce7e4fc1c07f4459baaa1628",
+      "pixels_per_point": 1.5,
+      "logical_height": 800,
+      "pixel_height": 1256,
+      "image": "after-compact-egui_dock-720.png",
+      "inspected": false,
+      "method": "PrintWindow-PW_RENDERFULLCONTENT",
+      "logical_width": 720,
+      "pixel_width": 1102
+    }
+  ]
+}

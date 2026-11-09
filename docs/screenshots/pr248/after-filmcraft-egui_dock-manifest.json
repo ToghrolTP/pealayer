@@ -1,0 +1,44 @@
+{
+  "source_dirty": false,
+  "label": "after-filmcraft",
+  "density": "compact",
+  "executable_sha256": "2c475243b1082a0ff16d5014577e74e123fa8fa248a005fc3ee9c95faae3a501",
+  "acceptance": "Captured only; human inspection and interaction evidence remain separate",
+  "locale": "en",
+  "timeline_style": "film_craft",
+  "monitor_style": "film_craft",
+  "palette": "studio",
+  "accent": "#6362c7",
+  "captures": [
+    {
+      "method": "PrintWindow-PW_RENDERFULLCONTENT",
+      "pixel_height": 1256,
+      "pixel_width": 1822,
+      "sha256": "b22f4f757fb2c88cf09ad32e88a35c46e3e89a0e585b942e895fa95b9c41b615",
+      "logical_width": 1200,
+      "image": "after-filmcraft-egui_dock-1200.png",
+      "inspected": false,
+      "logical_height": 800,
+      "pixels_per_point": 1.5
+    },
+    {
+      "method": "PrintWindow-PW_RENDERFULLCONTENT",
+      "pixel_height": 1256,
+      "pixel_width": 1102,
+      "sha256": "fee3b926be5900ddd67b0827c88123e3701394cebe91c75feb894687b1345e26",
+      "logical_width": 720,
+      "image": "after-filmcraft-egui_dock-720.png",
+      "inspected": false,
+      "logical_height": 800,
+      "pixels_per_point": 1.5
+    }
+  ],
+  "theme": "dark",
+  "hardware_connected": false,
+  "captured_at_utc": "2026-11-09T20:22:52.0301218Z",
+  "baseline": false,
+  "format": "pealayer-native-design-review",
+  "workspace_ui": "egui_dock",
+  "media": "Generated 12-second 24-fps test pattern and silent audio",
+  "source_commit": "dbfc34a64d15040c0eb1252e1ce725f2328cae70"
+}
