@@ -45,7 +45,13 @@ const contracts = [
     'Density value capsule reserves every translated label width, supports narrow layouts and has layout-stable focus styling'],
   [hardware.includes('disabled={!state.hardware_connected || !details.buzzer?.playing}'), 'Buzzer stop follows authoritative activity, not connection alone'],
   [studio.includes('<ControlBar') && remote.includes('<ControlBar') && controlBar.includes('<VolumeControl') && volumeControl.includes("sendCmd('set_volume'") && controlBar.includes("sendCmd('set_mute'") && volumeControl.includes('aria-label={tr(locale, \'Volume\')}'), 'Simple and NLE share accessible horizontal volume and mute controls using session commands'],
-  [css.includes('.control-bar { width: 100%; min-width: 0; display: flex; flex-wrap: wrap;') && css.includes('.control-bar__volume.media-volume') && controlBar.indexOf('{group(true)}') < controlBar.indexOf('<VolumeControl'), 'the monitor wraps bounded groups with trailing selectors before volume'],
+  [css.includes('.control-bar { width: 100%; min-width: 0; display: flex; flex-wrap: wrap;')
+    && css.includes('.control-bar__volume.media-volume')
+    && controlBar.includes("a==='mute'&&surface==='monitor'&&<VolumeControl")
+    && controlBar.includes('className="control-bar__inline-volume"')
+    && controlBar.includes("surface==='simple'&&<VolumeControl className=\"control-bar__volume\"")
+    && controlBar.includes('{group(false)}{middle}{group(true)}'),
+    'bounded groups wrap while Monitor volume belongs to its movable Mute action and Simple retains its trailing volume'],
   [studio.includes('<ElapsedTimeInput') && remote.includes('<ElapsedTimeInput') && elapsedInput.includes('setSelectionRange') && elapsedInput.includes('onPaste=') && elapsedInput.includes("event.key === 'Escape'"), 'both playback surfaces share an immutable segmented elapsed-time editor with paste and cancellation'],
   [studio.includes('<ControlBar') && remote.includes('<ControlBar') && controlBar.includes('<PlaybackButton') && playbackButton.includes('disabled={!loaded || playing === undefined}') && playbackButton.includes("playing ? 'Pause' : 'Play'"), 'both playback surfaces render their action and enabled state from the authoritative snapshot'],
   [css.includes('.transport-action--play { --transport-color: var(--green); }') && css.includes('.transport-action--pause { --transport-color: var(--amber); }') && css.includes('border: 1px solid') && !css.includes('transform: translateY(1px);\n  box-shadow:'), 'transport intents share semantic colors and fixed borders instead of moving on hover/press'],
