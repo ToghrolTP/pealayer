@@ -31,6 +31,7 @@ pub(crate) mod player_mode;
 pub mod icons;
 pub mod layout;
 mod timeline_toolbar;
+pub(crate) mod timeline_strip;
 pub mod media_inspector;
 pub mod media_track_properties;
 pub mod media_tracks;

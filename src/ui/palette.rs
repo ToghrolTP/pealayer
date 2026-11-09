@@ -182,7 +182,7 @@ mod tests {
         for palette in [ColorPalette::Studio, ColorPalette::Native] {
             for dark in [true, false] {
                 let values = super::colors(palette, dark);
-                assert_eq!(values.len(), 14);
+                assert_eq!(values.len(), 26);
                 for value in values.values() {
                     assert!(crate::config::parse_rgb_hex(value).is_some());
                 }
