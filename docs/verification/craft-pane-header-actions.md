@@ -23,6 +23,28 @@ hover/press from shifting the title or its neighbors. An inactive tab's × close
 that tab, not the group's selected panel. Lock and modal shielding remain in
 effect.
 
+## Header alignment
+
+CraftUI originally centered the combined icon/title line box while the
+application's close control centered its visible glyph. Icon fallback fonts
+and the UI text font have different baseline and line-gap metrics, so the
+three visible elements could sit at slightly different heights.
+
+The adapter now centers the final painted icon and caption independently on
+the actual tab rectangle, sharing the close button's centerline. It uses the
+visible glyph geometry after truncation, including RTL shaping, rather than a
+font-specific vertical offset. Logical text, tab widths, horizontal placement,
+hit targets and drag/close/menu behavior keep their existing ownership. Titles
+are aligned even when the optional close button is hidden. Floating tabs use
+their own layer and rectangle.
+
+The regression measures the separately painted icon and caption against the
+actual upstream tab rectangle in both languages, themes and four display scales,
+with docked/floating panels and close controls shown/hidden. Existing pointer,
+lock/modal, inactive-tab close, overflow and collapse tests remain required.
+Native capture and installed-build receipts for this correction are recorded
+below when verified. Cafe delivery remains user-deferred.
+
 Collapse is not Close. Existing dock groups and floating windows use Craft's
 minimization action. Split-tree tab groups retain their panel membership and
 normal split dimensions; a persisted local view projects collapsed rows to
