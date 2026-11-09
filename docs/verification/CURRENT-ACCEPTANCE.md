@@ -18,6 +18,12 @@ passed forbidden/empty/changing-access parent cases; Cafe remains deferred.
 
 ## Window and media automation
 
+[Workspace selection and dialog title backgrounds](workspace-switcher-dialog-chrome.md)
+records the saved-profile repair, visible restore errors, leading Workspace
+divider and measured built-in title-frame correction. Native verification and
+the installed-package receipt are tracked separately there; status caption
+alignment and CraftUI pane controls remain unchanged. Cafe remains deferred.
+
 [CraftUI pane header actions](craft-pane-header-actions.md) tracks individual-tab
 close buttons (default on), the separate three-dot menu, and configurable
 collapse/expand chevrons (default off), without changing egui Dock chrome.

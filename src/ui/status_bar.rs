@@ -1143,7 +1143,7 @@ fn draw_group(app: &mut PealayerApp, ui: &mut egui::Ui, end: bool, hardware: Opt
         .show(ui, |ui| {
             ui.with_layout(crate::ui::i18n::layout(app.rtl, egui::Align::Center), |ui| {
                 for (index, item) in items.into_iter().enumerate() {
-                    if index > 0 && app.status_bar.dividers {
+                    if (index > 0 || item == Widget::Workspace) && app.status_bar.dividers {
                         let (rect, _) = ui.allocate_exact_size(egui::vec2(1.0, ITEM_HEIGHT), egui::Sense::hover());
                         ui.painter().line_segment([rect.center_top()+egui::vec2(0.0,5.0), rect.center_bottom()-egui::vec2(0.0,5.0)],
                             egui::Stroke::new(1.0, divider_color));
@@ -1252,7 +1252,9 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             let connection_width = connection_preferred_width(app,ui,hardware.as_ref())
                 .min((ui.available_width()-other_width-gaps).max(148.0));
             let items=group_items(app,true,hardware.as_ref(),&progress);
-            let separators=if app.status_bar.dividers { items.len().saturating_sub(1) as f32*4.0 } else { 0.0 };
+            let separators=if app.status_bar.dividers {
+                (items.len().saturating_sub(1)+usize::from(items.first()==Some(&Widget::Workspace))) as f32*4.0
+            } else { 0.0 };
             let end_width=(items.iter().map(|item| if *item == Widget::Connection { connection_width } else { slot_width(*item) }).sum::<f32>() + items.len().saturating_sub(1) as f32*3.0 + separators)
                 .max(24.0).min((ui.available_width()-48.0).max(24.0));
             let start_width=(ui.available_width()-end_width-3.0).max(1.0);
@@ -1622,6 +1624,71 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn workspace_menu_restores_the_actual_app_and_has_a_leading_divider() {
+        let _guard = crate::app::tests::lock_app_tests();
+        for rtl in [false, true] { for scale in [1.0, 1.5] { for dividers in [false, true] {
+            let ctx = egui::Context::default();
+            ctx.set_pixels_per_point(scale);
+            let mut app = PealayerApp::default();
+            app.engine_handle = crate::four_d::engine::memory_only_test_engine();
+            app.rtl = rtl;
+            app.show_four_d_editor = true;
+            for widget in Widget::ALL { app.status_bar.set_visible(widget, widget == Widget::Workspace); }
+            app.status_bar.dividers = dividers;
+            let mut author = app.capture_workspace_profile(&ctx);
+            author.egui_memory = None;
+            author.window_geometry = None;
+            author.name = "Authoring desk".into();
+            author.icon = "effects".into();
+            let mut watch = author.clone();
+            watch.name = "Watch films".into();
+            watch.nle = false;
+            app.workspace_profiles = [("author-id".into(), author), ("watch-id".into(), watch)].into();
+            app.active_workspace_profile = Some("author-id".into());
+            let mut time = 0.0;
+            let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary,
+                pressed, modifiers: egui::Modifiers::NONE };
+            let mut render = |app: &mut PealayerApp, events| {
+                let mut output = ctx.run_ui(egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 420.0))),
+                    time: Some(time), events, ..Default::default()
+                }, |ui| draw(app, ui));
+                time += 0.1;
+                output.textures_delta.clear();
+                output
+            };
+            render(&mut app, vec![]);
+            let output = render(&mut app, vec![]);
+            let slot = ctx.data(|data| data.get_temp::<Vec<(Widget, egui::Rect)>>(
+                egui::Id::new("test-status-widget-rects"))).unwrap()[0].1;
+            assert_eq!(slot.width(), WORKSPACE_WIDTH, "No caption/chevron alignment change");
+            let separator = output.shapes.iter().any(|shape| matches!(&shape.shape,
+                egui::Shape::LineSegment { points, stroke } if stroke.width == 1.0
+                    && (points[0].x-points[1].x).abs() < 0.01
+                    && (points[0].y-(slot.top()+5.0)).abs() < 0.1
+                    && (points[1].y-(slot.bottom()-5.0)).abs() < 0.1
+                    && if rtl { points[0].x > slot.right() && points[0].x < slot.right()+5.0 }
+                       else { points[0].x < slot.left() && points[0].x > slot.left()-5.0 }));
+            assert_eq!(separator, dividers, "Missing/extra Workspace divider: rtl={rtl}, scale={scale}");
+            for (id, caption, nle) in [("watch-id", "Watch films", false), ("author-id", "Authoring desk", true)] {
+                render(&mut app, vec![egui::Event::PointerMoved(slot.center()), button(slot.center(), true)]);
+                render(&mut app, vec![button(slot.center(), false)]);
+                let output = render(&mut app, vec![]);
+                let row = output.shapes.iter().find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text().ends_with(caption) && text.galley.text().contains("  ") =>
+                        Some(egui::Rect::from_min_size(text.pos, text.galley.size())),
+                    _ => None,
+                }).expect("Workspace menu row");
+                render(&mut app, vec![egui::Event::PointerMoved(row.center()), button(row.center(), true)]);
+                render(&mut app, vec![button(row.center(), false)]);
+                assert_eq!(app.active_workspace_profile.as_deref(), Some(id));
+                assert_eq!(app.show_four_d_editor, nle, "Menu choice must reach the actual app restore");
+                assert_eq!(app.runtime_config_snapshot().workspace_session.nle, nle);
+            }
+        } } }
     }
 
     #[test]
@@ -2202,7 +2269,7 @@ mod tests {
                                 }
                             }
                             assert_eq!(frames, 1, "one themed frame owns the boundary");
-                            assert_eq!(dividers, usize::from(enabled), "only the two visible start widgets need a divider; the lone end widget does not");
+                            assert_eq!(dividers, 2 * usize::from(enabled), "start widgets and the anchored Workspace each need their divider");
                             output.textures_delta.clear();
                         }
                     }

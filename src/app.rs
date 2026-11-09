@@ -6472,7 +6472,24 @@ impl PealayerApp {
                 );
                 self.save_config();
             }
-            Err(error) => self.config_status = error,
+            Err(error) => {
+                self.config_status = self.tr("Workspace could not be opened");
+                let _ = crate::messaging::publish_detailed(
+                    crate::messaging::ToastRequest {
+                        id: Some("workspace.restore".into()),
+                        title: self.tr("Workspace could not be opened"),
+                        message: format!("{}: {}. {}", self.tr("Workspace"), profile.name,
+                            self.tr("Your current workspace was left unchanged.")),
+                        severity: crate::messaging::Severity::Warning,
+                        timeout_ms: 10000,
+                        actions: Vec::new(),
+                        default_action: None,
+                        details: None,
+                    },
+                    "workspace",
+                    error,
+                );
+            }
         }
     }
 
@@ -10328,6 +10345,35 @@ pub(crate) mod tests {
                 std::thread::sleep(std::time::Duration::from_millis(10));
             }
         }
+    }
+
+    #[test]
+    fn workspace_restore_failure_is_visible_and_preserves_the_current_workspace() {
+        let _lock = lock_app_tests();
+        let ctx = egui::Context::default();
+        let mut app = PealayerApp::default();
+        app.engine_handle = crate::four_d::engine::memory_only_test_engine();
+        let before = app.capture_workspace_profile(&ctx);
+        let active = app.active_workspace_profile.clone();
+        let mut invalid = before.clone();
+        invalid.name = "Invalid arrangement".into();
+        invalid.nle = !before.nle;
+        invalid.dock_layout = Some("{\"surfaces\":[]}".into());
+        app.workspace_profiles.insert("invalid".into(), invalid);
+        app.restore_workspace_profile(&ctx, "invalid");
+        assert_eq!(app.active_workspace_profile, active);
+        let after = app.capture_workspace_profile(&ctx);
+        assert_eq!(after.nle, before.nle);
+        assert_eq!(after.dock_layout, before.dock_layout);
+        assert_eq!(after.sidebar_rail, before.sidebar_rail);
+        assert_eq!(after.dialogs, before.dialogs);
+        let messages = crate::messaging::snapshot();
+        let warning = messages.toasts.iter().find(|toast| toast.id == "workspace.restore").unwrap();
+        assert_eq!(warning.severity, crate::messaging::Severity::Warning);
+        assert!(warning.message.contains("Invalid arrangement"));
+        assert!(warning.message.contains("unchanged"));
+        assert!(warning.details.as_ref().is_some_and(|details| !details.is_empty()));
+        crate::messaging::dismiss("workspace.restore");
     }
 
     #[test]
