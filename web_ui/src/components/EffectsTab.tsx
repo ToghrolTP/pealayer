@@ -63,6 +63,8 @@ import { TimeValueField } from './TimeValueField';
 import { formatTimeMs, repeatedSequenceDurationMs, sequenceKindLabels, sequenceExtraKinds, sequenceStepTemplate, moveSequenceStep, sequenceLaneKey, sequenceLaneChoices } from '../cueAuthoring';
 
 interface EffectsTabProps {
+  importedEffect?: import('../assetImports').ImportedEffect | null;
+  onImported?: () => void;
   state: PlayerState;
   sendCmd: (command: string, payload?: Record<string, unknown>) => Promise<boolean>;
   locale: UiLocale;
@@ -139,9 +141,21 @@ const draftPayload = (draft: EffectDraft): Record<string, unknown> => ({
   } : JSON.parse(draft.programText || '{}'),
 });
 
-export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale, apiBaseUrl }) => {
+export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale, apiBaseUrl, importedEffect, onImported }) => {
   const effects = state.controller_effects ?? [];
   const [draft, setDraft] = useState<EffectDraft | null>(null);
+  useEffect(() => {
+    // Never overwrite another open editor. A pending import opens when that
+    // editor is explicitly closed, with its full program/properties intact.
+    if (!importedEffect || draft) return;
+    const parts = programParts(importedEffect.program);
+    setDraft({ ...importedEffect, reference: '', color: importedEffect.color || String(parts.properties.color ?? ''),
+      steps: parts.steps, properties: parts.properties,
+      repeat_count: Number((importedEffect.program as Record<string, unknown>)?.repeat_count ?? 1),
+      repeat_interval_ms: Number((importedEffect.program as Record<string, unknown>)?.repeat_interval_ms ?? 0),
+      programText: JSON.stringify(importedEffect.program ?? {}, null, 2), is_new: true });
+    onImported?.();
+  }, [importedEffect, draft, onImported]);
   const [saving, setSaving] = useState(false);
   const [activeStep, setActiveStep] = useState('0');
   const previousIdentities = useRef(new Map<string, { name: string; icon: string; category: string }>());
@@ -518,7 +532,7 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale, 
             options={recordingColors.map(color => ({ value: color.id, label: tr(locale, color.label), color: color.hex }))}
             onChange={(color, hex) => setDraft({ ...draft, color: color === 'custom' ? hex! : color })} /></label>}
         </div></ConfigProvider>
-        {draft.kind === 'audio' ? <SoundEffectFields program={audioProgram} onChange={updateAudio} state={state} reference={draft.reference} apiBaseUrl={apiBaseUrl} locale={locale} sendCmd={sendCmd} /> : draft.kind === 'sequence' ? <>
+        {draft.kind === 'audio' ? <SoundEffectFields key={draft.id} program={audioProgram} onChange={updateAudio} state={state} reference={draft.reference} apiBaseUrl={apiBaseUrl} locale={locale} sendCmd={sendCmd} /> : draft.kind === 'sequence' ? <>
           <div className="effect-editor__toolbar"><strong>{tr(locale, 'Sequence steps')}</strong><Space wrap>
             <EffectRecorder state={state} sendCmd={sendCmd} locale={locale} effect={draftPayload(draft)} onSequenceChange={(steps, id) => setDraft((current) => current ? { ...current, id: String(id), reference: `effect:${id}`, is_new: false, steps } : current)} />
             <Button disabled={captureBusy || (!draft.steps.length && !sequenceLaneChoices(state.hardware_details?.controls ?? [],sequenceExtraKinds(state.hardware_details)).length)} icon={<PlusOutlined />} onClick={() => sequenceActions.current?.addStep()}>{tr(locale, 'Add step')}</Button>
@@ -535,7 +549,9 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale, 
             <Popconfirm title={tr(locale, 'Delete all sequence steps?')} onConfirm={() => setDraft({ ...draft, steps: [] })}><Button disabled={captureBusy || draft.steps.length === 0} icon={<DeleteOutlined />}>{tr(locale, 'Clear steps')}</Button></Popconfirm>
           </Space></div>
           <ConfigProvider componentDisabled={captureBusy}>
-          <SequenceTimeline key={draft.id} steps={draft.steps} locale={locale} controls={state.hardware_details?.controls} disabled={captureBusy} wheelPreferences={state.timeline_wheel_preferences}
+          <SequenceTimeline key={draft.id} steps={draft.steps} repeatCount={draft.repeat_count} repeatIntervalMs={draft.repeat_interval_ms} locale={locale} controls={state.hardware_details?.controls} disabled={captureBusy} wheelPreferences={state.timeline_wheel_preferences}
+            onRepeatChange={(repeat_count,repeat_interval_ms) => setDraft({...draft,repeat_count,repeat_interval_ms})}
+            cueColors={state.effect_designer_cue_colors}
             human={state.human_readable_time_units !== false} actionsRef={sequenceActions} extraKinds={sequenceExtraKinds(state.hardware_details)} onSelect={index => setActiveStep(String(index))} onEdit={revealStepProperties} onChange={steps => setDraft({ ...draft, steps })} />
           <Collapse className="effect-step-list" activeKey={[activeStep]} onChange={keys => setActiveStep(String(Array.isArray(keys) ? keys[0] ?? '' : keys))} items={draft.steps.map((step, index) => ({
             key: String(index),

@@ -9,6 +9,7 @@ pub mod craft_theme;
 pub mod motion;
 pub mod digital_twin;
 pub mod dialog;
+pub(crate) mod window_chrome;
 pub mod dropdown;
 pub mod effects_library;
 pub(crate) mod strip_designer;
@@ -20,13 +21,19 @@ pub mod error;
 pub mod four_d;
 pub mod group_picker;
 pub mod hardware_control;
+pub(crate) mod hardware_monitor;
 pub(crate) mod pwm_policy;
 pub mod i18n;
 pub(crate) mod fonts;
 pub(crate) mod egui_dock;
+pub(crate) mod panel_chrome;
+pub(crate) mod player_mode;
 pub mod icons;
+pub(crate) mod keycaps;
 pub mod layout;
 mod timeline_toolbar;
+pub(crate) mod zoom_shortcuts;
+pub(crate) mod timeline_strip;
 pub mod media_inspector;
 pub mod media_track_properties;
 pub mod media_tracks;
@@ -40,6 +47,7 @@ pub mod peer_browser;
 pub mod seek_preview;
 pub mod status_bar;
 pub mod sidebar_rail;
+pub mod sidebar_shortcuts;
 pub(crate) mod action_customization;
 pub(crate) mod control_bar;
 pub mod subtitles;
@@ -148,6 +156,7 @@ pub fn configure_main_window_style(ctx: &eframe::egui::Context) {
 /// theme can change later without reconstructing widget styling, and both the
 /// main window and independently hosted dialogs use this same function.
 pub fn configure_native_visuals(ctx: &eframe::egui::Context, config: &crate::config::AppConfig) {
+    window_chrome::install(ctx);
     i18n::configure_preferred_fonts(ctx, config);
     color_picker::configure_language(ctx, config.language);
     use eframe::egui::{Color32, CornerRadius, Stroke, Theme, Visuals};

@@ -1,9 +1,10 @@
-//! Intrinsic-width NLE transport: one row when it fits, with track/volume
-//! controls at the trailing end of the last row when the monitor narrows.
+//! Content-measured NLE transport. Below the wide breakpoint seeking owns a
+//! complete row; actions form balanced leading/trailing clusters below it.
 use crate::app::PealayerApp;
 use eframe::egui;
 
-const VOLUME_WIDTH: f32 = 210.0;
+#[cfg(test)]
+const VOLUME_WIDTH: f32 = 160.0;
 const MIN_SEEK_WIDTH: f32 = 96.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -11,15 +12,13 @@ enum Rows {
     One,
     Two,
     Three,
-    Four,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum Group {
     Transport,
     Timeline,
     Tracks,
-    Volume,
 }
 
 #[derive(Clone, Copy)]
@@ -27,10 +26,10 @@ pub(super) struct Metrics {
     transport: f32,
     timeline_min: f32,
     tracks: f32,
-    volume_min: f32,
     gap: f32,
     row_height: f32,
     gap_y: f32,
+    rtl: bool,
 }
 
 fn button_width(ui: &egui::Ui, label: &str) -> f32 {
@@ -101,24 +100,22 @@ impl Metrics {
                 + total_width
                 + 2.0 * gap,
             tracks,
-            volume_min: 44.0 + 24.0 + gap,
             gap,
             row_height: button_height(ui).max(super::control_density::height(ui)),
             gap_y: ui.spacing().item_spacing.y,
+            rtl: app.rtl,
         }
     }
 
     fn rows(self, width: f32) -> Rows {
         let complete =
-            self.transport + self.timeline_min + self.tracks + VOLUME_WIDTH + 3.0 * self.gap;
+            self.transport + self.timeline_min + self.tracks + 2.0 * self.gap;
         if width >= complete {
             Rows::One
-        } else if width >= self.transport + self.timeline_min + self.gap {
+        } else if width >= self.transport + self.tracks + self.cluster_gap() {
             Rows::Two
-        } else if width >= self.tracks + self.volume_min + self.gap {
-            Rows::Three
         } else {
-            Rows::Four
+            Rows::Three
         }
     }
 
@@ -127,103 +124,45 @@ impl Metrics {
             Rows::One => 1.0,
             Rows::Two => 2.0,
             Rows::Three => 3.0,
-            Rows::Four => 4.0,
         };
         rows * self.row_height + (rows - 1.0) * self.gap_y
     }
-}
 
-fn draw_group(
-    ui: &mut egui::Ui,
-    metrics: Metrics,
-    group: Group,
-    width: f32,
-    draw: &mut impl FnMut(Group, &mut egui::Ui),
-) {
-    ui.allocate_ui_with_layout(
-        egui::vec2(width.max(1.0), metrics.row_height),
-        egui::Layout::left_to_right(egui::Align::Center),
-        |ui| draw(group, ui),
-    );
-}
-
-fn draw_audio_row(
-    ui: &mut egui::Ui,
-    metrics: Metrics,
-    width: f32,
-    draw: &mut impl FnMut(Group, &mut egui::Ui),
-) {
-    let audio_width = (metrics.tracks + metrics.gap + VOLUME_WIDTH).min(width);
-    ui.add_space((width - audio_width).max(0.0));
-    draw_group(ui, metrics, Group::Tracks, metrics.tracks, draw);
-    draw_group(
-        ui,
-        metrics,
-        Group::Volume,
-        audio_width - metrics.tracks - metrics.gap,
-        draw,
-    );
+    fn cluster_gap(self) -> f32 { (2.0*self.gap).max(24.0) }
 }
 
 /// Explicit bounded groups keep the elastic seekbar from forcing a wrap and
 /// reserve exactly the number of rows used before the video is allocated.
 fn draw_layout(ui: &mut egui::Ui, metrics: Metrics, mut draw: impl FnMut(Group, &mut egui::Ui)) {
     let width = ui.available_width();
-    let audio_width = (metrics.tracks + metrics.gap + VOLUME_WIDTH).min(width);
-    let rows = metrics.rows(width);
-    if matches!(rows, Rows::Three | Rows::Four) {
-        ui.horizontal(|ui| {
-            draw_group(
-                ui,
-                metrics,
-                Group::Transport,
-                metrics.transport.min(width),
-                &mut draw,
-            )
-        });
-        ui.horizontal(|ui| draw_group(ui, metrics, Group::Timeline, width, &mut draw));
-        if rows == Rows::Four {
-            ui.horizontal(|ui| {
-                draw_group(
-                    ui,
-                    metrics,
-                    Group::Tracks,
-                    metrics.tracks.min(width),
-                    &mut draw,
-                )
-            });
-            ui.horizontal(|ui| {
-                let volume_width = VOLUME_WIDTH.min(width);
-                ui.add_space((width - volume_width).max(0.0));
-                draw_group(ui, metrics, Group::Volume, volume_width, &mut draw);
-            });
-        } else {
-            ui.horizontal(|ui| draw_audio_row(ui, metrics, width, &mut draw));
+    let (bounds, _) = ui.allocate_exact_size(egui::vec2(width, metrics.height(width)), egui::Sense::hover());
+    let mut slot = |group, row: usize, x: f32, w: f32| {
+        let x = if metrics.rtl { width - x - w } else { x };
+        let rect = egui::Rect::from_min_size(bounds.min + egui::vec2(x, row as f32 * (metrics.row_height + metrics.gap_y)),
+            egui::vec2(w.max(1.0), metrics.row_height));
+        let mut child = ui.new_child(egui::UiBuilder::new().id_salt(("monitor-control-group", group))
+            .max_rect(rect).layout(egui::Layout::left_to_right(egui::Align::Center)));
+        child.set_clip_rect(rect.intersect(ui.clip_rect()));
+        draw(group, &mut child);
+    };
+    match metrics.rows(width) {
+        Rows::One => {
+            let timeline = width - metrics.transport - metrics.tracks - 2.0 * metrics.gap;
+            slot(Group::Transport, 0, 0.0, metrics.transport);
+            slot(Group::Timeline, 0, metrics.transport + metrics.gap, timeline);
+            slot(Group::Tracks, 0, width - metrics.tracks, metrics.tracks);
         }
-    } else {
-        // Single row: transport, full timeline, selectors, volume.
-        // Two rows: transport/timeline, then trailing selectors/volume.
-        ui.horizontal(|ui| {
-            draw_group(ui, metrics, Group::Transport, metrics.transport, &mut draw);
-            let tail = if rows == Rows::One {
-                audio_width + metrics.gap
-            } else {
-                0.0
-            };
-            draw_group(
-                ui,
-                metrics,
-                Group::Timeline,
-                width - metrics.transport - metrics.gap - tail,
-                &mut draw,
-            );
-            if rows == Rows::One {
-                draw_group(ui, metrics, Group::Tracks, metrics.tracks, &mut draw);
-                draw_group(ui, metrics, Group::Volume, VOLUME_WIDTH, &mut draw);
-            }
-        });
-        if rows == Rows::Two {
-            ui.horizontal(|ui| draw_audio_row(ui, metrics, width, &mut draw));
+        Rows::Two => {
+            slot(Group::Timeline, 0, 0.0, width);
+            slot(Group::Transport, 1, 0.0, metrics.transport);
+            slot(Group::Tracks, 1, width - metrics.tracks, metrics.tracks);
+        }
+        Rows::Three => {
+            let transport = metrics.transport.min(width);
+            let tracks = metrics.tracks.min(width);
+            slot(Group::Timeline, 0, 0.0, width);
+            slot(Group::Transport, 1, 0.0, transport);
+            slot(Group::Tracks, 2, width - tracks, tracks);
         }
     }
 }
@@ -234,11 +173,6 @@ pub(super) fn draw(app: &mut PealayerApp, ui: &mut egui::Ui, metrics: Metrics) {
         Group::Transport => super::control_bar::draw_group(app, ui, crate::config::ControlBarSurface::Monitor, false,control_owner),
         Group::Timeline => draw_timeline(app, ui),
         Group::Tracks => super::control_bar::draw_group(app, ui, crate::config::ControlBarSurface::Monitor, true,control_owner),
-        Group::Volume => {
-            ui.add_enabled_ui(app.current_video_path.is_some(), |ui| {
-                super::controls::draw_volume_slider(app, ui);
-            });
-        }
     });
 }
 
@@ -299,26 +233,15 @@ fn draw_timeline(app: &mut PealayerApp, ui: &mut egui::Ui) {
             false,
         ),
     };
-    let total_text = if finite_timeline {
-        crate::ui::controls::timecode_text(total_label)
-    } else {
-        egui::RichText::new(total_label)
-    };
-
     // Anchor the duration and fullscreen affordance to the right
     // edge first, then give the seekbar the exact remaining width.
     // A former fixed 180 px reservation was wider than these
     // controls and left a visible, useless tail after fullscreen.
     let response = ui
         .with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            let total_response = ui
-                .add(egui::Label::new(total_text).sense(if finite_timeline {
-                    egui::Sense::click()
-                } else {
-                    egui::Sense::hover()
-                }))
-                .on_hover_text(total_tooltip);
-            total_response.context_menu(|ui| crate::ui::controls::transport_context_menu(app, ui));
+            let total_response = crate::ui::controls::draw_duration_label(
+                app, ui, total_label, total_tooltip, finite_timeline,
+            );
             if finite_timeline && total_response.clicked() {
                 app.show_remaining_time = !app.show_remaining_time;
                 app.save_config();
@@ -370,26 +293,25 @@ mod tests {
             transport: 172.0,
             timeline_min: 300.0,
             tracks: 130.0,
-            volume_min: 114.0,
             gap: 8.0,
             gap_y: 4.0,
             row_height: 24.0,
+            rtl: false,
         }
     }
 
     #[test]
     fn smallest_number_of_rows_is_selected_at_exact_fit() {
         let m = metrics();
-        assert_eq!(m.rows(836.0), Rows::One);
-        assert_eq!(m.rows(835.9), Rows::Two);
-        assert_eq!(m.rows(480.0), Rows::Two);
-        assert_eq!(m.rows(479.9), Rows::Three);
-        assert_eq!(m.rows(252.0), Rows::Three);
-        assert_eq!(m.rows(251.9), Rows::Four);
-        assert_eq!(m.height(836.0), 24.0);
-        assert_eq!(m.height(480.0), 52.0);
-        assert_eq!(m.height(400.0), 80.0);
-        assert_eq!(m.height(240.0), 108.0);
+        assert_eq!(m.rows(618.0), Rows::One);
+        assert_eq!(m.rows(617.9), Rows::Two);
+        assert_eq!(m.rows(326.0), Rows::Two);
+        assert_eq!(m.rows(325.9), Rows::Three);
+        assert_eq!(m.rows(240.0), Rows::Three);
+        assert_eq!(m.height(618.0), 24.0);
+        assert_eq!(m.height(326.0), 52.0);
+        assert_eq!(m.height(300.0), 80.0);
+        assert_eq!(m.height(240.0), 80.0);
     }
 
     #[test]
@@ -420,24 +342,18 @@ mod tests {
                 },
             );
             output.textures_delta.clear();
-            assert_eq!(
-                rects.iter().map(|(group, _)| *group).collect::<Vec<_>>(),
-                vec![
-                    Group::Transport,
-                    Group::Timeline,
-                    Group::Tracks,
-                    Group::Volume
-                ]
-            );
-            let tracks = rects[2].1;
-            let volume = rects[3].1;
-            if metrics().rows(area.width()) != Rows::Four {
-                assert_eq!(tracks.top(), volume.top(), "width {width}");
-                assert!(tracks.right() <= volume.left(), "width {width}");
+            assert_eq!(rects.len(),3);
+            let find=|group|rects.iter().find(|(candidate,_)|*candidate==group).unwrap().1;
+            let tracks = find(Group::Tracks);
+            if metrics().rows(area.width()) == Rows::Two {
+                assert_eq!(find(Group::Timeline).width(),area.width());
+                assert!(find(Group::Timeline).bottom() < find(Group::Transport).top());
+                assert_eq!(find(Group::Transport).top(),tracks.top());
+                assert!(find(Group::Transport).right() <= tracks.left());
             }
             assert!(
-                (volume.right() - area.right()).abs() < 1.0,
-                "volume must trail at {width}"
+                (tracks.right() - area.right()).abs() < 1.0,
+                "configured trailing controls must trail at {width}"
             );
             for (_, rect) in &rects {
                 assert!(
@@ -525,6 +441,52 @@ mod tests {
                         assert!(actual.height()<=metrics.height(available.width())+1.0,"reserved height at {width}, hidden={hidden}: {actual:?}");
                     });output.textures_delta.clear();
                 }
+            }
+        }
+    }
+
+    #[test]
+    fn actual_monitor_overflow_opens_after_reflow_and_in_rtl() {
+        let _lock=crate::app::tests::lock_app_tests();
+        for width in [260.0,400.0,700.0,1400.0] {
+            for rtl in [false,true] {
+                let ctx=egui::Context::default(); let mut app=PealayerApp::default(); app.rtl=rtl;
+                let owner=std::cell::Cell::new(egui::Id::NULL);
+                let mut render=|app:&mut PealayerApp,events| {
+                    let mut output=ctx.run_ui(egui::RawInput {
+                        screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(width,600.0))),events,..Default::default()
+                    },|ui| {
+                        owner.set(ui.make_persistent_id(("control-bar",crate::config::ControlBarSurface::Monitor)));
+                        let metrics=Metrics::measure(app,ui); draw(app,ui,metrics);
+                    }); output.textures_delta.clear(); output
+                };
+                render(&mut app,vec![]); render(&mut app,vec![]);
+                // Match the same root UI used by the production draw call.
+                let pos=ctx.read_response(owner.get().with("overflow")).unwrap().rect.center();
+                let pointer=|pressed|egui::Event::PointerButton {pos,button:egui::PointerButton::Primary,pressed,modifiers:Default::default()};
+                render(&mut app,vec![egui::Event::PointerMoved(pos),pointer(true)]);
+                render(&mut app,vec![pointer(false)]);
+                let output=render(&mut app,vec![]);
+                assert!(output.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Text(text) if text.galley.text().contains("Show / hide actions"))),"overflow at width={width} rtl={rtl}");
+            }
+        }
+    }
+
+    #[test]
+    fn responsive_groups_mirror_without_overlap_or_height_changes() {
+        for width in [240.0,390.0,600.0,900.0,1400.0] {
+            let render=|rtl| {
+                let ctx=egui::Context::default(); let mut rects=Vec::new();
+                ctx.run_ui(egui::RawInput {screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(width,300.0))),..Default::default()},|ui| {
+                    let m=Metrics {rtl,..metrics()};
+                    draw_layout(ui,m,|group,ui| {rects.push((group,ui.max_rect()));});
+                }).drop_without_applying_deltas(); rects
+            };
+            let left=render(false); let right=render(true);
+            for (group,a) in left {
+                let b=right.iter().find(|(candidate,_)|*candidate==group).unwrap().1;
+                assert_eq!(a.size(),b.size()); assert_eq!(a.y_range(),b.y_range());
+                assert!((a.left()+b.right()-width).abs()<1.0,"mirror at {width}: {a:?} vs {b:?}");
             }
         }
     }

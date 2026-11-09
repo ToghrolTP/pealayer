@@ -16,6 +16,29 @@ widths, and has been exercised against live state rather than sample data.
 
 ## Current product ledger
 
+External-player Preferences now share icon/description mode entries and the
+authority-side executable resolver with native. Runtime switching and closed
+player recovery use the Rust command path, not Web-owned decoder rules. See
+[lifecycle and acceptance](verification/external-player-lifecycle.md).
+
+Remote folder navigation now uses a verified parent listing rather than an
+inferred URL. Native and Web hide unavailable parents, omit fabricated file
+metadata on navigation rows and browse folders on a single click. See
+[availability and interaction evidence](verification/remote-parent-navigation.md)
+for fixture, packaging and installed-runtime acceptance boundaries.
+
+Native file exchange now has contextual Shell drop descriptions, cue/sequence/
+strip clipboard actions and bounded taskbar attention. [Native exchange evidence](verification/native-data-exchange.md)
+keeps installed, Explorer and cross-authority acceptance separate. Browser
+clipboard parity remains open: reuse the validated authoring payloads and asset
+uploads, preserve focused text fields, and use browser clipboard permissions;
+never try to emulate Windows clipboard access or native taskbar flashing.
+
+Repeat projections: native and both Web designers share default-enabled step
+and whole-effect ghosts, source selection, interval/length gestures, count
+menus and Escape cancellation. [Interaction guide and verification](verification/step-repeat-ghosts.md)
+distinguish disconnected authoring tests from deployment and hardware acceptance.
+
 Strip authoring: [native and Web strip designer](STRIP-DESIGNER.md) now share
 the PCController-owned layered program contract: ordered pixel segments,
 gradient/fade/blink/breathing patterns, easing, offline preview, publish and
@@ -104,6 +127,19 @@ navigation and fixed ruler geometry. The full-toolbar visibility preference
 uses the shared Rust preference contract, so Web preferences can configure the
 native authority too. This is **not** a claim that React already has equivalent
 draggable ruler controls; that counterpart remains part of timeline parity.
+
+[Paused playback and track state](verification/paused-playback-and-track-state.md)
+corrects external selected-stream IDs shared by native/Web timeline snapshots,
+external pause/resume clock anchoring and native reveal-button availability.
+The installed local checkpoint includes real-player decoder tests and native
+captures; it does not claim new React toolbar gestures or remote deployment.
+
+[Movable monitor volume](verification/movable-monitor-volume.md) removes the
+fixed native/Web monitor slider in favor of the existing movable speaker action's
+complete volume group. NLE defaults hide redundant track pickers and place
+Fullscreen last. The saved action format and Simple workspace remain unchanged;
+native gestures/captures, Web source checks and local delivery are recorded
+separately from live browser/user acceptance and deferred Cafe deployment.
 
 Control-bar follow-up (12 October): [shared customization](verification/control-bar-customization.md)
 covers native Simple/Program Monitor and Web player/Monitor action menus,
@@ -292,3 +328,13 @@ on Cafe and David with the corrected CSS confirmed over HTTP. Erfan is updated
 without launching over KMPlayer. These are delivery checks, not visual proof.
 Current mobile visual acceptance is still pending, not inferred from CSS/build.
 See [cause, scope and verification](verification/MOBILE-BUTTON-CENTERING.md).
+
+## External authoring assets
+
+Native and Web file drops reuse one Rust ingestion/review queue, the current
+document formats, SFX library and effect designer. Browser/consumer files use
+bounded, owner-pinned byte uploads instead of server interpretation of local
+paths. Scenes/timeline fragments append only after review; audio source-field
+drops only update the current draft. See [user guide](ASSET-IMPORTS.md) and
+[verification and explicit deployment gates](verification/external-asset-import-draft.md).
+This does not complete the separate project/session restoration workflow.

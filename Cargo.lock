@@ -3463,6 +3463,7 @@ version = "0.2.0"
 dependencies = [
  "ab_glyph",
  "arboard",
+ "base64 0.22.1",
  "craft-ui",
  "eframe",
  "egui-elegance",
@@ -3505,9 +3506,11 @@ dependencies = [
  "url",
  "uuid",
  "windows",
+ "windows-core",
  "winit",
  "winreg",
  "winres",
+ "zbus",
  "zip",
 ]
 

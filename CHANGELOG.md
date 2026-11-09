@@ -6,7 +6,41 @@ retroactively attributed to an older download.
 
 ## Next milestone · unreleased
 
+### 🖥️ Windows taskbar and appearance
+
+- Changing the application icon also updates Explorer's taskbar group artwork
+  and matching pinned launcher, not just the titlebar and notification area.
+  Repeated changes refresh the running taskbar button without changing its
+  application identity or losing its playback actions.
+- Closing while minimized no longer reopens a tiny window. Valid normal placement
+  has one owner; maximized/fullscreen clients do not replace the Restore size.
+- Task View and Peek receive a separate full-resolution application composite
+  when Windows requests it, instead of being left black in custom-thumbnail mode.
+- Video-only taskbar thumbnails follow new rendered frames instead of stopping
+  when a short hover refresh timer expires. Paused frames remain unchanged;
+  the full-window Peek preview is not replaced by the thumbnail bitmap.
+- Click the control-density value capsule to advance through all five sizes,
+  wrapping back to Extra compact. Native and Web controls retain stable layout,
+  keyboard adjustment and disabled-state behavior.
+
+### 📦 Updating Pealayer
+
+- The command-line updater shows clear upload/download, verification, restart
+  and acknowledged-completion phases, with transfer speed and ETA when known.
+  Semantic terminal colors follow terminal support; redirected logs stay plain
+  and bounded. Use the update command's new `--json` option for automation.
+
+### 🪟 Workspace chrome
+
+- egui Dock restores its compact header height, centers tab captions and close
+  icons consistently, and clips scrolling tab controls correctly. Its close-all
+  control has no stray left-hand rule. CraftUI keeps its existing styling.
+
 ### 🎛️ Hardware controls
+
+- Hardware connection cards use a short, actionable explanation by default.
+  Hover or click the circled information button for the original technical
+  diagnostic and a copy action, in native and Web UI.
 
 - PWM indicators and On/Off selection share confirmed power state. Unknown or
   unavailable samples stay neutral; queued requests no longer fake PWM status.
@@ -56,6 +90,10 @@ retroactively attributed to an older download.
 
 ### 🎞️ Timeline and effects
 
+- Repeated steps and whole effects show linked, dimmed cue projections by
+  default. Select any occurrence, drag spacing, resize its shared length or
+  edit repeat counts from its menu. Escape cancels a projection drag without
+  changing the source or closing its containing Web designer.
 - Create direct hardware cues by track interaction or shortcut; distinguish
   move-only value markers and recorded clips from resizable holds and PWM ramps.
 - Resize streamed lighting's active window without changing its cycle speed;

@@ -607,7 +607,7 @@ fn dispatch(state: &ControlState, value: &Value, from: SocketAddr) -> Value {
             if let Some(error) = super::remote_command_permission(&command) {
                 return json!({"jsonrpc":"2.0","id":value["id"],"error":{"code":-32003,"message":error}});
             }
-            if !crate::platform::interop::get_live_config().web_allow_control {
+            if !crate::platform::interop::get_live_config().web_allow_control && command.query_result().is_none() {
                 return json!({"jsonrpc":"2.0","id":value["id"],"error":{"code":-32003,"message":"Control permission disabled"}});
             }
         }

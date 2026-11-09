@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ColorPicker } from './ColorPicker';
 import { ColorDropdown } from './ColorDropdown';
+import { ShortcutInput } from './ShortcutInput';
 import {
   Alert,
   Button,
@@ -17,6 +18,7 @@ import { FujiLoader } from './FujiLoader';
 import {
   BgColorsOutlined,
   CheckOutlined,
+  InfoCircleOutlined,
   CheckSquareOutlined,
   ControlOutlined,
   EditOutlined,
@@ -53,6 +55,8 @@ import {
   KeyOutlined,
   DashboardOutlined,
   VideoCameraOutlined,
+  ArrowUpOutlined,
+  ArrowDownOutlined,
 } from '@ant-design/icons';
 import { tr } from '../i18n';
 import { mergeAppearance, resolvedAppearanceTheme } from '../appearance';
@@ -83,7 +87,7 @@ interface PreferenceControl {
   section: string;
   group: string;
   label: string;
-  kind: 'accent' | 'color' | 'boolean' | 'file' | 'multi_select' | 'number' | 'replacement_list' | 'select' | 'choice_slider' | 'text';
+  kind: 'action_list' | 'accent' | 'color' | 'boolean' | 'file' | 'multi_select' | 'number' | 'replacement_list' | 'select' | 'choice_slider' | 'text';
   icon: string;
   description?: string;
   options?: PreferenceOption[];
@@ -127,11 +131,17 @@ const sectionIcons: Record<string, React.ReactNode> = {
   playback: <PlayCircleOutlined />,
   hardware: <ExperimentOutlined />,
   input: <ControlOutlined />,
+  timeline_toolbar: <ControlOutlined />,
+  sidebar_rail: <MenuOutlined />,
   web: <GlobalOutlined />,
   advanced: <SettingOutlined />,
 };
 
 const controlIcons: Record<string, React.ReactNode> = {
+  'monitor-play': <VideoCameraOutlined />,
+  'arrow-square-out': <ExpandOutlined />,
+  'squares-four': <GatewayOutlined />,
+  'plugs-connected': <LinkOutlined />,
   'circle-half': <GatewayOutlined />,
   gauge: <DashboardOutlined />,
   'film-strip': <VideoCameraOutlined />,
@@ -159,6 +169,23 @@ const controlIcons: Record<string, React.ReactNode> = {
   'list-checks': <MenuOutlined />,
   'pencil-simple': <EditOutlined />,
 };
+
+function PlayerExecutableHint({ executable }: { executable: string }) {
+  const [result, setResult] = useState<{ resolved?: string; error?: string }>();
+  useEffect(() => {
+    const controller = new AbortController();
+    setResult(undefined);
+    void fetch('/api/rpc', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'pealayer.player.executable.resolve', params: { executable } }),
+      signal: controller.signal,
+    }).then(response => response.json()).then(reply => setResult(reply.result ?? { error: reply.error?.message ?? 'Could not resolve executable' }))
+      .catch(error => { if (error.name !== 'AbortError') setResult({ error: 'Could not resolve executable' }); });
+    return () => controller.abort();
+  }, [executable]);
+  return result ? <small className="preference-player-path" role="status">
+    {result.resolved ? <CheckOutlined /> : <InfoCircleOutlined />} {result.resolved ?? result.error}
+  </small> : null;
+}
 
 const networkOptionIcon = (icon?: string) => {
   switch (icon) {
@@ -193,13 +220,13 @@ function patchForPath(values: JsonObject, path: string): JsonObject {
   return { [root]: values[root] };
 }
 
-function ChoiceSlider({ options, value, label, locale, disabled, onCommit }: {
+export function ChoiceSlider({ options, value, label, locale, disabled, onCommit }: {
   options: PreferenceOption[]; value: unknown; label: string; locale: 'en' | 'fa';
   disabled: boolean; onCommit: (value: PreferenceOption['value']) => void;
 }) {
   const selected = Math.max(0, options.findIndex(option => option.value === value));
   const [index, setIndex] = useState(selected);
-  useEffect(() => setIndex(selected), [selected]);
+  useEffect(() => { if (!disabled) setIndex(selected); }, [selected, disabled]);
   if (!options.length) return null;
   return <div className="preference-choice-slider" data-disabled={disabled}>
     <Slider min={0} max={options.length - 1} step={1} value={index} disabled={disabled}
@@ -210,10 +237,12 @@ function ChoiceSlider({ options, value, label, locale, disabled, onCommit }: {
       onChange={setIndex} onChangeComplete={position => {
         if (options[position].value !== value) onCommit(options[position].value);
       }} />
-    <span className="preference-choice-slider__value" title={tr(locale, options[index]?.label ?? '')}>
+    <button type="button" className="preference-choice-slider__value" disabled={disabled}
+      aria-label={tr(locale, label)} title={`${tr(locale, options[index]?.label ?? '')} → ${tr(locale, options[(index + 1) % options.length].label)}`}
+      onClick={() => { const next = (index + 1) % options.length; setIndex(next); onCommit(options[next].value); }}>
       {options.map((option, position) => <span key={position} aria-hidden="true" className="preference-choice-slider__measure">{tr(locale, option.label)}</span>)}
       <span className="preference-choice-slider__caption">{tr(locale, options[index]?.label ?? '')}</span>
-    </span>
+    </button>
   </div>;
 }
 
@@ -366,20 +395,23 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
       </span>
     );
     if (control.kind === 'file') {
+      const executable = control.key === 'external_mpv.executable';
+      const normalize = (text: string) => executable ? text.trim().replace(/^"|"$/g, '') : text.trim();
       return <div className="preference-control" key={control.key}>
         {commonLabel}
         <div className="preference-control__file">
           <Input key={String(value ?? '')} defaultValue={value ?? ''}
             aria-label={tr(locale, control.label)} title={String(value ?? '')}
             placeholder={tr(locale, control.placeholder ?? '')}
-            onPressEnter={(event) => void update(control, event.currentTarget.value.trim())}
-            onBlur={(event) => event.currentTarget.value !== (value ?? '') && void update(control, event.currentTarget.value.trim())} />
+            onPressEnter={(event) => void update(control, normalize(event.currentTarget.value))}
+            onBlur={(event) => event.currentTarget.value !== (value ?? '') && void update(control, normalize(event.currentTarget.value))} />
           <Button icon={<FolderOpenOutlined />} onClick={() => setFilePicker(control)}>{tr(locale, 'Browse…')}</Button>
-          <Tooltip title={tr(locale, 'Use default icon')}>
-            <Button icon={<UndoOutlined />} aria-label={tr(locale, 'Use default icon')} disabled={!value}
-              onClick={() => void update(control, null)} />
+          <Tooltip title={tr(locale, executable ? 'Use default player' : 'Use default icon')}>
+            <Button icon={<UndoOutlined />} aria-label={tr(locale, executable ? 'Use default player' : 'Use default icon')} disabled={!value}
+              onClick={() => void update(control, executable ? 'mpv' : null)} />
           </Tooltip>
         </div>
+        {executable && <PlayerExecutableHint executable={String(value ?? '')} />}
       </div>;
     }
     if (control.kind === 'accent') {
@@ -401,6 +433,39 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
         <ColorPicker value={String(value)} disabledAlpha showText disabled={saving === control.key}
           onChangeComplete={(color) => void update(control, color.toHexString().toUpperCase())} />
       </label>;
+    }
+    if (control.kind === 'action_list') {
+      const schema = contract;
+      if (!schema) return null;
+      const options = control.options ?? [];
+      const order = [...new Set([...(Array.isArray(value) ? value : []), ...options.map(option => option.value)])]
+        .filter(value => options.some(option => option.value === value));
+      const hiddenKey = control.custom_key!;
+      const hidden: unknown[] = valueAtPath(schema.values, hiddenKey) ?? [];
+      const move = (index: number, next: number) => {
+        const values = [...order]; [values[index], values[next]] = [values[next], values[index]];
+        void update(control, values);
+      };
+      return <div key={control.key} className="preference-action-list">
+        {order.map((value, index) => {
+          const option = options.find(option => option.value === value)!;
+          return <div key={String(value)} style={{display:'flex',alignItems:'center',gap:8,marginBlock:6}}>
+            <Switch size="small" checked={!hidden.includes(value)} disabled={saving !== null}
+              aria-label={tr(locale, option.label)} onChange={visible => void updatePaths([{key:hiddenKey,
+                value:visible ? hidden.filter(item => item !== value) : [...hidden.filter(item => item !== value), value]}])} />
+            <span className="phosphor-icon" aria-hidden="true">{option.icon}</span>
+            <span style={{flex:1,minWidth:0}}>{tr(locale, option.label)}</span>
+            <Button size="small" icon={<ArrowUpOutlined />} title={tr(locale,'Move up')}
+              disabled={index === 0 || saving !== null} onClick={() => move(index,index-1)} />
+            <Button size="small" icon={<ArrowDownOutlined />} title={tr(locale,'Move down')}
+              disabled={index === order.length-1 || saving !== null} onClick={() => move(index,index+1)} />
+          </div>;
+        })}
+        <Button icon={<UndoOutlined />} disabled={saving !== null} onClick={() => void updatePaths([
+          {key:control.key,value:valueAtPath(schema.defaults,control.key)},
+          {key:hiddenKey,value:valueAtPath(schema.defaults,hiddenKey)},
+        ])}>{tr(locale,'Reset shortcuts')}</Button>
+      </div>;
     }
     if (control.kind === 'boolean') {
       return (
@@ -465,8 +530,12 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
             value={value}
             showSearch={['ui_font_name', 'monospace_font_name'].includes(control.key) ? { optionFilterProp: 'label' } : undefined}
             onOpenChange={(open) => { if (open && ['audio_device', 'sfx_audio_device'].includes(control.key)) void refreshAudioOutputs(); }}
-            options={(control.options ?? []).map((option) => ({ value: option.value, label: option.description || tr(locale, option.label) }))}
-            optionRender={control.key === 'color_palette' ? option => paletteLabel(option.value, String(option.label)) : undefined}
+            options={(control.options ?? []).map((option) => ({ value: option.value, label: control.key === 'external_mpv.mode' ? tr(locale, option.label) : option.description || tr(locale, option.label), description: option.description, icon: option.icon }))}
+            optionRender={control.key === 'color_palette' ? option => paletteLabel(option.value, String(option.label))
+              : control.key === 'external_mpv.mode' ? option => <span className="preference-player-option">
+                <span aria-hidden="true">{controlIcons[option.data.icon ?? 'monitor-play']}</span>
+                <span>{option.label}<small>{option.data.description}</small></span>
+              </span> : undefined}
             labelRender={control.key === 'color_palette' ? option => paletteLabel(option.value, String(option.label)) : undefined}
             onChange={(next) => void update(control, next)}
           />
@@ -537,6 +606,13 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
           </div>
         </div>
       );
+    }
+    if (control.key.startsWith('application_shortcuts.')) {
+      return <label className="preference-control" key={control.key}>
+        {commonLabel}
+        <ShortcutInput value={String(value ?? '')} label={tr(locale, control.label)}
+          placeholder={control.placeholder} onCommit={next => void update(control, next)} />
+      </label>;
     }
     return (
       <label className="preference-control" key={control.key}>

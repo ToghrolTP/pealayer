@@ -4,6 +4,11 @@ Owner: [issue #80](https://github.com/ToghrolTP/pealayer/issues/80).
 The existing [master/background policy](background-media-controls.md) remains
 independent of ordinary keyboard shortcuts and system volume/mute keys.
 
+Current follow-up: [native discovery and KDE Connect](native-media-discovery.md)
+supersedes this receipt's Linux backend limits and old installation blocker.
+Keep the original checks below as historical evidence, not current deployment
+status or a claim that a phone/OS session was observed then.
+
 ## Completed current paths
 
 - Cached media inspection supplies actual title, artist and album tags to native
@@ -25,7 +30,8 @@ independent of ordinary keyboard shortcuts and system volume/mute keys.
   playback/app icon. The WinRT stream is retained and reused in memory: no artwork
   temporary file, per-frame disk write or remote-cover fetch. This is branding
   artwork, not an assertion that embedded album covers have been extracted.
-  Other native adapters use configured local artwork URLs when available.
+  Linux now uses cached content-addressed PNG artwork; other native adapters use
+  configured local artwork URLs when available.
 - Playing position publication is bounded to measured 250 ms advances; backward
   jumps, pause/stop and metadata replacement are immediate. Paused exact positions
   remain exact. Failed publication does not advance the success cache; native
@@ -49,10 +55,11 @@ another application's media buttons or system volume.
 ## Explicit limits and acceptance
 
 Repeat/shuffle are not advertised: the player has no corresponding shared modes.
-Embedded-cover extraction is not implemented. Linux/macOS retain Souvlaki's
-backend support; its API does not expose native rate/capability publication on
-those platforms. Shared event gating, metadata and bounded playback publication
-still apply. Browser action/position availability is browser-dependent.
+Embedded-cover extraction is not implemented. Linux now uses application-owned
+MPRIS with factual rate/capability/track/position/volume publication, as described
+in the follow-up. macOS retains Souvlaki, whose API does not expose native
+rate/capability publication. Shared event gating, metadata and bounded playback
+publication still apply. Browser action/position availability is browser-dependent.
 
 Pure/memory-only native tests cover metadata, playlist boundaries, callback
 lifetime/rate validation, scope rechecks, signed WinRT positions and overflow,
@@ -66,9 +73,10 @@ round-trips artwork bytes in memory without an HWND or session registration.
 The full Web TypeScript/behavior/responsive/parity/production/PWA pipeline passed,
 including the new executable session projection tests and 51 parity contracts.
 
-Local/Cafe installation remains blocked by preserved generated Web files and
-existing launch restrictions. The known Windows GNU native access violation is
-an independent platform acceptance gate. Source/tests are not physical media-key,
+The original local/Cafe installation was blocked by preserved generated Web files
+and launch restrictions; current local installation/readback and the separate
+Cafe deferral are recorded in the follow-up. The known Windows GNU native access
+violation is an independent platform acceptance gate. Source/tests are not physical media-key,
 SMTC-flyout, lock-screen, thumbnail or Linux/macOS runtime acceptance. After an
 approved update, test file replacement/Stop, real tags/artwork, finite/live seek,
 speed, EOF and playlist boundaries, both focus policies, disable/re-enable and

@@ -233,6 +233,8 @@ fn header(app: &PealayerApp, ui: &mut egui::Ui) {
                 ui.add(
                     egui::Label::new(egui::RichText::new(&app.app_name).size(25.0).strong()).wrap(),
                 );
+                let description = crate::platform::interop::live_app_description();
+                if !description.is_empty() { ui.label(description); }
                 ui.label(
                     egui::RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION")))
                         .size(17.0)

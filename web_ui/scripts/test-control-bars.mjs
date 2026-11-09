@@ -10,6 +10,8 @@ assert.equal(ACTIONS.length,15);
 assert.deepEqual(defaultLayout('simple').order.slice(0,3),['back','play_pause','forward']);
 assert.equal(defaultLayout('monitor').hidden[actionIndex('stop')],false);
 assert.equal(defaultLayout('simple').hidden[actionIndex('stop')],true);
+for(const action of ['video_track','audio_track','subtitle_track']) assert.equal(defaultLayout('monitor').hidden[actionIndex(action)],true);
+assert.equal(defaultLayout('monitor').order.at(-1),'fullscreen');
 assert.equal(browserActions.includes('pin'),false,'browser does not claim a native floating window');
 const original = defaultLayout('monitor');
 const hidden = patchAction(original,'stop','hidden',true);
@@ -26,6 +28,8 @@ assert(bar.includes("setDragImage(event.currentTarget,event.clientX-rect.left,ev
 assert(bar.includes("event.key==='Escape'")&&bar.includes('suppressClick.current=true'),'cancel and release cannot execute a dragged action');
 assert(bar.includes("patchAction(layout,drag.current,'hidden',true)")&&bar.includes('is-removing'),'trash drop hides the semantic action');
 assert(bar.includes('draggable={!saving&&Boolean(authoritative)}')&&bar.includes('disabled={!enabled(a)}'),'unavailable actions customize independently of execution');
+assert(bar.includes('if(volumePointer.current){event.preventDefault();return;}'),'volume slider interaction cannot start an action drag');
+assert(bar.includes('control-bar__inline-volume')&&bar.includes("surface==='simple'&&<VolumeControl"),'monitor volume belongs to its reorderable speaker action, without a duplicate fixed slider');
 assert(app.includes("expected:{control_bars:current.control_bars}, values:{control_bars:next}"),'save is narrow and optimistic-concurrency checked');
 assert(css.includes('.control-bar__action.is-dragging { visibility: hidden; }'),'drag image does not duplicate a decorated original');
 assert(css.includes('.control-bar__overflow { display: inline-flex; flex: none; }'),'restore/trash does not scroll away with actions');

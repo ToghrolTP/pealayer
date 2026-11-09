@@ -19,6 +19,9 @@ struct Projection {
 struct TabButton {
     tab: Tab,
     rect: egui::Rect,
+    clip_rect: egui::Rect,
+    close_rect: Option<egui::Rect>,
+    keyboard_focus: bool,
     layer: egui::LayerId,
 }
 
@@ -37,14 +40,18 @@ fn dock_style(ui: &egui::Ui) -> egui_dock::Style {
     style.dock_area_padding = None;
     style.main_surface_border_stroke = egui::Stroke::NONE;
     style.main_surface_border_rounding = egui::CornerRadius::ZERO;
-    style.tab_bar.height = t
-        .tab_h
-        .max(ui.text_style_height(&egui::TextStyle::Body) + 6.0);
+    // egui Dock was 24 points before the CraftUI migration. Its selectable
+    // adapter must not inherit CraftUI's independently tuned 32-point chrome.
+    style.tab_bar.height = HEADER_BUTTON_WIDTH
+        .max(ui.text_style_height(&egui::TextStyle::Button) + 4.0).ceil();
     style.tab_bar.bg_fill = t.tab_bg;
-    style.tab_bar.hline_color = t.separator;
+    style.tab_bar.corner_radius = egui::CornerRadius::ZERO;
+    // The adapter paints one connected tab/body perimeter. Upstream's inset
+    // tab rectangle, body rectangle and erasing hlines use different coordinates.
+    style.tab_bar.hline_color = egui::Color32::TRANSPARENT;
     style.tab.active.bg_fill = t.panel_bg;
     style.tab.active.text_color = t.tab_text_active;
-    style.tab.active.outline_color = t.separator;
+    style.tab.active.outline_color = egui::Color32::TRANSPARENT;
     style.tab.active.corner_radius = egui::CornerRadius::ZERO;
     style.tab.inactive.bg_fill = t.tab_bg;
     style.tab.inactive.text_color = t.tab_text;
@@ -52,20 +59,35 @@ fn dock_style(ui: &egui::Ui) -> egui_dock::Style {
     style.tab.inactive.corner_radius = egui::CornerRadius::ZERO;
     style.tab.focused.bg_fill = t.panel_bg;
     style.tab.focused.text_color = t.tab_text_active;
-    style.tab.focused.outline_color = t.focus;
+    style.tab.focused.outline_color = egui::Color32::TRANSPARENT;
     style.tab.focused.corner_radius = egui::CornerRadius::ZERO;
     style.tab.hovered.bg_fill = t.hover;
     style.tab.hovered.text_color = t.tab_text_active;
     style.tab.hovered.corner_radius = egui::CornerRadius::ZERO;
-    style.tab.tab_body.stroke = egui::Stroke::new(1.0, t.separator);
+    style.tab.hovered.outline_color = egui::Color32::TRANSPARENT;
+    style.tab.tab_body.stroke = egui::Stroke::NONE;
+    style.tab.tab_body.bg_fill = t.panel_bg;
     style.tab.tab_body.corner_radius = egui::CornerRadius::ZERO;
     style.separator.width = 1.0;
     style.separator.color_idle = t.separator;
     style.separator.color_hovered = t.focus;
     style.separator.color_dragged = t.accent_hover;
     style.separator.extra_interact_width = t.gap;
-    style.buttons.close_tab_color = t.icon;
-    style.buttons.close_tab_active_color = t.tab_text_active;
+    // Keep upstream hit targets; paint consistently sized Phosphor glyphs below.
+    style.buttons.close_tab_color = egui::Color32::TRANSPARENT;
+    style.buttons.close_tab_active_color = egui::Color32::TRANSPARENT;
+    style.buttons.close_tab_bg_fill = t.hover;
+    style.buttons.close_all_tabs_color = egui::Color32::TRANSPARENT;
+    style.buttons.close_all_tabs_active_color = egui::Color32::TRANSPARENT;
+    style.buttons.close_all_tabs_disabled_color = egui::Color32::TRANSPARENT;
+    style.buttons.close_all_tabs_bg_fill = t.hover;
+    style.buttons.close_all_tabs_border_color = egui::Color32::TRANSPARENT;
+    style.buttons.collapse_tabs_bg_fill = t.hover;
+    style.buttons.collapse_tabs_border_color = egui::Color32::TRANSPARENT;
+    // Keyboard focus must use the same palette, not the upstream default skin.
+    style.tab.inactive_with_kb_focus = style.tab.inactive.clone();
+    style.tab.active_with_kb_focus = style.tab.active.clone();
+    style.tab.focused_with_kb_focus = style.tab.focused.clone();
     // Preserve the upstream button/hit target, replacing only its solid triangle.
     style.buttons.collapse_tabs_color = egui::Color32::TRANSPARENT;
     style.buttons.collapse_tabs_active_color = egui::Color32::TRANSPARENT;
@@ -77,6 +99,39 @@ fn disclosure_rect(header: egui::Rect) -> egui::Rect {
         header.min,
         egui::vec2(HEADER_BUTTON_WIDTH.min(header.width()), header.height()),
     )
+}
+
+fn paint_header_icon(painter: &egui::Painter, rect: egui::Rect, glyph: &str, color: egui::Color32) {
+    super::panel_chrome::paint_icon(painter, rect, glyph, color);
+}
+
+/// A single physical-pixel contour joins the selected tab to its body. There
+/// are no overlapping rectangles, erase strokes or rounded inset corners.
+fn paint_panel_contour(painter: &egui::Painter, panel: egui::Rect, header: egui::Rect,
+    active: Option<egui::Rect>, collapsed: bool, color: egui::Color32) {
+    let scale = painter.ctx().pixels_per_point();
+    let pixel = scale.recip();
+    let snap = |value: f32| (value * scale).round() / scale;
+    let left = snap(panel.left()) + pixel * 0.5;
+    let right = snap(panel.right()) - pixel * 0.5;
+    let top = snap(header.top()) + pixel * 0.5;
+    let seam = snap(header.bottom()) - pixel * 0.5;
+    let bottom = snap(panel.bottom()) - pixel * 0.5;
+    let stroke = egui::Stroke::new(pixel, color);
+    if right <= left || bottom <= top { return; }
+    let mut points = if collapsed || bottom <= seam {
+        vec![egui::pos2(left,top),egui::pos2(right,top),egui::pos2(right,bottom),egui::pos2(left,bottom)]
+    } else if let Some(active) = active.filter(|rect| rect.width() > pixel) {
+        let tab_left = (snap(active.left()) + pixel * 0.5).clamp(left,right);
+        let tab_right = (snap(active.right()) - pixel * 0.5).clamp(tab_left,right);
+        vec![egui::pos2(left,seam),egui::pos2(tab_left,seam),egui::pos2(tab_left,top),
+            egui::pos2(tab_right,top),egui::pos2(tab_right,seam),egui::pos2(right,seam),
+            egui::pos2(right,bottom),egui::pos2(left,bottom)]
+    } else {
+        vec![egui::pos2(left,seam),egui::pos2(right,seam),egui::pos2(right,bottom),egui::pos2(left,bottom)]
+    };
+    points.dedup();
+    painter.add(egui::Shape::closed_line(points, stroke));
 }
 
 /// Register only genuinely empty header space, not a y-band across unrelated
@@ -116,20 +171,42 @@ fn decorate_headers(
                 .pointer_hover_pos()
                 .is_some_and(|p| rect.contains(p))
                 && ui.ctx().layer_id_at(rect.center()) == Some(button.layer);
-            painter.text(
-                rect.center(),
-                egui::Align2::CENTER_CENTER,
+            paint_header_icon(
+                &painter, rect,
                 if leaf.collapsed {
                     super::icons::CARET_RIGHT
                 } else {
                     super::icons::CARET_DOWN
                 },
-                egui::FontId::proportional(13.0),
                 if hovered { t.tab_text_active } else { t.icon },
             );
+            let close_all = egui::Rect::from_min_max(egui::pos2(header.right()-HEADER_BUTTON_WIDTH.min(header.width()),header.top()),header.max);
+            let secondary = ui.input(|i| i.modifiers.shift);
+            let icon_color = |rect: egui::Rect| {
+                if !interactive { t.text_dim }
+                else if ui.ctx().pointer_hover_pos().is_some_and(|p| rect.contains(p))
+                    && ui.ctx().layer_id_at(rect.center()) == Some(button.layer) { t.tab_text_active }
+                else { t.icon }
+            };
+            paint_header_icon(&painter,close_all,
+                if secondary && !path.surface.is_main() { super::icons::APP_WINDOW } else { super::icons::X },
+                if secondary && path.surface.is_main() { t.text_dim } else { icon_color(close_all) });
+            for tab in buttons.iter().filter(|b| leaf.tabs.contains(&b.tab)) {
+                let tab_clip = tab.clip_rect.intersect(header).intersect(clip);
+                if let Some(close) = tab.close_rect.filter(|rect| rect.intersects(tab_clip)) {
+                    // Scrollable tabs must not paint over collapse/close-all.
+                    paint_header_icon(&painter.with_clip_rect(tab_clip),close,super::icons::X,icon_color(close));
+                }
+            }
         }
-        if dock.focused_leaf() == Some(path) {
-            super::craft_theme::paint_active_panel_outline(&painter, leaf.rect, &t);
+        let active = leaf.tabs.get(leaf.active.0).and_then(|tab| buttons.iter().find(|button| button.tab == *tab));
+        paint_panel_contour(&painter, leaf.rect, header,
+            active.map(|button| button.rect.intersect(button.clip_rect).intersect(header)), leaf.collapsed,
+            if dock.focused_leaf() == Some(path) || active.is_some_and(|button|button.keyboard_focus) {t.focus} else {t.separator});
+        for button in buttons.iter().filter(|button| leaf.tabs.contains(&button.tab) && button.keyboard_focus
+            && active.is_none_or(|active| active.tab != button.tab)) {
+            painter.with_clip_rect(button.clip_rect.intersect(header)).rect_stroke(button.rect.shrink(1.0),
+                0.0, egui::Stroke::new(1.0, t.focus), egui::StrokeKind::Inside);
         }
         let left = buttons
             .iter()
@@ -374,38 +451,60 @@ fn retain_unchanged(source: &Node<Tab>, before: &Node<Tab>, after: &mut Node<Tab
     }
 }
 
-impl egui_dock::TabViewer for PealayerTabViewer<'_> {
+// Keep Dock-only title metrics out of the shared CraftUI panel viewer.
+struct DockTabViewer<'a> {
+    viewer: PealayerTabViewer<'a>,
+    context: egui::Context,
+    title_font: egui::FontId,
+}
+
+impl egui_dock::TabViewer for DockTabViewer<'_> {
     type Tab = Tab;
     fn title(&mut self, tab: &mut Tab) -> egui::WidgetText {
-        format!("{} {}", tab.icon(), tab.title(self.app)).into()
+        let mut galley = self.context.fonts_mut(|fonts| fonts.layout_no_wrap(
+            format!("{} {}", tab.icon(), tab.title(self.viewer.app)),
+            self.title_font.clone(), egui::Color32::PLACEHOLDER));
+        // Upstream centers the line box. Center its actual ink instead, without
+        // changing text, width, hit targets, accessibility or drag geometry.
+        let delta = galley.rect.center().y - galley.mesh_bounds.center().y;
+        let normalized = std::sync::Arc::make_mut(&mut galley);
+        for row in &mut normalized.rows { row.pos.y += delta; }
+        normalized.mesh_bounds = normalized.mesh_bounds.translate(egui::vec2(0.0, delta));
+        egui::WidgetText::Galley(galley)
     }
     fn id(&mut self, tab: &mut Tab) -> egui::Id {
         egui::Id::new(("workspace-panel", *tab))
     }
     fn ui(&mut self, ui: &mut egui::Ui, tab: &mut Tab) {
-        PealayerTabViewer::ui(self, ui, tab);
+        PealayerTabViewer::ui(&mut self.viewer, ui, tab);
     }
     fn scroll_bars(&self, tab: &Tab) -> [bool; 2] {
-        PealayerTabViewer::scroll_bars(self, tab)
+        PealayerTabViewer::scroll_bars(&self.viewer, tab)
     }
     fn is_closeable(&self, _tab: &Tab) -> bool {
-        !self.app.dock_state.locked
+        !self.viewer.app.dock_state.locked
     }
     fn allowed_in_windows(&self, _tab: &mut Tab) -> bool {
-        !self.app.dock_state.locked
+        !self.viewer.app.dock_state.locked
     }
     fn on_tab_button(&mut self, tab: &mut Tab, response: &egui::Response) {
+        // Read the real upstream target before entering the data transaction.
+        let close_rect = response.ctx.read_response(response.id.with("close-button")).map(|close| close.rect);
+        let keyboard_focus = response.has_focus();
         response.ctx.data_mut(|data| {
             let buttons = data.get_temp_mut_or_default::<Vec<TabButton>>(tab_buttons_id());
             buttons.push(TabButton {
                 tab: *tab,
                 rect: response.rect,
+                clip_rect: response.interact_rect,
+                close_rect,
+                keyboard_focus,
                 layer: response.layer_id,
             });
         });
     }
     fn context_menu(&mut self, ui: &mut egui::Ui, tab: &mut Tab, _node: egui_dock::NodePath) {
-        self.draw_context_menu(ui, *tab);
+        self.viewer.draw_context_menu(ui, *tab);
     }
 }
 
@@ -443,7 +542,11 @@ pub fn show(app: &mut PealayerApp, ui: &mut egui::Ui, reveal: Option<Tab>) {
     let header_height = style.tab_bar.height;
     app.workspace_rendering = true;
     ui.add_enabled_ui(!blocked, |ui| {
-        let mut viewer = PealayerTabViewer { app };
+        let mut viewer = DockTabViewer {
+            viewer: PealayerTabViewer::new(app),
+            context: ui.ctx().clone(),
+            title_font: egui::TextStyle::Button.resolve(ui.style()),
+        };
         egui_dock::DockArea::new(&mut projection.dock)
             .id(egui::Id::new("egui-workspace-dock"))
             .style(style)
@@ -574,6 +677,7 @@ mod tests {
         let ctx = egui::Context::default();
         super::super::i18n::configure_ui_fonts(&ctx, false);
         let mut app = PealayerApp::default();
+        app.engine_handle = crate::four_d::engine::memory_only_test_engine();
         app.dock_state.layout = Layout {
             root: Some(Node::Tabs {
                 panels: vec![Tab::EffectControls, Tab::MediaInspector],
@@ -587,10 +691,122 @@ mod tests {
     }
 
     #[test]
+    fn header_and_body_have_one_connected_pixel_aligned_contour() {
+        let _guard = crate::app::tests::lock_app_tests();
+        for dark in [false, true] { for scale in [1.0, 1.25, 1.5, 2.0] {
+            let (ctx, mut app) = fixture();
+            ctx.set_pixels_per_point(scale);
+            ctx.set_visuals(if dark {egui::Visuals::dark()} else {egui::Visuals::light()});
+            frame(&ctx, &mut app, vec![]);
+            let output = frame(&ctx, &mut app, vec![egui::Event::PointerMoved(egui::pos2(45.0,12.0))]);
+            let paths: Vec<_> = output.shapes.iter().filter_map(|shape| match &shape.shape {
+                egui::Shape::Path(path) if path.closed && path.points.len() == 8 => Some(path), _=>None
+            }).collect();
+            assert_eq!(paths.len(),1,"selected tab and body must have one perimeter, not stacked frames");
+            for path in paths {
+                assert!((path.stroke.width * scale - 1.0).abs()<0.01);
+                for point in &path.points {
+                    for coordinate in [point.x,point.y] {
+                        assert!(((coordinate * scale).fract()-0.5).abs()<0.02,"stroke not on a physical pixel center at {scale}");
+                    }
+                }
+            }
+            let header = ctx.data(|data|data.get_temp::<Vec<TabButton>>(tab_buttons_id())).unwrap()[0].rect;
+            assert!(!output.shapes.iter().any(|shape|matches!(&shape.shape,
+                egui::Shape::Rect(rect) if rect.stroke.color.a()>0 && rect.stroke.width>0.0
+                    && rect.rect.top() < header.bottom() && rect.rect.bottom() > header.top())),
+                "upstream inset tab/body rectangle returned beside the connected perimeter");
+        } }
+    }
+
+    #[test]
+    fn dock_caption_ink_and_compact_height_match_header_controls() {
+        let _guard = crate::app::tests::lock_app_tests();
+        for dark in [false, true] {
+          for scale in [1.0, 1.25, 1.5, 2.0] {
+           for language in [crate::config::AppLanguage::English, crate::config::AppLanguage::Persian] {
+            for size in [14.0, 22.0] {
+                let (ctx, mut app) = fixture();
+                app.language = language;
+                app.rtl = language.is_rtl();
+                super::super::i18n::configure_ui_fonts(&ctx, language.is_rtl());
+                ctx.set_pixels_per_point(scale);
+                ctx.set_visuals(if dark { egui::Visuals::dark() } else { egui::Visuals::light() });
+                ctx.all_styles_mut(|style| {
+                    style.text_styles.insert(egui::TextStyle::Body, egui::FontId::proportional(size));
+                    style.text_styles.insert(egui::TextStyle::Button, egui::FontId::proportional(size));
+                });
+                frame(&ctx, &mut app, vec![]);
+                let output = frame(&ctx, &mut app, vec![]);
+                let buttons = ctx.data(|data| data.get_temp::<Vec<TabButton>>(tab_buttons_id())).unwrap();
+                let header = buttons[0].rect;
+                if size == 14.0 && scale == 1.0 && language == crate::config::AppLanguage::English {
+                    assert_eq!(header.height(), 24.0, "egui Dock must retain its pre-CraftUI compact header, not CraftUI's 32-point header");
+                }
+                assert!(header.height() >= 24.0, "non-Latin/large-font metrics can grow, never shrink the compact baseline");
+                let close = buttons[0].close_rect.expect("real upstream close hit target");
+                assert_eq!(close.width(), HEADER_BUTTON_WIDTH);
+                assert_eq!(close.width(), close.height(), "large fonts must not stretch the close target");
+                assert!((close.center().y - header.center().y).abs() < 0.01);
+                let title = Tab::EffectControls.title(&app);
+                let caption = output.shapes.iter().find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text().contains(&title) => Some(text.visual_bounding_rect()),
+                    _ => None,
+                }).expect("actual tab caption");
+                assert!(caption.height() <= header.height()-2.0, "font-aware height must contain the caption ink");
+                assert!((caption.center().y - header.center().y).abs() < 0.5,
+                    "caption ink must align with header glyphs at font {size}: {caption:?} vs {header:?}");
+            }
+           }
+          }
+        }
+    }
+
+    #[test]
+    fn overflow_close_glyphs_stay_clipped_and_no_vertical_close_rule_is_painted() {
+        let _guard = crate::app::tests::lock_app_tests();
+        for dark in [false, true] {
+            let (ctx, mut app) = fixture();
+            ctx.set_visuals(if dark { egui::Visuals::dark() } else { egui::Visuals::light() });
+            let draw = |app: &mut PealayerApp, events| {
+                let mut output = ctx.run_ui(egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(220.0, 500.0))),
+                    events, ..Default::default()
+                }, |ui| show(app, ui, None));
+                output.textures_delta.clear(); output
+            };
+            draw(&mut app, vec![]);
+            draw(&mut app, vec![]);
+            let projection = ctx.data(|data| data.get_temp::<Projection>(egui::Id::new("egui-dock-projection"))).unwrap();
+            let leaf = projection.dock.main_surface().root_node().unwrap().get_leaf().unwrap();
+            let close_left = leaf.rect.right() - HEADER_BUTTON_WIDTH;
+            for pointer in [egui::Pos2::ZERO, egui::pos2(leaf.rect.right()-12.0,leaf.rect.top()+12.0)] {
+                let output = draw(&mut app, vec![egui::Event::PointerMoved(pointer)]);
+                let buttons = ctx.data(|data| data.get_temp::<Vec<TabButton>>(tab_buttons_id())).unwrap();
+                assert!(buttons.iter().any(|button| button.rect.right() > close_left), "fixture must overflow");
+                for shape in &output.shapes {
+                    match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == super::super::icons::X
+                            && text.visual_bounding_rect().center().x < close_left => {
+                            assert!(shape.clip_rect.right() <= close_left+0.1, "tab close glyph must not bleed over close-all");
+                            assert!(shape.clip_rect.left() >= leaf.rect.left()+HEADER_BUTTON_WIDTH-0.1, "tab close glyph must not bleed over disclosure");
+                        }
+                        egui::Shape::LineSegment {points,stroke} if stroke.color.a() > 0 => {
+                            assert!(!(points.iter().all(|point| (point.x-close_left).abs()<0.1)
+                                && (points[1].y-points[0].y).abs()>12.0), "unwanted visible close-all left border");
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn restored_header_chevrons_and_palette_match_live_renderer_geometry() {
         let _guard = crate::app::tests::lock_app_tests();
         for dark in [false, true] {
-            for scale in [1.0, 1.25, 2.0] {
+            for scale in [1.0, 1.25, 1.5, 2.0] {
                 let (ctx, mut app) = fixture();
                 ctx.set_visuals(if dark {
                     egui::Visuals::dark()
@@ -626,6 +842,16 @@ mod tests {
                     has_text(&output, super::super::icons::CARET_DOWN),
                     "custom caret not rendered"
                 );
+                assert!(has_text(&output,super::super::icons::X),"custom close glyphs must render");
+                for shape in &output.shapes {
+                    if let egui::Shape::Text(text) = &shape.shape {
+                        if [super::super::icons::X,super::super::icons::CARET_DOWN].contains(&text.galley.text())
+                            && header.contains(text.visual_bounding_rect().center()) {
+                            assert!((text.visual_bounding_rect().center().y-header.center().y).abs()<0.15,
+                                "header icon ink must be vertically centered at {scale}: {:?}",text.visual_bounding_rect());
+                        }
+                    }
+                }
                 for shape in &output.shapes {
                     if let egui::Shape::Text(text) = &shape.shape {
                         if text.galley.text() == super::super::icons::CARET_DOWN {
@@ -657,8 +883,13 @@ mod tests {
                 ctx.run_ui(Default::default(), |ui| {
                     let style = dock_style(ui);
                     let tokens = super::super::craft_theme::current(&ctx);
-                    assert_eq!(style.tab.focused.outline_color, tokens.focus);
+                    assert_eq!(style.tab.focused.outline_color, egui::Color32::TRANSPARENT);
                     assert_eq!(style.tab_bar.bg_fill, tokens.tab_bg);
+                    assert_eq!(style.tab_bar.corner_radius, egui::CornerRadius::ZERO);
+                    assert_eq!(style.tab.tab_body.bg_fill, style.tab.active.bg_fill);
+                    assert_eq!(style.buttons.close_all_tabs_border_color,egui::Color32::TRANSPARENT);
+                    assert_eq!(style.buttons.close_all_tabs_bg_fill,tokens.hover);
+                    assert_eq!(style.tab.active_with_kb_focus.bg_fill,style.tab.active.bg_fill);
                     assert_eq!(
                         style.buttons.collapse_tabs_color,
                         egui::Color32::TRANSPARENT

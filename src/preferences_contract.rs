@@ -10,6 +10,10 @@ pub struct PreferencesNavigation {
 }
 
 impl PreferencesNavigation {
+    pub(crate) fn timeline_toolbar() -> Self {
+        Self { section: Some("timeline_toolbar".into()), scroll_y: 0.0 }
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         if !self.scroll_y.is_finite() || !(0.0..=1_000_000.0).contains(&self.scroll_y) {
             return Err("scroll_y must be a finite offset between 0 and 1000000 logical pixels".into());
@@ -39,6 +43,7 @@ fn is_false(value: &bool) -> bool {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PreferenceControlKind {
+    ActionList,
     Accent,
     Color,
     Boolean,
@@ -131,6 +136,19 @@ pub struct PreferenceSection {
     pub label: &'static str,
     pub icon: &'static str,
     pub navigation_group: &'static str,
+}
+
+#[cfg(test)]
+#[test]
+fn timeline_toolbar_page_has_one_canonical_visibility_control() {
+    let controls = preference_controls(&crate::config::AppConfig::default());
+    let matches: Vec<_> = controls.iter().filter(|control| control.key == "timeline_toolbar_visible").collect();
+    assert_eq!(matches.len(), 1);
+    assert_eq!(matches[0].section, "timeline_toolbar");
+    assert_eq!(matches[0].group, "Timeline toolbar");
+    // Workspace snapshots store these selections by index.
+    assert_eq!(preference_sections().iter().take(6).map(|section| section.id).collect::<Vec<_>>(),
+        ["appearance", "playback", "hardware", "input", "web", "advanced"]);
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -350,6 +368,13 @@ pub fn preference_sections() -> Vec<PreferenceSection> {
             label: "Advanced",
             icon: "gear",
         },
+        PreferenceSection {
+            id: "timeline_toolbar",
+            navigation_group: "Application",
+            label: "Timeline toolbar",
+            icon: "sliders",
+        },
+        PreferenceSection { id: "sidebar_rail", navigation_group: "Application", label: "Sidebar rail", icon: "sliders" },
     ]
 }
 
@@ -362,6 +387,12 @@ fn application_icon_control(key: &'static str, label: &'static str, placeholder:
 
 fn seekbar_color_control(key: &'static str, label: &'static str) -> PreferenceControl {
     let mut control = PreferenceControl::text(key, "playback", "Seekbar markers", label, "#RRGGBB");
+    control.kind = PreferenceControlKind::Color;
+    control
+}
+
+fn designer_color_control(key: &'static str, label: &'static str) -> PreferenceControl {
+    let mut control = PreferenceControl::text(key, "hardware", "Effect designer colors", label, "#RRGGBB");
     control.kind = PreferenceControlKind::Color;
     control
 }
@@ -403,7 +434,30 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
         control
     };
     let mut controls = vec![
-        PreferenceControl::select("external_mpv.mode", "playback", "External mpv", "Player mode", &[("internal", "Internal player (default)"), ("external", "External mpv only"), ("dual", "External mpv + internal preview"), ("remote", "Control existing mpv")]),
+        PreferenceControl::boolean("ui.sidebar_rail.enabled", "sidebar_rail", "Sidebar rail", "Show sidebar rail"),
+        PreferenceControl::number("ui.sidebar_rail.width", "sidebar_rail", "Sidebar rail", "Sidebar pane width", 240.0, 600.0, 10.0),
+        {
+            let mut control = PreferenceControl::boolean("ui.sidebar_shortcuts.order", "sidebar_rail", "Shortcuts", "Shortcuts");
+            control.kind = PreferenceControlKind::ActionList;
+            control.custom_key = Some("ui.sidebar_shortcuts.hidden");
+            control.options = crate::ui::sidebar_shortcuts::RailAction::ALL.into_iter().map(|action| PreferenceOption {
+                value: serde_json::to_value(action).unwrap(), label: action.label(), color: None,
+                description: None, icon: Some(action.icon()),
+            }).collect();
+            control
+        },
+        {
+            let mut c = PreferenceControl::select("external_mpv.mode", "playback", "External mpv", "Player mode", &[("internal", "Internal player"), ("external", "External mpv only"), ("dual", "Both players"), ("remote", "Control existing mpv")]);
+            for (option, (icon, description)) in c.options.iter_mut().zip([
+                ("monitor-play", "Play inside Pealayer. No external window."),
+                ("arrow-square-out", "Play in a separate mpv window. Closing it stops playback."),
+                ("squares-four", "External playback with a muted internal preview. Falls back to internal when mpv closes."),
+                ("plugs-connected", "Attach to an existing IPC endpoint. Pealayer does not own or close that process."),
+            ]) {
+                option.icon = Some(icon); option.description = Some(description.into());
+            }
+            c
+        },
         PreferenceControl::boolean("external_mpv.use_mpv_config", "playback", "External mpv", "Load mpv's own configuration and scripts when launching"),
         {
             let mut c = PreferenceControl::text("external_mpv.executable", "playback", "External mpv", "mpv executable", "mpv or full executable path");
@@ -430,6 +484,8 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
         PreferenceControl::accent(config),
         PreferenceControl::select("workspace_ui", "appearance", "Interface", "Workspace interface",
             &[("craft_ui", "CraftUI"), ("egui_dock", "egui Dock")]),
+        PreferenceControl::boolean("craft_show_close_buttons", "appearance", "Workspace panels", "Show CraftUI panel close buttons"),
+        PreferenceControl::boolean("craft_show_collapse_buttons", "appearance", "Workspace panels", "Show CraftUI collapse buttons"),
         PreferenceControl::boolean("preferences_grouped_navigation", "appearance", "Interface", "Group Preferences navigation"),
         PreferenceControl::choice_slider("ui_control_density", "appearance", "Interface", "Control density",
             &[("extra_compact", "Extra compact"), ("compact", "Compact"), ("regular", "Regular"),
@@ -749,6 +805,16 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "Timeline",
             "Use compact timeline track rows",
         ),
+        designer_color_control("effect_designer_cue_colors.motion", "Seat motion"),
+        designer_color_control("effect_designer_cue_colors.relay", "Relay"),
+        designer_color_control("effect_designer_cue_colors.pwm", "PWM"),
+        designer_color_control("effect_designer_cue_colors.beep", "Buzzer"),
+        designer_color_control("effect_designer_cue_colors.rgb", "Status RGB"),
+        designer_color_control("effect_designer_cue_colors.addressable", "Strip pixel"),
+        designer_color_control("effect_designer_cue_colors.rf", "RF"),
+        designer_color_control("effect_designer_cue_colors.display", "Display"),
+        designer_color_control("effect_designer_cue_colors.menu", "Front-panel action"),
+        designer_color_control("effect_designer_cue_colors.opcode", "Raw opcode"),
         {
             let mut control = PreferenceControl::boolean(
                 "timeline_hide_cue_text_overflow",
@@ -813,8 +879,8 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
         ),
         PreferenceControl::boolean(
             "timeline_toolbar_visible",
-            "input",
-            "Timeline navigation",
+            "timeline_toolbar",
+            "Timeline toolbar",
             "Show timeline toolbar",
         ),
         PreferenceControl::number(
@@ -1291,6 +1357,8 @@ fn semantic_preference_icon(control: &PreferenceControl) -> &'static str {
         "ui_animation_mode" => "waveform",
         "ui_control_density" => "sliders-horizontal",
         "workspace_ui" => "tabs",
+        "craft_show_close_buttons" => "x",
+        "craft_show_collapse_buttons" => "caret-down",
         "preferences_grouped_navigation" => "list-checks",
         "ui_font_family" | "monospace_font_family" | "ui_font_name" | "monospace_font_name" => "text-t",
         "language" => "translate",
@@ -1310,6 +1378,7 @@ fn semantic_preference_icon(control: &PreferenceControl) -> &'static str {
         key if key.starts_with("web_") => "globe",
         key if key.starts_with("keyboard_") || key.starts_with("shortcut_") || key.starts_with("media_keys_") => "keyboard",
         _ => match control.kind {
+            PreferenceControlKind::ActionList => "list-checks",
             PreferenceControlKind::Accent | PreferenceControlKind::Color => "palette",
             PreferenceControlKind::Boolean => "check-square",
             PreferenceControlKind::File => "image",
@@ -1371,6 +1440,23 @@ pub fn set_value_at_path(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn craft_header_visibility_is_shared_persistent_and_live_previewed() {
+        let mut config=crate::config::AppConfig::default();
+        assert!(config.craft_show_close_buttons);
+        assert!(!config.craft_show_collapse_buttons);
+        let contract=super::preferences_contract(&config);
+        for (key,value,icon) in [("craft_show_close_buttons",true,"x"),("craft_show_collapse_buttons",false,"caret-down")] {
+            let row=contract.controls.iter().find(|row|row.key==key).unwrap();
+            assert_eq!(row.group,"Workspace panels");
+            assert_eq!(row.icon,icon);
+            assert_eq!(contract.values[key],serde_json::json!(value));
+        }
+        config.craft_show_close_buttons=false;config.craft_show_collapse_buttons=true;
+        let restored:crate::config::AppConfig=serde_json::from_value(serde_json::to_value(&config).unwrap()).unwrap();
+        let mut preview=crate::config::AppConfig::default();preview.copy_appearance_from(&restored);
+        assert!(!preview.craft_show_close_buttons);assert!(preview.craft_show_collapse_buttons);
+    }
     #[test]
     fn density_slider_choices_match_serialized_shared_sizes() {
         use crate::config::UiControlDensity;

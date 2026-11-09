@@ -3,6 +3,7 @@ use std::net::TcpStream;
 use std::time::Duration;
 
 use crate::platform::interop::{InteropCommand, LaunchRequest};
+use crate::update::console::{ColorChoice, OutputOptions};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CliOptions {
@@ -19,9 +20,9 @@ pub enum CliAction {
     RunGui(CliOptions),
     RunClient { endpoint: String, port: u16, options: CliOptions },
     SendRemote(String),
-    PushUpdate(String),
-    UpdateFrom { url: String, sha256: Option<String> },
-    UpdateStatus(String),
+    PushUpdate { target: String, output: OutputOptions },
+    UpdateFrom { url: String, sha256: Option<String>, output: OutputOptions },
+    UpdateStatus { target: String, output: OutputOptions },
     RegisterAssociations,
     UnregisterAssociations,
     PrintHelp(String),
@@ -97,6 +98,10 @@ UPDATE OPTIONS:
   --update-from <URL>       Ask the running instance to fetch, verify and apply an update
   --sha256 <HASH>           Required/expected hash for the preceding --update-from URL
   --update-status [HOST]    Query local or remote update progress
+  --json                    Update commands: emit one JSON result instead of human output
+  --color <auto|always|never> Update commands: semantic colors (default auto)
+  --no-color                Update commands: plain output; also respects NO_COLOR
+                            Put output options after the update command.
 
 APPLICATION OPTIONS:
   --connect <pealayer://HOST:PORT>  Control a remote Pealayer session
@@ -267,29 +272,20 @@ pub fn parse_cli_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliActi
                 let target = args_iter
                     .next()
                     .ok_or("Option '--deploy-to' requires a Pealayer host or URL")?;
-                return Ok(CliAction::PushUpdate(target));
+                let (output, _, _) = parse_update_options(args_iter, false, false)?;
+                return Ok(CliAction::PushUpdate { target, output });
             }
             "--update-from" => {
                 let url = args_iter
                     .next()
                     .ok_or("Option '--update-from' requires an HTTP(S) URL")?;
-                let mut sha256 = None;
-                if let Some(option) = args_iter.next() {
-                    if option != "--sha256" {
-                        return Err(format!("Unexpected update option: {option}"));
-                    }
-                    sha256 = Some(
-                        args_iter
-                            .next()
-                            .ok_or("Option '--sha256' requires a 64-character digest")?,
-                    );
-                }
-                return Ok(CliAction::UpdateFrom { url, sha256 });
+                let (output, sha256, _) = parse_update_options(args_iter, true, false)?;
+                return Ok(CliAction::UpdateFrom { url, sha256, output });
             }
             "--update-status" => {
-                return Ok(CliAction::UpdateStatus(args_iter.next().unwrap_or_else(
-                    || format!("127.0.0.1:{}", crate::config::control_port()),
-                )));
+                let (output, _, host) = parse_update_options(args_iter, false, true)?;
+                let target = host.unwrap_or_else(|| format!("127.0.0.1:{}", crate::config::control_port()));
+                return Ok(CliAction::UpdateStatus { target, output });
             }
             "--" => {
                 let positional = args_iter
@@ -325,6 +321,40 @@ pub fn parse_cli_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliActi
         web_only,
     };
     Ok(if let Some(endpoint)=peer_endpoint {CliAction::RunClient {endpoint,port:client_port,options}}else{CliAction::RunGui(options)})
+}
+
+fn parse_update_options(
+    mut args: impl Iterator<Item = String>,
+    allow_hash: bool,
+    allow_host: bool,
+) -> Result<(OutputOptions, Option<String>, Option<String>), String> {
+    let mut output = OutputOptions::default();
+    let mut hash = None;
+    let mut host = None;
+    while let Some(option) = args.next() {
+        match option.as_str() {
+            "--json" => output.json = true,
+            "--no-color" => output.color = ColorChoice::Never,
+            "--color" => {
+                output.color = match args.next().as_deref() {
+                    Some("auto") => ColorChoice::Auto,
+                    Some("always") => ColorChoice::Always,
+                    Some("never") => ColorChoice::Never,
+                    _ => return Err("--color requires auto, always or never".into()),
+                };
+            }
+            "--sha256" if allow_hash && hash.is_none() => {
+                let value = args.next().ok_or("--sha256 requires a 64-character digest")?;
+                if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                    return Err("--sha256 requires a 64-character hexadecimal digest".into());
+                }
+                hash = Some(value);
+            }
+            value if allow_host && !value.starts_with('-') && host.is_none() => host = Some(option),
+            _ => return Err(format!("Unexpected update option: {option}")),
+        }
+    }
+    Ok((output, hash, host))
 }
 
 pub fn send_remote_command(cmd_str: &str) -> Result<String, String> {
@@ -439,6 +469,28 @@ fn send_control_request(payload: &str, timeout: Duration) -> Result<String, Stri
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn update_output_options_are_explicit_and_do_not_swallow_invalid_arguments() {
+        let parse = |args: &[&str]| parse_cli_args(args.iter().map(|value| value.to_string()));
+        assert_eq!(parse(&["pealayer", "--deploy-to", "peer:8080", "--json", "--no-color"]).unwrap(),
+            CliAction::PushUpdate { target: "peer:8080".into(), output: OutputOptions { json: true, color: ColorChoice::Never } });
+        assert!(matches!(parse(&["pealayer", "--update-status", "--json", "peer:8080"]).unwrap(),
+            CliAction::UpdateStatus { target, output: OutputOptions { json: true, .. } } if target == "peer:8080"));
+        assert!(matches!(parse(&["pealayer", "--update-status", "--color", "always"]).unwrap(),
+            CliAction::UpdateStatus { output: OutputOptions { color: ColorChoice::Always, .. }, .. }));
+        let digest = "a".repeat(64);
+        assert!(matches!(parse(&["pealayer", "--update-from", "https://example.invalid/update", "--json", "--sha256", &digest]).unwrap(),
+            CliAction::UpdateFrom { sha256: Some(value), output: OutputOptions { json: true, .. }, .. } if value == digest));
+        for args in [
+            vec!["pealayer", "--deploy-to", "peer", "--garbage"],
+            vec!["pealayer", "--deploy-to", "peer", "--sha256", &digest],
+            vec!["pealayer", "--update-status", "peer", "extra"],
+            vec!["pealayer", "--update-status", "--color", "bogus"],
+            vec!["pealayer", "--update-from", "url", "--sha256", "no"],
+            vec!["pealayer", "--json"],
+        ] { assert!(parse(&args).is_err(), "{args:?}"); }
+    }
 
     #[test]
     fn remote_folder_cli_uses_the_shared_contract() {

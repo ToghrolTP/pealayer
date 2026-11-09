@@ -2,7 +2,7 @@ use std::ops::RangeInclusive;
 use eframe::egui::load::Bytes;
 use eframe::egui::{Id, ImageSource, Ui};
 use craft_ui::panes::{
-    Edge, PaneContent, PaneHost, PaneOutput, PaneRequest, PaneState, Rail, RailItem,
+    Edge, PaneContent, PaneHost, PaneOutput, PaneRequest, PaneState,
     RailRequest, SidePolicy,
 };
 use crate::app::PealayerApp;
@@ -107,7 +107,7 @@ impl<'a> PaneContent<SidebarPane> for SidebarPaneContent<'a> {
 
     fn body(&mut self, ui: &mut Ui, pane: &SidebarPane) {
         let tab = PealayerTab::from(*pane);
-        let mut viewer = crate::ui::layout::PealayerTabViewer { app: self.app };
+        let mut viewer = crate::ui::layout::PealayerTabViewer::new(self.app);
         craft_ui::docking::DockContent::body(&mut viewer, ui, &tab);
     }
 
@@ -203,23 +203,12 @@ pub fn show_sidebar_rail(
 
     let before = *state;
     let mut dock_changed = false;
-    let items: Vec<RailItem<SidebarPane>> = SidebarPane::ALL
-        .iter()
-        .map(|pane| {
-            RailItem::new(*pane, icon_source(*pane), pane.title(app.language))
-        })
-        .collect();
-
-    let rail_out = Rail::new(Id::unique("pealayer-sidebar-rail"))
-        .edge(Edge::End)
-        .rtl(app.rtl)
-        .width(crate::ui::craft_theme::RAIL_WIDTH)
-        .button_size(crate::ui::craft_theme::RAIL_BUTTON)
-        .show(ui, &items, state.open.as_ref(), |_| {});
-
-    if let Some(ref req) = rail_out.request {
-        state.apply_rail_request(req.clone());
-    }
+    app.sidebar_rail_state = *state;
+    super::sidebar_shortcuts::show(app, ui);
+    *state = app.sidebar_rail_state;
+    let request = if state.open != before.open {
+        state.open.map(RailRequest::Open).or_else(|| before.open.map(RailRequest::Close))
+    } else { None };
 
     // Mutual exclusivity: if a pane is open in the sidebar rail, close it from the dock grid
     if let Some(pane) = state.open {
@@ -242,7 +231,7 @@ pub fn show_sidebar_rail(
 
     app.sidebar_rail_state = *state;
 
-    let pane_out = if let Some(pane) = state.open {
+    let pane_out = if let Some(pane) = state.open.filter(|_| state.enabled) {
         let open_panes = [pane];
         let mut content = SidebarPaneContent { app };
         let out = PaneHost::new(Id::unique("pealayer-sidebar-pane-host"))
@@ -270,7 +259,7 @@ pub fn show_sidebar_rail(
         ui.ctx().request_repaint();
     }
 
-    (rail_out.request, pane_out)
+    (request, pane_out)
 }
 
 #[cfg(test)]

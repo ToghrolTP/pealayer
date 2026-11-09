@@ -40,6 +40,7 @@ httpdate = "1.0.3"
 tungstenite = "0.30.0"
 reqwest = { version = "0.12.28", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 sha2 = "0.11.0"
+base64 = "0.22.1"
 flate2 = "1.1.9"
 tar = "0.4.46"
 zip = { version = "9.0.2", default-features = false, features = ["deflate-flate2-zlib-rs"] }
@@ -66,9 +67,16 @@ egui-phosphor = { version = "0.14.0", default-features = false, features = ["reg
 
 [dev-dependencies]
 ttf-parser = "0.25.1"
+# Compile the MPRIS adapter's pure/interface tests on Windows too. Production
+# Windows still registers only SMTC, never a second D-Bus/media-key listener.
+zbus = "5.19.0"
+
+[target.'cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))'.dependencies]
+zbus = "5.19.0"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.56.0"
+windows-core = "0.62"
 windows = { version = "0.62", features = [
     "Foundation",
     "Media",
@@ -80,8 +88,12 @@ windows = { version = "0.62", features = [
     "Win32_UI_Shell_Common",
     "Win32_UI_Shell_PropertiesSystem",
     "Win32_System_Com",
+    "Win32_System_Console",
     "Win32_System_Diagnostics_Debug",
     "Win32_System_DataExchange",
+    "Win32_System_Ole",
+    "Win32_System_Memory",
+    "Win32_System_SystemServices",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_Variant",
     "Win32_System_LibraryLoader",

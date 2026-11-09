@@ -117,11 +117,14 @@ pub(crate) fn control(
         (btn_style.normal.fill, btn_style.normal.stroke)
     };
 
-    let color = if enabled {
-        visuals.text_color()
-    } else {
-        ui.visuals().weak_text_color()
-    };
+    // Availability gates invocation immediately; only its presentation fades.
+    // The shared timing policy also honors disabled/reduced OS animation.
+    let availability = super::motion::hover_alpha(ui, id.with("availability"), enabled);
+    // Disabled actions retain drag customization, so their Response still
+    // receives pointer hover. That must not brighten an unavailable icon.
+    let available_ink = if enabled { visuals.text_color() }
+        else { ui.visuals().widgets.inactive.text_color() };
+    let color = ui.visuals().weak_text_color().lerp_to_gamma(available_ink, availability);
     let button_rect = rect.shrink(if frame { 0.5 } else { 2.0 });
     ui.painter().rect(
         button_rect,

@@ -615,6 +615,12 @@ fn session_visual_changed(before: &Session, after: &Session) -> bool {
         || before.media_view != after.media_view || before.timeline != after.timeline
 }
 impl Client {
+    pub(crate) fn pending_timeline_change(&self)->bool {
+        self.latest.lock().is_ok_and(|latest|latest.session.status.get("pending_timeline_change").and_then(Value::as_bool)==Some(true))
+    }
+    pub(crate) fn asset_review(&self)->Option<Value>{
+        self.latest.lock().ok()?.session.status.get("asset_imports")?.get("reviews")?.as_array()?.first().cloned()
+    }
     pub fn url(&self, path: &str) -> Result<url::Url, String> {
         if !path.starts_with('/') || path.starts_with("//") || path.contains('\\') {
             return Err("Invalid peer API path".into());
