@@ -67,7 +67,8 @@ Unsupported shuffle/repeat modes are not invented or advertised.
 - A dedicated Linux workflow runs the adapter against an explicitly private
   dbus-run-session, checking actual discovery/properties, event delivery,
   transport requests and metadata/Stop clearing. The strengthened real-bus run
-  [passed at the local-Quit safety checkpoint](https://github.com/ToghrolTP/pealayer/actions/runs/42571922936).
+  [passed at the final packaged source checkpoint](https://github.com/ToghrolTP/pealayer/actions/runs/42572934634):
+  104 platform checks and the actual private-bus case.
 - Final focused native checks cover the introspected Seeked signal, nonzero
   restored starts, exact paused microsecond seeks and integer paused positions
   beyond f64's exact range. All five MPRIS checks passed locally; the strengthened
@@ -98,8 +99,24 @@ not implement per-application volume, and its relative-seek extrapolation assume
 Pealayer still publishes truthful metadata/rate/artwork rather than inventing
 track changes to work around a consumer limitation.
 
-The final package/deployment receipt follows verification. Native replacement is
-blocked while the running Preferences helper reports unknown authoring state;
-its edits must be saved/discarded and the helper closed first. Cafe deployment
-remains user-deferred while its route is offline. Neither gate is waived by a
-successful package or Windows readback of the already-running build.
+## Package and handoff receipt
+
+- Packaged source: `fa4213d013fb7ecf6e83116950cc99e3f34b09b4`.
+- Executable SHA-256: `586336102e5298c6847af5d135694ef5537ed7f898be51157d29636610362c99`.
+- Reused canonical staging: `%LOCALAPPDATA%\Programs\Pealayer\staging\preferences-organization`.
+- Embedded `--build-info` independently reports the same clean source identity.
+  The current `host-manifest.json`, not old loose staging diagnostics, is the
+  package receipt. The selected host libmpv is unchanged, SHA-256
+  `e56ce67cd00f06a59dc7ed5b97a49a9182a381554c755dc4570a52af1ef30e65`.
+- Native release build, libmpv smoke, quick-action/native resources, Web bundle
+  integrity and standalone downloader resource/headless checks passed. Packaging
+  deliberately skipped repeating the already-run native/Web regression suites.
+
+**Not installed:** fresh local authoring inspection still reports the running
+Preferences helper as unknown, so its edits are preserved. Save/discard those
+edits and close the helper, then recheck authoring before invoking the graceful
+updater. Cafe deployment remains user-deferred while its route is offline.
+Neither gate is waived by a successful package or Windows readback of the
+already-running build. The general cross-platform release matrix remains a
+separate pending gate; do not merge or publish a stable release on this receipt
+alone. The paired-phone view and Apple work in #269 remain explicit.
