@@ -287,6 +287,93 @@ fn icon_grid_tile(
     response.on_hover_text(hover_label)
 }
 
+/// One measured row: the edit owns the leading icon, and the segmented view
+/// switch owns the trailing edge. Neither hover nor selection changes geometry.
+fn icon_picker_header(
+    ui: &mut eframe::egui::Ui,
+    search: &mut String,
+    search_id: eframe::egui::Id,
+    grid: &mut bool,
+    config: IconPickerConfig<'_>,
+) -> eframe::egui::Response {
+    use eframe::egui;
+    let rtl = config.language.is_rtl();
+    let height = crate::ui::control_density::height(ui);
+    let button_width = height.max(26.0);
+    let group_width = button_width * 2.0 + 4.0;
+    let (row, _) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), egui::Sense::hover());
+    let group = egui::Rect::from_min_size(
+        egui::pos2(if rtl { row.left() } else { row.right() - group_width }, row.top()),
+        egui::vec2(group_width, height));
+    let search_rect = if rtl {
+        egui::Rect::from_min_max(egui::pos2(group.right() + 8.0, row.top()), row.max)
+    } else {
+        egui::Rect::from_min_max(row.min, egui::pos2(group.left() - 8.0, row.bottom()))
+    };
+    let inset = 26;
+    let margin = egui::Margin { left: if rtl { 6 } else { inset },
+        right: if rtl { inset } else { 6 }, top: 0, bottom: 0 };
+    let response = ui.place(search_rect,
+        crate::ui::dialog::singleline_text_edit(ui, search)
+            .id_salt(search_id.with("input"))
+            .hint_text(config.search_hint)
+            .horizontal_align(if rtl { egui::Align::Max } else { egui::Align::Min })
+            .margin(margin).desired_width(search_rect.width()));
+    let icon_slot = egui::Rect::from_center_size(
+        egui::pos2(if rtl { response.rect.right() - 14.0 } else { response.rect.left() + 14.0 }, row.center().y),
+        egui::vec2(20.0, height));
+    // The prefix remains part of the input's frame/hit target, not a separate
+    // label that consumes layout width or breaks focus ownership.
+    let painter = ui.painter().with_clip_rect(ui.clip_rect().intersect(response.rect));
+    let mut font = egui::TextStyle::Button.resolve(ui.style());
+    font.size = font.size.min(18.0);
+    let paint_glyph = |rect: egui::Rect, glyph: &str, color| {
+        let galley = painter.layout_no_wrap(glyph.into(), font.clone(), color);
+        let ink = if galley.mesh_bounds.is_finite() { galley.mesh_bounds } else { galley.rect };
+        painter.galley(rect.center() - ink.center().to_vec2(), galley, color);
+    };
+    paint_glyph(icon_slot, MAGNIFYING_GLASS, ui.visuals().weak_text_color());
+
+    let painter = ui.painter().with_clip_rect(ui.clip_rect().intersect(group));
+    painter.rect(group, 6.0, ui.visuals().widgets.inactive.weak_bg_fill,
+        ui.visuals().widgets.noninteractive.bg_stroke, egui::StrokeKind::Inside);
+    let mut buttons = [egui::Rect::NOTHING; 2];
+    let modes = [(false, LIST, "List view"), (true, GRID_FOUR, "Grid view")];
+    let responses = modes.iter().enumerate().map(|(index, (is_grid, _, _))| {
+        let visual_index = if rtl { 1 - index } else { index };
+        let rect = egui::Rect::from_min_size(
+            group.min + egui::vec2(2.0 + button_width * visual_index as f32, 2.0),
+            egui::vec2(button_width, height - 4.0));
+        buttons[index] = rect;
+        let button = ui.interact(rect, search_id.with(("view", index)), egui::Sense::click())
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        if button.clicked() { *grid = *is_grid; }
+        button
+    }).collect::<Vec<_>>();
+    for ((is_grid, glyph, label), button) in modes.into_iter().zip(responses) {
+        let rect = button.rect;
+        let selected = *grid == is_grid;
+        let visuals = ui.style().interact_selectable(&button, selected);
+        let fill = if selected { ui.visuals().selection.bg_fill }
+            else if button.hovered() || button.is_pointer_button_down_on() { visuals.weak_bg_fill }
+            else { egui::Color32::TRANSPARENT };
+        let stroke = if button.has_focus() { ui.visuals().selection.stroke }
+            else { egui::Stroke::NONE };
+        painter.rect(rect, 4.0, fill, stroke, egui::StrokeKind::Inside);
+        let color = if selected { ui.visuals().selection.stroke.color }
+            else if button.hovered() { visuals.text_color() } else { ui.visuals().weak_text_color() };
+        let galley = painter.layout_no_wrap(glyph.into(), font.clone(), color);
+        let ink = if galley.mesh_bounds.is_finite() { galley.mesh_bounds } else { galley.rect };
+        painter.galley(rect.center() - ink.center().to_vec2(), galley, color);
+        button.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, ui.is_enabled(),
+            selected, crate::ui::i18n::tr(config.language, label)));
+        button.on_hover_text(crate::ui::i18n::tr(config.language, label));
+    }
+    #[cfg(test)]
+    ui.data_mut(|data| data.insert_temp(search_id.with("header-geometry"), (row, response.rect, group, buttons, icon_slot)));
+    response
+}
+
 /// Draw the popup body used by both combobox selectors and compact icon
 /// buttons. The first row is always search; optional defaults and preset
 /// results form separate, consistently divided sections below it.
@@ -304,45 +391,7 @@ pub fn searchable_icon_picker_contents(
     let view_id = egui::Id::new(ICON_PICKER_GRID_ID);
     let mut grid = ui.data_mut(|data| data.get_persisted::<bool>(view_id).unwrap_or(false));
     let previous_grid = grid;
-    let list_label = crate::ui::i18n::tr(config.language, "List view");
-    let grid_label = crate::ui::i18n::tr(config.language, "Grid view");
-    let search_response = ui
-        .horizontal(|ui| {
-            ui.label(egui::RichText::new(MAGNIFYING_GLASS).color(ui.visuals().weak_text_color()));
-            let switch_width = 26.0;
-            let search_width =
-                (ui.available_width() - switch_width * 2.0 - 20.0 - ui.spacing().item_spacing.x * 3.0)
-                    .max(70.0);
-            let search_response = ui.add_sized(
-                [search_width, ui.spacing().interact_size.y],
-                crate::ui::dialog::singleline_text_edit(ui, search)
-                    .id_salt(search_id.with("input"))
-                    .hint_text(config.search_hint)
-                    .desired_width(search_width),
-            );
-            if ui
-                .add_sized(
-                    [switch_width, ui.spacing().interact_size.y],
-                    egui::Button::new(LIST).selected(!grid),
-                )
-                .on_hover_text(list_label)
-                .clicked()
-            {
-                grid = false;
-            }
-            if ui
-                .add_sized(
-                    [switch_width, ui.spacing().interact_size.y],
-                    egui::Button::new(GRID_FOUR).selected(grid),
-                )
-                .on_hover_text(grid_label)
-                .clicked()
-            {
-                grid = true;
-            }
-            search_response
-        })
-        .inner;
+    let search_response = icon_picker_header(ui, search, search_id, &mut grid, config);
     ui.data_mut(|data| data.insert_persisted(view_id, grid));
     crate::ui::dropdown::register_search(ui, &search_response);
     if request_focus || grid != previous_grid {
@@ -1107,6 +1156,113 @@ mod tests {
             click_picker(&context, &mut value, compact, default.center());
             assert!(value.is_empty());
             assert!(!egui::Popup::is_id_open(&context, popup_id));
+        }
+    }
+
+    #[test]
+    fn picker_header_has_contained_prefix_centered_controls_and_trailing_segment() {
+        use eframe::egui;
+        use crate::config::{AppLanguage, ColorPalette, UiControlDensity};
+        for density in [UiControlDensity::ExtraCompact, UiControlDensity::Compact,
+            UiControlDensity::Regular, UiControlDensity::Comfortable, UiControlDensity::Spacious] {
+            for font_size in [14.0, 22.0] { for scale in [1.0, 1.25, 1.5] {
+                for language in [AppLanguage::English, AppLanguage::Persian] {
+                    for palette in [ColorPalette::Native, ColorPalette::Studio] {
+                        for dark in [false, true] { for width in [180.0, 280.0, 480.0] {
+                            let ctx = egui::Context::default();
+                            ctx.set_pixels_per_point(scale);
+                            let mut style = egui::Style::default();
+                            style.visuals = if dark { egui::Visuals::dark() } else { egui::Visuals::light() };
+                            crate::ui::palette::apply(&mut style.visuals, palette);
+                            style.text_styles.insert(egui::TextStyle::Button, egui::FontId::proportional(font_size));
+                            crate::ui::control_density::configure(&mut style, density);
+                            ctx.set_theme(if dark { egui::Theme::Dark } else { egui::Theme::Light });
+                            ctx.set_style_of(if dark { egui::Theme::Dark } else { egui::Theme::Light }, style);
+                            let id = egui::Id::new("header-test");
+                            let mut search = String::new();
+                            let mut grid = false;
+                            for _ in 0..3 {
+                                ctx.run_ui(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(
+                                    egui::Pos2::ZERO, egui::vec2(900.0, 500.0))), ..Default::default() }, |ui| {
+                                    ui.set_width(width);
+                                    let field = icon_picker_header(ui, &mut search, id, &mut grid, IconPickerConfig {
+                                        language, presets: CONTROL_ICON_PRESETS, fallback_glyph: PLUG,
+                                        fallback_name: "Default", width, show_selected_name: true,
+                                        search_hint: "Search icons...", presets_label: "Presets",
+                                        no_matches_label: "No matches", clear_label: None,
+                                    });
+                                    let (next, _) = ui.allocate_exact_size(egui::vec2(10.0, 10.0), egui::Sense::hover());
+                                    assert!((next.top() - field.rect.bottom() - ui.spacing().item_spacing.y).abs() < 0.1,
+                                        "the header must allocate its height only once");
+                                }).drop_without_applying_deltas();
+                            }
+                            let (row, field, group, buttons, prefix) = ctx.data(|data| data.get_temp::<(
+                                egui::Rect, egui::Rect, egui::Rect, [egui::Rect; 2], egui::Rect)>(id.with("header-geometry"))).unwrap();
+                            assert!(field.contains_rect(prefix), "prefix must be inside field: {field:?}, {prefix:?}");
+                            assert!((field.height() - row.height()).abs() < 0.1, "field/row heights: {field:?} {row:?}");
+                            assert!((field.center().y - group.center().y).abs() < 0.1);
+                            assert!((buttons[0].center().y - group.center().y).abs() < 0.1);
+                            assert!((buttons[1].center().y - group.center().y).abs() < 0.1);
+                            assert!(!field.intersects(group));
+                            if language.is_rtl() {
+                                assert!((group.left() - row.left()).abs() < 0.1);
+                                assert!((field.left() - group.right() - 8.0).abs() < 0.1);
+                            } else {
+                                assert!((group.right() - row.right()).abs() < 0.1);
+                                assert!((group.left() - field.right() - 8.0).abs() < 0.1);
+                            }
+                        }}
+                    }
+                }
+            }}
+        }
+    }
+
+    #[test]
+    fn picker_header_selected_hover_and_prefix_click_keep_geometry_and_search() {
+        use eframe::egui;
+        fn fill(output: &egui::FullOutput, target: egui::Rect) -> Option<egui::Color32> {
+            fn find(shape: &egui::Shape, target: egui::Rect) -> Option<egui::Color32> {
+                match shape {
+                    egui::Shape::Rect(rect) if rect.rect == target => Some(rect.fill),
+                    egui::Shape::Vec(shapes) => shapes.iter().find_map(|s| find(s, target)),
+                    _ => None,
+                }
+            }
+            output.shapes.iter().find_map(|s| find(&s.shape, target))
+        }
+        for compact in [false, true] {
+            let ctx = egui::Context::default();
+            ctx.set_theme(egui::Theme::Dark);
+            // Compare final widget colors, not the enclosing popup's fade-in.
+            ctx.global_style_mut(|style| style.animation_time = 0.0);
+            let mut value = "sparkle".to_string();
+            let (_, trigger, id) = picker_frame(&ctx, &mut value, compact, Vec::new());
+            click_picker(&ctx, &mut value, compact, trigger.center());
+            let (initial, _, _) = picker_frame(&ctx, &mut value, compact, Vec::new());
+            let geometry = || ctx.data(|data| data.get_temp::<(
+                egui::Rect, egui::Rect, egui::Rect, [egui::Rect; 2], egui::Rect)>(id.with("search").with("header-geometry"))).unwrap();
+            let before = geometry();
+            let accent = ctx.style_of(egui::Theme::Dark).visuals.selection.bg_fill;
+            assert_eq!(fill(&initial, before.3[0]), Some(accent));
+            assert_eq!(fill(&initial, before.3[1]), Some(egui::Color32::TRANSPARENT));
+            let (hover, _, _) = picker_frame(&ctx, &mut value, compact,
+                vec![egui::Event::PointerMoved(before.3[1].center())]);
+            assert_eq!(geometry(), before, "hover must not move header controls");
+            assert_ne!(fill(&hover, before.3[1]), Some(accent));
+            let (selected, _, _) = click_picker(&ctx, &mut value, compact, before.3[1].center());
+            assert_eq!(fill(&selected, before.3[1]), Some(accent));
+            assert_ne!(fill(&selected, before.3[0]), Some(accent), "only one segment selected on release");
+            assert_eq!(geometry(), before);
+            click_picker(&ctx, &mut value, compact, before.4.center());
+            let (typed, _, _) = picker_frame(&ctx, &mut value, compact, vec![egui::Event::Text("lamp".into())]);
+            assert!(painted_text_rect(&typed, &format!("{LAMP}\nLamp")).is_some(), "prefix must focus search");
+            let search = ctx.data(|data| data.get_temp::<String>(id.with("search"))).unwrap();
+            assert_eq!(search, "lamp");
+            click_picker(&ctx, &mut value, compact, before.3[0].center());
+            let (listed, _, _) = picker_frame(&ctx, &mut value, compact, Vec::new());
+            assert!(painted_text_rect(&listed, &format!("{LAMP}  Lamp")).is_some());
+            assert_eq!(value, "sparkle", "view switching never changes the chosen icon");
         }
     }
 
