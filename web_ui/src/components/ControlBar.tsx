@@ -36,6 +36,7 @@ export function ControlBar({state,sendCmd,surface,locale,quickSeekSeconds,onLayo
   const [target,setTarget] = useState<{action:ControlAction;after:boolean}>();
   const drag = useRef<ControlAction | undefined>(undefined);
   const suppressClick = useRef(false);
+  const volumePointer = useRef(false);
   const layout = draft ?? authoritative ?? defaultLayout(surface);
   const order = orderedActions(layout.order).filter((a) => browserActions.includes(a));
   useEffect(() => {
@@ -80,14 +81,15 @@ export function ControlBar({state,sendCmd,surface,locale,quickSeekSeconds,onLayo
     previous_chapter:<StepBackwardOutlined/>,next_chapter:<StepForwardOutlined/>,
     fullscreen:<ExpandOutlined/>,mute:state.muted?<MutedOutlined/>:<SoundOutlined/>,preferences:<SettingOutlined/>,
   } as Partial<Record<ControlAction,React.ReactNode>>)[a];
-  const label = (a:ControlAction) => tr(locale,a==='play_pause'?(state.playing?'Pause':'Play'):a==='mute'&&state.muted?'Unmute':actionLabels[a]);
+  const label = (a:ControlAction) => tr(locale,a==='play_pause'?(state.playing?'Pause':'Play'):a==='mute'&&surface==='monitor'?'Volume':a==='mute'&&state.muted?'Unmute':actionLabels[a]);
+  const commandLabel = (a:ControlAction) => a==='mute'?tr(locale,state.muted?'Unmute':'Mute'):label(a);
   const menu = (action?:ControlAction):MenuProps => {
     const peers=action?order.filter((a)=>!layout.hidden[actionIndex(a)]&&layout.end[actionIndex(a)]===layout.end[actionIndex(action)]):[];
     const index=action?peers.indexOf(action):-1;
     return {items:[
       ...(action?[
         {key:'caption',label:label(action),icon:icon(action),disabled:true},
-        ...(!action.endsWith('_track')?[{key:'invoke',label:label(action),icon:icon(action),disabled:!enabled(action)}]:[]),
+        ...(!action.endsWith('_track')?[{key:'invoke',label:commandLabel(action),icon:icon(action),disabled:!enabled(action)}]:[]),
         {type:'divider' as const},
         {key:'start',label:tr(locale,'Place at start'),icon:!layout.end[actionIndex(action)]?<CheckOutlined/>:undefined,disabled:saving},
         {key:'end',label:tr(locale,'Place at end'),icon:layout.end[actionIndex(action)]?<CheckOutlined/>:undefined,disabled:saving},
@@ -116,11 +118,12 @@ export function ControlBar({state,sendCmd,surface,locale,quickSeekSeconds,onLayo
   };
   const ownsDrag = (event:React.DragEvent) => Boolean(drag.current)&&event.dataTransfer.types.includes(MIME);
   const item = (a:ControlAction) => <Dropdown key={a} trigger={['contextMenu']} menu={menu(a)}>
-    <span className={`control-bar__action${dragged===a?' is-dragging':''}${target?.action===a?` is-drop-${target.after?'after':'before'}`:''}`}
+    <span className={`control-bar__action${a==='mute'&&surface==='monitor'?' control-bar__action--volume':''}${dragged===a?' is-dragging':''}${target?.action===a?` is-drop-${target.after?'after':'before'}`:''}`}
       draggable={!saving&&Boolean(authoritative)}
-      onPointerDown={(event)=>{if(event.button===0)suppressClick.current=false;}}
+      onPointerDown={(event)=>{if(event.button===0)suppressClick.current=false;volumePointer.current=Boolean(a==='mute'&&surface==='monitor'&&(event.target as Element).closest('.media-volume'));}}
       onClickCapture={(event)=>{if(suppressClick.current||drag.current){event.preventDefault();event.stopPropagation();}}}
       onDragStart={(event)=>{
+        if(volumePointer.current){event.preventDefault();return;}
         const rect=event.currentTarget.getBoundingClientRect();
         event.dataTransfer.setData(MIME,JSON.stringify({surface,action:a}));event.dataTransfer.effectAllowed='move';
         event.dataTransfer.setDragImage(event.currentTarget,event.clientX-rect.left,event.clientY-rect.top);
@@ -142,25 +145,28 @@ export function ControlBar({state,sendCmd,surface,locale,quickSeekSeconds,onLayo
       }}>
       {a==='play_pause'?<PlaybackButton className={`control-bar__play${state.playing?' transport-action--active':''}`} playing={state.playing} loaded={loaded} locale={locale} onClick={()=>invoke(a)}/>
         :a.endsWith('_track')?<MediaTrackSelectors state={state} sendCmd={sendCmd} locale={locale} compact only={a.replace('_track','') as 'video'|'audio'|'subtitle'}/>
-        :<Tooltip title={a==='back'||a==='forward'?`${label(a)} · ${state.playing===false?tr(locale,'frames'):`${quickSeekSeconds}s`}`:label(a)}>
+        :<Tooltip title={a==='back'||a==='forward'?`${label(a)} · ${state.playing===false?tr(locale,'frames'):`${quickSeekSeconds}s`}`:commandLabel(a)}>
           <Button className={`transport-action${a==='stop'?' transport-action--stop':a==='mute'&&state.muted?' transport-action--pause transport-action--active':''}`}
-            aria-label={label(a)} disabled={!enabled(a)} icon={icon(a)} onClick={()=>invoke(a)}/>
+            aria-label={commandLabel(a)} disabled={!enabled(a)} icon={icon(a)} onClick={()=>invoke(a)}/>
         </Tooltip>}
+      {a==='mute'&&surface==='monitor'&&<VolumeControl className="control-bar__inline-volume" state={state} sendCmd={sendCmd} locale={locale} showMute={false}/>}
     </span>
   </Dropdown>;
-  const group=(end:boolean)=><div className={`control-bar__group control-bar__group--${end?'end':'start'}`}
-    onDragOver={(event)=>{if(ownsDrag(event)){event.preventDefault();setTarget(undefined);setRemoving(false);}}}
-    onDrop={(event)=>{if(ownsDrag(event)&&drag.current){event.preventDefault();void change(patchAction(layout,drag.current,'end',end));finishDrag();}}}>
-    <div className="control-bar__strip">{order.filter((a)=>!layout.hidden[actionIndex(a)]&&layout.end[actionIndex(a)]===end).map(item)}</div>
-    {end&&<Dropdown trigger={['click','contextMenu']} menu={menu()}><span className={`control-bar__overflow${removing?' is-removing':''}`}
+  const overflow=<Dropdown trigger={['click','contextMenu']} menu={menu()}><span className={`control-bar__overflow${removing?' is-removing':''}`}
       onDragOver={(event)=>{if(ownsDrag(event)){event.preventDefault();event.stopPropagation();setRemoving(true);setTarget(undefined);}}}
       onDragLeave={()=>setRemoving(false)}
       onDrop={(event)=>{if(ownsDrag(event)&&drag.current){event.preventDefault();event.stopPropagation();void change(patchAction(layout,drag.current,'hidden',true));finishDrag();}}}>
       <Button aria-label={tr(locale,dragged?'Hide':'Control bar')} icon={dragged?<DeleteOutlined/>:<MoreOutlined/>}/>
-    </span></Dropdown>}
+    </span></Dropdown>;
+  const group=(end:boolean)=><div className={`control-bar__group control-bar__group--${end?'end':'start'}`}
+    onDragOver={(event)=>{if(ownsDrag(event)){event.preventDefault();setTarget(undefined);setRemoving(false);}}}
+    onDrop={(event)=>{if(ownsDrag(event)&&drag.current){event.preventDefault();void change(patchAction(layout,drag.current,'end',end));finishDrag();}}}>
+    {end&&surface==='monitor'&&overflow}
+    <div className="control-bar__strip">{order.filter((a)=>!layout.hidden[actionIndex(a)]&&layout.end[actionIndex(a)]===end).map(item)}</div>
+    {end&&surface!=='monitor'&&overflow}
   </div>;
   return <div className="control-bar" aria-label={tr(locale,'Control bar')}>
     {group(false)}{middle}{group(true)}
-    <VolumeControl className="control-bar__volume" state={state} sendCmd={sendCmd} locale={locale} showMute={false}/>
+    {surface==='simple'&&<VolumeControl className="control-bar__volume" state={state} sendCmd={sendCmd} locale={locale} showMute={false}/>}
   </div>;
 }

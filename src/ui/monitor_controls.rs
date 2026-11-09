@@ -3,6 +3,7 @@
 use crate::app::PealayerApp;
 use eframe::egui;
 
+#[cfg(test)]
 const VOLUME_WIDTH: f32 = 160.0;
 const MIN_SEEK_WIDTH: f32 = 96.0;
 
@@ -18,7 +19,6 @@ enum Group {
     Transport,
     Timeline,
     Tracks,
-    Volume,
 }
 
 #[derive(Clone, Copy)]
@@ -26,7 +26,6 @@ pub(super) struct Metrics {
     transport: f32,
     timeline_min: f32,
     tracks: f32,
-    volume_min: f32,
     gap: f32,
     row_height: f32,
     gap_y: f32,
@@ -101,7 +100,6 @@ impl Metrics {
                 + total_width
                 + 2.0 * gap,
             tracks,
-            volume_min: 44.0 + 56.0 + gap,
             gap,
             row_height: button_height(ui).max(super::control_density::height(ui)),
             gap_y: ui.spacing().item_spacing.y,
@@ -111,10 +109,10 @@ impl Metrics {
 
     fn rows(self, width: f32) -> Rows {
         let complete =
-            self.transport + self.timeline_min + self.tracks + VOLUME_WIDTH + 3.0 * self.gap;
+            self.transport + self.timeline_min + self.tracks + 2.0 * self.gap;
         if width >= complete {
             Rows::One
-        } else if width >= self.transport + self.tracks + self.volume_min + self.gap + self.cluster_gap() {
+        } else if width >= self.transport + self.tracks + self.cluster_gap() {
             Rows::Two
         } else {
             Rows::Three
@@ -149,28 +147,22 @@ fn draw_layout(ui: &mut egui::Ui, metrics: Metrics, mut draw: impl FnMut(Group, 
     };
     match metrics.rows(width) {
         Rows::One => {
-            let timeline = width - metrics.transport - metrics.tracks - VOLUME_WIDTH - 3.0 * metrics.gap;
+            let timeline = width - metrics.transport - metrics.tracks - 2.0 * metrics.gap;
             slot(Group::Transport, 0, 0.0, metrics.transport);
             slot(Group::Timeline, 0, metrics.transport + metrics.gap, timeline);
-            slot(Group::Tracks, 0, width - VOLUME_WIDTH - metrics.gap - metrics.tracks, metrics.tracks);
-            slot(Group::Volume, 0, width - VOLUME_WIDTH, VOLUME_WIDTH);
+            slot(Group::Tracks, 0, width - metrics.tracks, metrics.tracks);
         }
         Rows::Two => {
-            let volume = VOLUME_WIDTH.min(width - metrics.transport - metrics.tracks - metrics.gap - metrics.cluster_gap());
             slot(Group::Timeline, 0, 0.0, width);
             slot(Group::Transport, 1, 0.0, metrics.transport);
-            slot(Group::Tracks, 1, width - volume - metrics.gap - metrics.tracks, metrics.tracks);
-            slot(Group::Volume, 1, width - volume, volume);
+            slot(Group::Tracks, 1, width - metrics.tracks, metrics.tracks);
         }
         Rows::Three => {
-            let gap=metrics.gap.max(16.0);
-            let transport = metrics.transport.min((width - metrics.row_height - gap).max(1.0));
-            let tracks = metrics.tracks.min((width - transport - gap).max(1.0));
-            let volume = (width * 0.7).clamp(metrics.volume_min, 240.0).min(width);
+            let transport = metrics.transport.min(width);
+            let tracks = metrics.tracks.min(width);
             slot(Group::Timeline, 0, 0.0, width);
             slot(Group::Transport, 1, 0.0, transport);
-            slot(Group::Tracks, 1, width - tracks, tracks);
-            slot(Group::Volume, 2, width - volume, volume);
+            slot(Group::Tracks, 2, width - tracks, tracks);
         }
     }
 }
@@ -181,11 +173,6 @@ pub(super) fn draw(app: &mut PealayerApp, ui: &mut egui::Ui, metrics: Metrics) {
         Group::Transport => super::control_bar::draw_group(app, ui, crate::config::ControlBarSurface::Monitor, false,control_owner),
         Group::Timeline => draw_timeline(app, ui),
         Group::Tracks => super::control_bar::draw_group(app, ui, crate::config::ControlBarSurface::Monitor, true,control_owner),
-        Group::Volume => {
-            ui.add_enabled_ui(app.current_video_path.is_some(), |ui| {
-                super::controls::draw_volume_slider(app, ui);
-            });
-        }
     });
 }
 
@@ -306,7 +293,6 @@ mod tests {
             transport: 172.0,
             timeline_min: 300.0,
             tracks: 130.0,
-            volume_min: 114.0,
             gap: 8.0,
             gap_y: 4.0,
             row_height: 24.0,
@@ -317,14 +303,14 @@ mod tests {
     #[test]
     fn smallest_number_of_rows_is_selected_at_exact_fit() {
         let m = metrics();
-        assert_eq!(m.rows(786.0), Rows::One);
-        assert_eq!(m.rows(785.9), Rows::Two);
-        assert_eq!(m.rows(448.0), Rows::Two);
-        assert_eq!(m.rows(447.9), Rows::Three);
+        assert_eq!(m.rows(618.0), Rows::One);
+        assert_eq!(m.rows(617.9), Rows::Two);
+        assert_eq!(m.rows(326.0), Rows::Two);
+        assert_eq!(m.rows(325.9), Rows::Three);
         assert_eq!(m.rows(240.0), Rows::Three);
-        assert_eq!(m.height(786.0), 24.0);
-        assert_eq!(m.height(448.0), 52.0);
-        assert_eq!(m.height(400.0), 80.0);
+        assert_eq!(m.height(618.0), 24.0);
+        assert_eq!(m.height(326.0), 52.0);
+        assert_eq!(m.height(300.0), 80.0);
         assert_eq!(m.height(240.0), 80.0);
     }
 
@@ -356,14 +342,9 @@ mod tests {
                 },
             );
             output.textures_delta.clear();
-            assert_eq!(rects.len(),4);
+            assert_eq!(rects.len(),3);
             let find=|group|rects.iter().find(|(candidate,_)|*candidate==group).unwrap().1;
             let tracks = find(Group::Tracks);
-            let volume = find(Group::Volume);
-            if metrics().rows(area.width()) != Rows::Three {
-                assert_eq!(tracks.top(), volume.top(), "width {width}");
-                assert!(tracks.right() <= volume.left(), "width {width}");
-            }
             if metrics().rows(area.width()) == Rows::Two {
                 assert_eq!(find(Group::Timeline).width(),area.width());
                 assert!(find(Group::Timeline).bottom() < find(Group::Transport).top());
@@ -371,8 +352,8 @@ mod tests {
                 assert!(find(Group::Transport).right() <= tracks.left());
             }
             assert!(
-                (volume.right() - area.right()).abs() < 1.0,
-                "volume must trail at {width}"
+                (tracks.right() - area.right()).abs() < 1.0,
+                "configured trailing controls must trail at {width}"
             );
             for (_, rect) in &rects {
                 assert!(

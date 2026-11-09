@@ -942,13 +942,19 @@ impl ControlBarLayout {
         let mut result = Self {order:ControlBarAction::ALL,hidden:[true;ControlBarAction::COUNT],end:[false;ControlBarAction::COUNT]};
         let visible: &[ControlBarAction] = match surface {
             ControlBarSurface::Simple => &[Back,PlayPause,Forward,Fullscreen,Pin,AudioSettings,SubtitleSettings,Mute],
-            ControlBarSurface::Monitor => &[PlayPause,Stop,Back,Forward,Fullscreen,VideoTrack,AudioTrack,SubtitleTrack,Mute],
+            ControlBarSurface::Monitor => &[PlayPause,Stop,Back,Forward,Mute,Fullscreen],
         };
         for action in visible { result.hidden[*action as usize]=false; }
         for action in [Fullscreen,Pin,VideoTrack,AudioTrack,SubtitleTrack,AudioSettings,SubtitleSettings,Mute,Preferences] { result.end[action as usize]=true; }
         if surface==ControlBarSurface::Simple {
             let order:Vec<_>=[Back,PlayPause,Forward].into_iter().chain(ControlBarAction::ALL).fold(Vec::new(),|mut list,a|{if !list.contains(&a){list.push(a)} list});
             result.order=order.try_into().unwrap();
+        } else {
+            // Volume is grouped with Mute; Fullscreen follows it at the end.
+            let mut order = ControlBarAction::ALL.to_vec();
+            order.retain(|action| *action != Fullscreen);
+            order.push(Fullscreen);
+            result.order = order.try_into().unwrap();
         }
         result
     }
@@ -999,6 +1005,20 @@ mod control_bar_tests {
         assert_eq!(restored,bars);
         assert_eq!(restored.simple.ordered().len(),ControlBarAction::COUNT);
         assert!(!bars.simple.move_to(Mute,Mute,true));
+    }
+
+    #[test]
+    fn monitor_defaults_keep_volume_and_fullscreen_without_redundant_pickers() {
+        use ControlBarAction::*;
+        let layout = ControlBarLayout::defaults(ControlBarSurface::Monitor);
+        assert_eq!(layout.ordered().last(), Some(&Fullscreen));
+        assert!(layout.end[Fullscreen as usize] && layout.end[Mute as usize]);
+        for action in [Mute, Fullscreen] { assert!(!layout.hidden[action as usize]); }
+        for action in [VideoTrack, AudioTrack, SubtitleTrack] { assert!(layout.hidden[action as usize]); }
+        // Saved layouts keep their exact indexed flags and order, not a new
+        // schema that discards user customization when adding the widget.
+        let saved: ControlBarLayout = serde_json::from_value(serde_json::to_value(layout).unwrap()).unwrap();
+        assert_eq!(saved, layout);
     }
     #[test]
     fn repeated_order_entries_cannot_lose_other_actions_and_malformed_ids_fail() {

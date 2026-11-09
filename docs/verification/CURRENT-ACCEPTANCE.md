@@ -18,6 +18,10 @@ passed forbidden/empty/changing-access parent cases; Cafe remains deferred.
 
 ## Window and media automation
 
+[Movable monitor volume](movable-monitor-volume.md) tracks grouped speaker/slider
+customization, hidden-by-default NLE track pickers, final Fullscreen placement
+and the requested instance's enabled hover thumbnails.
+
 [Paused playback and track state](paused-playback-and-track-state.md) records
 external pause-clock anchoring, paused dual-preview stability, internal exact
 seek/resume intent, authoritative media-strip selection and visibility-aware

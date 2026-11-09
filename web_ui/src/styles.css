@@ -1044,6 +1044,8 @@ html[data-motion="disabled"] *, html[data-motion="disabled"] *::before, html[dat
 .control-bar__strip::-webkit-scrollbar { display: none; }
 .control-bar__action { position: relative; display: inline-flex; flex: none; border: 0; background: transparent; }
 .control-bar__action.is-dragging { visibility: hidden; }
+.control-bar__action--volume { align-items: center; gap: 8px; }
+.control-bar__inline-volume.media-volume { flex: none; width: 160px; grid-template-columns: minmax(36px, 1fr) 44px; margin-inline-start: 0; }
 .control-bar__action.is-drop-before::before, .control-bar__action.is-drop-after::after { content: ''; position: absolute; inset-block: 1px; width: 2px; background: var(--accent); }
 .control-bar__action.is-drop-before::before { inset-inline-start: -4px; }
 .control-bar__action.is-drop-after::after { inset-inline-end: -4px; }

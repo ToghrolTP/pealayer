@@ -30,6 +30,9 @@ pub(crate) fn label(action: Action) -> &'static str {
         Action::Preferences => "Preferences...",
     }
 }
+fn layout_label(surface: Surface, action: Action) -> &'static str {
+    if surface == Surface::Monitor && action == Action::Mute { "Volume" } else { label(action) }
+}
 fn kind(action: Action) -> Option<MediaTrackType> {
     match action {
         Action::VideoTrack => Some(MediaTrackType::Video),
@@ -172,9 +175,11 @@ fn invoke(app: &mut PealayerApp, ctx: &egui::Context, action: Action) {
         _ => {}
     }
 }
-pub(crate) fn width(ui: &egui::Ui, action: Action) -> f32 {
+pub(crate) fn width(ui: &egui::Ui, action: Action, surface: Surface) -> f32 {
     let height = super::control_density::height(ui);
-    if matches!(action, Action::Back | Action::Forward) {
+    if surface == Surface::Monitor && action == Action::Mute {
+        height + ui.spacing().item_spacing.x + 160.0
+    } else if matches!(action, Action::Back | Action::Forward) {
         height + 20.0
     } else if kind(action).is_some() {
         height + 14.0
@@ -191,7 +196,7 @@ pub(crate) fn group_width(app: &PealayerApp, ui: &egui::Ui, surface: Surface, en
             supported(*a, surface) && !layout.hidden[*a as usize] && layout.end[*a as usize] == end
         })
         .collect();
-    (actions.iter().map(|a| width(ui, *a)).sum::<f32>()
+    (actions.iter().map(|a| width(ui, *a, surface)).sum::<f32>()
         + actions.len().saturating_sub(1) as f32 * ui.spacing().item_spacing.x
         + if end {
             super::control_density::height(ui)
@@ -235,7 +240,10 @@ fn menu(app: &mut PealayerApp, ui: &mut egui::Ui, surface: Surface, action: Opti
         for item in &overflow {
             let label = format!("{}  {}", caption(app,*item), tooltip(app,*item));
             ui.add_enabled_ui(enabled(app,*item), |ui| {
-                if let Some(kind) = kind(*item) {
+                if *item == Action::Mute && surface == Surface::Monitor {
+                    ui.allocate_ui_with_layout(egui::vec2(200.0, super::control_density::height(ui)),
+                        egui::Layout::left_to_right(egui::Align::Center), |ui| super::controls::draw_volume_strip(app, ui));
+                } else if let Some(kind) = kind(*item) {
                     ui.menu_button(label, |ui| super::media_tracks::draw_track_menu(app,ui,kind));
                 } else if ui.button(label).clicked() { invoke(app,ui.ctx(),*item); ui.close(); }
             });
@@ -246,7 +254,7 @@ fn menu(app: &mut PealayerApp, ui: &mut egui::Ui, surface: Surface, action: Opti
         ui.strong(format!(
             "{} {}",
             caption(app, action),
-            app.tr(label(action))
+            app.tr(layout_label(surface, action))
         ));
         if matches!(
             action,
@@ -302,7 +310,7 @@ fn menu(app: &mut PealayerApp, ui: &mut egui::Ui, surface: Surface, action: Opti
                     super::icons::EYE_SLASH,
                     app.tr("Hide"),
                     caption(app, action),
-                    app.tr(label(action))
+                    app.tr(layout_label(surface, action))
                 ),
             )
             .clicked()
@@ -323,7 +331,7 @@ fn menu(app: &mut PealayerApp, ui: &mut egui::Ui, surface: Surface, action: Opti
             if ui
                 .dropdown_choice(
                     visible,
-                    format!("{} {}", caption(app, action), app.tr(label(action))),
+                    format!("{} {}", caption(app, action), app.tr(layout_label(surface, action))),
                 )
                 .clicked()
             {
@@ -373,14 +381,22 @@ pub(crate) fn draw_group(
         }).collect();
         // The shared trailing overflow button is already reserved above. Fit
         // the inline prefix without reserving a second, invisible menu slot.
+        let terminal = surface == Surface::Monitor && end && actions.last() == Some(&Action::Fullscreen)
+            && width(ui, Action::Fullscreen, surface) <= action_width;
+        let prefix = &actions[..actions.len() - usize::from(terminal)];
+        let prefix_width = action_width - if terminal {height + gap} else {0.0};
         let mut used=0.0;
-        let count=actions.iter().take_while(|action| {
-            let next=width(ui,**action)+if used>0.0 {gap} else {0.0};
-            if used+next<=action_width+0.01 {used+=next;true} else {false}
+        let count=prefix.iter().take_while(|action| {
+            let next=width(ui,**action,surface)+if used>0.0 {gap} else {0.0};
+            if used+next<=prefix_width+0.01 {used+=next;true} else {false}
         }).count();
-        let shown: Vec<_> = actions[..count].to_vec();
-        let overflow: Vec<_> = if surface==Surface::Monitor {actions[count..].to_vec()} else {Vec::new()};
+        let mut shown: Vec<_> = prefix[..count].to_vec();
+        if terminal {shown.push(Action::Fullscreen);}
+        let overflow: Vec<_> = if surface==Surface::Monitor {prefix[count..].to_vec()} else {Vec::new()};
         ui.data_mut(|data|data.insert_temp(owner.with(("overflow-actions",end)),overflow));
+        // Program Monitor's terminal action stays at the outer edge; the
+        // customization/overflow control precedes the trailing action group.
+        if end && surface == Surface::Monitor { draw_overflow(app, ui, surface, owner); }
         if group_width(app, ui, surface, end) > if end { height } else { 0.0 } {
             ui.allocate_ui_with_layout(egui::vec2(action_width, height), direction, |ui| {
                 ui.set_min_size(egui::vec2(action_width,height));
@@ -399,7 +415,7 @@ pub(crate) fn draw_group(
                     });
             });
         }
-        if end {
+        if end && surface != Surface::Monitor {
             draw_overflow(app, ui, surface, owner);
         }
     });
@@ -417,15 +433,19 @@ pub(crate) fn draw_group(
 }
 fn draw_actions(app: &mut PealayerApp, ui: &mut egui::Ui, surface: Surface, end: bool, owner: Id, shown: Option<&[Action]>) {
     let layout = app.control_bars.layout(surface);
-    let actions = layout.ordered().into_iter().filter(|a| {
+    let actions: Vec<_> = layout.ordered().into_iter().filter(|a| {
         supported(*a, surface) && !layout.hidden[*a as usize] && layout.end[*a as usize] == end
             && shown.is_none_or(|shown| shown.contains(a))
-    });
+    }).collect();
+    let terminal = surface == Surface::Monitor && end && actions.last() == Some(&Action::Fullscreen);
     let mut requested = None;
     for action in actions {
         let id = owner.with(action);
-        let w = width(ui, action);
+        let w = width(ui, action, surface);
         let h = super::control_density::height(ui);
+        if terminal && action == Action::Fullscreen && ui.available_width() > w {
+            ui.add_space(ui.available_width() - w);
+        }
         let active_drag = egui::DragAndDrop::payload::<Drag>(ui.ctx())
             .filter(|d| d.owner == owner && d.action == action);
         let dragging = active_drag.is_some() && ui.input(|i| i.pointer.primary_down());
@@ -473,9 +493,13 @@ fn draw_actions(app: &mut PealayerApp, ui: &mut egui::Ui, surface: Surface, end:
                 } else {
                     caption(app, action)
                 };
+                let volume = surface == Surface::Monitor && action == Action::Mute;
+                let button_rect = if volume {
+                    egui::Rect::from_min_size(egui::pos2(if app.rtl {rect.right() - h} else {rect.left()}, rect.top()), egui::vec2(h,h))
+                } else { rect };
                 let response = super::action_customization::control(
                     ui,
-                    rect,
+                    button_rect,
                     id,
                     &text,
                     &app.tr(label(action)),
@@ -483,6 +507,17 @@ fn draw_actions(app: &mut PealayerApp, ui: &mut egui::Ui, surface: Surface, end:
                     action == Action::Pin && app.pin_controls,
                     true,
                 );
+                if volume {
+                    let slider_rect = egui::Rect::from_min_max(
+                        egui::pos2(if app.rtl {rect.left()} else {button_rect.right() + ui.spacing().item_spacing.x},rect.top()),
+                        egui::pos2(if app.rtl {button_rect.left() - ui.spacing().item_spacing.x} else {rect.right()},rect.bottom()));
+                    let mut slider = ui.new_child(egui::UiBuilder::new().id_salt(id.with("volume-slider"))
+                        .max_rect(slider_rect).layout(if app.rtl {egui::Layout::right_to_left(egui::Align::Center)} else {egui::Layout::left_to_right(egui::Align::Center)}));
+                    slider.set_clip_rect(slider_rect.intersect(ui.clip_rect()));
+                    #[cfg(test)]
+                    ui.data_mut(|data| data.insert_temp(id.with("volume-slider-bounds"), slider_rect));
+                    slider.add_enabled_ui(is_enabled, |ui| super::controls::draw_volume_slider(app, ui));
+                }
                 if matches!(action, Action::Back | Action::Forward) {
                     super::controls::paint_transport_nudge(
                         app,
@@ -562,7 +597,9 @@ fn draw_actions(app: &mut PealayerApp, ui: &mut egui::Ui, surface: Surface, end:
             requested = Some(action);
         }
         response.context_menu(|ui| menu(app, ui, surface, Some(action),owner));
-        response.on_hover_text(tooltip(app, action));
+        response.on_hover_text(if surface == Surface::Monitor && action == Action::Mute {
+            format!("{}\n{}", tooltip(app,action), app.tr("Drag to move volume"))
+        } else { tooltip(app, action) });
     }
     if let Some(action) = requested {
         invoke(app, ui.ctx(), action);
@@ -667,6 +704,65 @@ mod tests {
         ctx.read_response(super::super::action_customization::owner(surface).with(action))
             .unwrap()
             .rect
+    }
+    #[test]
+    fn monitor_volume_moves_with_speaker_but_slider_gestures_do_not_reorder() {
+        let _lock = crate::app::tests::lock_app_tests();
+        for rtl in [false, true] {
+            let ctx = egui::Context::default();
+            let mut app = PealayerApp::default();
+            app.rtl = rtl;
+            let simple = app.control_bars.simple;
+            let surface = Surface::Monitor;
+            let owner = super::super::action_customization::owner(surface);
+            render(&ctx,&mut app,surface,vec![]);
+            render(&ctx,&mut app,surface,vec![]);
+            let slider_id = owner.with(Action::Mute).with("volume-slider-bounds");
+            let before = ctx.data(|data|data.get_temp::<egui::Rect>(slider_id)).unwrap();
+            let source = rect(&ctx,surface,Action::Mute).center();
+            render(&ctx,&mut app,surface,vec![egui::Event::PointerMoved(source),pointer(source,egui::PointerButton::Primary,true)]);
+            render(&ctx,&mut app,surface,vec![egui::Event::PointerMoved(source+egui::vec2(35.0,20.0))]);
+            assert_eq!(egui::DragAndDrop::payload::<Drag>(&ctx).unwrap().action,Action::Mute);
+            let target = rect(&ctx,surface,Action::Stop).center();
+            render(&ctx,&mut app,surface,vec![egui::Event::PointerMoved(target)]);
+            render(&ctx,&mut app,surface,vec![pointer(target,egui::PointerButton::Primary,false)]);
+            assert!(!app.control_bars.monitor.end[Action::Mute as usize]);
+            assert_eq!(app.control_bars.simple,simple);
+            assert!(!app.is_muted,"dragging the speaker must not mute");
+            render(&ctx,&mut app,surface,vec![]);
+            let after = ctx.data(|data|data.get_temp::<egui::Rect>(slider_id)).unwrap();
+            assert_ne!(before.top(),after.top(),"slider did not follow the moved speaker");
+            assert_eq!(after.top(),rect(&ctx,surface,Action::Mute).top());
+            app.current_video_path = Some("volume-pointer-fixture.mkv".into());
+            app.volume = 50.0;
+            app.mpv.0.set_property("volume",50.0).unwrap();
+            render(&ctx,&mut app,surface,vec![]);
+            let slider = ctx.data(|data|data.get_temp::<egui::Rect>(slider_id)).unwrap();
+            let press = egui::pos2(if rtl {slider.right()-20.0} else {slider.left()+20.0},slider.center().y);
+            let layout = app.control_bars;
+            render(&ctx,&mut app,surface,vec![egui::Event::PointerMoved(press),pointer(press,egui::PointerButton::Primary,true)]);
+            render(&ctx,&mut app,surface,vec![egui::Event::PointerMoved(press+egui::vec2(if rtl {-30.0} else {30.0},0.0))]);
+            assert!(egui::DragAndDrop::payload::<Drag>(&ctx).is_none());
+            render(&ctx,&mut app,surface,vec![pointer(press,egui::PointerButton::Primary,false)]);
+            assert_eq!(app.control_bars,layout);
+            assert!((app.mpv.0.get_property::<f64>("volume").unwrap()-50.0).abs()>0.1,"volume slider did not receive the gesture");
+        }
+    }
+
+    #[test]
+    fn monitor_fullscreen_trails_volume_and_menu() {
+        let _lock = crate::app::tests::lock_app_tests();
+        for rtl in [false,true] {
+            let ctx=egui::Context::default(); let mut app=PealayerApp::default(); app.rtl=rtl;
+            render(&ctx,&mut app,Surface::Monitor,vec![]);
+            let speaker=rect(&ctx,Surface::Monitor,Action::Mute);
+            let fullscreen=rect(&ctx,Surface::Monitor,Action::Fullscreen);
+            let owner=super::super::action_customization::owner(Surface::Monitor);
+            let slider=ctx.data(|data|data.get_temp::<egui::Rect>(owner.with(Action::Mute).with("volume-slider-bounds"))).unwrap();
+            let menu=ctx.read_response(owner.with("overflow")).unwrap().rect;
+            if rtl {assert!(fullscreen.right()<=slider.left() && slider.right()<=speaker.left() && speaker.right()<=menu.left());}
+            else {assert!(menu.right()<=speaker.left() && speaker.right()<=slider.left() && slider.right()<=fullscreen.left());}
+        }
     }
     #[test]
     fn overflow_primary_click_opens_a_durable_menu_independent_of_context_menu() {
@@ -978,8 +1074,8 @@ mod tests {
                         "overflow must remain reachable {overflow:?} in {slot:?}"
                     );
                     if !hidden {
-                        let edge=if rtl {overflow.left()-slot.left()} else {overflow.right()-slot.right()};
-                        assert!(edge.abs()<0.5,"overflow must stay at the trailing edge: {overflow:?} in {slot:?}, rtl={rtl}");
+                        let edge=if rtl {overflow.right()-slot.right()} else {overflow.left()-slot.left()};
+                        assert!(edge.abs()<0.5,"monitor menu must precede its trailing actions: {overflow:?} in {slot:?}, rtl={rtl}");
                     }
                 }
             }
