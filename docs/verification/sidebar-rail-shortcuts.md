@@ -39,19 +39,22 @@ application configuration. The current config API can update these fields; the
 existing process-local Preferences navigation target is `sidebar_rail` with
 `scroll_y: 0`. No second settings store or hardware protocol was introduced.
 
-## Verification and remaining delivery gate
+## Verification and delivery
 
 - 29 sidebar tests passed, including real pointer context menus and primary drag,
   phone/desktop widths, RTL, no hover actuation, hidden-panel placement, cancellation,
   modal blocking, locks, keyboard navigation and existing sidebar regressions.
 - 68 focused Preferences tests passed, including the new page at 390/700/1200
   logical points without edits caused by rendering. The suites overlap.
-- TypeScript passed. Full native release packaging and real-window visual
-  acceptance are not implied by the above source/test checks.
-- Local packaging is pending normal closure of the earlier isolated UI review
-  and its Preferences helper. Its authoring inspection reports the helper as
-  unknown; it was not force-closed or replaced. The regular installed app is not
-  yet updated with this feature. Do not mistake the preceding toolbar-navigation
-  package for this rail feature.
+- TypeScript passed. The initial packaging gate was the older isolated review's
+  unknown Preferences helper. The user closed that helper, a fresh clean read
+  allowed normal review shutdown, and packaging is now complete.
+- The feature is included in the locally installed NLE refinement checkpoint in
+  [PR #257](https://github.com/ToghrolTP/pealayer/pull/257). See the
+  [native gallery and runtime receipt](nle-transport-layout.md#native-gallery-and-delivered-checkpoint).
+  The rail is visible in the actual native review, and its shared Preferences
+  editor was inspected using the isolated embedded-dialog fixture. Real pointer
+  menus/reordering/docking are covered by the focused renderer tests; these are
+  not a claim of human acceptance of every optional destination.
 - Cafe deployment remains explicitly deferred until the user restores its normal
   connection. Do not change remote-access services to bypass that gate.
