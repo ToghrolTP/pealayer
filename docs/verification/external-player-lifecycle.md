@@ -69,6 +69,14 @@ the exact executable are now included, preserving their arguments, descriptions
 and unrelated targets. The bounded discovery does not follow directory symlinks.
 This broader launcher fix still requires canonical displayed-artwork acceptance.
 
+The canonical follow-up isolated the actual remaining stale registration:
+Explorer's `User Pinned/ImplicitAppShortcuts` entry for this exact executable
+explicitly referenced Classic. Updating the ordinary Start Menu link alone did
+not change that entry. The same bounded, target-checked refresh now includes
+implicit application shortcuts, not only explicit pins and ordinary launchers.
+This is a persistent branding path, not a one-time shortcut repair. Other apps,
+custom command arguments and the retained historical build remain excluded.
+
 The pixel fixture itself now locates the button by its exact AppUserModelID
 through read-only accessibility metadata before capturing pixels. Whole-taskbar
 icon matching could select the retained historical Pealayer instead, yielding a

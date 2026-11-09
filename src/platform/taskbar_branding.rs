@@ -175,12 +175,17 @@ unsafe fn update_shortcut(path: &Path, executable: &Path, icon: &Path) -> window
     unsafe { link.GetIconLocation(&mut current, &mut index)?; }
     let store: IPropertyStore = link.cast()?;
     let id = unsafe { store.GetValue(&ID)? };
-    if same_executable(Path::new(&string(&current)), icon) && index == 0 && id.to_string() == app_id() { return Ok(false); }
+    let resource = format!("{},0", icon.display());
+    if same_executable(Path::new(&string(&current)), icon) && index == 0 && id.to_string() == app_id()
+        && unsafe { store.GetValue(&ICON)? }.to_string() == resource { return Ok(false); }
     let location = wide(icon);
     unsafe {
         // Don't request write access for unrelated or already-current pins.
         file.Load(PCWSTR(filename.as_ptr()), STGM_READWRITE)?;
         link.SetIconLocation(PCWSTR(location.as_ptr()), 0)?;
+        // Implicit shortcuts may retain the originating window's relaunch
+        // properties as well as IShellLink's ordinary icon location.
+        store.SetValue(&ICON, &PROPVARIANT::from(resource.as_str()))?;
         store.SetValue(&ID, &PROPVARIANT::from(app_id().as_str()))?;
         store.Commit()?;
         file.Save(PCWSTR(filename.as_ptr()), true)?;
@@ -208,7 +213,9 @@ pub fn apply(hwnd: isize, source: u64, config: &crate::config::AppConfig, state:
                 // Menu registration even without a taskbar pin. Update ordinary
                 // launchers for this exact executable too, not just pinned links.
                 let launchers = launcher_files(roaming.join(r"Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"), false)
-                    .into_iter().chain(launcher_files(roaming.join(r"Microsoft\Windows\Start Menu\Programs"), true));
+                    .into_iter()
+                    .chain(launcher_files(roaming.join(r"Microsoft\Internet Explorer\Quick Launch\User Pinned\ImplicitAppShortcuts"), true))
+                    .chain(launcher_files(roaming.join(r"Microsoft\Windows\Start Menu\Programs"), true));
                 for launcher in launchers {
                     match unsafe { update_shortcut(&launcher, &executable, &default) } {
                         Ok(true) => updated += 1,
@@ -249,6 +256,21 @@ pub fn diagnostics() -> serde_json::Value {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn implicit_launchers_are_discovered_recursively_without_other_files() {
+        let root = std::env::temp_dir().join(format!("pealayer-launcher-search-{}", uuid::Uuid::new_v4()));
+        let nested = root.join("implicit-app-identity");
+        std::fs::create_dir_all(&nested).unwrap();
+        let link = nested.join("custom-user-label.lnk");
+        let other = nested.join("preserve.txt");
+        std::fs::write(&link, b"fixture").unwrap();
+        std::fs::write(&other, b"unrelated").unwrap();
+        assert!(launcher_files(root.clone(), false).is_empty());
+        assert_eq!(launcher_files(root.clone(), true), vec![link.clone()]);
+        assert_eq!(std::fs::read(&other).unwrap(), b"unrelated");
+        std::fs::remove_file(link).unwrap(); std::fs::remove_file(other).unwrap();
+        std::fs::remove_dir(nested).unwrap(); std::fs::remove_dir(root).unwrap();
+    }
     #[test]
     fn hidden_window_receives_explicit_group_icon_and_relaunch_metadata() {
         use windows::{core::w, Win32::UI::WindowsAndMessaging::{CreateWindowExW, DestroyWindow, WINDOW_EX_STYLE, WINDOW_STYLE}};
@@ -297,6 +319,11 @@ mod tests {
             assert!(update_shortcut(&path, &executable, &icon).unwrap());
             assert!(!update_shortcut(&path, &executable, &icon).unwrap());
             file.Load(PCWSTR(filename.as_ptr()), windows::Win32::System::Com::STGM_READWRITE).unwrap();
+            let reread: IShellLinkW = CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER).unwrap();
+            let persisted: IPersistFile = reread.cast().unwrap();
+            persisted.Load(PCWSTR(filename.as_ptr()), windows::Win32::System::Com::STGM_READ).unwrap();
+            let stored: IPropertyStore = reread.cast().unwrap();
+            assert_eq!(stored.GetValue(&ICON).unwrap().to_string(), format!("{},0", icon.display()));
             let mut caption = vec![0; 256]; let mut args = vec![0; 256];
             link.GetDescription(&mut caption).unwrap(); link.GetArguments(&mut args).unwrap();
             assert!(String::from_utf16_lossy(&caption).starts_with("User's launcher caption"));
