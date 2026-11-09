@@ -87,11 +87,14 @@ owned child and transport; unrelated applications remain untouched. Process
 startup may itself run the chosen shell's user profile, which must not be
 misrepresented as a sandbox.
 
-**PortableShell:** optional user-selected executable using the same PTY backend.
-Do not bundle or silently choose a stale development binary. Redirected ordinary
-stdio can select PortableShell batch mode and is not an interactive substitute.
-A later embedded callback-core adapter can be considered as a distinct package;
-it must not duplicate the terminal renderer or grant additional command rights.
+**PortableShell:** embed its pinned C99 byte-callback core with a Pealayer-specific
+host adapter. It shares the existing VT renderer but has no generic OS executor.
+Explicit submitted intents reuse typed application dispatch. Keep the core's
+license/provenance and terminal-profile normalization in the PortableShell source
+domain; native file discovery remains its separately hosted read-only adapter.
+Do not substitute an external PortableShell process or a stale development binary.
+Later extraction preserves this host boundary rather than copying shell code or
+granting additional command rights.
 
 Output, clipboard contents, shell history, private paths and controller commands
 can be sensitive. Keep history in session memory and do not publish transcripts
@@ -107,7 +110,7 @@ feature. It renders real cells rather than stripping ANSI into a text log:
 
 - Theme-aware default/ANSI colors, 256-color and truecolor foreground/background,
   bold, underline, inverse, wide-character continuations and a steady cursor.
-- Current app monospace selection, bounded 4–100 rows and 20–320 columns; resize
+- Current app monospace selection, bounded 4–80 rows and 20–240 columns; resize
   only on an actual geometry change. Backend PTY bounds are independently checked.
 - Wheel and Shift+Page scrollback; bounded configured history (100–10,000 lines).
   Selection and Select All currently operate on the visible viewport, not all

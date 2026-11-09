@@ -427,7 +427,7 @@ fn workspace_tool_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
         for (option, (icon, description)) in target.options.iter_mut().zip([
             ("plug", "Connect to the selected PCController host's interactive terminal."),
             ("terminal-window", "Run a shell on this Pealayer host, not on a remote playback authority."),
-            ("terminal-window", "Run an installed PortableShell executable on this Pealayer host."),
+            ("terminal-window", "Embedded Pealayer command shell. No external executable is needed."),
         ]) {
             option.icon = Some(icon);
             option.description = Some(description.into());
@@ -448,18 +448,9 @@ fn workspace_tool_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
                 arguments.description = Some("Separate arguments with spaces; quote an argument containing spaces. Applies to newly connected sessions.");
                 controls.push(arguments);
             }
-            crate::ui::terminal::TerminalTarget::PortableShell => {
-                let mut program = PreferenceControl::text("ui.terminal.portable_shell_program", "workspace_tools", "Terminal connection", "PortableShell executable", "PortableShell.exe");
-                program.kind = PreferenceControlKind::File;
-                #[cfg(windows)] { program.file_extensions = vec!["exe"]; }
-                controls.push(program);
-                let mut arguments = PreferenceControl::text("ui.terminal.portable_shell_arguments", "workspace_tools", "Terminal connection", "PortableShell arguments", "Optional arguments");
-                arguments.description = Some("Separate arguments with spaces; quote an argument containing spaces. Applies to newly connected sessions.");
-                controls.push(arguments);
-            }
+            crate::ui::terminal::TerminalTarget::PortableShell => {}
         }
         controls.extend([
-            PreferenceControl::number("ui.terminal.height", "workspace_tools", "Terminal appearance", "Panel height", 120.0, 900.0, 10.0),
             PreferenceControl::number("ui.terminal.font_size", "workspace_tools", "Terminal appearance", "Font size", 9.0, 28.0, 0.5),
             PreferenceControl::number("ui.terminal.scrollback_lines", "workspace_tools", "Terminal appearance", "Scrollback lines", 100.0, 10000.0, 100.0),
         ]);
@@ -512,7 +503,7 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             let mut control = PreferenceControl::boolean("ui.sidebar_shortcuts.order", "sidebar_rail", "Shortcuts", "Shortcuts");
             control.kind = PreferenceControlKind::ActionList;
             control.custom_key = Some("ui.sidebar_shortcuts.hidden");
-            control.options = crate::ui::sidebar_shortcuts::RailAction::ALL.into_iter().map(|action| PreferenceOption {
+            control.options = crate::ui::sidebar_shortcuts::RailAction::ALL.into_iter().filter(|action| action.included()).map(|action| PreferenceOption {
                 value: serde_json::to_value(action).unwrap(), label: action.label(), color: None,
                 description: None, icon: Some(action.icon()),
             }).collect();
@@ -1426,9 +1417,8 @@ fn semantic_preference_icon(control: &PreferenceControl) -> &'static str {
         "ui.toolbar.order" => "list-checks",
         "ui.terminal.enabled" | "ui.terminal.target" => "terminal-window",
         "ui.terminal.controller_endpoint" => "plug",
-        "ui.terminal.shell_program" | "ui.terminal.portable_shell_program" => "terminal-window",
-        "ui.terminal.shell_arguments" | "ui.terminal.portable_shell_arguments" => "keyboard",
-        "ui.terminal.height" => "arrows-out",
+        "ui.terminal.shell_program" => "terminal-window",
+        "ui.terminal.shell_arguments" => "keyboard",
         "ui.terminal.font_size" => "text-t",
         "ui.terminal.scrollback_lines" => "text-align-left",
         "status_bar.fps_mode" => "gauge",
@@ -1561,11 +1551,10 @@ mod tests {
         let mut config = crate::config::AppConfig::default();
         config.ui.terminal.controller_endpoint = "pccontroller://example.invalid:8787".into();
         config.ui.terminal.shell_program = "shell-fixture".into();
-        config.ui.terminal.portable_shell_program = "portable-fixture".into();
         for (target, expected, absent) in [
             (TerminalTarget::PcController, "ui.terminal.controller_endpoint", "ui.terminal.shell_program"),
-            (TerminalTarget::SystemShell, "ui.terminal.shell_program", "ui.terminal.portable_shell_program"),
-            (TerminalTarget::PortableShell, "ui.terminal.portable_shell_program", "ui.terminal.controller_endpoint"),
+            (TerminalTarget::SystemShell, "ui.terminal.shell_program", "ui.terminal.controller_endpoint"),
+            (TerminalTarget::PortableShell, "ui.terminal.target", "ui.terminal.shell_program"),
         ] {
             config.ui.terminal.target = target;
             let contract = super::preferences_contract(&config);
@@ -1573,7 +1562,6 @@ mod tests {
             assert!(!contract.controls.iter().any(|control| control.key == absent));
             assert!(super::value_at_path(&contract.values, absent).unwrap().as_str().is_some_and(|value| !value.is_empty()));
             for (key, minimum, maximum) in [
-                ("ui.terminal.height", 120.0, 900.0),
                 ("ui.terminal.font_size", 9.0, 28.0),
                 ("ui.terminal.scrollback_lines", 100.0, 10000.0),
             ] {

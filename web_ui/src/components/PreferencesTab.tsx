@@ -405,7 +405,7 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
     );
     if (control.kind === 'file') {
       const executable = control.key === 'external_mpv.executable';
-      const terminalExecutable = control.key === 'ui.terminal.shell_program' || control.key === 'ui.terminal.portable_shell_program';
+      const terminalExecutable = control.key === 'ui.terminal.shell_program';
       const resetLabel = terminalExecutable ? 'Use default shell' : executable ? 'Use default player' : 'Use default icon';
       const normalize = (text: string) => executable || terminalExecutable ? text.trim().replace(/^"|"$/g, '') : text.trim();
       return <div className="preference-control" key={control.key}>

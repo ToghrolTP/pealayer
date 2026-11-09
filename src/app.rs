@@ -2021,8 +2021,8 @@ impl eframe::App for PealayerApp {
                     crate::ui::workspace_toolbar::draw(self, ui);
                 });
             }
-            crate::ui::terminal::draw(self, ui);
         }
+        crate::ui::terminal::sync_visibility(self);
         crate::ui::workspace_toolbar::draw_palette(self, &ctx);
         crate::workspace_tools::publish(self);
 
@@ -6197,6 +6197,9 @@ impl PealayerApp {
     }
 
     pub fn open_or_focus_tab(&mut self, tab: crate::ui::layout::PealayerTab) {
+        if !tab.available() { return; }
+        if tab == crate::ui::layout::PealayerTab::Terminal && self.dock_state.locked
+            && !self.dock_state.layout.contains(&tab) { return; }
         self.show_four_d_editor = true;
         if let Ok(pane) = crate::ui::sidebar_rail::SidebarPane::try_from(tab) {
             if self.sidebar_rail_state.open == Some(pane) {
@@ -6207,6 +6210,7 @@ impl PealayerApp {
         if crate::ui::layout::reveal_and_focus_tab(&mut self.dock_state, tab) {
             self.save_dock_layout();
         }
+        if tab == crate::ui::layout::PealayerTab::Terminal { self.sync_terminal_visibility_from_workspace(); }
         self.pending_tab_reveals.retain(|queued| *queued != tab);
         self.pending_tab_reveals.push(tab);
     }
@@ -6275,6 +6279,11 @@ impl PealayerApp {
     }
 
     pub fn toggle_tab(&mut self, tab: crate::ui::layout::PealayerTab) {
+        if !tab.available() { return; }
+        if tab == crate::ui::layout::PealayerTab::Terminal && !self.dock_state.layout.contains(&tab) {
+            self.open_or_focus_tab(tab);
+            return;
+        }
         if let Ok(pane) = crate::ui::sidebar_rail::SidebarPane::try_from(tab) {
             if self.sidebar_rail_state.open == Some(pane) {
                 self.sidebar_rail_state.open = None;
@@ -6295,7 +6304,20 @@ impl PealayerApp {
     }
 
     pub fn save_dock_layout(&mut self) {
+        self.sync_terminal_visibility_from_workspace();
         self.save_config();
+    }
+
+    /// Native panel closes/profile changes own visibility, never terminal sessions.
+    pub(crate) fn sync_terminal_visibility_from_workspace(&mut self) {
+        #[cfg(feature = "workspace-terminal")]
+        {
+            let visible = self.dock_state.layout.contains(&crate::ui::layout::PealayerTab::Terminal);
+            if self.terminal_state.preferences.enabled != visible {
+                self.terminal_state.preferences.enabled = visible;
+                self.deferred_config_save = true;
+            }
+        }
     }
 
     /// Capture every durable part of the current desktop workspace. egui's
@@ -6376,6 +6398,7 @@ impl PealayerApp {
         }
         self.show_four_d_editor = profile.nle;
         self.dock_state = dock_state;
+        self.sync_terminal_visibility_from_workspace();
         self.sidebar_rail_state = rail;
         self.pending_tab_reveals.clear();
         let dialogs = &profile.dialogs;

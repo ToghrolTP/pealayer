@@ -13,11 +13,21 @@ does not reset panel membership or the sidebar rail.
 
 The command toolbar reuses existing application commands. Its overflow menu
 provides hidden/narrow actions and customization; individual buttons can be
-hidden or moved earlier/later. **Ctrl+Shift+P** opens the searchable command
+hidden or moved earlier/later. The flat toolbar groups related actions with
+dividers and reserves its trailing edge for the palette and overflow menu.
+Right-click empty toolbar space for commands, or double-click it for the
+customization dialog. Drag icons or editor rows to reorder; cancellation,
+workspace locking and modal ownership do not change the layout. The editor
+also provides keyboard-friendly move and visibility controls.
+**Ctrl+Shift+P** opens the searchable command
 palette even when the toolbar is hidden. Arrow keys select, Enter invokes one
 available command, and Escape cancels. Existing dialogs retain keyboard priority.
 
-The resizable bottom terminal has independent session tabs. Opening it never
+The terminal is a genuine workspace pane in both renderers, initially located
+as a hidden tab beside Timeline. It can be rearranged, floated or closed through
+the same workspace controls as other panes, without discarding its sessions.
+The body has independent session tabs rather than a second competing titlebar.
+Opening it never
 starts a process or connects. Choose a target and **Connect**:
 
 - **PCController:** the selected host's command catalog and explicit command
@@ -32,8 +42,19 @@ starts a process or connects. Choose a target and **Connect**:
   spaces, doubled matching quotes are literal, backslashes are preserved, and
   no expansion/evaluation occurs in Pealayer. The shell itself is not a sandbox
   and may run its own startup profile.
-- **PortableShell:** an optionally installed executable, using the same PTY.
-  No additional shell binary is bundled or silently downloaded.
+  Refresh the profile picker to discover Windows Terminal and VS Code-family
+  user settings. PortableShell owns their JSONC parsing, native paths and
+  normalization; Rust only copies owned records. The picker preserves literal
+  arguments, cwd and environment removals. Hidden profiles stay hidden;
+  disabled, unresolved and elevation-requiring entries cannot be launched.
+  Refresh is read-only and never selects or executes a profile automatically.
+  Imported environment values and source paths are not exposed in shared status.
+- **PortableShell:** the pinned C99 byte-callback core is embedded in Pealayer;
+  no PortableShell executable, demo workbench or generic OS command executor is
+  launched. A dedicated Pealayer host provides help, status, play/pause/stop,
+  exact seek, volume/mute and Preferences commands through existing typed app
+  dispatch. Opening the prompt is read-only. Closing cancels unfinished input,
+  never submits it. Application responses preserve the current draft prompt.
 
 Hiding the panel preserves sessions. Disconnect/Close session cancels queued
 input and tears down only the owned session; a host command already dispatched
@@ -71,14 +92,17 @@ to a playback authority:
 {"method":"pealayer.workspace.tools.get","params":{}}
 {"method":"pealayer.workspace.tools.control","params":{"action":"set_visible","toolbar":true,"terminal":true,"persist":true}}
 {"method":"pealayer.workspace.tools.control","params":{"action":"palette","open":true}}
+{"method":"pealayer.workspace.tools.control","params":{"action":"editor","open":true}}
 {"method":"pealayer.workspace.tools.control","params":{"action":"terminal","operation":"connect"}}
+{"method":"pealayer.workspace.tools.control","params":{"action":"terminal","operation":"refresh_profiles"}}
 {"method":"pealayer.workspace.tools.control","params":{"action":"terminal","operation":"write","data":"help"}}
 {"method":"pealayer.workspace.tools.control","params":{"action":"terminal","operation":"disconnect"}}
 ```
 
-Connect, Write and Resize require **native local IPC**, not browser HTTP/WebSocket
+Connect, Write, Resize and profile refresh require **native local IPC**, not browser HTTP/WebSocket
 requests. UI/visibility commands use existing Web control permissions. Status
-contains only availability, visibility, session IDs, target, dimensions and phase.
+contains only availability, visibility, session IDs, target, dimensions, phase
+and profile discovery counts/activity, never imported environment values.
 An accepted command is queued once, not confirmation that it executed. Poll status
 to observe connection transitions. `persist` requests an immediate configuration
 save; normal workspace persistence still applies on later saves/application exit.
@@ -116,8 +140,28 @@ Local evidence:
   and Preferences-height-change regression, which passed. That fix is not yet
   installed in the review process.
 
-The user is actively reviewing the isolated window and providing feedback; leave
-its settings and processes alone until coordinated. Final native screenshots,
-feedback reconciliation and canonical deployment remain pending. Cafe is
+The user reviewed the initial isolated window and provided feedback. Final native
+screenshots, feedback reconciliation and canonical deployment remain pending. Cafe is
 user-deferred/offline. No physical controller or remote deployment acceptance is
 implied by local fixtures.
+
+Follow-up implementation replaces the initial fixed bottom panel and external
+PortableShell profile above. The user authorized discarding the isolated review
+tests; that instance exited through its own local IPC Quit command. Regular and
+historical instances were left untouched. Docking, toolbar editor and embedded
+host tests are being rerun against the combined follow-up; earlier counts do
+not establish acceptance of those changes.
+
+Combined follow-up evidence: 55 workspace tests, 39 terminal-filter tests (two
+opt-in fixtures ignored in that pass), all five embedded host tests and the
+separate real Windows PTY fixture passed. Counts overlap. All three reduced
+feature checks passed again; these are developer checks, not product flavors.
+TypeScript, preference-file tests and 53 Web parity contracts passed. The added
+C sources compiled with the native Windows toolchain. Read-only profile import
+fixtures exercised the actual C adapter, including ownership and malformed-source
+atomicity. No user shell commands or physical outputs were used as fixtures.
+The PortableShell copyright/license is embedded in About as well as retained in
+the pinned vendor directory.
+
+PortableShell source ownership: [profile-import PR #84](https://github.com/atomicdeploy/portable-shell/pull/84).
+The pinned vendor receipt is `third_party/portable-shell/PEALAYER-VENDOR.md`.

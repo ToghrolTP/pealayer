@@ -28,9 +28,7 @@ pub struct TerminalPreferences {
     pub controller_endpoint: String,
     pub shell_program: String,
     pub shell_arguments: String,
-    pub portable_shell_program: String,
-    pub portable_shell_arguments: String,
-    pub height: f32,
+    pub profile_id: String,
     pub font_size: f32,
     pub scrollback_lines: usize,
 }
@@ -42,9 +40,7 @@ impl Default for TerminalPreferences {
             controller_endpoint: String::new(),
             shell_program: String::new(),
             shell_arguments: String::new(),
-            portable_shell_program: String::new(),
-            portable_shell_arguments: String::new(),
-            height: 260.0,
+            profile_id: String::new(),
             font_size: 13.0,
             scrollback_lines: 2000,
         }
@@ -52,9 +48,7 @@ impl Default for TerminalPreferences {
 }
 impl TerminalPreferences {
     pub fn validate(&self) -> Result<(), String> {
-        if !self.height.is_finite()
-            || !(120.0..=900.0).contains(&self.height)
-            || !self.font_size.is_finite()
+        if !self.font_size.is_finite()
             || !(9.0..=28.0).contains(&self.font_size)
             || !(100..=10000).contains(&self.scrollback_lines)
         {
@@ -67,8 +61,7 @@ impl TerminalPreferences {
             &self.controller_endpoint,
             &self.shell_program,
             &self.shell_arguments,
-            &self.portable_shell_program,
-            &self.portable_shell_arguments,
+            &self.profile_id,
         ] {
             if value.len() > 8192 || value.contains(['\0', '\r', '\n']) {
                 return Err(
@@ -86,7 +79,7 @@ pub struct TerminalState {
     confirm_exit: bool,
     closing: bool,
     quit_after_close: bool,
-    last_rendered_height: Option<f32>,
+    last_visibility_intent: Option<bool>,
     #[cfg(feature = "workspace-terminal")]
     retired: Vec<super::terminal_backend::Session>,
     #[cfg(feature = "workspace-terminal")]
@@ -95,6 +88,13 @@ pub struct TerminalState {
     active: usize,
     #[cfg(feature = "workspace-terminal")]
     next_id: u64,
+    #[cfg(feature = "workspace-terminal")]
+    profiles: Vec<super::terminal_profiles::Profile>,
+    #[cfg(feature = "workspace-terminal")]
+    profile_scan:
+        Option<std::sync::mpsc::Receiver<Result<super::terminal_profiles::Discovery, String>>>,
+    #[cfg(feature = "workspace-terminal")]
+    profile_warnings: Vec<String>,
 }
 
 /// A normal application close must not silently terminate a live shell.
@@ -222,13 +222,17 @@ impl TerminalState {
             .collect();
         #[cfg(not(feature = "workspace-terminal"))]
         let sessions: Vec<serde_json::Value> = Vec::new();
+        #[cfg(feature = "workspace-terminal")]
+        let profiles = serde_json::json!({"count":self.profiles.len(),"refreshing":self.profile_scan.is_some(),"warnings":self.profile_warnings.len()});
+        #[cfg(not(feature = "workspace-terminal"))]
+        let profiles = serde_json::json!({"count":0,"refreshing":false,"warnings":0});
         serde_json::json!({"available":cfg!(feature="workspace-terminal"),
-            "visible":self.preferences.enabled,"sessions":sessions})
+            "visible":cfg!(feature="workspace-terminal") && self.preferences.enabled,"sessions":sessions,"profiles":profiles})
     }
 }
 
 pub fn toggle(app: &mut crate::app::PealayerApp) {
-    if cfg!(feature = "workspace-terminal") {
+    if cfg!(feature = "workspace-terminal") && !app.dock_state.locked {
         app.terminal_state.preferences.enabled = !app.terminal_state.preferences.enabled;
         app.deferred_config_save = true;
     }
@@ -257,6 +261,13 @@ pub fn control(
             app.serial_port.clone()
         };
         let state = &mut app.terminal_state;
+        if matches!(operation, TerminalOperation::RefreshProfiles) {
+            if state.profile_scan.is_some() {
+                return Err("A profile refresh is already running".into());
+            }
+            state.profile_scan = Some(start_profile_scan(ctx)?);
+            return Ok(());
+        }
         if state.closing && matches!(operation, TerminalOperation::Connect) {
             return Err("Wait until closing terminal sessions have finished".into());
         }
@@ -272,12 +283,19 @@ pub fn control(
             .get_mut(state.active)
             .ok_or("No terminal session is selected")?;
         match operation {
+            TerminalOperation::RefreshProfiles => {
+                unreachable!("handled before selecting a session")
+            }
             TerminalOperation::Connect => {
                 if view.session.is_some() {
                     return Err("This terminal is already connecting or connected".into());
                 }
                 view.target = state.preferences.target;
-                connect(view, &state.preferences, &selected, ctx);
+                let profile = state
+                    .profiles
+                    .iter()
+                    .find(|profile| profile.stable_id == state.preferences.profile_id);
+                connect(view, &state.preferences, profile, &selected, ctx);
                 if let Some(error) = &view.error {
                     return Err(error.clone());
                 }
@@ -287,13 +305,7 @@ pub fn control(
                 ctx.request_repaint_after(std::time::Duration::from_millis(100));
             }
             TerminalOperation::Clear => {
-                view.parser = vt100::Parser::new(
-                    view.size.0,
-                    view.size.1,
-                    state.preferences.scrollback_lines,
-                );
-                view.screen = Default::default();
-                view.queries = QueryState::default();
+                view.clear(state.preferences.scrollback_lines);
             }
             TerminalOperation::Write { data } => {
                 if view.phase != "ready" {
@@ -347,11 +359,23 @@ struct View {
     catalog: Vec<serde_json::Value>,
     size: (u16, u16),
     queries: QueryState,
+    actions: Vec<super::portable_shell_host::Action>,
 }
 
 #[cfg(feature = "workspace-terminal")]
 impl View {
+    fn clear(&mut self, scrollback_lines: usize) {
+        // Keep the embedded editor's cursor/prompt in agreement with a cleared
+        // view. Ctrl-L redraws without submitting or discarding the draft.
+        if self.target == TerminalTarget::PortableShell && self.phase == "ready" {
+            self.send(super::terminal_backend::Input::Bytes(vec![12]));
+        }
+        self.parser = vt100::Parser::new(self.size.0, self.size.1, scrollback_lines);
+        self.screen = Default::default();
+        self.queries = QueryState::default();
+    }
     fn begin_close(&mut self) {
+        self.actions.clear();
         if let Some(session) = &self.session {
             session.request_close();
             self.phase = "closing";
@@ -374,6 +398,7 @@ impl View {
             catalog: Vec::new(),
             size: (24, 80),
             queries: QueryState::default(),
+            actions: Vec::new(),
         }
     }
     fn send(&mut self, input: super::terminal_backend::Input) -> bool {
@@ -391,7 +416,7 @@ impl View {
         }
     }
     fn output(&mut self, bytes: &[u8]) {
-        if self.target == TerminalTarget::PcController {
+        if self.target != TerminalTarget::SystemShell {
             self.parser.process(bytes);
             return;
         }
@@ -441,6 +466,11 @@ impl View {
                 Event::Catalog(catalog) => self.catalog = catalog,
                 Event::Output(bytes) => self.output(&bytes),
                 Event::Error(error) => self.error = Some(error),
+                Event::Application(action) => {
+                    if self.phase != "closing" {
+                        self.actions.push(action);
+                    }
+                }
                 Event::Exited { code } => {
                     // Exited is an ordered stream marker, not proof that the
                     // control/reader/child guard have all released ownership.
@@ -674,6 +704,7 @@ pub fn arguments(value: &str) -> Result<Vec<String>, String> {
 fn connect(
     view: &mut View,
     preferences: &TerminalPreferences,
+    profile: Option<&super::terminal_profiles::Profile>,
     selected: &str,
     ctx: &egui::Context,
 ) {
@@ -697,17 +728,36 @@ fn connect(
                 endpoint: endpoint.to_string(),
             }
         }
-        TerminalTarget::SystemShell | TerminalTarget::PortableShell => {
-            let (program, args) = if view.target == TerminalTarget::PortableShell {
-                (
-                    if preferences.portable_shell_program.trim().is_empty() {
-                        "PortableShell.exe".to_string()
-                    } else {
-                        preferences.portable_shell_program.clone()
-                    },
-                    &preferences.portable_shell_arguments,
-                )
-            } else {
+        TerminalTarget::PortableShell => Target::Embedded,
+        TerminalTarget::SystemShell if !preferences.profile_id.is_empty() => {
+            let Some(profile) = profile else {
+                view.error = Some(
+                    "Refresh terminal profiles before connecting to the selected profile".into(),
+                );
+                return;
+            };
+            if let Some(reason) = profile.blocked_reason() {
+                view.error = Some(reason.into());
+                return;
+            }
+            Target::Shell {
+                program: profile.program.clone().unwrap(),
+                args: profile.args.clone(),
+                cwd: if profile.inherit_cwd {
+                    None
+                } else {
+                    profile.cwd.clone()
+                },
+                environment: profile
+                    .env
+                    .iter()
+                    .map(|(key, value)| (key.clone(), value.clone()))
+                    .collect(),
+                clear_environment: profile.clear_env,
+            }
+        }
+        TerminalTarget::SystemShell => {
+            let (program, args) = {
                 let default = if cfg!(windows) {
                     std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".into())
                 } else {
@@ -729,11 +779,23 @@ fn connect(
                     return;
                 }
             };
-            Target::Shell { program, args }
+            Target::Shell {
+                program,
+                args,
+                cwd: None,
+                environment: Vec::new(),
+                clear_environment: false,
+            }
         }
     };
     match Session::spawn(target, view.size.0, view.size.1, ctx.clone()) {
         Ok(session) => {
+            // A new endpoint/process owns a new VT state. Reusing modes from a
+            // previous TUI (alternate screen, application keys, paste) corrupts
+            // the next session even when its text happens to look unchanged.
+            view.parser =
+                vt100::Parser::new(view.size.0, view.size.1, preferences.scrollback_lines);
+            view.screen = Default::default();
             view.session = Some(session);
             view.phase = "opening";
             view.error = None;
@@ -761,41 +823,34 @@ fn panel_contents(
     let mut remove = None;
     let mut focus_input = false;
     ui.horizontal(|ui| {
-        ui.label(
-            egui::RichText::new(format!(
-                "{} {}",
-                super::icons::TERMINAL_WINDOW,
-                app.tr("Terminal")
-            ))
-            .strong(),
-        );
         for (index, view) in state.views.iter().enumerate() {
             if ui
-                .selectable_label(
-                    state.active == index,
-                    format!("{} {}", view.target.label(), view.id),
+                .add(
+                    egui::Button::new(format!(
+                        "{}  {}",
+                        super::icons::TERMINAL_WINDOW,
+                        view.target.label()
+                    ))
+                    .selected(state.active == index)
+                    .frame(false),
                 )
+                .on_hover_text(format!("{} · {}", app.tr("Session"), view.id))
                 .clicked()
             {
                 state.active = index;
             }
         }
         if ui
-            .add_enabled(state.views.len() < 4, egui::Button::new(super::icons::PLUS))
+            .add_enabled(
+                state.views.len() < 4,
+                egui::Button::new(super::icons::PLUS).frame(false),
+            )
             .on_hover_text(app.tr("New session"))
             .clicked()
         {
             add = true;
         }
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui
-                .button(super::icons::X)
-                .on_hover_text(app.tr("Hide terminal"))
-                .clicked()
-            {
-                state.preferences.enabled = false;
-                app.deferred_config_save = true;
-            }
             ui.menu_button(super::icons::DOTS_THREE, |ui| {
                 if ui
                     .button(format!(
@@ -851,6 +906,68 @@ fn panel_contents(
             state.preferences.target = view.target;
             app.deferred_config_save = true;
         }
+        if view.target == TerminalTarget::SystemShell {
+            ui.add_enabled_ui(view.session.is_none(), |ui| {
+                let selected = state
+                    .profiles
+                    .iter()
+                    .find(|profile| profile.stable_id == state.preferences.profile_id)
+                    .map(|profile| profile.name.as_str())
+                    .unwrap_or(if state.preferences.profile_id.is_empty() {
+                        "Custom / system default"
+                    } else {
+                        "Refresh to load saved profile"
+                    });
+                let old = state.preferences.profile_id.clone();
+                super::dropdown::ComboBox::from_id_salt(("terminal-profile", view.id))
+                    .selected_text(selected)
+                    .width(190.0)
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(
+                            &mut state.preferences.profile_id,
+                            String::new(),
+                            app.tr("Custom / system default"),
+                        );
+                        for profile in state.profiles.iter().filter(|profile| !profile.hidden) {
+                            ui.add_enabled_ui(profile.ready(), |ui| {
+                                ui.selectable_value(
+                                    &mut state.preferences.profile_id,
+                                    profile.stable_id.clone(),
+                                    &profile.name,
+                                )
+                                .on_hover_text(
+                                    profile.blocked_reason().unwrap_or(&profile.provenance),
+                                );
+                            });
+                        }
+                    });
+                if state.preferences.profile_id != old {
+                    app.deferred_config_save = true;
+                }
+            });
+            if ui
+                .add_enabled(
+                    state.profile_scan.is_none(),
+                    egui::Button::new(super::icons::ARROW_CLOCKWISE).frame(false),
+                )
+                .on_hover_text(
+                    app.tr("Refresh terminal profiles from Windows Terminal and VS Code settings"),
+                )
+                .clicked()
+            {
+                match start_profile_scan(ui.ctx()) {
+                    Ok(receiver) => state.profile_scan = Some(receiver),
+                    Err(error) => state.profile_warnings = vec![error],
+                }
+            }
+            if state.profile_scan.is_some() {
+                ui.spinner();
+            }
+            if !state.profile_warnings.is_empty() {
+                ui.label(super::icons::INFO)
+                    .on_hover_text(state.profile_warnings.join("\n"));
+            }
+        }
         let color = if view.phase == "ready" {
             egui::Color32::from_rgb(80, 185, 130)
         } else {
@@ -873,7 +990,11 @@ fn panel_contents(
                 } else {
                     &app.serial_port
                 };
-                connect(view, &state.preferences, endpoint, ui.ctx());
+                let profile = state
+                    .profiles
+                    .iter()
+                    .find(|profile| profile.stable_id == state.preferences.profile_id);
+                connect(view, &state.preferences, profile, endpoint, ui.ctx());
                 focus_input = true;
             }
         } else if ui
@@ -892,10 +1013,7 @@ fn panel_contents(
             .on_hover_text(app.tr("Clear terminal"))
             .clicked()
         {
-            view.parser =
-                vt100::Parser::new(view.size.0, view.size.1, state.preferences.scrollback_lines);
-            view.screen = Default::default();
-            view.queries = QueryState::default();
+            view.clear(state.preferences.scrollback_lines);
         }
         if !view.label.is_empty() {
             ui.add(egui::Label::new(egui::RichText::new(&view.label).small().weak()).truncate())
@@ -974,7 +1092,7 @@ fn panel_contents(
                     .monospace()
                     .color(ui.visuals().selection.stroke.color),
             );
-            let edit_id = ui.make_persistent_id(("terminal-command", view.id));
+            let edit_id = egui::Id::unique(("terminal-command", view.id));
             // Consume terminal-specific keys before TextEdit handles Enter
             // (which otherwise relinquishes focus) or Tab (focus traversal).
             let accepts_commands = view.phase == "ready"
@@ -1035,8 +1153,38 @@ fn command_keys(ctx: &egui::Context, id: egui::Id, enabled: bool) -> (bool, bool
     })
 }
 
+#[cfg(feature = "workspace-terminal")]
+fn start_profile_scan(
+    ctx: &egui::Context,
+) -> Result<std::sync::mpsc::Receiver<Result<super::terminal_profiles::Discovery, String>>, String>
+{
+    let (sender, receiver) = std::sync::mpsc::sync_channel(1);
+    let ctx = ctx.clone();
+    std::thread::Builder::new()
+        .name("terminal-profiles".into())
+        .spawn(move || {
+            let _ = sender.send(super::terminal_profiles::discover_with_diagnostics());
+            ctx.request_repaint();
+        })
+        .map_err(|error| format!("Could not refresh terminal profiles: {error}"))?;
+    Ok(receiver)
+}
+
 pub fn tick(app: &mut crate::app::PealayerApp, ctx: &egui::Context) {
-    ctx.data_mut(|data| data.insert_temp(egui::Id::unique("terminal-keyboard-owner"), false));
+    // Dock bodies paint after global shortcut dispatch. Prime ownership from
+    // last frame's stable focused widget, not a stale output flag; typing into
+    // a terminal must never run playback or hardware shortcuts first.
+    #[cfg(feature = "workspace-terminal")]
+    let claimed = app.terminal_state.preferences.enabled
+        && ctx.memory(|memory| {
+            app.terminal_state.views.iter().any(|view| {
+                memory.has_focus(egui::Id::unique(("terminal-screen", view.id)))
+                    || memory.has_focus(egui::Id::unique(("terminal-command", view.id)))
+            })
+        });
+    #[cfg(not(feature = "workspace-terminal"))]
+    let claimed = false;
+    ctx.data_mut(|data| data.insert_temp(egui::Id::unique("terminal-keyboard-owner"), claimed));
     #[cfg(feature = "workspace-terminal")]
     for view in &mut app.terminal_state.views {
         if view.tick() {
@@ -1045,6 +1193,94 @@ pub fn tick(app: &mut crate::app::PealayerApp, ctx: &egui::Context) {
     }
     #[cfg(feature = "workspace-terminal")]
     {
+        if let Some(receiver) = &app.terminal_state.profile_scan {
+            let result = match receiver.try_recv() {
+                Ok(result) => Some(result),
+                Err(std::sync::mpsc::TryRecvError::Empty) => None,
+                Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                    Some(Err("Profile discovery ended unexpectedly".into()))
+                }
+            };
+            if let Some(result) = result {
+                app.terminal_state.profile_scan = None;
+                match result {
+                    Ok(discovery) => {
+                        app.terminal_state.profiles = discovery.profiles;
+                        app.terminal_state.profile_warnings = discovery.warnings;
+                    }
+                    Err(error) => app.terminal_state.profile_warnings = vec![error],
+                }
+            }
+        }
+        let actions: Vec<_> = app
+            .terminal_state
+            .views
+            .iter_mut()
+            .flat_map(|view| {
+                std::mem::take(&mut view.actions)
+                    .into_iter()
+                    .map(move |action| (view.id, action))
+            })
+            .collect();
+        for (id, action) in actions {
+            if !app
+                .terminal_state
+                .views
+                .iter()
+                .any(|view| view.id == id && view.phase == "ready")
+            {
+                continue;
+            }
+            use super::portable_shell_host::Action;
+            use crate::platform::interop::InteropCommand;
+            let command = match action {
+                Action::Status => None,
+                Action::Play => Some(InteropCommand::Play),
+                Action::Pause => Some(InteropCommand::Pause),
+                Action::Stop => Some(InteropCommand::Stop),
+                Action::Seek(seconds) => Some(InteropCommand::SeekTo { seconds }),
+                Action::Volume(value) => Some(InteropCommand::SetVolume { value }),
+                Action::Mute(muted) => Some(InteropCommand::SetMute { muted }),
+                Action::Preferences => Some(InteropCommand::OpenPreferences),
+            };
+            let result = if let Some(command) = command {
+                match command.validate() {
+                    Ok(()) => {
+                        app.apply_interop_command(ctx, command, "Pealayer shell");
+                        Ok("Request sent to Pealayer. Use status to inspect playback.".to_string())
+                    }
+                    Err(error) => Err(error),
+                }
+            } else {
+                let status = crate::platform::interop::get_live_status();
+                Ok(format!(
+                    "Playback: {}\nPosition: {:.3} / {:.3} s\nVolume: {:.0}%{}\nController: {}",
+                    if status.playing { "playing" } else { "paused" },
+                    status.playback_time,
+                    status.duration,
+                    status.volume,
+                    if status.muted { " (muted)" } else { "" },
+                    if status.controller_connected {
+                        "connected"
+                    } else {
+                        "disconnected"
+                    }
+                ))
+            };
+            if let Some(view) = app
+                .terminal_state
+                .views
+                .iter_mut()
+                .find(|view| view.id == id)
+                && view.phase != "closing"
+            {
+                let (text, error) = match result {
+                    Ok(text) => (text, false),
+                    Err(text) => (text, true),
+                };
+                view.send(super::terminal_backend::Input::Response { text, error });
+            }
+        }
         if app.terminal_state.collect_closed() {
             app.request_quit(ctx);
         } else if app.terminal_state.cleanup_pending() {
@@ -1054,38 +1290,49 @@ pub fn tick(app: &mut crate::app::PealayerApp, ctx: &egui::Context) {
     crate::workspace_tools::publish(app);
 }
 
-pub fn draw(app: &mut crate::app::PealayerApp, ui: &mut egui::Ui) {
+/// Apply a changed visibility intent once. Native pane close/profile actions
+/// write back the same preference, so hidden sessions never reopen themselves.
+pub fn sync_visibility(app: &mut crate::app::PealayerApp) {
+    #[cfg(feature = "workspace-terminal")]
+    {
+        let wanted = app.terminal_state.preferences.enabled;
+        if app.terminal_state.last_visibility_intent == Some(wanted) {
+            return;
+        }
+        let tab = super::layout::PealayerTab::Terminal;
+        let visible = app.dock_state.layout.contains(&tab);
+        if wanted != visible {
+            if wanted && !app.dock_state.locked {
+                app.show_four_d_editor = true;
+                if super::layout::reveal_and_focus_tab(&mut app.dock_state, tab) {
+                    app.pending_tab_reveals.retain(|queued| *queued != tab);
+                    app.pending_tab_reveals.push(tab);
+                }
+            } else {
+                let _ = app.dock_state.set_visible(
+                    tab,
+                    false,
+                    Some(super::layout::PealayerTab::Timeline),
+                    |_| craft_ui::docking::Permissions::default(),
+                );
+            }
+        }
+        app.sync_terminal_visibility_from_workspace();
+        app.terminal_state.last_visibility_intent = Some(app.terminal_state.preferences.enabled);
+    }
+    #[cfg(not(feature = "workspace-terminal"))]
+    let _ = app;
+}
+
+/// The renderer owns pane geometry, title, menus and close button. This body
+/// never creates a competing fixed panel or overwrites remembered dock bounds.
+pub fn draw_docked(app: &mut crate::app::PealayerApp, ui: &mut egui::Ui) {
     #[cfg(feature = "workspace-terminal")]
     if app.terminal_state.preferences.enabled {
         let mut state = std::mem::take(&mut app.terminal_state);
         let mut open_preferences = false;
-        let configured_height = state.preferences.height;
-        let explicit_height = state
-            .last_rendered_height
-            .is_none_or(|last| (last - configured_height).abs() > 1.0);
-        let panel = egui::Panel::bottom("workspace-terminal")
-            .resizable(true)
-            .default_size(state.preferences.height)
-            .min_size(120.0)
-            .max_size((ui.available_height() * 0.7).max(120.0));
-        let panel = if explicit_height {
-            panel.exact_size(configured_height.min((ui.available_height() * 0.7).max(120.0)))
-        } else {
-            panel
-        };
-        let response = panel.show(ui, |ui| {
-            // egui's panel frame otherwise shrinks a disconnected/empty
-            // session to its short contents on the next frame, then saves that
-            // reduced height over the user's configured size.
-            ui.set_min_height(ui.available_height());
-            panel_contents(app, ui, &mut state, &mut open_preferences)
-        });
-        let height = response.response.rect.height().clamp(120.0, 900.0);
-        if (height - state.preferences.height).abs() > 1.0 {
-            state.preferences.height = height;
-            app.deferred_config_save = true;
-        }
-        state.last_rendered_height = Some(height);
+        ui.set_min_height(ui.available_height());
+        panel_contents(app, ui, &mut state, &mut open_preferences);
         app.terminal_state = state;
         // Preferences snapshots must see the restored state, not mem::take's
         // temporary default. Opening a helper inside panel() loses that state.
@@ -1122,32 +1369,71 @@ mod tests {
     }
     #[cfg(feature = "workspace-terminal")]
     #[test]
-    fn disconnected_terminal_keeps_height_and_applies_explicit_preference_changes() {
+    fn docked_body_never_overwrites_workspace_geometry_or_preference_height() {
         let _guard = crate::app::tests::lock_app_tests();
         let mut app = crate::app::PealayerApp::default();
         app.terminal_state.preferences.enabled = true;
-        app.terminal_state.preferences.height = 280.0;
+        app.terminal_state.preferences.font_size = 13.0;
+        let workspace = app.dock_state.clone();
         let ctx = egui::Context::default();
         for height in [280.0, 280.0, 280.0, 360.0, 360.0] {
-            app.terminal_state.preferences.height = height;
             let mut output = ctx.run_ui(
                 egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(
                         egui::Pos2::ZERO,
-                        egui::vec2(1000.0, 800.0),
+                        egui::vec2(1000.0, height),
                     )),
                     ..Default::default()
                 },
-                |ui| draw(&mut app, ui),
+                |ui| draw_docked(&mut app, ui),
             );
             output.textures_delta.clear();
-            assert!(
-                (app.terminal_state.preferences.height - height).abs() < 2.0,
-                "configured {height}, got {}",
-                app.terminal_state.preferences.height
-            );
+            assert_eq!(app.terminal_state.preferences.font_size, 13.0);
             assert!(!app.terminal_state.busy());
+            assert_eq!(app.dock_state, workspace);
         }
+    }
+    #[cfg(feature = "workspace-terminal")]
+    #[test]
+    fn visibility_intent_reconciles_once_and_close_never_reopens_sessions() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let mut app = crate::app::PealayerApp::default();
+        let tab = super::super::layout::PealayerTab::Terminal;
+        app.terminal_state.preferences.enabled = true;
+        sync_visibility(&mut app);
+        assert!(app.dock_state.layout.contains(&tab));
+        let remembered = app.dock_state.clone();
+        sync_visibility(&mut app);
+        assert_eq!(remembered, app.dock_state);
+        app.toggle_tab(tab);
+        assert!(!app.terminal_state.preferences.enabled);
+        sync_visibility(&mut app);
+        sync_visibility(&mut app);
+        assert!(!app.dock_state.layout.contains(&tab));
+        app.dock_state.locked = true;
+        app.terminal_state.preferences.enabled = true;
+        sync_visibility(&mut app);
+        assert!(!app.dock_state.layout.contains(&tab));
+        assert!(!app.terminal_state.preferences.enabled);
+    }
+    #[cfg(feature = "workspace-terminal")]
+    #[test]
+    fn focused_terminal_preclaims_keyboard_before_dock_paint() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let mut app = crate::app::PealayerApp::default();
+        app.terminal_state.preferences.enabled = true;
+        app.terminal_state
+            .views
+            .push(View::new(7, &app.terminal_state.preferences));
+        let ctx = egui::Context::default();
+        ctx.memory_mut(|memory| {
+            memory.request_focus(egui::Id::unique(("terminal-command", 7_u64)))
+        });
+        tick(&mut app, &ctx);
+        assert!(owns_keyboard(&ctx));
+        app.terminal_state.preferences.enabled = false;
+        tick(&mut app, &ctx);
+        assert!(!owns_keyboard(&ctx));
     }
     #[cfg(feature = "workspace-terminal")]
     #[test]

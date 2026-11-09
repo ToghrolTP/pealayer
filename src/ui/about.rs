@@ -482,6 +482,14 @@ fn libraries_and_licenses(_app: &PealayerApp, ui: &mut egui::Ui) {
             }
             library_row(ui, name, &format!("{version} · {license}"), purpose);
         }
+        #[cfg(feature = "workspace-terminal")]
+        {
+            ui.separator();
+            library_row(ui, "PortableShell", "512c1c6 · MIT", "Embedded Pealayer shell and terminal profile import");
+            ui.collapsing("PortableShell license", |ui| {
+                ui.add(egui::Label::new(include_str!("../../third_party/portable-shell/LICENSE")).wrap());
+            });
+        }
         ui.add_space(6.0);
         ui.add(egui::Label::new(egui::RichText::new("This is a concise runtime inventory. Packaged notices and each dependency's source license remain authoritative.").small().weak()).wrap());
         ui.hyperlink_to(

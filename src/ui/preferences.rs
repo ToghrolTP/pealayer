@@ -1483,7 +1483,7 @@ fn render_contract_control(
         }
         PreferenceControlKind::File => {
             let player_executable = control.key == "external_mpv.executable";
-            let terminal_executable = matches!(control.key, "ui.terminal.shell_program" | "ui.terminal.portable_shell_program");
+            let terminal_executable = control.key == "ui.terminal.shell_program";
             let executable = player_executable || terminal_executable;
             let picker_title = if terminal_executable { "Choose terminal executable" }
                 else if executable { "Choose mpv executable" } else { "Choose an image file" };
@@ -2235,8 +2235,7 @@ mod tests {
 
     #[test]
     fn clearing_terminal_preferences_returns_to_defaults_without_null_strings() {
-        for key in ["ui.terminal.controller_endpoint", "ui.terminal.shell_program", "ui.terminal.shell_arguments",
-            "ui.terminal.portable_shell_program", "ui.terminal.portable_shell_arguments"] {
+        for key in ["ui.terminal.controller_endpoint", "ui.terminal.shell_program", "ui.terminal.shell_arguments"] {
             assert_eq!(preference_text_value(key, "  ", false), serde_json::json!(""));
         }
         assert!(preference_text_value("app_icon_default", "", false).is_null());

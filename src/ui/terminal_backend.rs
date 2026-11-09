@@ -24,8 +24,17 @@ const MAX_COMMAND_OUTPUT: usize = 1024 * 1024;
 
 #[derive(Clone, Debug)]
 pub enum Target {
-    Controller { endpoint: String },
-    Shell { program: String, args: Vec<String> },
+    Controller {
+        endpoint: String,
+    },
+    Shell {
+        program: String,
+        args: Vec<String>,
+        cwd: Option<String>,
+        environment: Vec<(String, Option<String>)>,
+        clear_environment: bool,
+    },
+    Embedded,
 }
 
 #[derive(Debug)]
@@ -33,6 +42,7 @@ pub enum Input {
     Bytes(Vec<u8>),
     Command(String),
     Resize { rows: u16, cols: u16 },
+    Response { text: String, error: bool },
 }
 
 #[derive(Debug)]
@@ -42,12 +52,14 @@ pub enum Event {
     Output(Vec<u8>),
     Exited { code: Option<u32> },
     Error(String),
+    Application(super::portable_shell_host::Action),
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Kind {
     Controller,
     Shell,
+    Embedded,
 }
 
 #[derive(Default)]
@@ -185,6 +197,7 @@ impl Session {
     pub fn spawn(target: Target, rows: u16, cols: u16, ctx: egui::Context) -> Result<Self, String> {
         validate_size(rows, cols)?;
         let kind = match &target {
+            Target::Embedded => Kind::Embedded,
             Target::Controller { endpoint } => {
                 if endpoint.trim().is_empty()
                     || endpoint.len() > 4096
@@ -194,7 +207,13 @@ impl Session {
                 }
                 Kind::Controller
             }
-            Target::Shell { program, args } => {
+            Target::Shell {
+                program,
+                args,
+                cwd,
+                environment,
+                ..
+            } => {
                 if program.trim().is_empty()
                     || program.len() > 4096
                     || program.contains(['\r', '\n', '\0'])
@@ -206,6 +225,21 @@ impl Session {
                     || args.iter().map(String::len).sum::<usize>() > 64 * 1024
                 {
                     return Err("Terminal arguments are invalid or too large".into());
+                }
+                if cwd
+                    .as_ref()
+                    .is_some_and(|path| path.len() > 8192 || path.contains('\0'))
+                    || environment.len() > 64
+                    || environment.iter().any(|(key, value)| {
+                        key.is_empty()
+                            || key.contains(['=', '\0'])
+                            || key.len() > 4096
+                            || value
+                                .as_ref()
+                                .is_some_and(|value| value.len() > 65536 || value.contains('\0'))
+                    })
+                {
+                    return Err("Terminal working directory or environment is invalid".into());
                 }
                 Kind::Shell
             }
@@ -222,10 +256,24 @@ impl Session {
             .name("terminal-session".into())
             .spawn(move || {
                 let result = match target {
+                    Target::Embedded => run_embedded(rows, cols, &output),
                     Target::Controller { endpoint } => run_controller(&endpoint, &output),
-                    Target::Shell { program, args } => {
-                        run_shell(&program, &args, rows, cols, &output)
-                    }
+                    Target::Shell {
+                        program,
+                        args,
+                        cwd,
+                        environment,
+                        clear_environment,
+                    } => run_shell(
+                        &program,
+                        &args,
+                        cwd.as_deref(),
+                        &environment,
+                        clear_environment,
+                        rows,
+                        cols,
+                        &output,
+                    ),
                 };
                 if let Err(error) = result {
                     output.shared.finish();
@@ -320,14 +368,17 @@ fn validate_input(kind: Kind, input: &Input) -> Result<(), String> {
                 Ok(())
             }
         }
-        Input::Bytes(bytes) if kind == Kind::Shell => {
+        Input::Bytes(bytes) if matches!(kind, Kind::Shell | Kind::Embedded) => {
             if bytes.is_empty() || bytes.len() > MAX_INPUT_BYTES {
                 Err("Terminal input must contain 1–32768 bytes per submission".into())
             } else {
                 Ok(())
             }
         }
-        Input::Resize { rows, cols } if kind == Kind::Shell => validate_size(*rows, *cols),
+        Input::Resize { rows, cols } if matches!(kind, Kind::Shell | Kind::Embedded) => {
+            validate_size(*rows, *cols)
+        }
+        Input::Response { text, .. } if kind == Kind::Embedded && text.len() <= 8192 => Ok(()),
         _ => Err("This input is not supported by the selected terminal session".into()),
     }
 }
@@ -427,6 +478,83 @@ fn pty_size(rows: u16, cols: u16) -> PtySize {
     }
 }
 
+/// PortableShell runs in-process on one owned worker, never through an OS
+/// executable or command interpreter. Only explicit submitted commands cross
+/// back to the UI's typed application dispatcher.
+fn run_embedded(rows: u16, cols: u16, output: &Events) -> Result<(), String> {
+    let mut host = super::portable_shell_host::Host::new(rows.min(80), cols.min(240))?;
+    let started = std::time::Instant::now();
+    output.send(Event::Ready {
+        label: "Pealayer · embedded PortableShell".into(),
+    });
+    let mut escape_deadline = None;
+    loop {
+        if !output.shared.active(output.generation) {
+            break;
+        }
+        if !output.output(&host.take_output()) {
+            break;
+        }
+        for action in host.take_actions() {
+            if !output.send(Event::Application(action)) {
+                return Ok(());
+            }
+        }
+        if host.exited() {
+            output.shared.finish();
+            output.exited(Some(0));
+            break;
+        }
+        let mut state = output
+            .shared
+            .state
+            .lock()
+            .unwrap_or_else(|error| error.into_inner());
+        while !state.cancelled && !state.finished && state.inputs.is_empty() {
+            if let Some(deadline) = escape_deadline {
+                let now = std::time::Instant::now();
+                if now >= deadline {
+                    break;
+                }
+                state = output
+                    .shared
+                    .wake
+                    .wait_timeout(state, deadline - now)
+                    .unwrap_or_else(|error| error.into_inner())
+                    .0;
+            } else {
+                state = output
+                    .shared
+                    .wake
+                    .wait(state)
+                    .unwrap_or_else(|error| error.into_inner());
+            }
+        }
+        if state.cancelled || state.finished {
+            break;
+        }
+        let input = state.inputs.pop_front();
+        drop(state);
+        let now = started.elapsed().as_millis() as u32;
+        match input {
+            Some(Input::Bytes(bytes)) => {
+                host.feed(&bytes);
+                escape_deadline =
+                    Some(std::time::Instant::now() + std::time::Duration::from_millis(70));
+            }
+            Some(Input::Resize { rows, cols }) => host.resize(rows.min(80), cols.min(240)),
+            Some(Input::Response { text, error }) => host.response(&text, error),
+            Some(Input::Command(_)) => unreachable!("input validated at session boundary"),
+            None => {
+                host.tick(now);
+                escape_deadline = None;
+            }
+        }
+    }
+    // Dropping Host cancels unfinished input; it must never submit it.
+    Ok(())
+}
+
 /// A spawn failure after creating a child must not orphan it. This guard lives
 /// only on workers, and is disarmed only after that exact child has been reaped.
 struct OwnedChild {
@@ -452,6 +580,9 @@ impl Drop for OwnedChild {
 fn run_shell(
     program: &str,
     args: &[String],
+    cwd: Option<&str>,
+    environment: &[(String, Option<String>)],
+    clear_environment: bool,
     rows: u16,
     cols: u16,
     output: &Events,
@@ -465,6 +596,19 @@ fn run_shell(
         .map_err(|error| format!("Could not open terminal: {error}"))?;
     let mut command = CommandBuilder::new(&program);
     command.args(args);
+    if clear_environment {
+        command.env_clear();
+    }
+    if let Some(cwd) = cwd {
+        command.cwd(cwd);
+    }
+    for (key, value) in environment {
+        if let Some(value) = value {
+            command.env(key, value);
+        } else {
+            command.env_remove(key);
+        }
+    }
     command.env("TERM", "xterm-256color");
     command.env("COLORTERM", "truecolor");
     if !output.shared.active(output.generation) {
@@ -669,7 +813,9 @@ fn run_shell(
                     .resize = Some((rows, cols));
                 output.shared.wake.notify_all();
             }
-            Input::Command(_) => unreachable!("input validated at session boundary"),
+            Input::Command(_) | Input::Response { .. } => {
+                unreachable!("input validated at session boundary")
+            }
         }
     }
     Ok(())
@@ -678,6 +824,60 @@ fn run_shell(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn embedded_session_is_readonly_until_submission_and_cancels_unfinished_input() {
+        use super::super::portable_shell_host::Action;
+        let session = Session::spawn(Target::Embedded, 24, 80, egui::Context::default()).unwrap();
+        let mut output = Vec::new();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let mut ready = false;
+        while !ready && std::time::Instant::now() < deadline {
+            while let Some(event) = session.try_recv() {
+                match event {
+                    Event::Ready { .. } => ready = true,
+                    Event::Output(bytes) => output.extend(bytes),
+                    Event::Application(_) | Event::Catalog(_) => {
+                        panic!("Opening the prompt dispatched a command")
+                    }
+                    Event::Error(error) => panic!("{error}"),
+                    _ => {}
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(ready);
+        session
+            .send(Input::Bytes(b"status\rseek 1.25\r".to_vec()))
+            .unwrap();
+        let mut actions = Vec::new();
+        while actions.len() < 2 && std::time::Instant::now() < deadline {
+            while let Some(event) = session.try_recv() {
+                match event {
+                    Event::Application(action) => actions.push(action),
+                    Event::Output(bytes) => output.extend(bytes),
+                    Event::Error(error) => panic!("{error}"),
+                    _ => {}
+                }
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(actions, [Action::Status, Action::Seek(1.25)]);
+        assert!(String::from_utf8_lossy(&output).contains("Pealayer"));
+        session.send(Input::Bytes(b"play".to_vec())).unwrap();
+        session.request_close();
+        while !session.is_closed() && std::time::Instant::now() < deadline {
+            if let Some(Event::Application(_)) = session.try_recv() {
+                panic!("Closing executed unfinished input");
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert!(
+            session.is_closed(),
+            "Embedded worker must release ownership after cancellation"
+        );
+        assert!(session.send(Input::Bytes(b"\r".to_vec())).is_err());
+    }
 
     #[test]
     fn controller_session_dispatches_only_explicit_commands_and_never_replays_failures() {
@@ -973,6 +1173,9 @@ mod tests {
                 "ui::terminal_backend::tests::pty_fixture_process".into(),
                 "--nocapture".into(),
             ],
+            cwd: None,
+            environment: Vec::new(),
+            clear_environment: false,
         }
     }
 
@@ -1046,7 +1249,9 @@ mod tests {
                         assert_eq!(code, Some(0));
                         exited = true;
                     }
-                    Event::Catalog(_) => panic!("Shell must not connect to PCController"),
+                    Event::Catalog(_) | Event::Application(_) => {
+                        panic!("OS shell must not dispatch application or controller commands")
+                    }
                 }
             }
             if !sent && String::from_utf8_lossy(&bytes).contains("PTY-FIXTURE-READY") {

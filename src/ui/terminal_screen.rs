@@ -25,8 +25,8 @@ pub struct ScreenOutput {
 }
 
 fn dimensions(size: egui::Vec2, cell: egui::Vec2) -> (u16, u16) {
-    let rows = (size.y / cell.y.max(1.0)).floor().clamp(4.0, 100.0) as u16;
-    let cols = (size.x / cell.x.max(1.0)).floor().clamp(20.0, 320.0) as u16;
+    let rows = (size.y / cell.y.max(1.0)).floor().clamp(4.0, 80.0) as u16;
+    let cols = (size.x / cell.x.max(1.0)).floor().clamp(20.0, 240.0) as u16;
     (rows, cols)
 }
 
@@ -746,7 +746,7 @@ mod tests {
         );
         assert_eq!(
             dimensions(egui::vec2(10000.0, 10000.0), egui::vec2(8.0, 16.0)),
-            (100, 320)
+            (80, 240)
         );
         assert_eq!(
             ansi_color(vt100::Color::Idx(196), egui::Color32::WHITE, true),
