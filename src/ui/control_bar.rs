@@ -365,6 +365,7 @@ pub(crate) fn draw_group(
         egui::Layout::left_to_right(egui::Align::Center)
     };
     let area = ui.allocate_ui_with_layout(egui::vec2(total, height), direction, |ui| {
+        ui.set_min_size(egui::vec2(total,height));
         let action_width = (total - if end { height + gap } else { 0.0 }).max(1.0);
         let actions: Vec<_> = app.control_bars.layout(surface).ordered().into_iter().filter(|action| {
             let layout=app.control_bars.layout(surface);
@@ -382,6 +383,7 @@ pub(crate) fn draw_group(
         ui.data_mut(|data|data.insert_temp(owner.with(("overflow-actions",end)),overflow));
         if group_width(app, ui, surface, end) > if end { height } else { 0.0 } {
             ui.allocate_ui_with_layout(egui::vec2(action_width, height), direction, |ui| {
+                ui.set_min_size(egui::vec2(action_width,height));
                 if surface == Surface::Monitor {
                     draw_actions(app,ui,surface,end,owner,Some(&shown));
                     return;
@@ -975,6 +977,10 @@ mod tests {
                         slot.contains_rect(overflow),
                         "overflow must remain reachable {overflow:?} in {slot:?}"
                     );
+                    if !hidden {
+                        let edge=if rtl {overflow.left()-slot.left()} else {overflow.right()-slot.right()};
+                        assert!(edge.abs()<0.5,"overflow must stay at the trailing edge: {overflow:?} in {slot:?}, rtl={rtl}");
+                    }
                 }
             }
         }

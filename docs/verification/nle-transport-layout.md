@@ -18,6 +18,12 @@ in row count retain widget/drag identities and user action ordering/visibility.
 Buttons that do not fit a narrow monitor group are available as real commands in
 its trailing overflow menu, not clipped or stranded in an invisible scroller.
 
+The first real native narrow capture also exposed an allocator shrinking the
+action lane to its visible prefix, leaving the overflow button short of the pane
+edge. The lane now reserves its exact measured bounds. A rendered trailing-edge
+assertion guards it across densities and RTL, and medium rows reserve a distinct
+inter-cluster gutter rather than packing transport against the track selectors.
+
 ## Three-dot failure and regression
 
 The left-click `Popup::menu` and secondary-click `Response::context_menu` both used

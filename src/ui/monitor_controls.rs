@@ -114,7 +114,7 @@ impl Metrics {
             self.transport + self.timeline_min + self.tracks + VOLUME_WIDTH + 3.0 * self.gap;
         if width >= complete {
             Rows::One
-        } else if width >= self.transport + self.tracks + self.volume_min + 2.0 * self.gap {
+        } else if width >= self.transport + self.tracks + self.volume_min + self.gap + self.cluster_gap() {
             Rows::Two
         } else {
             Rows::Three
@@ -129,6 +129,8 @@ impl Metrics {
         };
         rows * self.row_height + (rows - 1.0) * self.gap_y
     }
+
+    fn cluster_gap(self) -> f32 { (2.0*self.gap).max(24.0) }
 }
 
 /// Explicit bounded groups keep the elastic seekbar from forcing a wrap and
@@ -154,15 +156,16 @@ fn draw_layout(ui: &mut egui::Ui, metrics: Metrics, mut draw: impl FnMut(Group, 
             slot(Group::Volume, 0, width - VOLUME_WIDTH, VOLUME_WIDTH);
         }
         Rows::Two => {
-            let volume = VOLUME_WIDTH.min(width - metrics.transport - metrics.tracks - 2.0 * metrics.gap);
+            let volume = VOLUME_WIDTH.min(width - metrics.transport - metrics.tracks - metrics.gap - metrics.cluster_gap());
             slot(Group::Timeline, 0, 0.0, width);
             slot(Group::Transport, 1, 0.0, metrics.transport);
             slot(Group::Tracks, 1, width - volume - metrics.gap - metrics.tracks, metrics.tracks);
             slot(Group::Volume, 1, width - volume, volume);
         }
         Rows::Three => {
-            let transport = metrics.transport.min((width - metrics.row_height - metrics.gap).max(1.0));
-            let tracks = metrics.tracks.min((width - transport - metrics.gap).max(1.0));
+            let gap=metrics.gap.max(16.0);
+            let transport = metrics.transport.min((width - metrics.row_height - gap).max(1.0));
+            let tracks = metrics.tracks.min((width - transport - gap).max(1.0));
             let volume = (width * 0.7).clamp(metrics.volume_min, 240.0).min(width);
             slot(Group::Timeline, 0, 0.0, width);
             slot(Group::Transport, 1, 0.0, transport);
@@ -316,11 +319,11 @@ mod tests {
         let m = metrics();
         assert_eq!(m.rows(786.0), Rows::One);
         assert_eq!(m.rows(785.9), Rows::Two);
-        assert_eq!(m.rows(432.0), Rows::Two);
-        assert_eq!(m.rows(431.9), Rows::Three);
+        assert_eq!(m.rows(448.0), Rows::Two);
+        assert_eq!(m.rows(447.9), Rows::Three);
         assert_eq!(m.rows(240.0), Rows::Three);
         assert_eq!(m.height(786.0), 24.0);
-        assert_eq!(m.height(432.0), 52.0);
+        assert_eq!(m.height(448.0), 52.0);
         assert_eq!(m.height(400.0), 80.0);
         assert_eq!(m.height(240.0), 80.0);
     }
