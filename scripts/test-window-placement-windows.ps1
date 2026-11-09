@@ -143,17 +143,17 @@ try {
             if($diagnostic.branding.refresh_pending -or $diagnostic.branding.error){throw 'Previous branding phase did not settle.'}
             $artworkBox=$null
             $artworkPass=0
-            $previousIcon=$diagnostic.branding.icon
+            $previousRevision=$diagnostic.branding.revision
             $identity=$diagnostic.branding.app_id
             $refreshes=$diagnostic.branding.refreshes
             foreach($preset in 'classic','current','classic','current'){
                 $null=Invoke-RestMethod "http://127.0.0.1:$Port/api/config" -Method Post -ContentType application/json -Body (@{app_icon_preset=$preset}|ConvertTo-Json)
                 $deadline=[DateTime]::UtcNow.AddSeconds(5)
-                do {$diagnostic=Invoke-RestMethod "http://127.0.0.1:$Port/api/player/taskbar-preview";if($diagnostic.branding.icon -ne $previousIcon -and !$diagnostic.branding.refresh_pending -and !$diagnostic.shell_commands.thumbnail_toolbar.last_error -and $diagnostic.shell_commands.thumbnail_toolbar.added_hwnd -eq $handle.ToInt64()){break};Start-Sleep -Milliseconds 100}while([DateTime]::UtcNow -lt $deadline)
-                if($diagnostic.branding.icon -eq $previousIcon -or $diagnostic.branding.error){throw 'Live icon change failed.'}
+                do {$diagnostic=Invoke-RestMethod "http://127.0.0.1:$Port/api/player/taskbar-preview";if($diagnostic.branding.revision -ne $previousRevision -and !$diagnostic.branding.refresh_pending -and !$diagnostic.shell_commands.thumbnail_toolbar.last_error -and $diagnostic.shell_commands.thumbnail_toolbar.added_hwnd -eq $handle.ToInt64()){break};Start-Sleep -Milliseconds 100}while([DateTime]::UtcNow -lt $deadline)
+                if($diagnostic.branding.revision -eq $previousRevision -or $diagnostic.branding.error){throw 'Live icon change failed.'}
                 if($diagnostic.branding.app_id -ne $identity -or $diagnostic.branding.refreshes -ne ++$refreshes){throw 'Icon refresh changed identity or failed to rebuild membership.'}
                 if($diagnostic.shell_commands.thumbnail_toolbar.last_error -or $diagnostic.shell_commands.thumbnail_toolbar.added_hwnd -ne $handle.ToInt64()){throw "Icon refresh lost the media toolbar: $($diagnostic.shell_commands.thumbnail_toolbar | ConvertTo-Json -Compress)"}
-                $previousIcon=$diagnostic.branding.icon
+                $previousRevision=$diagnostic.branding.revision
                 "Live $preset icon metadata applied; stable identity; toolbar retained (not visual proof)"
                 if($TestDisplayedBranding){
                     Start-Sleep -Milliseconds 800

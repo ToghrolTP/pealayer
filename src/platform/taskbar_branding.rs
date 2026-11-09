@@ -11,8 +11,8 @@ const ICON: PROPERTYKEY = PROPERTYKEY { fmtid: MODEL, pid: 3 };
 const NAME: PROPERTYKEY = PROPERTYKEY { fmtid: MODEL, pid: 4 };
 const ID: PROPERTYKEY = PROPERTYKEY { fmtid: MODEL, pid: 5 };
 #[derive(Default)]
-struct Applied { stamp: Option<(isize, u64, String)>, icon: String, shortcuts_updated: u64, refreshes: u64, refresh_pending: bool, detached: bool, error: Option<String> }
-static APPLIED: Mutex<Applied> = Mutex::new(Applied { stamp: None, icon: String::new(), shortcuts_updated: 0, refreshes: 0, refresh_pending: false, detached: false, error: None });
+struct Applied { stamp: Option<(isize, u64, String)>, revision: u64, icon: String, shortcuts_updated: u64, refreshes: u64, refresh_pending: bool, detached: bool, error: Option<String> }
+static APPLIED: Mutex<Applied> = Mutex::new(Applied { stamp: None, revision: 0, icon: String::new(), shortcuts_updated: 0, refreshes: 0, refresh_pending: false, detached: false, error: None });
 const REFRESH_TIMER: usize = 0x5042_5249;
 
 // WM_SETICON/property notifications are asynchronous in Explorer. Re-registering
@@ -77,6 +77,7 @@ fn wide(path: &Path) -> Vec<u16> {
     use std::os::windows::ffi::OsStrExt;
     path.as_os_str().encode_wide().chain(Some(0)).collect()
 }
+#[cfg(test)]
 fn cache_icon(directory: &Path, bytes: &[u8]) -> Result<PathBuf, String> {
     use sha2::{Digest, Sha256};
     let digest: String = Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect();
@@ -84,6 +85,32 @@ fn cache_icon(directory: &Path, bytes: &[u8]) -> Result<PathBuf, String> {
     std::fs::create_dir_all(directory).map_err(|e| e.to_string())?;
     if std::fs::read(&path).ok().as_deref() != Some(bytes) { std::fs::write(&path, bytes).map_err(|e| e.to_string())?; }
     Ok(path)
+}
+fn publish_shell_icon(directory: &Path, role: &str, bytes: &[u8]) -> Result<(PathBuf, bool), String> {
+    use windows::Win32::UI::Shell::{SHGetFileInfoW, SHUpdateImageW, SHFILEINFOW, SHGFI_SYSICONINDEX,
+        SHChangeNotify, SHCNE_UPDATEITEM, SHCNF_PATHW};
+    let path = directory.join(format!("pealayer-{}-{role}.ico", app_id()));
+    if std::fs::read(&path).ok().as_deref() == Some(bytes) { return Ok((path, false)); }
+    std::fs::create_dir_all(directory).map_err(|error| error.to_string())?;
+    let filename = wide(&path);
+    let mut image = SHFILEINFOW::default();
+    let cached = path.is_file() && unsafe {
+        SHGetFileInfoW(PCWSTR(filename.as_ptr()), Default::default(), Some(&mut image),
+            std::mem::size_of::<SHFILEINFOW>() as u32, SHGFI_SYSICONINDEX) != 0
+    };
+    // Keep the old extractor identity, but replace its contents atomically.
+    // Explorer may retain that identity despite a different relaunch filename.
+    let temporary = path.with_extension(format!("{}.tmp", std::process::id()));
+    std::fs::write(&temporary, bytes).map_err(|error| error.to_string())?;
+    if let Err(error) = std::fs::rename(&temporary, &path) {
+        let _ = std::fs::remove_file(&temporary);
+        return Err(error.to_string());
+    }
+    unsafe {
+        SHChangeNotify(SHCNE_UPDATEITEM, SHCNF_PATHW, Some(filename.as_ptr().cast()), None);
+        if cached { SHUpdateImageW(PCWSTR(filename.as_ptr()), 0, 0, image.iIcon); }
+    }
+    Ok((path, true))
 }
 fn prune_cache(directory: &Path, keep: &[&Path]) {
     let Ok(entries) = std::fs::read_dir(directory) else { return; };
@@ -178,17 +205,6 @@ unsafe fn update_shortcut(path: &Path, executable: &Path, icon: &Path) -> window
     let resource = format!("{},0", icon.display());
     if same_executable(Path::new(&string(&current)), icon) && index == 0 && id.to_string() == app_id()
         && unsafe { store.GetValue(&ICON)? }.to_string() == resource { return Ok(false); }
-    // UPDATEITEM refreshes link metadata, not necessarily the image already
-    // cached by a long-lived taskbar group. Remember this owned link's OLD
-    // extractor location and image-list index before changing either of them.
-    use windows::Win32::UI::Shell::{SHGetFileInfoW, SHUpdateImageW, SHFILEINFOW, SHGFI_ICONLOCATION, SHGFI_SYSICONINDEX};
-    let mut old_image = SHFILEINFOW::default();
-    let mut old_location = SHFILEINFOW::default();
-    let image_update = unsafe {
-        SHGetFileInfoW(PCWSTR(filename.as_ptr()), Default::default(), Some(&mut old_location), std::mem::size_of::<SHFILEINFOW>() as u32, SHGFI_ICONLOCATION) != 0
-            && Path::new(&string(&old_location.szDisplayName)).is_file()
-            && SHGetFileInfoW(PCWSTR(filename.as_ptr()), Default::default(), Some(&mut old_image), std::mem::size_of::<SHFILEINFOW>() as u32, SHGFI_SYSICONINDEX) != 0
-    };
     let location = wide(icon);
     unsafe {
         // Don't request write access for unrelated or already-current pins.
@@ -202,9 +218,6 @@ unsafe fn update_shortcut(path: &Path, executable: &Path, icon: &Path) -> window
         file.Save(PCWSTR(filename.as_ptr()), true)?;
         use windows::Win32::UI::Shell::{SHChangeNotify, SHCNE_UPDATEITEM, SHCNF_PATHW};
         SHChangeNotify(SHCNE_UPDATEITEM, SHCNF_PATHW, Some(filename.as_ptr().cast()), None);
-        if image_update {
-            SHUpdateImageW(PCWSTR(old_location.szDisplayName.as_ptr()), old_location.iIcon, 0, old_image.iIcon);
-        }
     }
     Ok(true)
 }
@@ -214,8 +227,8 @@ pub fn apply(hwnd: isize, source: u64, config: &crate::config::AppConfig, state:
     if APPLIED.lock().is_ok_and(|value| value.stamp.as_ref() == Some(&stamp)) { return; }
     let result = (|| -> Result<(PathBuf, u64, bool), String> {
         let directory = crate::config::AppConfig::get_config_path().with_file_name("shell-icons");
-        let icon = cache_icon(&directory, &crate::branding::native_icon_bytes(config, state)?)?;
-        let default = cache_icon(&directory, &crate::branding::native_icon_bytes(config, crate::branding::PlaybackIconState::Stopped)?)?;
+        let (icon, icon_changed) = publish_shell_icon(&directory, "taskbar", &crate::branding::native_icon_bytes(config, state)?)?;
+        let (default, default_changed) = publish_shell_icon(&directory, "launcher", &crate::branding::native_icon_bytes(config, crate::branding::PlaybackIconState::Stopped)?)?;
         let executable = std::env::current_exe().map_err(|e| e.to_string())?;
         let initialized = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) }.is_ok();
         let result = (|| -> windows::core::Result<(u64,bool)> {
@@ -238,7 +251,8 @@ pub fn apply(hwnd: isize, source: u64, config: &crate::config::AppConfig, state:
                     }
                 }
             }
-            let changed=unsafe { set_window_properties(HWND(hwnd as *mut _), &icon, &name, &executable)? };
+            let changed=unsafe { set_window_properties(HWND(hwnd as *mut _), &icon, &name, &executable)? }
+                || icon_changed || default_changed;
             if changed {
                 schedule_refresh(HWND(hwnd as *mut _))
                     .map_err(|error| windows::core::Error::new(windows::core::HRESULT(0x80004005u32 as i32),error))?;
@@ -253,6 +267,7 @@ pub fn apply(hwnd: isize, source: u64, config: &crate::config::AppConfig, state:
         match result {
             Ok((icon, updated, changed)) => {
                 applied.stamp = Some(stamp);
+                applied.revision += 1;
                 applied.icon = icon.file_name().unwrap_or_default().to_string_lossy().into_owned();
                 applied.shortcuts_updated += updated;
                 applied.refresh_pending |= changed;
@@ -264,12 +279,31 @@ pub fn apply(hwnd: isize, source: u64, config: &crate::config::AppConfig, state:
 }
 pub fn diagnostics() -> serde_json::Value {
     APPLIED.lock().map(|value| serde_json::json!({"applied":value.stamp.is_some(),
-        "icon":value.icon,"app_id":app_id(),"refreshes":value.refreshes,"refresh_pending":value.refresh_pending,"owned_shortcuts_updated":value.shortcuts_updated,"error":value.error})).unwrap_or_default()
+        "icon":value.icon,"revision":value.revision,"app_id":app_id(),"refreshes":value.refreshes,"refresh_pending":value.refresh_pending,"owned_shortcuts_updated":value.shortcuts_updated,"error":value.error})).unwrap_or_default()
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn shell_resource_identity_is_stable_atomic_and_unchanged_bytes_do_not_write() {
+        let directory = std::env::temp_dir().join(format!("pealayer-shell-resource-{}", uuid::Uuid::new_v4()));
+        let modern = include_bytes!("../../assets/icon.ico");
+        let classic = include_bytes!("../../assets/icons/classic.ico");
+        let (path, changed) = publish_shell_icon(&directory, "taskbar", modern).unwrap();
+        assert!(changed);
+        let modified = path.metadata().unwrap().modified().unwrap();
+        assert_eq!(publish_shell_icon(&directory, "taskbar", modern).unwrap(), (path.clone(), false));
+        assert_eq!(path.metadata().unwrap().modified().unwrap(), modified);
+        for bytes in [classic.as_slice(), modern.as_slice(), classic.as_slice(), modern.as_slice()] {
+            assert_eq!(publish_shell_icon(&directory, "taskbar", bytes).unwrap(), (path.clone(), true));
+            assert_eq!(std::fs::read(&path).unwrap(), bytes);
+            assert_eq!(std::fs::read_dir(&directory).unwrap().count(), 1, "no temporary or duplicate icon left behind");
+        }
+        prune_cache(&directory, &[&path]);
+        assert!(path.is_file(), "the stable resource is not a legacy hash-cache entry");
+        std::fs::remove_file(path).unwrap(); std::fs::remove_dir(directory).unwrap();
+    }
     #[test]
     fn implicit_launchers_are_discovered_recursively_without_other_files() {
         let root = std::env::temp_dir().join(format!("pealayer-launcher-search-{}", uuid::Uuid::new_v4()));

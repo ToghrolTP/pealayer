@@ -85,6 +85,16 @@ in addition to the item notification. It uses the old image identity as required
 by Windows, not a global cache flush. Canonical repeated-switch pixel acceptance
 remains the deciding gate for this follow-up.
 
+The canonical repeated-switch check rejected that attempt too: notifying the
+old immutable icon refreshed the old artwork. The final strategy uses stable,
+per-application taskbar and default-launcher ICO resources. New bytes replace
+their contents atomically; the targeted notification now names the same old
+resource whose contents actually changed. Default launcher and playback-state
+artwork retain separate roles. Identical bytes do not rewrite the file, no
+partial ICO can be observed, and historical hashed cache pruning cannot remove
+these resources. Diagnostics exposes an application revision rather than using
+filename churn as proof of change. Canonical pixel checks remain mandatory.
+
 The pixel fixture itself now locates the button by its exact AppUserModelID
 through read-only accessibility metadata before capturing pixels. Whole-taskbar
 icon matching could select the retained historical Pealayer instead, yielding a
