@@ -10478,6 +10478,36 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[cfg(feature = "workspace-terminal")]
+    fn explicit_workspace_profile_owns_terminal_visibility_until_a_new_show_intent() {
+        let _lock = lock_app_tests();
+        use crate::ui::layout::PealayerTab as Tab;
+        let ctx = egui::Context::default();
+        let mut app = PealayerApp::default();
+        let without_terminal = app.capture_workspace_profile(&ctx);
+        // Ordinary startup honors the enabled preference without starting a session.
+        app.terminal_state.preferences.enabled = true;
+        crate::ui::terminal::sync_visibility(&mut app);
+        assert!(app.is_tab_open_in_dock(Tab::Terminal));
+        assert!(!app.terminal_state.busy());
+        // --workspace restores its captured layout, not a merge with global flags.
+        app.apply_workspace_profile(&ctx, &without_terminal).unwrap();
+        crate::ui::terminal::sync_visibility(&mut app);
+        assert!(!app.is_tab_open_in_dock(Tab::Terminal));
+        assert!(!app.terminal_state.preferences.enabled);
+        assert_eq!(serde_json::to_string(&app.dock_state).unwrap(),
+            without_terminal.dock_layout.as_ref().unwrap().as_str());
+        // A subsequent explicit visibility request wins, preserving every sibling.
+        let siblings: Vec<_> = app.dock_state.layout.panels().into_iter().copied().collect();
+        app.terminal_state.preferences.enabled = true;
+        crate::ui::terminal::sync_visibility(&mut app);
+        assert!(app.is_tab_open_in_dock(Tab::Terminal));
+        assert!(app.terminal_state.preferences.enabled);
+        assert!(siblings.into_iter().all(|tab| app.is_tab_open_in_dock(tab)));
+        assert!(!app.terminal_state.busy());
+    }
+
+    #[test]
     fn sidebar_menu_open_from_simple_enters_editor_and_honors_locked_ownership() {
         let _lock = lock_app_tests();
         use crate::ui::{layout::PealayerTab as Tab, sidebar_rail::SidebarPane as Pane};

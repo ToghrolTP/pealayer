@@ -152,8 +152,8 @@ historical instances were left untouched. Docking, toolbar editor and embedded
 host tests are being rerun against the combined follow-up; earlier counts do
 not establish acceptance of those changes.
 
-Combined follow-up evidence: 55 workspace tests, 39 terminal-filter tests (two
-opt-in fixtures ignored in that pass), all five embedded host tests and the
+Combined follow-up evidence: 56 workspace tests, 41 terminal-filter tests (two
+opt-in fixtures ignored in that pass), all six embedded host tests and the
 separate real Windows PTY fixture passed. Counts overlap. All three reduced
 feature checks passed again; these are developer checks, not product flavors.
 TypeScript, preference-file tests and 53 Web parity contracts passed. The added
@@ -162,6 +162,18 @@ fixtures exercised the actual C adapter, including ownership and malformed-sourc
 atomicity. No user shell commands or physical outputs were used as fixtures.
 The PortableShell copyright/license is embedded in About as well as retained in
 the pinned vendor directory.
+
+Native inspection caught a safe-writer presentation edge: embedded newlines were
+stripped from status output. Responses now submit logical lines independently,
+with a real VT-parser regression preserving both line breaks and unfinished
+input. Embedded resize requests reject unsupported dimensions before queuing;
+the view reports the same grid the core actually owns.
+
+Visibility has two intentional owners: a general Show Terminal request reveals
+the pane; explicitly restoring a workspace profile restores that profile's saved
+membership. The review launch's `--workspace nle` selected an older snapshot
+without Terminal. A regression now covers that explicit restore followed by a
+new Show Terminal intent, without overriding saved profiles or losing siblings.
 
 PortableShell source ownership: [profile-import PR #84](https://github.com/atomicdeploy/portable-shell/pull/84).
 The pinned vendor receipt is `third_party/portable-shell/PEALAYER-VENDOR.md`.

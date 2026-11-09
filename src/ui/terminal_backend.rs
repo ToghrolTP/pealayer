@@ -197,7 +197,10 @@ impl Session {
     pub fn spawn(target: Target, rows: u16, cols: u16, ctx: egui::Context) -> Result<Self, String> {
         validate_size(rows, cols)?;
         let kind = match &target {
-            Target::Embedded => Kind::Embedded,
+            Target::Embedded => {
+                validate_embedded_size(rows, cols)?;
+                Kind::Embedded
+            }
             Target::Controller { endpoint } => {
                 if endpoint.trim().is_empty()
                     || endpoint.len() > 4096
@@ -356,6 +359,17 @@ fn validate_size(rows: u16, cols: u16) -> Result<(), String> {
     }
 }
 
+pub fn embedded_size(rows: u16, cols: u16) -> (u16, u16) {
+    (rows.clamp(4, 80), cols.clamp(8, 240))
+}
+fn validate_embedded_size(rows: u16, cols: u16) -> Result<(), String> {
+    if embedded_size(rows, cols) != (rows, cols) {
+        Err("Embedded PortableShell supports 4–80 rows and 8–240 columns".into())
+    } else {
+        Ok(())
+    }
+}
+
 fn validate_input(kind: Kind, input: &Input) -> Result<(), String> {
     match input {
         Input::Command(line) if kind == Kind::Controller => {
@@ -375,9 +389,10 @@ fn validate_input(kind: Kind, input: &Input) -> Result<(), String> {
                 Ok(())
             }
         }
-        Input::Resize { rows, cols } if matches!(kind, Kind::Shell | Kind::Embedded) => {
-            validate_size(*rows, *cols)
+        Input::Resize { rows, cols } if kind == Kind::Embedded => {
+            validate_embedded_size(*rows, *cols)
         }
+        Input::Resize { rows, cols } if kind == Kind::Shell => validate_size(*rows, *cols),
         Input::Response { text, .. } if kind == Kind::Embedded && text.len() <= 8192 => Ok(()),
         _ => Err("This input is not supported by the selected terminal session".into()),
     }
@@ -482,7 +497,7 @@ fn pty_size(rows: u16, cols: u16) -> PtySize {
 /// executable or command interpreter. Only explicit submitted commands cross
 /// back to the UI's typed application dispatcher.
 fn run_embedded(rows: u16, cols: u16, output: &Events) -> Result<(), String> {
-    let mut host = super::portable_shell_host::Host::new(rows.min(80), cols.min(240))?;
+    let mut host = super::portable_shell_host::Host::new(rows, cols)?;
     let started = std::time::Instant::now();
     output.send(Event::Ready {
         label: "Pealayer · embedded PortableShell".into(),
@@ -542,7 +557,7 @@ fn run_embedded(rows: u16, cols: u16, output: &Events) -> Result<(), String> {
                 escape_deadline =
                     Some(std::time::Instant::now() + std::time::Duration::from_millis(70));
             }
-            Some(Input::Resize { rows, cols }) => host.resize(rows.min(80), cols.min(240)),
+            Some(Input::Resize { rows, cols }) => host.resize(rows, cols),
             Some(Input::Response { text, error }) => host.response(&text, error),
             Some(Input::Command(_)) => unreachable!("input validated at session boundary"),
             None => {
@@ -877,6 +892,26 @@ mod tests {
             "Embedded worker must release ownership after cancellation"
         );
         assert!(session.send(Input::Bytes(b"\r".to_vec())).is_err());
+    }
+
+    #[test]
+    fn embedded_resize_rejects_unrepresentable_grids_before_queuing() {
+        for (rows, cols) in [(1, 80), (24, 1), (81, 80), (24, 241)] {
+            assert!(validate_input(Kind::Embedded, &Input::Resize { rows, cols }).is_err());
+            assert!(
+                Session::spawn(Target::Embedded, rows, cols, egui::Context::default()).is_err()
+            );
+        }
+        assert!(
+            validate_input(
+                Kind::Embedded,
+                &Input::Resize {
+                    rows: 80,
+                    cols: 240
+                }
+            )
+            .is_ok()
+        );
     }
 
     #[test]

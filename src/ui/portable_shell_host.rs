@@ -225,14 +225,19 @@ impl Host {
         if text.chars().count() > 8192 {
             bounded.push_str(" … [response truncated]");
         }
-        if let Ok(text) = CString::new(bounded) {
-            unsafe {
-                ps_message(
-                    self.session.as_ptr(),
-                    if is_error { 4 } else { 0 },
-                    text.as_ptr(),
-                )
-            };
+        // ps_message deliberately strips embedded control characters. Submit
+        // logical lines separately instead of losing line boundaries, while
+        // letting the core suspend/redraw the current unfinished prompt.
+        for line in bounded.lines() {
+            if let Ok(text) = CString::new(line) {
+                unsafe {
+                    ps_message(
+                        self.session.as_ptr(),
+                        if is_error { 4 } else { 0 },
+                        text.as_ptr(),
+                    )
+                };
+            }
         }
     }
 }
@@ -447,6 +452,31 @@ mod tests {
         host.resize(u16::MAX, 0);
         host.feed(b"ume 25\r");
         assert_eq!(host.take_actions(), vec![Action::Volume(25.0)]);
+    }
+
+    #[test]
+    fn multiline_status_keeps_lines_and_unfinished_prompt_separate() {
+        let mut host = Host::new(24, 80).unwrap();
+        let mut parser = vt100::Parser::new(24, 80, 100);
+        parser.process(&host.take_output());
+        host.feed(b"vol");
+        host.response("Playback: idle\nPosition: 0.000 s\nVolume: 100%", false);
+        parser.process(&host.take_output());
+        let text = parser.screen().contents();
+        assert!(
+            text.lines().any(|line| line.trim() == "Playback: idle"),
+            "{text}"
+        );
+        assert!(
+            text.lines().any(|line| line.trim() == "Position: 0.000 s"),
+            "{text}"
+        );
+        assert!(
+            text.lines().any(|line| line.trim() == "Volume: 100%"),
+            "{text}"
+        );
+        host.feed(b"ume 25\r");
+        assert_eq!(host.take_actions(), [Action::Volume(25.0)]);
     }
 
     #[test]

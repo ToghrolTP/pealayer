@@ -712,6 +712,9 @@ fn connect(
     if view.session.is_some() {
         return;
     }
+    if view.target == TerminalTarget::PortableShell {
+        view.size = super::terminal_backend::embedded_size(view.size.0, view.size.1);
+    }
     let target = match view.target {
         TerminalTarget::PcController => {
             let endpoint = if preferences.controller_endpoint.trim().is_empty() {
@@ -1255,7 +1258,13 @@ pub fn tick(app: &mut crate::app::PealayerApp, ctx: &egui::Context) {
                 let status = crate::platform::interop::get_live_status();
                 Ok(format!(
                     "Playback: {}\nPosition: {:.3} / {:.3} s\nVolume: {:.0}%{}\nController: {}",
-                    if status.playing { "playing" } else { "paused" },
+                    if status.current_video.is_none() {
+                        "idle"
+                    } else if status.playing {
+                        "playing"
+                    } else {
+                        "paused"
+                    },
                     status.playback_time,
                     status.duration,
                     status.volume,
