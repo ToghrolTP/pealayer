@@ -20,8 +20,10 @@ passed forbidden/empty/changing-access parent cases; Cafe remains deferred.
 
 [External player lifecycle](external-player-lifecycle.md) covers contextual
 Program Monitor switching, explicit relaunch after Quit, internal fallback,
-rich mode choices, factual executable resolution and first-assignment taskbar
-artwork invalidation. Package and installed-shell acceptance are recorded there.
+rich mode choices and factual executable resolution. The canonical package and
+paused full-application close/recovery checks passed. **Dynamic taskbar artwork
+still fails canonical displayed-pixel acceptance**, including after human focus;
+PR #260 remains draft. See the linked receipt and remaining gate. Cafe is deferred.
 
 [Movable monitor volume](movable-monitor-volume.md) tracks grouped speaker/slider
 customization, hidden-by-default NLE track pickers, final Fullscreen placement

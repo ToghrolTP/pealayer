@@ -101,6 +101,41 @@ icon matching could select the retained historical Pealayer instead, yielding a
 false pass followed by a false failure. It never invokes accessibility patterns,
 drives input, changes focus, restarts Explorer or resets the global icon cache.
 
+### Installed checkpoint and remaining gate
+
+The canonical installation is running source
+`ee7aab7cd7aa42203c70bb7fbbbb871a499f7c7c`, with executable SHA-256
+`3773094b4ba2197a4722d50fb345e874963ddacaf00be75a3bbf8a8e871642ec`.
+Its destination libmpv SHA-256 is
+`e56ce67cd00f06a59dc7ed5b97a49a9182a381554c755dc4570a52af1ef30e65`.
+The real application RPC exercise switched paused loaded media through Both,
+owned-player Quit, External-only, owned-player Quit and back to Internal.
+Both exits recovered, playback remained paused and the final position delta
+was zero. The resolver returned the actual GUI mpv executable. This does not
+establish audible or moving-video GPU acceptance of every transition.
+
+**Dynamic canonical taskbar artwork is still failing.** Stable-resource file
+bytes, HWND icons and relaunch metadata all changed to Classic, while the
+identity-scoped taskbar capture still showed Modern. At the user's request,
+a human then focused the regular window without restarting or changing
+Preferences; the subsequent capture remained Modern. Focus therefore did not
+explain or repair the discrepancy. The diagnostic's `finally` removed temporary
+branding, and a fresh API read confirmed configured/effective Modern with no
+temporary overrides. The private capture is
+`verification/external-lifecycle-focused-classic.png` under the program root;
+it is a failed acceptance artifact, not a successful Classic screenshot.
+
+The focused native suite passed 72 checks including the opt-in real mpv fixture;
+the current five Shell checks passed with an isolated configuration and instance
+identity. TypeScript and the three Web control-bar/media/responsive source
+checks passed. Package/runtime success and these tests do **not** override the
+failed visible Shell result. [PR #260](https://github.com/ToghrolTP/pealayer/pull/260)
+remains draft. Do not rerun long package builds merely to repeat a disproven
+strategy: the next candidate needs a specific, testable Shell-cache hypothesis
+and repeated canonical Classic/Modern pixel acceptance, with action-toolbar
+recovery and stable identity retained. No global cache reset, Explorer restart,
+focus stealing, hidden main window or replacement application ID was used.
+
 ## Verification boundaries
 
 The focused native suite covers actual mpv JSON IPC, ownership-safe detach,
