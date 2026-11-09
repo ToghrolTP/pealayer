@@ -21,6 +21,13 @@ extractable into optional packages without copying application business logic.
 
 The initial boundary is compile-time, not a dynamic plugin loader:
 
+Product decision: publish **one standard distribution with all tools included**,
+not separate flavors. Tool visibility is a runtime preference. The internal
+feature checks below do not introduce user-facing editions. Future broader
+build gating also includes [the downloader #110](https://github.com/ToghrolTP/pealayer/issues/110):
+its queue/service, native/Web UI contributions, engine adapters and standalone
+utility must be gated coherently without duplicated logic or broken routes.
+
 | Cargo feature | Purpose | Default build | Default visibility |
 | --- | --- | --- | --- |
 | `workspace-toolbar` | Application command toolbar and command palette | Included | Hidden |
@@ -179,6 +186,9 @@ commands.
   duplicate commands, worker leaks or orphaned focus/event hooks.
 - [ ] Keep controller authority and executable-launch permissions host-owned;
   packages cannot bypass them. Document dependency licenses and distribution.
+- [ ] Extend planned gating to the downloader and other optional feature families,
+  preserving the full standard distribution and independently selectable runtime
+  visibility; do not create reduced app flavors in this initial PR.
 
 ## Evidence still required
 

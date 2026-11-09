@@ -86,15 +86,38 @@ save; normal workspace persistence still applies on later saves/application exit
 ## Build/package boundary
 
 Default builds include `workspace-toolbar` and `workspace-terminal`, both visually
-disabled. `--no-default-features` omits both; either feature can be included alone.
+disabled. The shipped product is one fully featured distribution, not separate
+tool flavors. Internal `--no-default-features` checks omit both; either feature can
+be checked alone without publishing another edition.
 Omitted implementations retain configuration values without exposing broken
 controls. [Extraction backlog](../backlog/workspace-tools-plugins.md) defines later
 package ownership; this feature does not install a speculative plugin loader.
 
 ## Verification receipt
 
-In progress: default compilation, native headless regressions, isolated loopback
-host-console fixture, actual owned Windows PTY fixture, feature matrix and Web
-type/contracts. Build and screenshot/deployment results must be recorded here
-before calling this delivered. Cafe is user-deferred/offline; no remote deployment
-or physical controller acceptance is implied by local fixtures.
+Local evidence:
+
+- Default compilation; no-tools, toolbar-only and terminal-only checks passed.
+- 42 focused workspace regressions passed, including seven command toolbar/palette
+  tests. A separate terminal-filter pass passed 27 tests with two deliberate
+  ignored fixtures; these counts overlap and are not an additive total.
+- The opt-in real Windows PTY fixture passed UTF-8 I/O, resize, final-output/exit
+  ordering and owned child cancellation. It uses the Rust test executable, not
+  a production board or the user's shell profile.
+- Mocked loopback PCController catalog/execute/error/disconnect/no-replay passed;
+  the bounded-response reader regression passed. No physical output was actuated.
+- Web TypeScript, preference-file tests, 53 parity contracts, workflow lint and
+  whitespace checks passed. The packaged Web/PWA integrity check passed.
+- A clean standard package from `1c8cc78911604100f49159b15fec39079d13bff8`
+  passed manifest, identity, quick-action resources and runtime smoke checks.
+  An isolated native review profile runs that package, not a reduced flavor.
+- Native inspection found the disconnected terminal frame shrinking below its
+  configured height. The subsequent source fix has an actual three-frame sizing
+  and Preferences-height-change regression, which passed. That fix is not yet
+  installed in the review process.
+
+The user is actively reviewing the isolated window and providing feedback; leave
+its settings and processes alone until coordinated. Final native screenshots,
+feedback reconciliation and canonical deployment remain pending. Cafe is
+user-deferred/offline. No physical controller or remote deployment acceptance is
+implied by local fixtures.

@@ -1074,6 +1074,10 @@ pub fn draw(app: &mut crate::app::PealayerApp, ui: &mut egui::Ui) {
             panel
         };
         let response = panel.show(ui, |ui| {
+            // egui's panel frame otherwise shrinks a disconnected/empty
+            // session to its short contents on the next frame, then saves that
+            // reduced height over the user's configured size.
+            ui.set_min_height(ui.available_height());
             panel_contents(app, ui, &mut state, &mut open_preferences)
         });
         let height = response.response.rect.height().clamp(120.0, 900.0);
@@ -1115,6 +1119,35 @@ mod tests {
             serde_json::from_value::<TerminalPreferences>(serde_json::json!({})).unwrap(),
             state.preferences
         );
+    }
+    #[cfg(feature = "workspace-terminal")]
+    #[test]
+    fn disconnected_terminal_keeps_height_and_applies_explicit_preference_changes() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let mut app = crate::app::PealayerApp::default();
+        app.terminal_state.preferences.enabled = true;
+        app.terminal_state.preferences.height = 280.0;
+        let ctx = egui::Context::default();
+        for height in [280.0, 280.0, 280.0, 360.0, 360.0] {
+            app.terminal_state.preferences.height = height;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(1000.0, 800.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| draw(&mut app, ui),
+            );
+            output.textures_delta.clear();
+            assert!(
+                (app.terminal_state.preferences.height - height).abs() < 2.0,
+                "configured {height}, got {}",
+                app.terminal_state.preferences.height
+            );
+            assert!(!app.terminal_state.busy());
+        }
     }
     #[cfg(feature = "workspace-terminal")]
     #[test]
