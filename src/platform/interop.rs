@@ -322,6 +322,8 @@ pub enum InteropCommand {
     StopControllerEffect,
     StopAudioPreview,
     RefreshAudioOutputs,
+    SetPlayerMode { mode: crate::mpv::external::Mode },
+    ResolvePlayerExecutable { executable: String },
     SaveControllerEffectGroup {
         original_name: String,
         name: String,
@@ -579,6 +581,10 @@ impl InteropCommand {
 
     pub fn query_result(&self) -> Option<Value> {
         match self {
+            Self::ResolvePlayerExecutable { executable } => Some(match crate::mpv::external::resolve_executable(executable) {
+                Ok(path) => serde_json::json!({"input":executable,"resolved":path,"error":null}),
+                Err(error) => serde_json::json!({"input":executable,"resolved":null,"error":error}),
+            }),
             Self::GetWindow => Some(serde_json::to_value(crate::platform::window_control::snapshot()).expect("window status")),
             Self::GetPlayback => {
                 let status=get_live_status();
@@ -599,6 +605,7 @@ impl InteropCommand {
 
     pub fn validate(&self) -> Result<(), String> {
         match self {
+            Self::ResolvePlayerExecutable { executable } if executable.len() > 4096 || executable.contains(['\r', '\n', '\0']) => Err("Invalid player executable".into()),
             Self::SetWindow { placement } => placement.validate(),
             Self::FrameStep { frames } if *frames==0 || frames.unsigned_abs()>120 => Err("Frame step must be a nonzero count within ±120".into()),
             Self::ImportAssets { request } => request.validate(),
@@ -955,7 +962,8 @@ pub fn command_catalog() -> Value {
     #[cfg(windows)]
     {catalog["transports"].as_array_mut().unwrap().push(Value::String("wm-copydata".into()));catalog["wm_copydata"]=serde_json::json!({"request_dwdata":crate::platform::copydata::REQUEST,"response_dwdata":crate::platform::copydata::RESPONSE,"encoding":"UTF-8 JSON or JSON-RPC","limit_bytes":1048576,"reply":"wParam sender HWND; asynchronous WM_COPYDATA response; same Windows session","acknowledgement":"LRESULT=1 means queued, not applied"});}
     catalog["playback_queries"]=serde_json::json!(["pealayer.playback.get","pealayer.media.get","pealayer.chapters.get","pealayer.status"]);
-    catalog["commands"].as_array_mut().unwrap().extend(["get_window","set_window","get_playback","get_media","get_chapters","frame_step"].map(|s|Value::String(s.into())));
+    catalog["commands"].as_array_mut().unwrap().extend(["get_window","set_window","get_playback","get_media","get_chapters","frame_step","set_player_mode","resolve_player_executable"].map(|s|Value::String(s.into())));
+    catalog["external_player"] = serde_json::json!({"mode":"pealayer.player.mode","modes":["internal","external","dual","remote"],"resolve":"pealayer.player.executable.resolve","params":{"executable":"name or full path"},"closed":"dual falls back to internal; external-only stays stopped; explicitly reselect to relaunch","status":"external_mpv in /api/player/status"});
     catalog.as_object_mut().unwrap().insert("assets".into(),assets);
     catalog.as_object_mut().unwrap().insert("branding".into(), serde_json::json!({
         "get":"pealayer.branding.get", "update":"pealayer.branding.update", "http":"/api/branding",
@@ -2207,6 +2215,11 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         }
         "audio_effect.stop" => Some(InteropCommand::StopAudioPreview),
         "audio.outputs.refresh" => Some(InteropCommand::RefreshAudioOutputs),
+        "pealayer.player.mode" => Some(InteropCommand::SetPlayerMode {
+            mode: serde_json::from_value(request.params.get("mode").cloned().ok_or("A player mode is required")?)
+                .map_err(|_| "Use internal, external, dual or remote".to_string())?,
+        }),
+        "pealayer.player.executable.resolve" => Some(InteropCommand::ResolvePlayerExecutable { executable: string(&["executable"])? }),
         "controller_effect.group.save" | "pealayer.controller_effect.group.save" => {
             Some(InteropCommand::SaveControllerEffectGroup {
                 original_name: request

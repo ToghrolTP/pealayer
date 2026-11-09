@@ -18,6 +18,11 @@ passed forbidden/empty/changing-access parent cases; Cafe remains deferred.
 
 ## Window and media automation
 
+[External player lifecycle](external-player-lifecycle.md) covers contextual
+Program Monitor switching, explicit relaunch after Quit, internal fallback,
+rich mode choices, factual executable resolution and first-assignment taskbar
+artwork invalidation. Package and installed-shell acceptance are recorded there.
+
 [Movable monitor volume](movable-monitor-volume.md) tracks grouped speaker/slider
 customization, hidden-by-default NLE track pickers, final Fullscreen placement
 and the requested instance's enabled hover thumbnails. The canonical local

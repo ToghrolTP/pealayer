@@ -1296,7 +1296,8 @@ fn permission_denied(capability: &str) -> HttpResponse {
 
 fn remote_command_permission(command: &crate::platform::interop::InteropCommand) -> Option<&'static str> {
     use crate::platform::interop::InteropCommand;
-    if matches!(command, InteropCommand::UpdateBranding { .. } | InteropCommand::GetBranding | InteropCommand::ClearBranding)
+    if matches!(command, InteropCommand::UpdateBranding { .. } | InteropCommand::GetBranding | InteropCommand::ClearBranding
+        | InteropCommand::SetPlayerMode { .. } | InteropCommand::ResolvePlayerExecutable { .. })
         && !crate::platform::interop::get_live_config().web_allow_configuration {
         return Some("Web configuration permission is disabled");
     }

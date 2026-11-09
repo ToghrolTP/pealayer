@@ -1252,6 +1252,10 @@ fn render_contract_control(
                             let caption = if dynamic_label { option.description.clone().unwrap_or_else(|| tr(option.label)) } else { tr(option.label) };
                             let response = if control.key == "color_palette" {
                                 palette_choice(ui, option.value == current, &caption, option.value.as_str().unwrap_or("native"))
+                            } else if control.key == "external_mpv.mode" {
+                                crate::ui::player_mode::rich_choice(ui, option.value == current,
+                                    crate::ui::icons::named_control_icon(option.icon.unwrap_or("monitor-play")).unwrap_or(crate::ui::icons::MONITOR_PLAY),
+                                    &caption, option.description.as_deref().unwrap_or_default(), control_width)
                             } else { ui.dropdown_choice(
                                     option.value == current,
                                     caption,
@@ -1478,6 +1482,9 @@ fn render_contract_control(
             }
         }
         PreferenceControlKind::File => {
+            let executable = control.key == "external_mpv.executable";
+            let mut resolving_allowed = true;
+            let mut refresh_resolution = false;
             let mut text = current.as_str().unwrap_or_default().to_string();
             let mut edited = false;
             if let Some(selected) = crate::ui::peer_browser::take_preference_file(ui.ctx(), control.key) {
@@ -1487,14 +1494,20 @@ fn render_contract_control(
             preference_row(ui, control_icon, &tr(control.label), label_width, |ui| {
                 let controls = file_controls(ui, &mut text, &tr(control.placeholder.unwrap_or_default()), &tr("Browse..."));
                 edited |= controls.0.changed();
-                if controls.1.on_hover_text(tr("Choose an image file")).clicked() {
+                resolving_allowed = !controls.0.has_focus();
+                if executable && controls.0.lost_focus() {
+                    let normalized = text.trim().trim_matches('"').to_owned();
+                    edited |= text != normalized; text = normalized;
+                    refresh_resolution = true;
+                }
+                if controls.1.on_hover_text(tr(if executable { "Choose mpv executable" } else { "Choose an image file" })).clicked() {
                     if crate::peer::active() {
                         crate::ui::peer_browser::open(ui.ctx(), crate::ui::peer_browser::Purpose::PreferenceFile {
                             key: control.key.to_owned(), extensions: control.file_extensions.iter().map(|extension| (*extension).to_owned()).collect(),
                         }, None);
                     } else {
-                        let mut dialog = rfd::FileDialog::new().set_title(tr("Choose an image file"))
-                            .add_filter("Images", &control.file_extensions);
+                        let mut dialog = rfd::FileDialog::new().set_title(tr(if executable { "Choose mpv executable" } else { "Choose an image file" }))
+                            .add_filter(if executable { "Executable" } else { "Images" }, &control.file_extensions);
                         if let Some(parent) = std::path::Path::new(&text).parent().filter(|parent| parent.is_dir()) {
                             dialog = dialog.set_directory(parent);
                         }
@@ -1504,13 +1517,17 @@ fn render_contract_control(
                         }
                     }
                 }
-                if controls.2.on_hover_text(tr("Use default icon")).clicked() {
-                    text.clear();
+                if controls.2.on_hover_text(tr(if executable { "Use default player" } else { "Use default icon" })).clicked() {
+                    text = if executable { "mpv".into() } else { String::new() };
                     edited = true;
                 }
             });
+            if executable {
+                if refresh_resolution { ui.data_mut(|data| data.remove::<String>(ui.id().with("resolved-player-request"))); }
+                resolved_player_hint(ui, &text, resolving_allowed);
+            }
             if edited {
-                replacement = Some(if text.trim().is_empty() { serde_json::Value::Null }
+                replacement = Some(if text.trim().is_empty() && !executable { serde_json::Value::Null }
                     else { serde_json::Value::String(text.trim().to_owned()) });
             }
         }
@@ -1549,6 +1566,36 @@ fn render_contract_control(
     replacement
         .is_some_and(|replacement| set_value_at_path(values, control.key, replacement).is_ok())
         || companion_changed
+}
+
+fn resolved_player_hint(ui: &mut egui::Ui, input: &str, resolving_allowed: bool) {
+    let request_id = ui.id().with("resolved-player-request");
+    let result_id = ui.id().with("resolved-player-result");
+    let previous = ui.data(|data| data.get_temp::<String>(request_id));
+    // Resolve once after an edit settles. Never probe PATH or a remote server
+    // on each Preferences animation frame; results are scoped to this draft.
+    if resolving_allowed && previous.as_deref() != Some(input) {
+        let input = input.to_owned();
+        ui.data_mut(|data| { data.insert_temp(request_id, input.clone()); data.remove::<(String, String, bool)>(result_id); });
+        let ctx = ui.ctx().clone();
+        let client = crate::peer::client();
+        std::thread::spawn(move || {
+            let result = if let Some(client) = client {
+                client.post("/api/rpc", &serde_json::json!({"jsonrpc":"2.0","id":1,
+                    "method":"pealayer.player.executable.resolve","params":{"executable":input}}))
+                    .and_then(|reply| reply.get("result").and_then(|value|value.get("resolved")).and_then(serde_json::Value::as_str)
+                        .map(str::to_owned).ok_or_else(|| reply["result"]["error"].as_str().unwrap_or("Could not resolve player on the connected instance").to_owned()))
+            } else { crate::mpv::external::resolve_executable(&input).map(|path| path.display().to_string()) };
+            let (text, valid) = match result { Ok(path) => (path, true), Err(error) => (error, false) };
+            ctx.data_mut(|data| data.insert_temp(result_id, (input, text, valid)));
+            ctx.request_repaint();
+        });
+    }
+    if let Some((query, text, valid)) = ui.data(|data| data.get_temp::<(String, String, bool)>(result_id))
+        && query == input {
+        ui.label(egui::RichText::new(format!("{}  {text}", if valid { crate::ui::icons::CHECK } else { crate::ui::icons::WARNING }))
+            .small().color(if valid { ui.visuals().weak_text_color() } else { ui.visuals().error_fg_color }));
+    }
 }
 
 #[derive(Clone, Copy)]

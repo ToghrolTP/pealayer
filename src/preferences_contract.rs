@@ -446,7 +446,18 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             }).collect();
             control
         },
-        PreferenceControl::select("external_mpv.mode", "playback", "External mpv", "Player mode", &[("internal", "Internal player (default)"), ("external", "External mpv only"), ("dual", "External mpv + internal preview"), ("remote", "Control existing mpv")]),
+        {
+            let mut c = PreferenceControl::select("external_mpv.mode", "playback", "External mpv", "Player mode", &[("internal", "Internal player"), ("external", "External mpv only"), ("dual", "Both players"), ("remote", "Control existing mpv")]);
+            for (option, (icon, description)) in c.options.iter_mut().zip([
+                ("monitor-play", "Play inside Pealayer. No external window."),
+                ("arrow-square-out", "Play in a separate mpv window. Closing it stops playback."),
+                ("squares-four", "External playback with a muted internal preview. Falls back to internal when mpv closes."),
+                ("plugs-connected", "Attach to an existing IPC endpoint. Pealayer does not own or close that process."),
+            ]) {
+                option.icon = Some(icon); option.description = Some(description.into());
+            }
+            c
+        },
         PreferenceControl::boolean("external_mpv.use_mpv_config", "playback", "External mpv", "Load mpv's own configuration and scripts when launching"),
         {
             let mut c = PreferenceControl::text("external_mpv.executable", "playback", "External mpv", "mpv executable", "mpv or full executable path");

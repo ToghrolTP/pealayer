@@ -17,6 +17,7 @@ import { FujiLoader } from './FujiLoader';
 import {
   BgColorsOutlined,
   CheckOutlined,
+  InfoCircleOutlined,
   CheckSquareOutlined,
   ControlOutlined,
   EditOutlined,
@@ -136,6 +137,10 @@ const sectionIcons: Record<string, React.ReactNode> = {
 };
 
 const controlIcons: Record<string, React.ReactNode> = {
+  'monitor-play': <VideoCameraOutlined />,
+  'arrow-square-out': <ExpandOutlined />,
+  'squares-four': <GatewayOutlined />,
+  'plugs-connected': <LinkOutlined />,
   'circle-half': <GatewayOutlined />,
   gauge: <DashboardOutlined />,
   'film-strip': <VideoCameraOutlined />,
@@ -163,6 +168,23 @@ const controlIcons: Record<string, React.ReactNode> = {
   'list-checks': <MenuOutlined />,
   'pencil-simple': <EditOutlined />,
 };
+
+function PlayerExecutableHint({ executable }: { executable: string }) {
+  const [result, setResult] = useState<{ resolved?: string; error?: string }>();
+  useEffect(() => {
+    const controller = new AbortController();
+    setResult(undefined);
+    void fetch('/api/rpc', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'pealayer.player.executable.resolve', params: { executable } }),
+      signal: controller.signal,
+    }).then(response => response.json()).then(reply => setResult(reply.result ?? { error: reply.error?.message ?? 'Could not resolve executable' }))
+      .catch(error => { if (error.name !== 'AbortError') setResult({ error: 'Could not resolve executable' }); });
+    return () => controller.abort();
+  }, [executable]);
+  return result ? <small className="preference-player-path" role="status">
+    {result.resolved ? <CheckOutlined /> : <InfoCircleOutlined />} {result.resolved ?? result.error}
+  </small> : null;
+}
 
 const networkOptionIcon = (icon?: string) => {
   switch (icon) {
@@ -372,20 +394,23 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
       </span>
     );
     if (control.kind === 'file') {
+      const executable = control.key === 'external_mpv.executable';
+      const normalize = (text: string) => executable ? text.trim().replace(/^"|"$/g, '') : text.trim();
       return <div className="preference-control" key={control.key}>
         {commonLabel}
         <div className="preference-control__file">
           <Input key={String(value ?? '')} defaultValue={value ?? ''}
             aria-label={tr(locale, control.label)} title={String(value ?? '')}
             placeholder={tr(locale, control.placeholder ?? '')}
-            onPressEnter={(event) => void update(control, event.currentTarget.value.trim())}
-            onBlur={(event) => event.currentTarget.value !== (value ?? '') && void update(control, event.currentTarget.value.trim())} />
+            onPressEnter={(event) => void update(control, normalize(event.currentTarget.value))}
+            onBlur={(event) => event.currentTarget.value !== (value ?? '') && void update(control, normalize(event.currentTarget.value))} />
           <Button icon={<FolderOpenOutlined />} onClick={() => setFilePicker(control)}>{tr(locale, 'Browse…')}</Button>
-          <Tooltip title={tr(locale, 'Use default icon')}>
-            <Button icon={<UndoOutlined />} aria-label={tr(locale, 'Use default icon')} disabled={!value}
-              onClick={() => void update(control, null)} />
+          <Tooltip title={tr(locale, executable ? 'Use default player' : 'Use default icon')}>
+            <Button icon={<UndoOutlined />} aria-label={tr(locale, executable ? 'Use default player' : 'Use default icon')} disabled={!value}
+              onClick={() => void update(control, executable ? 'mpv' : null)} />
           </Tooltip>
         </div>
+        {executable && <PlayerExecutableHint executable={String(value ?? '')} />}
       </div>;
     }
     if (control.kind === 'accent') {
@@ -504,8 +529,12 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
             value={value}
             showSearch={['ui_font_name', 'monospace_font_name'].includes(control.key) ? { optionFilterProp: 'label' } : undefined}
             onOpenChange={(open) => { if (open && ['audio_device', 'sfx_audio_device'].includes(control.key)) void refreshAudioOutputs(); }}
-            options={(control.options ?? []).map((option) => ({ value: option.value, label: option.description || tr(locale, option.label) }))}
-            optionRender={control.key === 'color_palette' ? option => paletteLabel(option.value, String(option.label)) : undefined}
+            options={(control.options ?? []).map((option) => ({ value: option.value, label: control.key === 'external_mpv.mode' ? tr(locale, option.label) : option.description || tr(locale, option.label), description: option.description, icon: option.icon }))}
+            optionRender={control.key === 'color_palette' ? option => paletteLabel(option.value, String(option.label))
+              : control.key === 'external_mpv.mode' ? option => <span className="preference-player-option">
+                <span aria-hidden="true">{controlIcons[option.data.icon ?? 'monitor-play']}</span>
+                <span>{option.label}<small>{option.data.description}</small></span>
+              </span> : undefined}
             labelRender={control.key === 'color_palette' ? option => paletteLabel(option.value, String(option.label)) : undefined}
             onChange={(next) => void update(control, next)}
           />

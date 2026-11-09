@@ -14205,6 +14205,8 @@ impl<'a> PealayerTabViewer<'a> {
         ui.separator();
         match tab {
             PealayerTab::ProgramMonitor => {
+                crate::ui::player_mode::menu(self.app, ui);
+                ui.separator();
                 let is_fullscreen = self.app.fullscreen_intent(ui.ctx());
                 let label = if is_fullscreen {
                     self.app.tr("Exit Fullscreen")

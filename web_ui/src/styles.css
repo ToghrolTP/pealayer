@@ -1351,3 +1351,6 @@ html[data-motion="disabled"] .app-statusbar .status-widget { transition: none; }
   .rf-manager-modal .rf-form-grid { grid-template-columns: minmax(0, 1fr); }
   .rf-manager-modal .ant-modal-body { max-height: 76dvh; }
 }
+.preference-player-option { display: flex; align-items: center; gap: 10px; white-space: normal; padding-block: 4px; }
+.preference-player-option small { display: block; opacity: .68; line-height: 1.4; }
+.preference-player-path { grid-column: 1 / -1; color: var(--text-muted); overflow-wrap: anywhere; }

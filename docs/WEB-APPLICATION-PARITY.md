@@ -16,6 +16,11 @@ widths, and has been exercised against live state rather than sample data.
 
 ## Current product ledger
 
+External-player Preferences now share icon/description mode entries and the
+authority-side executable resolver with native. Runtime switching and closed
+player recovery use the Rust command path, not Web-owned decoder rules. See
+[lifecycle and acceptance](verification/external-player-lifecycle.md).
+
 Remote folder navigation now uses a verified parent listing rather than an
 inferred URL. Native and Web hide unavailable parents, omit fabricated file
 metadata on navigation rows and browse folders on a single click. See

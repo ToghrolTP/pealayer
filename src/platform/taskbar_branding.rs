@@ -105,8 +105,10 @@ unsafe fn set_window_properties(hwnd: HWND, icon: &Path, name: &str, executable:
     // this window's association before changing its relaunch artwork, then
     // restore the exact same stable ID. No global icon-cache reset/Explorer
     // restart, new identity, or pin/unpin operation is involved.
-    let changed = unsafe { store.GetValue(&ID)? }.to_string() == app_id()
-        && unsafe { store.GetValue(&ICON)? }.to_string() != resource;
+    // A fresh HWND may inherit Explorer's cached artwork for our stable app ID
+    // from the preceding process. First assignment needs the same deferred
+    // refresh as a live change; empty properties do not mean fresh shell pixels.
+    let changed = unsafe { store.GetValue(&ICON)? }.to_string() != resource;
     if changed {
         unsafe { store.SetValue(&ID, &PROPVARIANT::default())?; store.Commit()?; }
     }
@@ -232,7 +234,8 @@ mod tests {
         unsafe {
             let window = CreateWindowExW(WINDOW_EX_STYLE::default(), w!("STATIC"), w!("Branding fixture"),
                 WINDOW_STYLE::default(), 0, 0, 32, 32, None, None, None, None).unwrap();
-            set_window_properties(window, Path::new(r"C:\fixture\classic.ico"), "Fixture", Path::new(r"C:\fixture\pealayer.exe")).unwrap();
+            assert!(set_window_properties(window, Path::new(r"C:\fixture\classic.ico"), "Fixture", Path::new(r"C:\fixture\pealayer.exe")).unwrap(), "first HWND assignment must invalidate inherited Explorer artwork too");
+            assert!(!set_window_properties(window, Path::new(r"C:\fixture\classic.ico"), "Fixture", Path::new(r"C:\fixture\pealayer.exe")).unwrap(), "unchanged artwork must not churn taskbar membership");
             let store: IPropertyStore = SHGetPropertyStoreForWindow(window).unwrap();
             assert_eq!(store.GetValue(&ICON).unwrap().to_string(), r"C:\fixture\classic.ico,0");
             assert_eq!(store.GetValue(&ID).unwrap().to_string(), app_id());

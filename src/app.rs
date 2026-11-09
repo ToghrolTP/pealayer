@@ -1187,6 +1187,9 @@ impl eframe::App for PealayerApp {
         // Drain every command source before mutating player state. This keeps IPC,
         // Web UI, media controls, and PCController actions on one behavior path.
         let mut inbound_commands = Vec::new();
+        if let Some(command) = crate::ui::player_mode::take_request(ctx) {
+            inbound_commands.push(("Program Monitor", command));
+        }
         while let Ok(command) = self.interop_rx.try_recv() {
             inbound_commands.push(("IPC", command));
         }
@@ -4929,6 +4932,17 @@ impl PealayerApp {
                     std::thread::spawn(move || { crate::mpv::audio_output::refresh_devices(); ctx.request_repaint(); });
                 }
             }
+            InteropCommand::SetPlayerMode { mode } => {
+                let mut settings = self.runtime_config_snapshot().external_mpv;
+                settings.mode = mode;
+                if mode != crate::mpv::external::Mode::Remote { settings.endpoint.clear(); }
+                let relaunch = crate::platform::interop::external_mpv_settings() == settings && crate::mpv::external::status().closed;
+                if let Err(error) = self.apply_config_patch(ctx, &serde_json::json!({"external_mpv": settings})) {
+                    self.set_osd(error);
+                } else if relaunch {
+                    crate::mpv::external::relaunch(self.mpv.0, ctx, settings);
+                }
+            }
             InteropCommand::SaveControllerEffectGroup {
                 original_name,
                 name,
@@ -5425,7 +5439,8 @@ impl PealayerApp {
                 }
             },
             InteropCommand::GetStatus | InteropCommand::GetProcessStatus | InteropCommand::GetBranding
-                | InteropCommand::GetWindow | InteropCommand::GetPlayback | InteropCommand::GetMedia | InteropCommand::GetChapters => {}
+                | InteropCommand::GetWindow | InteropCommand::GetPlayback | InteropCommand::GetMedia | InteropCommand::GetChapters
+                | InteropCommand::ResolvePlayerExecutable { .. } => {}
         }
         if !matches!(source, "keyboard" | "menu") {
             self.set_osd(format!("{source}: command applied"));
