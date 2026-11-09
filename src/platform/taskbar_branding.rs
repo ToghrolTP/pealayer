@@ -137,6 +137,25 @@ fn same_executable(left: &Path, right: &Path) -> bool {
     let normalize = |path: &Path| path.to_string_lossy().trim_start_matches(r"\\?\").replace('/', "\\").to_ascii_lowercase();
     normalize(left) == normalize(right)
 }
+fn launcher_files(root: PathBuf, recursive: bool) -> Vec<PathBuf> {
+    let mut directories = vec![root];
+    let mut files = Vec::new();
+    let mut visited = 0;
+    while let Some(directory) = directories.pop() {
+        visited += 1;
+        if visited > 256 || files.len() >= 2048 { break; }
+        let Ok(entries) = std::fs::read_dir(directory) else { continue; };
+        for entry in entries.flatten() {
+            if files.len() >= 2048 { break; }
+            let Ok(kind) = entry.file_type() else { continue; };
+            if recursive && kind.is_dir() && !kind.is_symlink() && directories.len() < 256 { directories.push(entry.path()); }
+            if kind.is_file() && entry.path().extension().is_some_and(|value| value.eq_ignore_ascii_case("lnk")) {
+                files.push(entry.path());
+            }
+        }
+    }
+    files
+}
 /// Only ordinary launchers for this exact executable qualify. Preserve everything else.
 unsafe fn update_shortcut(path: &Path, executable: &Path, icon: &Path) -> windows::core::Result<bool> {
     use windows::{core::Interface, Win32::System::Com::{CoCreateInstance, CLSCTX_INPROC_SERVER, IPersistFile, STGM_READ, STGM_READWRITE},
@@ -184,14 +203,17 @@ pub fn apply(hwnd: isize, source: u64, config: &crate::config::AppConfig, state:
             let mut updated = 0;
             if std::env::var_os("PEALAYER_INSTANCE_ID").is_none()
                 && let Some(roaming) = std::env::var_os("APPDATA") {
-                let pins = PathBuf::from(roaming).join(r"Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar");
-                if let Ok(entries) = std::fs::read_dir(pins) {
-                    for entry in entries.flatten().filter(|entry| entry.path().extension().is_some_and(|value| value.eq_ignore_ascii_case("lnk"))) {
-                        match unsafe { update_shortcut(&entry.path(), &executable, &default) } {
-                            Ok(true) => updated += 1,
-                            Ok(false) => {}
-                            Err(error) => log::warn!("Refresh Pealayer pinned icon: {error}"),
-                        }
+                let roaming = PathBuf::from(roaming);
+                // Explorer can resolve an established app ID through its Start
+                // Menu registration even without a taskbar pin. Update ordinary
+                // launchers for this exact executable too, not just pinned links.
+                let launchers = launcher_files(roaming.join(r"Microsoft\Internet Explorer\Quick Launch\User Pinned\TaskBar"), false)
+                    .into_iter().chain(launcher_files(roaming.join(r"Microsoft\Windows\Start Menu\Programs"), true));
+                for launcher in launchers {
+                    match unsafe { update_shortcut(&launcher, &executable, &default) } {
+                        Ok(true) => updated += 1,
+                        Ok(false) => {}
+                        Err(error) => log::warn!("Refresh Pealayer launcher icon: {error}"),
                     }
                 }
             }
@@ -221,7 +243,7 @@ pub fn apply(hwnd: isize, source: u64, config: &crate::config::AppConfig, state:
 }
 pub fn diagnostics() -> serde_json::Value {
     APPLIED.lock().map(|value| serde_json::json!({"applied":value.stamp.is_some(),
-        "icon":value.icon,"app_id":app_id(),"refreshes":value.refreshes,"refresh_pending":value.refresh_pending,"pinned_shortcuts_updated":value.shortcuts_updated,"error":value.error})).unwrap_or_default()
+        "icon":value.icon,"app_id":app_id(),"refreshes":value.refreshes,"refresh_pending":value.refresh_pending,"owned_shortcuts_updated":value.shortcuts_updated,"error":value.error})).unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -270,6 +292,7 @@ mod tests {
             link.SetArguments(w!("--activate")).unwrap();
             let file: IPersistFile = link.cast().unwrap();
             file.Save(PCWSTR(filename.as_ptr()), true).unwrap();
+            assert_eq!(launcher_files(directory.clone(), true), vec![path.clone()]);
             assert!(!update_shortcut(&path, Path::new(r"C:\different.exe"), &icon).unwrap());
             assert!(update_shortcut(&path, &executable, &icon).unwrap());
             assert!(!update_shortcut(&path, &executable, &icon).unwrap());

@@ -61,6 +61,20 @@ change. Unchanged properties remain a no-op. Both native icon slots are installe
 first; thumbnail-toolbar restoration, timer teardown and the stable ID remain.
 Native property readback alone is not acceptance of the displayed taskbar image.
 
+An identity-scoped follow-up found that the canonical app still retained Classic
+after this first change, despite four successful isolated-app artwork switches.
+Its registered Start Menu shortcut still pointed at executable resource zero;
+the old refresh inspected only taskbar pins. Ordinary Start Menu launchers for
+the exact executable are now included, preserving their arguments, descriptions
+and unrelated targets. The bounded discovery does not follow directory symlinks.
+This broader launcher fix still requires canonical displayed-artwork acceptance.
+
+The pixel fixture itself now locates the button by its exact AppUserModelID
+through read-only accessibility metadata before capturing pixels. Whole-taskbar
+icon matching could select the retained historical Pealayer instead, yielding a
+false pass followed by a false failure. It never invokes accessibility patterns,
+drives input, changes focus, restarts Explorer or resets the global icon cache.
+
 ## Verification boundaries
 
 The focused native suite covers actual mpv JSON IPC, ownership-safe detach,

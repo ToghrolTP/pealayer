@@ -27,6 +27,13 @@ public static class PealayerTaskbarArtwork {
   using(var g=Graphics.FromImage(b))g.CopyFromScreen(r.L,r.T,0,0,b.Size);
   return b;
  }
+ public static Bitmap CaptureButton(int x,int y,int width,int height) {
+  SetProcessDPIAware();
+  if(width<20||width>512||height<20||height>256)throw new Exception("Invalid taskbar button bounds");
+  var b=new Bitmap(width,height,PixelFormat.Format32bppArgb);
+  using(var g=Graphics.FromImage(b))g.CopyFromScreen(x,y,0,0,b.Size);
+  return b;
+ }
  public static double[] Match(Bitmap capture,string iconPath,int[] fixedBox) {
   var data=capture.LockBits(new Rectangle(0,0,capture.Width,capture.Height),ImageLockMode.ReadOnly,PixelFormat.Format32bppArgb);
   byte[] pixels=new byte[data.Stride*capture.Height]; Marshal.Copy(data.Scan0,pixels,0,pixels.Length);
@@ -64,8 +71,20 @@ public static class PealayerTaskbarArtwork {
 '@
 
 function Assert-TaskbarArtwork {
-    param([string]$IconPath,[string]$OtherIconPath,[int[]]$Box,[string]$OutputPath)
-    $capture=[PealayerTaskbarArtwork]::Capture()
+    param([string]$IconPath,[string]$OtherIconPath,[int[]]$Box,[string]$OutputPath,[string]$AppId)
+    if($AppId){
+        # Read-only UIA identity lookup: never invoke a pattern, focus a window
+        # or select whichever similar icon happens to occur first on the bar.
+        Add-Type -AssemblyName UIAutomationClient,UIAutomationTypes
+        $bar=[Windows.Automation.AutomationElement]::RootElement.FindFirst([Windows.Automation.TreeScope]::Children,
+            [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::ClassNameProperty,'Shell_TrayWnd'))
+        if(!$bar){throw 'Visible taskbar not found.'}
+        $button=$bar.FindFirst([Windows.Automation.TreeScope]::Descendants,
+            [Windows.Automation.PropertyCondition]::new([Windows.Automation.AutomationElement]::AutomationIdProperty,"Appid: $AppId"))
+        if(!$button -or $button.Current.IsOffscreen){throw "Visible taskbar button for $AppId not found; no artwork pass inferred."}
+        $bounds=$button.Current.BoundingRectangle
+        $capture=[PealayerTaskbarArtwork]::CaptureButton([int]$bounds.X,[int]$bounds.Y,[int]$bounds.Width,[int]$bounds.Height)
+    }else{$capture=[PealayerTaskbarArtwork]::Capture()}
     try {
         $match=[PealayerTaskbarArtwork]::Match($capture,$IconPath,$Box)
         $targetBox=@([int]$match[1],[int]$match[2],[int]$match[3])

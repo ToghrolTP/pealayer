@@ -161,7 +161,7 @@ try {
                     $expected=if($preset -eq 'classic'){Join-Path $assets 'icons\classic.ico'}else{Join-Path $assets 'icon.ico'}
                     $alternate=if($preset -eq 'classic'){Join-Path $assets 'icon.ico'}else{Join-Path $assets 'icons\classic.ico'}
                     $artworkPass++
-                    $artworkBox=Assert-TaskbarArtwork -IconPath $expected -OtherIconPath $alternate -Box $artworkBox -OutputPath (Join-Path $fixtureDirectory "taskbar-$artworkPass-$preset.png")
+                    $artworkBox=Assert-TaskbarArtwork -AppId $identity -IconPath $expected -OtherIconPath $alternate -Box $artworkBox -OutputPath (Join-Path $fixtureDirectory "taskbar-$artworkPass-$preset.png")
                 }
             }
             if($TestDisplayedBranding){

@@ -4939,6 +4939,7 @@ impl PealayerApp {
                 let relaunch = crate::platform::interop::external_mpv_settings() == settings && crate::mpv::external::status().closed;
                 if let Err(error) = self.apply_config_patch(ctx, &serde_json::json!({"external_mpv": settings})) {
                     self.set_osd(error);
+                    return;
                 } else if relaunch {
                     crate::mpv::external::relaunch(self.mpv.0, ctx, settings);
                 }
