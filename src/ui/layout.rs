@@ -8663,7 +8663,7 @@ mod hardware_monitor_offline_tests {
             let ctx=egui::Context::default();
             for frame in 0..2 {
                 let mut output=ctx.run_ui(egui::RawInput{screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(360.0,700.0))),time:Some(frame as f64),..Default::default()},|ui| {
-                    PealayerTabViewer{app:&mut app}.ui(ui,&mut PealayerTab::HardwareMonitor);
+                    PealayerTabViewer::new(&mut app).ui(ui,&mut PealayerTab::HardwareMonitor);
                 });
                 let text=output.shapes.iter().filter_map(|shape|match &shape.shape {egui::Shape::Text(t)=>Some(t.galley.text()),_=>None}).collect::<Vec<_>>().join("\n");
                 assert!(text.contains(if connected {"No board connected"}else{"Hardware Disconnected"}),"{text}");
@@ -9052,7 +9052,7 @@ mod timeline_row_tests {
                             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, height))),
                             time: Some(frame as f64), ..Default::default()
                         }, |ui| {
-                            let mut viewer = PealayerTabViewer { app: &mut app };
+                            let mut viewer = PealayerTabViewer::new(&mut app);
                             let available = ui.available_rect_before_wrap();
                             let scroll = egui::ScrollArea::new(viewer.scroll_bars(&PealayerTab::ProgramMonitor))
                                 .show(ui, |ui| viewer.ui(ui, &mut PealayerTab::ProgramMonitor));
@@ -9353,7 +9353,7 @@ mod timeline_row_tests {
                 let mut output = ctx.run_ui(egui::RawInput {
                     screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 420.0))),
                     time: Some(time), events, ..Default::default()
-                }, |ui| { PealayerTabViewer { app: &mut app }.ui(ui, &mut PealayerTab::Timeline); });
+                }, |ui| { PealayerTabViewer::new(&mut app).ui(ui, &mut PealayerTab::Timeline); });
                 output.textures_delta.clear();
                 output
             };
@@ -13995,7 +13995,7 @@ mod timeline_row_tests {
                     ..Default::default()
                 },
                 |ui| {
-                    PealayerTabViewer { app }.ui(ui, &mut PealayerTab::Timeline);
+                    PealayerTabViewer::new(app).ui(ui, &mut PealayerTab::Timeline);
                 },
             );
             output.textures_delta.clear();
@@ -14106,6 +14106,9 @@ pub fn draw_workspace_tab_menu(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
 pub struct PealayerTabViewer<'a> {
     pub app: &'a mut PealayerApp,
+    pub(crate) collapsed: Vec<PealayerTab>,
+    pub(crate) header_options: super::panel_chrome::HeaderOptions,
+    pub(crate) minimum_body: f32,
 }
 
 #[cfg(test)]
@@ -14164,10 +14167,11 @@ fn panel_body<R>(ui: &mut egui::Ui, panel: &PealayerTab, body: impl FnOnce(&mut 
 pub(crate) struct DockViewState {
     pub maximized: Option<PealayerTab>,
     pub auto_collapse: bool,
+    pub collapsed: Vec<PealayerTab>,
 }
 
 impl Default for DockViewState {
-    fn default() -> Self { Self { maximized: None, auto_collapse: true } }
+    fn default() -> Self { Self { maximized: None, auto_collapse: true, collapsed: Vec::new() } }
 }
 
 impl DockViewState {
@@ -14191,6 +14195,7 @@ impl DockViewState {
             }
         }
         self.maximized = self.maximized.filter(|panel| workspace.layout.contains(panel));
+        self.collapsed.retain(|panel| workspace.layout.contains(panel));
     }
 
     pub fn store(&self, ctx: &egui::Context) {
@@ -14199,6 +14204,9 @@ impl DockViewState {
 }
 
 impl<'a> PealayerTabViewer<'a> {
+    pub fn new(app: &'a mut PealayerApp) -> Self {
+        Self{app,collapsed:Vec::new(),header_options:super::panel_chrome::HeaderOptions::current(),minimum_body:0.0}
+    }
     pub fn draw_context_menu(&mut self, ui: &mut egui::Ui, tab: PealayerTab) {
         let title = tab.title(self.app);
         ui.label(egui::RichText::new(title).strong());
@@ -20342,16 +20350,33 @@ impl<'a> PealayerTabViewer<'a> {
 
 impl<'a> craft_ui::docking::DockContent<PealayerTab> for PealayerTabViewer<'a> {
     fn body(&mut self, ui: &mut egui::Ui, panel: &PealayerTab) {
+        if self.collapsed.contains(panel) {
+            let rect=ui.max_rect();
+            ui.ctx().data_mut(|data|data.get_temp_mut_or_default::<Vec<egui::Rect>>(
+                egui::Id::new("workspace_dock_area").with("collapsed-bodies")).push(rect));
+            return;
+        }
         super::sidebar_shortcuts::drop_target(self.app, ui, Some(*panel));
         panel_body(ui, panel, |ui| self.draw_tab_body(ui, *panel));
+    }
+
+    fn limits(&self, panel: &PealayerTab) -> craft_ui::docking::PanelLimits {
+        let collapsed=self.collapsed.contains(panel);
+        craft_ui::docking::PanelLimits {min:egui::vec2(self.minimum_body,if collapsed {0.0}else{self.minimum_body}),..Default::default()}
     }
 
     fn logical_label(&self, panel: &PealayerTab) -> String {
         panel.title(self.app)
     }
 
-    fn label(&mut self, _ui: &egui::Ui, panel: &PealayerTab, logical: &str, _font: &egui::FontId, _color: egui::Color32) -> egui::WidgetText {
-        format!("{} {logical}", panel.icon()).into()
+    fn label(&mut self, _ui: &egui::Ui, panel: &PealayerTab, logical: &str, font: &egui::FontId, color: egui::Color32) -> egui::WidgetText {
+        let close=self.header_options.close;
+        let mut job=egui::text::LayoutJob::default();
+        let gutter=egui::TextFormat{font_id:font.clone(),color:egui::Color32::TRANSPARENT,..Default::default()};
+        if close && self.app.rtl {job.append("\u{200b}",24.0,gutter.clone());}
+        job.append(&format!("{} {logical}",panel.icon()),0.0,egui::TextFormat{font_id:font.clone(),color,..Default::default()});
+        if close && !self.app.rtl {job.append("\u{200b}",24.0,gutter);}
+        job.into()
     }
 
     fn permissions(&self, _panel: &PealayerTab) -> craft_ui::docking::Permissions {
@@ -20369,23 +20394,31 @@ impl<'a> craft_ui::docking::DockContent<PealayerTab> for PealayerTabViewer<'a> {
     }
 
     fn group_header_width(&self, _panels: &[PealayerTab], _active: &PealayerTab, _floating: bool, strip_width: f32) -> f32 {
-        strip_width.min(52.0)
+        strip_width.min(if self.header_options.collapse {52.0}else{28.0})
     }
 
-    fn group_header(&mut self, ui: &mut egui::Ui, _panels: &[PealayerTab], active: &PealayerTab, _floating: bool) {
-        let [menu, close] = super::panel_chrome::craft_actions(ui.max_rect(), self.app.rtl);
-        let response = super::panel_chrome::button(ui, menu, ui.id().with("panel-menu"),
-            crate::ui::icons::CARET_DOWN, &self.app.tr("Panels"));
-        egui::Popup::menu(&response).show(|ui| self.draw_context_menu(ui, *active));
-        let close = ui.add_enabled_ui(!self.app.dock_state.locked, |ui| {
-            super::panel_chrome::button(ui, close, ui.id().with("panel-close"),
-                crate::ui::icons::X, &self.app.tr("Close panel"))
-        }).inner;
-        if close.clicked() && !self.app.dock_state.locked {
-            match self.app.dock_state.set_visible(*active, false, Some(PealayerTab::ProgramMonitor),
-                |_| craft_ui::docking::Permissions::default()) {
-                Ok(()) => { self.app.deferred_config_save = true; ui.ctx().request_repaint(); }
-                Err(error) => log::warn!("Cannot close workspace panel: {error:?}"),
+    fn group_header(&mut self, ui: &mut egui::Ui, panels: &[PealayerTab], active: &PealayerTab, _floating: bool) {
+        let slots = super::panel_chrome::craft_actions(ui.max_rect(), self.app.rtl,self.header_options.collapse);
+        let response = super::panel_chrome::button(ui, slots[0], ui.id().with("panel-menu"),
+            crate::ui::icons::DOTS_THREE, &self.app.tr("Panel menu"));
+        egui::Popup::menu(&response).show(|ui| {
+            self.draw_context_menu(ui, *active);
+            ui.separator();
+            let collapsed=super::panel_chrome::group_collapsed(self.app,ui.ctx(),panels,*active);
+            if ui.add_enabled(!self.app.dock_state.locked,egui::Button::new(format!("{} {}",
+                if collapsed {crate::ui::icons::CARET_RIGHT}else{crate::ui::icons::CARET_DOWN},
+                self.app.tr(if collapsed {"Expand panel"}else{"Collapse panel"})))).clicked() {
+                super::panel_chrome::toggle_collapse(self.app,ui.ctx(),panels);ui.close();
+            }
+        });
+        if let Some(rect)=slots.get(1) {
+            let collapsed=super::panel_chrome::group_collapsed(self.app,ui.ctx(),panels,*active);
+            let glyph=if collapsed {if self.app.rtl {crate::ui::icons::CARET_LEFT}else{crate::ui::icons::CARET_RIGHT}}else{crate::ui::icons::CARET_DOWN};
+            let response=ui.add_enabled_ui(!self.app.dock_state.locked,|ui|
+                super::panel_chrome::button(ui,*rect,ui.id().with("panel-collapse"),glyph,
+                    &self.app.tr(if collapsed {"Expand panel"}else{"Collapse panel"}))).inner;
+            if response.clicked() {
+                super::panel_chrome::toggle_collapse(self.app,ui.ctx(),panels);
             }
         }
     }
@@ -21074,7 +21107,7 @@ mod dock_content_tests {
     fn pealayer_tab_viewer_implements_dock_content() {
         use craft_ui::docking::DockContent;
         let mut app = PealayerApp::default();
-        let viewer = PealayerTabViewer { app: &mut app };
+        let viewer = PealayerTabViewer::new(&mut app);
 
         assert_eq!(viewer.logical_label(&PealayerTab::ProgramMonitor), "Program Monitor");
         assert_eq!(viewer.logical_label(&PealayerTab::Timeline), "Timeline");

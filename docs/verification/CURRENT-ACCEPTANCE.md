@@ -18,6 +18,10 @@ passed forbidden/empty/changing-access parent cases; Cafe remains deferred.
 
 ## Window and media automation
 
+[CraftUI pane header actions](craft-pane-header-actions.md) tracks individual-tab
+close buttons (default on), the separate three-dot menu, and configurable
+collapse/expand chevrons (default off), without changing egui Dock chrome.
+
 [External player lifecycle](external-player-lifecycle.md) covers contextual
 Program Monitor switching, explicit relaunch after Quit, internal fallback,
 rich mode choices and factual executable resolution. The canonical package and

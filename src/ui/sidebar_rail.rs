@@ -107,7 +107,7 @@ impl<'a> PaneContent<SidebarPane> for SidebarPaneContent<'a> {
 
     fn body(&mut self, ui: &mut Ui, pane: &SidebarPane) {
         let tab = PealayerTab::from(*pane);
-        let mut viewer = crate::ui::layout::PealayerTabViewer { app: self.app };
+        let mut viewer = crate::ui::layout::PealayerTabViewer::new(self.app);
         craft_ui::docking::DockContent::body(&mut viewer, ui, &tab);
     }
 

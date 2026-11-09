@@ -2058,50 +2058,7 @@ impl eframe::App for PealayerApp {
                     } else if crate::platform::interop::get_live_config().workspace_ui == crate::config::WorkspaceUi::EguiDock {
                         crate::ui::egui_dock::show(self, ui, raise_panel);
                     } else {
-                        self.workspace_rendering = true;
-                        let layout_snapshot = self.dock_state.layout.clone();
-                        let mut dock_style = craft_ui::docking::DockStyle::from_ui(ui);
-                        let craft_tokens = crate::ui::craft_theme::current(ui.ctx());
-                        crate::ui::craft_theme::apply_dock_style(&mut dock_style, &craft_tokens);
-                        dock_style.right_to_left = self.rtl;
-                        let locked = self.dock_state.locked;
-                        let dock_layer = ui.layer_id();
-                        let modal_blocked = !ui.ctx().memory(|memory| memory.is_above_modal_layer(dock_layer));
-                        let mut dock_view = crate::ui::layout::DockViewState::load(ui.ctx());
-                        let view_before = dock_view.clone();
-                        let output = ui.scope(|ui| {
-                            let mut tab_viewer = crate::ui::layout::PealayerTabViewer { app: self };
-                            let mut area = craft_ui::docking::DockArea::new(egui::Id::new("workspace_dock_area"))
-                                .locked(locked)
-                                .input_blocked(modal_blocked)
-                                .maximized(dock_view.maximized)
-                                .auto_collapse_iconic(dock_view.auto_collapse);
-                            if let Some(panel) = raise_panel {
-                                area = area.raise_panel(panel);
-                            }
-                            area.show_content(ui, &layout_snapshot, &dock_style, &mut tab_viewer)
-                        }).inner;
-                        self.workspace_rendering = false;
-                        if !output.actions.is_empty() {
-                            let layout_before = self.dock_state.clone();
-                            if let Err(error) = self.dock_state.apply_all(output.actions, |_| craft_ui::docking::Permissions::default()) {
-                                log::warn!("Workspace action rejected: {error:?}");
-                            }
-                            if self.dock_state != layout_before {
-                                self.deferred_config_save = true;
-                                ui.ctx().request_repaint();
-                            }
-                        }
-                        dock_view.apply(output.events, &self.dock_state);
-                        if dock_view != view_before {
-                            dock_view.store(ui.ctx());
-                            self.deferred_config_save = true;
-                            ui.ctx().request_repaint();
-                        }
-
-                        if !self.pending_tab_reveals.is_empty() {
-                            ui.ctx().request_repaint();
-                        }
+                        crate::ui::panel_chrome::show(self,ui,raise_panel);
                     }
                 } else {
                     crate::ui::video::draw(self, ui);
@@ -6234,6 +6191,7 @@ impl PealayerApp {
         let mut changed = false;
         for tab in requests {
             changed |= crate::ui::layout::reveal_and_focus_tab(&mut self.dock_state, tab);
+            crate::ui::panel_chrome::expand_group(&mut view,&self.dock_state.layout,tab);
         }
         // An explicit reveal must not remain behind a different maximized
         // panel. Keep maximization when revealing that same panel.
@@ -10458,7 +10416,7 @@ pub(crate) mod tests {
         let ctx = egui::Context::default();
         let mut app = PealayerApp::default();
         app.workspace_rendering = true;
-        DockViewState { maximized: Some(Tab::ProgramMonitor), auto_collapse: false }.store(&ctx);
+        DockViewState { maximized: Some(Tab::ProgramMonitor), auto_collapse: false, ..Default::default() }.store(&ctx);
         // A body callback queues a reveal after this frame's builder has run.
         assert_eq!(app.prepare_workspace_reveals(&ctx), None);
         app.open_or_focus_tab(Tab::Timeline);

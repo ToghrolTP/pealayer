@@ -1,5 +1,10 @@
 # egui Dock: restore application chrome and header interactions
 
+Current CraftUI header behavior is tracked in
+[pane header actions](craft-pane-header-actions.md): individual-tab close,
+three-dot menu and an optional collapse/expand chevron. This supersedes the
+older menu-chevron decision documented in the historical captures below.
+
 ## Connected header contours and CraftUI controls
 
 The later enlarged native review exposed an additional problem: the Dock

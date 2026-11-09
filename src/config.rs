@@ -1135,6 +1135,8 @@ pub struct AppConfig {
     pub ui_font_name: String,
     pub monospace_font_name: String,
     pub workspace_ui: WorkspaceUi,
+    pub craft_show_close_buttons: bool,
+    pub craft_show_collapse_buttons: bool,
     pub preferences_grouped_navigation: bool,
     pub language: AppLanguage,
     pub direction: AppDirection,
@@ -1343,6 +1345,8 @@ impl Default for AppConfig {
             ui_font_name: String::new(),
             monospace_font_name: String::new(),
             workspace_ui: WorkspaceUi::CraftUi,
+            craft_show_close_buttons: true,
+            craft_show_collapse_buttons: false,
             preferences_grouped_navigation: true,
             language: AppLanguage::System,
             direction: AppDirection::Auto,
@@ -1872,6 +1876,8 @@ impl AppConfig {
         self.ui_font_name.clone_from(&source.ui_font_name);
         self.monospace_font_name.clone_from(&source.monospace_font_name);
         self.workspace_ui = source.workspace_ui;
+        self.craft_show_close_buttons = source.craft_show_close_buttons;
+        self.craft_show_collapse_buttons = source.craft_show_collapse_buttons;
         self.preferences_grouped_navigation = source.preferences_grouped_navigation;
         self.app_icon_preset = source.app_icon_preset;
     }

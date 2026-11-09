@@ -484,6 +484,8 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
         PreferenceControl::accent(config),
         PreferenceControl::select("workspace_ui", "appearance", "Interface", "Workspace interface",
             &[("craft_ui", "CraftUI"), ("egui_dock", "egui Dock")]),
+        PreferenceControl::boolean("craft_show_close_buttons", "appearance", "Workspace panels", "Show CraftUI panel close buttons"),
+        PreferenceControl::boolean("craft_show_collapse_buttons", "appearance", "Workspace panels", "Show CraftUI collapse buttons"),
         PreferenceControl::boolean("preferences_grouped_navigation", "appearance", "Interface", "Group Preferences navigation"),
         PreferenceControl::choice_slider("ui_control_density", "appearance", "Interface", "Control density",
             &[("extra_compact", "Extra compact"), ("compact", "Compact"), ("regular", "Regular"),
@@ -1355,6 +1357,8 @@ fn semantic_preference_icon(control: &PreferenceControl) -> &'static str {
         "ui_animation_mode" => "waveform",
         "ui_control_density" => "sliders-horizontal",
         "workspace_ui" => "tabs",
+        "craft_show_close_buttons" => "x",
+        "craft_show_collapse_buttons" => "caret-down",
         "preferences_grouped_navigation" => "list-checks",
         "ui_font_family" | "monospace_font_family" | "ui_font_name" | "monospace_font_name" => "text-t",
         "language" => "translate",
@@ -1436,6 +1440,23 @@ pub fn set_value_at_path(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn craft_header_visibility_is_shared_persistent_and_live_previewed() {
+        let mut config=crate::config::AppConfig::default();
+        assert!(config.craft_show_close_buttons);
+        assert!(!config.craft_show_collapse_buttons);
+        let contract=super::preferences_contract(&config);
+        for (key,value,icon) in [("craft_show_close_buttons",true,"x"),("craft_show_collapse_buttons",false,"caret-down")] {
+            let row=contract.controls.iter().find(|row|row.key==key).unwrap();
+            assert_eq!(row.group,"Workspace panels");
+            assert_eq!(row.icon,icon);
+            assert_eq!(contract.values[key],serde_json::json!(value));
+        }
+        config.craft_show_close_buttons=false;config.craft_show_collapse_buttons=true;
+        let restored:crate::config::AppConfig=serde_json::from_value(serde_json::to_value(&config).unwrap()).unwrap();
+        let mut preview=crate::config::AppConfig::default();preview.copy_appearance_from(&restored);
+        assert!(!preview.craft_show_close_buttons);assert!(preview.craft_show_collapse_buttons);
+    }
     #[test]
     fn density_slider_choices_match_serialized_shared_sizes() {
         use crate::config::UiControlDensity;

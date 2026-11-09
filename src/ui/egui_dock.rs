@@ -543,7 +543,7 @@ pub fn show(app: &mut PealayerApp, ui: &mut egui::Ui, reveal: Option<Tab>) {
     app.workspace_rendering = true;
     ui.add_enabled_ui(!blocked, |ui| {
         let mut viewer = DockTabViewer {
-            viewer: PealayerTabViewer { app },
+            viewer: PealayerTabViewer::new(app),
             context: ui.ctx().clone(),
             title_font: egui::TextStyle::Button.resolve(ui.style()),
         };
