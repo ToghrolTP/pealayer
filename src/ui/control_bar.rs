@@ -222,9 +222,26 @@ pub(crate) fn compute_toolbar_fit(
             overflow_width,
         })
 }
-fn menu(app: &mut PealayerApp, ui: &mut egui::Ui, surface: Surface, action: Option<Action>) {
+fn menu(app: &mut PealayerApp, ui: &mut egui::Ui, surface: Surface, action: Option<Action>, owner: Id) {
     let mut layout = app.control_bars.layout(surface);
     let mut changed = false;
+    if action.is_none() {
+        let mut overflow = Vec::new();
+        for end in [false, true] {
+            for item in ui.data(|data| data.get_temp::<Vec<Action>>(owner.with(("overflow-actions",end)))).unwrap_or_default() {
+                if !overflow.contains(&item) { overflow.push(item); }
+            }
+        }
+        for item in &overflow {
+            let label = format!("{}  {}", caption(app,*item), tooltip(app,*item));
+            ui.add_enabled_ui(enabled(app,*item), |ui| {
+                if let Some(kind) = kind(*item) {
+                    ui.menu_button(label, |ui| super::media_tracks::draw_track_menu(app,ui,kind));
+                } else if ui.button(label).clicked() { invoke(app,ui.ctx(),*item); ui.close(); }
+            });
+        }
+        if !overflow.is_empty() { ui.separator(); }
+    }
     if let Some(action) = action {
         ui.strong(format!(
             "{} {}",
@@ -349,8 +366,26 @@ pub(crate) fn draw_group(
     };
     let area = ui.allocate_ui_with_layout(egui::vec2(total, height), direction, |ui| {
         let action_width = (total - if end { height + gap } else { 0.0 }).max(1.0);
+        let actions: Vec<_> = app.control_bars.layout(surface).ordered().into_iter().filter(|action| {
+            let layout=app.control_bars.layout(surface);
+            supported(*action,surface) && !layout.hidden[*action as usize] && layout.end[*action as usize]==end
+        }).collect();
+        // The shared trailing overflow button is already reserved above. Fit
+        // the inline prefix without reserving a second, invisible menu slot.
+        let mut used=0.0;
+        let count=actions.iter().take_while(|action| {
+            let next=width(ui,**action)+if used>0.0 {gap} else {0.0};
+            if used+next<=action_width+0.01 {used+=next;true} else {false}
+        }).count();
+        let shown: Vec<_> = actions[..count].to_vec();
+        let overflow: Vec<_> = if surface==Surface::Monitor {actions[count..].to_vec()} else {Vec::new()};
+        ui.data_mut(|data|data.insert_temp(owner.with(("overflow-actions",end)),overflow));
         if group_width(app, ui, surface, end) > if end { height } else { 0.0 } {
             ui.allocate_ui_with_layout(egui::vec2(action_width, height), direction, |ui| {
+                if surface == Surface::Monitor {
+                    draw_actions(app,ui,surface,end,owner,Some(&shown));
+                    return;
+                }
                 egui::ScrollArea::horizontal()
                     .id_salt(owner.with(("scroll", end)))
                     .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
@@ -358,7 +393,7 @@ pub(crate) fn draw_group(
                     .auto_shrink([false, true])
                     .max_width(action_width)
                     .show(ui, |ui| {
-                        ui.with_layout(direction, |ui| draw_actions(app, ui, surface, end, owner));
+                        ui.with_layout(direction, |ui| draw_actions(app, ui, surface, end, owner,None));
                     });
             });
         }
@@ -378,10 +413,11 @@ pub(crate) fn draw_group(
         app.request_control_bar_save(ui.ctx());
     }
 }
-fn draw_actions(app: &mut PealayerApp, ui: &mut egui::Ui, surface: Surface, end: bool, owner: Id) {
+fn draw_actions(app: &mut PealayerApp, ui: &mut egui::Ui, surface: Surface, end: bool, owner: Id, shown: Option<&[Action]>) {
     let layout = app.control_bars.layout(surface);
     let actions = layout.ordered().into_iter().filter(|a| {
         supported(*a, surface) && !layout.hidden[*a as usize] && layout.end[*a as usize] == end
+            && shown.is_none_or(|shown| shown.contains(a))
     });
     let mut requested = None;
     for action in actions {
@@ -523,7 +559,7 @@ fn draw_actions(app: &mut PealayerApp, ui: &mut egui::Ui, surface: Surface, end:
         } else if response.clicked() && is_enabled && !has_drag {
             requested = Some(action);
         }
-        response.context_menu(|ui| menu(app, ui, surface, Some(action)));
+        response.context_menu(|ui| menu(app, ui, surface, Some(action),owner));
         response.on_hover_text(tooltip(app, action));
     }
     if let Some(action) = requested {
@@ -566,9 +602,10 @@ fn draw_overflow(app: &mut PealayerApp, ui: &mut egui::Ui, surface: Surface, own
         app.request_control_bar_save(ui.ctx());
     }
     if drag.is_none() {
-        egui::Popup::menu(&response).show(|ui| menu(app, ui, surface, None));
+        egui::Popup::menu(&response).id(response.id.with("control-bar-menu"))
+            .show(|ui| menu(app, ui, surface, None,owner));
     }
-    response.context_menu(|ui| menu(app, ui, surface, None));
+    response.context_menu(|ui| menu(app, ui, surface, None,owner));
 }
 
 #[cfg(test)]
@@ -628,6 +665,57 @@ mod tests {
         ctx.read_response(super::super::action_customization::owner(surface).with(action))
             .unwrap()
             .rect
+    }
+    #[test]
+    fn overflow_primary_click_opens_a_durable_menu_independent_of_context_menu() {
+        let _lock = crate::app::tests::lock_app_tests();
+        for surface in [Surface::Monitor, Surface::Simple] {
+            let ctx=egui::Context::default(); let mut app=PealayerApp::default();
+            let original=app.control_bars;
+            for _ in 0..2 { render(&ctx,&mut app,surface,vec![]); }
+            let id=super::super::action_customization::owner(surface).with("overflow");
+            let pos=ctx.read_response(id).unwrap().rect.center();
+            render(&ctx,&mut app,surface,vec![egui::Event::PointerMoved(pos),pointer(pos,egui::PointerButton::Primary,true)]);
+            render(&ctx,&mut app,surface,vec![pointer(pos,egui::PointerButton::Primary,false)]);
+            for _ in 0..2 {
+                let output=render(&ctx,&mut app,surface,vec![]);
+                assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,egui::Shape::Text(text) if text.galley.text().contains("Show / hide actions"))), "left-click overflow menu disappeared on {surface:?}");
+            }
+            assert_eq!(app.control_bars,original);
+            egui::Popup::close_all(&ctx);
+            render(&ctx,&mut app,surface,vec![pointer(pos,egui::PointerButton::Secondary,true)]);
+            render(&ctx,&mut app,surface,vec![pointer(pos,egui::PointerButton::Secondary,false)]);
+            assert!(egui::Popup::is_id_open(&ctx,id.with("popup")));
+        }
+    }
+    #[test]
+    fn compact_monitor_overflow_keeps_omitted_commands_usable() {
+        let _lock=crate::app::tests::lock_app_tests();
+        let ctx=egui::Context::default(); let mut app=PealayerApp::default();
+        let surface=Surface::Monitor; let owner=super::super::action_customization::owner(surface);
+        app.control_bars.monitor.hidden[Action::Preferences as usize]=false;
+        let render=|app:&mut PealayerApp,events| {
+            let mut output=ctx.run_ui(egui::RawInput {
+                screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(700.0,600.0))),events,..Default::default()
+            },|ui| {
+                ui.allocate_ui_with_layout(egui::vec2(72.0,32.0),egui::Layout::left_to_right(egui::Align::Center),|ui| {
+                    draw_group(app,ui,surface,true,owner);
+                });
+            }); output.textures_delta.clear(); output
+        };
+        render(&mut app,vec![]); render(&mut app,vec![]);
+        let overflow=ctx.data(|data|data.get_temp::<Vec<Action>>(owner.with(("overflow-actions",true)))).unwrap();
+        assert!(overflow.contains(&Action::Preferences));
+        let pos=ctx.read_response(owner.with("overflow")).unwrap().rect.center();
+        render(&mut app,vec![egui::Event::PointerMoved(pos),pointer(pos,egui::PointerButton::Primary,true)]);
+        render(&mut app,vec![pointer(pos,egui::PointerButton::Primary,false)]);
+        let output=render(&mut app,vec![]);
+        let target=output.shapes.iter().find_map(|shape|match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text().contains("Preferences...") => Some(text.pos+text.galley.size()*0.5), _=>None,
+        }).expect("omitted command must be rendered in overflow");
+        render(&mut app,vec![egui::Event::PointerMoved(target),pointer(target,egui::PointerButton::Primary,true)]);
+        render(&mut app,vec![pointer(target,egui::PointerButton::Primary,false)]);
+        assert!(app.show_preferences_dialog,"overflow command must dispatch the existing Preferences action");
     }
     #[test]
     fn real_bars_support_disabled_drag_cross_side_reorder_and_trash_without_invocation() {
