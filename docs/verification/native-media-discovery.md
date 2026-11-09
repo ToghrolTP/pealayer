@@ -45,6 +45,9 @@ zbus dependency directly rather than registering alongside that backend.
   and publication failures retry with bounded backoff; idle work blocks on events.
   Drop/failure invalidates callbacks. There is no periodic D-Bus probe on the UI
   thread, and no second Windows or Linux session registration.
+- OS-session Quit is explicitly process-local. A remote-consumer frontend must
+  close itself rather than forward this desktop request into shutting down its
+  remote authority; ordinary explicit remote transport commands are unchanged.
 
 The [MPRIS specification](https://specifications.freedesktop.org/mpris/latest/Player_Interface.html)
 defines the property units, track-ID stale-seek guard and change/seek signals.
@@ -79,9 +82,13 @@ A phone's real KDE Connect view is a separate acceptance gate; a viewing-only
 check has been requested. No board output or production playback was actuated.
 macOS's generic KDE Connect fallback cannot display rich state; the retained
 Souvlaki Apple backend also lacks a public rate/capability publishing API. Do not
-call those richer Apple properties complete. Windows KDE Connect itself does
+call those richer Apple properties complete; [#269](https://github.com/ToghrolTP/pealayer/issues/269)
+tracks their native implementation and actual Apple-runtime verification.
+Windows KDE Connect itself does
 not implement per-application volume, and its relative-seek extrapolation assumes
-1x; Pealayer still publishes the truthful playback rate rather than falsifying it.
+1x. Its artwork cache identity also depends on track tags, not artwork bytes.
+Pealayer still publishes truthful metadata/rate/artwork rather than inventing
+track changes to work around a consumer limitation.
 
 Linux private-bus CI, package/deployment and the current runtime receipt follow
 verification. Cafe deployment remains user-deferred while its route is offline.

@@ -178,7 +178,9 @@ pub fn map_media_control_event(
         MediaControlEvent::SetVolume(_) => return None,
         MediaControlEvent::OpenUri(target) => InteropCommand::Open { target },
         MediaControlEvent::Raise => InteropCommand::Activate,
-        MediaControlEvent::Quit => InteropCommand::Quit,
+        // MPRIS belongs to this process. A remote-consumer frontend must never
+        // forward an OS request to close itself into quitting the authority.
+        MediaControlEvent::Quit => InteropCommand::QuitLocal,
         // Souvlaki's event enum is non-exhaustive. Unrecognized OS actions must
         // not be guessed into a playback or hardware command.
         _ => return None,
@@ -663,6 +665,9 @@ mod tests {
         assert_eq!(effective_session_volume(0.7, true), 0.0);
         assert_eq!(effective_session_volume(0.7, false), 0.7);
         assert_eq!(effective_session_volume(2.0, false), 1.3);
+        let quit = map_media_control_event(MediaControlEvent::Quit, 10.0).unwrap();
+        assert_eq!(quit, InteropCommand::QuitLocal);
+        assert!(quit.is_process_local());
     }
     #[test]
     fn session_artwork_cache_reuses_identical_bytes_without_rewriting() {
@@ -719,7 +724,7 @@ mod tests {
             (MediaControlEvent::Next, InteropCommand::Next),
             (MediaControlEvent::Previous, InteropCommand::Previous),
             (MediaControlEvent::Raise, InteropCommand::Activate),
-            (MediaControlEvent::Quit, InteropCommand::Quit),
+            (MediaControlEvent::Quit, InteropCommand::QuitLocal),
         ] {
             assert_eq!(map_media_control_event(event, 7.5), Some(command));
         }

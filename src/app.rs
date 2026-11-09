@@ -2299,7 +2299,7 @@ impl PealayerApp {
     fn media_control_command_allowed(&self,ctx:&egui::Context,command:&InteropCommand)->bool {
         // Explicit OS-session window/file requests must still be able to raise
         // a foreground-only player. They are not keyboard transport buttons.
-        if matches!(command,InteropCommand::Activate|InteropCommand::Quit|InteropCommand::Open{..}) {self.media_keys_enabled}
+        if matches!(command,InteropCommand::Activate|InteropCommand::Quit|InteropCommand::QuitLocal|InteropCommand::Open{..}) {self.media_keys_enabled}
         else {
             if !self.media_controls_allowed(ctx) { return false; }
             let caps = self.media_session_capabilities();
@@ -10737,7 +10737,7 @@ pub(crate) mod tests {
         let _lock=lock_app_tests();
         let mut app=PealayerApp::default();app.web_only=true;app.media_keys_background_enabled=false;
         let ctx=egui::Context::default();
-        for command in [InteropCommand::Activate,InteropCommand::Quit,InteropCommand::Open{target:"fixture.mkv".into()}] {
+        for command in [InteropCommand::Activate,InteropCommand::Quit,InteropCommand::QuitLocal,InteropCommand::Open{target:"fixture.mkv".into()}] {
             assert!(app.media_control_command_allowed(&ctx,&command));
         }
         assert!(!app.media_control_command_allowed(&ctx,&InteropCommand::TogglePause));
