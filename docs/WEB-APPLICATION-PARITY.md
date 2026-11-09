@@ -123,6 +123,12 @@ uses the shared Rust preference contract, so Web preferences can configure the
 native authority too. This is **not** a claim that React already has equivalent
 draggable ruler controls; that counterpart remains part of timeline parity.
 
+[Paused playback and track state](verification/paused-playback-and-track-state.md)
+corrects external selected-stream IDs shared by native/Web timeline snapshots,
+external pause/resume clock anchoring and native reveal-button availability.
+The installed local checkpoint includes real-player decoder tests and native
+captures; it does not claim new React toolbar gestures or remote deployment.
+
 Control-bar follow-up (12 October): [shared customization](verification/control-bar-customization.md)
 covers native Simple/Program Monitor and Web player/Monitor action menus,
 saved ordering, logical start/end placement and hide/restore. Native gesture

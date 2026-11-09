@@ -18,6 +18,11 @@ The external bridge omission traces to its original integration, rather than
 the recent footer reflow. The old fixes for paused sub-frame authoring and
 the renderer's committed last-good texture remain intact.
 
+Source lineage: the [external integration](https://github.com/ToghrolTP/pealayer/commit/945207bcb75930eb7c5451c59d1baa5bee7c2c2a)
+introduced the external clock/mirror paths; [timeline state synchronization](https://github.com/ToghrolTP/pealayer/commit/ce859047860a3c30e3b90d58eddbc3ee50af9dd0)
+added the unconditional scrub reset in Play. This follow-up preserves that reset
+for ordinary playback while keeping a still-pending exact commit alive.
+
 ## Verification
 
 - Focused clock/toolbar/visibility/resume tests, including actual toolbar pointer
@@ -35,4 +40,40 @@ the renderer's committed last-good texture remain intact.
   from null-output decoder tests. Cafe is deferred at the user's request while
   its normal connection is unavailable.
 
-Package and installed-runtime receipt will be appended after verification.
+## Native captures
+
+Actual enlarged native captures from the isolated, hardware-disconnected dual
+player, using the same Studio palette and a synthetic media file. These are not
+mockups or private-production media captures.
+
+Complete playhead visible: the target/reveal action is dimmed; the selected
+video strip remains solid (1200-point window).
+
+![Visible playhead and disabled reveal action](../screenshots/timeline-playhead-visible.png)
+
+Playhead offscreen: the action is available without moving the viewport or
+seeking automatically (720-point window).
+
+![Offscreen playhead and available reveal action](../screenshots/timeline-playhead-out-of-view.png)
+
+## Delivered checkpoint
+
+- [PR #258](https://github.com/ToghrolTP/pealayer/pull/258), implementation
+  `4012c24412c842d0c73f11beb07361b08c3f9165`, clean packaged source.
+- 207 focused tests passed; the separate real internal decoder and real external
+  named-pipe/dual-preview tests both passed. Package duplicate test suites were
+  deliberately skipped, not counted as rerun.
+- Web/PWA bundle integrity, native resources, seven quick-action icons, libmpv
+  smoke and standalone-downloader identity/headless smoke passed.
+- Canonical executable updated through the graceful peer updater, with restart
+  acknowledgement in 15.9 seconds. Installed source and executable digest match
+  the staged candidate:
+  `f914fbf2305c05a87d044e29eeb5f3e679e0478e71313c3d28d548162ae6a0c9`.
+- Host libmpv retained:
+  `e56ce67cd00f06a59dc7ed5b97a49a9182a381554c755dc4570a52af1ef30e65`.
+- The regular application is running with the same media and paused position,
+  no pending seek. The historical comparison remains untouched. Review and
+  owned external test player exited through their own APIs/IPC after capture.
+- Actual native dual-preview rendering and toolbar appearance were inspected.
+  The user's own external-player pause/internal-resume acceptance remains a
+  separate feedback gate; no broad moving-GPU soak or Cafe deployment is claimed.
