@@ -19,7 +19,7 @@ segment, muted inactive ink, hover/pressed feedback and an inside keyboard-focus
 outline. Glyphs are centered by their visible ink bounds. Borders and interaction
 states never change layout. Each segment exposes its label and selection through
 accessibility metadata, and retains the shared picker's existing search focus,
-filtering, initial-focus and session view-selection ownership.
+filtering, initial-focus and remembered view-selection ownership.
 
 ## Verification
 
@@ -42,6 +42,26 @@ The user-provided native crop records the reported alignment and spacing defects
 
 ![Before: detached search icon and independently sized buttons](../screenshots/icon-picker-header-before.png)
 
-Native visual capture and installed-build receipt are recorded after packaging.
+## Installed-build receipt
+
+The canonical executable is installed through the graceful peer updater and is
+running from source `f3ca393ec91f95fbda358fa8cc1fc01b92a2db55`. The package was
+built from a clean source tree; Web bundle integrity, native resources, all seven
+quick-action icon resources, downloader smoke and libmpv smoke passed. The
+packager skipped duplicate regression runs after the separate UI suite above.
+
+The executable's acknowledged SHA-256 is
+`a5fc8a55350aec0bd6436e3d7d79ba6f5139a8fb831e3d9b4bf11e74197ef894`.
+Its destination libmpv remains
+`e56ce67cd00f06a59dc7ed5b97a49a9182a381554c755dc4570a52af1ef30e65`.
+The post-restart process API independently reports the matching source and
+executable. Playback remains paused at the exact pre-update position; the full
+workspace/profile/session and selected appearance fields compared unchanged.
+No hardware command, layout reset or window-placement change was requested.
+
+The final live native picker capture is **pending** the user opening its popup.
+The source/render tests and installed-process acknowledgement are not a claim of
+that screenshot check or human acceptance. The PR remains draft for that gate.
+
 Cafe deployment remains deferred at the user's request while its normal route
 is offline; this local change is not a production-host delivery claim.

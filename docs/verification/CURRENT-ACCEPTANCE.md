@@ -21,7 +21,9 @@ passed forbidden/empty/changing-access parent cases; Cafe remains deferred.
 [Native icon picker header](icon-picker-header.md) unifies the search field and
 trailing List/Grid segmented control. Its magnifier is inside the input, controls
 share a density/font-aware centerline, and selection/hover/focus do not move them.
-Focused geometry and pointer/paint verification are tracked in the linked receipt.
+The update is installed with 563 native UI checks passing; its live open-picker
+screenshot is pending. Geometry, pointer/paint and delivery evidence are tracked
+in the linked receipt.
 
 [Studio media strips](studio-media-strips.md) replaces native hardcoded media
 colors with palette-owned surfaces and keeps media/cue captions pinned to the
