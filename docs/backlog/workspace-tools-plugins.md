@@ -3,11 +3,10 @@
 Tracking: [workspace tools extraction #272](https://github.com/ToghrolTP/pealayer/issues/272),
 under [plugin architecture #44](https://github.com/ToghrolTP/pealayer/issues/44).
 
-Status: implementation and verification in progress. The authorized office proxy
-route retrieved the pinned dependencies after the original connection failed.
-Default compilation, native headless tests and the owned Windows PTY fixture
-have passed. No deployment, physical hardware or screenshot acceptance is implied
-until recorded in [the verification receipt](../verification/workspace-tools.md).
+Status: the standard Windows tools are implemented, tested, captured and installed
+locally; see [the verification receipt](../verification/workspace-tools.md).
+Remaining cross-platform, production-host and later package/plugin extraction
+gates remain explicit below. Native fixtures are not physical hardware acceptance.
 
 Parent tracking: [Pealayer continuation #80](https://github.com/ToghrolTP/pealayer/issues/80)
 and [current acceptance index](../verification/CURRENT-ACCEPTANCE.md).

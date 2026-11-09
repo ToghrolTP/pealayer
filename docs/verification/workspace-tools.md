@@ -140,17 +140,16 @@ Local evidence:
   and Preferences-height-change regression, which passed. That fix is not yet
   installed in the review process.
 
-The user reviewed the initial isolated window and provided feedback. Final native
-screenshots, feedback reconciliation and canonical deployment remain pending. Cafe is
-user-deferred/offline. No physical controller or remote deployment acceptance is
-implied by local fixtures.
+The initial review led to the follow-up below; its package alone did not establish
+acceptance of that follow-up. The final native delivery receipt supersedes this
+initial checkpoint. Cafe is user-deferred/offline. No physical controller or
+remote deployment acceptance is implied by local fixtures.
 
 Follow-up implementation replaces the initial fixed bottom panel and external
 PortableShell profile above. The user authorized discarding the isolated review
 tests; that instance exited through its own local IPC Quit command. Regular and
-historical instances were left untouched. Docking, toolbar editor and embedded
-host tests are being rerun against the combined follow-up; earlier counts do
-not establish acceptance of those changes.
+historical instances were left untouched. Earlier counts do not establish
+acceptance of those changes; the combined results below cover the follow-up.
 
 Combined follow-up evidence: 56 workspace tests, 41 terminal-filter tests (two
 opt-in fixtures ignored in that pass), all six embedded host tests and the
@@ -177,3 +176,49 @@ new Show Terminal intent, without overriding saved profiles or losing siblings.
 
 PortableShell source ownership: [profile-import PR #84](https://github.com/atomicdeploy/portable-shell/pull/84).
 The pinned vendor receipt is `third_party/portable-shell/PEALAYER-VENDOR.md`.
+
+## Native delivery and captures
+
+The clean Windows package from `f7f2e8be335a226b6e7469e9c301c84fba4c5376`
+passed runtime smoke, executable identity, all seven taskbar-action resources
+and Web/PWA integrity. Its executable SHA-256 is
+`048757d107282f6051caa84c4ca2df5b3395f9eddfc1076263313693fb6b12ae`.
+The canonical local updater completed its graceful restart/build acknowledgement;
+the installed executable independently has that hash and reports the matching
+source commit. The loaded movie remained paused at its existing saved position
+(578.286 s); this update did not require a new seek or playback mutation.
+
+The isolated review runs the same package. Local IPC opened the embedded shell,
+submitted only read-only help/status commands, refreshed profile discovery and
+opened/closed the toolbar editor. Discovery returned 15 profiles, zero warnings;
+no imported shell was executed and no profile names/environment values are
+published here. Changing between CraftUI and egui Dock preserved the live session
+and pane membership. The canonical profile retains both tools hidden with no
+terminal session started. Regular, review and historical apps remain separate.
+
+These are actual native captures at Studio/dark/Compact and 150% display scale,
+not mockups. Before is the initial `1c8cc789` package; after/editor are the final
+package above. Black Program Monitor means no media was loaded in the isolated
+review; the fixture is deliberately disconnected from hardware.
+
+### Before
+
+![Initial boxed toolbar and fixed bottom terminal](../screenshots/workspace-tools-before.png)
+
+### After — CraftUI, embedded Pealayer prompt
+
+![Flat grouped toolbar and terminal beside Timeline](../screenshots/workspace-tools-after.png)
+
+### Toolbar editor
+
+![Native toolbar editor with visibility, grips and move controls](../screenshots/workspace-tools-editor.png)
+
+### egui Dock — narrower viewport
+
+![Same terminal session in the native Dock renderer](../screenshots/workspace-tools-dock-narrow.png)
+
+Cafe deployment remains explicitly user-deferred/offline. Linux/macOS native
+profile discovery, physical controller effects and full-screen-TUI compatibility
+are separate acceptance gates; the Windows fixtures/captures do not claim them.
+One upstream header retains its original extra blank EOF line; the file-specific
+whitespace attribute preserves its pinned bytes while keeping other checks on.
