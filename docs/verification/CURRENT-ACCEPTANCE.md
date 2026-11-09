@@ -18,6 +18,11 @@ passed forbidden/empty/changing-access parent cases; Cafe remains deferred.
 
 ## Window and media automation
 
+[Shortcut field keycaps](shortcut-keycaps.md) renders application shortcut values
+as individual keys inside their inputs, retaining normal editing on focus and
+unchanged binding/storage semantics. Native/Web tests and delivery evidence are
+tracked in the linked receipt.
+
 [Native icon picker header](icon-picker-header.md) unifies the search field and
 trailing List/Grid segmented control. Its magnifier is inside the input, controls
 share a density/font-aware centerline, and selection/hover/focus do not move them.

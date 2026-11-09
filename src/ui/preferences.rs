@@ -1544,12 +1544,15 @@ fn render_contract_control(
             let text_align = crate::ui::i18n::input_alignment(rtl_ui, &text);
             preference_row(ui, control_icon, &tr(control.label), label_width, |ui| {
                 let control_width = ui.available_width().min(PREFERENCE_CONTROL_MAX_WIDTH);
-                let response = ui.add(
+                let response = if control.key.starts_with("application_shortcuts.") {
+                    crate::ui::keycaps::text_edit(ui, ui.make_persistent_id(control.key),
+                        &mut text, control_width, control.placeholder.unwrap_or_default(), rtl_ui)
+                } else { ui.add(
                     crate::ui::dialog::singleline_text_edit(ui, &mut text)
                         .horizontal_align(text_align)
                         .desired_width(control_width)
                         .hint_text(control.placeholder.unwrap_or_default()),
-                );
+                ) };
                 if response.changed() {
                     replacement = Some(if text.trim().is_empty() {
                         serde_json::Value::Null

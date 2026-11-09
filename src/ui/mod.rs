@@ -29,6 +29,7 @@ pub(crate) mod egui_dock;
 pub(crate) mod panel_chrome;
 pub(crate) mod player_mode;
 pub mod icons;
+pub(crate) mod keycaps;
 pub mod layout;
 mod timeline_toolbar;
 pub(crate) mod timeline_strip;

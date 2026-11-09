@@ -1,6 +1,7 @@
 import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { ColorPicker } from './ColorPicker';
 import { ColorDropdown } from './ColorDropdown';
+import { ShortcutInput } from './ShortcutInput';
 import {
   Alert,
   Button,
@@ -605,6 +606,13 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
           </div>
         </div>
       );
+    }
+    if (control.key.startsWith('application_shortcuts.')) {
+      return <label className="preference-control" key={control.key}>
+        {commonLabel}
+        <ShortcutInput value={String(value ?? '')} label={tr(locale, control.label)}
+          placeholder={control.placeholder} onCommit={next => void update(control, next)} />
+      </label>;
     }
     return (
       <label className="preference-control" key={control.key}>
