@@ -43,6 +43,7 @@ fn is_false(value: &bool) -> bool {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PreferenceControlKind {
+    ActionList,
     Accent,
     Color,
     Boolean,
@@ -373,6 +374,7 @@ pub fn preference_sections() -> Vec<PreferenceSection> {
             label: "Timeline toolbar",
             icon: "sliders",
         },
+        PreferenceSection { id: "sidebar_rail", navigation_group: "Application", label: "Sidebar rail", icon: "sliders" },
     ]
 }
 
@@ -432,6 +434,18 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
         control
     };
     let mut controls = vec![
+        PreferenceControl::boolean("ui.sidebar_rail.enabled", "sidebar_rail", "Sidebar rail", "Show sidebar rail"),
+        PreferenceControl::number("ui.sidebar_rail.width", "sidebar_rail", "Sidebar rail", "Sidebar pane width", 240.0, 600.0, 10.0),
+        {
+            let mut control = PreferenceControl::boolean("ui.sidebar_shortcuts.order", "sidebar_rail", "Shortcuts", "Shortcuts");
+            control.kind = PreferenceControlKind::ActionList;
+            control.custom_key = Some("ui.sidebar_shortcuts.hidden");
+            control.options = crate::ui::sidebar_shortcuts::RailAction::ALL.into_iter().map(|action| PreferenceOption {
+                value: serde_json::to_value(action).unwrap(), label: action.label(), color: None,
+                description: None, icon: Some(action.icon()),
+            }).collect();
+            control
+        },
         PreferenceControl::select("external_mpv.mode", "playback", "External mpv", "Player mode", &[("internal", "Internal player (default)"), ("external", "External mpv only"), ("dual", "External mpv + internal preview"), ("remote", "Control existing mpv")]),
         PreferenceControl::boolean("external_mpv.use_mpv_config", "playback", "External mpv", "Load mpv's own configuration and scripts when launching"),
         {
@@ -1349,6 +1363,7 @@ fn semantic_preference_icon(control: &PreferenceControl) -> &'static str {
         key if key.starts_with("web_") => "globe",
         key if key.starts_with("keyboard_") || key.starts_with("shortcut_") || key.starts_with("media_keys_") => "keyboard",
         _ => match control.kind {
+            PreferenceControlKind::ActionList => "list-checks",
             PreferenceControlKind::Accent | PreferenceControlKind::Color => "palette",
             PreferenceControlKind::Boolean => "check-square",
             PreferenceControlKind::File => "image",

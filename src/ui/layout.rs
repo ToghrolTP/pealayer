@@ -20304,12 +20304,14 @@ impl<'a> PealayerTabViewer<'a> {
     }
 
     pub fn ui(&mut self, ui: &mut egui::Ui, tab: &mut PealayerTab) {
+        super::sidebar_shortcuts::drop_target(self.app, ui, Some(*tab));
         self.draw_tab_body(ui, *tab);
     }
 }
 
 impl<'a> craft_ui::docking::DockContent<PealayerTab> for PealayerTabViewer<'a> {
     fn body(&mut self, ui: &mut egui::Ui, panel: &PealayerTab) {
+        super::sidebar_shortcuts::drop_target(self.app, ui, Some(*panel));
         panel_body(ui, panel, |ui| self.draw_tab_body(ui, *panel));
     }
 

@@ -728,6 +728,7 @@ pub fn run() -> eframe::Result {
                 recording_keys: std::collections::HashMap::new(),
                 dock_state,
                 sidebar_rail_state: loaded_config.ui.sidebar_rail,
+                sidebar_shortcuts: loaded_config.ui.sidebar_shortcuts.clone(),
                 rtt_state: Arc::new(Mutex::new(crate::app::RttState {
                     video_texture: None,
                     video_fbo: None,

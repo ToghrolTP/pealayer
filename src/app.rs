@@ -719,6 +719,7 @@ pub struct PealayerApp {
 
     // Phase 4 & 5 Selection/Override state
     pub(crate) sidebar_rail_state: crate::ui::sidebar_rail::SidebarRailState,
+    pub(crate) sidebar_shortcuts: crate::ui::sidebar_shortcuts::RailShortcuts,
     pub(crate) selected_instance_ids: std::collections::HashSet<uuid::Uuid>,
     pub selected_keyframes: std::collections::HashSet<(uuid::Uuid, usize)>,
     pub(crate) selected_timeline_keyframe: Option<uuid::Uuid>,
@@ -2040,6 +2041,7 @@ impl eframe::App for PealayerApp {
                     // the next render, when DockArea can actually raise it.
                     let raise_panel = self.prepare_workspace_reveals(ui.ctx());
                     if self.dock_state.layout.panels().is_empty() {
+                        crate::ui::sidebar_shortcuts::drop_target(self, ui, None);
                         ui.centered_and_justified(|ui| {
                             ui.vertical_centered(|ui| {
                                 ui.label(egui::RichText::new(crate::ui::icons::TABS).size(36.0));
@@ -2103,6 +2105,7 @@ impl eframe::App for PealayerApp {
                     crate::ui::controls::draw(self, ui);
                     crate::ui::four_d::draw_editor(self, ui);
                 }
+                crate::ui::sidebar_shortcuts::commit_drop(self, ui.ctx());
                 crate::ui::error::draw(self, ui);
                 crate::ui::menu::draw_estop_release_dialog(self, ui);
                 crate::ui::subtitles::draw_settings_dialog(self, ui);
@@ -7536,6 +7539,7 @@ impl PealayerApp {
         cfg.status_bar = self.status_bar;
         cfg.control_bars = self.control_bars;
         cfg.ui.sidebar_rail = self.sidebar_rail_state;
+        cfg.ui.sidebar_shortcuts = self.sidebar_shortcuts.clone();
         cfg.window_geometry = self.window_geometry;
         let dock_state = self.dock_state.clone();
         if let Ok(json) = serde_json::to_string(&dock_state) {
@@ -7926,6 +7930,7 @@ impl PealayerApp {
         self.status_bar = config.status_bar;
         self.control_bars = config.control_bars;
         self.sidebar_rail_state = config.ui.sidebar_rail;
+        self.sidebar_shortcuts = config.ui.sidebar_shortcuts.clone();
         self.sidebar_rail_state.width = self.sidebar_rail_state.width.clamp(
             crate::ui::sidebar_rail::SidebarPaneContent::MIN_WIDTH,
             crate::ui::sidebar_rail::SidebarPaneContent::MAX_WIDTH,
@@ -10233,6 +10238,7 @@ impl Default for PealayerApp {
             status_bar: crate::config::StatusBarConfig::default(),
             control_bars: crate::config::ControlBarsConfig::default(),
             sidebar_rail_state: crate::ui::sidebar_rail::SidebarRailState::default(),
+            sidebar_shortcuts: crate::ui::sidebar_shortcuts::RailShortcuts::default(),
             config_fingerprint: crate::config::AppConfig::fingerprint(
                 &crate::config::AppConfig::get_config_path(),
             )

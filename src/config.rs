@@ -272,6 +272,7 @@ impl TimelineToolbarPreferences {
 #[serde(default)]
 pub struct UiPreferences {
     pub sidebar_rail: crate::ui::sidebar_rail::SidebarRailState,
+    pub sidebar_shortcuts: crate::ui::sidebar_shortcuts::RailShortcuts,
 }
 
 #[cfg(test)]

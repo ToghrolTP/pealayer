@@ -53,6 +53,8 @@ import {
   KeyOutlined,
   DashboardOutlined,
   VideoCameraOutlined,
+  ArrowUpOutlined,
+  ArrowDownOutlined,
 } from '@ant-design/icons';
 import { tr } from '../i18n';
 import { mergeAppearance, resolvedAppearanceTheme } from '../appearance';
@@ -83,7 +85,7 @@ interface PreferenceControl {
   section: string;
   group: string;
   label: string;
-  kind: 'accent' | 'color' | 'boolean' | 'file' | 'multi_select' | 'number' | 'replacement_list' | 'select' | 'choice_slider' | 'text';
+  kind: 'action_list' | 'accent' | 'color' | 'boolean' | 'file' | 'multi_select' | 'number' | 'replacement_list' | 'select' | 'choice_slider' | 'text';
   icon: string;
   description?: string;
   options?: PreferenceOption[];
@@ -128,6 +130,7 @@ const sectionIcons: Record<string, React.ReactNode> = {
   hardware: <ExperimentOutlined />,
   input: <ControlOutlined />,
   timeline_toolbar: <ControlOutlined />,
+  sidebar_rail: <MenuOutlined />,
   web: <GlobalOutlined />,
   advanced: <SettingOutlined />,
 };
@@ -404,6 +407,39 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
         <ColorPicker value={String(value)} disabledAlpha showText disabled={saving === control.key}
           onChangeComplete={(color) => void update(control, color.toHexString().toUpperCase())} />
       </label>;
+    }
+    if (control.kind === 'action_list') {
+      const schema = contract;
+      if (!schema) return null;
+      const options = control.options ?? [];
+      const order = [...new Set([...(Array.isArray(value) ? value : []), ...options.map(option => option.value)])]
+        .filter(value => options.some(option => option.value === value));
+      const hiddenKey = control.custom_key!;
+      const hidden: unknown[] = valueAtPath(schema.values, hiddenKey) ?? [];
+      const move = (index: number, next: number) => {
+        const values = [...order]; [values[index], values[next]] = [values[next], values[index]];
+        void update(control, values);
+      };
+      return <div key={control.key} className="preference-action-list">
+        {order.map((value, index) => {
+          const option = options.find(option => option.value === value)!;
+          return <div key={String(value)} style={{display:'flex',alignItems:'center',gap:8,marginBlock:6}}>
+            <Switch size="small" checked={!hidden.includes(value)} disabled={saving !== null}
+              aria-label={tr(locale, option.label)} onChange={visible => void updatePaths([{key:hiddenKey,
+                value:visible ? hidden.filter(item => item !== value) : [...hidden.filter(item => item !== value), value]}])} />
+            <span className="phosphor-icon" aria-hidden="true">{option.icon}</span>
+            <span style={{flex:1,minWidth:0}}>{tr(locale, option.label)}</span>
+            <Button size="small" icon={<ArrowUpOutlined />} title={tr(locale,'Move up')}
+              disabled={index === 0 || saving !== null} onClick={() => move(index,index-1)} />
+            <Button size="small" icon={<ArrowDownOutlined />} title={tr(locale,'Move down')}
+              disabled={index === order.length-1 || saving !== null} onClick={() => move(index,index+1)} />
+          </div>;
+        })}
+        <Button icon={<UndoOutlined />} disabled={saving !== null} onClick={() => void updatePaths([
+          {key:control.key,value:valueAtPath(schema.defaults,control.key)},
+          {key:hiddenKey,value:valueAtPath(schema.defaults,hiddenKey)},
+        ])}>{tr(locale,'Reset shortcuts')}</Button>
+      </div>;
     }
     if (control.kind === 'boolean') {
       return (

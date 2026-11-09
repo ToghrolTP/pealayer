@@ -1146,6 +1146,45 @@ fn render_contract_control(
     let mut description_rendered = false;
     let control_icon = preference_control_icon(control.icon);
     match control.kind {
+        PreferenceControlKind::ActionList => {
+            let hidden_key = control.custom_key.expect("action list requires its visibility key");
+            let mut order = Vec::new();
+            for value in current.as_array().into_iter().flatten().chain(control.options.iter().map(|option| &option.value)) {
+                if control.options.iter().any(|option| option.value == *value) && !order.contains(value) { order.push(value.clone()); }
+            }
+            let mut hidden = value_at_path(values, hidden_key).and_then(|value| value.as_array()).cloned().unwrap_or_default();
+            let mut changed = false;
+            for (index, value) in order.clone().into_iter().enumerate() {
+                let option = control.options.iter().find(|option| option.value == value).unwrap();
+                ui.push_id((control.key, value.to_string()), |ui| ui.horizontal(|ui| {
+                    let mut visible = !hidden.contains(&value);
+                    if ui.checkbox(&mut visible, format!("{}  {}", option.icon.unwrap_or(""), tr(option.label))).changed() {
+                        hidden.retain(|candidate| *candidate != value);
+                        if !visible { hidden.push(value.clone()); }
+                        changed = true;
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        for (enabled, next, icon, tip) in [
+                            (index + 1 < order.len(), (index + 1).min(order.len() - 1), crate::ui::icons::ARROW_DOWN, "Move down"),
+                            (index > 0, index.saturating_sub(1), crate::ui::icons::ARROW_UP, "Move up"),
+                        ] {
+                            if ui.add_enabled(enabled, egui::Button::new(icon).small()).on_hover_text(tr(tip)).clicked() {
+                                order.swap(index, next); changed = true;
+                            }
+                        }
+                    });
+                }));
+            }
+            if ui.button(format!("{}  {}", crate::ui::icons::ARROW_COUNTER_CLOCKWISE, tr("Reset shortcuts"))).clicked() {
+                order = value_at_path(preference_defaults(), control.key).and_then(|value| value.as_array()).cloned().unwrap_or_default();
+                hidden = value_at_path(preference_defaults(), hidden_key).and_then(|value| value.as_array()).cloned().unwrap_or_default();
+                changed = true;
+            }
+            if changed {
+                replacement = Some(serde_json::Value::Array(order));
+                companion_changed = set_value_at_path(values, hidden_key, serde_json::Value::Array(hidden)).is_ok();
+            }
+        }
         PreferenceControlKind::Accent => {
             let selected = current.as_str().unwrap_or("system");
             let custom_key = control.custom_key.unwrap_or("custom_accent_color");
@@ -2077,6 +2116,7 @@ fn section_icon(section: &str) -> &'static str {
         "hardware" => crate::ui::icons::PLUG,
         "input" => crate::ui::icons::SLIDERS_HORIZONTAL,
         "timeline_toolbar" => crate::ui::icons::SLIDERS_HORIZONTAL,
+        "sidebar_rail" => crate::ui::icons::TABS,
         "web" => crate::ui::icons::GLOBE,
         _ => crate::ui::icons::GEAR,
     }
@@ -2103,6 +2143,7 @@ fn group_icon(group: &str) -> &'static str {
         "Status bar" => crate::ui::icons::GAUGE,
         "Typography" => crate::ui::icons::TEXT_T,
         "Timeline toolbar" => crate::ui::icons::SLIDERS_HORIZONTAL,
+        "Sidebar rail" | "Shortcuts" => crate::ui::icons::TABS,
         "Windows graphics and composition" | "Dialog windows" => crate::ui::icons::APP_WINDOW,
         _ => crate::ui::icons::GEAR,
     }
@@ -2115,6 +2156,7 @@ fn section_heading(section: &str) -> &'static str {
         "hardware" => "PCController and hardware",
         "input" => "Keyboard, mouse, and gesture bindings",
         "timeline_toolbar" => "Timeline toolbar",
+        "sidebar_rail" => "Sidebar rail",
         "web" => "Web UI and network APIs",
         _ => "Configuration",
     }
@@ -2403,6 +2445,24 @@ mod tests {
                 assert!(draft.is_dirty());
                 assert!(draft.pending_navigation.is_none());
             }
+        }
+    }
+
+    #[test]
+    fn sidebar_shortcut_preferences_render_without_mutating_values_at_all_widths() {
+        let _guard = crate::app::tests::lock_app_tests();
+        for width in [390.0,700.0,1200.0] {
+            let ctx=egui::Context::default();
+            let mut draft=PreferencesDraft::new(AppConfig::default(),0);
+            let expected=draft.config.clone();
+            draft.pending_navigation=Some(PreferencesNavigation {section:Some("sidebar_rail".into()),scroll_y:0.0});
+            for _ in 0..3 {
+                ctx.run_ui(egui::RawInput {screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(width,600.0))),..Default::default()}, |ui| {
+                    draw_preferences_editor(&mut draft,ui);
+                }).drop_without_applying_deltas();
+            }
+            assert_eq!(preference_sections()[draft.tab].id,"sidebar_rail");
+            assert_eq!(draft.config,expected); assert!(!draft.is_dirty());
         }
     }
 
