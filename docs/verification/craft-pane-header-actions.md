@@ -42,8 +42,29 @@ The regression measures the separately painted icon and caption against the
 actual upstream tab rectangle in both languages, themes and four display scales,
 with docked/floating panels and close controls shown/hidden. Existing pointer,
 lock/modal, inactive-tab close, overflow and collapse tests remain required.
-Native capture and installed-build receipts for this correction are recorded
-below when verified. Cafe delivery remains user-deferred.
+All nine CraftUI tests and twelve egui Dock regressions passed. Actual wide and
+narrow native captures were inspected with the same Studio dark palette and
+1.5× display scale. These header crops are enlarged 4× using nearest-neighbor
+presentation; their UI pixels and geometry are otherwise unchanged.
+
+Before:
+
+![CraftUI header before vertical alignment correction](../screenshots/craft-header-alignment-before.png)
+
+After:
+
+![CraftUI header with centered icon, title and close control](../screenshots/craft-header-alignment-after.png)
+
+The clean package at `832f77b7c1ea72b247fe3c682bacdb218ca5fa05` passed its
+libmpv/runtime, resource, downloader and Web/PWA package checks. Executable SHA-256:
+`a3036be1469197c50099b10b93c892d074a465bbe5834381de2b8831ba181efb`.
+The process-local authoring gate was clean before the guarded updater ran.
+The restarted canonical application acknowledged that exact build and digest,
+retaining paused playback at 578286 ms and its existing libmpv runtime digest
+`e56ce67cd00f06a59dc7ed5b97a49a9182a381554c755dc4570a52af1ef30e65`.
+Cafe delivery remains user-deferred while its normal connection is unavailable.
+
+## Collapse behavior
 
 Collapse is not Close. Existing dock groups and floating windows use Craft's
 minimization action. Split-tree tab groups retain their panel membership and
