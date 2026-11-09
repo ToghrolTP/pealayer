@@ -77,6 +77,14 @@ implicit application shortcuts, not only explicit pins and ordinary launchers.
 This is a persistent branding path, not a one-time shortcut repair. Other apps,
 custom command arguments and the retained historical build remain excluded.
 
+That repaired initial canonical artwork, but repeated switching still left
+Explorer's image-list entry stale after the link metadata had changed. The link
+update now captures its old extractor location and system-image-list index and
+sends the targeted [SHUpdateImage notification](https://learn.microsoft.com/en-us/windows/win32/api/shlobj_core/nf-shlobj_core-shupdateimagew)
+in addition to the item notification. It uses the old image identity as required
+by Windows, not a global cache flush. Canonical repeated-switch pixel acceptance
+remains the deciding gate for this follow-up.
+
 The pixel fixture itself now locates the button by its exact AppUserModelID
 through read-only accessibility metadata before capturing pixels. Whole-taskbar
 icon matching could select the retained historical Pealayer instead, yielding a

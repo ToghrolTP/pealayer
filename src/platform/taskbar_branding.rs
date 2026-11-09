@@ -178,6 +178,17 @@ unsafe fn update_shortcut(path: &Path, executable: &Path, icon: &Path) -> window
     let resource = format!("{},0", icon.display());
     if same_executable(Path::new(&string(&current)), icon) && index == 0 && id.to_string() == app_id()
         && unsafe { store.GetValue(&ICON)? }.to_string() == resource { return Ok(false); }
+    // UPDATEITEM refreshes link metadata, not necessarily the image already
+    // cached by a long-lived taskbar group. Remember this owned link's OLD
+    // extractor location and image-list index before changing either of them.
+    use windows::Win32::UI::Shell::{SHGetFileInfoW, SHUpdateImageW, SHFILEINFOW, SHGFI_ICONLOCATION, SHGFI_SYSICONINDEX};
+    let mut old_image = SHFILEINFOW::default();
+    let mut old_location = SHFILEINFOW::default();
+    let image_update = unsafe {
+        SHGetFileInfoW(PCWSTR(filename.as_ptr()), Default::default(), Some(&mut old_location), std::mem::size_of::<SHFILEINFOW>() as u32, SHGFI_ICONLOCATION) != 0
+            && Path::new(&string(&old_location.szDisplayName)).is_file()
+            && SHGetFileInfoW(PCWSTR(filename.as_ptr()), Default::default(), Some(&mut old_image), std::mem::size_of::<SHFILEINFOW>() as u32, SHGFI_SYSICONINDEX) != 0
+    };
     let location = wide(icon);
     unsafe {
         // Don't request write access for unrelated or already-current pins.
@@ -191,6 +202,9 @@ unsafe fn update_shortcut(path: &Path, executable: &Path, icon: &Path) -> window
         file.Save(PCWSTR(filename.as_ptr()), true)?;
         use windows::Win32::UI::Shell::{SHChangeNotify, SHCNE_UPDATEITEM, SHCNF_PATHW};
         SHChangeNotify(SHCNE_UPDATEITEM, SHCNF_PATHW, Some(filename.as_ptr().cast()), None);
+        if image_update {
+            SHUpdateImageW(PCWSTR(old_location.szDisplayName.as_ptr()), old_location.iIcon, 0, old_image.iIcon);
+        }
     }
     Ok(true)
 }
