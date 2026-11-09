@@ -1197,12 +1197,15 @@ impl eframe::App for PealayerApp {
             inbound_commands.push(("Web UI", command));
         }
         while let Ok(event) = self.media_cmd_rx.try_recv() {
+            let unmute = matches!(&event, crate::platform::media_controls::NativeMediaEvent::Control(
+                souvlaki::MediaControlEvent::SetVolume(value)) if value.is_finite() && *value > 0.0);
             if let Some(command) = crate::platform::media_controls::map_native_media_event(
                     event,
                     self.quick_seek_seconds,
                 )
                 && self.media_control_command_allowed(ctx,&command)
             {
+                if unmute && self.is_muted { inbound_commands.push(("Media controls", InteropCommand::SetMute { muted: false })); }
                 inbound_commands.push(("Media controls", command));
             }
         }
@@ -1258,7 +1261,7 @@ impl eframe::App for PealayerApp {
                 self.playback_time,
                 self.duration,
             );
-            mc.update_volume(self.volume as f64 / 100.0);
+            mc.update_volume(crate::platform::media_controls::effective_session_volume(self.volume as f64 / 100.0, self.is_muted));
         }
 
         // Connection loss and retry are normal runtime states. Surface them in
@@ -10655,11 +10658,13 @@ pub(crate) mod tests {
             app.media_keys_enabled=enabled;app.media_keys_background_enabled=background;
             app.media_controls=Some(crate::platform::media_controls::MediaControlsManager::memory_only_test_manager(&app.app_name));
             let old_volume=app.volume;
+            app.is_muted = true;
             app.media_cmd_tx.send(souvlaki::MediaControlEvent::SetVolume(0.17).into()).unwrap();
             let ctx=egui::Context::default();
             let mut frame=eframe::Frame::_new_kittest();
             let _=ctx.run_logic(&egui::RawInput::default(),|ctx|eframe::App::logic(&mut app,ctx,&mut frame));
             assert_eq!(app.volume,if accept{17.0}else{old_volume},"enabled={enabled}, background={background}");
+            assert_eq!(app.is_muted, !accept, "only an allowed positive native volume request unmutes");
             assert_eq!(app.media_keys_background_enabled,background);
         }
         crate::platform::interop::set_live_config(original);

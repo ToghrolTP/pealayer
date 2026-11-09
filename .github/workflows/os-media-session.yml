@@ -1,0 +1,40 @@
+name: "🎵 Native media-session contracts"
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - 'src/platform/media_controls.rs'
+      - 'src/platform/mpris_session.rs'
+      - 'src/platform/windows_media_session.rs'
+      - 'src/app.rs'
+      - 'Cargo.toml'
+      - 'Cargo.lock'
+      - '.github/workflows/os-media-session.yml'
+permissions:
+  contents: read
+jobs:
+  build:
+    name: "🐧 MPRIS · private D-Bus session"
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      PEALAYER_CONFIG_FILE: ${{ runner.temp }}/pealayer-native-media-tests.json
+      PEALAYER_INSTANCE_ID: native-media-tests
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87
+        with:
+          toolchain: stable
+      - uses: Swatinem/rust-cache@d1527c8f67ef9af357290475d4af4b0fab8f12e0
+        with:
+          key: linux-x86_64
+      - name: Install native test dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y dbus-daemon libmpv-dev pkg-config libasound2-dev libx11-dev libxcb-shape0-dev libxcb-xfixes0-dev libudev-dev
+      - name: Verify media projection and interface contracts
+        run: cargo test --locked --lib platform:: -- --test-threads=1
+      - name: Verify actual discovery, properties, signals and commands
+        run: timeout 60s dbus-run-session -- env PEALAYER_TEST_MPRIS_BUS=1 cargo test --locked --lib platform::mpris_session::tests::private_bus_projection_and_controls -- --ignored --test-threads=1

@@ -18,6 +18,12 @@ passed forbidden/empty/changing-access parent cases; Cafe remains deferred.
 
 ## Window and media automation
 
+[Native media discovery](native-media-discovery.md) audits KDE Connect's actual
+platform consumers, verifies Windows SMTC readback and corrects Linux MPRIS rate,
+capability, track identity, volume/mute, position and event publication. Its
+private-bus CI, delivery receipt and explicit Apple/KDE consumer limits are
+tracked separately from phone or physical acceptance.
+
 [Shortcut field keycaps](shortcut-keycaps.md) renders application shortcut values
 as individual keys inside their inputs, retaining normal editing on focus and
 unchanged binding/storage semantics. The update is installed and its actual

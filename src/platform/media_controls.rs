@@ -36,6 +36,8 @@ pub fn map_native_media_event(
 
 #[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct SessionMetadata {
+    /// Opaque MPRIS object path: no local path, URL credentials or query data.
+    pub track_id: Option<String>,
     pub title: Option<String>,
     pub artist: Option<String>,
     pub album: Option<String>,
@@ -62,6 +64,7 @@ pub fn session_metadata(
         })
     };
     SessionMetadata {
+        track_id: Some(format!("/org/mpris/MediaPlayer2/track/{}", session_digest(target.as_bytes()))),
         title: tag(&["title"]).or_else(|| {
             let label = if crate::media::is_remote_media_target(target) {
                 url::Url::parse(target).ok().map(|url| {
@@ -189,6 +192,11 @@ fn directed_seconds(direction: SeekDirection, seconds: f64) -> f64 {
     }
 }
 
+/// MPRIS has no separate Mute property. Its volume must describe audible output.
+pub fn effective_session_volume(volume: f64, muted: bool) -> f64 {
+    if muted { 0.0 } else { volume.clamp(0.0, 1.3) }
+}
+
 fn playback_state(has_media: bool, is_paused: bool, time: f64) -> MediaPlayback {
     let progress = if time.is_finite() && time >= 0.0 {
         Duration::try_from_secs_f64(time).ok().map(MediaPosition)
@@ -239,6 +247,10 @@ pub struct MediaControlsManager {
         not(any(target_os = "macos", target_os = "ios", target_os = "android"))
     ))]
     last_volume: Option<f64>,
+    #[cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))]
+    mpris: Option<super::mpris_session::MprisSession>,
+    #[cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))]
+    position_observed: Instant,
 }
 
 impl MediaControlsManager {
@@ -268,6 +280,10 @@ impl MediaControlsManager {
                 not(any(target_os = "macos", target_os = "ios", target_os = "android"))
             ))]
             last_volume: None,
+            #[cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))]
+            mpris: None,
+            #[cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))]
+            position_observed: Instant::now(),
         }
     }
     pub fn new(
@@ -300,6 +316,10 @@ impl MediaControlsManager {
                 not(any(target_os = "macos", target_os = "ios", target_os = "android"))
             ))]
             last_volume: None,
+            #[cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))]
+            mpris: None,
+            #[cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))]
+            position_observed: Instant::now(),
         };
         #[cfg(target_os = "windows")]
         {
@@ -320,7 +340,9 @@ impl MediaControlsManager {
                 }
             }
         }
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))]
+        { manager.mpris = Some(super::mpris_session::MprisSession::new(app_name, manager.active.clone(), event_tx, egui_ctx)); }
+        #[cfg(not(any(target_os = "windows", all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))))]
         {
             let _ = hwnd_raw;
             let config = PlatformConfig {
@@ -371,7 +393,10 @@ impl MediaControlsManager {
                 }
                 #[cfg(not(target_os = "windows"))]
                 {
-                    true
+                    #[cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))]
+                    { self.mpris.as_ref().is_none_or(|session| session.failed_for_retry()) }
+                    #[cfg(not(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android")))))]
+                    { true }
                 }
             }
             && self.can_publish()
@@ -402,7 +427,9 @@ impl MediaControlsManager {
                 }
             }
         }
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))]
+        { self.last_metadata = Some(desired); self.last_playback = None; }
+        #[cfg(not(any(target_os = "windows", all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))))]
         if let Some(controls) = &mut self.controls {
             let result = controls.set_metadata(MediaMetadata {
                 title: self.metadata.title.as_deref(),
@@ -456,6 +483,17 @@ impl MediaControlsManager {
         self.cover_url = crate::branding::resolved_icon_path(config, state)
             .and_then(|path| url::Url::from_file_path(path).ok())
             .map(|url| url.to_string());
+        #[cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))]
+        if self.context.is_some() {
+            // KDE Connect reads local art URLs. Embedded app artwork therefore
+            // needs one content-addressed PNG, not an inaccessible embedded/ICO
+            // resource. Unchanged bytes never rewrite the cache.
+            self.cover_url = self.artwork.as_deref().and_then(|bytes| {
+                let root = crate::server::thumbnails::get_thumbnail_cache_dir();
+                let directory = root.parent()?.join("media-session");
+                cache_session_artwork(&directory, bytes).ok()
+            });
+        }
         self.artwork_revision = self.artwork_revision.wrapping_add(1);
     }
 
@@ -486,7 +524,13 @@ impl MediaControlsManager {
             }
         }
         #[cfg(not(target_os = "windows"))]
-        let _ = (capabilities, rate);
+        {
+            self.last_capabilities = Some(capabilities);
+            if rate.is_finite() && rate > 0.0 && self.last_rate != Some(rate) {
+                self.last_rate = Some(rate);
+                self.last_playback = None; // Re-anchor elapsed position at the new factual rate.
+            }
+        }
     }
 
     pub fn has_branding(&self, app_name: &str) -> bool {
@@ -525,7 +569,9 @@ impl MediaControlsManager {
                 }
             }
         }
-        #[cfg(not(target_os = "windows"))]
+        #[cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))]
+        { self.last_playback = Some(playback); self.position_observed = Instant::now(); }
+        #[cfg(not(any(target_os = "windows", all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))))]
         if let Some(controls) = &mut self.controls {
             match controls.set_playback(playback.clone()) {
                 Ok(()) => self.last_playback = Some(playback),
@@ -547,11 +593,14 @@ impl MediaControlsManager {
             unix,
             not(any(target_os = "macos", target_os = "ios", target_os = "android"))
         ))]
-        if self.last_volume != Some(volume)
-            && let Some(controls) = &mut self.controls
-            && controls.set_volume(volume).is_ok()
-        {
-            self.last_volume = Some(volume);
+        if let Some(session) = &mut self.mpris {
+            self.last_volume = Some(volume.clamp(0.0, 1.3));
+            session.publish(super::mpris_session::Snapshot {
+                metadata: self.metadata.clone(), duration: self.duration, artwork: self.cover_url.clone(),
+                playback: self.last_playback.clone().unwrap_or(MediaPlayback::Stopped),
+                capabilities: self.last_capabilities.unwrap_or_default(), rate: self.last_rate.unwrap_or(1.0),
+                volume: self.last_volume.unwrap_or(1.0),
+            }, self.position_observed);
         }
         #[cfg(not(all(
             unix,
@@ -579,9 +628,53 @@ fn artwork_png(bytes: &[u8]) -> Option<Vec<u8>> {
     Some(output.into_inner())
 }
 
+fn session_digest(bytes: &[u8]) -> String {
+    use sha2::Digest;
+    sha2::Sha256::digest(bytes).iter().map(|byte| format!("{byte:02x}")).collect()
+}
+
+#[cfg(any(test, all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android")))))]
+fn cache_session_artwork(directory: &std::path::Path, bytes: &[u8]) -> std::io::Result<String> {
+    let path = directory.join(format!("artwork-{}.png", session_digest(bytes)));
+    if std::fs::read(&path).ok().as_deref() != Some(bytes) {
+        std::fs::create_dir_all(directory)?;
+        let stage = directory.join(format!("artwork-{}.tmp", uuid::Uuid::new_v4()));
+        let write = std::fs::write(&stage, bytes).and_then(|()| std::fs::rename(&stage, &path));
+        if write.is_err() { let _ = std::fs::remove_file(&stage); }
+        write?;
+    }
+    url::Url::from_file_path(&path).map(|url| url.to_string())
+        .map_err(|()| std::io::Error::new(std::io::ErrorKind::InvalidInput, "Artwork cache path must be absolute"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn session_track_ids_are_stable_distinct_and_do_not_disclose_paths() {
+        let info = crate::media_info::MediaFileInfo::default();
+        let first = session_metadata(Some("https://user:secret@example.org/a.mkv?token=private"), &info, true);
+        assert_eq!(first, session_metadata(Some("https://user:secret@example.org/a.mkv?token=private"), &info, true));
+        let second = session_metadata(Some("https://example.org/b.mkv"), &info, true);
+        assert_ne!(first.track_id, second.track_id);
+        let id = first.track_id.unwrap();
+        assert!(id.starts_with("/org/mpris/MediaPlayer2/track/"));
+        assert!(!id.contains("secret") && !id.contains("private") && !id.contains("example"));
+        assert_eq!(effective_session_volume(0.7, true), 0.0);
+        assert_eq!(effective_session_volume(0.7, false), 0.7);
+        assert_eq!(effective_session_volume(2.0, false), 1.3);
+    }
+    #[test]
+    fn session_artwork_cache_reuses_identical_bytes_without_rewriting() {
+        let directory = std::env::temp_dir().join(format!("pealayer-session-art-{}", uuid::Uuid::new_v4()));
+        let first = cache_session_artwork(&directory, b"fixture-png-bytes").unwrap();
+        let path = url::Url::parse(&first).unwrap().to_file_path().unwrap();
+        let modified = std::fs::metadata(&path).unwrap().modified().unwrap();
+        assert_eq!(first, cache_session_artwork(&directory, b"fixture-png-bytes").unwrap());
+        assert_eq!(modified, std::fs::metadata(&path).unwrap().modified().unwrap());
+        assert_ne!(first, cache_session_artwork(&directory, b"changed-png-bytes").unwrap());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
     #[test]
     fn master_and_background_permission_cover_every_focus_state() {
         for enabled in [false, true] {

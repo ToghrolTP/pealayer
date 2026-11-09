@@ -9,7 +9,7 @@ export interface SessionState {
   duration?: number; playback_time?: number; playback_rate?: number;
   quick_seek_seconds?: number;
   media_keys_enabled?: boolean;
-  media_session?: { title: string | null; artist: string | null; album: string | null; video: boolean };
+  media_session?: { track_id: string | null; title: string | null; artist: string | null; album: string | null; video: boolean };
   media_session_capabilities?: SessionCapabilities;
 }
 export function sessionActive(state: SessionState): boolean {
