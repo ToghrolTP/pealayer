@@ -33,6 +33,17 @@ The isolated native UI suite passed **555 tests, zero failures, one opt-in test
 ignored**. Parent-provided private config/instance identities keep persistence
 fixtures away from normal settings. `git diff --check` passed.
 
-Installed checkpoint pending. Cafe deployment remains deferred
+The Windows package passed Web/PWA integrity, native/runtime and downloader
+smoke probes, resource verification and all seven quick-action icons. The fresh
+authoring inspection was clean before the peer updater. The restarted canonical
+app acknowledged source `673b00349e201fa0b7aefb8a3217e7f424407f89`, executable
+SHA-256 `3ea557816985aed2490fd18950a532f52c0dcabf30c6f9cdc2a37904aa282a77`.
+The original libmpv remained unchanged. The process API independently confirms
+that exact source/digest, unchanged paused position, active NLE workspace and
+pane settings. Its animation preference remains System; no user setting was
+overridden. Real pointer/paint transition evidence is the native rendered test,
+not a claimed human pass or a screenshot purporting to prove temporal behavior.
+
+Cafe deployment remains deferred
 at the user's request while its normal connection is unavailable. No hardware
 actuation or production media playback is needed for this presentation change.

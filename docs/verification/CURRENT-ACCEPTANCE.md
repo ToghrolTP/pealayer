@@ -21,7 +21,8 @@ passed forbidden/empty/changing-access parent cases; Cafe remains deferred.
 [Reveal-playhead availability](playhead-action-fade.md) adds the missing brief
 fade to the existing visibility-aware disabled state. Invocation is blocked
 immediately, with reduced-motion support and preserved drag customization;
-verification and delivery are tracked in the linked receipt.
+555 native UI checks passed and the canonical update is installed with unchanged
+paused playback. Verification and delivery are tracked in the linked receipt.
 
 [Workspace selection and dialog title backgrounds](workspace-switcher-dialog-chrome.md)
 records the saved-profile repair, visible restore errors, leading Workspace
