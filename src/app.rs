@@ -2142,6 +2142,7 @@ impl eframe::App for PealayerApp {
                                     (crate::ui::icons::SLIDERS_HORIZONTAL, "Mouse Wheel", "Adjust Volume on player/bar"),
                                     (crate::ui::icons::CLOCK_COUNTER_CLOCKWISE, "Shift + Mouse Wheel", "Seek forward / backward"),
                                     (crate::ui::icons::PLUS, "A (Timeline)", "Add cue to selected track"),
+                                    (crate::ui::icons::MAGNIFYING_GLASS, "− / + (=)", "Zoom out / in"),
                                     (crate::ui::icons::ARROWS_OUT, "Double Click", "Toggle Fullscreen / Open Video"),
                                     (crate::ui::icons::LIST_CHECKS, "Right Click", "Open Player Context Menu"),
                                     (crate::ui::icons::FILE_VIDEO, "Drag & Drop", "Drop media file onto window to play"),

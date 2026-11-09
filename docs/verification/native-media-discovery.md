@@ -99,7 +99,7 @@ not implement per-application volume, and its relative-seek extrapolation assume
 Pealayer still publishes truthful metadata/rate/artwork rather than inventing
 track changes to work around a consumer limitation.
 
-## Package and handoff receipt
+## Initial package receipt (superseded by combined local delivery below)
 
 - Packaged source: `fa4213d013fb7ecf6e83116950cc99e3f34b09b4`.
 - Executable SHA-256: `586336102e5298c6847af5d135694ef5537ed7f898be51157d29636610362c99`.
@@ -112,11 +112,18 @@ track changes to work around a consumer limitation.
   integrity and standalone downloader resource/headless checks passed. Packaging
   deliberately skipped repeating the already-run native/Web regression suites.
 
-**Not installed:** fresh local authoring inspection still reports the running
-Preferences helper as unknown, so its edits are preserved. Save/discard those
-edits and close the helper, then recheck authoring before invoking the graceful
-updater. Cafe deployment remains user-deferred while its route is offline.
-Neither gate is waived by a successful package or Windows readback of the
-already-running build. The general cross-platform release matrix remains a
-separate pending gate; do not merge or publish a stable release on this receipt
-alone. The paired-phone view and Apple work in #269 remain explicit.
+## Combined local delivery
+
+The former Preferences-helper blocker cleared: fresh authoring was clean before
+the graceful update. Media-session changes are now installed with the
+[contextual zoom build and exact runtime receipt](contextual-zoom-shortcuts.md#local-delivery-receipt),
+clean source `85993976d334eb5c858af3ec4c6d54c797c81f66`. The updater acknowledged
+its digest, the local API independently reports that source, and Windows OS
+readback matches title, paused state, exact position, duration and rate with
+artwork present. No media playback or board output was actuated.
+
+Cafe deployment remains user-deferred while its route is offline. The general
+cross-platform matrix/stacked merge, paired-phone view and Apple work in #269
+remain separate gates; local delivery is not a stable-release or whole-platform
+acceptance claim. The initial staged package above is historical, not the
+current staging or installed executable.

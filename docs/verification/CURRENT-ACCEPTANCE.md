@@ -18,6 +18,12 @@ passed forbidden/empty/changing-access parent cases; Cafe remains deferred.
 
 ## Window and media automation
 
+[Contextual −/+ zoom](contextual-zoom-shortcuts.md) is installed locally with
+the default-enabled keyboard policy retained: the main timeline needs no canvas
+focus, front editor/dialog ownership is respected, and text fields keep typing.
+Five real-egui shortcut/view regressions and the retained wheel regression passed;
+actual user keyboard feedback and deferred Cafe delivery remain separate.
+
 [Native media discovery](native-media-discovery.md) audits KDE Connect's actual
 platform consumers, verifies Windows SMTC readback and corrects Linux MPRIS rate,
 capability, track identity, volume/mute, position and event publication. Its
