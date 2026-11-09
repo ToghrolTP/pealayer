@@ -84,7 +84,7 @@ fn replay_timeline_pointer_buttons(with_content: bool) {
                 ..Default::default()
             },
             |ui| {
-                PealayerTabViewer { app: &mut app }.ui(ui, &mut PealayerTab::Timeline);
+                PealayerTabViewer::new(&mut app).ui(ui, &mut PealayerTab::Timeline);
             },
         );
         if let Some(update) = &output.platform_output.accesskit_update {

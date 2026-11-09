@@ -56,19 +56,18 @@ impl Snapshot {
             MediaPlayback::Paused { progress } => (progress, false),
             MediaPlayback::Stopped => return 0,
         };
-        let base = position.map(|p| p.0.as_secs_f64()).unwrap_or_default();
-        let seconds = base
-            + if playing {
-                elapsed.as_secs_f64() * self.rate
-            } else {
-                0.0
-            };
-        let seconds = self
-            .duration
-            .map(|d| seconds.min(d.as_secs_f64()))
-            .unwrap_or(seconds)
-            .max(0.0);
-        (seconds * 1_000_000.0).min(i64::MAX as f64) as i64
+        let base = position.map(|p| p.0).unwrap_or_default();
+        let advance = if playing {
+            Duration::try_from_secs_f64(elapsed.as_secs_f64() * self.rate).unwrap_or(Duration::MAX)
+        } else {
+            Duration::ZERO
+        };
+        let position = base.saturating_add(advance);
+        micros(
+            self.duration
+                .map(|end| position.min(end))
+                .unwrap_or(position),
+        )
     }
     fn metadata_map(&self) -> HashMap<&str, OwnedValue> {
         let mut map = HashMap::new();
@@ -110,6 +109,21 @@ fn micros(duration: Duration) -> i64 {
 struct Published {
     snapshot: Snapshot,
     at: Instant,
+}
+fn seeked_position(before: &Published, next: &Published) -> Option<i64> {
+    let position = next.snapshot.position(Duration::ZERO);
+    let changed_track = before.snapshot.metadata.track_id != next.snapshot.metadata.track_id;
+    let unexpected_start =
+        changed_track && next.snapshot.metadata.track_id.is_some() && position > 0;
+    let discrepancy = before
+        .snapshot
+        .position(next.at.saturating_duration_since(before.at))
+        .abs_diff(position);
+    let paused_seek = before.snapshot.status() == "Paused"
+        && next.snapshot.status() == "Paused"
+        && before.snapshot.playback != next.snapshot.playback;
+    (unexpected_start || (!changed_track && (paused_seek || discrepancy > 100_000)))
+        .then_some(position)
 }
 struct Shared {
     current: Mutex<Published>,
@@ -184,6 +198,12 @@ struct Player {
 }
 #[zbus::interface(name = "org.mpris.MediaPlayer2.Player", spawn = false)]
 impl Player {
+    #[zbus(signal)]
+    async fn seeked(
+        emitter: &zbus::object_server::SignalEmitter<'_>,
+        position: i64,
+    ) -> zbus::Result<()>;
+
     fn play(&self) {
         if self.shared.snapshot().capabilities.can_stop {
             self.shared.emit(MediaControlEvent::Play);
@@ -493,15 +513,7 @@ fn publish_changes(
             changed.insert(name, OwnedValue::from(value));
         }
     }
-    let new_position = next.position(Duration::ZERO);
-    let discrepancy = before
-        .snapshot
-        .position(current.at.saturating_duration_since(before.at))
-        .abs_diff(new_position);
-    let exact_paused_seek =
-        old.status() == "Paused" && next.status() == "Paused" && old.playback != next.playback;
-    let seeked = old.metadata.track_id == next.metadata.track_id
-        && (exact_paused_seek || discrepancy > 100_000);
+    let seeked = seeked_position(before, &current);
     drop(current); // Never hold our state lock across D-Bus I/O.
     if !changed.is_empty() {
         connection.emit_signal(
@@ -512,8 +524,8 @@ fn publish_changes(
             &(PLAYER, changed, Vec::<&str>::new()),
         )?;
     }
-    if seeked {
-        connection.emit_signal(None::<&str>, PATH, PLAYER, "Seeked", &(new_position,))?;
+    if let Some(position) = seeked {
+        connection.emit_signal(None::<&str>, PATH, PLAYER, "Seeked", &(position,))?;
     }
     Ok(())
 }
@@ -573,6 +585,80 @@ mod tests {
         );
         assert_eq!(micros(Duration::MAX), i64::MAX);
         assert!(Snapshot::default().metadata_map().is_empty());
+        state.duration = None;
+        for position in [1, 3_429_001, 9_007_199_254_740_993] {
+            state.playback = MediaPlayback::Paused {
+                progress: Some(MediaPosition(Duration::from_micros(position))),
+            };
+            assert_eq!(
+                state.position(Duration::from_secs(50)),
+                position as i64,
+                "paused positions must not round-trip through f64"
+            );
+        }
+    }
+
+    #[test]
+    fn introspection_advertises_the_real_seek_signal_and_property_contract() {
+        use zbus::object_server::Interface;
+        let (shared, _) = shared(fixture());
+        let mut xml = String::new();
+        Player { shared }.introspect_to_writer(&mut xml, 0);
+        assert!(xml.contains("signal name=\"Seeked\""));
+        for property in [
+            "Metadata",
+            "PlaybackStatus",
+            "Rate",
+            "Volume",
+            "CanPlay",
+            "CanPause",
+            "CanSeek",
+        ] {
+            assert!(
+                xml.contains(&format!("property name=\"{property}\"")),
+                "missing {property}"
+            );
+        }
+        assert!(!xml.contains("LoopStatus") && !xml.contains("Shuffle"));
+    }
+
+    #[test]
+    fn restored_nonzero_positions_and_exact_paused_seeks_emit_without_tick_spam() {
+        let at = Instant::now();
+        let stopped = Published {
+            snapshot: Snapshot::default(),
+            at,
+        };
+        let mut first = Published {
+            snapshot: fixture(),
+            at,
+        };
+        assert_eq!(seeked_position(&stopped, &first), Some(3_429_000));
+        let mut second = Published {
+            snapshot: first.snapshot.clone(),
+            at,
+        };
+        second.snapshot.playback = MediaPlayback::Paused {
+            progress: Some(MediaPosition(Duration::from_micros(3_429_001))),
+        };
+        assert_eq!(seeked_position(&first, &second), Some(3_429_001));
+        first.snapshot.playback = MediaPlayback::Playing {
+            progress: Some(MediaPosition(Duration::from_micros(3_429_000))),
+        };
+        second.at = at + Duration::from_millis(250);
+        second.snapshot.playback = MediaPlayback::Playing {
+            progress: Some(MediaPosition(Duration::from_micros(3_804_000))),
+        };
+        assert_eq!(
+            seeked_position(&first, &second),
+            None,
+            "ordinary 1.5x advancement is not a seek"
+        );
+        assert_eq!(
+            seeked_position(&first, &stopped),
+            None,
+            "Stop clears metadata, not a fake new seek"
+        );
     }
     #[test]
     fn paused_toggle_and_stale_seek_use_real_capabilities_and_track_identity() {
@@ -750,7 +836,7 @@ mod tests {
         let mut next = state.clone();
         next.rate = 2.0;
         next.volume = 0.0;
-        session.publish(next, Instant::now());
+        session.publish(next.clone(), Instant::now());
         assert_eq!(
             seen_rx.recv_timeout(Duration::from_secs(3)),
             Ok(true),
@@ -758,6 +844,22 @@ mod tests {
         );
         assert_eq!(proxy.get_property::<f64>("Rate").unwrap(), 2.0);
         assert_eq!(proxy.get_property::<f64>("Volume").unwrap(), 0.0);
+        let mut seeks = proxy.receive_signal("Seeked").unwrap();
+        let (seek_tx, seek_rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            if let Some(message) = seeks.next() {
+                let _ = seek_tx.send(message.body().deserialize::<(i64,)>().unwrap().0);
+            }
+        });
+        next.playback = MediaPlayback::Paused {
+            progress: Some(MediaPosition(Duration::from_micros(3_429_001))),
+        };
+        session.publish(next, Instant::now());
+        assert_eq!(
+            seek_rx.recv_timeout(Duration::from_secs(3)),
+            Ok(3_429_001),
+            "exact paused Seeked signal missing"
+        );
         let mut cleared = Snapshot::default();
         cleared.playback = MediaPlayback::Stopped;
         session.publish(cleared, Instant::now());

@@ -63,7 +63,17 @@ Unsupported shuffle/repeat modes are not invented or advertised.
   and prints comparison flags rather than private titles/paths/artwork bytes.
 - A dedicated Linux workflow runs the adapter against an explicitly private
   dbus-run-session, checking actual discovery/properties, event delivery,
-  transport requests and metadata/Stop clearing. Its result is recorded below.
+  transport requests and metadata/Stop clearing. The first real-bus run passed:
+  [102 platform checks and the live private-bus case](https://github.com/ToghrolTP/pealayer/actions/runs/42570090557).
+- Final focused native checks cover the introspected Seeked signal, nonzero
+  restored starts, exact paused microsecond seeks and integer paused positions
+  beyond f64's exact range. All five MPRIS checks passed locally; the strengthened
+  private-bus case is rerun in CI at the final source checkpoint.
+- CI also caught two stale inherited guards: Web parity expected the former fixed
+  Monitor volume placement, and the timeline pointer fixture constructed private
+  Dock-viewer fields. The guards now check the current volume ownership and use
+  the public viewer constructor. All 53 Web parity contracts and three local
+  pointer regressions passed, without restyling or weakening production controls.
 
 A phone's real KDE Connect view is a separate acceptance gate; a viewing-only
 check has been requested. No board output or production playback was actuated.
