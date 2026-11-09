@@ -46,8 +46,48 @@ egui Dock and CraftUI layout/header suites. Narrow-header checks cover 160, 240,
 also cover both themes and display scales from 1× to 2×. Tests use isolated
 configuration/instance identity and the command-free in-memory engine.
 
-Packaging, actual native captures and installed-runtime checks are separate
-gates and are recorded here after completion. Cafe deployment remains
+The Windows package passed the native/runtime and downloader smoke probes,
+quick-action resource checks and Web/PWA bundle verification. Its guarded
+updater installed and acknowledged source
+`e163a4ce9d84b1993ba5c4e451095afb39b974b0`, executable SHA-256
+`ec42e0cd89683ae0e73d3a8525b48e28bf030705311ae4aa44cd71384580c778`.
+The destination libmpv remains SHA-256
+`e56ce67cd00f06a59dc7ed5b97a49a9182a381554c755dc4570a52af1ef30e65`.
+The fresh authoring inspection was clean before replacement. The restarted app
+retained its 3002 × 1796-pixel window, workspace, paused media and position.
+
+Installed `/api/preferences` exposes both controls with their correct group and
+icons. Narrow `/api/config` updates were visually checked in both directions:
+the chevron appeared when enabled, and the per-tab × disappeared when disabled.
+Both settings were then restored to the requested **close shown / collapse
+hidden** defaults and confirmed by a fresh API read. The app remains running.
+Actual user clicking, not just these API changes, is covered separately by the
+native pointer tests above; no human-interaction pass is inferred from capture.
+
+### Actual native before and after
+
+These read-only Win32 captures use the same Studio/dark palette, window bounds
+and 1.5× display scale. The title crops are enlarged 2× and menu crops 3× using
+nearest-neighbor capture presentation, not a mockup or altered UI geometry.
+Only non-private header pixels are published.
+
+Before (group-only close was far from the individual title):
+
+![CraftUI tab title without its own close control](../screenshots/craft-tab-close-before.png)
+
+After (the tab owns its close control):
+
+![CraftUI tab title with individual close control](../screenshots/craft-tab-close-after.png)
+
+Separate three-dot menu, with the default-hidden chevron absent:
+
+![CraftUI panel menu](../screenshots/craft-panel-menu-after.png)
+
+Optional collapse/expand control enabled for verification, then restored hidden:
+
+![Separate menu and collapse chevron](../screenshots/craft-collapse-option-after.png)
+
+Cafe deployment remains
 user-deferred while its normal connection is unavailable. No hardware actuation
 is needed to verify these controls. The separate taskbar-artwork gate in
 [PR #260](https://github.com/ToghrolTP/pealayer/pull/260) remains unresolved.
