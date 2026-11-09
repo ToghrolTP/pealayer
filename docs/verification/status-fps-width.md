@@ -26,6 +26,36 @@ visible vertical centering and stationary neighboring slots through three digits
 Existing source switching, regular weight, tooltip stability, menus, drag ordering,
 Workspace placement and hardware/status tests remain passing.
 
-Packaging, local runtime capture and canonical installation are the next gates.
-Cafe deployment remains explicitly user-deferred/offline. This focused fix does
-not claim the broader status-history or production/hardware acceptance complete.
+## Native package and installed comparison
+
+The clean package from `8ba8891bfd2f071707f05d1e00a22485d2a3cb43` passed runtime
+smoke, Windows resources/quick actions and Web/PWA integrity. Release compilation
+took 3m 42s, using the existing shared cache and packaging directory; no duplicate
+worktree or additional staging package was created. Full regression suites were
+not repeated by packaging after the focused native pass above.
+
+The graceful canonical update was acknowledged in 16.8 s. Installed/package
+executable SHA-256 independently matches:
+`b56b0916d12e0f2b9d20d56be332f1199302080c2c7d21bd84539e7d0d993851`.
+The restarted API reports the clean source above. Loaded media remained paused
+at 578.286 s with volume 57%; the normal window stayed 3002 by 1756 pixels.
+No playback/settings changes were made to stage this comparison.
+
+### Before
+
+![Previous native FPS text compared with the adjacent status caption](../screenshots/status-fps-width-before.png)
+
+### After
+
+![Smaller regular-weight native FPS text with measured allocation](../screenshots/status-fps-width-after.png)
+
+These are actual native read-only captures, cropped to the leading 640 by 54
+physical pixels and enlarged exactly 2x for inspection. Palette, display scale
+and neighboring caption style are unchanged. Factual live FPS differs; these
+images illustrate typography, not a benchmark or fabricated three-digit reading.
+Three/four-digit containment is verified by the actual-paint regression above.
+Private full-window movie captures are not published.
+
+Cafe deployment remains explicitly user-deferred/offline; cross-platform CI is
+separate from this installed native result. This fix does not claim the broader
+status-history or production/hardware acceptance complete.
