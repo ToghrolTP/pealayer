@@ -1959,7 +1959,12 @@ mod tests {
                         Err(error) => panic!("fixture accept: {error}"),
                     }
                 };
+                // BSD/macOS can inherit the listener's nonblocking flag. The
+                // listener polls a bounded accept deadline, but each accepted
+                // HTTP exchange uses blocking I/O with its own time limits.
+                stream.set_nonblocking(false).unwrap();
                 stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+                stream.set_write_timeout(Some(Duration::from_secs(3))).unwrap();
                 let mut headers = Vec::new();
                 while !headers.ends_with(b"\r\n\r\n") {
                     let mut byte = [0];
