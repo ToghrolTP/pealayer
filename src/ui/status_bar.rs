@@ -9,6 +9,8 @@ use std::time::{Duration, Instant};
 const ITEM_HEIGHT: f32 = 22.0;
 const LOG_LIMIT: usize = 240;
 const WORKSPACE_WIDTH: f32 = 190.0;
+const FPS_MIN_WIDTH: f32 = 88.0;
+const FPS_ICON_SPACE: f32 = 19.0;
 
 pub fn widget_label(item: Widget) -> &'static str {
     match item {
@@ -333,6 +335,38 @@ fn status_font(ui: &egui::Ui, monospace: bool, strong: bool) -> egui::FontId {
     font
 }
 
+fn fps_font(ui: &egui::Ui, monospace: bool) -> egui::FontId {
+    // The counter is secondary telemetry, not a heading. Optical matching in
+    // status_font can enlarge a short fixed-pitch face; never let that make FPS
+    // larger/heavier-looking than the surrounding 12-point captions.
+    let mut font = status_font(ui, monospace, false);
+    font.size = (font.size * 0.9).min(11.0);
+    font
+}
+
+fn fps_slot_width(app: &PealayerApp, ui: &egui::Ui) -> f32 {
+    let font = fps_font(ui, app.status_bar.uses_monospace(Widget::Fps));
+    let digit = ui.fonts_mut(|fonts| {
+        ('0'..='9').max_by(|a, b|
+            fonts.glyph_width(&font, *a).total_cmp(&fonts.glyph_width(&font, *b)))
+            .unwrap_or('9')
+    });
+    // Reserve the widest three-digit value even while displaying 9.99. This
+    // keeps neighboring widgets stationary without assuming fixed-pitch fonts.
+    // Larger factual values may grow the slot, never disappear under its clip.
+    let reference = format!("{digit}{digit}{digit}.{digit}{digit} fps");
+    let measure = |text: String| {
+        let galley = ui.painter().layout_no_wrap(text, font.clone(), ui.visuals().text_color());
+        let ink = galley.mesh_bounds;
+        galley.size().x + if ink.is_finite() {
+            (-ink.left()).max(0.0) + (ink.right() - galley.size().x).max(0.0)
+        } else { 0.0 }
+    };
+    let current = app.current_fps_display(Instant::now())
+        .map(|fps| measure(fps.formatted)).unwrap_or_default();
+    (FPS_ICON_SPACE + 6.0 + measure(reference).max(current)).ceil().max(FPS_MIN_WIDTH)
+}
+
 fn metric_index(item: Widget) -> Option<usize> { match item {
     Widget::Voltage => Some(0), Widget::Current => Some(1), Widget::Temperature => Some(2), _ => None,
 } }
@@ -591,7 +625,7 @@ fn render_widget(
                 fps.formatted
             );
             let (rect, response) = ui.allocate_exact_size(
-                egui::vec2(88.0, ITEM_HEIGHT),
+                egui::vec2(fps_slot_width(app, ui), ITEM_HEIGHT),
                 egui::Sense::click_and_drag(),
             );
             let icon = if fps.is_ui_rate {
@@ -608,12 +642,12 @@ fn render_widget(
             paint_centered_galley(ui, egui::Rect::from_center_size(egui::pos2(icon_x,rect.center().y),
                 egui::vec2(18.0,ITEM_HEIGHT)), icon_galley, color, egui::Align::Center);
             let number_rect = if app.rtl {
-                egui::Rect::from_min_max(rect.min, rect.max - egui::vec2(19.0, 0.0))
+                egui::Rect::from_min_max(rect.min, rect.max - egui::vec2(FPS_ICON_SPACE, 0.0))
             } else {
-                egui::Rect::from_min_max(rect.min + egui::vec2(19.0, 0.0), rect.max)
+                egui::Rect::from_min_max(rect.min + egui::vec2(FPS_ICON_SPACE, 0.0), rect.max)
             };
             let galley = ui.painter().layout_no_wrap(fps.formatted.clone(),
-                status_font(ui, app.status_bar.uses_monospace(item), false), color);
+                fps_font(ui, app.status_bar.uses_monospace(item)), color);
             paint_centered_galley(ui, number_rect, galley, color, egui::Align::Max);
             return Some((
                 response.on_hover_ui(|ui| fps_details(ui, app, &fps, true)),
@@ -1079,8 +1113,8 @@ fn present(app: &PealayerApp, item: Widget, hardware: Option<&HardwareCapabiliti
         _ => true,
     }
 }
-fn slot_width(item: Widget) -> f32 { match item {
-    Widget::Fps => 88.0, Widget::Voltage | Widget::Current => 58.0, Widget::Temperature => 64.0,
+fn slot_width(app: &PealayerApp, ui: &egui::Ui, item: Widget) -> f32 { match item {
+    Widget::Fps => fps_slot_width(app, ui), Widget::Voltage | Widget::Current => 58.0, Widget::Temperature => 64.0,
     Widget::StatusRgb => 20.0, Widget::Workspace => WORKSPACE_WIDTH, Widget::Chart => 100.0,
     Widget::Progress => 168.0, Widget::Message => 180.0, Widget::Warnings => 150.0,
     Widget::Hot => 160.0, Widget::Estop => 130.0, _ => 148.0,
@@ -1247,7 +1281,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             let all_items: Vec<_> = [false, true].into_iter()
                 .flat_map(|end| group_items(app,end,hardware.as_ref(),&progress)).collect();
             let other_width: f32 = all_items.iter().filter(|item| **item != Widget::Connection)
-                .map(|item| slot_width(*item)).sum();
+                .map(|item| slot_width(app,ui,*item)).sum();
             let gaps = all_items.len().saturating_sub(1) as f32 * if app.status_bar.dividers { 7.0 } else { 3.0 };
             let connection_width = connection_preferred_width(app,ui,hardware.as_ref())
                 .min((ui.available_width()-other_width-gaps).max(148.0));
@@ -1255,7 +1289,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             let separators=if app.status_bar.dividers {
                 (items.len().saturating_sub(1)+usize::from(items.first()==Some(&Widget::Workspace))) as f32*4.0
             } else { 0.0 };
-            let end_width=(items.iter().map(|item| if *item == Widget::Connection { connection_width } else { slot_width(*item) }).sum::<f32>() + items.len().saturating_sub(1) as f32*3.0 + separators)
+            let end_width=(items.iter().map(|item| if *item == Widget::Connection { connection_width } else { slot_width(app,ui,*item) }).sum::<f32>() + items.len().saturating_sub(1) as f32*3.0 + separators)
                 .max(24.0).min((ui.available_width()-48.0).max(24.0));
             let start_width=(ui.available_width()-end_width-3.0).max(1.0);
             ui.allocate_ui_with_layout(egui::vec2(start_width,ITEM_HEIGHT),crate::ui::i18n::layout(app.rtl,egui::Align::Center),
@@ -1844,6 +1878,52 @@ mod tests {
     }
 
     #[test]
+    fn fps_digits_fit_their_real_clip_and_stay_subordinate_to_status_captions() {
+        let _guard = crate::app::tests::lock_app_tests();
+        for family in [crate::config::UiFontFamily::System, crate::config::UiFontFamily::Bundled] {
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+        for rtl in [false, true] {
+        for mono in [false, true] {
+            let ctx = egui::Context::default();
+            ctx.set_pixels_per_point(scale);
+            crate::ui::fonts::install(&ctx, &crate::config::AppConfig {
+                ui_font_family: family, monospace_font_family: family, ..Default::default()
+            }, false);
+            let mut app = PealayerApp::default();
+            app.engine_handle = crate::four_d::engine::memory_only_test_engine();
+            app.current_video_path = Some("fixture.mp4".into());
+            app.status_bar.fps_mode = StatusBarFpsMode::Media;
+            app.status_bar.monospace[Widget::Fps as usize] = mono;
+            app.rtl = rtl;
+            let mut normal_width = None;
+            for value in [9.99, 99.99, 100.0, 144.12, 999.99, 1000.0, 9999.99] {
+                app.media_fps = value;
+                let mut bounds = egui::Rect::NOTHING;
+                let mut output = ctx.run_ui(Default::default(), |ui| {
+                    bounds = render_widget(&app, ui, Widget::Fps, None,
+                        &TelemetryLog::default(), &[], 148.0).unwrap().0.rect;
+                });
+                let shape = output.shapes.iter().find(|shape|
+                    matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text().ends_with("fps")))
+                    .expect("painted FPS value");
+                let egui::Shape::Text(text) = &shape.shape else { unreachable!() };
+                let ink = text.galley.mesh_bounds.translate(text.pos.to_vec2());
+                assert!(shape.clip_rect.expand(0.05).contains_rect(ink),
+                    "FPS clipped: value={value}, {family:?}, mono={mono}, rtl={rtl}, scale={scale}: ink={ink:?}, clip={:?}", shape.clip_rect);
+                assert!(text.galley.job.sections[0].format.font_id.size <= 11.0,
+                    "FPS must be smaller than the 12-point status captions");
+                assert!((ink.center().y - bounds.center().y).abs() < 0.05,
+                    "FPS lost its visible vertical center");
+                if value < 1000.0 {
+                    if let Some(width) = normal_width { assert_eq!(bounds.width(), width, "ordinary FPS changes moved adjacent widgets"); }
+                    normal_width = Some(bounds.width());
+                }
+                output.textures_delta.clear();
+            }
+        } } } }
+    }
+
+    #[test]
     fn render_fps_uses_regular_font_in_every_source_mode() {
         let _guard = crate::app::tests::lock_app_tests();
         let context = egui::Context::default();
@@ -1856,7 +1936,7 @@ mod tests {
             app.status_bar.fps_mode=mode; app.is_paused=paused;
             let mut expected=None;
             let mut output=context.run_ui(Default::default(),|ui| {
-                expected=Some(status_font(ui,app.status_bar.uses_monospace(Widget::Fps),false));
+                expected=Some(fps_font(ui,app.status_bar.uses_monospace(Widget::Fps)));
                 render_widget(&app,ui,Widget::Fps,None,&TelemetryLog::default(),&[],100.0);
             });
             let actual=output.shapes.iter().find_map(|s| match &s.shape {
@@ -2012,7 +2092,7 @@ mod tests {
                     .find(|(widget, _)| *widget == Widget::Fps)
                     .unwrap()
                     .1;
-                assert_eq!(fps.width(), 88.0);
+                assert!(fps.width() >= FPS_MIN_WIDTH);
                 previous = Some(rects);
             }
         }
