@@ -18,6 +18,11 @@ passed forbidden/empty/changing-access parent cases; Cafe remains deferred.
 
 ## Window and media automation
 
+[Reveal-playhead availability](playhead-action-fade.md) adds the missing brief
+fade to the existing visibility-aware disabled state. Invocation is blocked
+immediately, with reduced-motion support and preserved drag customization;
+verification and delivery are tracked in the linked receipt.
+
 [Workspace selection and dialog title backgrounds](workspace-switcher-dialog-chrome.md)
 records the saved-profile repair, visible restore errors, leading Workspace
 divider and measured built-in title-frame correction. The package is installed;

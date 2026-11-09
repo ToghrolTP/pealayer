@@ -401,6 +401,7 @@ mod tests {
         app.timeline_toolbar_hidden = Action::ALL.into_iter()
             .filter(|action| *action != Action::BringPlayheadIntoView).collect();
         let ctx = egui::Context::default();
+        super::super::motion::configure(&ctx, crate::config::UiAnimationMode::Disabled);
         let viewport = Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(900.0, 600.0));
         let point = egui::pos2(viewport.right() - CELL * 1.5, viewport.top() + CELL * 0.5);
         let mut frame = |events, in_view| {
@@ -424,6 +425,67 @@ mod tests {
         assert_ne!(dimmed, available, "unavailable action must be visibly dimmed");
         frame(vec![egui::Event::PointerMoved(point), pointer_button(point, egui::PointerButton::Primary, true)], false);
         assert_eq!(frame(vec![pointer_button(point, egui::PointerButton::Primary, false)], false).0, Some(Action::BringPlayheadIntoView));
+    }
+
+    #[test]
+    fn reveal_availability_fades_without_delaying_its_click_guard_or_moving_the_icon() {
+        let _guard = crate::app::tests::lock_app_tests();
+        for animated in [false, true] {
+            let ctx = egui::Context::default();
+            super::super::motion::configure(&ctx, if animated {
+                crate::config::UiAnimationMode::Enabled
+            } else { crate::config::UiAnimationMode::Disabled });
+            let mut app = PealayerApp::default();
+            app.engine_handle = crate::four_d::engine::memory_only_test_engine();
+            app.timeline_toolbar_hidden = Action::ALL.into_iter()
+                .filter(|action| *action != Action::BringPlayheadIntoView).collect();
+            let viewport = Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(900.0, 600.0));
+            let point = egui::pos2(viewport.right() - CELL * 1.5, viewport.top() + CELL * 0.5);
+            let mut time = 0.0;
+            let mut frame = |visible, events| {
+                let mut action = None;
+                let mut result = None;
+                let mut output = ctx.run_ui(egui::RawInput {
+                    time: Some(time), predicted_dt: 0.01, events, ..Default::default()
+                }, |ui| {
+                    action = draw(ui, &mut app, viewport, false, visible).action;
+                });
+                time += 0.01;
+                for shape in &output.shapes {
+                    if let egui::Shape::Text(text) = &shape.shape
+                        && text.galley.text() == super::super::icons::TARGET {
+                        result = Some((text.fallback_color, text.pos));
+                    }
+                }
+                output.textures_delta.clear();
+                (action, result.expect("reveal icon paint"))
+            };
+            let (_, (available, position)) = frame(false, vec![]);
+            let (_, (first, _)) = frame(true, vec![]);
+            let (_, (middle, _)) = frame(true, vec![]);
+            let mut colors = vec![first, middle];
+            for index in 0..20 {
+                let (action, (color, current_position)) = frame(true, vec![
+                    egui::Event::PointerMoved(point),
+                    pointer_button(point, egui::PointerButton::Primary, index % 2 == 0),
+                ]);
+                assert_eq!(action, None, "Click must be blocked even during the fade");
+                assert_eq!(position, current_position, "Availability cannot shift the glyph");
+                colors.push(color);
+            }
+            let dimmed = *colors.last().unwrap();
+            assert_ne!(available, dimmed);
+            if animated {
+                assert_ne!(first, available);
+                assert_ne!(middle, dimmed, "State change must not snap immediately to its final color");
+                assert!(colors.windows(2).all(|pair| pair[0].r() >= pair[1].r()), "Fade must be monotonic");
+            } else { assert!(colors.iter().all(|color| *color == dimmed), "Reduced motion applies immediately"); }
+            frame(false, vec![egui::Event::PointerMoved(point), pointer_button(point, egui::PointerButton::Primary, true)]);
+            assert_eq!(frame(false, vec![pointer_button(point, egui::PointerButton::Primary, false)]).0,
+                Some(Action::BringPlayheadIntoView), "Re-enabling must not wait for the fade");
+            for _ in 0..20 { frame(false, vec![egui::Event::PointerMoved(egui::Pos2::ZERO)]); }
+            assert_eq!(frame(false, vec![]).1, (available, position));
+        }
     }
 
     #[test]
