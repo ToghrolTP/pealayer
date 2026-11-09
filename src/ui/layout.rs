@@ -826,6 +826,17 @@ fn timeline_offset_to_reveal_x(
     revealed.clamp(0.0, max_offset)
 }
 
+fn timeline_playhead_in_view(content: egui::Rect, viewport: egui::Rect, time: f64, zoom: f32) -> bool {
+    if !time.is_finite() || !zoom.is_finite() || zoom <= 0.0 { return false; }
+    let x = content.left() + time.max(0.0) as f32 * zoom;
+    // Include the complete seven-point ruler handle, not only its hairline.
+    // At either media boundary it cannot scroll farther to expose the half
+    // handle outside the content, so that boundary is already revealed.
+    let left = (x - 7.0).max(content.left());
+    let right = (x + 7.0).min(content.right());
+    x.is_finite() && viewport.left() <= left && right <= viewport.right()
+}
+
 fn timeline_offset_to_reveal_cue(
     current: egui::Vec2,
     cue: egui::Rect,
@@ -9226,6 +9237,20 @@ mod timeline_row_tests {
     }
 
     #[test]
+    fn playhead_visibility_includes_handle_and_current_scrub_position() {
+        let content = egui::Rect::from_min_size(egui::pos2(-200.0, 0.0), egui::vec2(1000.0, 200.0));
+        let viewport = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 200.0));
+        assert!(timeline_playhead_in_view(content, viewport, 3.5, 100.0));
+        assert!(!timeline_playhead_in_view(content, viewport, 1.0, 100.0));
+        assert!(!timeline_playhead_in_view(content, viewport, 7.0, 100.0));
+        assert!(!timeline_playhead_in_view(content, viewport, 2.01, 100.0));
+        assert!(!timeline_playhead_in_view(content, viewport, 5.99, 100.0));
+        assert!(!timeline_playhead_in_view(content, viewport, f64::NAN, 100.0));
+        assert!(timeline_playhead_in_view(viewport, viewport, 0.0, 100.0));
+        assert!(timeline_playhead_in_view(viewport, viewport, 4.0, 100.0));
+    }
+
+    #[test]
     fn playhead_follow_waits_near_the_edge_and_preserves_look_ahead() {
         assert_eq!(
             timeline_follow_target_offset(200.0, 450.0, 2_000.0, 500.0),
@@ -16852,11 +16877,12 @@ impl<'a> PealayerTabViewer<'a> {
                                             }
                                             ui.separator();
                                             if ui
-                                                .button(format!(
+                                                .add_enabled(!timeline_playhead_in_view(rect, viewport_clip,
+                                                    self.app.seek_pos.unwrap_or(self.app.playback_time), zoom), egui::Button::new(format!(
                                                     "{} {}",
                                                     crate::ui::icons::TARGET,
                                                     self.app.tr("Bring playhead into view")
-                                                ))
+                                                )))
                                                 .clicked()
                                             {
                                                 pending_timeline_toolbar_action = Some(
@@ -16866,8 +16892,11 @@ impl<'a> PealayerTabViewer<'a> {
                                             }
                                         }); }
 
+                                        let playhead_in_view = timeline_playhead_in_view(rect, viewport_clip,
+                                            self.app.seek_pos.unwrap_or(self.app.playback_time), zoom);
                                         let toolbar = crate::ui::timeline_toolbar::draw(
                                             ui, self.app, viewport_clip, can_add_keyframe,
+                                            playhead_in_view,
                                         );
                                         let toolbar_rect = toolbar.rect;
                                         if toolbar.action.is_some() {
@@ -19076,7 +19105,7 @@ impl<'a> PealayerTabViewer<'a> {
                                     TimelineToolbarAction::BringPlayheadIntoView => {
                                         ui.data_mut(|data| data.remove::<TimelineCueReveal>(timeline_cue_reveal_id()));
                                         let playhead_x =
-                                            (self.app.playback_time.max(0.0) as f32 * current_zoom)
+                                            (self.app.seek_pos.unwrap_or(self.app.playback_time).max(0.0) as f32 * current_zoom)
                                                 .min(timeline_content_size.x);
                                         let target_x = timeline_offset_to_reveal_x(
                                             current_offset.x,

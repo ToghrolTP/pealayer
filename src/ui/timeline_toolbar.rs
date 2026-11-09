@@ -134,6 +134,7 @@ pub(super) fn draw(
     app: &mut PealayerApp,
     viewport: Rect,
     can_add_keyframe: bool,
+    playhead_in_view: bool,
 ) -> Output {
     let mut output = Output {
         rect: Rect::NOTHING,
@@ -181,6 +182,7 @@ pub(super) fn draw(
             || !app.selected_keyframes.is_empty()
             || app.selected_timeline_keyframe.is_some();
         let enabled = match action {
+            Action::BringPlayheadIntoView => !playhead_in_view,
             Action::AddKeyframe => can_add_keyframe,
             Action::PreviousCue | Action::NextCue => !app.timeline.instances.is_empty(),
             Action::NudgeCueLeft
@@ -393,6 +395,38 @@ mod tests {
     use super::*;
 
     #[test]
+    fn visible_playhead_disables_and_dims_reveal_but_not_customization() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.timeline_toolbar_hidden = Action::ALL.into_iter()
+            .filter(|action| *action != Action::BringPlayheadIntoView).collect();
+        let ctx = egui::Context::default();
+        let viewport = Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(900.0, 600.0));
+        let point = egui::pos2(viewport.right() - CELL * 1.5, viewport.top() + CELL * 0.5);
+        let mut frame = |events, in_view| {
+            let mut action = None;
+            let output = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
+                action = draw(ui, &mut app, viewport, false, in_view).action;
+            });
+            let color = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text) if text.galley.text() == super::super::icons::TARGET =>
+                    Some(text.fallback_color),
+                _ => None,
+            });
+            output.drop_without_applying_deltas();
+            (action, color)
+        };
+        let (_, dimmed) = frame(vec![], true);
+        frame(vec![egui::Event::PointerMoved(point), pointer_button(point, egui::PointerButton::Primary, true)], true);
+        assert_eq!(frame(vec![pointer_button(point, egui::PointerButton::Primary, false)], true).0, None);
+        let (_, available) = frame(vec![egui::Event::PointerMoved(egui::pos2(0.0, 0.0))], false);
+        assert!(dimmed.is_some() && available.is_some());
+        assert_ne!(dimmed, available, "unavailable action must be visibly dimmed");
+        frame(vec![egui::Event::PointerMoved(point), pointer_button(point, egui::PointerButton::Primary, true)], false);
+        assert_eq!(frame(vec![pointer_button(point, egui::PointerButton::Primary, false)], false).0, Some(Action::BringPlayheadIntoView));
+    }
+
+    #[test]
     fn overflow_preferences_click_requests_exact_toolbar_page() {
         let _guard = crate::app::tests::lock_app_tests();
         let mut app = PealayerApp::default();
@@ -403,7 +437,7 @@ mod tests {
             ctx.run_ui(egui::RawInput {
                 screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 900.0))),
                 events, ..Default::default()
-            }, |ui| { draw(ui, &mut app, viewport, false); })
+            }, |ui| { draw(ui, &mut app, viewport, false, true); })
         };
         fn text_point(shape: &egui::epaint::Shape) -> Option<egui::Pos2> {
             match shape {

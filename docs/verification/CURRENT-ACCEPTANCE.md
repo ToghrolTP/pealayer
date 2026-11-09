@@ -18,6 +18,12 @@ passed forbidden/empty/changing-access parent cases; Cafe remains deferred.
 
 ## Window and media automation
 
+[Paused playback and track state](paused-playback-and-track-state.md) records
+external pause-clock anchoring, paused dual-preview stability, internal exact
+seek/resume intent, authoritative media-strip selection and visibility-aware
+timeline reveal controls. Focused and real finite-file decoder tests are
+separate from native visual and production deployment acceptance.
+
 [Native file exchange and attention](native-data-exchange.md) is installed with
 the exact package/runtime receipt. Final native suite: 1,153 passed, zero failed,
 two opt-in tests ignored, including real Shell COM file-description delivery.

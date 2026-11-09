@@ -5867,6 +5867,14 @@ impl PealayerApp {
         self.sub_position_percent = self.mpv.get_property::<f64>("sub-pos").unwrap_or(self.sub_position_percent);
         self.sub_delay = self.mpv.get_property::<f64>("sub-delay").unwrap_or(self.sub_delay);
         self.audio_delay = self.mpv.get_property::<f64>("audio-delay").unwrap_or(self.audio_delay);
+        // Native property events are intentionally drained in external mode.
+        // Adopt the external authority's cached selection too, otherwise the
+        // catalog says selected while timeline rows stay falsely disabled.
+        for (property, selected) in [("vid", &mut self.current_vid), ("aid", &mut self.current_aid), ("sid", &mut self.current_sid)] {
+            if let Ok(value) = self.mpv.get_property::<String>(property) {
+                *selected = value;
+            }
+        }
         if let Ok(aspect) = self.mpv.get_property::<f64>("video-out-params/aspect")
             && aspect.is_finite() && (0.05..=20.0).contains(&aspect) && (aspect-self.video_aspect_ratio).abs()>f64::EPSILON {
             self.video_aspect_ratio = aspect; self.pending_video_aspect_resize = true;
@@ -6012,6 +6020,15 @@ impl PealayerApp {
             return;
         }
         if self.is_playback_finished() { self.replay(); return; }
+        // Play during a decoder-owned exact seek is a resume intent, not a
+        // cancellation. Revoking that commit resumes an older decoded frame.
+        if self.pending_scrub_commit.is_some() || self.is_scrubbing {
+            self.was_playing_before_scrub = true;
+            if self.pending_scrub_commit.is_none() {
+                self.finish_scrub(self.seek_pos.unwrap_or(self.playback_time));
+            }
+            return;
+        }
         self.reset_scrub_state();
         if self.engine_handle.request_prepared_play() {
             let _=self.mpv.set_property("pause",true);
@@ -10316,6 +10333,29 @@ pub(crate) mod tests {
             .unwrap_or_else(|poisoned| poisoned.into_inner())
     }
 
+    // A finite, seekable file, unlike lavfi's progressively discovered duration.
+    pub(crate) struct SyntheticVideo(pub std::path::PathBuf);
+    impl SyntheticVideo {
+        pub(crate) fn new() -> Self {
+            let path = std::env::temp_dir().join(format!("pealayer-pause-{}.y4m", uuid::Uuid::new_v4()));
+            let mut bytes = b"YUV4MPEG2 W16 H16 F25:1 Ip A1:1 C420jpeg\n".to_vec();
+            for frame in 0..200 {
+                bytes.extend_from_slice(b"FRAME\n");
+                bytes.extend_from_slice(&[frame as u8; 384]);
+            }
+            std::fs::write(&path, bytes).unwrap();
+            Self(path)
+        }
+    }
+    impl Drop for SyntheticVideo {
+        fn drop(&mut self) {
+            for _ in 0..20 {
+                if std::fs::remove_file(&self.0).is_ok() { break; }
+                std::thread::sleep(std::time::Duration::from_millis(10));
+            }
+        }
+    }
+
     #[test]
     fn craft_app_workspace_profile_preserves_layout() {
         let _lock = lock_app_tests();
@@ -11054,6 +11094,67 @@ pub(crate) mod tests {
     #[test]
     fn paused_exact_seek_retains_sub_frame_timeline_position() {
         assert_eq!(settled_seek_position(3.462, 3.429, false), 3.429);
+    }
+
+    #[test]
+    fn play_waits_for_the_pending_exact_frame_instead_of_revoking_it() {
+        let _guard = lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.current_video_path = Some("synthetic-paused-fixture.mkv".into());
+        app.duration = 10.0;
+        app.playback_time = 2.0;
+        app.is_paused = true;
+        app.seek_pos = Some(3.429);
+        let pending = PendingScrubCommit {
+            request_id: 42, target_time: 3.429, dispatched: false,
+            playback_restarted: false, zero_fence: None,
+        };
+        app.pending_scrub_commit = Some(pending);
+        app.play();
+        assert_eq!(app.pending_scrub_commit, Some(pending));
+        assert_eq!(app.seek_pos, Some(3.429));
+        assert!(app.was_playing_before_scrub);
+        assert!(app.is_paused, "do not resume the old decoder frame before commit");
+        app.pause();
+        assert!(!app.was_playing_before_scrub, "an explicit Pause cancels delayed resume intent");
+    }
+
+    #[test]
+    #[ignore = "Real libmpv synthetic video, null outputs; no hardware"]
+    fn live_internal_resume_preserves_pending_exact_frame() {
+        let _guard = lock_app_tests();
+        let video = SyntheticVideo::new();
+        let mut app = PealayerApp::default();
+        struct Stop(&'static libmpv2::Mpv);
+        impl Drop for Stop { fn drop(&mut self) { let _ = self.0.command("stop", &[]); } }
+        let _stop = Stop(app.mpv.0);
+        app.current_video_path = Some(video.0.clone());
+        app.mpv.0.set_property("pause", true).unwrap();
+        app.mpv.0.command("loadfile", &[video.0.to_str().unwrap(), "replace"]).unwrap();
+        fn wait(app: &mut PealayerApp, mut ready: impl FnMut(&PealayerApp) -> bool) {
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
+            loop {
+                app.process_events();
+                if ready(app) { break; }
+                assert!(std::time::Instant::now() < deadline, "synthetic decoder did not settle");
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+        }
+        wait(&mut app, |app| app.is_seekable && app.duration > 0.0);
+        app.seek_absolute(2.125);
+        wait(&mut app, |app| app.pending_scrub_commit.is_none());
+        let held = app.mpv.0.get_property::<f64>("time-pos").unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(120));
+        app.process_events();
+        assert_eq!(app.mpv.0.get_property::<f64>("time-pos").unwrap(), held);
+        app.seek_absolute(4.125);
+        assert_eq!(app.pending_scrub_commit.map(|p| p.target_time), Some(4.125),
+            "second exact seek must be queued: seekable={}, loaded={}, duration={}", app.is_seekable, app.current_video_path.is_some(), app.duration);
+        app.play(); // Deliberately before the worker's final seek ACK/restart.
+        assert!(app.pending_scrub_commit.is_some(), "Play revoked the exact commit");
+        wait(&mut app, |app| app.pending_scrub_commit.is_none() && !app.is_paused);
+        let resumed = app.mpv.0.get_property::<f64>("time-pos").unwrap();
+        assert!((4.08..4.32).contains(&resumed), "resumed older frame at {resumed}");
     }
 
     #[test]

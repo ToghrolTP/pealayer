@@ -95,6 +95,14 @@ pub struct Status {
     pub clock_at: Option<Instant>,
     #[serde(skip)]
     pending_seek: bool,
+    #[serde(skip)]
+    clock_refresh: u64,
+    #[serde(skip)]
+    clock_refreshed: u64,
+    #[serde(skip)]
+    clock_requested: u64,
+    #[serde(skip)]
+    clock_query: Option<(u64, u64)>,
 }
 const OBSERVED: &[&str] = &[
     "path",
@@ -279,11 +287,7 @@ pub fn property(name: &str) -> Option<Value> {
         return Some(json!(true));
     }
     if name == "time-pos" {
-        let mut t = s.properties.get(name)?.as_f64()?;
-        if advancing(&s) {
-            t += s.clock_at?.elapsed().as_secs_f64().min(0.25) * number(&s, "speed", 1.0)
-        }
-        return Some(json!(t.min(number(&s, "duration", f64::MAX))));
+        return clock_position(&s, Instant::now()).map(|t| json!(t));
     }
     lookup(&s.properties, name)
 }
@@ -340,9 +344,35 @@ fn advancing(s: &Status) -> bool {
         && !flag(s, "eof-reached", false)
 }
 
+fn clock_position(s: &Status, now: Instant) -> Option<f64> {
+    let mut position = s.properties.get("time-pos")?.as_f64()?;
+    if advancing(s) {
+        position += s.clock_at.map_or(0.0, |at| now.saturating_duration_since(at).as_secs_f64().min(0.25))
+            * number(s, "speed", 1.0);
+    }
+    Some(position.min(number(s, "duration", f64::MAX)))
+}
+
+fn apply_clock_reply(s: &mut Status, v: &Value) -> bool {
+    let Some((request, revision)) = s.clock_query else { return false; };
+    if v["request_id"].as_u64() != Some(request) { return false; }
+    s.clock_query = None;
+    // A later pause/resume supersedes this query. Never install its old clock.
+    if revision == s.clock_refresh && v["error"] == "success"
+        && let Some(position) = v["data"].as_f64().filter(|t| t.is_finite() && *t >= 0.0) {
+        s.properties.insert("time-pos".into(), json!(position));
+        s.clock_at = Some(Instant::now());
+        s.clock_refreshed = revision;
+    }
+    true
+}
+
 fn apply_event(s: &mut Status, v: &Value) -> bool {
+    if apply_clock_reply(s, v) { return true; }
     if v["event"] == "start-file" {
         s.pending_seek = true;
+        s.clock_refresh = s.clock_refresh.saturating_add(1);
+        s.clock_query = None;
         for key in ["time-pos", "duration", "seekable"] {
             s.properties.remove(key);
         }
@@ -364,6 +394,18 @@ fn apply_event(s: &mut Status, v: &Value) -> bool {
             return false;
         };
         let data = v.get("data").cloned().unwrap_or(Value::Null);
+        if matches!(name, "pause" | "speed" | "paused-for-cache" | "seeking")
+            && s.properties.get(name) != Some(&data) {
+            // Re-anchor BEFORE changing the clock's advancing/rate flags.
+            // Otherwise resume extrapolates across the entire paused interval,
+            // and pause snaps back to the previous time-pos notification.
+            let now = Instant::now();
+            if let Some(position) = clock_position(s, now) {
+                s.properties.insert("time-pos".into(), json!(position));
+                s.clock_at = Some(now);
+            }
+            s.clock_refresh = s.clock_refresh.saturating_add(1);
+        }
         if name == "time-pos" {
             s.clock_at = Some(Instant::now());
         }
@@ -388,7 +430,7 @@ fn apply_event(s: &mut Status, v: &Value) -> bool {
     }
     false
 }
-fn mirror(mpv: &libmpv2::Mpv, s: &Status, last_path: &mut String) {
+fn mirror(mpv: &libmpv2::Mpv, s: &Status, last_path: &mut String, paused_target: &mut Option<f64>) {
     if s.mode != Mode::Dual {
         return;
     }
@@ -398,6 +440,7 @@ fn mirror(mpv: &libmpv2::Mpv, s: &Status, last_path: &mut String) {
         .and_then(Value::as_str)
         .unwrap_or_default();
     if path != *last_path {
+        *paused_target = None;
         *last_path = path.into();
         if path.is_empty() {
             let _ = mpv.command("stop", &[]);
@@ -441,15 +484,28 @@ fn mirror(mpv: &libmpv2::Mpv, s: &Status, last_path: &mut String) {
             set_local(mpv, key, value);
         }
     }
+    let paused = flag(s, "pause", true);
+    if !paused { *paused_target = None; }
+    // The transition's final clock is fetched over the existing IPC socket.
+    // Do not seek a paused preview back to an older time-pos in the meantime.
+    if s.clock_refreshed != s.clock_refresh { return; }
     if let (Some(target), Ok(local)) = (
-        s.properties.get("time-pos").and_then(Value::as_f64),
+        clock_position(s, Instant::now()),
         mpv.get_property::<f64>("time-pos"),
     ) {
-        let tolerance = if flag(s, "pause", true) { 0.05 } else { 0.20 };
+        if paused && *paused_target == Some(target) { return; }
+        // Exact timestamps can fall between frames. Do not replace an already
+        // matching paused frame merely because its decoded PTS is quantized.
+        let fps = number(s, "container-fps", 0.0);
+        let tolerance = if !paused { 0.20 } else if fps > 0.0 { 1.0 / fps + 0.002 } else { 0.05 };
         if (local - target).abs() > tolerance
             && !mpv.get_property::<bool>("seeking").unwrap_or(true)
         {
-            let _ = mpv.command("seek", &[&target.to_string(), "absolute+exact"]);
+            if mpv.command("seek", &[&target.to_string(), "absolute+exact"]).is_ok() && paused {
+                *paused_target = Some(target);
+            }
+        } else if paused && !mpv.get_property::<bool>("seeking").unwrap_or(true) {
+            *paused_target = Some(target);
         }
     }
 }
@@ -509,6 +565,7 @@ fn run(
     let preview_worker_lock = preview_lock.clone();
     std::thread::spawn(move || {
         let mut last_path = String::new();
+        let mut paused_target = None;
         let mut previous_epoch = 0;
         loop {
             let (slot, wake) = &*preview_latest;
@@ -523,11 +580,12 @@ fn run(
             }
             if epoch != previous_epoch {
                 last_path.clear();
+                paused_target = None;
                 previous_epoch = epoch;
             }
             let _guard = preview_worker_lock.lock().unwrap();
             if epoch == preview_generation.load(Ordering::Acquire) {
-                mirror(mpv, &s, &mut last_path);
+                mirror(mpv, &s, &mut last_path, &mut paused_target);
             }
         }
     });
@@ -766,6 +824,10 @@ fn run(
                         let mut s = state.write().unwrap();
                         s.properties.clear();
                         s.clock_at = None;
+                        s.clock_refresh = 0;
+                        s.clock_refreshed = 0;
+                        s.clock_requested = 0;
+                        s.clock_query = None;
                         s.connected = true;
                         s.mode = settings.mode;
                         s.endpoint = settings.endpoint.clone();
@@ -803,6 +865,27 @@ fn run(
                     s.endpoint = settings.endpoint.clone();
                     s.owned_process = child.is_some();
                     s.error=Some("Waiting for mpv IPC; start mpv with the configured --input-ipc-server endpoint".into());
+                }
+            }
+        }
+        // One factual clock read per transport-state transition, through the
+        // same serialized writer and correlated reply path. This is not polling.
+        if let Some(connection) = stream.as_mut() {
+            let query = {
+                let mut s = state.write().unwrap();
+                if s.connected && s.properties.get("time-pos").and_then(Value::as_f64).is_some()
+                    && s.clock_query.is_none() && s.clock_requested != s.clock_refresh {
+                    request = request.saturating_add(1);
+                    s.clock_requested = s.clock_refresh;
+                    s.clock_query = Some((request, s.clock_refresh));
+                    Some(request)
+                } else { None }
+            };
+            if let Some(id) = query {
+                if connection.write_json(&json!({"command":["get_property","time-pos"],"request_id":id})).is_ok() {
+                    pending.insert(id, Instant::now());
+                } else {
+                    state.write().unwrap().connected = false;
                 }
             }
         }
@@ -1043,6 +1126,48 @@ impl Transport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn clock_fixture(paused: bool, age: Duration) -> Status {
+        Status {
+            connected: true,
+            clock_at: Some(Instant::now() - age),
+            properties: BTreeMap::from([
+                ("pause".into(), json!(paused)), ("time-pos".into(), json!(10.0)),
+                ("speed".into(), json!(1.0)),
+            ]),
+            ..Default::default()
+        }
+    }
+    #[test]
+    fn resume_does_not_add_time_spent_paused() {
+        let mut s = clock_fixture(true, Duration::from_secs(30));
+        apply_event(&mut s, &json!({"event":"property-change","name":"pause","data":false}));
+        let position = clock_position(&s, Instant::now()).unwrap();
+        assert!((position - 10.0).abs() < 0.01, "resume jumped to {position}");
+        assert_ne!(s.clock_refresh, s.clock_refreshed);
+    }
+    #[test]
+    fn pause_waits_for_one_confirmed_socket_clock_and_keeps_it_exact() {
+        let mut s = clock_fixture(false, Duration::from_millis(40));
+        apply_event(&mut s, &json!({"event":"property-change","name":"pause","data":true}));
+        assert!(clock_position(&s, Instant::now()).unwrap() >= 10.039);
+        s.clock_query = Some((7, s.clock_refresh));
+        assert!(apply_event(&mut s, &json!({"request_id":7,"error":"success","data":10.042})));
+        assert_eq!(clock_position(&s, Instant::now() + Duration::from_secs(30)), Some(10.042));
+        assert_eq!(s.clock_refresh, s.clock_refreshed);
+        s.clock_query = Some((8, s.clock_refresh));
+        apply_event(&mut s, &json!({"event":"property-change","name":"pause","data":false}));
+        apply_event(&mut s, &json!({"request_id":8,"error":"success","data":2.0}));
+        assert!(clock_position(&s, Instant::now()).unwrap() >= 10.042, "old pause reply rewound resume");
+        assert_ne!(s.clock_refresh, s.clock_refreshed);
+    }
+    #[test]
+    fn replacement_media_rejects_the_previous_pause_clock_reply() {
+        let mut s = clock_fixture(true, Duration::ZERO);
+        s.clock_query = Some((9, s.clock_refresh));
+        apply_event(&mut s, &json!({"event":"start-file"}));
+        assert!(!apply_event(&mut s, &json!({"request_id":9,"error":"success","data":50.0})));
+        assert!(clock_position(&s, Instant::now()).is_none());
+    }
     #[test]
     fn shared_config_and_rpc_contract() {
         let mut config = crate::config::AppConfig::default();
@@ -1107,6 +1232,7 @@ mod tests {
     #[test]
     #[ignore = "Starts the explicitly configured real mpv with null outputs; no hardware"]
     fn live_duplex_ipc_and_muted_dual_preview() {
+        let video = crate::app::tests::SyntheticVideo::new();
         fn wait(mut ready: impl FnMut() -> bool) {
             let deadline = Instant::now() + Duration::from_secs(8);
             while !ready() {
@@ -1195,7 +1321,7 @@ mod tests {
             &mut client,
             json!([
                 "loadfile",
-                "av://lavfi:testsrc=duration=8:size=64x64:rate=10",
+                video.0.to_str().unwrap(),
                 "replace"
             ]),
         );
@@ -1215,6 +1341,20 @@ mod tests {
             .set_property("pause", true)
             .unwrap();
         wait(|| property("pause") == Some(json!(true)));
+        wait(|| { let s = status(); s.clock_refreshed == s.clock_refresh });
+        let paused_position = rpc(&mut client, json!(["get_property", "time-pos"])).as_f64().unwrap();
+        let displayed = property("time-pos").and_then(|v| v.as_f64()).unwrap();
+        assert!((displayed - paused_position).abs() < 0.002, "paused socket clock differs: {displayed} vs {paused_position}");
+        std::thread::sleep(Duration::from_millis(350));
+        assert_eq!(property("time-pos").and_then(|v| v.as_f64()), Some(displayed));
+        {
+            let _guard = crate::app::tests::lock_app_tests();
+            let mut app = crate::app::PealayerApp::default();
+            app.process_events();
+            let tracks = crate::ui::layout::web_timeline_tracks(&app);
+            assert!(tracks.iter().any(|row| row.kind == "video" && row.active && row.enabled),
+                "external catalog selection must not leave the video strip falsely faded");
+        }
         assert_eq!(
             rpc(&mut client, json!(["get_property", "pause"])),
             json!(true)
@@ -1257,8 +1397,20 @@ mod tests {
         wait(|| {
             let local = mpv.get_property::<f64>("time-pos").ok();
             let remote = property("time-pos").and_then(|v| v.as_f64());
-            local.zip(remote).is_some_and(|(a, b)| (a - b).abs() < 0.25)
+            local.zip(remote).is_some_and(|(a, b)| (a - b).abs() < 0.042)
+                && mpv.get_property::<bool>("pause").ok() == Some(true)
+                && !mpv.get_property::<bool>("seeking").unwrap_or(true)
         });
+        // File-load and the initial synchronization are allowed to finish
+        // before checking that unrelated events leave the paused frame alone.
+        std::thread::sleep(Duration::from_millis(150));
+        let held = mpv.get_property::<f64>("time-pos").unwrap();
+        for volume in [38, 39, 40] {
+            rpc(&mut client, json!(["set_property", "volume", volume]));
+            std::thread::sleep(Duration::from_millis(120));
+            assert_eq!(mpv.get_property::<f64>("time-pos").unwrap(), held,
+                "unrelated events must not reseek a paused dual preview");
+        }
         assert!(
             !status().owned_process,
             "An attached mpv must never be owned/terminated"
