@@ -1174,6 +1174,9 @@ html[data-motion="disabled"] .app-statusbar .status-widget { transition: none; }
 .status-connection-dot, .status-rgb-dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; background: var(--red); flex: 0 0 8px; }
 .status-connection-dot.is-online { background: var(--green); }
 .status-chart { color: var(--accent); }
+:root[data-palette="pastel"] .status-chart[data-metric="voltage"] { color: var(--blue); }
+:root[data-palette="pastel"] .status-chart[data-metric="current"] { color: var(--green); }
+:root[data-palette="pastel"] .status-chart[data-metric="temperature"] { color: var(--red); }
 .status-progress { --operation-color: var(--accent); position: relative; display: inline-flex; align-items: center; gap: 4px; height: 22px; width: 168px; overflow: hidden; white-space: nowrap; }
 .status-progress--host { --operation-color: #4b9be6; color: var(--operation-color); }
 .status-progress--board { --operation-color: var(--amber); color: var(--operation-color); }

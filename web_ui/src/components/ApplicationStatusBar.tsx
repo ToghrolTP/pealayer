@@ -145,7 +145,7 @@ export const ApplicationStatusBar: React.FC<ApplicationStatusBarProps> = ({ stat
           title={operations.map((operation) => `${operation.label} · ${operation.phase}\n${operation.detail}`).join('\n')}>
           <span className="status-progress__label">{tr(locale,op.label)} · {op.phase}</span><span className="status-progress__value">{fraction === undefined ? '…' : `${(fraction * 100).toFixed(0)}%`}</span><i style={{ width: fraction === undefined ? '100%' : `${fraction * 100}%` }} className={fraction === undefined ? 'is-indeterminate' : ''} /></span>;
       }
-      case 'chart': return <svg className="status-chart" width="100" height="20" viewBox="0 0 100 20" role="img" aria-label={chartTitle}><title>{chartTitle}</title>
+      case 'chart': return <svg className="status-chart" data-metric={config.chart_metric} width="100" height="20" viewBox="0 0 100 20" role="img" aria-label={chartTitle}><title>{chartTitle}</title>
         {metricValues.length ? chartPaths(samples, metricIndex, 100, 20).map((path, index) => <path key={index} d={path} fill="none" stroke="currentColor" strokeWidth="1.5" />) : <text x="50" y="14" textAnchor="middle">—</text>}</svg>;
       case 'message': return state.osd && state.osd.remaining_ms > 0 ? <><ApiOutlined />{state.osd.message}</> : null;
       case 'workspace': return <Dropdown trigger={['click']} placement="topRight" autoFocus open={workspaceMenuOpen}
