@@ -1,0 +1,11 @@
+import assert from 'node:assert/strict';
+import { filesystemBreadcrumbs, parseFileLocations } from '../src/fileLocations.ts';
+assert.deepEqual(filesystemBreadcrumbs('D:\\Movies\\Animation').map(item => item.path), ['D:\\', 'D:\\Movies', 'D:\\Movies\\Animation']);
+assert.deepEqual(filesystemBreadcrumbs('\\\\server\\share\\Films').map(item => item.path), ['\\\\server\\share\\', '\\\\server\\share\\Films']);
+assert.deepEqual(filesystemBreadcrumbs('\\\\?\\UNC\\server\\share\\Films'), filesystemBreadcrumbs('\\\\server\\share\\Films'));
+assert.deepEqual(filesystemBreadcrumbs('\\\\?\\D:\\Films'), filesystemBreadcrumbs('D:\\Films'));
+assert.deepEqual(filesystemBreadcrumbs('/media/films').map(item => item.path), ['/', '/media', '/media/films']);
+assert.deepEqual(filesystemBreadcrumbs('\\\\server\\share\\').map(item => item.path), ['\\\\server\\share\\']);
+assert.throws(() => parseFileLocations({ locations: [{}] }));
+assert.throws(() => parseFileLocations({}));
+assert.deepEqual(parseFileLocations({ locations: [{ name: 'D:', path: 'D:\\', kind: 'drive' }] }).length, 1);

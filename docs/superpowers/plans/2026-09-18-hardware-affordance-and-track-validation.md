@@ -423,7 +423,7 @@ Expected: PASS.
 3. In `PealayerTab::EffectControls` (inspector panel, lines 200-290):
    - If selected cue is mismatched:
      - Show warning banner: `ui.colored_label(Color32::from_rgb(245, 158, 11), format!("⚠️ Hardware Mismatch: Placed on R{}, but requires R{}", current_relay, primary_relay));`.
-     - Provide `if ui.button(format!("Relocate to R{}: {}", primary_relay, primary_name)).clicked() { ... }`.
+     - Provide `if ui.button(format!("Relocate to relay {}: {}", primary_relay, primary_name)).clicked() { ... }`.
 4. In active clip vertical drag (`self.app.active_drag`):
    - Restrict new row: if candidate row is incompatible with `tmpl.target`, keep instance on its current valid track row.
 

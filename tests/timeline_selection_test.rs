@@ -19,7 +19,10 @@ fn test_app_state_multi_keyframe_selection() {
     // Snapshot and restore
     let initial_count = app.timeline.analog_tracks.len();
     let snapshot = app.snapshot_timeline();
-    assert_eq!(snapshot.analog_tracks.len(), app.timeline.analog_tracks.len());
+    assert_eq!(
+        snapshot.analog_tracks.len(),
+        app.timeline.analog_tracks.len()
+    );
 
     let track = AnalogTrack::new("Extra Track", 2);
     app.timeline.analog_tracks.push(track);
@@ -34,14 +37,16 @@ fn test_timeline_zoom_scaling_and_clamping() {
     let mut app = PealayerApp::default();
     assert_eq!(app.timeline_zoom, 100.0);
 
-    // Zoom clamping bounds [20.0, 500.0]
-    let scroll_in = 5000.0;
-    app.timeline_zoom = (app.timeline_zoom + scroll_in * 0.2).clamp(20.0, 500.0);
-    assert_eq!(app.timeline_zoom, 500.0);
+    // Zoom clamping bounds [TIMELINE_MIN_ZOOM, TIMELINE_MAX_ZOOM]
+    let scroll_in = 15000.0;
+    app.timeline_zoom = (app.timeline_zoom + scroll_in * 0.2)
+        .clamp(pealayer::ui::layout::TIMELINE_MIN_ZOOM, pealayer::ui::layout::TIMELINE_MAX_ZOOM);
+    assert_eq!(app.timeline_zoom, pealayer::ui::layout::TIMELINE_MAX_ZOOM);
 
-    let scroll_out = -5000.0;
-    app.timeline_zoom = (app.timeline_zoom + scroll_out * 0.2).clamp(20.0, 500.0);
-    assert_eq!(app.timeline_zoom, 20.0);
+    let scroll_out = -15000.0;
+    app.timeline_zoom = (app.timeline_zoom + scroll_out * 0.2)
+        .clamp(pealayer::ui::layout::TIMELINE_MIN_ZOOM, pealayer::ui::layout::TIMELINE_MAX_ZOOM);
+    assert_eq!(app.timeline_zoom, pealayer::ui::layout::TIMELINE_MIN_ZOOM);
 
     // Coordinate conversion at zoom = 100.0
     app.timeline_zoom = 100.0;
@@ -79,10 +84,7 @@ fn test_keyframe_drag_state_group_translation() {
     app.selected_keyframes.insert((t2_id, 0));
 
     // Construct KeyframeDragState
-    let group_originals = vec![
-        (t1_id, 0, 1000, 0.25),
-        (t2_id, 0, 1500, 0.75),
-    ];
+    let group_originals = vec![(t1_id, 0, 1000, 0.25), (t2_id, 0, 1500, 0.75)];
 
     let drag = KeyframeDragState {
         track_id: t1_id,
@@ -110,11 +112,21 @@ fn test_keyframe_drag_state_group_translation() {
     }
 
     // Verify both keyframes moved together
-    let t1 = app.timeline.analog_tracks.iter().find(|t| t.id == t1_id).unwrap();
+    let t1 = app
+        .timeline
+        .analog_tracks
+        .iter()
+        .find(|t| t.id == t1_id)
+        .unwrap();
     assert_eq!(t1.keyframes[0].time_ms, 1500);
     assert!((t1.keyframes[0].value - 0.45).abs() < 1e-4);
 
-    let t2 = app.timeline.analog_tracks.iter().find(|t| t.id == t2_id).unwrap();
+    let t2 = app
+        .timeline
+        .analog_tracks
+        .iter()
+        .find(|t| t.id == t2_id)
+        .unwrap();
     assert_eq!(t2.keyframes[0].time_ms, 2000);
     assert!((t2.keyframes[0].value - 0.95).abs() < 1e-4);
 }
@@ -185,7 +197,12 @@ fn test_keyframe_drag_undo_snapshot_commit() {
     };
 
     // Simulate keyframe moved to 2500ms, 0.9 value
-    let t = app.timeline.analog_tracks.iter_mut().find(|t| t.id == tid).unwrap();
+    let t = app
+        .timeline
+        .analog_tracks
+        .iter_mut()
+        .find(|t| t.id == tid)
+        .unwrap();
     t.keyframes[0].time_ms = 2500;
     t.keyframes[0].value = 0.9;
 
@@ -205,11 +222,19 @@ fn test_keyframe_drag_undo_snapshot_commit() {
 
     // Perform Undo
     let current_snap = app.snapshot_timeline();
-    let restored = app.undo_stack.undo(current_snap).expect("Undo must succeed");
+    let restored = app
+        .undo_stack
+        .undo(current_snap)
+        .expect("Undo must succeed");
     app.restore_timeline_snapshot(restored);
 
     // Verify keyframe returned to original pre-drag state
-    let t = app.timeline.analog_tracks.iter().find(|t| t.id == tid).unwrap();
+    let t = app
+        .timeline
+        .analog_tracks
+        .iter()
+        .find(|t| t.id == tid)
+        .unwrap();
     assert_eq!(t.keyframes[0].time_ms, 1000);
     assert_eq!(t.keyframes[0].value, 0.5);
 }

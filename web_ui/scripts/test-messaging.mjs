@@ -1,0 +1,12 @@
+import assert from 'node:assert/strict';
+import { visibleToasts } from '../src/messaging.ts';
+const toast = { id: 'work', title: 'Ready', message: 'Published', severity: 'success', source: 'IPC', created_at_ms: 0, expires_at_ms: 1000 };
+const snapshot = { instance_id: 'host', revision: 1, toasts: [toast] };
+assert.equal(visibleToasts(snapshot, 500, true).length, 1);
+assert.equal(visibleToasts(snapshot, 1000, true).length, 0);
+assert.equal(visibleToasts(snapshot, 500, false).length, 0);
+assert.equal(visibleToasts({ ...snapshot, toasts: [{ ...toast, expires_at_ms: null }] }, 9999, true).length, 1);
+assert.deepEqual(visibleToasts(snapshot, 500, true), visibleToasts(snapshot, 500, true));
+assert.equal(visibleToasts({ ...snapshot, revision: 2, toasts: [] }, 500, true).length, 0);
+assert.equal(visibleToasts({ ...snapshot, toasts: Array.from({ length: 32 }, (_, i) => ({ ...toast, id: String(i) })) }, 500, true).length, 4);
+console.log('Shared messaging: 7 checks passed');

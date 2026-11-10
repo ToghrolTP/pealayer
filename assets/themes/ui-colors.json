@@ -1,0 +1,12 @@
+[
+  { "id": "red", "label": "Red", "hex": "#EF4444" },
+  { "id": "orange", "label": "Orange", "hex": "#F59E0B" },
+  { "id": "amber", "label": "Amber", "hex": "#D8A238" },
+  { "id": "green", "label": "Pealayer green", "hex": "#38D27A" },
+  { "id": "blue", "label": "Blue", "hex": "#3B82F6" },
+  { "id": "cyan", "label": "Cyan", "hex": "#22D3EE" },
+  { "id": "violet", "label": "Violet", "hex": "#8B5CF6" },
+  { "id": "grey", "label": "Grey", "hex": "#969696" },
+  { "id": "white", "label": "White", "hex": "#FFFFFF" },
+  { "id": "black", "label": "Black", "hex": "#000000" }
+]

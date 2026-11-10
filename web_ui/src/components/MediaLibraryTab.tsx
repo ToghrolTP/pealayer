@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { Card, Table, Breadcrumb, Button, Input, Tag, Space, Avatar, message, Popconfirm, Spin, Typography } from 'antd';
+import React, { useEffect, useRef, useState } from 'react';
+import { Card, Table, Breadcrumb, Button, Input, Tag, Space, Avatar, message, Popconfirm, Spin, Typography, Dropdown } from 'antd';
 import {
   FolderOutlined,
   VideoCameraOutlined,
@@ -8,7 +8,11 @@ import {
   ReloadOutlined,
   DeleteOutlined,
   SearchOutlined,
+  CopyOutlined,
 } from '@ant-design/icons';
+import { tr, UiLocale } from '../i18n';
+import { FileLocationSelect } from './FileLocationSelect';
+import { filesystemBreadcrumbs } from '../fileLocations';
 
 const { Text } = Typography;
 
@@ -30,60 +34,97 @@ interface BrowseResponse {
 interface MediaLibraryTabProps {
   sendCmd: (command: string, payload?: Record<string, any>) => void;
   onMediaPlayStarted?: () => void;
+  locale: UiLocale;
+  apiBaseUrl: string;
 }
 
-export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMediaPlayStarted }) => {
+export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMediaPlayStarted, locale, apiBaseUrl }) => {
   const [data, setData] = useState<BrowseResponse | null>(null);
   const [loading, setLoading] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [currentPath, setCurrentPath] = useState<string | undefined>(undefined);
+  const [pathInput, setPathInput] = useState('');
+  const request = useRef<AbortController | null>(null);
 
   const fetchDirectory = async (path?: string) => {
+    request.current?.abort();
+    const controller = new AbortController(); request.current = controller;
     setLoading(true);
     try {
       const query = path ? `?path=${encodeURIComponent(path)}` : '';
-      const res = await fetch(`/api/fs/browse${query}`);
+      const res = await fetch(`${apiBaseUrl}/api/fs/browse${query}`, { signal: controller.signal });
       if (res.ok) {
         const json: BrowseResponse = await res.json();
+        if (controller.signal.aborted) return;
         setData(json);
         setCurrentPath(json.current_path);
+        setPathInput(json.current_path);
       } else {
-        message.error('Failed loading directory');
+        const failure = await res.json();
+        if (!controller.signal.aborted) message.error(failure.error || tr(locale, 'Failed loading directory'));
       }
     } catch {
-      message.error('Error connecting to file system API');
+      if (!controller.signal.aborted) message.error(tr(locale, 'Error connecting to file system API'));
     } finally {
-      setLoading(false);
+      if (!controller.signal.aborted) setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchDirectory(currentPath);
-  }, []);
+    setData(null); setCurrentPath(undefined); setPathInput('');
+    void fetchDirectory();
+    return () => request.current?.abort();
+  }, [apiBaseUrl]);
 
   const handlePlayMedia = (filePath: string, fileName: string) => {
-    sendCmd('open_video', { path: filePath });
-    message.success(`Playing: ${fileName}`);
+    sendCmd('pealayer.open', { target: filePath });
+    message.success(`${tr(locale, 'Playing:')} ${fileName}`);
     if (onMediaPlayStarted) {
       onMediaPlayStarted();
     }
   };
 
+  const entryContextMenu = (record: FileEntry) => ({
+    items: [
+      record.is_dir
+        ? { key: 'open', icon: <FolderOutlined />, label: tr(locale, 'Open folder') }
+        : record.is_media
+          ? { key: 'play', icon: <PlayCircleOutlined />, label: tr(locale, 'Play') }
+          : null,
+      { key: 'copy', icon: <CopyOutlined />, label: tr(locale, 'Copy full path') },
+      { type: 'divider' as const },
+      { key: 'refresh', icon: <ReloadOutlined />, label: tr(locale, 'Refresh') },
+    ].filter(Boolean) as any,
+    onClick: async ({ key }: { key: string }) => {
+      if (key === 'open') await fetchDirectory(record.path);
+      if (key === 'play') handlePlayMedia(record.path, record.name);
+      if (key === 'refresh') await fetchDirectory(currentPath);
+      if (key === 'copy') {
+        try {
+          await navigator.clipboard.writeText(record.path);
+          void message.success(tr(locale, 'Path copied'));
+        } catch {
+          void message.error(tr(locale, 'Unable to copy path'));
+        }
+      }
+    },
+  });
+
   const handleDeleteFile = async (filePath: string) => {
     try {
-      const res = await fetch('/api/fs/trash', {
+      const res = await fetch(`${apiBaseUrl}/api/fs/trash`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ target_path: filePath }),
       });
       if (res.ok) {
-        message.success('File deleted');
+        message.success(tr(locale, 'File deleted'));
         fetchDirectory(currentPath);
       } else {
-        message.error('Failed to delete file');
+        message.error(tr(locale, 'Failed to delete file'));
       }
     } catch {
-      message.error('Error deleting file');
+      message.error(tr(locale, 'Error deleting file'));
     }
   };
 
@@ -101,55 +142,57 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
 
   const columns = [
     {
-      title: 'Name',
+      title: tr(locale, 'Name'),
       dataIndex: 'name',
       key: 'name',
       render: (_: any, record: FileEntry) => (
-        <Space size="middle">
+        <Dropdown trigger={['contextMenu']} menu={entryContextMenu(record)}>
+        <Space size="middle" className="media-library__entry">
           {record.is_dir ? (
-            <Avatar shape="square" icon={<FolderOutlined />} style={{ backgroundColor: '#0a2239', color: '#53a2be' }} />
+            <Avatar shape="square" icon={<FolderOutlined />} className="media-library__avatar media-library__avatar--folder" />
           ) : record.has_thumbnail ? (
             <Avatar
               shape="square"
-              src={`/api/fs/thumbnail?path=${encodeURIComponent(record.path)}`}
+              src={`${apiBaseUrl}/api/fs/thumbnail?path=${encodeURIComponent(record.path)}`}
               icon={<VideoCameraOutlined />}
-              style={{ backgroundColor: '#0a2239' }}
+              className="media-library__avatar"
             />
           ) : (
-            <Avatar shape="square" icon={<VideoCameraOutlined />} style={{ backgroundColor: '#0a2239', color: '#1d84b5' }} />
+            <Avatar shape="square" icon={<VideoCameraOutlined />} className="media-library__avatar media-library__avatar--video" />
           )}
 
           {record.is_dir ? (
             <Button
               type="link"
               onClick={() => fetchDirectory(record.path)}
-              style={{ padding: 0, fontWeight: 600, color: '#f8fafc' }}
+              className="media-library__name"
             >
               {record.name}
             </Button>
           ) : (
-            <Text style={{ color: record.is_media ? '#f8fafc' : '#94a3b8', fontWeight: record.is_media ? 500 : 400 }}>
+            <Text className={record.is_media ? 'media-library__name' : 'media-library__name media-library__name--muted'}>
               {record.name}
             </Text>
           )}
         </Space>
+        </Dropdown>
       ),
     },
     {
-      title: 'Type',
+      title: tr(locale, 'Type'),
       key: 'type',
       width: 120,
       render: (_: any, record: FileEntry) =>
         record.is_dir ? (
-          <Tag color="warning">Folder</Tag>
+          <Tag color="warning">{tr(locale, 'Folder')}</Tag>
         ) : record.is_media ? (
-          <Tag color="processing">Media Video</Tag>
+          <Tag color="processing">{tr(locale, 'Media Video')}</Tag>
         ) : (
-          <Tag color="default">File</Tag>
+          <Tag color="default">{tr(locale, 'File')}</Tag>
         ),
     },
     {
-      title: 'Size',
+      title: tr(locale, 'Size'),
       dataIndex: 'size_bytes',
       key: 'size_bytes',
       width: 120,
@@ -157,7 +200,7 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
         record.is_dir ? '-' : <Text type="secondary" style={{ fontFamily: 'monospace' }}>{formatSize(size)}</Text>,
     },
     {
-      title: 'Actions',
+      title: tr(locale, 'Actions'),
       key: 'actions',
       width: 140,
       render: (_: any, record: FileEntry) => (
@@ -168,19 +211,18 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
               size="small"
               icon={<PlayCircleOutlined />}
               onClick={() => handlePlayMedia(record.path, record.name)}
-              style={{ borderRadius: 6, backgroundColor: '#1d84b5' }}
             >
-              Play
+              {tr(locale, 'Play')}
             </Button>
           )}
           {!record.is_dir && (
             <Popconfirm
-              title="Delete File"
-              description="Are you sure you want to delete this file?"
+              title={tr(locale, 'Delete File')}
+              description={tr(locale, 'Are you sure you want to delete this file?')}
               onConfirm={() => handleDeleteFile(record.path)}
-              okText="Delete"
+              okText={tr(locale, 'Delete')}
               okButtonProps={{ danger: true }}
-              cancelText="Cancel"
+              cancelText={tr(locale, 'Cancel')}
             >
               <Button type="text" danger size="small" icon={<DeleteOutlined />} />
             </Popconfirm>
@@ -190,69 +232,49 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
     },
   ];
 
-  const pathParts = data?.current_path ? data.current_path.split('/').filter(Boolean) : [];
-
-  const breadcrumbItems = [
-    {
-      title: (
-        <a onClick={() => fetchDirectory('/')} style={{ color: '#38bdf8' }}>
-          Root
-        </a>
-      ),
-    },
-    ...pathParts.map((part, index) => {
-      const subPath = '/' + pathParts.slice(0, index + 1).join('/');
-      return {
-        title: (
-          <a onClick={() => fetchDirectory(subPath)} style={{ color: '#cbd5e1' }}>
-            {part}
-          </a>
-        ),
-      };
-    }),
-  ];
+  const breadcrumbItems = data ? filesystemBreadcrumbs(data.current_path).map(item => ({
+    title: <a onClick={() => void fetchDirectory(item.path)}>{item.name === 'Root' ? tr(locale, 'Root') : item.name}</a>,
+  })) : [];
 
   return (
-    <Card
-      bordered={false}
-      style={{
-        background: '#132e32',
-        borderRadius: 16,
-        border: '1px solid rgba(23, 96, 135, 0.3)',
-        boxShadow: '0 20px 40px rgba(0, 0, 0, 0.4)',
-      }}
-      bodyStyle={{ padding: 20 }}
-    >
+    <Card bordered={false} className="surface-card media-library" bodyStyle={{ padding: 20 }}>
       {/* Header controls: Breadcrumb & Search bar */}
       <Space direction="vertical" style={{ width: '100%' }} size="middle">
+        <div className="media-library__location-bar">
+          <FileLocationSelect apiBaseUrl={apiBaseUrl} locale={locale} disabled={loading} onSelect={path => void fetchDirectory(path)} />
+          <Input value={pathInput} aria-label={tr(locale, 'Folder path')} placeholder={tr(locale, 'Folder path')}
+            onChange={event => setPathInput(event.target.value)} onPressEnter={() => void fetchDirectory(pathInput)} />
+          <Button icon={<FolderOutlined />} disabled={loading || !pathInput.trim()} aria-label={tr(locale, 'Open folder')}
+            onClick={() => void fetchDirectory(pathInput)} />
+        </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
           <Space>
             {data?.parent_path && (
               <Button
                 icon={<ArrowUpOutlined />}
                 onClick={() => fetchDirectory(data.parent_path!)}
-                title="Go Up Directory"
+                title={tr(locale, 'Go Up Directory')}
               >
-                Up
+                {tr(locale, 'Up')}
               </Button>
             )}
             <Button icon={<ReloadOutlined />} onClick={() => fetchDirectory(currentPath)}>
-              Refresh
+              {tr(locale, 'Refresh')}
             </Button>
           </Space>
 
           <Input
-            prefix={<SearchOutlined style={{ color: '#53a2be' }} />}
-            placeholder="Search media files..."
+            prefix={<SearchOutlined />}
+            placeholder={tr(locale, 'Search media files...')}
             allowClear
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
-            style={{ width: 260, borderRadius: 8, background: '#0a2239', borderColor: '#176087' }}
+            className="media-library__search"
           />
         </div>
 
         {/* Current Path Breadcrumbs */}
-        <Breadcrumb items={breadcrumbItems} style={{ background: '#0a2239', padding: '8px 14px', borderRadius: 8, fontSize: 13, border: '1px solid rgba(23, 96, 135, 0.3)' }} />
+        <Breadcrumb items={breadcrumbItems} className="media-library__breadcrumbs" />
 
         {/* File Table */}
         <Spin spinning={loading}>
@@ -260,6 +282,7 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
             dataSource={filteredEntries}
             columns={columns}
             rowKey="path"
+            scroll={{ x: 640 }}
             pagination={{ pageSize: 15, showSizeChanger: true }}
             style={{ marginTop: 8 }}
           />
