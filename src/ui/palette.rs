@@ -89,6 +89,21 @@ pub(super) fn paint_gradient(
     if !rect.is_positive() || !rect.intersects(painter.clip_rect()) {
         return;
     }
+    if radius == 0 {
+        // egui's thin-rectangle path drops textures. Keep both color stops
+        // on the vertices so a one-point accent line retains its gradient.
+        let mut mesh = egui::Mesh::default();
+        let start = start.gamma_multiply(opacity);
+        let end = end.gamma_multiply(opacity);
+        mesh.colored_vertex(rect.left_top(), start);
+        mesh.colored_vertex(rect.right_top(), end);
+        mesh.colored_vertex(rect.right_bottom(), end);
+        mesh.colored_vertex(rect.left_bottom(), start);
+        mesh.add_triangle(0, 1, 2);
+        mesh.add_triangle(0, 2, 3);
+        painter.add(mesh);
+        return;
+    }
     let ctx = painter.ctx();
     let id = egui::Id::new(("pealayer-palette-gradient", start, end));
     let texture = ctx.data(|data| data.get_temp::<egui::TextureHandle>(id))
@@ -109,6 +124,23 @@ pub(super) fn paint_gradient(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn thin_accent_rule_paints_both_gradient_stops() {
+        use eframe::egui::{self, Color32, Shape};
+        let ctx = egui::Context::default();
+        let rect = egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(120.0, 1.0));
+        let start = Color32::from_rgb(163, 147, 244);
+        let end = Color32::from_rgb(239, 133, 188);
+        let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            super::paint_gradient(ui.painter(), rect, 0, start, end, 1.0);
+        });
+        assert!(output.shapes.iter().any(|shape| match &shape.shape {
+            Shape::Mesh(mesh) => mesh.vertices.iter().map(|vertex| vertex.color)
+                .eq([start, end, end, start]),
+            _ => false,
+        }));
+    }
     #[test]
     fn expanded_dropdown_paints_the_live_palette_without_changing_geometry() {
         use crate::config::{AppConfig, AppTheme, ColorPalette};
