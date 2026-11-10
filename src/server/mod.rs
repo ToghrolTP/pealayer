@@ -2302,6 +2302,26 @@ mod tests {
     }
 
     #[test]
+    fn project_documents_require_file_configuration_and_control_access() {
+        let mut config = crate::config::AppConfig {
+            web_allow_file_access: true,
+            web_allow_configuration: true,
+            web_allow_control: true,
+            ..Default::default()
+        };
+        let path = "/api/peer/documents";
+        assert_eq!(denied_web_capability("POST", path, &config), None);
+        config.web_allow_file_access = false;
+        assert_eq!(denied_web_capability("POST", path, &config), Some("host file access"));
+        config.web_allow_file_access = true;
+        config.web_allow_configuration = false;
+        assert_eq!(denied_web_capability("POST", path, &config), Some("configuration"));
+        config.web_allow_configuration = true;
+        config.web_allow_control = false;
+        assert_eq!(denied_web_capability("POST", path, &config), Some("control"));
+    }
+
+    #[test]
     fn test_url_decoding() {
         assert_eq!(
             urlencoding_decode("hello%20world%2Ftest"),

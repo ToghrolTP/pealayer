@@ -5541,6 +5541,11 @@ impl PealayerApp {
             }
         }
         self.was_playing_before_scrub = false;
+        self.project_seek_settled(pending.request_id);
+    }
+
+    pub(crate) fn pending_exact_seek_id(&self) -> Option<u64> {
+        self.pending_scrub_commit.map(|pending| pending.request_id)
     }
 
     pub(crate) fn reset_project_media_state(&mut self) {
@@ -5554,7 +5559,7 @@ impl PealayerApp {
         self.set_media_file_info(crate::media_info::MediaFileInfo::default());
     }
 
-    fn reset_scrub_state(&mut self) {
+    pub(crate) fn reset_scrub_state(&mut self) {
         self.seek_epoch = self.seek_epoch.wrapping_add(1);
         self.native_seek_client.finish();
         self.seek_controller.cancel_pending();
@@ -5740,7 +5745,7 @@ impl PealayerApp {
                 },
                 Some(Ok(Event::EndFile(reason))) => {
                     if reason == 4 {
-                        if self.project.pending_media.is_some() {self.fail_project_media_load("decoder rejected the media");continue;}
+                        if self.project_decoder_failed() {self.fail_project_media_load("decoder rejected the media");continue;}
                         if crate::peer::active(){
                             // Decoder failure is only a preview failure. Do not
                             // stop or advance the server or its hardware cues.
@@ -5769,6 +5774,7 @@ impl PealayerApp {
                     }
                 }
                 Some(Ok(Event::StartFile)) => {
+                    self.note_project_media_start();
                     if !self.engine_handle.media_clock_owned.load(std::sync::atomic::Ordering::Acquire)
                         && let Ok(mut sample) = self.engine_handle.media_playback.lock() {
                         sample.position_ms = 0;
@@ -6018,7 +6024,7 @@ impl PealayerApp {
 
     /// Restarts playback of the current video from the beginning (0.0s).
     pub fn replay(&mut self) {
-        if self.project.pending_media.is_some() || self.scene_operation_busy() {return;}
+        if self.project_restore_busy() || self.scene_operation_busy() {return;}
         if self.current_video_path.is_none() {
             return;
         }
@@ -6045,7 +6051,7 @@ impl PealayerApp {
 
     /// Resumes playback, or restarts if playback finished.
     pub fn play(&mut self) {
-        if self.project.pending_media.is_some() || self.scene_operation_busy() {return;}
+        if self.project_restore_busy() || self.scene_operation_busy() {return;}
         if self.current_video_path.is_none() {
             return;
         }
@@ -7567,7 +7573,7 @@ impl PealayerApp {
             ("audio_import",crate::mpv::sfx::importing()),
             ("asset_import",self.asset_import.busy()),
             ("terminal_session",self.terminal_state.busy()),
-            ("project_operation",crate::ui::projects::busy(ctx) || self.project.pending_media.is_some() || self.scene_operation_busy()),
+            ("project_operation",crate::ui::projects::busy(ctx) || self.project_restore_busy() || self.scene_operation_busy()),
         ] {items.push(Item {domain:domain.into(),state:if busy {State::Busy} else {State::Clean}});}
         Inspection::new(items)
     }
