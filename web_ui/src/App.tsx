@@ -292,6 +292,7 @@ const App: React.FC = () => {
   const palette = palettes[paletteName][resolvedTheme];
   const mediaGestures: MediaGesturePreferences = {
     clickPlayerToToggle: appConfig?.click_player_to_toggle ?? true,
+    videoClickFrameOnly: appConfig?.video_click_frame_only ?? true,
     pausedDragAction: appConfig?.paused_drag_action ?? 'move_window',
     playingDragAction: appConfig?.playing_drag_action ?? 'temporary_fast_forward',
     middleClickAction: appConfig?.middle_click_action ?? 'none',

@@ -849,9 +849,10 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     };
                     ui.add(
                         egui::Label::new(egui::RichText::new(status_lbl).size(10.0).weak())
-                            .truncate(),
+                            .truncate().sense(egui::Sense::click()),
                     )
-                    .on_hover_text(&app.serial_port);
+                    .on_hover_text(&app.serial_port)
+                    .context_menu(|ui| super::status_bar::hardware_context_menu(app, ui));
                     }
                 });
             });
@@ -875,6 +876,40 @@ pub fn format_track_label(id: i64, lang: Option<&str>, title: Option<&str>) -> S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn upper_hardware_label_context_menu_opens_preferences() {
+        let _guard=crate::app::tests::lock_app_tests();
+        let ctx=egui::Context::default(); let mut app=PealayerApp::default();
+        app.engine_handle=crate::four_d::engine::memory_only_test_engine();
+        let mut time=0.0;
+        let mut frame=|app:&mut PealayerApp,events| {
+            time+=0.1;
+            let mut output=ctx.run_ui(egui::RawInput {time:Some(time),events,
+                screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(1800.0,800.0))),..Default::default()},|ui|draw(app,ui));
+            output.textures_delta.clear(); output
+        };
+        fn point(output:&egui::FullOutput,label:&str)->egui::Pos2 {
+            output.shapes.iter().find_map(|shape|match &shape.shape {
+                egui::Shape::Text(t) if t.galley.text().contains(label)=>Some(t.pos+t.galley.rect.center().to_vec2()),_=>None,
+            }).expect("hardware header/menu caption")
+        }
+        frame(&mut app,vec![]); let output=frame(&mut app,vec![]);
+        let header=point(&output,"Hardware Disconnected");
+        let button=|pos,button,pressed|egui::Event::PointerButton {pos,button,pressed,modifiers:egui::Modifiers::NONE};
+        frame(&mut app,vec![egui::Event::PointerMoved(header),button(header,egui::PointerButton::Secondary,true)]);
+        frame(&mut app,vec![button(header,egui::PointerButton::Secondary,false)]);
+        let output=frame(&mut app,vec![]); let row=point(&output,"Hardware preferences");
+        frame(&mut app,vec![egui::Event::PointerMoved(row),button(row,egui::PointerButton::Primary,true)]);
+        frame(&mut app,vec![button(row,egui::PointerButton::Primary,false)]);
+        assert!(app.show_preferences_dialog,"menu selection must actually open Preferences");
+        drop(frame);
+        app.native_dialog_windows=false;
+        let mut output=ctx.run_ui(Default::default(),|ui|crate::ui::preferences::draw(&mut app,ui));
+        output.textures_delta.clear();
+        let hardware=crate::preferences_contract::preference_sections().iter().position(|section|section.id=="hardware").unwrap();
+        assert_eq!(app.preferences_tab,hardware,"rendered Preferences must consume the exact Hardware navigation");
+    }
 
     #[test]
     fn workspace_popup_does_not_contain_hardware_rf_controls() {

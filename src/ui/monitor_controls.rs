@@ -95,13 +95,13 @@ impl Metrics {
         });
         Self {
             transport: super::control_bar::group_width(app, ui, crate::config::ControlBarSurface::Monitor, false),
-            timeline_min: 104.0
+            timeline_min: super::controls::elapsed_editor_size(ui).x
                 + MIN_SEEK_WIDTH
                 + total_width
                 + 2.0 * gap,
             tracks,
             gap,
-            row_height: button_height(ui).max(super::control_density::height(ui)),
+            row_height: button_height(ui).max(super::controls::elapsed_editor_size(ui).y),
             gap_y: ui.spacing().item_spacing.y,
             rtl: app.rtl,
         }

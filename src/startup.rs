@@ -882,6 +882,7 @@ pub fn run() -> eframe::Result {
                 pause_on_hardware_disconnect: loaded_config.pause_on_hardware_disconnect,
                 auto_connect_hardware: loaded_config.auto_connect_hardware,
                 click_player_to_toggle: loaded_config.click_player_to_toggle,
+                video_click_frame_only: loaded_config.video_click_frame_only,
                 show_subseconds: loaded_config.show_subseconds,
                 seekbar_hover_thumbnails: loaded_config.seekbar_hover_thumbnails,
                 nle_seekbar_hover_thumbnails: loaded_config.nle_seekbar_hover_thumbnails,

@@ -1170,6 +1170,7 @@ pub struct AppConfig {
     /// Owner consent policy; never overrides PCController's production lock.
     pub allow_unattended_hardware_takeover: bool,
     pub click_player_to_toggle: bool,
+    pub video_click_frame_only: bool,
     pub playback_speed: f64,
     pub temporary_fast_forward_speed: f64,
     pub subtitle_font_size: f64,
@@ -1380,6 +1381,7 @@ impl Default for AppConfig {
             pause_on_hardware_disconnect: true,
             allow_unattended_hardware_takeover: false,
             click_player_to_toggle: true,
+            video_click_frame_only: true,
             playback_speed: 1.0,
             temporary_fast_forward_speed: 2.0,
             subtitle_font_size: 55.0,

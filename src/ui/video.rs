@@ -229,6 +229,13 @@ struct PseudoFrameTextureCache {
     entry: Option<(f64, egui::TextureHandle)>,
 }
 
+fn fitted_video_rect(rect: egui::Rect, aspect: f32) -> egui::Rect {
+    let size = if rect.width() / rect.height() > aspect {
+        egui::vec2(rect.height() * aspect, rect.height())
+    } else { egui::vec2(rect.width(), rect.width() / aspect) };
+    egui::Rect::from_center_size(rect.center(), size)
+}
+
 pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     super::simple_controls::publish_video(ui.ctx(),None);
     let video_size = ui.available_size();
@@ -236,8 +243,13 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         return;
     }
 
-    let (rect, response) = ui.allocate_exact_size(video_size, egui::Sense::click_and_drag());
+    let (rect, _) = ui.allocate_exact_size(video_size, egui::Sense::hover());
     let aspect_ratio = resolved_video_aspect_ratio(app.video_aspect_ratio);
+    let dest_rect = fitted_video_rect(rect, aspect_ratio);
+    let gesture_rect = if app.video_click_frame_only && app.current_video_path.is_some() {
+        dest_rect
+    } else { rect };
+    let response = ui.interact(gesture_rect, ui.id().with("video-surface-gestures"), egui::Sense::click_and_drag());
     let is_fullscreen = app.fullscreen_intent(ui.ctx());
     let simple_aspect_lock =
         app.consistent_video_aspect_ratio && !app.show_four_d_editor && !is_fullscreen;
@@ -635,26 +647,6 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     // 1. Calculate the destination from libmpv's post-filter display aspect.
     // The same value drives native WM_SIZING, so the outer window and the
     // rendered image cannot drift apart during a Simple-workspace resize.
-    let rect_w = rect.width();
-    let rect_h = rect.height();
-
-    let dest_rect = if rect_w / rect_h > aspect_ratio {
-        // Height-constrained
-        let new_w = rect_h * aspect_ratio;
-        let x_offset = (rect_w - new_w) / 2.0;
-        egui::Rect::from_min_size(
-            egui::pos2(rect.min.x + x_offset, rect.min.y),
-            egui::vec2(new_w, rect_h),
-        )
-    } else {
-        // Width-constrained
-        let new_h = rect_w / aspect_ratio;
-        let y_offset = (rect_h - new_h) / 2.0;
-        egui::Rect::from_min_size(
-            egui::pos2(rect.min.x, rect.min.y + y_offset),
-            egui::vec2(rect_w, new_h),
-        )
-    };
 
     let taskbar_video_rect =
         (app.windows_video_taskbar_thumbnail && app.current_video_path.is_some()).then(|| {
@@ -1188,6 +1180,31 @@ fn external_mpv_notice(status: &crate::mpv::external::Status) -> (elegance::Call
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn picture_only_pointer_actions_ignore_letterbox_and_can_be_expanded() {
+        let _guard=crate::app::tests::lock_app_tests();
+        let ctx=egui::Context::default(); let mut app=PealayerApp::default();
+        app.engine_handle=crate::four_d::engine::memory_only_test_engine();
+        app.current_video_path=Some("pointer-picture-fixture.mp4".into()); app.video_aspect_ratio=16.0/9.0;
+        app.consistent_video_aspect_ratio=false; app.right_click_action=crate::config::PlayerClickAction::ToggleMute;
+        app.right_hold_action=crate::config::PlayerDragAction::None;
+        let mut time=0.0;
+        let mut frame=|app:&mut PealayerApp,events| {
+            time+=0.1;
+            let mut out=ctx.run_ui(egui::RawInput {time:Some(time),events,
+                screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(800.0,700.0))),..Default::default()},|ui|draw(app,ui));
+            out.textures_delta.clear();
+        };
+        let button=|pos,pressed|egui::Event::PointerButton {pos,pressed,button:egui::PointerButton::Secondary,modifiers:egui::Modifiers::NONE};
+        frame(&mut app,vec![]); frame(&mut app,vec![]);
+        for (point,whole,expected) in [(egui::pos2(400.0,30.0),false,false),(egui::pos2(400.0,350.0),false,true),(egui::pos2(400.0,30.0),true,false)] {
+            app.video_click_frame_only=!whole;
+            frame(&mut app,vec![]); // Install changed hit geometry before the next press.
+            frame(&mut app,vec![egui::Event::PointerMoved(point),button(point,true)]);
+            frame(&mut app,vec![button(point,false)]);
+            assert_eq!(app.is_muted,expected,"whole={whole}, point={point:?}");
+        }
+    }
     use super::*;
 
     #[test]

@@ -193,9 +193,14 @@ intentional, not a separate browser-owned shell or a host resize.
   `b3b26d791366e8617458b15a4b0f09dda75f7315`; executable SHA-256:
   `9401ff393fc839743911d2f5a91c4be2da299a024cd2c0886d5c624d81ae9dd0`.
   Native/downloader smoke, PWA integrity and Windows resource checks pass.
-  **Its launch was blocked by tool policy. Final-build runtime/captures remain
-  pending the requested isolated launcher command; the images above are not
-  claimed as final-build evidence.**
+  The user launched it and HTTP independently confirms that exact clean source
+  and executable identity. The runner cannot access its native pipe, but the
+  user ran `scripts/test-terminal-host-windows.ps1` against that exact process
+  and reported its complete PASS: shared native/HTTP owner and sessions, real
+  get/set table, readable/key presentation, choices, selected-ID preservation,
+  shell/policy/ID/origin denials, privacy and grant revocation. Final actual
+  browser/captures remain pending; the images above are intermediate evidence,
+  not relabelled final-build captures. Occluded PrintWindow is unsupported here.
 - PR [#281](https://github.com/ToghrolTP/pealayer/pull/281) stays draft until that
   final native/Web gate and hosted platform checks finish. CodeQL's two browser
   test findings were fixed by passing data as CDP arguments, then replied to and

@@ -13,10 +13,19 @@ statements are not the present product state.
 [Shared Terminal and Pealayer Shell](terminal-host-experience.md) adds the real
 Preferences catalog, readable labels and choices, prompt-safe structured reports,
 live status and decoder-confirmed command results. Native/Web integration checks
-and actual checkpoint captures are recorded there. Final-package launch is
-tool-policy blocked and awaits the requested isolated launcher command; PR #281
-remains draft for final runtime/capture and hosted-platform gates. Other running
+and actual checkpoint captures are recorded there. The user launched the final
+package; HTTP confirms its exact identity and the user-run maintained native/HTTP
+acceptance script passes. Final real-browser/capture gates remain; PR #281 stays
+draft rather than treating intermediate screenshots as final evidence. Other running
 instances and user-deferred Cafe deployment remain unchanged.
+
+[Playback interaction follow-up](player-input-follow-up.md) fixes FPS-unit
+centering, direct volume input, elapsed clipping/shortened groups, picture-only
+gestures, upper hardware navigation and browser-link drops. The full native pass
+and focused refinements are recorded there. Packaging/installed settings,
+physical media keys and actual new-build screenshots remain explicit gates.
+[#292](https://github.com/ToghrolTP/pealayer/issues/292) tracks deferred tabular
+elapsed/duration typography separately.
 
 [Proportional numeric status typography](status-tabular-typography.md) fixes the
 FPS icon/digit-center mismatch, bundles Inter for Windows and shares tabular

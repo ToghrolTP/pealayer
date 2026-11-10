@@ -843,6 +843,7 @@ pub struct PealayerApp {
     pub(crate) pause_on_hardware_disconnect: bool,
     pub(crate) auto_connect_hardware: bool,
     pub(crate) click_player_to_toggle: bool,
+    pub(crate) video_click_frame_only: bool,
     pub(crate) show_subseconds: bool,
     pub(crate) human_readable_time_units: bool,
     pub(crate) seekbar_hover_thumbnails: bool,
@@ -7322,6 +7323,17 @@ impl PealayerApp {
     }
 
     pub fn load_dropped_files(&mut self, ctx: &egui::Context, paths: Vec<std::path::PathBuf>) {
+        let (links, paths): (Vec<_>, Vec<_>) = paths.into_iter().partition(|path|
+            path.to_str().is_some_and(crate::media::is_remote_media_target));
+        for link in links {
+            let target = link.to_str().expect("validated URL text");
+            // Use Open's existing authority, proxy, external-player and draft
+            // protection path, not a second URL loader or client filesystem.
+            self.apply_interop_command(ctx,crate::platform::interop::InteropCommand::Open {
+                target: target.to_owned(),
+            },"Browser link drop");
+        }
+        if paths.is_empty() { return; }
         let destination=crate::assets::native_destination(ctx);
         if let Err(error)=self.import_assets(crate::assets::ImportRequest {paths:paths.iter().map(|p|p.to_string_lossy().into_owned()).collect(),destination,owner_id:None},ctx) {self.show_error=Some(error);}
     }
@@ -7593,6 +7605,7 @@ impl PealayerApp {
         cfg.auto_connect_hardware = self.auto_connect_hardware;
         cfg.pause_on_hardware_disconnect = self.pause_on_hardware_disconnect;
         cfg.click_player_to_toggle = self.click_player_to_toggle;
+        cfg.video_click_frame_only = self.video_click_frame_only;
         cfg.playback_speed = self.configured_playback_speed;
         cfg.temporary_fast_forward_speed = self.temporary_fast_forward_speed;
         cfg.subtitle_font_size = self.sub_font_size;
@@ -7978,6 +7991,7 @@ impl PealayerApp {
         self.auto_connect_hardware = config.auto_connect_hardware;
         self.pause_on_hardware_disconnect = config.pause_on_hardware_disconnect;
         self.click_player_to_toggle = config.click_player_to_toggle;
+        self.video_click_frame_only = config.video_click_frame_only;
         self.configured_playback_speed = config.playback_speed;
         self.temporary_fast_forward_speed = config.temporary_fast_forward_speed;
         if self.video_surface_gesture.is_none() {
@@ -10341,6 +10355,7 @@ impl Default for PealayerApp {
             pause_on_hardware_disconnect: true,
             auto_connect_hardware: true,
             click_player_to_toggle: true,
+            video_click_frame_only: true,
             show_subseconds: true,
             human_readable_time_units: true,
             seekbar_hover_thumbnails: false,

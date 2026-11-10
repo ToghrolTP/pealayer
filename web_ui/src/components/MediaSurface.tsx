@@ -13,11 +13,13 @@ import {
 import { Dropdown } from 'antd';
 import { tr, type UiLocale } from '../i18n';
 import type { PlayerState } from './RemoteControlTab';
+import { insideMediaPicture } from '../mediaPicture';
 
 export type MediaClickAction = 'play_pause' | 'toggle_mute' | 'toggle_fullscreen' | 'context_menu' | 'none';
 export type MediaDragAction = 'move_window' | 'seek' | 'temporary_fast_forward' | 'none';
 export interface MediaGesturePreferences {
   clickPlayerToToggle: boolean;
+  videoClickFrameOnly: boolean;
   pausedDragAction: MediaDragAction;
   playingDragAction: MediaDragAction;
   middleClickAction: MediaClickAction;
@@ -126,6 +128,15 @@ export const MediaSurface: React.FC<MediaSurfaceProps> = ({ state, apiBaseUrl, e
   const lastFallbackRef = useRef(0);
   const [gestureActive, setGestureActive] = useState(false);
   const source = useMemo(() => target ? mediaSource(target, apiBaseUrl) : '', [target, apiBaseUrl]);
+  const insidePicture = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    if (!gestures.videoClickFrameOnly) return true;
+    const element = event.currentTarget.querySelector('video, img') as HTMLVideoElement | HTMLImageElement | null;
+    if (!element) return false;
+    const width = element instanceof HTMLVideoElement ? element.videoWidth : element.naturalWidth;
+    const height = element instanceof HTMLVideoElement ? element.videoHeight : element.naturalHeight;
+    if (!(width > 0 && height > 0)) return false;
+    return insideMediaPicture(event.clientX, event.clientY, element.getBoundingClientRect(), width, height);
+  }, [gestures.videoClickFrameOnly]);
 
   useEffect(() => {
     if (!useFallback) return;
@@ -175,7 +186,7 @@ export const MediaSurface: React.FC<MediaSurfaceProps> = ({ state, apiBaseUrl, e
     if (gesture.timer !== null) window.clearTimeout(gesture.timer);
     if (gesture.dragging && gesture.dragAction === 'seek') flushSeek(gesture);
     if (gesture.fastForwarding) void sendCmd('set_rate', { rate: Math.max(.05, gestures.playbackSpeed) });
-    if (!cancelled && !gesture.dragging) {
+    if (!cancelled && !gesture.dragging && insidePicture(event)) {
       if (gesture.button === 0 && gestures.clickPlayerToToggle) invokeClickAction('play_pause');
       else if (gesture.button === 1) invokeClickAction(gestures.middleClickAction);
       else if (gesture.button === 2) invokeClickAction(gestures.rightClickAction);
@@ -183,10 +194,11 @@ export const MediaSurface: React.FC<MediaSurfaceProps> = ({ state, apiBaseUrl, e
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
     pointerGesture.current = null;
     setGestureActive(false);
-  }, [flushSeek, gestures.clickPlayerToToggle, gestures.middleClickAction, gestures.playbackSpeed, gestures.rightClickAction, invokeClickAction, sendCmd]);
+  }, [flushSeek, gestures.clickPlayerToToggle, gestures.middleClickAction, gestures.playbackSpeed, gestures.rightClickAction, invokeClickAction, insidePicture, sendCmd]);
 
   const pointerHandlers = target ? {
     onPointerDown: (event: React.PointerEvent<HTMLDivElement>) => {
+      if (!insidePicture(event)) return;
       if (pointerGesture.current || ![0, 1, 2].includes(event.button)) return;
       const dragAction = event.button === 0
         ? (state.playing ? gestures.playingDragAction : gestures.pausedDragAction)

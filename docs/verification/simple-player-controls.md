@@ -85,5 +85,7 @@ not yet been applied to the older regular runtime: it lacks this configuration
 contract. Terminal Review is preserved separately and its final package identity
 was verified over HTTP after the user launched it, but the runner cannot access
 its native pipe and its occluded window does not support PrintWindow capture.
+The user subsequently ran the maintained final native/HTTP Terminal verification
+and reported its complete PASS; final actual browser/capture gates are separate.
 Other reviews/historical instances must not be overwritten. Cafe remains
 explicitly user-deferred/offline.

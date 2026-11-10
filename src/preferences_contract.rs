@@ -1082,6 +1082,12 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
                 ("none", "Do nothing"),
             ],
         ),
+        PreferenceControl::boolean(
+            "video_click_frame_only",
+            "input",
+            "Video surface",
+            "Apply video gestures only inside the picture",
+        ),
         PreferenceControl::select(
             "playing_drag_action",
             "input",

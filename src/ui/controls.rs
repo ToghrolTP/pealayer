@@ -116,9 +116,11 @@ fn volume_slider_widgets(ui: &mut egui::Ui, mut volume: f64, volume_label: &str)
         volume = (volume + f64::from(wheel.signum()) * 2.0).clamp(0.0, 130.0);
         ui.input_mut(|input| input.smooth_scroll_delta.y = 0.0);
     }
-    ui.add_sized([44.0, 22.0], egui::Label::new(timecode_text(format!("{:.0}%", volume))))
-        .on_hover_text(volume_label);
-    (response.changed() || wheel != 0.0).then_some(volume)
+    let value = ui.add_sized([44.0, super::control_density::height(ui)],
+        egui::DragValue::new(&mut volume).range(0.0..=130.0).speed(1.0)
+            .max_decimals(0).suffix("%").update_while_editing(false))
+        .on_hover_text(format!("{volume_label} · Click to type a percentage"));
+    (response.changed() || value.changed() || wheel != 0.0).then_some(volume)
 }
 
 pub fn timecode_text(value: impl Into<String>) -> egui::RichText {
@@ -621,8 +623,9 @@ pub fn draw_elapsed_editor(
     enabled: bool,
 ) -> egui::Response {
     let elapsed = resolve_display_time(app.seek_pos, app.playback_time);
-    let rendered = format_player_time(elapsed, true, app.show_subseconds);
-    let desired_width = 104.0;
+    let rendered = format_elapsed_display_time(elapsed, app.duration, app.show_subseconds);
+    let size = elapsed_editor_size(ui);
+    let desired_width = size.x;
     let edit_id = ui.make_persistent_id(id_source);
     let owner_key = egui::Id::new("elapsed-editor-owner");
     if app.editing_elapsed_time && app.elapsed_edit_focus_requested && enabled {
@@ -709,6 +712,7 @@ pub fn draw_elapsed_editor(
         .horizontal_align(egui::Align::Center)
         .vertical_align(egui::Align::Center)
         .margin(egui::Margin::symmetric(4, 2))
+        .min_size(egui::Vec2::ZERO)
         .interactive(editing)
         .frame(if editing {
             egui::Frame::new()
@@ -723,7 +727,7 @@ pub fn draw_elapsed_editor(
     // before painting can overwrite the mouse-down cursor on the release frame.
     let layout = egui::Layout::centered_and_justified(ui.layout().main_dir());
     let output = ui.add_enabled_ui(enabled, |ui| {
-        ui.allocate_ui_with_layout(egui::vec2(desired_width, 22.0), layout,
+        ui.allocate_ui_with_layout(egui::vec2(desired_width, size.y), layout,
             |ui| editor.show(ui)).inner
     }).inner;
     let pointer_group = ui.input(|input| input.pointer.interact_pos()).map(|position| {
@@ -731,7 +735,11 @@ pub fn draw_elapsed_editor(
         // not galley_pos itself. Use that same origin for glyph hit testing.
         let cursor = output.galley.cursor_from_pos(position - output.galley_pos
             + egui::vec2(output.galley.rect.left(), 0.0));
-        timecode_group_at_cursor(output.galley.text(), cursor.index.0)
+        let prefix = if editing { 0 } else {
+            usize::from(app.duration < 3600.0 && elapsed < 3600.0)
+                + usize::from(app.duration < 60.0 && elapsed < 60.0)
+        };
+        timecode_group_at_cursor(output.galley.text(), cursor.index.0) + prefix
     });
     let mut response = output.response.response;
 
@@ -1207,6 +1215,10 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     );
                                 }
                             }
+                            let exact = ui.add(egui::DragValue::new(&mut volume).range(0.0..=130.0)
+                                .max_decimals(0).suffix("%").update_while_editing(false))
+                                .on_hover_text(app.tr("Click to type a volume percentage"));
+                            if exact.changed() { volume_update = Some(volume); }
                         });
 
                         let total_response = draw_duration_label(
@@ -1218,10 +1230,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 drop(app_cell);
 
                 if let Some(new_volume) = volume_update {
-                    let _ = app.mpv.set_property("volume", new_volume);
-                    app.volume = new_volume;
-                    app.set_osd(format!("{}: {:.0}%", app.tr("Volume"), new_volume));
-                    app.save_config();
+                    app.apply_interop_command(&ctx,crate::platform::interop::InteropCommand::SetVolume {value:new_volume},"Simple volume control");
                 }
                 if toggle_total_mode {
                     app.show_remaining_time = !app.show_remaining_time;
@@ -1289,6 +1298,22 @@ pub fn multiply_style_opacity(style: &mut egui::Style, alpha: f32) {
 
 pub fn resolve_display_time(seek_pos: Option<f64>, playback_time: f64) -> f64 {
     seek_pos.unwrap_or(playback_time)
+}
+
+pub(super) fn elapsed_editor_size(ui: &egui::Ui) -> egui::Vec2 {
+    let font = egui::TextStyle::Monospace.resolve(ui.style());
+    let sample = ui.painter().layout_no_wrap("00:00:00.000".into(), font.clone(), ui.visuals().text_color());
+    let height = ui.fonts_mut(|fonts| fonts.row_height(&font));
+    egui::vec2((sample.size().x + 12.0).max(104.0),
+        (height + 6.0).max(super::control_density::height(ui)))
+}
+
+fn format_elapsed_display_time(seconds: f64, duration: f64, subseconds: bool) -> String {
+    let hours = seconds.abs() >= 3600.0 || duration >= 3600.0;
+    let text = format_player_time(seconds, hours, subseconds);
+    if !hours && seconds.abs() < 60.0 && duration < 60.0 {
+        text.strip_prefix("00:").unwrap_or(&text).to_owned()
+    } else { text }
 }
 
 pub fn format_player_time(time: f64, include_hours: bool, show_subseconds: bool) -> String {
@@ -1607,6 +1632,63 @@ mod tests {
     }
 
     #[test]
+    fn elapsed_display_omits_only_unneeded_leading_groups() {
+        assert_eq!(format_elapsed_display_time(3.125,40.0,true),"03.125");
+        assert_eq!(format_elapsed_display_time(3.0,40.0,false),"03");
+        assert_eq!(format_elapsed_display_time(3.0,120.0,false),"00:03");
+        assert_eq!(format_elapsed_display_time(63.0,120.0,false),"01:03");
+        assert_eq!(format_elapsed_display_time(3.0,4000.0,false),"00:00:03");
+        assert_eq!(format_elapsed_edit_time(3.125),"00:00:03.125","edit mask remains complete");
+    }
+
+    #[test]
+    fn elapsed_ink_fits_its_row_in_display_and_edit_modes_at_large_fonts() {
+        let _guard = crate::app::tests::lock_app_tests();
+        for scale in [1.0,1.25,1.5,2.0] { for size in [14.0,20.0,28.0] { for editing in [false,true] {
+            let ctx = egui::Context::default(); ctx.set_pixels_per_point(scale);
+            ctx.style_mut_of(ctx.theme(),|style| {style.text_styles.insert(egui::TextStyle::Monospace,egui::FontId::monospace(size));});
+            let mut app = PealayerApp::default(); app.duration = 120.0; app.playback_time = 63.125;
+            if editing { begin_elapsed_edit(&mut app); }
+            for _ in 0..2 {
+                let mut output = ctx.run_ui(Default::default(),|ui| {
+                    let size = elapsed_editor_size(ui);
+                    let (rect,_) = ui.allocate_exact_size(size,egui::Sense::hover());
+                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+                    child.set_clip_rect(rect);
+                    let response=draw_elapsed_editor(&mut app,&mut child,"elapsed-fit-fixture",true);
+                    assert!(rect.expand(0.1).contains_rect(response.rect),"editor grew outside measured row: {rect:?} {:?}",response.rect);
+                });
+                for shape in &output.shapes { if let egui::Shape::Text(text)=&shape.shape {
+                    let ink=text.galley.mesh_bounds.translate(text.pos.to_vec2());
+                    assert!(shape.clip_rect.expand(0.1).contains_rect(ink),"elapsed ink clipped: scale={scale}, size={size}, editing={editing}: {ink:?} clip={:?}",shape.clip_rect);
+                }}
+                output.textures_delta.clear();
+            }
+        }}}
+    }
+
+    #[test]
+    fn volume_percentage_accepts_direct_typed_input() {
+        let ctx=egui::Context::default(); let mut volume=50.0; let mut time=0.0;
+        let mut frame=|events| {
+            time+=0.1;
+            let mut output=ctx.run_ui(egui::RawInput {time:Some(time),events,..Default::default()},|ui| {
+                ui.horizontal(|ui| {ui.set_width(160.0); if let Some(value)=volume_slider_widgets(ui,volume,"Volume") {volume=value;}});
+            }); output.textures_delta.clear(); output
+        };
+        frame(vec![]); let output=frame(vec![]);
+        let point=output.shapes.iter().find_map(|shape|match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text().contains("50")=>Some(text.pos+text.galley.rect.center().to_vec2()),_=>None,
+        }).expect("volume percentage");
+        let button=|pressed|egui::Event::PointerButton {pos:point,pressed,button:egui::PointerButton::Primary,modifiers:egui::Modifiers::NONE};
+        frame(vec![egui::Event::PointerMoved(point),button(true)]); frame(vec![button(false)]);
+        frame(vec![]);
+        frame(vec![egui::Event::Text("75".into())]);
+        frame(vec![egui::Event::Key {key:egui::Key::Enter,physical_key:None,pressed:true,repeat:false,modifiers:egui::Modifiers::NONE}]);
+        drop(frame); assert_eq!(volume,75.0,"clicking the value must permit direct typing");
+    }
+
+    #[test]
     fn elapsed_pointer_selects_clicked_group_in_display_and_edit_modes() {
         let _guard = crate::app::tests::lock_app_tests();
         fn frame(ctx: &egui::Context, app: &mut PealayerApp, events: Vec<egui::Event>) -> egui::FullOutput {
@@ -1648,18 +1730,19 @@ mod tests {
         }
         for scale in [1.0, 1.5, 2.0] {
             for subseconds in [false, true] {
-                for initial_group in 0..(if subseconds { 4 } else { 3 }) {
+                for (playback,duration,prefix) in [(3723.456,4000.0,0),(63.456,120.0,1),(3.456,40.0,2)] {
+                for initial_group in 0..(if subseconds { 4 } else { 3 })-prefix {
                     let ctx = egui::Context::default();
                     ctx.set_pixels_per_point(scale);
                     let mut app = PealayerApp::default();
-                    app.playback_time = 3723.456;
+                    app.playback_time = playback; app.duration=duration;
                     app.show_subseconds = subseconds;
                     frame(&ctx, &mut app, vec![]);
                     let output = frame(&ctx, &mut app, vec![]);
-                    let shown = format_player_time(app.playback_time, true, subseconds);
+                    let shown = format_elapsed_display_time(app.playback_time,app.duration,subseconds);
                     click(&ctx, &mut app, point(&output, &shown, initial_group));
                     assert!(app.editing_elapsed_time);
-                    assert_eq!(app.elapsed_time_group, initial_group, "display click at scale {scale}");
+                    assert_eq!(app.elapsed_time_group, initial_group+prefix, "display click at scale {scale}");
                     for group in [3, 1, 2, 0] {
                         let output = frame(&ctx, &mut app, vec![]);
                         let value = app.elapsed_time_input.clone();
@@ -1668,6 +1751,7 @@ mod tests {
                         assert_eq!(app.elapsed_time_input, app.elapsed_time_original);
                         assert!(app.seek_pos.is_none(), "selection must never seek");
                     }
+                }
                 }
             }
         }
