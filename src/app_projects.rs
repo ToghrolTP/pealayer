@@ -63,6 +63,49 @@ impl PealayerApp {
             selected_cues:self.selected_instance_ids.iter().copied().collect(),selected_curve_points:self.selected_keyframes.iter().copied().collect(),selected_keyframe:self.selected_timeline_keyframe,
             selected_track:self.selected_timeline_track.clone(),track_filter:self.project.track_filter.clone()}}
     }
+    pub(crate) fn save_timeline_file(&mut self, path: &Path) -> Result<(), String> {
+        Document::Timeline(self.capture_timeline_document()).write(path)?;
+        self.timeline_saved_baseline = Some(self.snapshot_timeline());
+        let name = path.file_name().and_then(|name| name.to_str()).unwrap_or("timeline");
+        self.set_osd(format!("{} {name}", self.tr("Timeline saved:")));
+        Ok(())
+    }
+
+    pub(crate) fn open_timeline_file(&mut self, ctx: &egui::Context, path: &Path) -> Result<Value, String> {
+        if self.project_restore_busy() {
+            return Err("Wait for the pending project restoration before opening a timeline".into());
+        }
+        if self.is_timeline_dirty() {
+            return Err("Save the current timeline before opening another timeline".into());
+        }
+        match read_timeline_file(path)? {
+            TimelineFile::Document(timeline) => {
+                self.stage_document(ctx, Document::Timeline(timeline), path, None, false)
+            }
+            TimelineFile::Sidecar(timeline) => {
+                // The raw sidecar has no saved view. Retain its media-opening
+                // behaviour and never interpret its missing position as zero.
+                if self.current_video_path.is_none()
+                    && let Some(target) = &timeline.media_target
+                    && Path::new(target).is_file()
+                {
+                    let previous = self.project.bypass_discovery;
+                    self.project.bypass_discovery = true;
+                    self.load_video_file(PathBuf::from(target));
+                    self.project.bypass_discovery = previous;
+                }
+                self.undo_stack.push(self.snapshot_timeline());
+                self.track_muted = timeline.track_muted.clone();
+                self.track_soloed = timeline.track_soloed.clone();
+                self.track_locked = timeline.track_locked.clone();
+                self.timeline = timeline;
+                self.sync_timeline_engine();
+                self.timeline_saved_baseline = Some(self.snapshot_timeline());
+                Ok(json!({"loaded": true}))
+            }
+        }
+    }
+
     pub(crate) fn capture_project(&self,ctx:&egui::Context)->Project {
         Project {title:self.project.title.clone(),notes:self.project.notes.clone(),load:Components::default(),
             scene:self.project.scene.clone().or_else(||self.advertised_hardware().filter(|c|c.board_connected).map(|c|Scene::capture(&c))).map(Part::embedded),

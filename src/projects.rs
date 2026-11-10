@@ -489,15 +489,7 @@ impl Document {
         }
     }
     pub fn read(path: &Path) -> Result<Self, String> {
-        let mut bytes = Vec::new();
-        std::fs::File::open(path)
-            .map_err(|e| format!("Open {}: {e}", path.display()))?
-            .take(MAX_DOCUMENT_BYTES + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|e| e.to_string())?;
-        if bytes.len() as u64 > MAX_DOCUMENT_BYTES {
-            return Err("Document exceeds 32 MiB".into());
-        }
+        let bytes = read_document_bytes(path)?;
         let value: Self = serde_json::from_slice(&bytes)
             .map_err(|e| format!("Invalid Pealayer document: {e}"))?;
         value.validate()?;
@@ -510,6 +502,47 @@ impl Document {
             return Err("Document exceeds 32 MiB".into());
         }
         atomic_write(path, &bytes)
+    }
+}
+
+fn read_document_bytes(path: &Path) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .map_err(|e| format!("Open {}: {e}", path.display()))?
+        .take(MAX_DOCUMENT_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > MAX_DOCUMENT_BYTES {
+        return Err("Document exceeds 32 MiB".into());
+    }
+    Ok(bytes)
+}
+
+pub(crate) enum TimelineFile {
+    Document(TimelineDocument),
+    Sidecar(Timeline),
+}
+
+/// Explicit timeline opening also accepts the raw media-sidecar format. A
+/// tagged document never falls back to the sidecar reader after an error.
+pub(crate) fn read_timeline_file(path: &Path) -> Result<TimelineFile, String> {
+    let bytes = read_document_bytes(path)?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|e| format!("Invalid Pealayer timeline: {e}"))?;
+    let tagged = value.get("kind").is_some();
+    drop(value);
+    if tagged {
+        let document: Document = serde_json::from_slice(&bytes)
+            .map_err(|e| format!("Invalid Pealayer document: {e}"))?;
+        let Document::Timeline(timeline) = document else {
+            return Err("Choose a Pealayer timeline document".into());
+        };
+        timeline.validate()?;
+        Ok(TimelineFile::Document(timeline))
+    } else {
+        serde_json::from_slice(&bytes)
+            .map(TimelineFile::Sidecar)
+            .map_err(|e| format!("Invalid Pealayer timeline sidecar: {e}"))
     }
 }
 
@@ -740,6 +773,29 @@ mod tests {
         std::fs::create_dir(&path).unwrap();
         path
     }
+    #[test]
+    fn explicit_timeline_open_preserves_sidecars_and_rejects_wrong_tagged_documents() {
+        let dir = temp_dir();
+        let path = dir.join("timeline.json");
+        let mut timeline = Timeline::default();
+        timeline.track_muted.insert(5);
+        timeline.save_to_file(&path).unwrap();
+        assert!(matches!(read_timeline_file(&path).unwrap(), TimelineFile::Sidecar(value) if value == timeline));
+
+        let document = TimelineDocument {
+            timeline,
+            view: TimelineView { position_ms: 3640, zoom: 125.0, ..Default::default() },
+        };
+        Document::Timeline(document.clone()).write(&path).unwrap();
+        assert!(matches!(read_timeline_file(&path).unwrap(), TimelineFile::Document(value) if value == document));
+
+        Document::Scene(Scene::default()).write(&path).unwrap();
+        assert_eq!(read_timeline_file(&path).err().as_deref(), Some("Choose a Pealayer timeline document"));
+        std::fs::write(&path, br#"{"kind":null,"instances":[],"templates":[]}"#).unwrap();
+        assert!(read_timeline_file(&path).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn discovery_requires_identity_and_preserves_requested_media_when_excluded() {
         let dir = temp_dir();
