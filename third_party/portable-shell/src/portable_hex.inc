@@ -34,20 +34,20 @@ static void hex_render(ps_session *s){
     else if(s->hex_top/cols>total-rows)s->hex_top=(total-rows)*cols;
     at(s,2,1);field(s,s->hex_dirty?"Modified":"Saved",s->io.columns-1);
     view_rule(s,3,1,w,0);
-    at(s,3,12);view_color(s,"\033[31m");out(s,(s->io.flags&PS_UNICODE)?"┬":"+");
-    at(s,3,14+3*cols);out(s,(s->io.flags&PS_UNICODE)?"┬":"+");reset(s);
-    at(s,4,1);view_side(s);field(s," Offset",10);view_side(s);
-    field(s," Hex",1+3*cols);view_side(s);field(s,cols>=4?" ASCII":" A",cols+2);view_side(s);
+    at(s,3,12);view_color(s,"\033[31m");out(s,frame_glyph(s,PS_BORDER_TOP_JOIN));
+    at(s,3,14+3*cols);out(s,frame_glyph(s,PS_BORDER_TOP_JOIN));reset(s);
+    at(s,4,1);view_side(s);field(s," Offset",10);view_inner_side(s);
+    field(s," Hex",1+3*cols);view_inner_side(s);field(s,cols>=4?" ASCII":" A",cols+2);view_side(s);
     at(s,5,1);view_color(s,"\033[31m");
-    for(c=0;c<w;++c)out(s,(s->io.flags&PS_UNICODE)?(c==0?"├":c==w-1?"┤":c==11||c==13+3*cols?"┼":"─"):(c==0||c==w-1||c==11||c==13+3*cols?"+":"-"));
+    for(c=0;c<w;++c)out(s,frame_glyph(s,c==0?PS_BORDER_MIDDLE_LEFT:c==w-1?PS_BORDER_MIDDLE_RIGHT:c==11||c==13+3*cols?PS_BORDER_CROSS:PS_BORDER_HORIZONTAL));
     reset(s);
     for(r=0;r<rows;++r){
         index=s->hex_top+r*cols;at(s,r+6,1);view_side(s);out(s," ");view_color(s,"\033[90m");
-        if(index<s->hex_length)hex_number(s,index,8);else out(s,"        ");reset(s);out(s," ");view_side(s);out(s," ");
+        if(index<s->hex_length)hex_number(s,index,8);else out(s,"        ");reset(s);out(s," ");view_inner_side(s);out(s," ");
         for(c=0;c<cols;++c){
             if(index+c<s->hex_length){if(index+c==s->hex_pos&&!s->hex_ascii)view_selection(s);hex_number(s,s->hex_data[index+c],2);reset(s);}else out(s,"  ");out(s," ");
         }
-        view_side(s);out(s," ");
+        view_inner_side(s);out(s," ");
         for(c=0;c<cols;++c){
             unsigned b=index+c<s->hex_length?s->hex_data[index+c]:0;
             if(index+c==s->hex_pos&&s->hex_ascii)view_selection(s);
@@ -71,8 +71,8 @@ static void hex_render(ps_session *s){
         }
     }
     view_rule(s,s->io.rows-3,1,w,1);
-    at(s,s->io.rows-3,12);view_color(s,"\033[31m");out(s,(s->io.flags&PS_UNICODE)?"┴":"+");
-    at(s,s->io.rows-3,14+3*cols);out(s,(s->io.flags&PS_UNICODE)?"┴":"+");reset(s);
+    at(s,s->io.rows-3,12);view_color(s,"\033[31m");out(s,frame_glyph(s,PS_BORDER_BOTTOM_JOIN));
+    at(s,s->io.rows-3,14+3*cols);out(s,frame_glyph(s,PS_BORDER_BOTTOM_JOIN));reset(s);
     at(s,s->io.rows-2,1);field(s,s->hex_notice?s->hex_notice:(s->hex_ascii?"ASCII overwrite":"Hex overwrite: two digits per byte"),s->io.columns-1);
     at(s,s->io.rows-1,1);footer_field(s,"Tab Hex/ASCII  Ctrl-S Save  Esc Close",s->io.columns-1,0);
     at(s,s->io.rows,1);field(s,s->hex_dialog?"Unsaved: S Save / D Discard / Esc Cancel":"",s->io.columns-1);frame_end(s);

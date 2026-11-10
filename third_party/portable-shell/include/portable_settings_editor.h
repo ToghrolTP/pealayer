@@ -15,10 +15,24 @@
 #error PS_SETTINGS_GROUP_BYTES must include a terminator
 #endif
 enum { PS_SETTINGS_EDITOR_MAX_ROWS=128, PS_SETTINGS_LEVEL_MAX=65535 };
+#ifndef PS_SETTINGS_LABEL_BYTES
+#define PS_SETTINGS_LABEL_BYTES 64
+#endif
+#if PS_SETTINGS_LABEL_BYTES < 1
+#error PS_SETTINGS_LABEL_BYTES must include a terminator
+#endif
+/* Optional display metadata, deliberately separate from command/setting keys.
+   A NULL label uses the derived human label. NULL choices uses stable tokens. */
+typedef struct {
+    const char *key,*label;
+    const char *const *choice_labels;
+    unsigned choice_count;
+} ps_setting_presentation;
 typedef struct {
     const ps_setting *setting;
     char group[PS_SETTINGS_GROUP_BYTES];
     ps_control_value observed;
+    char label[PS_SETTINGS_LABEL_BYTES];
 } ps_settings_editor_row;
 typedef struct {
     ps_settings *registry;
@@ -28,7 +42,39 @@ typedef struct {
     ps_control_page page;
     ps_panel_chrome chrome;
     unsigned count;
+    const ps_setting_presentation *display;
+    unsigned display_count;
+    ps_panel_presentation presentation;
 } ps_settings_editor;
+static inline const ps_setting_presentation *ps_settings_editor_display(const ps_settings_editor *e,unsigned id){
+    unsigned i;if(!e||id>=e->count)return 0;
+    for(i=0;i<e->display_count;++i)if(ps_text_equal(e->display[i].key,e->rows[id].setting->name))return e->display+i;
+    return 0;
+}
+static inline const char *ps_settings_editor_label(void *context,unsigned id){
+    ps_settings_editor *e=(ps_settings_editor *)context;const ps_setting_presentation *p=ps_settings_editor_display(e,id);
+    return id<e->count?(p&&p->label?p->label:e->rows[id].label):0;
+}
+static inline const char *ps_settings_editor_key(void *context,unsigned id){
+    ps_settings_editor *e=(ps_settings_editor *)context;return id<e->count?e->rows[id].setting->name:0;
+}
+static inline const char *ps_settings_editor_choice_label(void *context,unsigned id,unsigned index){
+    const ps_setting_presentation *p=ps_settings_editor_display((ps_settings_editor *)context,id);
+    return p&&p->choice_labels&&index<p->choice_count?p->choice_labels[index]:0;
+}
+static inline int ps_settings_editor_set_presentation(ps_settings_editor *e,const ps_setting_presentation *items,unsigned count){
+    unsigned i,j;if(!e||(!items&&count))return 0;
+    for(i=0;i<count;++i){const ps_setting *s;
+        if(!items[i].key||(items[i].label&&!*items[i].label))return 0;
+        s=ps_settings_find(e->registry,items[i].key);if(!s)return 0;
+        for(j=0;j<i;++j)if(ps_text_equal(items[i].key,items[j].key))return 0;
+        if(items[i].choice_labels){
+            if(s->type!=PS_SETTING_CHOICE||items[i].choice_count!=s->choice_count)return 0;
+            for(j=0;j<items[i].choice_count;++j)if(!items[i].choice_labels[j])return 0;
+        }
+    }
+    e->display=items;e->display_count=count;return 1;
+}
 static inline unsigned ps_settings_editor_group_size(const ps_setting *setting){
     unsigned n=0;if(setting->group)return ps_text_length(setting->group);
     while(setting->name[n]&&setting->name[n]!='.')++n;
@@ -53,6 +99,7 @@ static inline int ps_settings_editor_read(void *context,unsigned id,ps_control_v
     row=e->rows+id;setting=row->setting;
     current.number=0;current.flags=0;current.revision=0;current.text[0]=0;
     if(ps_settings_find(e->registry,setting->name)==setting&&
+       (setting->type!=PS_SETTING_CHOICE||(setting->choices==e->controls[id].choices&&setting->choice_count==e->controls[id].choice_count))&&
        ps_settings_get(e->registry,setting->name,&value)==PS_SETTING_OK){
         current.flags=PS_CONTROL_VALID;
         if(!setting->write)current.flags|=PS_CONTROL_LOCKED;
@@ -112,11 +159,23 @@ static inline int ps_settings_editor_init(ps_settings_editor *e,ps_settings *reg
         if(s->type==PS_SETTING_CHOICE&&s->choice_count>PS_SETTINGS_EDITOR_MAX_ROWS)return 0;
     }
     e->registry=registry;e->rows=rows;e->controls=controls;e->count=registry->count;
+    e->display=0;e->display_count=0;
+    e->presentation.label=ps_settings_editor_label;e->presentation.key=ps_settings_editor_key;
+    e->presentation.choice=ps_settings_editor_choice_label;e->presentation.context=e;
     for(i=0;i<e->count;++i){const ps_setting *s=registry->entries[i];ps_control *c=controls+i;
         rows[i].setting=s;rows[i].observed.number=rows[i].observed.flags=rows[i].observed.revision=0;
         rows[i].observed.text[0]=0;group=s->group?s->group:s->name;n=ps_settings_editor_group_size(s);
         for(j=0;j<n;++j)rows[i].group[j]=group[j];
-        rows[i].group[j]=0;c->id=i;c->group=rows[i].group;c->label=s->name;
+        rows[i].group[j]=0;c->id=i;c->group=rows[i].group;
+        {const char *name=s->name,*part=name;unsigned upper=1;
+            while(*name){if(*name=='.')part=name+1;++name;}
+            for(j=0;*part&&j+1<sizeof rows[i].label;++part){char ch=*part;
+                if(ch=='_'||ch=='-'){ch=' ';upper=1;}
+                else {if(upper&&ch>='a'&&ch<='z')ch=(char)(ch-'a'+'A');upper=0;}
+                rows[i].label[j++]=ch;
+            }
+            rows[i].label[j]=0;c->label=j?rows[i].label:s->name;
+        }
         c->minimum=0;c->maximum=0;c->step=1;c->choices=s->choices;c->choice_count=s->choice_count;
         c->kind=s->type==PS_SETTING_BOOL?PS_CONTROL_TOGGLE:s->type==PS_SETTING_CHOICE?PS_CONTROL_CHOICE:PS_CONTROL_TEXT;
         if(s->type==PS_SETTING_UINT&&s->unsigned_maximum<=PS_SETTINGS_LEVEL_MAX){
@@ -125,7 +184,7 @@ static inline int ps_settings_editor_init(ps_settings_editor *e,ps_settings *reg
         if(c->kind==PS_CONTROL_LEVEL&&c->minimum==c->maximum)c->kind=PS_CONTROL_TEXT;
     }
     e->page.title=title;e->page.controls=controls;e->page.count=e->count;
-    e->panel.title=title;e->panel.status=0;e->panel.pages=&e->page;e->panel.count=1;
+    e->panel.title=title;e->panel.status="";e->panel.pages=&e->page;e->panel.count=1;
     e->panel.read=ps_settings_editor_read;e->panel.write=ps_settings_editor_write;e->panel.context=e;
     e->chrome.columns=0;e->chrome.count=0;e->chrome.summary=0;e->chrome.notice=0;
     e->chrome.actions=0;e->chrome.navigation=0;e->chrome.text=0;
@@ -137,6 +196,7 @@ static inline int ps_settings_editor_init(ps_settings_editor *e,ps_settings *reg
 static inline int ps_settings_editor_open(ps_settings_editor *e,ps_session *session){
     if(!PS_SETTINGS_EDITOR||!e||!session||!ps_panel_attach(session,&e->panel))return 0;
     ps_panel_set_chrome(session,&e->chrome);
+    ps_panel_set_presentation(session,&e->presentation);
     return ps_panel_open(session,0);
 }
 #endif

@@ -360,7 +360,9 @@ fn parse_update_options(
 pub fn send_remote_command(cmd_str: &str) -> Result<String, String> {
     let trimmed = cmd_str.trim();
     let payload = if trimmed.starts_with('{') {
-        crate::platform::interop::parse_interop_request(trimmed)?;
+        if !serde_json::from_str::<serde_json::Value>(trimmed).ok().is_some_and(|v|v["method"].as_str().is_some_and(|m|matches!(m,"pealayer.terminal.control"|"pealayer.terminal.pair"|"pealayer.terminal.revoke"))) {
+            crate::platform::interop::parse_interop_request(trimmed)?;
+        }
         trimmed.to_string()
     } else {
         serde_json::to_string(&crate::platform::interop::parse_text_command(trimmed)?)

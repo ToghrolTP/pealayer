@@ -2181,6 +2181,7 @@ fn section_icon(section: &str) -> &'static str {
         "timeline_toolbar" => crate::ui::icons::SLIDERS_HORIZONTAL,
         "sidebar_rail" => crate::ui::icons::TABS,
         "workspace_tools" => crate::ui::icons::TERMINAL_WINDOW,
+        "terminal" => crate::ui::icons::TERMINAL_WINDOW,
         "web" => crate::ui::icons::GLOBE,
         _ => crate::ui::icons::GEAR,
     }
@@ -2224,6 +2225,7 @@ fn section_heading(section: &str) -> &'static str {
         "timeline_toolbar" => "Timeline toolbar",
         "sidebar_rail" => "Sidebar rail",
         "workspace_tools" => "Workspace tools",
+        "terminal" => "Terminal",
         "web" => "Web UI and network APIs",
         _ => "Configuration",
     }
@@ -2635,7 +2637,11 @@ mod tests {
             assert!(std::time::Instant::now() < until, "{}", helper.draft.status);
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        assert!(matches!(receiver.recv_timeout(std::time::Duration::from_secs(1)).unwrap(),
+        let preview=receiver.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
+        let crate::platform::interop::InteropCommand::NativeLocal {command}=preview else {
+            panic!("Preferences preview must retain native transport provenance");
+        };
+        assert!(matches!(*command,
             crate::platform::interop::InteropCommand::PreviewConfig { config } if config.color_palette == crate::config::ColorPalette::Studio));
         assert!(helper.finish_preview(false));
         assert!(matches!(receiver.recv_timeout(std::time::Duration::from_secs(1)).unwrap(),

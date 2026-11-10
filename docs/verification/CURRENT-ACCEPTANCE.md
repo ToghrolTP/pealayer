@@ -25,6 +25,13 @@ The linked audit records the passing tests and incomplete production-package gat
 
 ## Publication and workspace tools checkpoint
 
+[Shared Terminal and Pealayer Shell](terminal-host-experience.md) includes live
+updater phases, prompt-safe structured status, the typed Preferences table, and
+native/Web views of the same paired host sessions. The graceful updater
+restarted the isolated review with the matching embedded Web bundle. Final
+native and Web captures and the runtime receipt are recorded in PR #281.
+The regular installation was closed and the Cafe API tunnel was unreachable.
+
 [Proportional numeric status typography](status-tabular-typography.md) fixes the
 FPS icon/digit-center mismatch, bundles Inter for Windows and shares tabular
 digit layout without requiring a monospace font. All 59 focused native tests and

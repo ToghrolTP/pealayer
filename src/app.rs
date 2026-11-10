@@ -4375,6 +4375,10 @@ impl PealayerApp {
         source: &str,
     ) {
         use crate::platform::interop::InteropCommand;
+        let (command,native_local)=match command {InteropCommand::NativeLocal {command}=>(*command,true),command=>(command,false)};
+        if !native_local && crate::terminal_access::changes_policy(&command) {
+            self.show_error=Some("Terminal security policy can only be changed by the native owner".into());return;
+        }
         if crate::peer::active() && let InteropCommand::Launch{request}=&command {
             if let Some(target)=&request.target{self.load_media_target(target);}
             if let Some(value)=request.volume{self.apply_interop_command(ctx,InteropCommand::SetVolume{value},source);}
@@ -4395,6 +4399,7 @@ impl PealayerApp {
         }
 
         match command {
+            InteropCommand::NativeLocal {..} => unreachable!("native provenance is unwrapped before dispatch"),
             InteropCommand::InspectAuthoring {request_id} => {
                 if crate::authoring::requested(request_id) {
                     crate::authoring::complete(request_id,self.inspect_authoring(ctx));
@@ -8083,6 +8088,7 @@ impl PealayerApp {
         self.sidebar_rail_state = config.ui.sidebar_rail;
         self.sidebar_shortcuts = config.ui.sidebar_shortcuts.clone();
         self.toolbar_state.preferences = config.ui.toolbar.clone();
+        if !config.ui.terminal.allow_remote {crate::terminal_access::revoke();}
         self.terminal_state.preferences = config.ui.terminal.clone();
         self.sidebar_rail_state.width = self.sidebar_rail_state.width.clamp(
             crate::ui::sidebar_rail::SidebarPaneContent::MIN_WIDTH,
@@ -8232,6 +8238,7 @@ impl PealayerApp {
                 self.load_remote_target(target,use_proxy,ctx);
             },
             "/api/peer/config"=>{
+                if let Some(values)=value.get("values") && !crate::terminal_access::remote_policy_patch_allowed(values) {return Err("Terminal security policy can only be changed by the native owner".into());}
                 let operation=value.get("operation").and_then(serde_json::Value::as_str).unwrap_or("save");
                 let owner_id=crate::peer::preference_owner_id();
                 let owner=ctx.data_mut(|data|data.get_temp::<String>(owner_id));
@@ -8543,7 +8550,7 @@ impl PealayerApp {
         ctx.request_repaint();
     }
 
-    fn apply_config_patch(
+    pub(crate) fn apply_config_patch(
         &mut self,
         ctx: &egui::Context,
         values: &serde_json::Value,

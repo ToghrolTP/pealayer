@@ -123,6 +123,9 @@ impl LaunchReceiptCache {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum InteropCommand {
+    /// Transport-owned provenance, impossible to deserialize from a wire payload.
+    #[serde(skip)]
+    NativeLocal { command: Box<InteropCommand> },
     #[serde(skip)]
     InspectAuthoring { request_id: u64 },
     RfControl { operation: String, #[serde(default)] params: Value },
@@ -920,6 +923,7 @@ impl InteropCommand {
 }
 
 pub fn command_catalog() -> Value {
+    let terminal=serde_json::json!({"available":cfg!(feature="workspace-terminal"),"pair":"pealayer.terminal.pair","revoke":"pealayer.terminal.revoke","native_control":"pealayer.terminal.control","control":"/api/terminal/control","events":"/api/terminal/events?after=REVISION","authorization":"native-issued memory-only Bearer key; eight-hour expiry; same-origin browser; remote execution opt-in","operations":["snapshot","create","create_profile","select","close","clear","input","scroll","refresh_profiles"],"ownership":"host session IDs and profiles shared by native and Web; HTTP follows the Pealayer authority"});
     let assets=serde_json::json!({"import":"pealayer.assets.import","review":"pealayer.assets.review","snapshot":"/api/assets","upload":"/api/assets/upload","chunk_bytes":crate::server::asset_upload::CHUNK_BYTES,"destinations":["player","library","timeline","audio-source"],"placement":"integer milliseconds; scene/timeline imports append after review, never replace the session","ownership":"transfer receipts pinned to the receiving session owner; hardware effect programs remain with PCController"});
     let mut catalog=serde_json::json!({
         "contract": "pealayer.control",
@@ -962,6 +966,7 @@ pub fn command_catalog() -> Value {
         "discovery": "/api/player/commands"
     });
     catalog["workspace_tools"] = serde_json::json!({ "status":"pealayer.workspace.tools.get", "control":"pealayer.workspace.tools.control", "scope":"local process, never relayed", "actions":["set_visible","palette","terminal"], "terminal_operations":["connect","disconnect","clear","write","resize"], "execution":"connect/write/resize require native local IPC; browser requests are rejected", "privacy":"metadata only; no transcript or history", "accepted":"queued once, not execution acknowledgement" });
+    catalog["terminal"] = terminal;
     catalog["window"]=serde_json::json!({"get":"pealayer.window.get","set":"pealayer.window.set","scope":"local process, never remote authority","units":"logical_points","position":"outer origin","size":"inner client size","states":["normal","minimized","maximized","fullscreen"],"bounds_without_state":"restore to normal, then place","acknowledgement":"queued; poll observed window state"});
     catalog["native_ipc"]=serde_json::json!({"endpoint":NATIVE_ENDPOINT.get(),"encoding":"UTF-8 JSON or JSON-RPC, newline terminated"});
     #[cfg(windows)]
@@ -2972,6 +2977,7 @@ pub(crate) fn dispatch_local_payload(
     expected_session_id: Option<u32>,
 ) -> String {
     if let Some(response) = crate::update::rpc::payload(payload, false, tx) { return response; }
+    if let Some(response) = crate::terminal_access::native_payload(payload, egui_ctx) { return response; }
     if let Some(response) = crate::downloads::rpc_payload(payload, false) { return response; }
     if let Some(response) = crate::server::discovery::rpc_payload(payload) { return response; }
     if let Ok(value) = serde_json::from_str::<serde_json::Value>(payload)
@@ -2994,6 +3000,7 @@ pub(crate) fn dispatch_local_payload(
         }
         _ => None,
     };
+    let command=if matches!(&command,InteropCommand::UpdateConfig {..}|InteropCommand::PreviewConfig {..}|InteropCommand::CommitPreviewConfig {..}) {InteropCommand::NativeLocal {command:Box::new(command)}} else {command};
     if let Some(operation_id) = operation_id {
         let mut receipts = match launch_receipts.lock() {
             Ok(receipts) => receipts,

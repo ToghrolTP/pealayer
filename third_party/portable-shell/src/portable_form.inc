@@ -16,12 +16,12 @@ static void form_border(ps_session *s,unsigned y,unsigned w,int bottom,unsigned 
     view_rule_color(s,y,2,w,bottom,ps_style_ink(s->theme,(s->io.flags&PS_TRUECOLOR)!=0,0,role));
 }
 static void form_value(ps_session *s,unsigned y,unsigned w,const char *value,unsigned role,unsigned border,int secret){
-    at(s,y,2);ink(s,border);out(s,(s->io.flags&PS_UNICODE)?"│":"|");
+    at(s,y,2);ink(s,border);out(s,frame_glyph(s,PS_BORDER_OUTER_VERTICAL));
     out(s," ");ink(s,role);
     if(secret){unsigned i,n=min(form_cells(s,value,length(value),1),w-4);for(i=0;i<n;++i)out(s,(s->io.flags&PS_UNICODE)?"•":"*");spaces(s,w-4-n);}
     else field(s,value,w-4);
     out(s," ");ink(s,border);
-    out(s,(s->io.flags&PS_UNICODE)?"│":"|");reset(s);
+    out(s,frame_glyph(s,PS_BORDER_OUTER_VERTICAL));reset(s);
 }
 static void form_title(ps_session *s,unsigned y,unsigned w,const char *label,unsigned role){
     form_border(s,y,w,0,role);at(s,y,4);ink(s,role);out(s," ");
@@ -50,11 +50,11 @@ static void form_render(ps_session *s){
         if(s->form_choice>=s->form_top+slots)s->form_top=s->form_choice-slots+1;
         for(i=0;i<slots;++i){
             unsigned selected=s->form_top+i==s->form_choice;
-            at(s,y+1+i,2);ink(s,role);out(s,(s->io.flags&PS_UNICODE)?"│":"|");out(s," ");
+            at(s,y+1+i,2);ink(s,role);out(s,frame_glyph(s,PS_BORDER_OUTER_VERTICAL));out(s," ");
             ink(s,selected?PS_INK_ACTION:PS_INK_MUTED);
             out(s,(s->io.flags&PS_UNICODE)?(selected?"● ":"○ "):(selected?"(*) ":"( ) "));
             field(s,f->choices[s->form_top+i],w-((s->io.flags&PS_UNICODE)?6:8));
-            out(s," ");ink(s,role);out(s,(s->io.flags&PS_UNICODE)?"│":"|");reset(s);
+            out(s," ");ink(s,role);out(s,frame_glyph(s,PS_BORDER_OUTER_VERTICAL));reset(s);
         }
     }
     form_border(s,y+slots+1,w,1,role);

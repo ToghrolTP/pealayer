@@ -152,7 +152,7 @@ impl<W: Write, E: Write> Reporter<W, E> {
         }
         let (phase, status) = match progress {
             UpdateProgress::Phase(phase) => (phase, None),
-            UpdateProgress::Status(status) => (phase_label(&status.state), Some(status)),
+            UpdateProgress::Status(status) => (status.phase_label(), Some(status)),
         };
         let changed = phase != self.last_phase;
         if changed {
@@ -257,21 +257,6 @@ impl<W: Write, E: Write> Reporter<W, E> {
                 let _ = self.errors.flush();
             }
         }
-    }
-}
-
-fn phase_label(state: &str) -> &str {
-    match state {
-        "idle" => "Idle",
-        "receiving" => "Uploading package",
-        "downloading" => "Downloading package",
-        "verifying" => "Verifying package",
-        "staged" => "Package staged",
-        "restarting" => "Restarting peer gracefully",
-        "completed" => "Build acknowledgement received",
-        "current" => "Build already current",
-        "failed" => "Update failed",
-        _ => "Update status",
     }
 }
 

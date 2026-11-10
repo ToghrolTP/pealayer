@@ -15,7 +15,7 @@ impl TerminalTarget {
         match self {
             Self::PcController => "PCController",
             Self::SystemShell => "System shell",
-            Self::PortableShell => "PortableShell",
+            Self::PortableShell => "Pealayer Shell",
         }
     }
 }
@@ -31,18 +31,38 @@ pub struct TerminalPreferences {
     pub profile_id: String,
     pub font_size: f32,
     pub scrollback_lines: usize,
+    pub allow_system_shell: bool,
+    pub allow_remote: bool,
+    pub allow_remote_system_shell: bool,
+    pub cursor_blink: bool,
+    pub cursor_style: CursorStyle,
+    pub accent_commands: bool,
+}
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CursorStyle {
+    #[default]
+    Bar,
+    Block,
+    Underline,
 }
 impl Default for TerminalPreferences {
     fn default() -> Self {
         Self {
             enabled: false,
-            target: TerminalTarget::PcController,
+            target: TerminalTarget::PortableShell,
             controller_endpoint: String::new(),
             shell_program: String::new(),
             shell_arguments: String::new(),
             profile_id: String::new(),
             font_size: 13.0,
             scrollback_lines: 2000,
+            allow_system_shell: false,
+            allow_remote: false,
+            allow_remote_system_shell: false,
+            cursor_blink: true,
+            cursor_style: CursorStyle::Bar,
+            accent_commands: true,
         }
     }
 }
@@ -76,6 +96,8 @@ impl TerminalPreferences {
 #[derive(Default)]
 pub struct TerminalState {
     pub preferences: TerminalPreferences,
+    #[cfg(feature = "workspace-terminal")]
+    remote_view: super::terminal_remote::State,
     confirm_exit: bool,
     closing: bool,
     quit_after_close: bool,
@@ -95,6 +117,12 @@ pub struct TerminalState {
         Option<std::sync::mpsc::Receiver<Result<super::terminal_profiles::Discovery, String>>>,
     #[cfg(feature = "workspace-terminal")]
     profile_warnings: Vec<String>,
+    #[cfg(feature = "workspace-terminal")]
+    closing_tabs: Vec<(u64, TerminalTarget, std::time::Instant)>,
+    #[cfg(feature = "workspace-terminal")]
+    published_signature: serde_json::Value,
+    #[cfg(feature = "workspace-terminal")]
+    profile_revision: u64,
 }
 
 /// A normal application close must not silently terminate a live shell.
@@ -185,9 +213,14 @@ impl TerminalState {
     #[cfg(feature = "workspace-terminal")]
     fn retire_view(&mut self, index: usize) {
         let mut view = self.views.remove(index);
+        self.closing_tabs
+            .push((view.id, view.target, std::time::Instant::now()));
         if let Some(session) = view.session.take() {
             session.request_close();
             self.retired.push(session);
+        }
+        if index < self.active {
+            self.active -= 1;
         }
         self.active = self.active.min(self.views.len().saturating_sub(1));
     }
@@ -308,6 +341,11 @@ pub fn control(
                 view.clear(state.preferences.scrollback_lines);
             }
             TerminalOperation::Write { data } => {
+                if view.target == TerminalTarget::SystemShell
+                    && !state.preferences.allow_system_shell
+                {
+                    return Err("System shell input is disabled in Terminal preferences".into());
+                }
                 if view.phase != "ready" {
                     return Err("Wait until the terminal session is ready".into());
                 }
@@ -330,7 +368,9 @@ pub fn control(
                     .ok_or("Terminal is not connected")?
                     .send(super::terminal_backend::Input::Resize { rows, cols })?;
                 view.size = (rows, cols);
-                view.parser.set_size(rows, cols);
+                if view.target != TerminalTarget::PortableShell {
+                    view.parser.set_size(rows, cols);
+                }
             }
         }
         Ok(())
@@ -346,7 +386,7 @@ pub fn control(
 struct View {
     id: u64,
     target: TerminalTarget,
-    parser: vt100::Parser,
+    parser: super::terminal_parser::Parser,
     screen: super::terminal_screen::ScreenViewState,
     session: Option<super::terminal_backend::Session>,
     phase: &'static str,
@@ -360,22 +400,34 @@ struct View {
     size: (u16, u16),
     queries: QueryState,
     actions: Vec<super::portable_shell_host::Action>,
+    created_at: std::time::Instant,
+    notice_at: std::time::Instant,
+    output_revision: u64,
+    settings_revision: u64,
+    prompt_status: String,
+    pending_command: Option<super::shell_status::Pending>,
 }
 
 #[cfg(feature = "workspace-terminal")]
 impl View {
     fn clear(&mut self, scrollback_lines: usize) {
+        self.output_revision = self.output_revision.wrapping_add(1);
         // Keep the embedded editor's cursor/prompt in agreement with a cleared
         // view. Ctrl-L redraws without submitting or discarding the draft.
         if self.target == TerminalTarget::PortableShell && self.phase == "ready" {
             self.send(super::terminal_backend::Input::Bytes(vec![12]));
         }
-        self.parser = vt100::Parser::new(self.size.0, self.size.1, scrollback_lines);
+        self.parser = if self.target == TerminalTarget::PortableShell {
+            super::terminal_parser::Parser::semantic(self.size.0, self.size.1, scrollback_lines)
+        } else {
+            super::terminal_parser::Parser::new(self.size.0, self.size.1, scrollback_lines)
+        };
         self.screen = Default::default();
         self.queries = QueryState::default();
     }
     fn begin_close(&mut self) {
         self.actions.clear();
+        self.pending_command = None;
         if let Some(session) = &self.session {
             session.request_close();
             self.phase = "closing";
@@ -385,7 +437,11 @@ impl View {
         Self {
             id,
             target: preferences.target,
-            parser: vt100::Parser::new(24, 80, preferences.scrollback_lines.clamp(100, 10000)),
+            parser: super::terminal_parser::Parser::new(
+                24,
+                80,
+                preferences.scrollback_lines.clamp(100, 10000),
+            ),
             screen: Default::default(),
             session: None,
             phase: "disconnected",
@@ -399,6 +455,12 @@ impl View {
             size: (24, 80),
             queries: QueryState::default(),
             actions: Vec::new(),
+            created_at: std::time::Instant::now(),
+            notice_at: std::time::Instant::now(),
+            output_revision: 0,
+            settings_revision: u64::MAX,
+            prompt_status: String::new(),
+            pending_command: None,
         }
     }
     fn send(&mut self, input: super::terminal_backend::Input) -> bool {
@@ -416,6 +478,7 @@ impl View {
         }
     }
     fn output(&mut self, bytes: &[u8]) {
+        self.output_revision = self.output_revision.wrapping_add(1);
         if self.target != TerminalTarget::SystemShell {
             self.parser.process(bytes);
             return;
@@ -457,6 +520,7 @@ impl View {
             };
             match event {
                 Event::Ready { label } => {
+                    self.notice_at = std::time::Instant::now();
                     self.label = label;
                     if self.phase != "closing" {
                         self.phase = "ready";
@@ -465,6 +529,11 @@ impl View {
                 }
                 Event::Catalog(catalog) => self.catalog = catalog,
                 Event::Output(bytes) => self.output(&bytes),
+                Event::GridSize { rows, cols } => {
+                    self.parser.set_size(rows, cols);
+                    self.screen.clear_selection();
+                    self.output_revision = self.output_revision.wrapping_add(1);
+                }
                 Event::Error(error) => self.error = Some(error),
                 Event::Application(action) => {
                     if self.phase != "closing" {
@@ -712,6 +781,10 @@ fn connect(
     if view.session.is_some() {
         return;
     }
+    if view.target == TerminalTarget::SystemShell && !preferences.allow_system_shell {
+        view.error = Some("System shells are disabled. Enable local shell execution in Terminal preferences first.".into());
+        return;
+    }
     if view.target == TerminalTarget::PortableShell {
         view.size = super::terminal_backend::embedded_size(view.size.0, view.size.1);
     }
@@ -796,8 +869,19 @@ fn connect(
             // A new endpoint/process owns a new VT state. Reusing modes from a
             // previous TUI (alternate screen, application keys, paste) corrupts
             // the next session even when its text happens to look unchanged.
-            view.parser =
-                vt100::Parser::new(view.size.0, view.size.1, preferences.scrollback_lines);
+            view.parser = if view.target == TerminalTarget::PortableShell {
+                super::terminal_parser::Parser::semantic(
+                    view.size.0,
+                    view.size.1,
+                    preferences.scrollback_lines,
+                )
+            } else {
+                super::terminal_parser::Parser::new(
+                    view.size.0,
+                    view.size.1,
+                    preferences.scrollback_lines,
+                )
+            };
             view.screen = Default::default();
             view.session = Some(session);
             view.phase = "opening";
@@ -810,13 +894,142 @@ fn connect(
 }
 
 #[cfg(feature = "workspace-terminal")]
+pub(super) fn session_tab(
+    ui: &mut egui::Ui,
+    id: u64,
+    target: TerminalTarget,
+    active: bool,
+    phase: &str,
+    alpha: f32,
+) -> (bool, bool) {
+    let height = super::control_density::height(ui).max(28.0);
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let caption = target.label().to_string();
+    let galley = ui
+        .painter()
+        .layout_no_wrap(caption, font, egui::Color32::PLACEHOLDER);
+    let icon = ui.painter().layout_no_wrap(
+        super::icons::TERMINAL_WINDOW.into(),
+        egui::FontId::proportional(16.0),
+        egui::Color32::PLACEHOLDER,
+    );
+    let width = (galley.size().x + icon.size().x + height + 36.0) * alpha.clamp(0.0, 1.0);
+    let (rect, response) =
+        ui.allocate_exact_size(egui::vec2(width, height + 4.0), egui::Sense::click());
+    let selected =
+        super::motion::hover_alpha(ui, egui::Id::unique(("terminal-active", id)), active);
+    // Selection's stroke is its contrasting text ink (often white), not the
+    // application accent. Keep session chrome independent of text selection.
+    let accent = super::craft_theme::current(ui.ctx()).accent;
+    let bg = ui
+        .visuals()
+        .widgets
+        .inactive
+        .bg_fill
+        .lerp_to_gamma(accent, selected * 0.12);
+    let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
+    painter.rect_filled(rect, 6.0, bg.gamma_multiply(alpha));
+    painter.rect_stroke(
+        rect,
+        6.0,
+        egui::Stroke::new(
+            1.0,
+            if active {
+                accent.gamma_multiply(0.55)
+            } else {
+                ui.visuals().widgets.noninteractive.bg_stroke.color
+            }
+            .gamma_multiply(alpha),
+        ),
+        egui::StrokeKind::Inside,
+    );
+    if selected > 0.0 {
+        painter.line_segment(
+            [
+                rect.left_bottom() + egui::vec2(8.0, -1.0),
+                rect.right_bottom() - egui::vec2(8.0, 1.0),
+            ],
+            egui::Stroke::new(2.0, accent.gamma_multiply(selected * alpha)),
+        );
+    }
+    let caption_x = rect.left() + 10.0 + icon.size().x + 8.0;
+    let ink = ui.visuals().text_color().gamma_multiply(alpha);
+    painter.galley(
+        egui::pos2(
+            rect.left() + 10.0,
+            rect.center().y - icon.mesh_bounds.center().y,
+        ),
+        icon,
+        ink,
+    );
+    painter.galley(
+        egui::pos2(caption_x, rect.center().y - galley.mesh_bounds.center().y),
+        galley,
+        ink,
+    );
+    let close_rect = egui::Rect::from_center_size(
+        rect.right_center() - egui::vec2(height / 2.0 + 3.0, 0.0),
+        egui::Vec2::splat(height - 4.0),
+    );
+    let close_hit = if rect.width() >= height {
+        close_rect.intersect(rect)
+    } else {
+        egui::Rect::from_min_size(rect.min, egui::Vec2::ZERO)
+    };
+    let close = ui.interact(
+        close_hit,
+        egui::Id::unique(("terminal-close", id)),
+        egui::Sense::click(),
+    );
+    let glyph = ui.painter().layout_no_wrap(
+        super::icons::X.into(),
+        egui::FontId::proportional(14.0),
+        egui::Color32::PLACEHOLDER,
+    );
+    painter.galley(
+        close_rect.center() - glyph.mesh_bounds.center().to_vec2(),
+        glyph,
+        if close.hovered() {
+            ui.visuals().error_fg_color
+        } else {
+            ui.visuals().weak_text_color()
+        }
+        .gamma_multiply(alpha),
+    );
+    close
+        .clone()
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text("Close session");
+    response
+        .clone()
+        .on_hover_cursor(egui::CursorIcon::PointingHand)
+        .on_hover_text(format!("Session {id} · {phase}"));
+    let mut menu_close = false;
+    response.context_menu(|ui| {
+        ui.label(egui::RichText::new(format!("{} · {id}", target.label())).strong());
+        ui.separator();
+        if ui
+            .button(format!("{}  Close session", super::icons::X))
+            .clicked()
+        {
+            menu_close = true;
+            ui.close();
+        }
+    });
+    (
+        response.clicked() && !close.clicked(),
+        close.clicked() || menu_close,
+    )
+}
+
+#[cfg(feature = "workspace-terminal")]
 fn panel_contents(
     app: &mut crate::app::PealayerApp,
     ui: &mut egui::Ui,
     state: &mut TerminalState,
     open_preferences: &mut bool,
 ) {
-    if state.views.is_empty() {
+    if state.views.is_empty() && state.next_id == 0 {
         state.next_id += 1;
         state
             .views
@@ -825,24 +1038,56 @@ fn panel_contents(
     let mut add = false;
     let mut remove = None;
     let mut focus_input = false;
+    ui.add_space(6.0);
     ui.horizontal(|ui| {
-        for (index, view) in state.views.iter().enumerate() {
-            if ui
-                .add(
-                    egui::Button::new(format!(
-                        "{}  {}",
-                        super::icons::TERMINAL_WINDOW,
-                        view.target.label()
-                    ))
-                    .selected(state.active == index)
-                    .frame(false),
-                )
-                .on_hover_text(format!("{} · {}", app.tr("Session"), view.id))
-                .clicked()
-            {
-                state.active = index;
-            }
-        }
+        ui.add_space(6.0);
+        ui.spacing_mut().item_spacing.x = 6.0;
+        egui::ScrollArea::horizontal()
+            .id_salt("terminal-session-tabs")
+            .max_width((ui.available_width() - 80.0).max(80.0))
+            .show(ui, |ui| {
+                ui.horizontal(|ui| {
+                    let duration = ui.style().animation_time;
+                    for (index, view) in state.views.iter().enumerate() {
+                        let alpha = if duration > 0.0 {
+                            (view.created_at.elapsed().as_secs_f32() / duration).min(1.0)
+                        } else {
+                            1.0
+                        };
+                        let (selected, close) = session_tab(
+                            ui,
+                            view.id,
+                            view.target,
+                            state.active == index,
+                            view.phase,
+                            alpha,
+                        );
+                        if selected {
+                            state.active = index;
+                        }
+                        if close {
+                            remove = Some(index);
+                        }
+                        if alpha < 1.0 {
+                            ui.ctx().request_repaint();
+                        }
+                    }
+                    state.closing_tabs.retain(|(_, _, at)| {
+                        duration > 0.0 && at.elapsed().as_secs_f32() < duration
+                    });
+                    for (id, target, at) in &state.closing_tabs {
+                        session_tab(
+                            ui,
+                            *id,
+                            *target,
+                            false,
+                            "closing",
+                            1.0 - at.elapsed().as_secs_f32() / duration,
+                        );
+                        ui.ctx().request_repaint();
+                    }
+                });
+            });
         if ui
             .add_enabled(
                 state.views.len() < 4,
@@ -866,8 +1111,40 @@ fn panel_contents(
                     *open_preferences = true;
                     ui.close();
                 }
-                if ui.button(app.tr("Close session")).clicked() {
+                if ui
+                    .button(format!("{}  {}", super::icons::X, app.tr("Close session")))
+                    .clicked()
+                {
                     remove = Some(state.active);
+                    ui.close();
+                }
+                ui.separator();
+                if ui
+                    .add_enabled(
+                        state.preferences.allow_remote,
+                        egui::Button::new(format!(
+                            "{}  Pair remote terminal (copy access key)",
+                            super::icons::COPY
+                        )),
+                    )
+                    .clicked()
+                {
+                    match crate::terminal_access::pair() {
+                        Ok(value) => ui
+                            .ctx()
+                            .copy_text(value["access_key"].as_str().unwrap_or_default().into()),
+                        Err(error) => app.set_osd(error),
+                    }
+                    ui.close();
+                }
+                if ui
+                    .button(format!(
+                        "{}  Revoke remote terminal access",
+                        super::icons::LOCK
+                    ))
+                    .clicked()
+                {
+                    crate::terminal_access::revoke();
                     ui.close();
                 }
             });
@@ -886,8 +1163,28 @@ fn panel_contents(
             .request_repaint_after(std::time::Duration::from_millis(100));
     }
     let Some(view) = state.views.get_mut(state.active) else {
+        ui.vertical_centered(|ui| {
+            ui.add_space(24.0);
+            ui.label(
+                egui::RichText::new(super::icons::TERMINAL_WINDOW)
+                    .size(32.0)
+                    .weak(),
+            );
+            ui.label(app.tr("No terminal sessions"));
+            if ui
+                .button(format!("{}  {}", super::icons::PLUS, app.tr("New session")))
+                .clicked()
+            {
+                state.next_id += 1;
+                state
+                    .views
+                    .push(View::new(state.next_id, &state.preferences));
+                state.active = 0;
+            }
+        });
         return;
     };
+    ui.add_space(6.0);
     ui.separator();
     ui.horizontal_wrapped(|ui| {
         let before = view.target;
@@ -1019,8 +1316,22 @@ fn panel_contents(
             view.clear(state.preferences.scrollback_lines);
         }
         if !view.label.is_empty() {
-            ui.add(egui::Label::new(egui::RichText::new(&view.label).small().weak()).truncate())
-                .on_hover_text(&view.label);
+            let elapsed = view.notice_at.elapsed().as_secs_f32();
+            if elapsed < 4.0 {
+                ui.scope(|ui| {
+                    ui.multiply_opacity((4.0 - elapsed).min(1.0));
+                    ui.add(
+                        egui::Label::new(egui::RichText::new(&view.label).small().weak())
+                            .truncate(),
+                    );
+                });
+                ui.ctx()
+                    .request_repaint_after(std::time::Duration::from_millis(if elapsed < 3.0 {
+                        3000
+                    } else {
+                        32
+                    }));
+            }
         }
     });
     if let Some(error) = &view.error {
@@ -1062,24 +1373,37 @@ fn panel_contents(
     let output = ui
         .allocate_ui(egui::vec2(ui.available_width(), height), |ui| {
             ui.set_height(height);
-            super::terminal_screen::show(
+            super::terminal_screen::show_with_preferences(
                 ui,
                 &mut view.parser,
                 &mut view.screen,
                 egui::Id::unique(("terminal-screen", view.id)),
-                !line_mode && view.phase == "ready",
+                !line_mode
+                    && view.phase == "ready"
+                    && (view.target != TerminalTarget::SystemShell
+                        || state.preferences.allow_system_shell),
                 state.preferences.font_size,
+                &state.preferences,
+                view.target == TerminalTarget::PortableShell && view.session.is_some(),
             )
         })
         .inner;
     let size = (output.rows, output.cols);
-    if size != view.size {
-        view.size = size;
-        if !line_mode && view.phase == "ready" {
-            view.send(super::terminal_backend::Input::Resize {
-                rows: size.0,
-                cols: size.1,
-            });
+    if output.clear {
+        view.clear(state.preferences.scrollback_lines);
+    }
+    if output.preferences {
+        *open_preferences = true;
+    }
+    if size != view.size && view.phase != "opening" {
+        // Keep the launch size until the first resize can actually reach the
+        // backend. Recording the new size during startup suppresses that
+        // resize and leaves the producer wider than the visible grid.
+        if line_mode || view.phase != "ready" || view.send(super::terminal_backend::Input::Resize {
+            rows: size.0,
+            cols: size.1,
+        }) {
+            view.size = size;
         }
     }
     if !line_mode {
@@ -1093,7 +1417,7 @@ fn panel_contents(
             ui.label(
                 egui::RichText::new("pc›")
                     .monospace()
-                    .color(ui.visuals().selection.stroke.color),
+                    .color(super::craft_theme::current(ui.ctx()).accent),
             );
             let edit_id = egui::Id::unique(("terminal-command", view.id));
             // Consume terminal-specific keys before TextEdit handles Enter
@@ -1174,6 +1498,17 @@ fn start_profile_scan(
 }
 
 pub fn tick(app: &mut crate::app::PealayerApp, ctx: &egui::Context) {
+    for pending in crate::terminal_access::pending() {
+        let result = if pending.deadline <= std::time::Instant::now() {
+            Err("Terminal request expired before execution".into())
+        } else if let Some(grant) = pending.grant {
+            crate::terminal_access::check_grant(&grant)
+                .and_then(|()| host_operation(app, ctx, pending.operation, true))
+        } else {
+            host_operation(app, ctx, pending.operation, false)
+        };
+        let _ = pending.reply.send(result);
+    }
     // Dock bodies paint after global shortcut dispatch. Prime ownership from
     // last frame's stable focused widget, not a stale output flag; typing into
     // a terminal must never run playback or hardware shortcuts first.
@@ -1183,7 +1518,7 @@ pub fn tick(app: &mut crate::app::PealayerApp, ctx: &egui::Context) {
             app.terminal_state.views.iter().any(|view| {
                 memory.has_focus(egui::Id::unique(("terminal-screen", view.id)))
                     || memory.has_focus(egui::Id::unique(("terminal-command", view.id)))
-            })
+            }) || memory.has_focus(egui::Id::unique("remote-host-terminal"))
         });
     #[cfg(not(feature = "workspace-terminal"))]
     let claimed = false;
@@ -1196,6 +1531,102 @@ pub fn tick(app: &mut crate::app::PealayerApp, ctx: &egui::Context) {
     }
     #[cfg(feature = "workspace-terminal")]
     {
+        let live = crate::platform::interop::get_live_status();
+        let shell_status = super::shell_status::Status {
+            loaded: live.current_video.is_some(),
+            playing: live.playing,
+            position: live.playback_time,
+            duration: live.duration,
+            volume: live.volume,
+            muted: live.muted,
+            controller: live.controller_connected,
+            update: crate::update::manager().status(),
+        };
+        let prompt = shell_status.summary();
+        for view in &mut app.terminal_state.views {
+            if view.target == TerminalTarget::PortableShell
+                && view.phase == "ready"
+                && view.prompt_status != prompt
+                && view.send(super::terminal_backend::Input::PromptStatus(prompt.clone()))
+            {
+                view.prompt_status = prompt.clone();
+            }
+        }
+        if app
+            .terminal_state
+            .views
+            .iter()
+            .any(|view| view.pending_command.is_some())
+        {
+            let observed = if crate::peer::active() && !crate::peer::mirroring() {
+                super::shell_status::Observed {
+                    idle: Some(live.current_video.is_none()),
+                    paused: Some(!live.playing),
+                    position: Some(live.playback_time),
+                    seeking: None,
+                    volume: Some(live.volume),
+                    muted: Some(live.muted),
+                }
+            } else {
+                super::shell_status::Observed {
+                    idle: app.mpv.get_property("idle-active").ok(),
+                    paused: app.mpv.get_property("pause").ok(),
+                    position: app.mpv.get_property("time-pos").ok(),
+                    seeking: app.mpv.get_property("seeking").ok(),
+                    volume: app.mpv.get_property("volume").ok(),
+                    muted: app.mpv.get_property("mute").ok(),
+                }
+            };
+            for view in &mut app.terminal_state.views {
+                if let Some(pending) = &view.pending_command {
+                    let result = if let Some(text) = pending.confirmed(&observed) {
+                        Some((text, false))
+                    } else if pending.started.elapsed() >= std::time::Duration::from_secs(6) {
+                        Some((
+                            format!(
+                                "{} was not confirmed by the player. Not retried.",
+                                pending.label()
+                            ),
+                            true,
+                        ))
+                    } else {
+                        None
+                    };
+                    if let Some((text, error)) = result {
+                        view.pending_command = None;
+                        view.send(super::terminal_backend::Input::Response { text, error });
+                    }
+                }
+            }
+            // Only bounded outstanding acknowledgments need this wakeup. Idle
+            // prompts follow existing media events; they never install a poll.
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
+        let revision = crate::platform::interop::live_config_revision();
+        if app.terminal_state.views.iter().any(|v| {
+            v.target == TerminalTarget::PortableShell
+                && v.phase == "ready"
+                && v.settings_revision != revision
+        }) {
+            let config = app.runtime_config_snapshot();
+            let name = crate::config::resolved_app_name(&config);
+            let values = super::terminal_settings::snapshot(&config);
+            for view in &mut app.terminal_state.views {
+                if view.target == TerminalTarget::PortableShell
+                    && view.phase == "ready"
+                    && view.settings_revision != revision
+                {
+                    if view.send(super::terminal_backend::Input::Branding(name.clone()))
+                        && view.send(super::terminal_backend::Input::Settings {
+                            values: values.clone(),
+                            open: false,
+                        })
+                    {
+                        view.settings_revision = revision;
+                    }
+                }
+            }
+        }
         if let Some(receiver) = &app.terminal_state.profile_scan {
             let result = match receiver.try_recv() {
                 Ok(result) => Some(result),
@@ -1208,6 +1639,10 @@ pub fn tick(app: &mut crate::app::PealayerApp, ctx: &egui::Context) {
                 app.terminal_state.profile_scan = None;
                 match result {
                     Ok(discovery) => {
+                        if app.terminal_state.profiles != discovery.profiles {
+                            app.terminal_state.profile_revision =
+                                app.terminal_state.profile_revision.wrapping_add(1);
+                        }
                         app.terminal_state.profiles = discovery.profiles;
                         app.terminal_state.profile_warnings = discovery.warnings;
                     }
@@ -1219,10 +1654,12 @@ pub fn tick(app: &mut crate::app::PealayerApp, ctx: &egui::Context) {
             .terminal_state
             .views
             .iter_mut()
-            .flat_map(|view| {
-                std::mem::take(&mut view.actions)
-                    .into_iter()
-                    .map(move |action| (view.id, action))
+            .filter_map(|view| {
+                if view.pending_command.is_none() && !view.actions.is_empty() {
+                    Some((view.id, view.actions.remove(0)))
+                } else {
+                    None
+                }
             })
             .collect();
         for (id, action) in actions {
@@ -1236,7 +1673,65 @@ pub fn tick(app: &mut crate::app::PealayerApp, ctx: &egui::Context) {
             }
             use super::portable_shell_host::Action;
             use crate::platform::interop::InteropCommand;
-            let command = match action {
+            if matches!(
+                action,
+                Action::Configure | Action::Get(_) | Action::Set { .. }
+            ) {
+                let config = app.runtime_config_snapshot();
+                let mut result = Ok(String::new());
+                match &action {
+                    Action::Set {
+                        key,
+                        value,
+                        expected,
+                    } => {
+                        result = super::terminal_settings::patch(
+                            &config,
+                            key,
+                            value,
+                            expected.as_deref(),
+                        )
+                        .and_then(|patch| app.apply_config_patch(ctx, &patch))
+                        .map(|()| format!("Saved {key} = {value}"));
+                    }
+                    Action::Get(key) => {
+                        let values = super::terminal_settings::snapshot(&config);
+                        result = if let Some(key) = key {
+                            super::terminal_settings::read(&config, key)
+                                .map(|value| format!("{key} = {value}"))
+                        } else {
+                            Ok(values
+                                .iter()
+                                .map(|entry| format!("{} = {}", entry.key, entry.value))
+                                .collect::<Vec<_>>()
+                                .join("\n"))
+                        };
+                    }
+                    _ => {}
+                }
+                let values = super::terminal_settings::snapshot(&app.runtime_config_snapshot());
+                if let Some(view) = app
+                    .terminal_state
+                    .views
+                    .iter_mut()
+                    .find(|view| view.id == id)
+                {
+                    view.send(super::terminal_backend::Input::Settings {
+                        values,
+                        open: matches!(action, Action::Configure),
+                    });
+                    if !matches!(action, Action::Configure) {
+                        let (text, error) = match result {
+                            Ok(text) => (text, false),
+                            Err(text) => (text, true),
+                        };
+                        view.send(super::terminal_backend::Input::Response { text, error });
+                    }
+                }
+                continue;
+            }
+            let command = match action.clone() {
+                Action::Configure | Action::Get(_) | Action::Set { .. } => unreachable!(),
                 Action::Status => None,
                 Action::Play => Some(InteropCommand::Play),
                 Action::Pause => Some(InteropCommand::Pause),
@@ -1245,36 +1740,133 @@ pub fn tick(app: &mut crate::app::PealayerApp, ctx: &egui::Context) {
                 Action::Volume(value) => Some(InteropCommand::SetVolume { value }),
                 Action::Mute(muted) => Some(InteropCommand::SetMute { muted }),
                 Action::Preferences => Some(InteropCommand::OpenPreferences),
+                Action::EditSetting(ref key) => {
+                    let controls = crate::preferences_contract::preference_controls(
+                        &app.runtime_config_snapshot(),
+                    );
+                    if let Some(control) = controls.iter().find(|control| {
+                        control.key == key || control.custom_key == Some(key.as_str())
+                    }) {
+                        Some(InteropCommand::NavigatePreferences {
+                            navigation: crate::preferences_contract::PreferencesNavigation {
+                                section: Some(control.section.into()),
+                                scroll_y: 0.0,
+                            },
+                        })
+                    } else {
+                        if let Some(view) = app
+                            .terminal_state
+                            .views
+                            .iter_mut()
+                            .find(|view| view.id == id)
+                        {
+                            view.send(super::terminal_backend::Input::Response {
+                                text: "Setting is not in Preferences".into(),
+                                error: true,
+                            });
+                        }
+                        continue;
+                    }
+                }
             };
             let result = if let Some(command) = command {
+                let requires_media =
+                    matches!(action, Action::Play | Action::Pause | Action::Seek(_));
+                if requires_media && app.current_video_path.is_none() {
+                    if let Some(view) = app
+                        .terminal_state
+                        .views
+                        .iter_mut()
+                        .find(|view| view.id == id)
+                    {
+                        view.send(super::terminal_backend::Input::Response {
+                            text: "No media is loaded. Open a file first.".into(),
+                            error: true,
+                        });
+                    }
+                    continue;
+                }
+                if matches!(action, Action::Seek(_)) && !app.is_seekable {
+                    if let Some(view) = app
+                        .terminal_state
+                        .views
+                        .iter_mut()
+                        .find(|view| view.id == id)
+                    {
+                        view.send(super::terminal_backend::Input::Response {
+                            text: "This media cannot seek.".into(),
+                            error: true,
+                        });
+                    }
+                    continue;
+                }
                 match command.validate() {
                     Ok(()) => {
+                        let previous_error = app.show_error.clone();
                         app.apply_interop_command(ctx, command, "Pealayer shell");
-                        Ok("Request sent to Pealayer. Use status to inspect playback.".to_string())
+                        if app.show_error != previous_error
+                            && let Some(error) = app.show_error.clone()
+                        {
+                            Err(error)
+                        } else if matches!(action, Action::Preferences | Action::EditSetting(_)) {
+                            if app.show_preferences_dialog {
+                                Ok("Preferences opened".into())
+                            } else {
+                                Err("Preferences did not open".into())
+                            }
+                        } else {
+                            let action = if let Action::Seek(value) = action {
+                                Action::Seek(value.min(app.duration).max(0.0))
+                            } else {
+                                action
+                            };
+                            let pending = super::shell_status::Pending::new(action);
+                            if let Some(view) = app
+                                .terminal_state
+                                .views
+                                .iter_mut()
+                                .find(|view| view.id == id)
+                            {
+                                view.send(super::terminal_backend::Input::Pending(
+                                    pending.label().into(),
+                                ));
+                                view.pending_command = Some(pending);
+                            }
+                            ctx.request_repaint();
+                            continue;
+                        }
                     }
                     Err(error) => Err(error),
                 }
             } else {
-                let status = crate::platform::interop::get_live_status();
-                Ok(format!(
-                    "Playback: {}\nPosition: {:.3} / {:.3} s\nVolume: {:.0}%{}\nController: {}",
-                    if status.current_video.is_none() {
-                        "idle"
-                    } else if status.playing {
-                        "playing"
-                    } else {
-                        "paused"
-                    },
-                    status.playback_time,
-                    status.duration,
-                    status.volume,
-                    if status.muted { " (muted)" } else { "" },
-                    if status.controller_connected {
-                        "connected"
-                    } else {
-                        "disconnected"
-                    }
-                ))
+                let report = if crate::peer::active() && !crate::peer::mirroring() {
+                    shell_status.clone()
+                } else {
+                    // Explicit command only: this closes the one-frame gap
+                    // between decoder confirmation and public status publish.
+                    let observed = super::shell_status::Observed {
+                        idle: app.mpv.get_property("idle-active").ok(),
+                        paused: app.mpv.get_property("pause").ok(),
+                        position: app.mpv.get_property("time-pos").ok(),
+                        seeking: None,
+                        volume: app.mpv.get_property("volume").ok(),
+                        muted: app.mpv.get_property("mute").ok(),
+                    };
+                    let mut report = shell_status.clone().with_observation(&observed);
+                    report.duration = app.mpv.get_property("duration").unwrap_or(report.duration);
+                    report
+                };
+                if let Some(view) = app
+                    .terminal_state
+                    .views
+                    .iter_mut()
+                    .find(|view| view.id == id)
+                {
+                    view.send(super::terminal_backend::Input::StatusReport(
+                        report,
+                    ));
+                }
+                continue;
             };
             if let Some(view) = app
                 .terminal_state
@@ -1297,6 +1889,200 @@ pub fn tick(app: &mut crate::app::PealayerApp, ctx: &egui::Context) {
         }
     }
     crate::workspace_tools::publish(app);
+    #[cfg(feature = "workspace-terminal")]
+    if crate::terminal_access::watched() {
+        if !app.terminal_state.preferences.allow_remote {
+            crate::terminal_access::revoke();
+        } else {
+            let signature = serde_json::json!([
+                app.terminal_state.status(),
+                app.terminal_state.active,
+                app.terminal_state.preferences.allow_remote_system_shell,
+                crate::platform::interop::live_config_revision(),
+                app.terminal_state.profile_revision,
+                app.terminal_state
+                    .views
+                    .iter()
+                    .map(|v| (v.id, v.output_revision))
+                    .collect::<Vec<_>>()
+            ]);
+            if signature != app.terminal_state.published_signature {
+                crate::terminal_access::publish(private_snapshot(&app.terminal_state, true));
+                app.terminal_state.published_signature = signature;
+            }
+        }
+    }
+}
+
+fn host_operation(
+    app: &mut crate::app::PealayerApp,
+    ctx: &egui::Context,
+    operation: crate::terminal_access::Operation,
+    remote: bool,
+) -> Result<serde_json::Value, String> {
+    #[cfg(feature = "workspace-terminal")]
+    {
+        use crate::terminal_access::Operation;
+        use crate::workspace_tools::TerminalOperation;
+        let allowed = |target: TerminalTarget, prefs: &TerminalPreferences| {
+            !remote
+                || target != TerminalTarget::SystemShell
+                || (prefs.allow_system_shell && prefs.allow_remote_system_shell)
+        };
+        match operation {
+            Operation::Snapshot => {}
+            Operation::Create { target } => {
+                let state = &mut app.terminal_state;
+                if state.views.len() >= 4 || state.closing {
+                    return Err("Close a session before opening another (maximum four)".into());
+                }
+                if !allowed(target, &state.preferences) {
+                    return Err("Remote system shells are disabled".into());
+                }
+                state.next_id += 1;
+                let mut view = View::new(state.next_id, &state.preferences);
+                view.target = target;
+                let selected = if crate::peer::active() {
+                    ""
+                } else {
+                    &app.serial_port
+                };
+                let profile = state
+                    .profiles
+                    .iter()
+                    .find(|p| p.stable_id == state.preferences.profile_id);
+                connect(&mut view, &state.preferences, profile, selected, ctx);
+                if let Some(error) = view.error {
+                    return Err(error);
+                }
+                state.views.push(view);
+                state.active = state.views.len() - 1;
+            }
+            Operation::CreateProfile { profile_id } => {
+                let state = &mut app.terminal_state;
+                if state.views.len() >= 4 || state.closing {
+                    return Err("Close a session before opening another (maximum four)".into());
+                }
+                if !allowed(TerminalTarget::SystemShell, &state.preferences)
+                    || !state.preferences.allow_system_shell
+                {
+                    return Err("System shells are disabled".into());
+                }
+                let profile = state
+                    .profiles
+                    .iter()
+                    .find(|p| p.stable_id == profile_id)
+                    .ok_or("Refresh host profiles before selecting this profile")?;
+                let mut preferences = state.preferences.clone();
+                preferences.profile_id = profile_id;
+                state.next_id += 1;
+                let mut view = View::new(state.next_id, &preferences);
+                view.target = TerminalTarget::SystemShell;
+                connect(&mut view, &preferences, Some(profile), "", ctx);
+                if let Some(error) = view.error {
+                    return Err(error);
+                }
+                state.views.push(view);
+                state.active = state.views.len() - 1;
+            }
+            Operation::RefreshProfiles => control(app, ctx, TerminalOperation::RefreshProfiles)?,
+            Operation::Select { id }
+            | Operation::Close { id }
+            | Operation::Clear { id }
+            | Operation::Input { id, .. }
+            | Operation::Scroll { id, .. } => {
+                let state = &mut app.terminal_state;
+                let index = state
+                    .views
+                    .iter()
+                    .position(|v| v.id == id)
+                    .ok_or("Session no longer exists on this host")?;
+                if !allowed(state.views[index].target, &state.preferences) {
+                    return Err("Remote access to this system shell is disabled".into());
+                }
+                match operation {
+                    Operation::Select { .. } => state.active = index,
+                    Operation::Close { .. } => state.retire_view(index),
+                    Operation::Clear { .. } => {
+                        state.views[index].clear(state.preferences.scrollback_lines)
+                    }
+                    Operation::Scroll { lines, .. } => {
+                        let view = &mut state.views[index];
+                        let offset = view
+                            .parser
+                            .screen()
+                            .scrollback()
+                            .saturating_add_signed(lines.clamp(-100, 100) as isize);
+                        view.parser.set_scrollback(offset);
+                        view.output_revision = view.output_revision.wrapping_add(1);
+                    }
+                    Operation::Input { data, .. } => {
+                        if state.views[index].target == TerminalTarget::SystemShell
+                            && !state.preferences.allow_system_shell
+                        {
+                            return Err(
+                                "System shell input is disabled in Terminal preferences".into()
+                            );
+                        }
+                        if state.views[index].phase != "ready" {
+                            return Err("Wait until the session is ready".into());
+                        }
+                        let input = if state.views[index].target == TerminalTarget::PcController {
+                            super::terminal_backend::Input::Command(data)
+                        } else {
+                            super::terminal_backend::Input::Bytes(data.into_bytes())
+                        };
+                        state.views[index]
+                            .session
+                            .as_ref()
+                            .ok_or("Session has ended")?
+                            .send(input)?;
+                    }
+                    _ => unreachable!(),
+                }
+            }
+        }
+        ctx.request_repaint();
+        return Ok(private_snapshot(&app.terminal_state, remote));
+    }
+    #[cfg(not(feature = "workspace-terminal"))]
+    {
+        let _ = (app, ctx, operation, remote);
+        Err("Terminal is not included in this build".into())
+    }
+}
+#[cfg(feature = "workspace-terminal")]
+fn private_snapshot(state: &TerminalState, remote: bool) -> serde_json::Value {
+    use serde_json::json;
+    let permitted = |v: &&View| {
+        !remote
+            || v.target != TerminalTarget::SystemShell
+            || (state.preferences.allow_system_shell && state.preferences.allow_remote_system_shell)
+    };
+    let sessions=state.views.iter().filter(permitted).map(|v|json!({"id":v.id,"target":v.target,"phase":v.phase,"rows":v.size.0,"cols":v.size.1})).collect::<Vec<_>>();
+    let view = state.views.get(state.active).filter(|v| permitted(v));
+    let screen=view.map(|v| {
+        let screen=v.parser.screen();let (rows,cols)=screen.size();
+        let lines=(0..rows).map(|row| {
+            let mut runs:Vec<serde_json::Value>=Vec::new();
+            for col in 0..cols {
+                let Some(cell)=screen.cell(row,col) else {continue;};
+                if cell.is_wide_continuation() {continue;}
+                let text=if cell.contents().is_empty(){" ".to_string()}else{cell.contents()};
+                let fg=super::terminal_screen::web_color(cell.fgcolor());let bg=super::terminal_screen::web_color(cell.bgcolor());
+                let fg_role=if v.parser.accent(row,col){Some("accent")}else{None};
+                if let Some(last)=runs.last_mut() && last["fg"]==json!(fg) && last["fg_role"]==json!(fg_role) && last["bg"]==json!(bg) && last["bold"]==cell.bold() && last["inverse"]==cell.inverse() && last["underline"]==cell.underline() {
+                    let mut joined=last["text"].as_str().unwrap().to_string();joined.push_str(&text);last["text"]=json!(joined);
+                } else {runs.push(json!({"text":text,"fg":fg,"fg_role":fg_role,"bg":bg,"bold":cell.bold(),"inverse":cell.inverse(),"underline":cell.underline()}));}
+            } runs
+        }).collect::<Vec<_>>();
+            json!({"id":v.id,"lines":lines,"cursor":screen.cursor_position(),"hide_cursor":screen.hide_cursor(),"alternate":screen.alternate_screen(),"bracketed_paste":screen.bracketed_paste(),"application_cursor":screen.application_cursor(),
+            "mouse":screen.mouse_protocol_mode()!=vt100::MouseProtocolMode::None && screen.mouse_protocol_encoding()==vt100::MouseProtocolEncoding::Sgr})
+    });
+    json!({"owner_id":crate::peer::instance_id(),"sessions":sessions,"screen":screen,
+        "profiles":state.profiles.iter().filter(|p|!p.hidden).map(|p|json!({"id":p.stable_id,"name":p.name,"ready":p.ready()})).collect::<Vec<_>>(),
+        "cursor_style":state.preferences.cursor_style,"cursor_blink":state.preferences.cursor_blink,"font_size":state.preferences.font_size,"accent_commands":state.preferences.accent_commands,
+        "system_shell_available":state.preferences.allow_system_shell && (!remote || state.preferences.allow_remote_system_shell)})
 }
 
 /// Apply a changed visibility intent once. Native pane close/profile actions
@@ -1338,6 +2124,26 @@ pub fn sync_visibility(app: &mut crate::app::PealayerApp) {
 pub fn draw_docked(app: &mut crate::app::PealayerApp, ui: &mut egui::Ui) {
     #[cfg(feature = "workspace-terminal")]
     if app.terminal_state.preferences.enabled {
+        if let Some(client) = crate::peer::client() {
+            if super::terminal_remote::draw(
+                ui,
+                &mut app.terminal_state.remote_view,
+                client.origin.clone(),
+                &app.terminal_state.preferences,
+            ) {
+                app.apply_interop_command(
+                    ui.ctx(),
+                    crate::platform::interop::InteropCommand::NavigatePreferences {
+                        navigation: crate::preferences_contract::PreferencesNavigation {
+                            section: Some("terminal".into()),
+                            scroll_y: 0.0,
+                        },
+                    },
+                    "terminal",
+                );
+            }
+            return;
+        }
         let mut state = std::mem::take(&mut app.terminal_state);
         let mut open_preferences = false;
         ui.set_min_height(ui.available_height());
@@ -1350,7 +2156,7 @@ pub fn draw_docked(app: &mut crate::app::PealayerApp, ui: &mut egui::Ui) {
                 ui.ctx(),
                 crate::platform::interop::InteropCommand::NavigatePreferences {
                     navigation: crate::preferences_contract::PreferencesNavigation {
-                        section: Some("workspace_tools".into()),
+                        section: Some("terminal".into()),
                         scroll_y: 0.0,
                     },
                 },
@@ -1365,6 +2171,60 @@ pub fn draw_docked(app: &mut crate::app::PealayerApp, ui: &mut egui::Ui) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(feature = "workspace-terminal")]
+    #[test]
+    fn native_and_remote_views_share_ids_and_reject_system_shell_by_default() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let mut app = crate::app::PealayerApp::default();
+        let ctx = egui::Context::default();
+        assert!(!app.terminal_state.preferences.allow_system_shell);
+        assert!(!app.terminal_state.preferences.allow_remote);
+        assert!(!app.terminal_state.preferences.allow_remote_system_shell);
+        use crate::terminal_access::Operation;
+        assert!(
+            host_operation(
+                &mut app,
+                &ctx,
+                Operation::Create {
+                    target: TerminalTarget::SystemShell
+                },
+                true
+            )
+            .is_err()
+        );
+        let mut a = View::new(51, &app.terminal_state.preferences);
+        a.parser.process(b"host-owned");
+        app.terminal_state.views.push(a);
+        let b = View::new(52, &app.terminal_state.preferences);
+        app.terminal_state.views.push(b);
+        host_operation(&mut app, &ctx, Operation::Select { id: 52 }, true).unwrap();
+        assert_eq!(app.terminal_state.active, 1);
+        let snapshot = host_operation(&mut app, &ctx, Operation::Select { id: 51 }, true).unwrap();
+        assert_eq!(snapshot["screen"]["id"], 51);
+        assert!(snapshot.to_string().contains("host-owned"));
+        assert!(
+            app.terminal_state
+                .status()
+                .to_string()
+                .find("host-owned")
+                .is_none()
+        );
+        host_operation(&mut app, &ctx, Operation::Close { id: 52 }, true).unwrap();
+        assert_eq!(app.terminal_state.views.len(), 1);
+        assert_eq!(app.terminal_state.views[0].id, 51);
+        assert!(
+            host_operation(
+                &mut app,
+                &ctx,
+                Operation::Input {
+                    id: 999,
+                    data: "play\r".into()
+                },
+                true
+            )
+            .is_err()
+        );
+    }
     #[test]
     fn hidden_terminal_never_allocates_a_connection() {
         let state = TerminalState::default();
@@ -1375,6 +2235,127 @@ mod tests {
             serde_json::from_value::<TerminalPreferences>(serde_json::json!({})).unwrap(),
             state.preferences
         );
+    }
+    #[cfg(feature = "workspace-terminal")]
+    #[test]
+    fn closing_another_tab_preserves_the_selected_session_identity() {
+        let mut state = TerminalState::default();
+        for id in 1..=3 {
+            state.views.push(View::new(id, &state.preferences));
+        }
+        state.active = 1;
+        state.retire_view(0);
+        assert_eq!(state.views[state.active].id, 2);
+        state.retire_view(1);
+        assert_eq!(state.views[state.active].id, 2);
+        assert_eq!(state.closing_tabs.len(), 2);
+    }
+    #[cfg(feature = "workspace-terminal")]
+    #[test]
+    fn active_session_chrome_uses_live_accent_not_selection_text_ink() {
+        let ctx = egui::Context::default();
+        for accent in [
+            egui::Color32::from_rgb(139, 121, 235),
+            egui::Color32::from_rgb(30, 150, 100),
+        ] {
+            let mut tokens = super::super::craft_theme::current(&ctx);
+            tokens.accent = accent;
+            super::super::craft_theme::set_current(&ctx, tokens);
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                ui.visuals_mut().selection.stroke.color = egui::Color32::WHITE;
+                session_tab(ui, 9, TerminalTarget::PortableShell, true, "ready", 1.0);
+            });
+            output.textures_delta.clear();
+            let outline = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Rect(rect) if rect.stroke.width == 1.0 => Some(rect.stroke.color),
+                    _ => None,
+                })
+                .expect("session outline must be painted");
+            assert_eq!(outline, accent.gamma_multiply(0.55));
+            assert_ne!(outline, egui::Color32::WHITE);
+        }
+    }
+    #[cfg(feature = "workspace-terminal")]
+    #[test]
+    fn session_tab_centers_actual_ink_and_close_is_independent_at_fractional_scales() {
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            let ctx = egui::Context::default();
+            ctx.set_pixels_per_point(scale);
+            super::super::i18n::configure_ui_fonts(&ctx, false);
+            let mut result = (false, false);
+            let mut paint = |events| {
+                let mut output = ctx.run_ui(
+                    egui::RawInput {
+                        events,
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(700.0, 200.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| {
+                        result =
+                            session_tab(ui, 71, TerminalTarget::PortableShell, true, "ready", 1.0);
+                    },
+                );
+                output.textures_delta.clear();
+                output
+            };
+            let output = paint(vec![]);
+            let text: Vec<_> = output
+                .shapes
+                .iter()
+                .filter_map(|shape| {
+                    if let egui::Shape::Text(text) = &shape.shape {
+                        Some(text)
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            let centers: Vec<_> = text
+                .iter()
+                .filter(|t| {
+                    [
+                        super::super::icons::TERMINAL_WINDOW,
+                        "Pealayer Shell",
+                        super::super::icons::X,
+                    ]
+                    .contains(&t.galley.text())
+                })
+                .map(|t| t.pos.y + t.galley.mesh_bounds.center().y)
+                .collect();
+            assert_eq!(centers.len(), 3);
+            assert!(centers.iter().all(|y| (y - centers[0]).abs() * scale < 0.1));
+            let close = text
+                .iter()
+                .find(|t| t.galley.text() == super::super::icons::X)
+                .unwrap();
+            let point = close.pos + close.galley.mesh_bounds.center().to_vec2();
+            paint(vec![
+                egui::Event::PointerMoved(point),
+                egui::Event::PointerButton {
+                    pos: point,
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ]);
+            paint(vec![egui::Event::PointerButton {
+                pos: point,
+                button: egui::PointerButton::Primary,
+                pressed: false,
+                modifiers: egui::Modifiers::NONE,
+            }]);
+            assert_eq!(
+                result,
+                (false, true),
+                "close must not select/activate the underlying session"
+            );
+        }
     }
     #[cfg(feature = "workspace-terminal")]
     #[test]

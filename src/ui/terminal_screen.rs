@@ -1,5 +1,6 @@
 //! Native cell-grid view of the VT parser. No process, clipboard OSC, or transport
 //! side effects: the caller owns the parser, input delivery and PTY lifecycle.
+use super::terminal_parser::Parser;
 use eframe::egui;
 
 // One bracketed paste stays below the backend's 32 KiB atomic input limit.
@@ -14,6 +15,15 @@ pub struct ScreenViewState {
     selection_anchor: Option<usize>,
     wheel_fraction: f32,
     rejected_paste: bool,
+    last_mouse: Option<(usize, bool)>,
+}
+
+impl ScreenViewState {
+    pub(super) fn clear_selection(&mut self) {
+        self.selection = None;
+        self.selection_anchor = None;
+        self.last_mouse = None;
+    }
 }
 
 pub struct ScreenOutput {
@@ -22,6 +32,8 @@ pub struct ScreenOutput {
     pub input: Vec<Vec<u8>>,
     pub focused: bool,
     pub clicked: bool,
+    pub clear: bool,
+    pub preferences: bool,
 }
 
 fn dimensions(size: egui::Vec2, cell: egui::Vec2) -> (u16, u16) {
@@ -120,6 +132,13 @@ fn ansi_color(color: vt100::Color, default: egui::Color32, dark: bool) -> egui::
             Color32::from_rgb(r, g, b)
         }
     }
+}
+pub(crate) fn web_color(color: vt100::Color) -> Option<String> {
+    if color == vt100::Color::Default {
+        return None;
+    }
+    let c = ansi_color(color, egui::Color32::WHITE, true);
+    Some(format!("#{:02x}{:02x}{:02x}", c.r(), c.g(), c.b()))
 }
 
 fn key_bytes(
@@ -232,7 +251,12 @@ fn key_bytes(
 
 fn paste_bytes(text: &str, bracketed: bool) -> Option<Vec<u8>> {
     // Reject oversized pastes atomically, never execute a truncated command.
-    if text.len() > MAX_PASTE_BYTES {
+    if text.len() > MAX_PASTE_BYTES
+        || (!bracketed && text.contains(['\r', '\n']))
+        || text
+            .chars()
+            .any(|ch| ch.is_control() && !matches!(ch, '\r' | '\n' | '\t'))
+    {
         return None;
     }
     let mut result = Vec::with_capacity(text.len() + 12);
@@ -297,11 +321,76 @@ fn selected_text(screen: &vt100::Screen, selection: Option<(usize, usize)>) -> S
 /// The caller must also suppress earlier global shortcuts while this Id owns focus.
 pub fn show(
     ui: &mut egui::Ui,
-    parser: &mut vt100::Parser,
+    parser: &mut Parser,
     state: &mut ScreenViewState,
     id: egui::Id,
     interactive: bool,
     font_size: f32,
+) -> ScreenOutput {
+    show_with_preferences(
+        ui,
+        parser,
+        state,
+        id,
+        interactive,
+        font_size,
+        &super::terminal::TerminalPreferences::default(),
+        false,
+    )
+}
+
+pub fn show_with_preferences(
+    ui: &mut egui::Ui,
+    parser: &mut Parser,
+    state: &mut ScreenViewState,
+    id: egui::Id,
+    interactive: bool,
+    font_size: f32,
+    preferences: &super::terminal::TerminalPreferences,
+    defer_resize: bool,
+) -> ScreenOutput {
+    show_impl(
+        ui,
+        parser,
+        state,
+        id,
+        interactive,
+        font_size,
+        preferences,
+        true,
+        defer_resize,
+    )
+}
+pub fn show_shared(
+    ui: &mut egui::Ui,
+    parser: &mut Parser,
+    state: &mut ScreenViewState,
+    id: egui::Id,
+    interactive: bool,
+    preferences: &super::terminal::TerminalPreferences,
+) -> ScreenOutput {
+    show_impl(
+        ui,
+        parser,
+        state,
+        id,
+        interactive,
+        preferences.font_size,
+        preferences,
+        false,
+        false,
+    )
+}
+fn show_impl(
+    ui: &mut egui::Ui,
+    parser: &mut Parser,
+    state: &mut ScreenViewState,
+    id: egui::Id,
+    interactive: bool,
+    font_size: f32,
+    preferences: &super::terminal::TerminalPreferences,
+    measure_viewport: bool,
+    defer_resize: bool,
 ) -> ScreenOutput {
     let mut font = egui::TextStyle::Monospace.resolve(ui.style());
     if font_size.is_finite() {
@@ -314,11 +403,16 @@ pub fn show(
         )
     });
     let available = ui.available_size().max(egui::vec2(1.0, 1.0));
-    let (rows, cols) = dimensions(available, cell);
-    if parser.screen().size() != (rows, cols) {
-        parser.set_size(rows, cols);
-        state.selection = None;
+    let requested = if measure_viewport {
+        dimensions(available, cell)
+    } else {
+        parser.screen().size()
+    };
+    if !defer_resize && parser.screen().size() != requested {
+        parser.set_size(requested.0, requested.1);
+        state.clear_selection();
     }
+    let (rows, cols) = parser.screen().size();
     let (rect, _) = ui.allocate_exact_size(available, egui::Sense::hover());
     let response = ui
         .interact(rect, id, egui::Sense::click_and_drag())
@@ -352,7 +446,14 @@ pub fn show(
             .clamp(0.0, f32::from(cols - 1)) as usize;
         row * usize::from(cols) + col
     };
-    if active_layer {
+    let modifiers = ui.input(|input| input.modifiers);
+    let mouse = interactive
+        && active_layer
+        && !modifiers.shift
+        && parser.screen().alternate_screen()
+        && parser.screen().mouse_protocol_mode() != vt100::MouseProtocolMode::None
+        && parser.screen().mouse_protocol_encoding() == vt100::MouseProtocolEncoding::Sgr;
+    if active_layer && !mouse {
         if response.drag_started() {
             if let Some(point) = ui.input(|input| input.pointer.press_origin()) {
                 let index = point_index(point);
@@ -375,9 +476,55 @@ pub fn show(
     let mut copy = false;
     let mut select_all = false;
     let mut input_bytes = Vec::new();
+    if mouse && let Some(point) = ui.input(|input| input.pointer.interact_pos()) {
+        if rect.contains(point) || response.dragged() {
+            let index = point_index(point);
+            let col = index % usize::from(cols) + 1;
+            let row = index / usize::from(cols) + 1;
+            let (pressed, released, down) = ui.input(|input| {
+                (
+                    input.pointer.button_pressed(egui::PointerButton::Primary),
+                    input.pointer.button_released(egui::PointerButton::Primary),
+                    input.pointer.primary_down(),
+                )
+            });
+            if pressed {
+                input_bytes.push(format!("\x1b[<0;{col};{row}M").into_bytes());
+            }
+            if released {
+                input_bytes.push(format!("\x1b[<0;{col};{row}m").into_bytes());
+            }
+            let (right_pressed, right_released) = ui.input(|input| {
+                (
+                    input.pointer.button_pressed(egui::PointerButton::Secondary),
+                    input
+                        .pointer
+                        .button_released(egui::PointerButton::Secondary),
+                )
+            });
+            if right_pressed {
+                input_bytes.push(format!("\x1b[<2;{col};{row}M").into_bytes());
+            }
+            if right_released {
+                input_bytes.push(format!("\x1b[<2;{col};{row}m").into_bytes());
+            }
+            if down
+                && !pressed
+                && state.last_mouse != Some((index, true))
+                && matches!(
+                    parser.screen().mouse_protocol_mode(),
+                    vt100::MouseProtocolMode::ButtonMotion | vt100::MouseProtocolMode::AnyMotion
+                )
+            {
+                input_bytes.push(format!("\x1b[<32;{col};{row}M").into_bytes());
+            }
+            state.last_mouse = Some((index, down));
+        }
+    } else {
+        state.last_mouse = None;
+    }
     let mut paste_rejected = false;
     let mut scroll_lines = 0_i32;
-    let modifiers = ui.input(|input| input.modifiers);
     let hover = response.hovered() && active_layer;
     let events = ui.input_mut(|input| {
         let all = std::mem::take(&mut input.events);
@@ -423,7 +570,21 @@ pub fn show(
                     egui::MouseWheelUnit::Point => delta.y / cell.y,
                 };
                 let whole = state.wheel_fraction.trunc() as i32;
-                scroll_lines += whole;
+                if mouse {
+                    if let Some(point) = ui.input(|input| input.pointer.hover_pos()) {
+                        let index = point_index(point);
+                        let col = index % usize::from(cols) + 1;
+                        let row = index / usize::from(cols) + 1;
+                        for _ in 0..whole.unsigned_abs().min(32) {
+                            input_bytes.push(
+                                format!("\x1b[<{};{col};{row}M", if whole > 0 { 64 } else { 65 })
+                                    .into_bytes(),
+                            );
+                        }
+                    }
+                } else {
+                    scroll_lines += whole;
+                }
                 state.wheel_fraction -= whole as f32;
             }
             egui::Event::Copy => {
@@ -511,31 +672,78 @@ pub fn show(
     }
     parser.set_scrollback(state.scrollback);
     state.scrollback = parser.screen().scrollback();
-    response.context_menu(|ui| {
-        if ui
-            .add_enabled(
-                state.selection.is_some(),
-                egui::Button::new("Copy selection"),
-            )
-            .clicked()
-        {
-            copy = true;
-            ui.close();
-        }
-        if ui.button("Select all visible text").clicked() {
-            select_all = true;
-            ui.close();
-        }
-        if ui
-            .add_enabled(state.scrollback != 0, egui::Button::new("Scroll to latest"))
-            .clicked()
-        {
-            state.scrollback = 0;
-            state.selection = None;
-            parser.set_scrollback(0);
-            ui.close();
-        }
-    });
+    let mut clear = false;
+    let mut preferences_requested = false;
+    if !mouse {
+        response.context_menu(|ui| {
+            if ui
+                .add_enabled(
+                    state.selection.is_some(),
+                    egui::Button::new(format!("{}  Copy selection", super::icons::COPY)),
+                )
+                .clicked()
+            {
+                copy = true;
+                ui.close();
+            }
+            if ui
+                .button(format!(
+                    "{}  Select all visible text",
+                    super::icons::LIST_CHECKS
+                ))
+                .clicked()
+            {
+                select_all = true;
+                ui.close();
+            }
+            if ui
+                .add_enabled(
+                    interactive,
+                    egui::Button::new(format!("{}  Paste", super::icons::CLIPBOARD)),
+                )
+                .clicked()
+            {
+                if let Ok(text) =
+                    arboard::Clipboard::new().and_then(|mut clipboard| clipboard.get_text())
+                {
+                    if let Some(bytes) = paste_bytes(&text, bracketed) {
+                        input_bytes.push(bytes);
+                    } else {
+                        state.rejected_paste = true;
+                    }
+                }
+                response.request_focus();
+                ui.close();
+            }
+            if ui
+                .add_enabled(
+                    state.scrollback != 0,
+                    egui::Button::new(format!("{}  Scroll to latest", super::icons::ARROW_DOWN)),
+                )
+                .clicked()
+            {
+                state.scrollback = 0;
+                state.selection = None;
+                parser.set_scrollback(0);
+                ui.close();
+            }
+            ui.separator();
+            if ui
+                .button(format!("{}  Clear terminal", super::icons::TRASH))
+                .clicked()
+            {
+                clear = true;
+                ui.close();
+            }
+            if ui
+                .button(format!("{}  Terminal preferences", super::icons::GEAR))
+                .clicked()
+            {
+                preferences_requested = true;
+                ui.close();
+            }
+        });
+    }
     if select_all {
         state.selection = Some((0, usize::from(rows) * usize::from(cols)));
     }
@@ -548,6 +756,11 @@ pub fn show(
     let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
     let background = ui.visuals().extreme_bg_color;
     let foreground = ui.visuals().text_color();
+    // Snapshot once, outside the grid loop. The selection foreground is not
+    // the theme accent and must remain reserved for selected text contrast.
+    let tokens = super::craft_theme::current(ui.ctx());
+    let accent = tokens.accent;
+    let core = parser.application_palette();
     painter.rect_filled(rect, 0.0, background);
     let mut bold_font = font.clone();
     let bold_family = egui::FontFamily::Name("pealayer-status-mono-strong".into());
@@ -569,7 +782,44 @@ pub fn show(
                 egui::vec2(cell.x * width, cell.y),
             );
             let mut fg = ansi_color(content.fgcolor(), foreground, ui.visuals().dark_mode);
+            // PortableShell's default semantic canvas follows the live app
+            // surface; explicit non-role ANSI/truecolor values stay untouched.
+            if core && content.fgcolor() == vt100::Color::Rgb(230, 233, 239) {
+                fg = foreground;
+            }
+            if core && content.fgcolor() == vt100::Color::Rgb(151, 160, 175) {
+                fg = ui.visuals().weak_text_color();
+            }
+            if core && !ui.visuals().dark_mode {
+                fg = match content.fgcolor() {
+                    vt100::Color::Rgb(126, 224, 163) | vt100::Color::Rgb(166, 218, 149) => {
+                        egui::Color32::from_rgb(23, 120, 64)
+                    }
+                    vt100::Color::Rgb(255, 204, 102) => ui.visuals().warn_fg_color,
+                    vt100::Color::Rgb(255, 107, 122) => ui.visuals().error_fg_color,
+                    vt100::Color::Rgb(255, 184, 108) => egui::Color32::from_rgb(160, 80, 16),
+                    vt100::Color::Rgb(112, 211, 235) => egui::Color32::from_rgb(0, 100, 125),
+                    _ => fg,
+                };
+            }
+            // Only explicit semantic output follows the application accent.
+            // Ordinary cyan/violet and identical RGB fallback values do not.
+            if preferences.accent_commands && parser.accent(row, col) {
+                fg = accent;
+            }
             let mut bg = ansi_color(content.bgcolor(), background, ui.visuals().dark_mode);
+            if core {
+                bg = match content.bgcolor() {
+                    vt100::Color::Rgb(24, 26, 31) => background,
+                    vt100::Color::Rgb(36, 41, 50) => tokens.card_bg,
+                    vt100::Color::Rgb(48, 55, 67) => tokens.control_surface,
+                    vt100::Color::Rgb(211, 218, 230) => {
+                        fg = ui.visuals().selection.stroke.color;
+                        ui.visuals().selection.bg_fill
+                    }
+                    _ => bg,
+                };
+            }
             if content.inverse() {
                 std::mem::swap(&mut fg, &mut bg);
             }
@@ -606,21 +856,36 @@ pub fn show(
             }
         }
     }
-    // A steady cursor avoids an idle repaint loop and respects reduced motion.
-    if interactive && state.scrollback == 0 && !screen.hide_cursor() {
+    // Blink only the focused, visible terminal. No hidden-session timer and no
+    // continuous repaint; reduced-motion policy keeps the caret steady.
+    let blink = preferences.cursor_blink && focused && ui.style().animation_time > 0.0;
+    let time = ui.input(|input| input.time);
+    let caret_visible = !blink || (time / 0.6).floor() as u64 % 2 == 0;
+    if interactive && state.scrollback == 0 && !screen.hide_cursor() && blink {
+        ui.ctx()
+            .request_repaint_after(std::time::Duration::from_secs_f64(
+                0.6 - time.rem_euclid(0.6),
+            ));
+    }
+    if interactive && state.scrollback == 0 && !screen.hide_cursor() && caret_visible {
         let (row, col) = screen.cursor_position();
         if row < rows && col < cols {
-            let cursor = egui::Rect::from_min_size(
+            let mut cursor = egui::Rect::from_min_size(
                 rect.min + egui::vec2(f32::from(col) * cell.x, f32::from(row) * cell.y),
                 cell,
             );
+            match preferences.cursor_style {
+                super::terminal::CursorStyle::Bar => cursor.max.x = cursor.min.x + 2.0,
+                super::terminal::CursorStyle::Underline => cursor.min.y = cursor.max.y - 2.0,
+                super::terminal::CursorStyle::Block => {}
+            }
             painter.rect_stroke(
                 cursor,
                 0.0,
                 egui::Stroke::new(
                     if focused { 2.0 } else { 1.0 },
                     if focused {
-                        ui.visuals().selection.stroke.color
+                        accent
                     } else {
                         ui.visuals().weak_text_color()
                     },
@@ -632,7 +897,7 @@ pub fn show(
     if state.rejected_paste {
         response
             .clone()
-            .on_hover_text("Paste is limited to 16 KiB; nothing was sent.");
+            .on_hover_text("Paste rejected: maximum 16 KiB, no embedded control codes, and multiline input requires bracketed paste. Nothing was sent.");
         painter.rect_stroke(
             rect,
             0.0,
@@ -669,11 +934,13 @@ pub fn show(
         egui::WidgetInfo::labeled(egui::Role::TextInput, interactive, accessible.clone())
     });
     ScreenOutput {
-        rows,
-        cols,
+        rows: requested.0,
+        cols: requested.1,
         input: input_bytes,
         focused,
         clicked,
+        clear,
+        preferences: preferences_requested,
     }
 }
 
@@ -715,13 +982,15 @@ mod tests {
             paste_bytes("a\nb", true).unwrap(),
             b"\x1b[200~a\nb\x1b[201~"
         );
-        assert_eq!(paste_bytes("a\nb", false).unwrap(), b"a\nb");
+        assert!(paste_bytes("a\nb", false).is_none());
+        assert!(paste_bytes("\x1b[201~play\r", true).is_none());
+        assert_eq!(paste_bytes("plain text", false).unwrap(), b"plain text");
         assert!(paste_bytes(&"x".repeat(MAX_PASTE_BYTES + 1), true).is_none());
     }
 
     #[test]
     fn fragmented_ansi_unicode_and_copy_read_real_cells() {
-        let mut parser = vt100::Parser::new(4, 20, 100);
+        let mut parser = Parser::new(4, 20, 100);
         parser.process(b"\x1b[38;2;12;");
         parser.process(b"34;56m");
         let bytes = "界e\u{301}".as_bytes();
@@ -759,10 +1028,113 @@ mod tests {
     }
 
     #[test]
+    fn explicit_accent_recolors_existing_output_without_recoloring_ordinary_cyan() {
+        let ctx = egui::Context::default();
+        let mut parser = Parser::semantic(4, 20, 100);
+        parser.process(b"\x1b[38;2;216;160;255m\x1b]777;ps;ink;accent\x1b\\A\x1b[36mC");
+        let mut state = ScreenViewState::default();
+        for accent in [
+            egui::Color32::from_rgb(130, 100, 230),
+            egui::Color32::from_rgb(20, 140, 100),
+        ] {
+            let mut tokens = super::super::craft_theme::current(&ctx);
+            tokens.accent = accent;
+            super::super::craft_theme::set_current(&ctx, tokens);
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                ui.visuals_mut().selection.stroke.color = egui::Color32::WHITE;
+                show_shared(
+                    ui,
+                    &mut parser,
+                    &mut state,
+                    egui::Id::unique("accent-test"),
+                    false,
+                    &super::super::terminal::TerminalPreferences::default(),
+                );
+            });
+            output.textures_delta.clear();
+            let color = |glyph: &str| {
+                output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == glyph => {
+                            Some(text.fallback_color)
+                        }
+                        _ => None,
+                    })
+                    .expect("glyph must be painted")
+            };
+            assert_eq!(color("A"), accent);
+            assert_ne!(color("C"), accent);
+        }
+    }
+    #[test]
+    fn core_popups_follow_light_and_dark_surfaces_without_recoloring_system_shell_rgb() {
+        for light in [false, true] {
+            let ctx = egui::Context::default();
+            ctx.set_visuals(if light {
+                egui::Visuals::light()
+            } else {
+                egui::Visuals::dark()
+            });
+            let tokens = super::super::craft_theme::Tokens::for_kind(if light {
+                super::super::craft_theme::ThemeKind::Light
+            } else {
+                super::super::craft_theme::ThemeKind::Dark
+            });
+            super::super::craft_theme::set_current(&ctx, tokens);
+            for core in [false, true] {
+                let mut parser = if core {
+                    Parser::semantic(4, 20, 0)
+                } else {
+                    Parser::new(4, 20, 0)
+                };
+                parser.process(
+                    b"\x1b[38;2;230;233;239;48;2;48;55;67mP\x1b[38;2;24;26;31;48;2;211;218;230mS",
+                );
+                let mut state = ScreenViewState::default();
+                let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    show_shared(
+                        ui,
+                        &mut parser,
+                        &mut state,
+                        egui::Id::unique("palette-test"),
+                        false,
+                        &super::super::terminal::TerminalPreferences::default(),
+                    );
+                });
+                output.textures_delta.clear();
+                let color = |glyph: &str| {
+                    output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.text() == glyph => {
+                                Some(text.fallback_color)
+                            }
+                            _ => None,
+                        })
+                        .unwrap()
+                };
+                if core {
+                    assert_eq!(color("P"), ctx.style_of(ctx.theme()).visuals.text_color());
+                    assert_eq!(
+                        color("S"),
+                        ctx.style_of(ctx.theme()).visuals.selection.stroke.color
+                    );
+                    assert!(output.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Rect(rect) if rect.fill==tokens.control_surface)));
+                } else {
+                    assert_eq!(color("P"), egui::Color32::from_rgb(230, 233, 239));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn focused_grid_claims_space_text_and_navigation_but_readonly_view_does_not() {
         let ctx = egui::Context::default();
         let id = egui::Id::unique("terminal-input-test");
-        let mut parser = vt100::Parser::new(4, 20, 100);
+        let mut parser = Parser::new(4, 20, 100);
         let mut state = ScreenViewState::default();
         let mut frame = ctx.run_ui(egui::RawInput::default(), |ui| {
             show(ui, &mut parser, &mut state, id, true, 12.0);

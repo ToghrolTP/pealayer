@@ -377,6 +377,8 @@ pub fn preference_sections() -> Vec<PreferenceSection> {
         PreferenceSection { id: "sidebar_rail", navigation_group: "Application", label: "Sidebar rail", icon: "sliders" },
         #[cfg(any(feature = "workspace-toolbar", feature = "workspace-terminal"))]
         PreferenceSection { id: "workspace_tools", navigation_group: "Application", label: "Workspace tools", icon: "terminal-window" },
+        #[cfg(feature = "workspace-terminal")]
+        PreferenceSection { id: "terminal", navigation_group: "Application", label: "Terminal", icon: "terminal-window" },
     ]
 }
 
@@ -418,11 +420,12 @@ fn workspace_tool_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
     }
     #[cfg(feature = "workspace-terminal")]
     {
+        let start = controls.len();
         let mut enabled = PreferenceControl::boolean("ui.terminal.enabled", "workspace_tools", "Terminal", "Show terminal panel");
         enabled.description = Some("Showing the panel does not start a shell or connect to a host. Choose Connect in the terminal when ready.");
         controls.push(enabled);
         let mut target = PreferenceControl::select("ui.terminal.target", "workspace_tools", "Terminal", "Default session", &[
-            ("pc_controller", "PCController"), ("system_shell", "System shell"), ("portable_shell", "PortableShell"),
+            ("pc_controller", "PCController"), ("system_shell", "System shell"), ("portable_shell", "Pealayer Shell"),
         ]);
         for (option, (icon, description)) in target.options.iter_mut().zip([
             ("plug", "Connect to the selected PCController host's interactive terminal."),
@@ -454,6 +457,18 @@ fn workspace_tool_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             PreferenceControl::number("ui.terminal.font_size", "workspace_tools", "Terminal appearance", "Font size", 9.0, 28.0, 0.5),
             PreferenceControl::number("ui.terminal.scrollback_lines", "workspace_tools", "Terminal appearance", "Scrollback lines", 100.0, 10000.0, 100.0),
         ]);
+        controls.extend([
+            PreferenceControl::boolean("ui.terminal.cursor_blink", "terminal", "Terminal appearance", "Blink cursor"),
+            PreferenceControl::select("ui.terminal.cursor_style", "terminal", "Terminal appearance", "Cursor style", &[("bar", "Bar"), ("block", "Block"), ("underline", "Underline")]),
+            PreferenceControl::boolean("ui.terminal.accent_commands", "terminal", "Terminal appearance", "Use app accent for commands"),
+            PreferenceControl::boolean("ui.terminal.allow_system_shell", "terminal", "Security", "Allow local system shells"),
+            PreferenceControl::boolean("ui.terminal.allow_remote", "terminal", "Security", "Allow paired remote terminal access"),
+            PreferenceControl::boolean("ui.terminal.allow_remote_system_shell", "terminal", "Security", "Allow paired remote access to system shells"),
+        ]);
+        for control in &mut controls[start..] { control.section = "terminal"; }
+        for control in controls[start..].iter_mut().filter(|control|control.group=="Security") {
+            control.description=Some("Only the native host can change terminal security. Remote access also requires a native-issued, expiring access key. Use a trusted encrypted connection outside localhost.");
+        }
     }
     // Avoid feature-off warnings without changing or discarding persisted settings.
     let _ = config;

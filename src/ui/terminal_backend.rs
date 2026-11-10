@@ -41,8 +41,22 @@ pub enum Target {
 pub enum Input {
     Bytes(Vec<u8>),
     Command(String),
-    Resize { rows: u16, cols: u16 },
-    Response { text: String, error: bool },
+    Resize {
+        rows: u16,
+        cols: u16,
+    },
+    Response {
+        text: String,
+        error: bool,
+    },
+    Settings {
+        values: Vec<super::terminal_settings::Setting>,
+        open: bool,
+    },
+    Branding(String),
+    PromptStatus(String),
+    Pending(String),
+    StatusReport(super::shell_status::Status),
 }
 
 #[derive(Debug)]
@@ -50,6 +64,7 @@ pub enum Event {
     Ready { label: String },
     Catalog(Vec<Value>),
     Output(Vec<u8>),
+    GridSize { rows: u16, cols: u16 },
     Exited { code: Option<u32> },
     Error(String),
     Application(super::portable_shell_host::Action),
@@ -394,6 +409,48 @@ fn validate_input(kind: Kind, input: &Input) -> Result<(), String> {
         }
         Input::Resize { rows, cols } if kind == Kind::Shell => validate_size(*rows, *cols),
         Input::Response { text, .. } if kind == Kind::Embedded && text.len() <= 8192 => Ok(()),
+        Input::StatusReport(status)
+            if kind == Kind::Embedded
+                && [status.position, status.duration, status.volume]
+                    .into_iter()
+                    .all(f64::is_finite) =>
+        {
+            Ok(())
+        }
+        Input::Settings { values, .. }
+            if kind == Kind::Embedded
+                && values.len() <= 256
+                && values.iter().all(|entry| {
+                    entry.key.len() < 96
+                        && entry.value.len() < 192
+                        && !entry.key.contains('\0')
+                        && !entry.value.contains('\0')
+                        && entry.group.len() < 64
+                        && entry.choices.len() <= 64
+                }) =>
+        {
+            Ok(())
+        }
+        Input::Branding(name)
+            if kind == Kind::Embedded && name.len() <= 1024 && !name.contains('\0') =>
+        {
+            Ok(())
+        }
+        Input::PromptStatus(text)
+            if kind == Kind::Embedded
+                && text.len() <= 512
+                && text.bytes().filter(|byte| *byte == b'\n').count() <= 1
+                && !text.chars().any(|ch| ch.is_control() && ch != '\n') =>
+        {
+            Ok(())
+        }
+        Input::Pending(text)
+            if kind == Kind::Embedded
+                && text.len() <= 512
+                && !text.chars().any(char::is_control) =>
+        {
+            Ok(())
+        }
         _ => Err("This input is not supported by the selected terminal session".into()),
     }
 }
@@ -500,9 +557,10 @@ fn run_embedded(rows: u16, cols: u16, output: &Events) -> Result<(), String> {
     let mut host = super::portable_shell_host::Host::new(rows, cols)?;
     let started = std::time::Instant::now();
     output.send(Event::Ready {
-        label: "Pealayer · embedded PortableShell".into(),
+        label: "Pealayer Shell".into(),
     });
     let mut escape_deadline = None;
+    let mut notice_deadline: Option<std::time::Instant> = None;
     loop {
         if !output.shared.active(output.generation) {
             break;
@@ -526,7 +584,11 @@ fn run_embedded(rows: u16, cols: u16, output: &Events) -> Result<(), String> {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         while !state.cancelled && !state.finished && state.inputs.is_empty() {
-            if let Some(deadline) = escape_deadline {
+            if let Some(deadline) = [escape_deadline, notice_deadline]
+                .into_iter()
+                .flatten()
+                .min()
+            {
                 let now = std::time::Instant::now();
                 if now >= deadline {
                     break;
@@ -555,12 +617,59 @@ fn run_embedded(rows: u16, cols: u16, output: &Events) -> Result<(), String> {
             Some(Input::Bytes(bytes)) => {
                 host.feed(&bytes);
                 escape_deadline =
-                    Some(std::time::Instant::now() + std::time::Duration::from_millis(70));
+                    Some(std::time::Instant::now() + std::time::Duration::from_millis(110));
             }
-            Some(Input::Resize { rows, cols }) => host.resize(rows, cols),
-            Some(Input::Response { text, error }) => host.response(&text, error),
+            Some(Input::Resize { rows, cols }) => {
+                // The old prompt must be erased on the old grid. Deliver its
+                // replacement bytes before publishing the new parser dimensions.
+                host.prepare_resize(cols);
+                if !output.output(&host.take_output())
+                    || !output.send(Event::GridSize { rows, cols })
+                {
+                    break;
+                }
+                host.resize(rows, cols);
+            }
+            Some(Input::Branding(name)) => host.branding(&name),
+            Some(Input::PromptStatus(text)) => host.prompt_status(&text),
+            Some(Input::Pending(text)) => {
+                host.pending(&text);
+                notice_deadline = None;
+            }
+            Some(Input::StatusReport(status)) => {
+                host.status_report(&status);
+                if host.table_active() {
+                    notice_deadline =
+                        Some(std::time::Instant::now() + std::time::Duration::from_secs(3));
+                }
+            }
+            Some(Input::Response { text, error }) => {
+                host.response(&text, error);
+                if error {
+                    notice_deadline = None;
+                } else if host.table_active() {
+                    notice_deadline =
+                        Some(std::time::Instant::now() + std::time::Duration::from_secs(3));
+                }
+                escape_deadline =
+                    Some(std::time::Instant::now() + std::time::Duration::from_millis(110));
+            }
+            Some(Input::Settings { values, open }) => {
+                if let Err(error) = host.settings(&values, open) {
+                    host.response(&error, true);
+                }
+                host.tick(now);
+                // The core coalesces table paint for 100 ms. One bounded settle
+                // tick is needed even if no further input arrives.
+                escape_deadline =
+                    Some(std::time::Instant::now() + std::time::Duration::from_millis(110));
+            }
             Some(Input::Command(_)) => unreachable!("input validated at session boundary"),
             None => {
+                if notice_deadline.is_some_and(|deadline| std::time::Instant::now() >= deadline) {
+                    host.clear_notice();
+                    notice_deadline = None;
+                }
                 host.tick(now);
                 escape_deadline = None;
             }
@@ -828,7 +937,13 @@ fn run_shell(
                     .resize = Some((rows, cols));
                 output.shared.wake.notify_all();
             }
-            Input::Command(_) | Input::Response { .. } => {
+            Input::Command(_)
+            | Input::Response { .. }
+            | Input::Settings { .. }
+            | Input::Branding(_)
+            | Input::PromptStatus(_)
+            | Input::Pending(_)
+            | Input::StatusReport(_) => {
                 unreachable!("input validated at session boundary")
             }
         }
@@ -892,6 +1007,15 @@ mod tests {
             "Embedded worker must release ownership after cancellation"
         );
         assert!(session.send(Input::Bytes(b"\r".to_vec())).is_err());
+    }
+
+    #[test]
+    fn embedded_prompt_accepts_one_activity_line_and_rejects_other_controls() {
+        let accepted = Input::PromptStatus("Idle\n↻ Uploading package 0%".into());
+        assert!(validate_input(Kind::Embedded, &accepted).is_ok());
+        for text in ["Idle\nA\nB", "Idle\rOverwrite", "Idle\x1b[2J"] {
+            assert!(validate_input(Kind::Embedded, &Input::PromptStatus(text.into())).is_err());
+        }
     }
 
     #[test]
@@ -1284,8 +1408,8 @@ mod tests {
                         assert_eq!(code, Some(0));
                         exited = true;
                     }
-                    Event::Catalog(_) | Event::Application(_) => {
-                        panic!("OS shell must not dispatch application or controller commands")
+                    Event::Catalog(_) | Event::Application(_) | Event::GridSize { .. } => {
+                        panic!("OS shell must not emit embedded terminal or controller events")
                     }
                 }
             }
