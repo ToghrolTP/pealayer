@@ -42,6 +42,16 @@ into memory. The client identifies requests with a Pealayer User-Agent.
 
 HTTP(S)/RTSP/RTMP media URLs are opened directly by the consumer. A decoder,
 network or permission failure disables only its preview, not remote controls.
+Pealayer prefers TCP for RTSP and RTSPS. Known live transports show **Live**
+when seeking is unavailable, even if the demuxer reports the length of its
+received window. Seekable finite media retains its duration and seek controls.
+Display and status fields redact URL user information. The original encoded URL
+continues to be used for playback.
+
+The [original remote media branch](https://github.com/ToghrolTP/pealayer/tree/archive/remote-live-media)
+is retained in the project history. See [live media verification](verification/live-media-and-recording-retention.md)
+for the focused timeline checks and the remaining private-source verification.
+
 Revoking file access hides the preview source but does not prevent connecting.
 File → Open and project/config import/export use a server-files dialog, not a
 consumer-native picker. Typed paths are server paths. Configuration exports
