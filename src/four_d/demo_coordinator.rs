@@ -1,4 +1,4 @@
-use std::net::{TcpListener, TcpStream};
+use std::net::TcpListener;
 use std::path::PathBuf;
 use std::process::{Command, Stdio};
 use std::thread;
@@ -107,7 +107,7 @@ impl DemoCoordinatorSession {
         std::fs::create_dir(&temp_root).map_err(|e| format!("create demo coordinator temp root: {e}"))?;
         let temp_root = DemoDataRoot(temp_root);
 
-        let (supervisor, address) = if let Some(binary) = resolve_controller_binary() {
+        let (supervisor, client) = if let Some(binary) = resolve_controller_binary() {
             let config_path = temp_root.0.join("config.json");
             // The host's discovery defaults apply even to a loopback IPC listener.
             // A demonstration should neither announce itself nor open LAN sockets.
@@ -172,30 +172,40 @@ impl DemoCoordinatorSession {
                     }
                 };
 
-                let deadline = Instant::now() + Duration::from_secs(4);
-                let mut ready = false;
+                let address = format!("127.0.0.1:{coordinator_port}");
+                let expected_host = format!("ipc:{}", child.id());
+                let deadline = Instant::now() + Duration::from_secs(8);
                 while Instant::now() < deadline {
-                    if TcpStream::connect(("127.0.0.1", coordinator_port)).is_ok() {
-                        ready = true;
-                        break;
-                    }
                     if let Ok(Some(status)) = child.try_wait() {
                         last_err = format!("PCController coordinator exited prematurely with status: {status}");
                         break;
                     }
-                    thread::sleep(Duration::from_millis(20));
+                    match ControllerClient::connect(&address) {
+                        Ok(mut client) => match client.call("controller.snapshot", json!({})) {
+                            Ok(snapshot) if snapshot["host_instance_id"].as_str() == Some(expected_host.as_str()) => {
+                                started = Some(client);
+                                break;
+                            }
+                            Ok(_) => {
+                                last_err = format!("another coordinator owns {address}");
+                                break;
+                            }
+                            Err(error) => last_err = error,
+                        },
+                        Err(error) => last_err = error,
+                    }
+                    thread::sleep(Duration::from_millis(50));
                 }
 
-                if ready {
-                    started = Some((CoordinatorSupervisor::Process(child), format!("127.0.0.1:{coordinator_port}")));
-                    break;
+                if let Some(client) = started.take() {
+                    return Self::attach(vb, CoordinatorSupervisor::Process(child), client, temp_root);
                 }
 
                 drop(child);
                 thread::sleep(Duration::from_millis(50 * attempt as u64));
             }
 
-            started.ok_or_else(|| format!("PCController coordinator did not start after 3 attempts: {last_err}"))?
+            return Err(format!("PCController coordinator did not start after 3 attempts: {last_err}"));
         } else {
             let candidates = library_candidates();
             if candidates.is_empty() {
@@ -239,12 +249,19 @@ impl DemoCoordinatorSession {
                 .ok_or_else(|| "demo coordinator exposed no valid listening address".to_string())?
                 .to_owned();
 
-            (CoordinatorSupervisor::Host(host), address)
+            let client = ControllerClient::connect(&address)
+                .map_err(|error| format!("connect to demo coordinator at {address}: {error}"))?;
+            (CoordinatorSupervisor::Host(host), client)
         };
+        Self::attach(vb, supervisor, client, temp_root)
+    }
 
-        let mut client = ControllerClient::connect(&address)
-            .map_err(|e| format!("connect to demo coordinator at {address}: {e}"))?;
-
+    fn attach(
+        vb: VirtualBoardSession,
+        supervisor: CoordinatorSupervisor,
+        mut client: ControllerClient,
+        temp_root: DemoDataRoot,
+    ) -> Result<Self, String> {
         let connected = client.call("controller.connect", json!({"port": format!("tcp://127.0.0.1:{}", vb.port)}))
             .map_err(|e| format!("attach demo coordinator to virtual board: {e}"))?;
         if connected.get("connected").and_then(|v| v.as_bool()) != Some(true) {
