@@ -20,6 +20,10 @@ for (const [role, value] of Object.entries(palette)) {
   document.documentElement.style.setProperty(`--${role}`, value);
 }
 document.documentElement.style.setProperty('--accent', palette.blue);
+window.fetch = async input => {
+  if (input === '/api/icons/catalog') return Response.json([]);
+  throw Error('Unexpected fixture network request');
+};
 
 const effect: ImportedEffect = {
   id: '12', reference: '', name: rtl ? 'آزمون نورپردازی' : 'Lighting rehearsal',
