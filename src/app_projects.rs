@@ -15,6 +15,21 @@ impl ProjectSeek {
     }
 }
 
+#[derive(Clone, Copy)]
+struct ExternalLoadFence {
+    loaded: u64,
+    failed: u64,
+}
+
+impl ExternalLoadFence {
+    fn active() -> Option<Self> {
+        crate::mpv::external::active().then(|| {
+            let status = crate::mpv::external::status();
+            Self { loaded: status.loaded_revision, failed: status.load_failure_revision }
+        })
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct ProjectSession {
     pub path:Option<PathBuf>,
@@ -28,7 +43,7 @@ pub(crate) struct ProjectSession {
     pending_commit:Option<(Project,PathBuf,bool,egui::Context)>,
     rollback_media:Option<Media>,
     pending_started:Option<std::time::Instant>,
-    pending_external_revision:Option<u64>,
+    pending_external_revision:Option<ExternalLoadFence>,
     native_start_seen: bool,
     pending_seek: Option<ProjectSeek>,
     pub pending_discovery:Option<(String,Vec<PathBuf>)>,
@@ -145,7 +160,7 @@ impl PealayerApp {
                 return Err("Wait for the current media load before restoring a project".into());
             }
             let previous_media=self.capture_project_media();
-            let external_revision=crate::mpv::external::active().then(||crate::mpv::external::status().loaded_revision);
+            let external_revision=ExternalLoadFence::active();
             // Supply start with loadfile, before decode. FileLoaded reasserts the
             // exact target (including positions below one second) and track selection.
             let options=format!("pause=yes,start={},speed={}",media.position_ms as f64/1000.0,media.speed);
@@ -255,9 +270,24 @@ impl PealayerApp {
         if self.project.pending_seek.is_some() { return; }
         if let Some(before) = self.project.pending_external_revision {
             let status = crate::mpv::external::status();
-            if !status.connected || status.loaded_revision <= before { return; }
-            self.is_seekable = status.properties.get("seekable").and_then(Value::as_bool).unwrap_or(false);
-            self.duration = status.properties.get("duration").and_then(Value::as_f64).unwrap_or(0.0);
+            if !status.connected { return; }
+            if status.load_failure_revision > before.failed {
+                self.fail_project_media_load("external decoder rejected the media");
+                return;
+            }
+            if status.loaded_revision <= before.loaded { return; }
+            // FileLoaded and property observations travel separately over IPC.
+            // Wait for the new file's seekability and clock before committing.
+            let Some(seekable) = status.properties.get("seekable").and_then(Value::as_bool) else { return; };
+            let duration = status.properties.get("duration").and_then(Value::as_f64);
+            if expected.position_ms > 0 && !seekable
+                || seekable && expected.duration_ms > 0 && duration.is_none()
+                || !seekable && status.properties.get("time-pos").and_then(Value::as_f64).is_none()
+            {
+                return;
+            }
+            self.is_seekable = seekable;
+            self.duration = duration.unwrap_or(0.0);
         } else if !self.project.native_start_seen {
             return;
         }
@@ -339,7 +369,7 @@ impl PealayerApp {
         self.show_error=Some(format!("Project media restoration: {error}. Existing timeline/workspace retained; playback remains paused."));
         if !replacing_media { return; }
         if let Some(media)=previous {
-            let external_revision=crate::mpv::external::active().then(||crate::mpv::external::status().loaded_revision);
+            let external_revision=ExternalLoadFence::active();
             let options=format!("pause=yes,start={},speed={}",media.position_ms as f64/1000.0,media.speed);
             if self.mpv.command("loadfile",&[&media.target,"replace","-1",&options]).is_ok() {
                 self.current_video_path=Some(PathBuf::from(&media.target));self.last_media_target=self.current_video_path.clone();
