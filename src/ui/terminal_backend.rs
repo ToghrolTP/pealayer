@@ -64,6 +64,7 @@ pub enum Event {
     Ready { label: String },
     Catalog(Vec<Value>),
     Output(Vec<u8>),
+    GridSize { rows: u16, cols: u16 },
     Exited { code: Option<u32> },
     Error(String),
     Application(super::portable_shell_host::Action),
@@ -438,7 +439,8 @@ fn validate_input(kind: Kind, input: &Input) -> Result<(), String> {
         Input::PromptStatus(text)
             if kind == Kind::Embedded
                 && text.len() <= 512
-                && !text.chars().any(char::is_control) =>
+                && text.bytes().filter(|byte| *byte == b'\n').count() <= 1
+                && !text.chars().any(|ch| ch.is_control() && ch != '\n') =>
         {
             Ok(())
         }
@@ -617,7 +619,17 @@ fn run_embedded(rows: u16, cols: u16, output: &Events) -> Result<(), String> {
                 escape_deadline =
                     Some(std::time::Instant::now() + std::time::Duration::from_millis(110));
             }
-            Some(Input::Resize { rows, cols }) => host.resize(rows, cols),
+            Some(Input::Resize { rows, cols }) => {
+                // The old prompt must be erased on the old grid. Deliver its
+                // replacement bytes before publishing the new parser dimensions.
+                host.prepare_resize(cols);
+                if !output.output(&host.take_output())
+                    || !output.send(Event::GridSize { rows, cols })
+                {
+                    break;
+                }
+                host.resize(rows, cols);
+            }
             Some(Input::Branding(name)) => host.branding(&name),
             Some(Input::PromptStatus(text)) => host.prompt_status(&text),
             Some(Input::Pending(text)) => {
@@ -995,6 +1007,15 @@ mod tests {
             "Embedded worker must release ownership after cancellation"
         );
         assert!(session.send(Input::Bytes(b"\r".to_vec())).is_err());
+    }
+
+    #[test]
+    fn embedded_prompt_accepts_one_activity_line_and_rejects_other_controls() {
+        let accepted = Input::PromptStatus("Idle\n↻ Uploading package 0%".into());
+        assert!(validate_input(Kind::Embedded, &accepted).is_ok());
+        for text in ["Idle\nA\nB", "Idle\rOverwrite", "Idle\x1b[2J"] {
+            assert!(validate_input(Kind::Embedded, &Input::PromptStatus(text.into())).is_err());
+        }
     }
 
     #[test]

@@ -372,14 +372,18 @@ impl Host {
         }
     }
 
-    pub fn resize(&mut self, rows: u16, columns: u16) {
+    pub fn prepare_resize(&mut self, columns: u16) {
         let columns = columns.clamp(8, 240);
-        let previous = self.columns;
-        // Prepare shorter prompt lines before the core repaints a smaller grid.
-        if columns < previous {
+        if columns < self.columns {
             self.columns = columns;
             self.update_prompt();
         }
+    }
+
+    pub fn resize(&mut self, rows: u16, columns: u16) {
+        let columns = columns.clamp(8, 240);
+        let previous = self.columns;
+        self.prepare_resize(columns);
         unsafe {
             ps_resize(
                 self.session.as_ptr(),
@@ -1177,10 +1181,15 @@ mod tests {
 
     #[test]
     fn narrow_live_prompt_shows_update_without_duplicate_lines_or_losing_input() {
-        let mut host = Host::new(21, 63).unwrap();
-        let mut parser = vt100::Parser::new(21, 63, 100);
+        let mut host = Host::new(21, 100).unwrap();
+        let mut parser = vt100::Parser::new(21, 100, 100);
         host.branding("Pealayer Terminal Review");
         host.feed(b"sta");
+        parser.process(&host.take_output());
+        host.prepare_resize(63);
+        parser.process(&host.take_output());
+        parser.set_size(21, 63);
+        host.resize(21, 63);
         parser.process(&host.take_output());
         let summary = "■ Idle · ♪ 100% · ○ Hardware";
         host.prompt_status(&format!("{summary}\n↻ Uploading package 0%"));

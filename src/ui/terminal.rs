@@ -368,7 +368,9 @@ pub fn control(
                     .ok_or("Terminal is not connected")?
                     .send(super::terminal_backend::Input::Resize { rows, cols })?;
                 view.size = (rows, cols);
-                view.parser.set_size(rows, cols);
+                if view.target != TerminalTarget::PortableShell {
+                    view.parser.set_size(rows, cols);
+                }
             }
         }
         Ok(())
@@ -527,6 +529,11 @@ impl View {
                 }
                 Event::Catalog(catalog) => self.catalog = catalog,
                 Event::Output(bytes) => self.output(&bytes),
+                Event::GridSize { rows, cols } => {
+                    self.parser.set_size(rows, cols);
+                    self.screen.clear_selection();
+                    self.output_revision = self.output_revision.wrapping_add(1);
+                }
                 Event::Error(error) => self.error = Some(error),
                 Event::Application(action) => {
                     if self.phase != "closing" {
@@ -1377,6 +1384,7 @@ fn panel_contents(
                         || state.preferences.allow_system_shell),
                 state.preferences.font_size,
                 &state.preferences,
+                view.target == TerminalTarget::PortableShell && view.phase == "ready",
             )
         })
         .inner;
