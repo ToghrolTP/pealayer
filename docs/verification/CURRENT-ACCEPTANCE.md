@@ -10,6 +10,10 @@ statements are not the present product state.
 
 ## Publication and workspace tools checkpoint
 
+[Subtitle timeline segments](subtitle-timeline-segments.md) add an opt-in
+native display for individual source cue intervals, with local FFprobe
+indexing and visible gaps. Sources without readable timing show their status.
+
 [Remote Location presentation](remote-location-presentation.md) replaces the
 incomplete rows with shared List/Grid controls, restrained interaction states,
 visible preview loading/failure/retry and bounded menus with real owner-backed

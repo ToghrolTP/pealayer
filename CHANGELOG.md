@@ -6,6 +6,12 @@ retroactively attributed to an older download.
 
 ## Next milestone · unreleased
 
+### 🎬 Subtitle timeline
+
+- Optionally show timed subtitle cues as separate segments, with the gaps
+  between them visible. Toggle this from the subtitle track menu or Playback
+  preferences.
+
 ### 🗂️ Remote locations
 
 - Browse files in a saved List or Grid layout, with consistent hover, selection

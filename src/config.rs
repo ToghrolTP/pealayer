@@ -1236,6 +1236,7 @@ pub struct AppConfig {
     /// Follow an advancing playhead and ease the viewport forward before it
     /// reaches the trailing edge.
     pub timeline_follow_playhead: bool,
+    pub timeline_subtitle_segments: bool,
     pub timeline_toolbar_visible: bool,
     pub timeline_toolbar_order: Vec<TimelineToolbarAction>,
     pub timeline_toolbar_hidden: Vec<TimelineToolbarAction>,
@@ -1445,6 +1446,7 @@ impl Default for AppConfig {
             timeline_animated_navigation: true,
             timeline_navigation_transition_ms: 100,
             timeline_follow_playhead: false,
+            timeline_subtitle_segments: false,
             timeline_toolbar_visible: true,
             timeline_toolbar_order: Vec::new(),
             timeline_toolbar_hidden: default_timeline_toolbar_hidden(),

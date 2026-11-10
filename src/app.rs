@@ -882,6 +882,8 @@ pub struct PealayerApp {
     pub(crate) timeline_animated_navigation: bool,
     pub(crate) timeline_navigation_transition_ms: u32,
     pub(crate) timeline_follow_playhead: bool,
+    pub(crate) timeline_subtitle_segments: bool,
+    pub(crate) subtitle_timing: crate::subtitle_timing::Index,
     pub(crate) timeline_toolbar_visible: bool,
     pub(crate) timeline_toolbar_order: Vec<crate::config::TimelineToolbarAction>,
     pub(crate) timeline_toolbar_hidden: Vec<crate::config::TimelineToolbarAction>,
@@ -1237,6 +1239,16 @@ impl eframe::App for PealayerApp {
 
         if crate::peer::active(){crate::peer::mirror(||self.process_events());}else{self.process_events();}
         if crate::peer::active(){self.poll_peer_session(ctx);}
+        let subtitle_source = self.current_video_path.as_deref().filter(|_| {
+            self.media_metadata_loaded && self.duration.is_finite() && self.duration > 0.0
+        });
+        self.subtitle_timing.update(
+            ctx,
+            self.timeline_subtitle_segments,
+            crate::peer::active(),
+            subtitle_source,
+            &self.media_tracks,
+        );
         self.sync_window_level(ctx);
         self.tick_virtual_board_kinematics(ctx);
 
@@ -5778,6 +5790,7 @@ impl PealayerApp {
                     }
                 }
                 Some(Ok(Event::StartFile)) => {
+                    self.subtitle_timing.invalidate();
                     if !self.engine_handle.media_clock_owned.load(std::sync::atomic::Ordering::Acquire)
                         && let Ok(mut sample) = self.engine_handle.media_playback.lock() {
                         sample.position_ms = 0;
@@ -7667,6 +7680,7 @@ impl PealayerApp {
         cfg.timeline_animated_navigation = self.timeline_animated_navigation;
         cfg.timeline_navigation_transition_ms = self.timeline_navigation_transition_ms;
         cfg.timeline_follow_playhead = self.timeline_follow_playhead;
+        cfg.timeline_subtitle_segments = self.timeline_subtitle_segments;
         cfg.timeline_toolbar_visible = self.timeline_toolbar_visible;
         cfg.timeline_toolbar_order =
             crate::config::persisted_timeline_toolbar_order(&self.timeline_toolbar_order);
@@ -8070,6 +8084,7 @@ impl PealayerApp {
         self.timeline_animated_navigation = config.timeline_animated_navigation;
         self.timeline_navigation_transition_ms = config.timeline_navigation_transition_ms;
         self.timeline_follow_playhead = config.timeline_follow_playhead;
+        self.timeline_subtitle_segments = config.timeline_subtitle_segments;
         self.timeline_toolbar_visible = config.timeline_toolbar_visible;
         self.timeline_toolbar_order =
             crate::config::normalize_timeline_toolbar_order(&config.timeline_toolbar_order);
@@ -8380,6 +8395,7 @@ impl PealayerApp {
             let bar_preferences_only = state.config.as_ref().is_some_and(|old| {
                 let mut comparison = old.clone(); comparison.status_bar = config.status_bar;
                 comparison.simple_workspace = config.simple_workspace;
+                comparison.timeline_subtitle_segments = config.timeline_subtitle_segments;
                 comparison.control_bars=config.control_bars;
                 crate::config::TimelineToolbarPreferences::from_config(&config).apply(&mut comparison);
                 comparison == config
@@ -8388,6 +8404,7 @@ impl PealayerApp {
                 self.apply_timeline_toolbar_preferences(&crate::config::TimelineToolbarPreferences::from_config(&config));
                 self.status_bar = config.status_bar;
                 self.simple_workspace = config.simple_workspace;
+                self.timeline_subtitle_segments = config.timeline_subtitle_segments;
                 self.control_bars=config.control_bars;
                 crate::platform::interop::set_live_config(snapshot.session.config.clone());
             } else if let Err(error)=crate::peer::mirror(||self.apply_runtime_config(ctx,config.clone())){self.config_status=error;}
@@ -8594,11 +8611,25 @@ impl PealayerApp {
         if ctx.data_mut(|data|data.get_temp::<String>(crate::peer::preference_owner_id())).is_some() {
             return Err("Preferences is being previewed by a peer; finish that edit first".into());
         }
+        let subtitle_display_only = values.as_object().is_some_and(|values| {
+            values.len() == 1 && values.contains_key("timeline_subtitle_segments")
+        });
+        if subtitle_display_only
+            && (self.show_preferences_dialog
+                || self.preference_preview_original.is_some()
+                || self.native_preferences.as_ref().is_some_and(|helper| !helper.confirmed_exited()))
+        {
+            return Err("Change subtitle cue segments in the open Preferences window".into());
+        }
         let updated = self.runtime_config_snapshot().apply_patch(values)?;
         updated.save()?;
         if values.as_object().is_some_and(|values|!values.is_empty() && values.keys().all(|key|key=="simple_workspace")) {
             self.simple_workspace=updated.simple_workspace;
             crate::platform::interop::set_live_config(updated.clone());
+        } else if subtitle_display_only {
+            self.timeline_subtitle_segments = updated.timeline_subtitle_segments;
+            crate::platform::interop::set_live_config(updated.clone());
+            ctx.request_repaint();
         } else { self.apply_runtime_config(ctx, updated.clone())?; }
         if [
             "theme",
@@ -10413,6 +10444,8 @@ impl Default for PealayerApp {
             timeline_animated_navigation: true,
             timeline_navigation_transition_ms: 100,
             timeline_follow_playhead: false,
+            timeline_subtitle_segments: false,
+            subtitle_timing: Default::default(),
             timeline_toolbar_visible: true,
             timeline_toolbar_order: crate::config::default_timeline_toolbar_order(),
             timeline_toolbar_hidden: crate::config::default_timeline_toolbar_hidden(),

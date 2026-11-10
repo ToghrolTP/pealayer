@@ -923,6 +923,8 @@ pub fn run() -> eframe::Result {
                 timeline_animated_navigation: loaded_config.timeline_animated_navigation,
                 timeline_navigation_transition_ms: loaded_config.timeline_navigation_transition_ms,
                 timeline_follow_playhead: loaded_config.timeline_follow_playhead,
+                timeline_subtitle_segments: loaded_config.timeline_subtitle_segments,
+                subtitle_timing: Default::default(),
                 timeline_toolbar_visible: loaded_config.timeline_toolbar_visible,
                 timeline_toolbar_order: crate::config::normalize_timeline_toolbar_order(
                     &loaded_config.timeline_toolbar_order,

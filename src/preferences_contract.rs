@@ -781,6 +781,12 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             control
         },
         PreferenceControl::boolean(
+            "timeline_subtitle_segments",
+            "playback",
+            "Subtitles",
+            "Show subtitle cue segments in the timeline",
+        ),
+        PreferenceControl::boolean(
             "restore_last_media_on_startup",
             "playback",
             "Playback history",

@@ -27,6 +27,7 @@ pub mod preferences_contract;
 pub mod remote_location;
 pub mod server;
 pub mod subtitle;
+mod subtitle_timing;
 pub mod startup;
 pub mod ui;
 pub mod update;
