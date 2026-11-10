@@ -108,6 +108,26 @@ impl DemoCoordinatorSession {
         let temp_root = DemoDataRoot(temp_root);
 
         let (supervisor, address) = if let Some(binary) = resolve_controller_binary() {
+            let config_path = temp_root.0.join("config.json");
+            // The host's discovery defaults apply even to a loopback IPC listener.
+            // A demonstration should neither announce itself nor open LAN sockets.
+            let config = json!({
+                "integrations": {
+                    "discovery": {
+                        "mndp_enabled": false,
+                        "mdns_enabled": false,
+                        "dns_sd_enabled": false,
+                        "ssdp_enabled": false,
+                        "upnp_enabled": false,
+                        "ws_discovery_enabled": false,
+                        "broadcast_enabled": false,
+                        "netbios_enabled": false
+                    },
+                    "local_device": { "enabled": false }
+                }
+            });
+            std::fs::write(&config_path, config.to_string())
+                .map_err(|error| format!("write isolated demo controller configuration: {error}"))?;
             let mut last_err = String::new();
             let mut started = None;
 
@@ -139,7 +159,7 @@ impl DemoCoordinatorSession {
                     "--no-connect",
                 ])
                 .env("PCCONTROLLER_DATA_DIR", &temp_root.0)
-                .env("PCCONTROLLER_CONFIG", temp_root.0.join("config.json"))
+                .env("PCCONTROLLER_CONFIG", &config_path)
                 .stdout(Stdio::null())
                 .stderr(Stdio::null());
 
