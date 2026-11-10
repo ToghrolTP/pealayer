@@ -34,6 +34,20 @@ pub struct MediaFileInfo {
     pub playlist: Vec<MediaCollectionEntry>,
 }
 
+impl MediaFileInfo {
+    /// Automation gets the same cached factual inspector data, without source
+    /// URL credentials. Never probe mpv from an HTTP/IPC/window-message thread.
+    pub fn redacted(&self)->Self {
+        let mut value=self.clone();
+        for group in &mut value.groups {for (_,text) in &mut group.properties {*text=crate::media::redact_media_target(text);}}
+        for text in value.metadata.values_mut().chain(value.filtered_metadata.values_mut()) {*text=crate::media::redact_media_target(text);}
+        for entry in value.chapters.iter_mut().chain(value.editions.iter_mut()).chain(value.playlist.iter_mut()) {
+            for text in entry.properties.values_mut() {*text=crate::media::redact_media_target(text);}
+        }
+        value
+    }
+}
+
 const PROPERTY_GROUPS: &[(&str, &[&str])] = &[
     (
         "File and source",

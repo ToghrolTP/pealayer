@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { clipboardUrl } from '../clipboardUrls';
 import { Alert, Button, Checkbox, Descriptions, Dropdown, Input, Modal, Space, Table, Tag, Tooltip, Typography, message } from 'antd';
-import { ArrowLeftOutlined, ArrowUpOutlined, CopyOutlined, FileOutlined, FolderOpenOutlined, GlobalOutlined, PlayCircleOutlined, ReloadOutlined, SearchOutlined, SnippetsOutlined } from '@ant-design/icons';
+import { ArrowUpOutlined, CopyOutlined, FileOutlined, FolderOpenOutlined, GlobalOutlined, PlayCircleOutlined, ReloadOutlined, SearchOutlined, SnippetsOutlined } from '@ant-design/icons';
 
 export interface RemoteEntry { name: string; url: string; is_dir: boolean; playable: boolean; size_bytes: number | null; modified: string | null }
 export interface RemoteBrowser {
@@ -62,25 +62,25 @@ export function RemoteLocationDialog({ state, connected, base, sendCmd, autoInsp
   const listing = state.listing;
   const selected = listing?.entries.find(entry => entry.url === state.selected);
   const browse = (url: string) => { lastSent.current = url; dirty.current = false; sendCmd('pealayer.remote.browse', { target: url, ...(override.current === undefined ? {} : { use_proxy: override.current }) }); };
-  const choose = (entry: RemoteEntry, play = false) => entry.is_dir && play ? browse(entry.url) : sendCmd('pealayer.remote.select', { target: entry.url, play });
+  const choose = (entry: RemoteEntry, play = false) => entry.is_dir ? browse(entry.url) : sendCmd('pealayer.remote.select', { target: entry.url, play });
   const copy = (url: string) => { void navigator.clipboard?.writeText(url); };
   const valid = !!clipboardUrl(target);
-  const parent: RemoteEntry | undefined = listing?.parent_url ? { name: 'Back · Parent folder', url: listing.parent_url, is_dir: true, playable: false, size_bytes: null, modified: null } : undefined;
+  const parent: RemoteEntry | undefined = listing?.parent_url ? { name: 'Parent folder', url: listing.parent_url, is_dir: true, playable: false, size_bytes: null, modified: null } : undefined;
   const rows = [...(parent ? [parent] : []), ...(listing?.entries.filter(e => e.name.toLowerCase().includes(filter.toLowerCase())) || [])];
   const menu = (entry: RemoteEntry) => ({ items: [
     { key: 'play', label: entry.is_dir ? 'Open folder' : 'Play', icon: entry.is_dir ? <FolderOpenOutlined /> : <PlayCircleOutlined />, disabled: !connected || state.loading || (!entry.is_dir && !entry.playable), onClick: () => choose(entry, true) },
-    { key: 'select', label: 'File information', icon: <FileOutlined />, disabled: entry.url === parent?.url || state.loading, onClick: () => choose(entry) },
+    ...(!entry.is_dir ? [{ key: 'select', label: 'File information', icon: <FileOutlined />, disabled: !connected || state.loading, onClick: () => choose(entry) }] : []),
     { key: 'copy', label: 'Copy URL', icon: <CopyOutlined />, onClick: () => copy(entry.url) },
   ] });
   const sortOrder = (by: RemoteBrowser['sort']) => state.sort === by ? state.descending ? 'descend' as const : 'ascend' as const : null;
   return <Modal title={<Space><FolderOpenOutlined />Remote location</Space>} open centered onCancel={() => sendCmd('pealayer.remote.close')}
     width="min(1000px, calc(100vw - 32px))" className="remote-location-modal" styles={{ body: { maxHeight: 'calc(100dvh - 220px)', overflow: 'auto' } }}
-    footer={<Space><Button onClick={() => sendCmd('pealayer.remote.close')}>Close</Button><Button type="primary" icon={<PlayCircleOutlined />} disabled={!connected || !selected?.playable} onClick={() => selected && choose(selected, true)}>Play selected</Button></Space>}>
+    footer={<Space><Button onClick={() => sendCmd('pealayer.remote.close')}>Close</Button><Button type="primary" icon={<PlayCircleOutlined />} disabled={!connected || state.loading || !selected?.playable} onClick={() => selected && choose(selected, true)}>Play selected</Button></Space>}>
     <div className="remote-location-address"><Input aria-label="Remote location" value={target} onChange={e => { dirty.current = true; setTarget(e.target.value); }} onPressEnter={() => valid && browse(target)} placeholder="https://host/folder/" prefix={<GlobalOutlined />} /><Tooltip title="Paste a link; browser clipboard permission may be required"><Button icon={<SnippetsOutlined />} aria-label="Paste remote link" disabled={!navigator.clipboard?.readText} onClick={() => { void navigator.clipboard.readText().then(text => { dirty.current = true; setTarget(text); }).catch(() => { void message.info('Clipboard access was denied. Paste into the address field with Ctrl+V or your browser menu.'); }); }} /></Tooltip><Button icon={<SearchOutlined />} disabled={!connected || !valid} onClick={() => browse(target)}>Browse</Button></div>
     <Space wrap className="remote-location-options">
       <Tooltip title="A manual choice overrides automatic route selection until this dialog closes"><Checkbox checked={proxy} onChange={e => { override.current = e.target.checked; setProxy(e.target.checked); if (valid) browse(target); }}>Use proxy</Checkbox></Tooltip>
       {listing && <><Tag icon={<GlobalOutlined />}>{listing.host}</Tag>{listing.server && <Typography.Text type="secondary">{listing.server}</Typography.Text>}
-        <Button icon={<ArrowUpOutlined />} disabled={!connected || !listing.parent_url} onClick={() => listing.parent_url && browse(listing.parent_url)}>Parent folder</Button>
+        {listing.parent_url && <Button icon={<ArrowUpOutlined />} disabled={!connected || state.loading} onClick={() => browse(listing.parent_url!)}>Parent folder</Button>}
         <Button icon={<ReloadOutlined />} disabled={!connected || state.loading} onClick={() => browse(target)} aria-label="Reload directory" /></>}
     </Space>
     {state.error && <Alert type="error" showIcon message="Cannot open this remote location" description={state.error} />}
@@ -90,11 +90,11 @@ export function RemoteLocationDialog({ state, connected, base, sendCmd, autoInsp
     <Table<RemoteEntry> size="small" rowKey="url" pagination={listing && listing.entries.length > 100 ? { pageSize: 50, showSizeChanger: false } : false} loading={{ spinning: state.loading, delay: 250 }} scroll={{ y: 320, x: 560 }} dataSource={rows}
       rowClassName={e => e.url === state.selected ? 'remote-file-selected' : ''}
       onChange={(_page, _filters, sorter) => { const s = Array.isArray(sorter) ? sorter[0] : sorter; sendCmd('pealayer.remote.sort', { by: s.columnKey || 'name', descending: s.order === 'descend' }); }}
-      onRow={entry => ({ onClick: () => !state.loading && (entry.url === parent?.url ? browse(entry.url) : choose(entry)), onDoubleClick: () => !state.loading && (entry.is_dir || entry.playable) && choose(entry, true) })}
+      onRow={entry => ({ onClick: event => connected && !state.loading && (!entry.is_dir || event.detail < 2) && choose(entry), onDoubleClick: () => connected && !state.loading && !entry.is_dir && entry.playable && choose(entry, true) })}
       columns={[
-        { key: 'name', title: 'Name', sorter: true, sortOrder: sortOrder('name'), render: (_, entry) => <Dropdown menu={menu(entry)} trigger={['contextMenu']}><div className="remote-file-name">{entry.url === parent?.url ? <span className="remote-file-thumbnail"><ArrowLeftOutlined /></span> : <Thumbnail entry={entry} base={base} enabled={state.thumbnails} />}<Typography.Text ellipsis={{ tooltip: entry.name }}>{entry.name}</Typography.Text></div></Dropdown> },
-        { key: 'date', title: 'Modified', width: 180, sorter: true, sortOrder: sortOrder('date'), render: (_, e) => <Typography.Text type="secondary">{e.modified || '—'}</Typography.Text> },
-        { key: 'size', title: 'Size', width: 105, align: 'right', sorter: true, sortOrder: sortOrder('size'), render: (_, e) => bytes(e.size_bytes) },
+        { key: 'name', title: 'Name', sorter: true, sortOrder: sortOrder('name'), render: (_, entry) => <Dropdown menu={menu(entry)} trigger={['contextMenu']}><div className="remote-file-name">{entry.url === parent?.url ? <span className="remote-file-thumbnail"><ArrowUpOutlined /></span> : <Thumbnail entry={entry} base={base} enabled={state.thumbnails} />}<Typography.Text ellipsis={{ tooltip: entry.name }}>{entry.name}</Typography.Text></div></Dropdown> },
+        { key: 'date', title: 'Modified', width: 180, sorter: true, sortOrder: sortOrder('date'), render: (_, e) => e.url === parent?.url ? null : <Typography.Text type="secondary">{e.modified || '—'}</Typography.Text> },
+        { key: 'size', title: 'Size', width: 105, align: 'right', sorter: true, sortOrder: sortOrder('size'), render: (_, e) => e.url === parent?.url ? null : bytes(e.size_bytes) },
         { key: 'actions', width: 70, render: (_, entry) => <Button size="small" icon={entry.is_dir ? <FolderOpenOutlined /> : <PlayCircleOutlined />} disabled={!connected || state.loading || (!entry.playable && !entry.is_dir)} aria-label={entry.is_dir ? 'Open folder' : 'Play'} onClick={event => { event.stopPropagation(); choose(entry, true); }} /> },
       ]} />
     {selected && <Descriptions bordered size="small" column={{ xs: 1, sm: 2 }} className="remote-file-info"><Descriptions.Item label="File" span="filled"><Typography.Text ellipsis={{ tooltip: selected.name }}>{selected.name}</Typography.Text></Descriptions.Item><Descriptions.Item label="Size">{bytes(selected.size_bytes)}</Descriptions.Item><Descriptions.Item label="Modified">{selected.modified || 'Unavailable'}</Descriptions.Item><Descriptions.Item label="URL" span="filled"><Typography.Text copyable ellipsis={{ tooltip: selected.url }}>{selected.url}</Typography.Text></Descriptions.Item></Descriptions>}

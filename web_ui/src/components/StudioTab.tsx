@@ -631,7 +631,9 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                   <span>{repeatedSequenceDurationMs(effectDraft.steps, effectDraft.repeat_count ?? 1, effectDraft.repeat_interval_ms ?? 0) === null ? tr(locale, 'Effect repeat interval cannot be shorter than its length') : formatTimeMs(repeatedSequenceDurationMs(effectDraft.steps, effectDraft.repeat_count ?? 1, effectDraft.repeat_interval_ms ?? 0)!, state.human_readable_time_units !== false)}</span>
                   <Button disabled={captureBusy || savingEffect || !hardwareOutputsAvailable(state) || Boolean(state.estop_active) || !effectDraft.name?.trim() || !effectDraft.steps.length || repeatedSequenceDurationMs(effectDraft.steps,effectDraft.repeat_count ?? 1,effectDraft.repeat_interval_ms ?? 0) === null} icon={<CaretRightFilled />} onClick={() => { void sendCmd('controller_effect.publish_and_run', effectPayload(effectDraft)); }}>{tr(locale, 'Publish & Run')}</Button>
                 </Space>
-                <SequenceTimeline key={effectDraft.id} steps={effectDraft.steps} locale={locale} controls={state.hardware_details?.controls} disabled={captureBusy} wheelPreferences={timelineWheelPreferences} actionsRef={sequenceActions} extraKinds={sequenceExtraKinds(state.hardware_details)}
+                <SequenceTimeline key={effectDraft.id} steps={effectDraft.steps} repeatCount={effectDraft.repeat_count} repeatIntervalMs={effectDraft.repeat_interval_ms} locale={locale} controls={state.hardware_details?.controls} disabled={captureBusy} wheelPreferences={timelineWheelPreferences} actionsRef={sequenceActions} extraKinds={sequenceExtraKinds(state.hardware_details)}
+                  onRepeatChange={(repeat_count,repeat_interval_ms) => setEffectDraft({...effectDraft,repeat_count,repeat_interval_ms})}
+                  cueColors={state.effect_designer_cue_colors}
                   human={state.human_readable_time_units !== false} onEdit={index => {
                     const panel = document.querySelector<HTMLElement>(`[data-step-properties="${index}"]`);
                     panel?.scrollIntoView({ block: 'nearest', behavior: document.documentElement.dataset.motion === 'disabled' ? 'auto' : 'smooth' });
@@ -911,11 +913,13 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
         <div className="timeline-grid" ref={timelineGridRef}>
         <div className="timeline-content" style={{ width: `${timelineZoom * 100}%` }}>
         <div className="timeline-ruler">
-          <span>{formatTimelineTime(0)}</span>
-          <span>{formatTimelineTime((timelineDurationMs / 1000) * .25)}</span>
-          <span>{formatTimelineTime((timelineDurationMs / 1000) * .5)}</span>
-          <span>{formatTimelineTime((timelineDurationMs / 1000) * .75)}</span>
-          <span>{formatTimelineTime(timelineDurationMs / 1000)}</span>
+          <div className="timeline-ruler-track">
+            {[0, .25, .5, .75, 1].map(fraction => (
+              <span key={fraction} style={{ left: `${fraction * 100}%` }}>
+                {formatTimelineTime((timelineDurationMs / 1000) * fraction)}
+              </span>
+            ))}
+          </div>
         </div>
 
         <div
@@ -1058,7 +1062,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
                   </Dropdown>
                 </div>
                 </Dropdown>
-                <div className="timeline-lane" data-motion-track={track.control_key && !track.locked && isMotionControl(track.control_key) ? track.control_key : undefined}>
+                <div className="timeline-lane" data-asset-lane={track.key} data-asset-duration={timelineDurationMs} data-motion-track={track.control_key && !track.locked && isMotionControl(track.control_key) ? track.control_key : undefined}>
                   {effectCues.map((cue) => (
                     (() => {
                       const placement = cuePreviews[cue.id] ?? cue;

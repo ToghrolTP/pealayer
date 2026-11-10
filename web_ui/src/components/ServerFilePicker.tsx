@@ -9,10 +9,11 @@ interface FileEntry { name: string; path: string; is_dir: boolean; size_bytes: n
 interface Directory { current_path: string; parent_path: string | null; entries: FileEntry[] }
 interface Props {
   apiBaseUrl: string; locale: UiLocale; extensions: string[];
+  allowAnyFile?: boolean;
   initialFile?: string; title: string; onSelect: (path: string) => void; onCancel: () => void;
 }
 
-export const ServerFilePicker: React.FC<Props> = ({ apiBaseUrl, locale, extensions, initialFile, title, onSelect, onCancel }) => {
+export const ServerFilePicker: React.FC<Props> = ({ apiBaseUrl, locale, extensions, allowAnyFile = false, initialFile, title, onSelect, onCancel }) => {
   const [directory, setDirectory] = useState<Directory | null>(null);
   const [path, setPath] = useState('');
   const [filter, setFilter] = useState('');
@@ -43,7 +44,7 @@ export const ServerFilePicker: React.FC<Props> = ({ apiBaseUrl, locale, extensio
     return () => request.current?.abort();
   }, [apiBaseUrl]);
   const rows = (directory?.entries ?? []).filter(entry => (entry.is_dir
-    || preferenceFileAllowed(entry.name, extensions))
+    || allowAnyFile || preferenceFileAllowed(entry.name, extensions))
     && entry.name.toLocaleLowerCase().includes(filter.toLocaleLowerCase()));
   return <Modal open title={title} width={680} className="server-file-picker" style={{ maxWidth: 'calc(100vw - 32px)' }}
     onCancel={onCancel} onOk={() => selected && onSelect(selected)} okText={tr(locale, 'Select')}

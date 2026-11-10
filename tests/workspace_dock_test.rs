@@ -17,14 +17,15 @@ fn test_config_workspace_dock_layout_field() {
 }
 
 #[test]
-fn test_pealayer_tab_all_contains_six_tabs() {
-    assert_eq!(PealayerTab::ALL.len(), 6);
+fn test_pealayer_tab_catalog_includes_optional_terminal() {
+    assert_eq!(PealayerTab::ALL.len(), 7);
     assert!(PealayerTab::ALL.contains(&PealayerTab::ProgramMonitor));
     assert!(PealayerTab::ALL.contains(&PealayerTab::MediaInspector));
     assert!(PealayerTab::ALL.contains(&PealayerTab::Timeline));
     assert!(PealayerTab::ALL.contains(&PealayerTab::EffectControls));
     assert!(PealayerTab::ALL.contains(&PealayerTab::EffectsLibrary));
     assert!(PealayerTab::ALL.contains(&PealayerTab::HardwareMonitor));
+    assert!(PealayerTab::ALL.contains(&PealayerTab::Terminal));
 }
 
 #[test]
@@ -38,7 +39,7 @@ fn test_dock_state_serde_roundtrip() {
 
     for tab in PealayerTab::ALL
         .into_iter()
-        .filter(|tab| *tab != PealayerTab::MediaInspector)
+        .filter(|tab| !matches!(tab, PealayerTab::MediaInspector | PealayerTab::Terminal))
     {
         assert!(
             deserialized.layout.contains(&tab),
@@ -51,6 +52,10 @@ fn test_dock_state_serde_roundtrip() {
             .layout
             .contains(&PealayerTab::MediaInspector),
         "the optional Media Inspector must remain hidden in the default workspace"
+    );
+    assert!(
+        !deserialized.layout.contains(&PealayerTab::Terminal),
+        "the optional Terminal must remain hidden in the default workspace"
     );
 }
 
@@ -131,6 +136,19 @@ fn test_restore_optional_media_inspector() {
     assert!(dock_state.layout.contains(&PealayerTab::MediaInspector));
 }
 
+#[cfg(feature = "workspace-terminal")]
+#[test]
+fn test_optional_terminal_visibility_survives_roundtrip() {
+    let mut workspace = create_initial_layout();
+    assert!(!workspace.layout.contains(&PealayerTab::Terminal));
+    reveal_and_focus_tab(&mut workspace, PealayerTab::Terminal);
+    let json = serde_json::to_string(&workspace).expect("serialize visible terminal");
+    let restored: Workspace<PealayerTab> =
+        serde_json::from_str(&json).expect("deserialize visible terminal");
+    assert!(restored.layout.contains(&PealayerTab::Terminal));
+    assert!(restored.layout.contains(&PealayerTab::Timeline));
+}
+
 #[test]
 fn test_restore_into_empty_dock() {
     let mut dock_state = create_initial_layout();
@@ -191,11 +209,12 @@ fn test_corrupt_dock_json_fallback() {
 
     for tab in PealayerTab::ALL
         .into_iter()
-        .filter(|tab| *tab != PealayerTab::MediaInspector)
+        .filter(|tab| !matches!(tab, PealayerTab::MediaInspector | PealayerTab::Terminal))
     {
         assert!(fallback.layout.contains(&tab));
     }
     assert!(!fallback.layout.contains(&PealayerTab::MediaInspector));
+    assert!(!fallback.layout.contains(&PealayerTab::Terminal));
 }
 
 #[test]

@@ -16,7 +16,7 @@ assert.equal(displayedWidgets(['workspace', 'temperature', 'fps']).at(-1), 'work
 assert.equal(reorderWidgets([...WIDGETS], 'workspace', 'fps', false)[0], 'workspace');
 assert.equal(DEFAULT_VISIBILITY.trailing[WIDGETS.indexOf('workspace')], true);
 assert.equal(DEFAULT_VISIBILITY.trailing[WIDGETS.indexOf('voltage')], false);
-assert.equal(DEFAULT_VISIBILITY.monospace[WIDGETS.indexOf('current')], true);
+assert.ok(DEFAULT_VISIBILITY.monospace.every((value) => value === false));
 assert.deepEqual(DEFAULT_VISIBILITY.metric_limits, [[null,null],[null,null],[null,null]]);
 assert.equal(DEFAULT_VISIBILITY.fps_mode, 'auto');
 assert.deepEqual(['media', 'ui', 'auto'].map(nextFpsMode), ['ui', 'auto', 'media']);
@@ -55,6 +55,8 @@ assert.equal(paths.length, 2, 'missing samples break the line, never become zero
 assert.deepEqual(chartPaths([{ time: 0, values: [undefined] }], 0, 100, 20), []);
 const styles = readFileSync(new URL('../src/styles.css', import.meta.url), 'utf8');
 const view = readFileSync(new URL('../src/components/ApplicationStatusBar.tsx', import.meta.url), 'utf8');
+assert.ok(view.includes("screenRate ? ' is-screen-rate' : ''"));
+assert.match(styles,/\.status-widget--fps, \.status-widget--fps \.app-statusbar__fps\s*\{\s*font-weight:\s*400;/,'FPS must be regular for media, render and Auto modes');
 const connectionRule = styles.match(/\.app-statusbar \.status-widget--connection\s*\{([^}]+)\}/)?.[1] ?? '';
 assert.match(connectionRule, /width:\s*max-content/, 'connection caption must use spare bar space');
 assert.match(connectionRule, /flex:\s*0 1 auto/, 'caption may shrink on narrow screens');

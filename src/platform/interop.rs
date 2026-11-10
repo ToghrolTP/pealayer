@@ -9,6 +9,7 @@ use std::sync::mpsc::{Receiver, channel};
 #[cfg(any(unix, windows))]
 use std::sync::{Arc, Mutex};
 use std::thread;
+static NATIVE_ENDPOINT:std::sync::OnceLock<String>=std::sync::OnceLock::new();
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LaunchRequest {
@@ -95,7 +96,7 @@ fn validate_launch_destination(
 
 #[cfg(any(unix, windows, test))]
 #[derive(Default)]
-struct LaunchReceiptCache {
+pub(crate) struct LaunchReceiptCache {
     operation_ids: std::collections::VecDeque<String>,
 }
 
@@ -186,7 +187,15 @@ pub enum InteropCommand {
     Minimize,
     Maximize,
     Restore,
+    GetWindow,
+    SetWindow { #[serde(flatten)] placement: crate::platform::window_control::Placement },
+    GetPlayback,
+    GetMedia,
+    GetChapters,
+    FrameStep { frames: i32 },
     OpenPreferences,
+    GetWorkspaceTools,
+    WorkspaceTools { #[serde(flatten)] request: crate::workspace_tools::Request },
     NavigatePreferences {
         #[serde(flatten)]
         navigation: crate::preferences_contract::PreferencesNavigation,
@@ -307,12 +316,17 @@ pub enum InteropCommand {
         reference: String,
         start_time_ms: u64,
     },
+    ImportAssets { request: crate::assets::ImportRequest },
+    ReviewAsset { id: uuid::Uuid, accept: bool },
+    ResolveTimelineClose {decision:crate::app::TimelineCloseDecision},
     PlayControllerEffect {
         reference: String,
     },
     StopControllerEffect,
     StopAudioPreview,
     RefreshAudioOutputs,
+    SetPlayerMode { mode: crate::mpv::external::Mode },
+    ResolvePlayerExecutable { executable: String },
     SaveControllerEffectGroup {
         original_name: String,
         name: String,
@@ -359,6 +373,7 @@ pub enum InteropCommand {
         on_behavior: crate::four_d::controller::PwmOnBehavior,
     },
     RefreshHardwareCatalog,
+    SetHardwareConnection { connected: bool },
     HardwareAuthority {
         operation: String,
         #[serde(default)]
@@ -420,6 +435,9 @@ pub enum InteropCommand {
     UpdateConfig {
         values: Value,
     },
+    UpdateBranding {
+        update: crate::branding::BrandingUpdate,
+    },
     PreviewConfig {
         config: Box<crate::config::AppConfig>,
     },
@@ -428,6 +446,8 @@ pub enum InteropCommand {
     },
     CancelPreviewConfig,
     ReloadConfig,
+    GetBranding,
+    ClearBranding,
     GetStatus,
 }
 
@@ -554,20 +574,46 @@ fn valid_timeline_track_key(value: &str) -> bool {
 
 impl InteropCommand {
     pub fn is_process_local(&self) -> bool {
-        matches!(self, Self::QuitLocal | Self::GetProcessStatus | Self::ConnectPeer { .. } | Self::InspectAuthoring { .. } | Self::NavigatePreferences { .. } | Self::OpenAbout { .. })
+        // A native sender owns unuploaded paths. Let its local importer
+        // transfer them; owner-stamped browser receipts already belong to the
+        // authority and follow normal session forwarding instead.
+        matches!(self,Self::ImportAssets{request} if request.owner_id.is_none()) ||
+        matches!(self, Self::GetWorkspaceTools | Self::WorkspaceTools { .. } | Self::QuitLocal | Self::GetProcessStatus | Self::ConnectPeer { .. } | Self::InspectAuthoring { .. } | Self::NavigatePreferences { .. } | Self::OpenAbout { .. }
+            | Self::GetWindow | Self::SetWindow { .. } | Self::Activate | Self::Minimize | Self::Maximize | Self::Restore | Self::SetFullscreen { .. } | Self::ToggleFullscreen)
     }
 
     pub fn query_result(&self) -> Option<Value> {
         match self {
+            Self::GetWorkspaceTools => Some(crate::workspace_tools::snapshot()),
+            Self::ResolvePlayerExecutable { executable } => Some(match crate::mpv::external::resolve_executable(executable) {
+                Ok(path) => serde_json::json!({"input":executable,"resolved":path,"error":null}),
+                Err(error) => serde_json::json!({"input":executable,"resolved":null,"error":error}),
+            }),
+            Self::GetWindow => Some(serde_json::to_value(crate::platform::window_control::snapshot()).expect("window status")),
+            Self::GetPlayback => {
+                let status=get_live_status();
+                Some(serde_json::json!({"playing":status.playing,"loaded":status.current_video.is_some(),"position_seconds":status.playback_time,
+                    "duration_seconds":status.duration,"volume":status.volume,"muted":status.muted,"rate":status.playback_rate,
+                    "seekable":status.seekable,"live":status.live,"seek_pending":status.seek_pending,"settled_seek_revision":status.settled_seek_revision,
+                    "settled_seek_target":status.settled_seek_target,"buffered_until":status.buffered_until,"buffering_percent":status.buffering_percent}))
+            },
+            Self::GetMedia => { let status=get_live_status();Some(serde_json::json!({"target":status.current_video,"information":get_live_media_information(),"tracks":status.media_tracks,"chapters":status.chapters,"current_chapter_index":status.current_chapter_index,"duration_seconds":status.duration,"media_fps":status.media_fps})) },
+            Self::GetChapters => {let status=get_live_status();Some(serde_json::json!({"chapters":status.chapters,"current_chapter_index":status.current_chapter_index}))},
             Self::GetStatus => Some(serde_json::to_value(get_live_status())
                 .unwrap_or_else(|_| serde_json::json!({"status":"initializing"}))),
             Self::GetProcessStatus => Some(crate::process_control::status()),
+            Self::GetBranding => Some(crate::branding::snapshot()),
             _ => None,
         }
     }
 
     pub fn validate(&self) -> Result<(), String> {
         match self {
+            Self::WorkspaceTools { request } => request.validate(),
+            Self::ResolvePlayerExecutable { executable } if executable.len() > 4096 || executable.contains(['\r', '\n', '\0']) => Err("Invalid player executable".into()),
+            Self::SetWindow { placement } => placement.validate(),
+            Self::FrameStep { frames } if *frames==0 || frames.unsigned_abs()>120 => Err("Frame step must be a nonzero count within ±120".into()),
+            Self::ImportAssets { request } => request.validate(),
             Self::ConnectPeer { request } => request.validate(),
             Self::NavigatePreferences { navigation } => navigation.validate(),
             Self::RfControl { operation, params } => {
@@ -865,6 +911,7 @@ impl InteropCommand {
                 Err("workspace profile direction must be -1 or 1".to_string())
             }
             Self::UpdateConfig { values } => crate::config::AppConfig::validate_patch_shape(values),
+            Self::UpdateBranding { update } => update.validate(),
             Self::PreviewConfig { config } | Self::CommitPreviewConfig { config } => {
                 config.validate()
             }
@@ -874,15 +921,17 @@ impl InteropCommand {
 }
 
 pub fn command_catalog() -> Value {
-    serde_json::json!({
+    let assets=serde_json::json!({"import":"pealayer.assets.import","review":"pealayer.assets.review","snapshot":"/api/assets","upload":"/api/assets/upload","chunk_bytes":crate::server::asset_upload::CHUNK_BYTES,"destinations":["player","library","timeline","audio-source"],"placement":"integer milliseconds; scene/timeline imports append after review, never replace the session","ownership":"transfer receipts pinned to the receiving session owner; hardware effect programs remain with PCController"});
+    let mut catalog=serde_json::json!({
         "contract": "pealayer.control",
-        "transports": ["native", "http", "json-rpc", "websocket"],
+        "transports": ["native", "http", "json-rpc", "websocket", "tcp-ndjson", "binary-udp"],
         "process": { "status": "/api/process/status", "authoring": "/api/process/authoring", "command": "/api/process/command", "methods": ["pealayer.process.status", "pealayer.process.connect", "pealayer.process.quit"], "scope": "local process, never relayed to authority", "connect": "validated, idempotent, graceful restart; poll local status after reconnect" },
         "messaging": { "contract": "pealayer.messages.v1", "snapshot": "/api/messages", "subscription": "/ws", "publish": "pealayer.toast.show", "dismiss": "pealayer.toast.dismiss", "invoke": "pealayer.toast.invoke", "max_actions": 4, "default_action": "bound action ID", "state": "pealayer.messages.state", "surfaces": ["egui", "web", "terminal"], "persistent_timeout_ms": 0 },
         "remote_folders": { "browse": "pealayer.remote.browse", "select": "pealayer.remote.select", "sort": "pealayer.remote.sort", "close": "pealayer.remote.close", "state": "/api/remote/state", "thumbnail": "/api/remote/thumbnail", "subscription": "/ws" },
         "preferences_navigation": { "method": "pealayer.preferences.navigate", "command": "navigate_preferences", "section": "optional schema section ID", "scroll_y": "absolute logical pixel offset, clamped to content", "scope": "local native process, including its Preferences helper", "accepted": "queued, not confirmation that a frame has rendered" },
         "about_navigation": { "method": "pealayer.about.open", "command": "open_about", "tab": ["overview", "build", "board", "libraries"], "scope": "local native process, never relayed to authority", "accepted": "queued, not confirmation that a frame has rendered" },
         "commands": [
+            "import_assets", "review_asset", "resolve_timeline_close",
             "open", "play", "pause", "toggle_pause", "stop", "next", "previous",
             "browse_remote", "select_remote", "sort_remote", "close_remote_browser",
             "chapter_previous", "chapter_next", "set_chapter",
@@ -899,7 +948,7 @@ pub fn command_catalog() -> Value {
             "timeline.cue.place", "timeline.cue.edit", "controller_effect.publish_and_run", "controller_effect.record.capabilities",
             "controller_effect.record.start", "controller_effect.record.status",
             "controller_effect.record.save", "controller_effect.record.discard",
-            "set_emergency_stop", "invoke_hardware_action", "set_hardware_pwm", "refresh_hardware_catalog",
+            "set_emergency_stop", "invoke_hardware_action", "set_hardware_pwm", "refresh_hardware_catalog", "set_hardware_connection",
             "configure_addressable_strip", "fill_addressable_strip", "set_addressable_strip_pixel",
             "send_addressable_strip_frame", "start_addressable_strip_rainbow",
             "start_addressable_strip_effect", "stop_addressable_strip",
@@ -908,10 +957,32 @@ pub fn command_catalog() -> Value {
             "press_front_panel_key", "board_information", "rf_control", "open_rf_manager"
         ],
         "json_rpc_prefix": "pealayer",
+        "hardware_connection": {"method":"pealayer.hardware.connection","command":"set_hardware_connection","params":{"connected":"required boolean"},"scope":"current session authority; existing configured endpoint"},
         "transport": { "nudge": "pealayer.transport.nudge", "directions": [-1,1],
             "paused_step": "frame_step_count", "playing_step": "quick_seek_seconds" },
         "discovery": "/api/player/commands"
-    })
+    });
+    catalog["workspace_tools"] = serde_json::json!({ "status":"pealayer.workspace.tools.get", "control":"pealayer.workspace.tools.control", "scope":"local process, never relayed", "actions":["set_visible","palette","terminal"], "terminal_operations":["connect","disconnect","clear","write","resize"], "execution":"connect/write/resize require native local IPC; browser requests are rejected", "privacy":"metadata only; no transcript or history", "accepted":"queued once, not execution acknowledgement" });
+    catalog["window"]=serde_json::json!({"get":"pealayer.window.get","set":"pealayer.window.set","scope":"local process, never remote authority","units":"logical_points","position":"outer origin","size":"inner client size","states":["normal","minimized","maximized","fullscreen"],"bounds_without_state":"restore to normal, then place","acknowledgement":"queued; poll observed window state"});
+    catalog["native_ipc"]=serde_json::json!({"endpoint":NATIVE_ENDPOINT.get(),"encoding":"UTF-8 JSON or JSON-RPC, newline terminated"});
+    #[cfg(windows)]
+    {catalog["transports"].as_array_mut().unwrap().push(Value::String("wm-copydata".into()));catalog["wm_copydata"]=serde_json::json!({"request_dwdata":crate::platform::copydata::REQUEST,"response_dwdata":crate::platform::copydata::RESPONSE,"encoding":"UTF-8 JSON or JSON-RPC","limit_bytes":1048576,"reply":"wParam sender HWND; asynchronous WM_COPYDATA response; same Windows session","acknowledgement":"LRESULT=1 means queued, not applied"});}
+    catalog["playback_queries"]=serde_json::json!(["pealayer.playback.get","pealayer.media.get","pealayer.chapters.get","pealayer.status"]);
+    catalog["commands"].as_array_mut().unwrap().extend(["get_window","set_window","get_playback","get_media","get_chapters","frame_step","set_player_mode","resolve_player_executable"].map(|s|Value::String(s.into())));
+    catalog["external_player"] = serde_json::json!({"mode":"pealayer.player.mode","modes":["internal","external","dual","remote"],"resolve":"pealayer.player.executable.resolve","params":{"executable":"name or full path"},"closed":"dual falls back to internal; external-only stays stopped; explicitly reselect to relaunch","status":"external_mpv in /api/player/status"});
+    catalog.as_object_mut().unwrap().insert("assets".into(),assets);
+    catalog.as_object_mut().unwrap().insert("branding".into(), serde_json::json!({
+        "get":"pealayer.branding.get", "update":"pealayer.branding.update", "http":"/api/branding",
+        "persist":"optional boolean; false by default", "values":crate::branding::BRANDING_KEYS,
+        "accepted":"queued; read effective/configured branding to confirm application"
+    }));
+    catalog["commands"].as_array_mut().unwrap().extend([serde_json::json!("update_branding"), serde_json::json!("get_branding")]);
+    catalog["branding"]["clear"] = serde_json::json!("pealayer.branding.clear");
+    catalog["commands"].as_array_mut().unwrap().push(serde_json::json!("clear_branding"));
+    catalog["updates"] = serde_json::json!({"http":"/api/update/", "methods":crate::update::rpc::METHODS,
+        "scope":"local process, never implicitly relayed to authority", "chunk_bytes":crate::update::rpc::CHUNK_BYTES,
+        "encoding":"base64", "completion":"exact artifact and health acknowledgement, not transfer acceptance"});
+    catalog
 }
 
 pub fn parse_text_command(input: &str) -> Result<InteropCommand, String> {
@@ -1102,6 +1173,7 @@ impl AppearanceState {
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct ApplicationIdentity {
     pub name: String,
+    pub description: String,
     pub version: String,
     pub commit: String,
     pub dirty: bool,
@@ -1113,6 +1185,7 @@ impl ApplicationIdentity {
     pub fn current(name: &str) -> Self {
         Self {
             name: name.to_string(),
+            description: live_app_description(),
             version: env!("CARGO_PKG_VERSION").to_string(),
             commit: env!("PEALAYER_GIT_COMMIT").to_string(),
             dirty: env!("PEALAYER_GIT_DIRTY") == "true",
@@ -1272,12 +1345,16 @@ pub fn runtime_identity() -> RuntimeIdentity {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerStatusResponse {
+    pub window: crate::platform::window_control::WindowStatus,
     #[serde(default)]
     pub external_mpv: crate::mpv::external::Status,
     #[serde(default)]
     pub application: ApplicationIdentity,
     #[serde(default)]
     pub runtime: RuntimeIdentity,
+    #[serde(default)]
+    pub asset_imports: Value,
+    pub pending_timeline_change: bool,
     #[serde(default)] pub rf: Value,
     #[serde(default)]
     pub remote_browser: crate::remote_location::BrowserState,
@@ -1315,6 +1392,7 @@ pub struct PlayerStatusResponse {
     #[serde(default)]
     pub current_chapter_index: Option<i64>,
     pub seekbar_markers: crate::config::SeekbarMarkersConfig,
+    pub effect_designer_cue_colors: std::collections::BTreeMap<String, String>,
     pub control_bars: crate::config::ControlBarsConfig,
     pub media_keys_enabled: bool,
     pub media_keys_background_enabled: bool,
@@ -1589,11 +1667,9 @@ impl WebControllerEffectDraft {
             let value = value.trim();
             (!value.is_empty()
                 && value.len() <= 64
-                && value
-                    .chars()
-                    .all(|character| character.is_alphanumeric() || " -_".contains(character)))
+                && !value.chars().any(char::is_control))
             .then_some(())
-            .ok_or_else(|| format!("{label} must contain 1 to 64 safe characters"))
+            .ok_or_else(|| format!("{label} must contain 1 to 64 printable characters"))
         };
         field("effect name", &self.name)?;
         field("effect category", &self.category)?;
@@ -1646,8 +1722,11 @@ impl Default for PlayerStatusResponse {
     fn default() -> Self {
         Self {
             external_mpv: crate::mpv::external::Status::default(),
+            window: crate::platform::window_control::WindowStatus::default(),
             application: ApplicationIdentity::default(),
             runtime: RuntimeIdentity::default(),
+            asset_imports: crate::assets::snapshot(),
+            pending_timeline_change: false,
             rf: Value::Null,
             status: String::new(),
             messages: crate::messaging::MessageSnapshot::default(),
@@ -1672,6 +1751,7 @@ impl Default for PlayerStatusResponse {
             chapters: Vec::new(),
             current_chapter_index: None,
             seekbar_markers: crate::config::SeekbarMarkersConfig::default(),
+            effect_designer_cue_colors: crate::config::default_designer_cue_colors(),
             control_bars: crate::config::ControlBarsConfig::default(),
             media_keys_enabled: true,
             media_keys_background_enabled: true,
@@ -1875,11 +1955,25 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         "minimize" | "pealayer.window.minimize" => Some(InteropCommand::Minimize),
         "maximize" | "pealayer.window.maximize" => Some(InteropCommand::Maximize),
         "restore" | "pealayer.window.restore" => Some(InteropCommand::Restore),
+        "get_window" | "pealayer.window.get" => Some(InteropCommand::GetWindow),
+        "set_window" | "pealayer.window.set" => Some(InteropCommand::SetWindow {
+            placement: serde_json::from_value(request.params.clone()).map_err(|error|error.to_string())?,
+        }),
+        "get_playback" | "pealayer.playback.get" => Some(InteropCommand::GetPlayback),
+        "get_media" | "pealayer.media.get" => Some(InteropCommand::GetMedia),
+        "get_chapters" | "pealayer.chapters.get" => Some(InteropCommand::GetChapters),
+        "frame_step" | "pealayer.frame.step" => Some(InteropCommand::FrameStep {
+            frames: request.params.get("frames").and_then(Value::as_i64).and_then(|n|i32::try_from(n).ok()).ok_or("frames must be an integer within ±120")?,
+        }),
         "preferences" | "open_preferences" | "pealayer.window.preferences" => {
             Some(InteropCommand::OpenPreferences)
         }
         "navigate_preferences" | "pealayer.preferences.navigate" => Some(InteropCommand::NavigatePreferences {
             navigation: serde_json::from_value(request.params.clone()).map_err(|error| error.to_string())?,
+        }),
+        "pealayer.workspace.tools.get" => Some(InteropCommand::GetWorkspaceTools),
+        "pealayer.workspace.tools.control" => Some(InteropCommand::WorkspaceTools {
+            request: serde_json::from_value(request.params.clone()).map_err(|error|error.to_string())?,
         }),
         "pealayer.about.open" => Some(InteropCommand::OpenAbout {
             tab: match request.params.get("tab") {
@@ -2114,6 +2208,14 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
                     .unwrap_or_default(),
             })
         }
+        "pealayer.assets.import" => Some(InteropCommand::ImportAssets {
+            request: serde_json::from_value(request.params.clone()).map_err(|e|format!("Invalid asset import: {e}"))?,
+        }),
+        "pealayer.assets.review" => Some(InteropCommand::ReviewAsset {
+            id: serde_json::from_value(request.params.get("id").cloned().unwrap_or_default()).map_err(|_|"Asset review requires a UUID".to_string())?,
+            accept: request.params.get("accept").and_then(Value::as_bool).ok_or("Asset review requires accept: true or false")?,
+        }),
+        "pealayer.timeline.resolve_pending"=>Some(InteropCommand::ResolveTimelineClose{decision:serde_json::from_value(request.params.get("decision").cloned().ok_or("A save, discard or cancel decision is required")?).map_err(|e|format!("Invalid timeline decision: {e}"))?}),
         "controller_effect.play" | "pealayer.controller_effect.play" => {
             Some(InteropCommand::PlayControllerEffect {
                 reference: string(&["reference", "effect"])?,
@@ -2124,6 +2226,11 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         }
         "audio_effect.stop" => Some(InteropCommand::StopAudioPreview),
         "audio.outputs.refresh" => Some(InteropCommand::RefreshAudioOutputs),
+        "pealayer.player.mode" => Some(InteropCommand::SetPlayerMode {
+            mode: serde_json::from_value(request.params.get("mode").cloned().ok_or("A player mode is required")?)
+                .map_err(|_| "Use internal, external, dual or remote".to_string())?,
+        }),
+        "pealayer.player.executable.resolve" => Some(InteropCommand::ResolvePlayerExecutable { executable: string(&["executable"])? }),
         "controller_effect.group.save" | "pealayer.controller_effect.group.save" => {
             Some(InteropCommand::SaveControllerEffectGroup {
                 original_name: request
@@ -2250,6 +2357,9 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         "hardware.catalog.refresh" | "pealayer.hardware.catalog.refresh" => {
             Some(InteropCommand::RefreshHardwareCatalog)
         }
+        "pealayer.hardware.connection" => Some(InteropCommand::SetHardwareConnection {
+            connected: request.params.get("connected").and_then(Value::as_bool).ok_or("Hardware connection requires connected: true or false")?,
+        }),
         "pealayer.hardware.authority" => {
             let operation = string(&["operation"])?;
             if !matches!(operation.as_str(), "request" | "accept" | "reject" | "release" | "lock" | "unlock") {
@@ -2427,6 +2537,11 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
                 values: request.params.clone(),
             })
         }
+        "pealayer.branding.update" => Some(InteropCommand::UpdateBranding {
+            update: serde_json::from_value(request.params.clone()).map_err(|error| format!("Invalid branding request: {error}"))?,
+        }),
+        "pealayer.branding.get" => Some(InteropCommand::GetBranding),
+        "pealayer.branding.clear" => Some(InteropCommand::ClearBranding),
         "config.reload" | "pealayer.config.reload" => Some(InteropCommand::ReloadConfig),
         "get_status" | "player.status" | "pealayer.status" | "pealayer.messages.state" => None,
         method => return Err(format!("unknown Pealayer JSON-RPC method: {method}")),
@@ -2471,6 +2586,14 @@ pub fn get_live_appearance() -> Option<AppearanceState> {
         .and_then(|status| status.as_ref().and_then(|status| status.appearance.clone()))
 }
 
+static LIVE_MEDIA_INFORMATION: std::sync::RwLock<Option<crate::media_info::MediaFileInfo>>=std::sync::RwLock::new(None);
+pub fn set_live_media_information(info:crate::media_info::MediaFileInfo) {
+    if let Ok(mut current)=LIVE_MEDIA_INFORMATION.write(){*current=Some(info);}
+}
+pub fn get_live_media_information()->crate::media_info::MediaFileInfo {
+    if let Some(client)=crate::peer::client() && let Some(view)=client.snapshot().and_then(|snapshot|snapshot.session.media_view) {return view.file.redacted();}
+    LIVE_MEDIA_INFORMATION.read().ok().and_then(|value|value.clone()).unwrap_or_default()
+}
 pub fn get_live_status() -> PlayerStatusResponse {
     if let Some(client)=crate::peer::client() && let Some(snapshot)=client.snapshot() && let Ok(status)=serde_json::from_value(snapshot.session.status){return status;}
     if let Ok(lock) = LIVE_STATUS.read() {
@@ -2496,6 +2619,10 @@ pub fn set_live_config(config: crate::config::AppConfig) {
 /// per-frame rendering path just to discover that it is unchanged.
 pub fn live_config_revision() -> u64 {
     LIVE_CONFIG_REVISION.load(std::sync::atomic::Ordering::Acquire)
+}
+
+pub(crate) fn invalidate_live_config_revision() {
+    LIVE_CONFIG_REVISION.fetch_add(1, std::sync::atomic::Ordering::Release);
 }
 
 #[derive(Clone)]
@@ -2539,6 +2666,11 @@ pub fn get_live_config() -> crate::config::AppConfig {
         .ok()
         .and_then(|config| config.clone())
         .unwrap_or_else(crate::config::AppConfig::load)
+}
+
+pub(crate) fn live_app_description() -> String {
+    LIVE_CONFIG.read().ok().and_then(|config| config.as_ref().map(crate::config::resolved_app_description))
+        .unwrap_or_else(|| crate::config::resolved_app_description(&crate::config::AppConfig::default()))
 }
 
 /// Small live-policy read for the media observer; no config/disk clone per tick.
@@ -2759,6 +2891,7 @@ fn spawn_windows_pipe_listener(
 pub fn parse_interop_request(
     line: &str,
 ) -> Result<(Option<serde_json::Value>, InteropCommand), String> {
+    if line.len()>1024*1024 {return Err("Control request exceeds 1 MiB".into());}
     let val: serde_json::Value = serde_json::from_str(line).map_err(|e| e.to_string())?;
 
     // Check if JSON-RPC 2.0 format
@@ -2814,6 +2947,10 @@ pub fn format_interop_error(id: Option<serde_json::Value>, code: i32, message: &
     }
 }
 
+pub(crate) fn request_id(payload:&str)->Option<Value> {
+    serde_json::from_str::<Value>(payload).ok().and_then(|value|value.get("id").cloned())
+}
+
 /// Commands from IPC/HTTP must wake an inactive Windows owner as well as egui.
 /// The native edge is scheduled on the shared shell worker, never under a
 /// context transaction or on the receiving window's message callback.
@@ -2824,7 +2961,7 @@ pub(crate) fn wake_command_dispatcher(ctx: &eframe::egui::Context) {
 }
 
 #[cfg(any(unix, windows, test))]
-fn dispatch_local_payload(
+pub(crate) fn dispatch_local_payload(
     payload: &str,
     tx: &std::sync::mpsc::Sender<InteropCommand>,
     egui_ctx: &eframe::egui::Context,
@@ -2832,6 +2969,7 @@ fn dispatch_local_payload(
     expected_identity: &str,
     expected_session_id: Option<u32>,
 ) -> String {
+    if let Some(response) = crate::update::rpc::payload(payload, false, tx) { return response; }
     if let Some(response) = crate::projects::rpc_payload(payload, false) { return response; }
     if let Some(response) = crate::downloads::rpc_payload(payload, false) { return response; }
     if let Some(response) = crate::server::discovery::rpc_payload(payload) { return response; }
@@ -2839,7 +2977,7 @@ fn dispatch_local_payload(
         && let Some(response) = crate::server::binary_udp::rpc(&value, true) { return response.to_string(); }
     let (id, command) = match parse_interop_request(payload) {
         Ok(parsed) => parsed,
-        Err(error) => return format_interop_error(None, -32600, &error),
+        Err(error) => return format_interop_error(request_id(payload), -32600, &error),
     };
     if let Some(value) = command.query_result() {
         return format_interop_response(id, &value);
@@ -2916,6 +3054,12 @@ pub fn spawn_interop_listener(
     egui_ctx: eframe::egui::Context,
     application_identity: String,
 ) {
+    #[cfg(windows)]
+    let _=NATIVE_ENDPOINT.set(windows_pipe_name(&application_identity));
+    #[cfg(unix)]
+    let _=NATIVE_ENDPOINT.set(get_socket_path().to_string_lossy().into_owned());
+    #[cfg(windows)]
+    crate::platform::copydata::start(tx.clone(),egui_ctx.clone(),application_identity.clone());
     // Keep the listening identity stable even if branding is previewed or this
     // process is a named review/remote-client instance.
     egui_ctx.data_mut(|data| data.insert_temp(eframe::egui::Id::new("native-listener-identity"), application_identity.clone()));
@@ -3176,6 +3320,7 @@ pub(crate) fn controller_instance_identity(instance_id: &str, name: &str) -> Val
             "web_ui":format!("http://127.0.0.1:{port}/")}},
         "values":{"application":name,"version":env!("CARGO_PKG_VERSION"),"commit":env!("PEALAYER_GIT_COMMIT"),
             "peer_origin":peer_origin,
+            "update_contract":"pealayer.update", "update_transports":"http,json-rpc,websocket,native",
             "os":std::env::consts::OS,"arch":std::env::consts::ARCH,"host":controller_host_name(),
             "app_actions":PCCONTROLLER_ACTIONS,"control_contract":"pealayer.control",
             "control_transports":"native,http,websocket,json-rpc","coordinator":"pccontroller","serial_owner":"pccontroller"}
@@ -3966,6 +4111,27 @@ mod tests {
     }
 
     #[test]
+    fn window_and_media_commands_share_json_and_rpc_contracts() {
+        let placement=serde_json::json!({"x":-50,"y":40,"width":960,"height":640,"state":"normal"});
+        let rpc=serde_json::json!({"jsonrpc":"2.0","id":"place","method":"pealayer.window.set","params":placement});
+        let (_,command)=parse_interop_request(&rpc.to_string()).unwrap();
+        let mut plain=placement;plain["command"]=Value::String("set_window".into());
+        assert_eq!(parse_interop_request(&plain.to_string()).unwrap().1,command);
+        assert!(command.is_process_local());
+        for (method,command) in [("pealayer.window.get",InteropCommand::GetWindow),("pealayer.playback.get",InteropCommand::GetPlayback),("pealayer.media.get",InteropCommand::GetMedia),("pealayer.chapters.get",InteropCommand::GetChapters)] {
+            let rpc=serde_json::json!({"jsonrpc":"2.0","id":9,"method":method,"params":{}});
+            assert_eq!(parse_interop_request(&rpc.to_string()).unwrap().1,command);
+            assert!(command.query_result().unwrap().is_object());
+        }
+        for params in [serde_json::json!({"width":0}),serde_json::json!({"state":"invalid"}),serde_json::json!({"x":"40"}),serde_json::json!({"widht":900})] {
+            assert!(parse_interop_request(&serde_json::json!({"jsonrpc":"2.0","id":1,"method":"pealayer.window.set","params":params}).to_string()).is_err());
+        }
+        assert!(InteropCommand::FrameStep{frames:0}.validate().is_err());
+        assert!(InteropCommand::FrameStep{frames:-1}.validate().is_ok());
+        assert!(InteropCommand::FrameStep{frames:121}.validate().is_err());
+    }
+
+    #[test]
     fn launch_destination_rejects_other_identity_and_session() {
         let options = crate::cli::CliOptions {
             target: None,
@@ -4273,6 +4439,12 @@ mod tests {
 
     #[test]
     fn parses_hardware_presentation_updates_for_web_channel_management() {
+        for connected in [true,false] {
+            let request:JsonRpcRequest=serde_json::from_value(serde_json::json!({"jsonrpc":"2.0","id":"connection","method":"pealayer.hardware.connection","params":{"connected":connected}})).unwrap();
+            assert_eq!(command_from_json_rpc(&request).unwrap(),Some(InteropCommand::SetHardwareConnection{connected}));
+        }
+        let invalid:JsonRpcRequest=serde_json::from_value(serde_json::json!({"jsonrpc":"2.0","id":"connection","method":"pealayer.hardware.connection","params":{"connected":"yes"}})).unwrap();
+        assert!(command_from_json_rpc(&invalid).is_err());
         let folder: JsonRpcRequest = serde_json::from_str(r#"{"jsonrpc":"2.0","id":"folder","method":"hardware.folder.update","params":{"operation":"move","kind":"pwm","name":"Lighting","keys":["pwm.0"]}}"#).unwrap();
         assert!(matches!(command_from_json_rpc(&folder).unwrap(), Some(InteropCommand::UpdateHardwareFolder { fields }) if fields["operation"] == "move" && fields["keys"][0] == "pwm.0"));
         let invalid: JsonRpcRequest = serde_json::from_str(r#"{"jsonrpc":"2.0","id":"folder","method":"hardware.folder.update","params":[]}"#).unwrap();

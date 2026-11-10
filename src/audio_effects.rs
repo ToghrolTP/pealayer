@@ -104,6 +104,7 @@ impl PealayerApp {
                     config.audio_effects.retain(|e| e.id != effect.id);
                     config.audio_effects.push(effect.clone());
                     if let Err(error) = config.validate() {
+                        self.finish_asset_audio(effect.id,None);
                         self.set_osd(error);
                         continue;
                     }
@@ -127,6 +128,11 @@ impl PealayerApp {
                     self.sync_timeline_engine();
                     self.save_config();
                     self.last_web_broadcast = None;
+                    self.finish_asset_audio(effect.id,Some(&effect));
+                }
+                Completion::ImportFailed { id, error } => {
+                    self.finish_asset_audio(id,None);
+                    self.asset_error(format!("Audio import failed: {error}"));
                 }
                 Completion::Error(error) => {
                     let _ = crate::messaging::publish(

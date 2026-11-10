@@ -1,4 +1,5 @@
 pub mod fs_api;
+pub mod asset_upload;
 mod fs_locations;
 mod media_stream;
 mod download_media;
@@ -10,7 +11,7 @@ mod udp_codec;
 pub(crate) mod udp_client;
 
 use std::collections::VecDeque;
-use std::io::{Read, Write};
+use std::io::{BufRead, Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::sync::{Arc, Mutex};
@@ -77,6 +78,7 @@ fn web_asset_path(root: &std::path::Path, request_path: &str) -> Option<std::pat
 #[serde(rename_all = "camelCase")]
 pub struct WebRuntimeConfig {
     pub app_name: String,
+    pub app_description: String,
     pub version: String,
     pub websocket_path: String,
     pub app_icon_path: String,
@@ -96,6 +98,7 @@ impl WebRuntimeConfig {
     ) -> Self {
         Self {
             app_name,
+            app_description: String::new(),
             version: env!("CARGO_PKG_VERSION").to_string(),
             websocket_path: "/ws".to_string(),
             app_icon_path: "/api/runtime/app-icon".to_string(),
@@ -320,7 +323,7 @@ fn spawn_control_server_on_listeners_with_channel(
     state_tx: Sender<String>,
     state_rx: Receiver<String>,
 ) -> Sender<String> {
-    crate::update::manager().register_gui_context(egui_ctx.clone());
+    crate::update::manager().register_gui_context(egui_ctx.clone(),command_tx.clone());
     let latest_status = Arc::new(Mutex::new(None));
     let websocket_clients: Arc<Mutex<Vec<Sender<String>>>> = Arc::new(Mutex::new(Vec::new()));
 
@@ -432,6 +435,10 @@ fn handle_connection(mut stream: TcpStream, state: ControlState) {
             Ok(0) | Err(_) => return,
             Ok(length) => length,
         };
+        if preview[..length].iter().find(|byte| !byte.is_ascii_whitespace()).is_some_and(|byte| matches!(*byte,b'{'|b'[')) {
+            handle_ndjson(stream, state);
+            return;
+        }
         if preview[..length]
             .windows(4)
             .any(|window| window == b"\r\n\r\n")
@@ -501,15 +508,40 @@ fn handle_connection(mut stream: TcpStream, state: ControlState) {
     }
 }
 
+/// NDJSON shares the current listener, permissions and typed dispatcher.
+/// Bound line size, idle reads, writes and per-connection work.
+fn handle_ndjson(mut stream:TcpStream,state:ControlState) {
+    let Ok(reader)=stream.try_clone() else{return;};
+    let mut reader=std::io::BufReader::new(reader);
+    let _=stream.set_write_timeout(Some(Duration::from_secs(3)));
+    for _ in 0..256 {
+        let mut bytes=Vec::new();
+        match reader.by_ref().take((MAX_HTTP_REQUEST_BYTES+1) as u64).read_until(b'\n',&mut bytes) {
+            Ok(0)|Err(_)=>return,
+            _=>{},
+        }
+        if bytes.len()>MAX_HTTP_REQUEST_BYTES || !bytes.ends_with(b"\n") {return;}
+        let Ok(text)=std::str::from_utf8(&bytes) else{return;};
+        if text.trim().is_empty(){continue;}
+        let response=handle_websocket_text(&state,text.trim()).unwrap_or_else(||crate::platform::interop::json_rpc_error(&serde_json::Value::Null,-32600,"Invalid control request"));
+        if stream.write_all(response.trim_end().as_bytes()).and_then(|_|stream.write_all(b"\n")).and_then(|_|stream.flush()).is_err(){return;}
+    }
+}
+
 fn peer_relay_route(target: &str) -> bool {
     let path = target.split('?').next().unwrap_or(target);
     // Session commands operate the authority. Updating this executable and
     // inspecting this consumer are process-local, never updates of its server.
-    path.starts_with("/api/") && path != "/api/client/status"
+    path.starts_with("/api/") && path != "/api/client/status" && path != "/api/window"
         && !path.starts_with("/api/update/")
         && !path.starts_with("/api/process/")
         && path != "/api/udp"
         && !path.starts_with("/api/discovery")
+}
+
+fn window_read_payload(body:&[u8])->bool {
+    std::str::from_utf8(body).ok().and_then(|text|crate::platform::interop::parse_interop_request(text).ok())
+        .is_some_and(|(_,command)|matches!(command,crate::platform::interop::InteropCommand::GetWindow | crate::platform::interop::InteropCommand::GetWorkspaceTools))
 }
 
 fn local_process_payload(body: &[u8]) -> bool {
@@ -517,9 +549,10 @@ fn local_process_payload(body: &[u8]) -> bool {
     // Invalid parameters still belong to this process and must receive its
     // validation error, not be sent to the authority by the gateway.
     if let Some(method) = value.get("method").and_then(serde_json::Value::as_str) {
-        return matches!(method, "pealayer.process.status" | "pealayer.process.connect" | "pealayer.process.quit" | "pealayer.preferences.navigate" | "navigate_preferences" | "pealayer.about.open");
+        if method.starts_with("pealayer.workspace.tools.") { return true; }
+        return crate::update::rpc::is_method(method) || method.starts_with("pealayer.window.") || matches!(method, "get_window" | "set_window" | "activate" | "minimize" | "maximize" | "restore" | "set_fullscreen" | "toggle_fullscreen" | "pealayer.fullscreen.set" | "pealayer.fullscreen.toggle" | "pealayer.process.status" | "pealayer.process.connect" | "pealayer.process.quit" | "pealayer.preferences.navigate" | "navigate_preferences" | "pealayer.about.open");
     }
-    if matches!(value.get("command").and_then(serde_json::Value::as_str), Some("navigate_preferences" | "open_about")) { return true; }
+    if matches!(value.get("command").and_then(serde_json::Value::as_str), Some("navigate_preferences" | "open_about" | "workspace_tools" | "get_workspace_tools")) { return true; }
     serde_json::from_value::<crate::platform::interop::InteropCommand>(value)
         .is_ok_and(|command| command.is_process_local())
 }
@@ -629,9 +662,10 @@ fn handle_websocket(stream: TcpStream, state: ControlState) {
 }
 
 fn handle_websocket_text(state: &ControlState, text: &str) -> Option<String> {
+    if let Some(response) = crate::update::rpc::payload(text, true, &state.command_tx) { return Some(response); }
     if let Some(response)=crate::projects::rpc_payload(text,true) {return Some(response);}
     if local_process_payload(text.as_bytes()) {
-        if !crate::platform::interop::get_live_config().web_allow_control {
+        if !crate::platform::interop::get_live_config().web_allow_control && !window_read_payload(text.as_bytes()) {
             return Some(crate::platform::interop::format_interop_error(None, -32003, "Web control permission is disabled"));
         }
         return Some(dispatch_ipc_payload(state, text));
@@ -652,6 +686,7 @@ fn handle_websocket_text(state: &ControlState, text: &str) -> Option<String> {
             return Some(crate::platform::interop::format_interop_error(None, -32602, &error));
         }
         if let Some(error) = remote_command_permission(&command) { return Some(crate::platform::interop::format_interop_error(None, -32003, error)); }
+        if let Some(value)=command.query_result() {return Some(crate::platform::interop::format_interop_response(None,&value));}
         if !crate::platform::interop::get_live_config().web_allow_control {
             return Some(crate::platform::interop::format_interop_error(
                 None,
@@ -659,12 +694,14 @@ fn handle_websocket_text(state: &ControlState, text: &str) -> Option<String> {
                 "Web control permission is disabled",
             ));
         }
-        if state.command_tx.send(command).is_ok() {
-            state.egui_ctx.request_repaint();
-        }
-        return None;
+        let accepted=state.command_tx.send(command).is_ok();
+        if accepted {crate::platform::interop::wake_command_dispatcher(&state.egui_ctx);}
+        return Some(serde_json::json!({"accepted":accepted}).to_string());
     }
-    let request = serde_json::from_str::<crate::platform::interop::JsonRpcRequest>(text).ok()?;
+    let request = match serde_json::from_str::<crate::platform::interop::JsonRpcRequest>(text) {
+        Ok(request)=>request,
+        Err(error)=>return Some(crate::platform::interop::format_interop_error(None,-32600,&format!("Invalid control request: {error}"))),
+    };
     if let Some(response) = crate::downloads::rpc_payload(text, true) { return Some(response); }
     Some(
         if matches!(
@@ -688,6 +725,9 @@ fn handle_websocket_text(state: &ControlState, text: &str) -> Option<String> {
             match crate::platform::interop::command_from_json_rpc(&request) {
                 Ok(Some(command)) => {
                     if let Some(error) = remote_command_permission(&command) { return Some(crate::platform::interop::json_rpc_error(&request.id, -32003, error)); }
+                    if let Some(value)=command.query_result() {
+                        return Some(crate::platform::interop::json_rpc_result(&request.id,value));
+                    }
                     if !crate::platform::interop::get_live_config().web_allow_control {
                         return Some(crate::platform::interop::json_rpc_error(
                             &request.id,
@@ -697,7 +737,7 @@ fn handle_websocket_text(state: &ControlState, text: &str) -> Option<String> {
                     }
                     let accepted = state.command_tx.send(command).is_ok();
                     if accepted {
-                        state.egui_ctx.request_repaint();
+            crate::platform::interop::wake_command_dispatcher(&state.egui_ctx);
                     }
                     crate::platform::interop::json_rpc_result(
                         &request.id,
@@ -857,8 +897,15 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
     if media_stream::header(&request.headers, "x-pealayer-route").is_some_and(|route| route.split(',').any(|id| id.trim() == crate::peer::instance_id()) || route.split(',').count() > 8) {
         return HttpResponse::text(508, "Loop Detected", "Pealayer peer routing loop");
     }
+    if request.method=="POST" && matches!(path,"/api/ipc"|"/api/player/command")
+        && let Some(response)=crate::update::rpc::payload(&String::from_utf8_lossy(&request.body),true,&state.command_tx) {
+        return HttpResponse::json(200,"OK",response);
+    }
     if let Some(capability) = denied_web_capability(&request.method, path, &web) {
         return permission_denied(capability);
+    }
+    if path.starts_with("/api/assets/upload") && query_value(&request.target,"owner_id").is_some_and(|id|id != crate::peer::instance_id()) {
+        return HttpResponse::json(409,"Conflict",serde_json::json!({"error":"Asset session owner changed; retry the transfer"}).to_string());
     }
     match (request.method.as_str(), path) {
         ("GET", "/api/peer/session") => {
@@ -872,6 +919,18 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
             Err(error) => HttpResponse::text(503,"Service Unavailable",error),
         },
         ("GET", "/api/client/status")=>HttpResponse::json(200,"OK",crate::peer::diagnostics().to_string()),
+        ("GET", "/api/window")=>HttpResponse::json(200,"OK",crate::platform::interop::InteropCommand::GetWindow.query_result().unwrap().to_string()),
+        ("POST", "/api/window")=>{
+            let command=serde_json::from_slice::<crate::platform::window_control::Placement>(&request.body)
+                .map_err(|error|error.to_string()).and_then(|placement|{placement.validate()?;Ok(crate::platform::interop::InteropCommand::SetWindow{placement})});
+            match command {
+                Ok(command)=>{let accepted=state.command_tx.send(command).is_ok();if accepted{crate::platform::interop::wake_command_dispatcher(&state.egui_ctx);} HttpResponse::json(if accepted{202}else{503},if accepted{"Accepted"}else{"Service Unavailable"},serde_json::json!({"accepted":accepted}).to_string())},
+                Err(error)=>HttpResponse::json(400,"Bad Request",serde_json::json!({"error":error}).to_string()),
+            }
+        },
+        ("GET", "/api/player/playback")=>HttpResponse::json(200,"OK",crate::platform::interop::InteropCommand::GetPlayback.query_result().unwrap().to_string()),
+        ("GET", "/api/player/media")=>HttpResponse::json(200,"OK",crate::platform::interop::InteropCommand::GetMedia.query_result().unwrap().to_string()),
+        ("GET", "/api/player/chapters")=>HttpResponse::json(200,"OK",crate::platform::interop::InteropCommand::GetChapters.query_result().unwrap().to_string()),
         ("GET", "/api/process/status")=>HttpResponse::json(200,"OK",crate::process_control::status().to_string()),
         ("GET", "/api/process/authoring") => match crate::authoring::inspect(&state.command_tx,&state.egui_ctx) {
             Ok(value)=>HttpResponse::json(200,"OK",serde_json::to_string(&value).unwrap_or_default()),
@@ -890,6 +949,9 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
         ("POST", "/api/peer/controller") => {
             let result = serde_json::from_slice::<serde_json::Value>(&request.body).map_err(|error|error.to_string()).and_then(|value| {
                 let method=value.get("method").and_then(serde_json::Value::as_str).ok_or("A controller method is required")?;
+                if controller_update_request(method,value.get("params"),0) && !web.web_allow_updates {
+                    return Err("Web application update permission is disabled".into());
+                }
                 crate::peer::controller_call(method.into(),value.get("params").cloned().unwrap_or_else(||serde_json::json!({})))
             });
             peer_result(result)
@@ -943,6 +1005,16 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
             .unwrap_or_else(|_| "{}".to_string()),
         ),
         ("POST", "/api/config") => config_update_response(&request.body, state),
+        ("GET", "/api/branding") => HttpResponse::json(200, "OK", crate::branding::snapshot().to_string()),
+        ("POST", "/api/branding") => branding_update_response(&request.body, state),
+        ("DELETE", "/api/branding") => {
+            if !web.web_allow_control || !web.web_allow_configuration { return permission_denied("control and configuration"); }
+            if state.command_tx.send(crate::platform::interop::InteropCommand::ClearBranding).is_err() {
+                return HttpResponse::text(503, "Service Unavailable", "Dispatcher unavailable");
+            }
+            crate::platform::interop::wake_command_dispatcher(&state.egui_ctx);
+            HttpResponse::json(202, "Accepted", r#"{"accepted":true}"#)
+        }
         ("GET", "/api/update/manifest") => match crate::update::current_manifest() {
             Ok(manifest) => HttpResponse::json(
                 200,
@@ -1085,6 +1157,21 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
             player_seek_thumbnail_response(&request.target, state)
         }
         ("GET", "/api/fs/browse") => browse_response(&request.target),
+        ("GET", "/api/assets") => HttpResponse::json(200,"OK",crate::assets::snapshot().to_string()),
+        ("POST", "/api/assets/upload/begin") => peer_result(serde_json::from_slice::<asset_upload::Begin>(&request.body).map_err(|e|e.to_string()).and_then(asset_upload::begin)),
+        ("PUT", "/api/assets/upload/chunk") => peer_result((||{
+            let id=query_value(&request.target,"id").and_then(|s|uuid::Uuid::parse_str(&s).ok()).ok_or("Asset upload UUID is required")?;
+            let offset=query_value(&request.target,"offset").and_then(|s|s.parse::<u64>().ok()).ok_or("Asset upload offset is required")?;
+            asset_upload::chunk(id,offset,&request.body)
+        })()),
+        ("POST", "/api/assets/upload/finish") => peer_result(query_value(&request.target,"id").and_then(|s|uuid::Uuid::parse_str(&s).ok()).ok_or_else(||"Asset upload UUID is required".to_string()).and_then(asset_upload::finish)),
+        ("DELETE", "/api/assets/upload") => peer_result(query_value(&request.target,"id").and_then(|s|uuid::Uuid::parse_str(&s).ok()).ok_or_else(||"Asset upload UUID is required".to_string()).and_then(asset_upload::cancel)),
+        ("DELETE", "/api/assets/upload/batch") => peer_result(query_value(&request.target,"batch_id").and_then(|s|uuid::Uuid::parse_str(&s).ok()).ok_or_else(||"Asset batch UUID is required".to_string()).and_then(asset_upload::abort_batch)),
+        ("POST", "/api/assets/upload/retain") => peer_result(serde_json::from_slice::<serde_json::Value>(&request.body).map_err(|e|e.to_string()).and_then(|value| {
+            let paths:Vec<String>=serde_json::from_value(value.get("paths").cloned().ok_or("Asset paths are required")?).map_err(|e|e.to_string())?;
+            if paths.is_empty() || paths.len()>crate::assets::MAX_FILES{return Err("Choose 1–64 asset paths".into());}
+            asset_upload::retain_paths(&paths);Ok(serde_json::json!({"retained":true}))
+        })),
         ("GET", "/api/fs/locations") => HttpResponse::json(200, "OK",
             serde_json::json!({"locations": fs_locations::locations(&web.recent_media)}).to_string()),
         ("GET", "/api/fs/thumbnail") => thumbnail_response(&request.target),
@@ -1102,7 +1189,7 @@ fn denied_web_capability(
 ) -> Option<&'static str> {
     let configuration_route = path == "/api/peer/documents" || matches!(
         (method, path),
-        ("GET", "/api/config") | ("GET", "/api/preferences") | ("POST", "/api/config") | ("GET", "/api/peer/session") | ("GET", "/api/peer/hardware") | ("POST", "/api/peer/config") | ("POST", "/api/peer/files")
+        ("GET", "/api/config") | ("GET", "/api/preferences") | ("POST", "/api/config") | ("GET" | "POST", "/api/branding") | ("GET", "/api/peer/session") | ("GET", "/api/peer/hardware") | ("POST", "/api/peer/config") | ("POST", "/api/peer/files")
     );
     let control_route = matches!(
         (method, path),
@@ -1110,6 +1197,7 @@ fn denied_web_capability(
             | ("POST", "/api/messages")
             | ("DELETE", "/api/osd")
             | ("POST", "/api/player/command")
+            | ("POST", "/api/window")
             | ("POST", "/api/ipc")
             | ("POST", "/api/process/command")
     );
@@ -1117,6 +1205,7 @@ fn denied_web_capability(
         || matches!(path, "/api/player/frame" | "/api/player/seek-thumbnail"
             | "/api/player/taskbar-preview" | "/api/player/taskbar-preview.png" | "/api/player/taskbar-icons.png");
     let update_route = path.starts_with("/api/update/");
+    if path.starts_with("/api/assets") && (!web.web_allow_file_access || !web.web_allow_control || !web.web_allow_configuration) {return Some("asset import (file, control and configuration)");}
     if configuration_route && !web.web_allow_configuration {
         return Some("configuration");
     }
@@ -1130,6 +1219,16 @@ fn denied_web_capability(
         return Some("application updates");
     }
     None
+}
+
+fn controller_update_request(method: &str, params: Option<&serde_json::Value>, depth: usize) -> bool {
+    if depth > 4 { return true; }
+    if method.starts_with("controller.software.") || method.starts_with("controller.artifact.")
+        || method.starts_with("controller.update.") || method == "controller.peer.update.host" { return true; }
+    if method == "controller.bridge.call" && let Some(request) = params.and_then(|p|p.get("request")) {
+        return request.get("method").and_then(|m|m.as_str()).is_some_and(|m| controller_update_request(m,request.get("params"),depth+1));
+    }
+    false
 }
 
 fn peer_result(result: Result<serde_json::Value,String>) -> HttpResponse {
@@ -1199,12 +1298,29 @@ fn permission_denied(capability: &str) -> HttpResponse {
 
 fn remote_command_permission(command: &crate::platform::interop::InteropCommand) -> Option<&'static str> {
     use crate::platform::interop::InteropCommand;
+    if let InteropCommand::Launch { request } = command {
+        if let Some(error) = request.commands.iter().find_map(remote_command_permission) { return Some(error); }
+    }
+    if matches!(command, InteropCommand::WorkspaceTools { request } if request.requires_native_sender()) {
+        return Some("Terminal execution and input require native local IPC");
+    }
+    if matches!(command, InteropCommand::UpdateBranding { .. } | InteropCommand::GetBranding | InteropCommand::ClearBranding
+        | InteropCommand::SetPlayerMode { .. } | InteropCommand::ResolvePlayerExecutable { .. })
+        && !crate::platform::interop::get_live_config().web_allow_configuration {
+        return Some("Web configuration permission is disabled");
+    }
+    if matches!(command,InteropCommand::ImportAssets{..}|InteropCommand::ReviewAsset{..}|InteropCommand::ResolveTimelineClose{..}) {
+        let config=crate::platform::interop::get_live_config();
+        if !config.web_allow_file_access || !config.web_allow_configuration || !config.web_allow_control {return Some("Asset import requires file, configuration and control permissions");}
+    }
     if matches!(command,InteropCommand::Documents {..}) {
         let config=crate::platform::interop::get_live_config();
         if !config.web_allow_file_access || !config.web_allow_configuration || !config.web_allow_control {return Some("Document file, configuration or control permission is disabled");}
     }
     if crate::platform::interop::get_live_config().web_allow_file_access { return None; }
     match command {
+        InteropCommand::UpdateBranding { update } if update.values.as_object().is_some_and(|values|
+            values.iter().any(|(key,value)| key.starts_with("app_icon") && key != "app_icon_preset" && value.is_string())) => Some("Web host file access permission is disabled"),
         InteropCommand::BrowseRemote { .. } | InteropCommand::SelectRemote { .. } | InteropCommand::Open { .. } => Some("Web host file access permission is disabled"),
         InteropCommand::Launch { request } => if request.target.is_some() || request.commands.iter().any(|c| remote_command_permission(c).is_some()) { Some("Web host file access permission is disabled") } else { None },
         _ => None,
@@ -1282,7 +1398,7 @@ fn live_runtime_config() -> WebRuntimeConfig {
 fn runtime_config_for(config: &crate::config::AppConfig) -> WebRuntimeConfig {
     let language = crate::config::resolve_language(crate::config::resolved_language_preference(config));
     let rtl = crate::config::resolve_rtl(crate::config::resolved_direction_preference(config), language);
-    WebRuntimeConfig::production(
+    let mut runtime = WebRuntimeConfig::production(
         crate::config::resolved_app_name(config),
         if language == crate::config::AppLanguage::Persian { "fa" } else { "en" }.into(),
         if rtl { "rtl" } else { "ltr" }.into(),
@@ -1292,7 +1408,9 @@ fn runtime_config_for(config: &crate::config::AppConfig) -> WebRuntimeConfig {
             crate::config::AppTheme::System => "system",
         }.into(),
         crate::ui::platform_accent_rgb(config),
-    )
+    );
+    runtime.app_description = crate::config::resolved_app_description(config);
+    runtime
 }
 
 fn pwa_manifest_response() -> HttpResponse {
@@ -1308,7 +1426,7 @@ fn pwa_manifest_response() -> HttpResponse {
             "name": app_name,
             "short_name": app_name,
             "id": "/",
-            "description": "Media, timeline, effects, and live PCController hardware workspace",
+            "description": if runtime.app_description.is_empty() { env!("CARGO_PKG_DESCRIPTION").to_owned() } else { runtime.app_description },
             "start_url": "/#/player",
             "scope": "/",
             "display": "standalone",
@@ -1347,12 +1465,15 @@ fn pwa_manifest_response() -> HttpResponse {
 }
 
 fn json_rpc_response(body: &[u8], state: &ControlState) -> HttpResponse {
+    if let Some(response) = crate::update::rpc::payload(&String::from_utf8_lossy(body), true, &state.command_tx) {
+        return HttpResponse::json(200, "OK", response);
+    }
     if let Some(response)=crate::projects::rpc_payload(&String::from_utf8_lossy(body),true) {return HttpResponse::json(200,"OK",response);}
     if let Some(response) = crate::downloads::rpc_payload(&String::from_utf8_lossy(body), true) {
         return HttpResponse::json(200, "OK", response);
     }
     if local_process_payload(body) {
-        if !crate::platform::interop::get_live_config().web_allow_control { return permission_denied("control"); }
+        if !crate::platform::interop::get_live_config().web_allow_control && !window_read_payload(body) { return permission_denied("control"); }
         return HttpResponse::json(200, "OK", dispatch_ipc_payload(state, &String::from_utf8_lossy(body)));
     }
     let response = match serde_json::from_slice::<crate::platform::interop::JsonRpcRequest>(body) {
@@ -1379,6 +1500,9 @@ fn json_rpc_response(body: &[u8], state: &ControlState) -> HttpResponse {
         Ok(request) => match crate::platform::interop::command_from_json_rpc(&request) {
             Ok(Some(command)) => {
                 if let Some(error) = remote_command_permission(&command) { return HttpResponse::json(403,"Forbidden",crate::platform::interop::json_rpc_error(&request.id,-32003,error)); }
+                if let Some(value)=command.query_result() {
+                    return HttpResponse::json(200, "OK", crate::platform::interop::json_rpc_result(&request.id, value));
+                }
                 if !crate::platform::interop::get_live_config().web_allow_control {
                     return HttpResponse::json(
                         403,
@@ -1392,7 +1516,7 @@ fn json_rpc_response(body: &[u8], state: &ControlState) -> HttpResponse {
                 }
                 let accepted = state.command_tx.send(command).is_ok();
                 if accepted {
-                    state.egui_ctx.request_repaint();
+            crate::platform::interop::wake_command_dispatcher(&state.egui_ctx);
                 }
                 crate::platform::interop::json_rpc_result(
                     &request.id,
@@ -1436,7 +1560,7 @@ fn config_update_response(body: &[u8], state: &ControlState) -> HttpResponse {
                 .send(crate::platform::interop::InteropCommand::UpdateConfig { values })
                 .is_ok();
             if accepted {
-                state.egui_ctx.request_repaint();
+            crate::platform::interop::wake_command_dispatcher(&state.egui_ctx);
                 HttpResponse::json(202, "Accepted", r#"{"accepted":true}"#)
             } else {
                 HttpResponse::text(503, "Service Unavailable", "Dispatcher unavailable")
@@ -1450,9 +1574,29 @@ fn config_update_response(body: &[u8], state: &ControlState) -> HttpResponse {
     }
 }
 
+fn branding_update_response(body: &[u8], state: &ControlState) -> HttpResponse {
+    let request = serde_json::from_slice::<crate::branding::BrandingUpdate>(body)
+        .map_err(|error| format!("Invalid branding request: {error}"))
+        .and_then(|update| { update.validate()?; Ok(update) });
+    match request {
+        Ok(update) => {
+            let command = crate::platform::interop::InteropCommand::UpdateBranding { update };
+            if let Some(error) = remote_command_permission(&command) { return permission_denied(error); }
+            if !crate::platform::interop::get_live_config().web_allow_control { return permission_denied("control"); }
+            if state.command_tx.send(command).is_err() { return HttpResponse::text(503, "Service Unavailable", "Dispatcher unavailable"); }
+            crate::platform::interop::wake_command_dispatcher(&state.egui_ctx);
+            HttpResponse::json(202, "Accepted", r#"{"accepted":true}"#)
+        }
+        Err(error) => HttpResponse::json(400, "Bad Request", serde_json::json!({"error":error}).to_string()),
+    }
+}
+
 fn player_command_response(body: &[u8], state: &ControlState) -> HttpResponse {
+    if let Some(response) = crate::update::rpc::payload(&String::from_utf8_lossy(body), true, &state.command_tx) {
+        return HttpResponse::json(200, "OK", response);
+    }
     if local_process_payload(body) {
-        if !crate::platform::interop::get_live_config().web_allow_control { return permission_denied("control"); }
+        if !crate::platform::interop::get_live_config().web_allow_control && !window_read_payload(body) { return permission_denied("control"); }
         return HttpResponse::json(200, "OK", dispatch_ipc_payload(state, &String::from_utf8_lossy(body)));
     }
     match parse_player_command(body) {
@@ -1463,12 +1607,15 @@ fn player_command_response(body: &[u8], state: &ControlState) -> HttpResponse {
                 "Bad Request",
                 serde_json::json!({"error": error}).to_string(),
             ),
-            Ok(()) => match state.command_tx.send(command) {
+            Ok(()) => {
+                if let Some(value)=command.query_result(){return HttpResponse::json(200,"OK",value.to_string());}
+                match state.command_tx.send(command) {
                 Ok(()) => {
-                    state.egui_ctx.request_repaint();
+            crate::platform::interop::wake_command_dispatcher(&state.egui_ctx);
                     HttpResponse::json(200, "OK", r#"{"status":"ok"}"#)
                 }
                 Err(_) => HttpResponse::text(503, "Service Unavailable", "Dispatcher unavailable"),
+                }
             },
         },
         Err(error) => HttpResponse::json(
@@ -1519,7 +1666,7 @@ fn osd_response(body: &[u8], force_hide: bool, state: &ControlState) -> HttpResp
             .map_err(|_| "dispatcher unavailable".to_string())
     }) {
         Ok(()) => {
-            state.egui_ctx.request_repaint();
+            crate::platform::interop::wake_command_dispatcher(&state.egui_ctx);
             HttpResponse::json(202, "Accepted", r#"{"accepted":true}"#)
         }
         Err(error) => HttpResponse::json(
@@ -1560,6 +1707,7 @@ fn parse_player_command(body: &[u8]) -> Result<crate::platform::interop::Interop
 }
 
 fn dispatch_ipc_payload(state: &ControlState, payload: &str) -> String {
+    if let Some(response) = crate::update::rpc::payload(payload, true, &state.command_tx) { return response; }
     if let Some(response)=crate::projects::rpc_payload(payload,true) {return response;}
     if let Some(response) = discovery::rpc_payload(payload) { return response; }
     if let Some(response) = crate::downloads::rpc_payload(payload, true) { return response; }
@@ -1567,7 +1715,7 @@ fn dispatch_ipc_payload(state: &ControlState, payload: &str) -> String {
 
     let (id, command) = match crate::platform::interop::parse_interop_request(payload) {
         Ok(parsed) => parsed,
-        Err(error) => return crate::platform::interop::format_interop_error(None, -32600, &error),
+        Err(error) => return crate::platform::interop::format_interop_error(crate::platform::interop::request_id(payload), -32600, &error),
     };
     if let Some(error) = remote_command_permission(&command) { return crate::platform::interop::format_interop_error(id, -32003, error); }
     if let Some(value) = command.query_result() {
@@ -1849,7 +1997,144 @@ fn mime_for_path(path: &std::path::Path) -> &'static str {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn workspace_tools_stay_local_and_web_cannot_execute_a_shell() {
+        use crate::platform::interop::{InteropCommand, parse_interop_request};
+        for params in [serde_json::json!({"action":"terminal","operation":"connect"}),
+            serde_json::json!({"action":"terminal","operation":"write","data":"help"}),
+            serde_json::json!({"action":"terminal","operation":"resize","rows":24,"cols":80})] {
+            let payload=serde_json::json!({"method":"pealayer.workspace.tools.control","params":params}).to_string();
+            assert!(super::local_process_payload(payload.as_bytes()));
+            let (_,command)=parse_interop_request(&payload).unwrap();
+            assert!(command.is_process_local());
+            assert!(super::remote_command_permission(&command).is_some());
+        }
+        assert!(super::local_process_payload(br#"{"method":"pealayer.workspace.tools.control","params":{"invalid":true}}"#));
+        let (_,command)=parse_interop_request(r#"{"method":"pealayer.workspace.tools.get","params":{}}"#).unwrap();
+        assert_eq!(command,InteropCommand::GetWorkspaceTools);
+        assert!(command.query_result().unwrap().is_object());
+    }
+    #[test]
+    fn control_queries_return_data_and_window_writes_stay_local_across_http_ws_and_tcp() {
+        use super::*;
+        use crate::platform::interop::{self,InteropCommand};
+        let _lock=crate::app::tests::lock_app_tests();
+        struct Restore(crate::config::AppConfig);
+        impl Drop for Restore{fn drop(&mut self){interop::set_live_config(self.0.clone());}}
+        let _restore=Restore(interop::get_live_config());
+        let mut config=crate::config::AppConfig::default();config.web_allow_control=true;interop::set_live_config(config.clone());
+        let (tx,rx)=channel();
+        let state=ControlState{command_tx:tx,latest_status:Arc::new(Mutex::new(None)),websocket_clients:Arc::new(Mutex::new(vec![])),egui_ctx:eframe::egui::Context::default(),web_dist_root:Default::default(),launch_receipts:Arc::new(Mutex::new(LaunchReceiptCache::default())),application_identity:"Control fixture".into(),expected_session_id:None};
+        for (name,key) in [("window","available"),("playback","position_seconds"),("media","information"),("chapters","chapters")] {
+            let request=serde_json::json!({"jsonrpc":"2.0","id":name,"method":format!("pealayer.{name}.get"),"params":{}}).to_string();
+            let response:serde_json::Value=serde_json::from_slice(&json_rpc_response(request.as_bytes(),&state).body).unwrap();
+            assert_eq!(response["id"],name);assert!(!response["result"][key].is_null(),"{response}");
+            let response:serde_json::Value=serde_json::from_str(&handle_websocket_text(&state,&request).unwrap()).unwrap();
+            assert!(!response["result"][key].is_null());
+            let plain=serde_json::json!({"command":format!("get_{name}")}).to_string();
+            let response:serde_json::Value=serde_json::from_slice(&player_command_response(plain.as_bytes(),&state).body).unwrap();
+            assert!(!response[key].is_null());
+        }
+        assert!(rx.try_recv().is_err(),"queries must not enqueue any mutation");
+        assert!(!peer_relay_route("/api/window"));
+        for method in ["pealayer.window.set","pealayer.window.minimize","pealayer.fullscreen.set"] {
+            assert!(local_process_payload(serde_json::json!({"method":method,"params":{"invalid":true}}).to_string().as_bytes()));
+        }
+        let update=br#"{"jsonrpc":"2.0","id":8,"method":"pealayer.window.set","params":{"width":900,"height":600}}"#;
+        assert!(json_rpc_response(update,&state).body.len()>0);
+        assert!(matches!(rx.try_recv().unwrap(),InteropCommand::SetWindow{..}));
+        let listener=TcpListener::bind("127.0.0.1:0").unwrap();let address=listener.local_addr().unwrap();let shared=state.clone();
+        let worker=thread::spawn(move||handle_connection(listener.accept().unwrap().0,shared));
+        let mut stream=TcpStream::connect(address).unwrap();stream.set_read_timeout(Some(Duration::from_secs(5))).unwrap();
+        stream.write_all(b"{\"jsonrpc\":\"2.0\",\"id\":41,\"method\":\"pealayer.window.get\",\"params\":{}}\n{\"command\":\"get_playback\"}\n").unwrap();
+        let mut reader=std::io::BufReader::new(stream.try_clone().unwrap());
+        for key in ["result","position_seconds"] {let mut line=String::new();reader.read_line(&mut line).unwrap();let value:serde_json::Value=serde_json::from_str(&line).unwrap();assert!(value.get(key).is_some(),"{value}");}
+        drop(reader);drop(stream);worker.join().unwrap();
+        config.web_allow_control=false;interop::set_live_config(config);
+        assert_eq!(json_rpc_response(update,&state).status,403);
+        let read=br#"{"jsonrpc":"2.0","id":42,"method":"pealayer.window.get","params":{}}"#;
+        assert_eq!(json_rpc_response(read,&state).status,200);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn update_rpc_is_process_local_permission_guarded_and_query_only_until_explicit_upload() {
+        use crate::platform::interop::{get_live_config,set_live_config};
+        let _lock=crate::app::tests::lock_app_tests();
+        struct Restore(crate::config::AppConfig);
+        impl Drop for Restore {fn drop(&mut self){set_live_config(self.0.clone());}}
+        let _restore=Restore(get_live_config());
+        let mut config=crate::config::AppConfig::default();config.web_allow_updates=false;set_live_config(config.clone());
+        let (tx,rx)=channel();
+        let state=ControlState {command_tx:tx,latest_status:Arc::new(Mutex::new(None)),websocket_clients:Arc::new(Mutex::new(vec![])),
+            egui_ctx:eframe::egui::Context::default(),web_dist_root:std::path::PathBuf::new(),
+            launch_receipts:Arc::new(Mutex::new(LaunchReceiptCache::default())),application_identity:"Update fixture".into(),expected_session_id:None};
+        let request=r#"{"jsonrpc":"2.0","id":1,"method":"pealayer.update.status","params":{}}"#;
+        assert!(local_process_payload(request.as_bytes()));
+        let denied:serde_json::Value=serde_json::from_slice(&json_rpc_response(request.as_bytes(),&state).body).unwrap();
+        assert_eq!(denied["error"]["code"],-32003);
+        config.web_allow_updates=true;config.web_allow_control=false;set_live_config(config);
+        let read:serde_json::Value=serde_json::from_slice(&json_rpc_response(request.as_bytes(),&state).body).unwrap();
+        assert!(read.get("result").is_some());
+        let socket:serde_json::Value=serde_json::from_str(&handle_websocket_text(&state,request).unwrap()).unwrap();
+        assert!(socket.get("result").is_some());
+        for method in crate::update::rpc::METHODS {
+            assert!(local_process_payload(serde_json::json!({"method":method,"params":{"invalid":true}}).to_string().as_bytes()));
+        }
+        assert!(controller_update_request("controller.bridge.call",Some(&serde_json::json!({"request":{"method":"controller.update.host"}})),0));
+        assert!(!controller_update_request("controller.relay.set",None,0));
+        assert!(rx.try_recv().is_err(),"queries must not quit or actuate outputs");
+    }
+
+    #[test]
+    fn branding_endpoints_share_validation_dispatch_and_permissions() {
+        use crate::platform::interop::{InteropCommand, get_live_config, set_live_config};
+        let _lock = crate::app::tests::lock_app_tests();
+        struct Restore(crate::config::AppConfig);
+        impl Drop for Restore { fn drop(&mut self) { set_live_config(self.0.clone()); } }
+        let _restore = Restore(get_live_config());
+        let mut config = crate::config::AppConfig::default();
+        config.web_allow_configuration = true;
+        config.web_allow_control = true;
+        config.web_allow_file_access = false;
+        set_live_config(config.clone());
+        let (tx, rx) = channel();
+        let state = ControlState {
+            command_tx:tx, latest_status:Arc::new(Mutex::new(None)),
+            websocket_clients:Arc::new(Mutex::new(vec![])), egui_ctx:eframe::egui::Context::default(),
+            web_dist_root:std::path::PathBuf::new(),
+            launch_receipts:Arc::new(Mutex::new(LaunchReceiptCache::default())),
+            application_identity:"Branding fixture".into(), expected_session_id:None,
+        };
+        let body = br#"{"values":{"app_name":"Stage","app_description":"Preview"}}"#;
+        assert_eq!(branding_update_response(body, &state).status, 202);
+        let InteropCommand::UpdateBranding { update } = rx.try_recv().unwrap() else { panic!("typed branding command") };
+        assert!(!update.persist);
+        assert_eq!(update.values["app_name"], "Stage");
+        assert_eq!(branding_update_response(br#"{"values":{"volume":10}}"#, &state).status, 400);
+        assert_eq!(branding_update_response(br#"{"values":{"app_icon":"C:\\private.ico"}}"#, &state).status, 403);
+        let query = br#"{"jsonrpc":"2.0","id":7,"method":"pealayer.branding.get","params":{}}"#;
+        let response = json_rpc_response(query, &state);
+        assert_eq!(response.status, 200);
+        let value:serde_json::Value = serde_json::from_slice(&response.body).unwrap();
+        assert!(value["result"]["effective"].is_object());
+        assert!(rx.try_recv().is_err(), "queries do not queue writes");
+        config.web_allow_control = false;
+        set_live_config(config.clone());
+        assert_eq!(json_rpc_response(query, &state).status, 200);
+        let socket_query = handle_websocket_text(&state, std::str::from_utf8(query).unwrap()).unwrap();
+        assert!(serde_json::from_str::<serde_json::Value>(&socket_query).unwrap()["result"]["effective"].is_object());
+        assert_eq!(branding_update_response(body, &state).status, 403);
+        config.web_allow_configuration = false;
+        set_live_config(config.clone());
+        assert_eq!(json_rpc_response(query, &state).status, 403);
+        assert_eq!(branding_update_response(body, &state).status, 403);
+        assert_eq!(denied_web_capability("GET", "/api/branding", &config), Some("configuration"));
+    }
+
+    #[test]
     fn remote_consumer_updates_stay_local_while_session_commands_relay() {
+        assert!(local_process_payload(br#"{"command":"import_assets","request":{"paths":["client.wav"],"destination":{"surface":"library"}}}"#));
+        assert!(!local_process_payload(br#"{"command":"import_assets","request":{"paths":["server.wav"],"owner_id":"00000000-0000-4000-8000-000000000001","destination":{"surface":"library"}}}"#));
         for target in ["/api/update/manifest", "/api/update/begin", "/api/update/chunk?id=one", "/api/update/finish", "/api/update/status", "/api/update/from-url", "/api/client/status"] {
             assert!(!super::peer_relay_route(target), "{target}");
         }
@@ -1889,6 +2174,11 @@ mod tests {
         assert!(local_process_payload(ipc.as_bytes()));
         assert!(local_process_payload(rpc.as_bytes()));
         assert!(matches!(parse_interop_request(ipc).unwrap().1, InteropCommand::NavigatePreferences { .. }));
+        let toolbar = r#"{"jsonrpc":"2.0","id":1,"method":"pealayer.preferences.navigate","params":{"section":"timeline_toolbar","scroll_y":0}}"#;
+        assert!(local_process_payload(toolbar.as_bytes()));
+        assert_eq!(parse_interop_request(toolbar).unwrap().1, InteropCommand::NavigatePreferences {
+            navigation: crate::preferences_contract::PreferencesNavigation::timeline_toolbar(),
+        });
         let invalid_ipc = br#"{"command":"navigate_preferences","scroll_y":"invalid"}"#;
         assert!(local_process_payload(invalid_ipc));
         assert!(parse_interop_request(std::str::from_utf8(invalid_ipc).unwrap()).is_err());
@@ -2008,6 +2298,7 @@ mod tests {
         assert_eq!(denied_web_capability("GET", "/", &restricted), None);
         assert_eq!(denied_web_capability("POST", "/api/messages", &restricted), Some("control"));
         assert_eq!(denied_web_capability("GET", "/api/messages", &restricted), None);
+        for path in ["/api/assets","/api/assets/upload/begin","/api/assets/upload/retain","/api/assets/upload/batch"] {assert!(denied_web_capability("POST",path,&restricted).is_some());}
     }
 
     #[test]

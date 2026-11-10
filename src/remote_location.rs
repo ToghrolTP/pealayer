@@ -255,6 +255,9 @@ pub fn normalize(target: &str) -> Result<Url, String> {
     Ok(url)
 }
 pub fn decoded(value: &str) -> String {
+    String::from_utf8_lossy(&decoded_bytes(value)).into_owned()
+}
+fn decoded_bytes(value: &str) -> Vec<u8> {
     let bytes = value.as_bytes();
     let mut out = Vec::new();
     let mut i = 0;
@@ -272,7 +275,7 @@ pub fn decoded(value: &str) -> String {
         out.push(bytes[i]);
         i += 1;
     }
-    String::from_utf8_lossy(&out).into_owned()
+    out
 }
 pub fn playable(url: &Url) -> bool {
     let path = decoded(url.path()).to_ascii_lowercase();
@@ -283,14 +286,28 @@ pub fn playable(url: &Url) -> bool {
     .iter()
     .any(|ext| path.ends_with(&format!(".{ext}")))
 }
-fn directory_base(url: &Url) -> Url {
-    let mut physical = url.clone();
-    if let Some((_, dir)) = url.query_pairs().find(|(key, _)| key == "dir") {
-        physical.set_query(None);
-        physical.set_path(&format!("/{}/", dir.trim_matches('/')));
+// Compare directory identities, not serialized URL spellings. query_pairs has
+// already decoded form escaping (including '+' as space); path segments need
+// exactly one percent decode, with literal '+' and '%' preserved.
+fn directory_segments(url: &Url) -> Option<Vec<Vec<u8>>> {
+    let segments: Vec<Vec<u8>> = if let Some((_, dir)) = url.query_pairs().find(|(key, _)| key == "dir") {
+        dir.trim_matches('/').split('/').map(|s| s.as_bytes().to_vec()).collect()
+    } else {
+        url.path().trim_matches('/').split('/').map(decoded_bytes).collect()
+    };
+    if segments.len() == 1 && segments[0].is_empty() {
+        return Some(Vec::new());
     }
-    physical
+    // An encoded separator must not masquerade as a direct child or permit
+    // traversal. Compare bytes so invalid UTF-8 cannot collapse distinct paths.
+    segments.iter().all(|s| !s.is_empty() && s != b"." && s != b".."
+        && !s.iter().any(|b| matches!(b, b'/' | b'\\' | 0)))
+        .then_some(segments)
 }
+fn is_directory_url(url: &Url) -> bool {
+    url.path().ends_with('/') || url.query_pairs().any(|(key, _)| key == "dir")
+}
+// A candidate only. Never advertise it until a real directory listing succeeds.
 pub fn parent(url: &Url) -> Option<String> {
     if let Some((_, dir)) = url.query_pairs().find(|(key, _)| key == "dir") {
         let trimmed = dir.trim_matches('/');
@@ -315,6 +332,32 @@ pub fn parent(url: &Url) -> Option<String> {
     } else {
         url.join("../").ok().map(|u| u.to_string())
     }
+}
+fn read_directory(
+    client: &reqwest::blocking::Client,
+    target: &Url,
+) -> Result<(Url, Vec<RemoteEntry>), String> {
+    let (actual, html) = html_response(
+        client.get(target.clone()).timeout(Duration::from_secs(2))
+            .header(reqwest::header::ACCEPT, "text/html,application/xhtml+xml")
+            .send().map_err(|e| e.to_string())?,
+    )?;
+    // A login page, self redirect, or unrelated directory is not an available
+    // parent. Query-based indexes are compared using their virtual directory.
+    if actual.origin() != target.origin()
+        || directory_segments(target).is_none()
+        || directory_segments(&actual) != directory_segments(target)
+    {
+        return Err("Directory redirected to a different location".into());
+    }
+    let entries = parse_index(&actual, &html)?;
+    Ok((actual, entries))
+}
+fn verified_parent(client: &reqwest::blocking::Client, current: &Url) -> Option<String> {
+    let candidate = Url::parse(&parent(current)?).ok()?;
+    if directory_segments(current).is_none()
+        || directory_segments(&candidate) == directory_segments(current) { return None; }
+    read_directory(client, &candidate).ok().map(|(url, _)| url.to_string())
 }
 fn size(text: &str) -> Option<u64> {
     let text = text.trim().replace(',', "");
@@ -349,7 +392,7 @@ fn selector(value: &str) -> Selector {
 
 pub fn parse_index(base: &Url, html: &str) -> Result<Vec<RemoteEntry>, String> {
     let document = Html::parse_document(html);
-    let physical = directory_base(base);
+    let physical = directory_segments(base).ok_or("Directory contains an invalid path segment")?;
     let recognized = document
         .select(&selector("title,h1"))
         .any(|e| text(e).to_lowercase().contains("index of"))
@@ -378,12 +421,8 @@ pub fn parse_index(base: &Url, html: &str) -> Result<Vec<RemoteEntry>, String> {
         {
             continue;
         }
-        let entry_physical = directory_base(&url);
-        if !entry_physical.path().starts_with(physical.path()) {
-            continue;
-        }
-        let relative = &entry_physical.path()[physical.path().len()..];
-        if relative.trim_matches('/').is_empty() || relative.trim_end_matches('/').contains('/') {
+        let Some(entry_physical) = directory_segments(&url) else { continue; };
+        if !entry_physical.starts_with(&physical) || entry_physical.len() != physical.len() + 1 {
             continue;
         }
         let row = anchor
@@ -442,8 +481,8 @@ pub fn parse_index(base: &Url, html: &str) -> Result<Vec<RemoteEntry>, String> {
         if !recognized && (row.is_none() || modified.is_none() && bytes.is_none()) {
             continue;
         }
-        let is_dir = entry_physical.path().ends_with('/');
-        let name = decoded(relative.trim_end_matches('/'));
+        let is_dir = is_directory_url(&url);
+        let name = String::from_utf8_lossy(&entry_physical[physical.len()]).into_owned();
         if seen.insert(url.to_string()) {
             entries.push(RemoteEntry {
                 name,
@@ -663,7 +702,7 @@ pub fn discover(
         Ok(RemoteListing {
             requested_url: requested.to_string(),
             host: url.host_str().unwrap_or_default().into(),
-            parent_url: parent(&url),
+            parent_url: verified_parent(&client, &url),
             url: url.to_string(),
             server,
             content_type,
@@ -694,16 +733,10 @@ pub fn discover(
             modified: header(reqwest::header::LAST_MODIFIED),
         };
         let folder = final_url.join(".").map_err(|e| e.to_string())?;
-        let sibling_result = client
-            .get(folder.clone())
-            .timeout(Duration::from_secs(2))
-            .header(reqwest::header::ACCEPT, "text/html")
-            .send()
-            .map_err(|e| e.to_string())
-            .and_then(html_response)
-            .and_then(|(base, html)| parse_index(&base, &html));
+        let sibling_result = read_directory(&client, &folder);
+        let parent_url = sibling_result.as_ref().ok().map(|(url, _)| url.to_string());
         let (mut entries, warning) = match sibling_result {
-            Ok(entries) => (entries, None),
+            Ok((_, entries)) => (entries, None),
             Err(error) => (
                 Vec::new(),
                 Some(format!(
@@ -721,7 +754,7 @@ pub fn discover(
             host: final_url.host_str().unwrap_or_default().into(),
             server,
             content_type,
-            parent_url: Some(folder.to_string()),
+            parent_url,
             file: Some(file),
             entries,
             warning,
@@ -819,6 +852,9 @@ fn finish_request(
             browser.state.listing = Some(listing);
         }
         Err(error) => {
+            if let Some(listing) = browser.state.listing.as_mut() {
+                if listing.parent_url.as_deref() == Some(target) { listing.parent_url = None; }
+            }
             (browser.state.error, browser.state.route_errors) = error.presentation();
         }
     }
@@ -1059,6 +1095,52 @@ pub fn thumbnail(
 #[cfg(test)]
 mod tests {
     use super::*;
+    fn http_fixture(mut replies:Vec<(&'static str,u16,&'static str,&'static str)>)->(String,std::thread::JoinHandle<()>) {
+        use std::io::{BufRead,Write};
+        let listener=std::net::TcpListener::bind("127.0.0.1:0").unwrap();let url=format!("http://{}",listener.local_addr().unwrap());listener.set_nonblocking(true).unwrap();
+        let worker=std::thread::spawn(move||{
+            let deadline=std::time::Instant::now()+Duration::from_secs(5);
+            while !replies.is_empty() && std::time::Instant::now()<deadline {
+                let Ok((mut socket,_))=listener.accept()else{std::thread::sleep(Duration::from_millis(5));continue;};
+                socket.set_read_timeout(Some(Duration::from_secs(1))).unwrap();let mut reader=std::io::BufReader::new(socket.try_clone().unwrap());let mut line=String::new();reader.read_line(&mut line).unwrap();let key=line.split_whitespace().take(2).collect::<Vec<_>>().join(" ");
+                let position=replies.iter().position(|r|r.0==key).unwrap_or_else(||panic!("Unexpected request: {key}"));let (_,status,kind,body)=replies.remove(position);
+                let extra=if kind=="redirect"{format!("Location: {body}\r\n")}else{format!("Content-Type: {kind}\r\n")};
+                write!(socket,"HTTP/1.1 {status} Test\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n",body.len()).unwrap();if !key.starts_with("HEAD ") && kind!="redirect"{socket.write_all(body.as_bytes()).unwrap();}
+            }
+            assert!(replies.is_empty(),"Expected requests not received");
+        });(url,worker)
+    }
+    #[test] fn direct_media_does_not_advertise_a_forbidden_parent(){
+        let (base,worker)=http_fixture(vec![("HEAD /locked/movie.mkv",200,"video/x-matroska","data"),("GET /locked/",403,"text/html","Denied")]);
+        let listing=discover(&format!("{base}/locked/movie.mkv"),false,None).unwrap();worker.join().unwrap();
+        assert!(listing.file.is_some());assert!(listing.parent_url.is_none());assert_eq!(listing.entries.len(),1);
+    }
+    #[test] fn accessible_and_empty_parent_indexes_are_available(){
+        let (base,worker)=http_fixture(vec![("HEAD /open/movie.mkv",200,"video/x-matroska","data"),("GET /open/",200,"text/html","<title>Index of /open/</title>")]);
+        let listing=discover(&format!("{base}/open/movie.mkv"),false,None).unwrap();worker.join().unwrap();assert_eq!(listing.parent_url,Some(format!("{base}/open/")));
+    }
+    #[test] fn forbidden_directory_parent_and_redirect_back_to_self_are_hidden(){
+        for redirect in [false,true] {
+            let index="<title>Index of /a/sub/</title>";
+            let mut replies=vec![("HEAD /a/sub/",200,"text/html",index),("GET /a/sub/",200,"text/html",index)];
+            if redirect {replies.extend([("GET /a/",302,"redirect","/a/sub/"),("GET /a/sub/",200,"text/html",index)]);}else{replies.push(("GET /a/",403,"text/html","Denied"));}
+            let (base,worker)=http_fixture(replies);let listing=discover(&format!("{base}/a/sub/"),false,None).unwrap();worker.join().unwrap();assert!(listing.parent_url.is_none());
+        }
+        assert!(parent(&Url::parse("https://index.invalid/").unwrap()).is_none());
+        assert_eq!(directory_segments(&Url::parse("https://index.invalid/?dir=").unwrap()), Some(vec![]));
+    }
+    #[test] fn failed_parent_navigation_revokes_only_that_action(){
+        let mut browser=Browser::default();let mut listing=test_listing();listing.parent_url=Some("https://files.invalid/".into());browser.state.listing=Some(listing);
+        assert!(finish_request(&mut browser,0,0,"https://elsewhere.invalid/",RequestMode::Browse,false,&Default::default(),Err(RouteProbeError::Failed(vec![]))));
+        assert!(browser.state.listing.as_ref().unwrap().parent_url.is_some());
+        assert!(finish_request(&mut browser,0,0,"https://files.invalid/",RequestMode::Browse,false,&Default::default(),Err(RouteProbeError::Failed(vec![RouteFailure{use_proxy:false,message:"Denied".into()}]))));
+        assert!(browser.state.listing.as_ref().unwrap().parent_url.is_none());assert!(browser.state.error.is_some());
+    }
+    #[test] fn query_parent_is_verified_without_inventing_a_physical_path(){
+        let index="<title>Index of /a/sub/</title>";
+        let (base,worker)=http_fixture(vec![("HEAD /?dir=a%2Fsub",200,"text/html",index),("GET /?dir=a%2Fsub",200,"text/html",index),("GET /?dir=a",200,"text/html","<title>Index of /a/</title>")]);
+        let listing=discover(&format!("{base}/?dir=a%2Fsub"),false,None).unwrap();worker.join().unwrap();assert_eq!(listing.parent_url,Some(format!("{base}/?dir=a")));
+    }
     #[test]
     fn route_probe_uses_first_valid_response_and_respects_manual_choice() {
         let both = std::sync::Arc::new(std::sync::Barrier::new(2));
@@ -1157,6 +1239,58 @@ mod tests {
         assert_eq!(entries[0].name, "فارسی %20+01.mkv");
         assert_eq!(entries[0].modified.as_deref(), Some("20-Apr-2025 10:18"));
         assert_eq!(entries[0].size_bytes, Some(199 * 1024 * 1024));
+    }
+    #[test]
+    fn query_listing_matches_equivalent_encoded_directory_segments() {
+        let base = normalize("https://files.invalid/?dir=shows%2FSeries%2C+Part+One%2F1080+x265").unwrap();
+        let entries = parse_index(&base, r#"<ul><li data-type="file"><a class="is-file" href="shows/Series%2C%20Part%20One/1080%20x265/Episode%2001.mkv"><span class="file-size">136.02MB</span><span class="file-modified">2026-10-12 17:44:51</span></a></li></ul>"#).unwrap();
+        assert_eq!(entries.len(), 1);
+        assert_eq!(entries[0].name, "Episode 01.mkv");
+        assert!(entries[0].playable);
+        assert_eq!(entries[0].size_bytes, Some((136.02_f64 * 1024.0 * 1024.0).round() as u64));
+        assert_eq!(entries[0].modified.as_deref(), Some("2026-10-12 17:44:51"));
+    }
+    #[test]
+    fn directory_matching_decodes_once_without_form_decoding_paths() {
+        for (query, path) in [
+            ("Series%2C+One", "Series%2c%20One"),
+            ("Literal%2520%2BName", "Literal%2520+Name"),
+            ("%E2%9C%93%3F%23%25", "%E2%9C%93%3f%23%25"),
+            ("%41lbum", "%41lbum"),
+        ] {
+            let query_base = normalize(&format!("https://files.invalid/?dir={query}")).unwrap();
+            let physical_base = normalize(&format!("https://files.invalid/{path}/")).unwrap();
+            assert_eq!(directory_segments(&query_base), directory_segments(&physical_base));
+            let html = format!(r#"<h1>Index of</h1><a href="/{path}/Episode%2520+01.mkv">file</a>"#);
+            for base in [query_base, physical_base] {
+                let entries = parse_index(&base, &html).unwrap();
+                assert_eq!(entries.len(), 1);
+                assert_eq!(entries[0].name, "Episode%20+01.mkv");
+            }
+        }
+        assert_ne!(directory_segments(&normalize("https://files.invalid/?dir=A+B").unwrap()),
+            directory_segments(&normalize("https://files.invalid/A+B/").unwrap()));
+    }
+    #[test]
+    fn equivalent_encoding_never_relaxes_directory_scope() {
+        let base = normalize("https://files.invalid/?dir=shows%2FA%2C+B").unwrap();
+        let entries = parse_index(&base, r#"<h1>Index of</h1>
+            <a href="/shows/A%2C%20B/good.mkv">good</a>
+            <a href="?dir=shows%2FA%2C+B%2Fchild">child</a>
+            <a href="/shows/A%2C%20B-sibling/no.mkv">sibling</a>
+            <a href="/shows/A%2C%20B/nested/no.mkv">nested</a>
+            <a href="/shows/A%2C%20B/..%2Fescape.mkv">slash</a>
+            <a href="/shows/A%2C%20B/..%5Cescape.mkv">backslash</a>
+            <a href="/shows/A%2C%20B/%2e%2e/escape.mkv">parent</a>
+            <a href="?dir=shows%2FA%2C+B%2F..">query parent</a>
+            <a href="https://elsewhere.invalid/shows/A%2C%20B/no.mkv">offsite</a>
+            <a href="https://user@files.invalid/shows/A%2C%20B/no.mkv">credentials</a>"#).unwrap();
+        assert_eq!(entries.len(), 2);
+        assert!(entries[0].is_dir);
+        assert_eq!(entries[0].name, "child");
+        assert_eq!(entries[1].name, "good.mkv");
+        assert_ne!(directory_segments(&normalize("https://files.invalid/%FF/").unwrap()),
+            directory_segments(&normalize("https://files.invalid/%FE/").unwrap()));
     }
     #[test]
     fn query_listings_preserve_navigation_and_reject_unrelated_links() {

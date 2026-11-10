@@ -87,6 +87,12 @@ fn apply_weight(data: &mut egui::FontData, weight: f32) {
     }
 }
 
+pub(crate) fn status_family(ui: &egui::Ui) -> egui::FontFamily {
+    let family = egui::FontFamily::Name("pealayer-status".into());
+    if ui.fonts_mut(|fonts| fonts.families().contains(&family)) { family }
+    else { egui::FontFamily::Proportional }
+}
+
 #[cfg(any(windows, test))]
 fn windows_monospace_family(names: &[String]) -> Option<String> {
     // Windows has no NONCLIENTMETRICS fixed-pitch preference. DirectWrite's
@@ -329,6 +335,35 @@ pub fn install(ctx: &egui::Context, config: &AppConfig, persian: bool) {
             .families
             .insert(egui::FontFamily::Name(strong.into()), emphasis);
     }
+    // Status typography has its own proportional family, never a replacement
+    // for terminal cells or the user's global monospace preference. Explicit
+    // custom UI choices still take precedence. CoreText keeps macOS native;
+    // Linux uses installed Roboto, then its existing DE/fontconfig selection.
+    let mut status = fonts.families[&egui::FontFamily::Proportional].clone();
+    let mut bundled = egui::FontData::from_static(include_bytes!("../../assets/fonts/InterVariable.ttf"));
+    apply_weight(&mut bundled, 400.0);
+    fonts.font_data.insert("pealayer-inter".into(), Arc::new(bundled.clone()));
+    let explicit = config.ui_font_family == UiFontFamily::Custom;
+    let native_name = if explicit { Some(config.ui_font_name.clone()) }
+        else if cfg!(target_os = "macos") { desktop_name(false) }
+        else if !cfg!(windows) { family_names().into_iter().find(|name| name.eq_ignore_ascii_case("Roboto"))
+            .or_else(|| desktop_name(false)) } else { None };
+    if explicit || !cfg!(windows) {
+        if let Some(data) = resolve(native_name.as_deref(), false, false) {
+            fonts.font_data.insert("pealayer-status-native".into(), Arc::new(data));
+            status.insert(0, "pealayer-status-native".into());
+        }
+    } else { status.insert(0, "pealayer-inter".into()); }
+    // Preserve the selected Persian fallback and icon coverage in every chain.
+    status.push("pealayer-inter".into());
+    let mut strong_status = status.clone();
+    if let Some(data) = if explicit || !cfg!(windows) { resolve(native_name.as_deref(), false, true) }
+        else { apply_weight(&mut bundled, 600.0); Some(bundled) } {
+        fonts.font_data.insert("pealayer-status-caption-emphasis".into(), Arc::new(data));
+        strong_status.insert(0,"pealayer-status-caption-emphasis".into());
+    }
+    fonts.families.insert(egui::FontFamily::Name("pealayer-status".into()),status);
+    fonts.families.insert(egui::FontFamily::Name("pealayer-status-caption-strong".into()),strong_status);
     ctx.set_fonts(fonts);
 }
 

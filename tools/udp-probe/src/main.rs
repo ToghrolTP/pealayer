@@ -11,6 +11,15 @@ mod udp_client;
 use serde_json::json;
 use std::time::Duration;
 fn main()->Result<(),String>{
+    if std::env::args().nth(1).as_deref()==Some("--rpc") {
+        use std::io::Read;
+        let endpoint=std::env::args().nth(2).ok_or("--rpc requires a literal IPv4 endpoint")?;
+        let mut text=String::new();std::io::stdin().take(1_048_577).read_to_string(&mut text).map_err(|e|e.to_string())?;
+        if text.len()>1_048_576{return Err("Probe request exceeds 1 MiB".into());}
+        let request:serde_json::Value=serde_json::from_str(&text).map_err(|e|e.to_string())?;
+        let mut client=udp_client::Client::connect(&endpoint,Duration::from_secs(3))?;
+        println!("{}",client.call(&request,None)?);return Ok(());
+    }
     if std::env::args().nth(1).as_deref()==Some("--codec") {let value=json!({"signed":i64::MIN,"unsigned":u64::MAX,"float":0.125,"unicode":"همتا","array":[null,false,true]});println!("{}",udp_codec::encode(&value)?.iter().map(|b|format!("{b:02x}")).collect::<String>());return Ok(());}
     // Fixed loopback fixture, not production discovery or a physical controller.
     let mut c=udp_client::Client::connect("127.0.0.1:18877",Duration::from_secs(3))?;

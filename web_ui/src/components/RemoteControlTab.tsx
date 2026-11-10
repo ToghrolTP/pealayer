@@ -23,6 +23,13 @@ import type { ControlBarsConfig } from '../controlBars';
 import { ElapsedTimeInput } from './ElapsedTimeInput';
 
 export interface PlayerState {
+  window?: { process_id: number; available: boolean; units: 'logical_points'; pixels_per_point: number;
+    outer_bounds: {x:number;y:number;width:number;height:number} | null;
+    inner_bounds: {x:number;y:number;width:number;height:number} | null;
+    normal_bounds: {x:number;y:number;width:number;height:number;maximized:boolean} | null;
+    minimized:boolean;maximized:boolean;fullscreen:boolean;focused:boolean;revision:number;error:string|null;native_handle:string|null };
+  pending_timeline_change?: boolean;
+  asset_imports?: import('../assetImports').AssetImportState;
   control_bars?: ControlBarsConfig;
   media_keys_enabled?: boolean;
   media_keys_background_enabled?: boolean;
@@ -42,7 +49,7 @@ export interface PlayerState {
   ui_fps?: number | null;
   status_operations?: Array<{ id: string; source: string; label: string; phase: string; fraction: number | null; detail: string }>;
   current_video?: string | null;
-  media_session?: { title: string | null; artist: string | null; album: string | null; video: boolean };
+  media_session?: { track_id: string | null; title: string | null; artist: string | null; album: string | null; video: boolean };
   media_session_capabilities?: import('../mediaSession').SessionCapabilities;
   quick_seek_seconds?: number;
   media_tracks?: Array<{
@@ -62,6 +69,7 @@ export interface PlayerState {
   settled_seek_revision?: number;
   settled_seek_target?: number | null;
   seekbar_markers?: { chapter_color: string; active_chapter_color: string; keyframe_color: string };
+  effect_designer_cue_colors?: Record<string, string>;
   timeline_keyframes?: Array<{ id: string; time_ms: number; label: string }>;
   seekable?: boolean;
   live?: boolean;

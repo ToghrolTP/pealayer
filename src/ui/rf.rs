@@ -395,7 +395,9 @@ fn draw_reception(state: &RfState, ui: &mut egui::Ui, entry: &Value, connected: 
     let (rect,response)=ui.allocate_exact_size(egui::vec2(14.0,14.0),egui::Sense::hover());
     ui.painter().circle_filled(rect.center(),4.0,color);
     response.on_hover_text(crate::ui::i18n::tr(language,if active {"Receiving"} else {"Not receiving"}));
-    ui.label(egui::RichText::new(format!("×{count}")).monospace().small().weak()).on_hover_text(crate::ui::i18n::tr(language,"Receptions since this dialog opened"));
+    let caption = super::numeric_text::layout(ui, &format!("×{count}"),
+        egui::TextStyle::Small.resolve(ui.style()),ui.visuals().weak_text_color());
+    ui.label(caption).on_hover_text(crate::ui::i18n::tr(language,"Receptions since this dialog opened"));
     if let Some(remaining)=remaining {ui.ctx().request_repaint_after(remaining);}
 }
 

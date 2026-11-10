@@ -233,6 +233,8 @@ fn header(app: &PealayerApp, ui: &mut egui::Ui) {
                 ui.add(
                     egui::Label::new(egui::RichText::new(&app.app_name).size(25.0).strong()).wrap(),
                 );
+                let description = crate::platform::interop::live_app_description();
+                if !description.is_empty() { ui.label(description); }
                 ui.label(
                     egui::RichText::new(format!("Version {}", env!("CARGO_PKG_VERSION")))
                         .size(17.0)
@@ -480,7 +482,19 @@ fn libraries_and_licenses(_app: &PealayerApp, ui: &mut egui::Ui) {
             }
             library_row(ui, name, &format!("{version} · {license}"), purpose);
         }
+        #[cfg(feature = "workspace-terminal")]
+        {
+            ui.separator();
+            library_row(ui, "PortableShell", "512c1c6 · MIT", "Embedded Pealayer shell and terminal profile import");
+            ui.collapsing("PortableShell license", |ui| {
+                ui.add(egui::Label::new(include_str!("../../third_party/portable-shell/LICENSE")).wrap());
+            });
+        }
         ui.add_space(6.0);
+        library_row(ui, "Inter", "SIL Open Font License 1.1", "Proportional status typography and tabular numeric layout");
+        ui.collapsing("Inter font license", |ui| {
+            ui.add(egui::Label::new(include_str!("../../assets/fonts/Inter-LICENSE.txt")).wrap());
+        });
         ui.add(egui::Label::new(egui::RichText::new("This is a concise runtime inventory. Packaged notices and each dependency's source license remain authoritative.").small().weak()).wrap());
         ui.hyperlink_to(
             "Inspect the complete dependency manifest",

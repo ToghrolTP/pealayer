@@ -134,6 +134,7 @@ pub(super) fn draw(
     app: &mut PealayerApp,
     viewport: Rect,
     can_add_keyframe: bool,
+    playhead_in_view: bool,
 ) -> Output {
     let mut output = Output {
         rect: Rect::NOTHING,
@@ -181,6 +182,7 @@ pub(super) fn draw(
             || !app.selected_keyframes.is_empty()
             || app.selected_timeline_keyframe.is_some();
         let enabled = match action {
+            Action::BringPlayheadIntoView => !playhead_in_view,
             Action::AddKeyframe => can_add_keyframe,
             Action::PreviousCue | Action::NextCue => !app.timeline.instances.is_empty(),
             Action::NudgeCueLeft
@@ -250,10 +252,6 @@ pub(super) fn draw(
     }
 
     let drag = egui::DragAndDrop::payload::<ToolbarDrag>(ui.ctx());
-    let drag_fade = crate::ui::motion::hover_alpha(ui,
-        Id::new("timeline-toolbar-hide-fade"),
-        drag.is_some(),
-    );
     let menu_rect = Rect::from_min_max(
         egui::pos2(output.rect.right() - CELL, output.rect.top()),
         output.rect.max,
@@ -274,32 +272,11 @@ pub(super) fn draw(
         Id::new("timeline-toolbar-removal-preview"),
         hide_hovered,
     );
-    if drag_fade > 0.0 {
-        toolbar.painter().rect_filled(
-            menu_rect.shrink(2.0),
-            4.0,
-            ui.visuals().error_fg_color.gamma_multiply(drag_fade),
-        );
-    }
-    for (icon, alpha) in [
-        (super::icons::DOTS_THREE, 1.0 - drag_fade),
-        (super::icons::TRASH, drag_fade),
-    ] {
-        let color = if icon == super::icons::TRASH {
-            Color32::WHITE
-        } else {
-            ui.visuals().text_color()
-        };
-        toolbar.painter().text(
-            menu_rect.center(),
-            Align2::CENTER_CENTER,
-            icon,
-            FontId::proportional(14.0),
-            color.gamma_multiply(alpha),
-        );
-    }
+    let hidden = super::action_customization::menu_hide_target::<ToolbarDrag>(
+        &mut toolbar, &response, drag.is_some(), FontId::proportional(14.0),
+    );
     if drag.is_some() {
-        if let Some(drag) = drop_payload(&response) {
+        if let Some(drag) = hidden {
             changed |= hide_action(&mut app.timeline_toolbar_hidden, drag.action);
         }
         response
@@ -316,66 +293,9 @@ pub(super) fn draw(
                 ui.set_max_width(250.0);
                 ui.strong(app.tr("Timeline toolbar"));
                 ui.separator();
-                for (index, action) in order.clone().into_iter().enumerate() {
-                    ui.horizontal(|ui| {
-                        let mut visible = !app.timeline_toolbar_hidden.contains(&action);
-                        let checkbox = ui.checkbox(
-                            &mut visible,
-                            egui::RichText::new(format!(
-                                "{}  {}",
-                                super::layout::timeline_toolbar_action_icon(action),
-                                app.tr(super::layout::timeline_toolbar_action_label(action))
-                            ))
-                            .size(12.0),
-                        );
-                        if checkbox.changed() {
-                            app.timeline_toolbar_hidden
-                                .retain(|candidate| *candidate != action);
-                            if !visible {
-                                app.timeline_toolbar_hidden.push(action);
-                            }
-                            changed = true;
-                        }
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            for (can_move, icon, next, tip) in [
-                                (
-                                    index + 1 < order.len(),
-                                    super::icons::ARROW_DOWN,
-                                    (index + 1).min(order.len() - 1),
-                                    "Move down",
-                                ),
-                                (
-                                    index > 0,
-                                    super::icons::ARROW_UP,
-                                    index.saturating_sub(1),
-                                    "Move up",
-                                ),
-                            ] {
-                                if ui
-                                    .add_enabled(can_move, egui::Button::new(icon).small())
-                                    .on_hover_text(app.tr(tip))
-                                    .clicked()
-                                {
-                                    order.swap(index, next);
-                                    changed = true;
-                                }
-                            }
-                        });
-                    });
-                }
-                ui.separator();
-                if ui
-                    .button(format!(
-                        "{} {}",
-                        super::icons::ARROW_COUNTER_CLOCKWISE,
-                        app.tr("Reset toolbar")
-                    ))
-                    .clicked()
-                {
-                    order = crate::config::default_timeline_toolbar_order();
-                    app.timeline_toolbar_hidden = crate::config::default_timeline_toolbar_hidden();
-                    changed = true;
-                }
+                let language = app.language;
+                changed |= customization(ui, &mut order, &mut app.timeline_toolbar_hidden,
+                    &|key| super::i18n::tr(language, key));
                 if ui
                     .button(format!(
                         "{} {}",
@@ -384,7 +304,8 @@ pub(super) fn draw(
                     ))
                     .clicked()
                 {
-                    super::preferences::open(app, ui.ctx());
+                    super::preferences::navigate(app, ui.ctx(),
+                        crate::preferences_contract::PreferencesNavigation::timeline_toolbar());
                     ui.close();
                 }
             });
@@ -403,9 +324,185 @@ pub(super) fn draw(
     output
 }
 
+/// The overflow menu and Preferences edit the same ordered/hidden action model.
+pub(super) fn customization(
+    ui: &mut egui::Ui,
+    order: &mut Vec<Action>,
+    hidden: &mut Vec<Action>,
+    tr: &impl Fn(&'static str) -> String,
+) -> bool {
+    let mut changed = false;
+    for (index, action) in order.clone().into_iter().enumerate() {
+        ui.push_id(action, |ui| ui.horizontal(|ui| {
+            let mut visible = !hidden.contains(&action);
+            if ui.checkbox(&mut visible, egui::RichText::new(format!("{}  {}",
+                super::layout::timeline_toolbar_action_icon(action),
+                tr(super::layout::timeline_toolbar_action_label(action)))).size(12.0)).changed() {
+                hidden.retain(|candidate| *candidate != action);
+                if !visible { hidden.push(action); }
+                changed = true;
+            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                for (enabled, icon, next, tip) in [
+                    (index + 1 < order.len(), super::icons::ARROW_DOWN, (index + 1).min(order.len() - 1), "Move down"),
+                    (index > 0, super::icons::ARROW_UP, index.saturating_sub(1), "Move up"),
+                ] {
+                    if ui.add_enabled(enabled, egui::Button::new(icon).small())
+                        .on_hover_text(tr(tip)).clicked() {
+                        order.swap(index, next);
+                        changed = true;
+                    }
+                }
+            });
+        }));
+    }
+    ui.separator();
+    if ui.button(format!("{} {}", super::icons::ARROW_COUNTER_CLOCKWISE, tr("Reset toolbar"))).clicked() {
+        *order = crate::config::default_timeline_toolbar_order();
+        *hidden = crate::config::default_timeline_toolbar_hidden();
+        changed = true;
+    }
+    changed
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn visible_playhead_disables_and_dims_reveal_but_not_customization() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.timeline_toolbar_hidden = Action::ALL.into_iter()
+            .filter(|action| *action != Action::BringPlayheadIntoView).collect();
+        let ctx = egui::Context::default();
+        super::super::motion::configure(&ctx, crate::config::UiAnimationMode::Disabled);
+        let viewport = Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(900.0, 600.0));
+        let point = egui::pos2(viewport.right() - CELL * 1.5, viewport.top() + CELL * 0.5);
+        let mut frame = |events, in_view| {
+            let mut action = None;
+            let output = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
+                action = draw(ui, &mut app, viewport, false, in_view).action;
+            });
+            let color = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text) if text.galley.text() == super::super::icons::TARGET =>
+                    Some(text.fallback_color),
+                _ => None,
+            });
+            output.drop_without_applying_deltas();
+            (action, color)
+        };
+        let (_, dimmed) = frame(vec![], true);
+        frame(vec![egui::Event::PointerMoved(point), pointer_button(point, egui::PointerButton::Primary, true)], true);
+        assert_eq!(frame(vec![pointer_button(point, egui::PointerButton::Primary, false)], true).0, None);
+        let (_, available) = frame(vec![egui::Event::PointerMoved(egui::pos2(0.0, 0.0))], false);
+        assert!(dimmed.is_some() && available.is_some());
+        assert_ne!(dimmed, available, "unavailable action must be visibly dimmed");
+        frame(vec![egui::Event::PointerMoved(point), pointer_button(point, egui::PointerButton::Primary, true)], false);
+        assert_eq!(frame(vec![pointer_button(point, egui::PointerButton::Primary, false)], false).0, Some(Action::BringPlayheadIntoView));
+    }
+
+    #[test]
+    fn reveal_availability_fades_without_delaying_its_click_guard_or_moving_the_icon() {
+        let _guard = crate::app::tests::lock_app_tests();
+        for animated in [false, true] {
+            let ctx = egui::Context::default();
+            super::super::motion::configure(&ctx, if animated {
+                crate::config::UiAnimationMode::Enabled
+            } else { crate::config::UiAnimationMode::Disabled });
+            let mut app = PealayerApp::default();
+            app.engine_handle = crate::four_d::engine::memory_only_test_engine();
+            app.timeline_toolbar_hidden = Action::ALL.into_iter()
+                .filter(|action| *action != Action::BringPlayheadIntoView).collect();
+            let viewport = Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(900.0, 600.0));
+            let point = egui::pos2(viewport.right() - CELL * 1.5, viewport.top() + CELL * 0.5);
+            let mut time = 0.0;
+            let mut frame = |visible, events| {
+                let mut action = None;
+                let mut result = None;
+                let mut output = ctx.run_ui(egui::RawInput {
+                    time: Some(time), predicted_dt: 0.01, events, ..Default::default()
+                }, |ui| {
+                    action = draw(ui, &mut app, viewport, false, visible).action;
+                });
+                time += 0.01;
+                for shape in &output.shapes {
+                    if let egui::Shape::Text(text) = &shape.shape
+                        && text.galley.text() == super::super::icons::TARGET {
+                        result = Some((text.fallback_color, text.pos));
+                    }
+                }
+                output.textures_delta.clear();
+                (action, result.expect("reveal icon paint"))
+            };
+            let (_, (available, position)) = frame(false, vec![]);
+            let (_, (first, _)) = frame(true, vec![]);
+            let (_, (middle, _)) = frame(true, vec![]);
+            let mut colors = vec![first, middle];
+            for index in 0..20 {
+                let (action, (color, current_position)) = frame(true, vec![
+                    egui::Event::PointerMoved(point),
+                    pointer_button(point, egui::PointerButton::Primary, index % 2 == 0),
+                ]);
+                assert_eq!(action, None, "Click must be blocked even during the fade");
+                assert_eq!(position, current_position, "Availability cannot shift the glyph");
+                colors.push(color);
+            }
+            let dimmed = *colors.last().unwrap();
+            assert_ne!(available, dimmed);
+            if animated {
+                assert_ne!(first, available);
+                assert_ne!(middle, dimmed, "State change must not snap immediately to its final color");
+                assert!(colors.windows(2).all(|pair| pair[0].r() >= pair[1].r()), "Fade must be monotonic");
+            } else { assert!(colors.iter().all(|color| *color == dimmed), "Reduced motion applies immediately"); }
+            frame(false, vec![egui::Event::PointerMoved(point), pointer_button(point, egui::PointerButton::Primary, true)]);
+            assert_eq!(frame(false, vec![pointer_button(point, egui::PointerButton::Primary, false)]).0,
+                Some(Action::BringPlayheadIntoView), "Re-enabling must not wait for the fade");
+            for _ in 0..20 { frame(false, vec![egui::Event::PointerMoved(egui::Pos2::ZERO)]); }
+            assert_eq!(frame(false, vec![]).1, (available, position));
+        }
+    }
+
+    #[test]
+    fn overflow_preferences_click_requests_exact_toolbar_page() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.preferences_tab = 1;
+        let ctx = egui::Context::default();
+        let viewport = Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(900.0, 600.0));
+        let mut frame = |events| {
+            ctx.run_ui(egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 900.0))),
+                events, ..Default::default()
+            }, |ui| { draw(ui, &mut app, viewport, false, true); })
+        };
+        fn text_point(shape: &egui::epaint::Shape) -> Option<egui::Pos2> {
+            match shape {
+                egui::epaint::Shape::Text(text) if text.galley.text().contains("Preferences...") =>
+                    Some(text.pos + text.galley.size() * 0.5),
+                egui::epaint::Shape::Vec(shapes) => shapes.iter().find_map(text_point),
+                _ => None,
+            }
+        }
+        let menu = egui::pos2(viewport.right() - CELL * 0.5, viewport.top() + CELL * 0.5);
+        frame(vec![]).drop_without_applying_deltas();
+        frame(vec![egui::Event::PointerMoved(menu), pointer_button(menu, egui::PointerButton::Primary, true)]).drop_without_applying_deltas();
+        frame(vec![pointer_button(menu, egui::PointerButton::Primary, false)]).drop_without_applying_deltas();
+        let output = frame(vec![]);
+        let preferences = output.shapes.iter().find_map(|shape| text_point(&shape.shape)).expect("overflow Preferences action visible");
+        output.drop_without_applying_deltas();
+        frame(vec![egui::Event::PointerMoved(preferences), pointer_button(preferences, egui::PointerButton::Primary, true)]).drop_without_applying_deltas();
+        frame(vec![pointer_button(preferences, egui::PointerButton::Primary, false)]).drop_without_applying_deltas();
+        drop(frame);
+        assert!(app.show_preferences_dialog);
+        assert!(app.preferences_draft.is_some());
+        app.native_dialog_windows = false;
+        ctx.run_ui(egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 900.0))),
+            ..Default::default()
+        }, |ui| super::super::preferences::draw(&mut app, ui)).drop_without_applying_deltas();
+        assert_eq!(crate::preferences_contract::preference_sections()[app.preferences_tab].id, "timeline_toolbar");
+    }
 
     fn pointer_button(pos: egui::Pos2, button: egui::PointerButton, pressed: bool) -> egui::Event {
         egui::Event::PointerButton {

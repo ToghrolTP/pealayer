@@ -22,6 +22,8 @@
 
 [Key Features](#key-features) • [System Architecture](#system-architecture) • [Feature Walkthrough](#feature-walkthrough) • [Hardware Protocols](#hardware-serial-protocol) • [Web Remote Control](#web-remote-control--restwebsocket-apis) • [Installation & Building](#installation--prerequisites) • [Shortcuts](#shortcut-keybindings)
 
+[📚 Version history and downloads](docs/releases/README.md) • [📝 Changelog](CHANGELOG.md) • [📸 Screenshots and provenance](docs/releases/SCREENSHOT-EVOLUTION.md)
+
 </div>
 
 ---
@@ -130,6 +132,7 @@ Equivalent shared commands: `pealayer --media-info`, `pealayer --media-folder`, 
 * **Unix Domain Socket IPC**: Direct headless automation on Linux via `/tmp/pealayer.sock` or `$XDG_RUNTIME_DIR/pealayer.sock`.
 * **Windows Named-Pipe IPC**: Second-process launches and local commands use a per-application, per-session named pipe before trying the loopback HTTP fallback. Single-instance mode is enabled by default and can be changed in **Preferences → Advanced → Application instance**.
 * **Pealayer Automation Endpoint**: Pealayer's newline-compatible command transport is available at `POST http://127.0.0.1:8080/api/ipc`, while JSON-RPC 2.0 remains at `/api/rpc`. These are distinct from the PCController coordinator endpoint on `:8787`; `:8787` remains the controller fallback.
+* **Window and Media Automation**: [Window placement, observed state, playback and media queries](docs/WINDOW-AND-MEDIA-CONTROL.md) share the typed dispatcher across native IPC, HTTP/RPC, WebSocket, raw NDJSON TCP, binary UDP and Windows `WM_COPYDATA`. Window commands address the local process; playback follows session authority.
 * **Desktop File Associations**: 1-click registration as default system player for 9+ media formats (`.mp4`, `.mkv`, `.avi`, `.webm`, `.mov`, `.flv`, `.mp3`, `.flac`, `.wav`) via Windows Registry (`winreg`) and Linux FreeDesktop XDG desktop entries (`xdg-mime`).
 * **Automatic Sidecar Mounting**: Automatically discovers and loads `<video>.4d.json` timeline projects saved alongside movie files.
 * **Native Multi-File Drop**: Dropped media is opened or queued, external subtitles are attached, and timeline JSON is imported according to the actual file type.

@@ -505,12 +505,6 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
                 // Workspace switcher
                 top_menu_button(ui, app.tr("Workspace"), |ui| {
-                    if ui.button(format!("{} {}",crate::ui::icons::RADIO,app.tr("RF controls…"))).clicked() {
-                        app.rf.open = true;
-                        if let Err(error) = app.request_rf("catalog",serde_json::json!({"read_board":true})) { app.rf.error = error; }
-                        ui.close();
-                    }
-                    ui.separator();
                     if let Some(id) = crate::ui::workspace_profiles::profile_choices(ui,
                         &app.ordered_workspace_profiles(), app.active_workspace_profile.as_deref()) {
                         app.restore_workspace_profile(ui.ctx(), &id);
@@ -521,6 +515,26 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         format!("{} {}", crate::ui::icons::TABS, app.tr("Panels")),
                         |ui| crate::ui::layout::draw_workspace_tab_menu(app, ui),
                     );
+                    #[cfg(feature = "workspace-toolbar")]
+                    {
+                        let mut enabled = app.toolbar_state.preferences.enabled;
+                        if ui.checkbox(&mut enabled, format!("{}  {}", crate::ui::icons::COMMAND, app.tr("Command toolbar"))).changed() {
+                            app.toolbar_state.preferences.enabled = enabled;
+                            app.deferred_config_save = true;
+                        }
+                        if ui.button(format!("{}  {}  Ctrl+Shift+P", crate::ui::icons::MAGNIFYING_GLASS, app.tr("Command palette"))).clicked() {
+                            app.toolbar_state.palette_open = true;
+                            ui.close();
+                        }
+                    }
+                    #[cfg(feature = "workspace-terminal")]
+                    {
+                        let mut enabled = app.terminal_state.preferences.enabled;
+                        if ui.checkbox(&mut enabled, format!("{}  {}", crate::ui::icons::TERMINAL_WINDOW, app.tr("Terminal"))).changed() {
+                            app.terminal_state.preferences.enabled = enabled;
+                            app.deferred_config_save = true;
+                        }
+                    }
                     let mut sidebar_rail_enabled = app.sidebar_rail_state.enabled;
                     if ui
                         .checkbox(&mut sidebar_rail_enabled, app.tr("Sidebar Rail"))
@@ -863,6 +877,35 @@ pub fn format_track_label(id: i64, lang: Option<&str>, title: Option<&str>) -> S
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn workspace_popup_does_not_contain_hardware_rf_controls() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let ctx = egui::Context::default();
+        let mut app = PealayerApp::default();
+        app.engine_handle = crate::four_d::engine::memory_only_test_engine();
+        fn frame(ctx: &egui::Context, app: &mut PealayerApp, events: Vec<egui::Event>) -> egui::FullOutput {
+            ctx.run_ui(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(1600.0,800.0))), events, ..Default::default() }, |ui| draw(app,ui))
+        }
+        fn text_pos(shape: &egui::Shape, text: &str) -> Option<egui::Pos2> {
+            match shape {
+                egui::Shape::Text(t) if t.galley.text().contains(text) => Some(t.pos+t.galley.rect.center().to_vec2()),
+                egui::Shape::Vec(shapes) => shapes.iter().find_map(|s|text_pos(s,text)),
+                _ => None,
+            }
+        }
+        let mut first=frame(&ctx,&mut app,vec![]);
+        let point=first.shapes.iter().find_map(|shape|text_pos(&shape.shape,"Workspace")).expect("workspace heading");
+        first.textures_delta.clear();
+        for pressed in [true,false] {
+            let mut output=frame(&ctx,&mut app,vec![egui::Event::PointerMoved(point),egui::Event::PointerButton {pos:point,button:egui::PointerButton::Primary,pressed,modifiers:egui::Modifiers::NONE}]);
+            output.textures_delta.clear();
+        }
+        let mut menu=frame(&ctx,&mut app,vec![]);
+        assert!(menu.shapes.iter().any(|s|text_pos(&s.shape,"Panels").is_some()),"workspace menu must open");
+        assert!(menu.shapes.iter().all(|s|text_pos(&s.shape,"RF controls…").is_none()),"RF controls belong to hardware");
+        menu.textures_delta.clear();
+    }
 
     #[test]
     fn header_endpoint_chevron_stays_clear_of_disconnect_across_density_and_fonts() {

@@ -5,6 +5,48 @@ Implementation: [workspace and typography PR](https://github.com/ToghrolTP/peala
 
 ## Regressions and repairs
 
+### Frame-rate detail card
+
+The FPS hover is now a compact palette-aware detail card rather than concatenated
+plain text. One heading, source icons and an active-source check replace the
+repeated mode narration. Labels/units use muted ink; measured numeric lanes share
+right-aligned, regular-weight monospace values. Horizontal dividers separate
+rates, optional mpv timing and the single interaction hint. Native hover and
+context-menu details use the same renderer and typed cached measurements, never
+parse a tooltip string or perform fresh media/GPU probes. Unavailable rates remain
+unknown, and unloaded media does not expose stale renderer timings. Source
+selection/cycling and telemetry cadence are unchanged. At the user's follow-up
+request, both media and screen FPS now use regular weight, on native and Web;
+source icons and the tooltip's check identify the active source without boldness.
+Native status monospace sizing matches the measured digit height of the selected
+UI face instead of assuming equal point sizes look equal. This is scoped to the
+status bar and retains user font choices, semantic warning/emergency emphasis
+and the existing visible-ink vertical alignment.
+
+The Web footer uses a matching hover/focus card with shared theme roles and
+aligned tabular values. It shows existing media/UI snapshots only: mpv render
+diagnostics are not advertised by its current status contract and are not
+invented locally. Both the button and parent widget omit the native browser
+`title`, preventing a second plain tooltip from appearing over the card.
+
+Focused native regressions check source behavior, missing/non-finite samples,
+value columns, separators, unique narration, narrow bounds, light/dark, RTL and
+display scale. Real Edge tests cover both palettes at 390/768/1440 pixels in
+light/dark and English/Persian, plus focus, source cycling and unknown samples.
+The installed native capture exposed a desktop-wide separator expansion that
+content-only paint tests missed. The card now bounds its actual width, with
+padding included before label wrapping. The regression renders the real egui
+tooltip container on both narrow and 3002-point viewports rather than testing
+only its inner rows.
+Live numeric rows reserve a measured digit lane and share a fixed font-derived,
+pixel-snapped digit baseline. Per-value glyph-ink centering can shift by a pixel
+when the displayed digits change, so it is intentionally not used for these
+updating values. A real-popup regression changes digit counts and unavailable
+samples in place with system/bundled monospace fonts, LTR/RTL and four display
+scales, checking stationary popup bounds, numeric endpoints and baselines.
+Fixture captures remain private; they are not historical screenshots or proof
+of the user's live native tooltip. Installed evidence is in the owning PR.
+
 The connection widget had a fixed 148-point slot (252 with transport shown).
 Changing the UI typeface to the native semibold face made “Hardware:
 Disconnected” wider, but the slot never used the otherwise empty bar. The slot
@@ -114,6 +156,17 @@ the UI counter and is correctly absent with no media loaded. The RGB/telemetry/
 warning widgets are capability-driven and absent while disconnected. Their
 history and per-item context-menu changes are recorded in the audit, not
 fabricated in this idle screenshot.
+
+Publication correction: the first public capability-era PNG mistakenly cropped
+the timeline's empty-state row. The original historical full-window capture was
+preserved, so its actual bottom rectangle `0,910,1222,46` now replaces that crop.
+No UI was reconstructed and no historical program was modified or rerun. All
+twelve gallery images were individually inspected during this correction.
+Original full-capture SHA-256:
+`7f806cf8ee995171e4de86c2f157c7b155a7cc60fa828074bde77ec312f75b3c`;
+corrected public PNG SHA-256:
+`d09a35d41dcb0d8cd21709e4cf3d304caa70e4cff46171fccda2b99c6a0f12e2`.
+Issue #228 and the screenshot-only PR #46 comment point to the corrected image.
 
 These four early applications were freshly built from unmodified tracked source
 and each original Cargo.lock. All used their original 800 × 600 logical default

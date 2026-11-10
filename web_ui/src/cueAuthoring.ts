@@ -22,6 +22,49 @@ export function stepInstances(step: SequenceStep, source: number, fromUs = 0, to
   return [...ghosts, { source, iteration: 0, at_us: step.at_us }];
 }
 
+export type SequenceInstance = { source: number; iteration: number; effectIteration: number; at_us: number };
+
+/** Drag a whole-effect projection without moving or duplicating source cues. */
+export function editEffectRepeatInterval(steps: SequenceStep[], count: number, interval: number, iteration: number, deltaMs: number): number {
+  if (iteration < 1 || count < 2 || repeatedSequenceDurationMs(steps, count, interval) == null || !Number.isFinite(deltaMs)) return interval;
+  const baseUs = steps.reduce((end, step) => Math.max(end, stepRepetition(step)!.endUs), 0);
+  const minimum = Math.max(1, Math.ceil(baseUs / 1000));
+  const maximum = Math.min(3600000, Math.floor((2147483647 - baseUs) / (count - 1) / 1000));
+  if (minimum > maximum) return interval;
+  return Math.max(minimum, Math.min(maximum, Math.round((interval || baseUs / 1000) + deltaMs / iteration)));
+}
+
+/** Viewport projection, not expanded effect data. Every proxy owns the same source. */
+export function sequenceInstances(steps: SequenceStep[], count = 1, interval = 0, showRepeats = true,
+  fromUs = 0, toUs = 2147483647, pinned?: { index: number; iteration: number; effectIteration: number }): SequenceInstance[] {
+  const originals = steps.map((step, source) => ({ source, iteration: 0, effectIteration: 0, at_us: step.at_us }));
+  if (!showRepeats) return originals;
+  const baseUs = steps.reduce((end, step) => Math.max(end, stepRepetition(step)?.endUs ?? 0), 0);
+  const periodUs = interval === 0 ? baseUs : interval * 1000;
+  const cycles = repeatedSequenceDurationMs(steps, count, interval) == null ? 1 : count;
+  const first = periodUs > 0 ? Math.max(0, Math.ceil((fromUs - baseUs - 1000000) / periodUs)) : 0;
+  const last = periodUs > 0 ? Math.min(cycles - 1, Math.floor(toUs / periodUs)) : 0;
+  const instances: SequenceInstance[] = [];
+  for (let effectIteration = last; effectIteration >= first; effectIteration--) {
+    const offset = effectIteration * periodUs;
+    steps.forEach((step, source) => {
+      for (const instance of stepInstances(step, source, Math.max(0, fromUs - offset - 1000000), Math.max(0, toUs - offset))) {
+        if (effectIteration === 0 && instance.iteration === 0) continue;
+        const at_us = instance.at_us + offset;
+        if (at_us <= toUs && at_us + Math.max(1000000, (step.duration_ms ?? 0) * 1000) >= fromUs)
+          instances.push({ ...instance, effectIteration, at_us });
+      }
+    });
+  }
+  if (pinned && steps[pinned.index] && (pinned.iteration > 0 || pinned.effectIteration > 0)
+    && !instances.some(item => item.source === pinned.index && item.iteration === pinned.iteration && item.effectIteration === pinned.effectIteration)) {
+    const step = steps[pinned.index];
+    instances.push({ source: pinned.index, iteration: pinned.iteration, effectIteration: pinned.effectIteration,
+      at_us: step.at_us + pinned.effectIteration * periodUs + pinned.iteration * (stepRepetition(step)?.intervalUs ?? 0) });
+  }
+  return [...instances, ...originals];
+}
+
 export function editStepInstance<T extends SequenceStep>(step: T, iteration: number, deltaMs: number, mode: 'move' | 'length'): T {
   const next = structuredClone(step);
   if (mode === 'length') next.duration_ms = Math.max(1, Math.min(65535, Math.round((step.duration_ms ?? 0) + deltaMs)));
@@ -39,6 +82,16 @@ export const sequenceKindLabels: Record<string, string> = {
   pwm: 'PWM', 'pwm-off': 'All PWM outputs off', display: 'Display', rf: 'RF', beep: 'Buzzer',
   rgb: 'Status RGB', addressable: 'Strip pixel', menu: 'Page', 'menu-action': 'Front-panel action', opcode: 'Raw opcode',
 };
+
+export function designerCueColor(colors: Record<string, string>, kind: string): string {
+  const key = ({'relay-mask':'relay','relays-off':'relay','pwm-off':'pwm','menu-action':'menu'} as Record<string,string>)[kind] ?? kind;
+  return colors[key] ?? colors.opcode;
+}
+export function designerCueInk(hex: string): string {
+  const rgb = hex.replace('#','').match(/.{2}/g)?.map(v => parseInt(v,16) / 255) ?? [0,0,0];
+  const [r,g,b] = rgb.map(v => v <= .04045 ? v / 12.92 : ((v + .055) / 1.055) ** 2.4);
+  return .2126*r + .7152*g + .0722*b > .179 ? '#000000' : '#ffffff';
+}
 
 export function sequenceLaneKey(step: SequenceStep): string {
   if (step.kind === 'motion') return step.target === 1 ? 'seat.b' : 'seat.a';

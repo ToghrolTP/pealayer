@@ -293,18 +293,14 @@ pub fn draw(
     let captions: Vec<_> = captions
         .into_iter()
         .map(|(text, time)| {
+            if time {
+                return super::numeric_text::layout(ui, &text, egui::FontId::proportional(11.0),
+                    ui.visuals().strong_text_color());
+            }
             ui.painter().layout(
                 text,
-                if time {
-                    egui::FontId::monospace(11.0)
-                } else {
-                    egui::FontId::proportional(12.0)
-                },
-                if time {
-                    ui.visuals().strong_text_color()
-                } else {
-                    ui.visuals().text_color()
-                },
+                egui::FontId::proportional(12.0),
+                ui.visuals().text_color(),
                 width,
             )
         })
@@ -408,6 +404,42 @@ pub fn draw(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "Real thumbnail decoder/cache with synthetic media; no hardware"]
+    fn enabled_native_hover_loads_a_real_thumbnail_without_seeking() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let video = crate::app::tests::SyntheticVideo::new();
+        let mut app = crate::app::PealayerApp::default();
+        app.current_video_path = Some(video.0.clone());
+        app.duration = 8.0;
+        app.playback_time = 2.0;
+        app.is_seekable = true;
+        app.is_paused = true;
+        app.nle_seekbar_hover_thumbnails = true;
+        let ctx = egui::Context::default();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let enabled = app.nle_seekbar_hover_thumbnails;
+            ctx.run_ui(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(600.0,400.0))),
+                events: vec![egui::Event::PointerMoved(egui::pos2(150.0,20.0))], ..Default::default()
+            }, |ui| {
+                let (_, response) = ui.allocate_exact_size(egui::vec2(300.0,28.0),egui::Sense::click_and_drag());
+                draw(&mut app,ui,&response,enabled,"real-monitor-hover-fixture");
+            }).drop_without_applying_deltas();
+            if let Some((_, texture)) = &app.seekbar_thumbnail_preview.texture {
+                assert_eq!(texture.size(),[320,180]);
+                break;
+            }
+            assert!(app.seekbar_thumbnail_preview.failed.is_none(),"thumbnail decoding failed");
+            assert!(Instant::now()<deadline,"native hover did not load its thumbnail");
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(app.seek_pos.is_none());
+        assert_eq!(app.playback_time,2.0);
+        assert!(app.is_paused);
+    }
 
     #[test]
     fn hovered_time_maps_and_clamps_to_media_range() {

@@ -8,6 +8,180 @@ This is the current index. Older handoffs and installed-build receipts remain
 historical evidence; their old open-PR, missing-feature or disconnected-runtime
 statements are not the present product state.
 
+## Publication and workspace tools checkpoint
+
+[Proportional numeric status typography](status-tabular-typography.md) fixes the
+FPS icon/digit-center mismatch, bundles Inter for Windows and shares tabular
+digit layout without requiring a monospace font. All 59 focused native tests and
+seven Web appearance tests pass, plus focused Web status/preview/RF checks. The
+canonical package is installed and hash-matched; inspected enlarged native
+captures show the prior 2-pixel discrepancy removed. The full remaining mono
+inventory and native OpenType limitation are documented. PR #278 owns this work;
+native macOS/Linux visual and deferred Cafe acceptance are not inferred.
+
+[Command toolbar completion](workspace-toolbar-completion.md) fixes the oversized
+palette, implements shared dots-to-Trash hiding, matches icon scale and clarifies
+disabled paint/cursors. All 41 focused tests pass. The clean package is installed
+and hash-matched, with inspected real before/after native captures; original
+paused playback, placement and temporary tool visibility are preserved. PR #277
+tracks this follow-up; hosted checks and user-deferred Cafe delivery remain separate.
+
+[Sidebar panel recovery](sidebar-panel-recovery.md) preserves each rail panel's
+location, toggle behavior and assigned size, replaces donor sidebar chrome,
+removes empty menu dividers and fixes disappearing active icons. All 63 distinct
+focused tests pass. The installed canonical build passes live API checks and
+matched native screenshot inspection, with the original layout/playback restored.
+Cafe delivery remains user-deferred/offline; hosted CI is a separate merge gate.
+
+[Remote directory encoding](remote-directory-encoding.md) corrects empty listings
+when query-based folder names and file links use equivalent escaping. All 19
+focused browser tests pass. The canonical local package now renders the user's
+six files with metadata and beginning thumbnails; paused media is preserved.
+Matched synthetic native before/after captures exclude the private URL. Cafe
+deployment remains user-deferred/offline; hosted CI is a separate merge gate.
+
+[Native FPS sizing](status-fps-width.md) fixes the fixed-slot clipping of larger
+frame rates and reduces the counter's secondary text size without changing other
+status fonts or tooltip typography. All 29 focused native status tests pass,
+including real clip containment through four-digit values and scale/direction/font
+coverage. The clean package is installed, independently hash-matched and captured
+before/after; paused media position and volume are preserved. Full hosted CI and
+user-deferred Cafe delivery are not implied by this local receipt.
+
+[Workspace tools](workspace-tools.md) records the standard full-featured package,
+local graceful installation, dockable Terminal, dedicated embedded Pealayer shell,
+editable toolbar and actual before/after captures. Both tools remain hidden by
+default; no application flavors were introduced. PortableShell profile discovery
+is merged upstream in #84. PR #273 owns Pealayer integration and its current-head
+CI/merge gate; use GitHub for the live merge state. The separate integration suite
+now passes 14 tests, explicitly covering hidden optional panes and visible Terminal
+round-tripping. Cafe delivery remains user-deferred/offline.
+
+[Native FPS comparison](native-fps-publication.md) publishes the real final tooltip
+crop and original before image for merged #253, superseding its pending-publication
+prose. The private full-window movie capture remains private. Merged #271 also has
+enlarged native header before/after images in its PR description. The full 12-image
+history in #228 remains intact. [About layout](about-dialog-layout.md) now has its
+missing real native capture too. The fresh combined native library suite passes
+1,301 tests, with six opt-in checks ignored. [Publication and merge procedure](github-publication.md)
+requires public-image verification and confirmed merges, not merely local evidence
+or a queued merge. #248 remains explicitly user-held and #227 remains unfinished.
+
+## Remote folder navigation
+
+[Verified parent actions](remote-parent-navigation.md) replace the inferred Back
+row, hide unavailable parent indexes and remove irrelevant navigation metadata.
+Native discovery and Web interaction/width tests are tracked there separately
+from user-host acceptance. The package is installed and its live HTTP/RPC checks
+passed forbidden/empty/changing-access parent cases; Cafe remains deferred.
+
+## Window and media automation
+
+[Contextual −/+ zoom](contextual-zoom-shortcuts.md) is installed locally with
+the default-enabled keyboard policy retained: the main timeline needs no canvas
+focus, front editor/dialog ownership is respected, and text fields keep typing.
+Five real-egui shortcut/view regressions and the retained wheel regression passed;
+actual user keyboard feedback and deferred Cafe delivery remain separate.
+
+[Native media discovery](native-media-discovery.md) audits KDE Connect's actual
+platform consumers, verifies Windows SMTC readback and corrects Linux MPRIS rate,
+capability, track identity, volume/mute, position and event publication. Its
+private-bus CI, delivery receipt and explicit Apple/KDE consumer limits are
+tracked separately from phone or physical acceptance.
+
+[Shortcut field keycaps](shortcut-keycaps.md) renders application shortcut values
+as individual keys inside their inputs, retaining normal editing on focus and
+unchanged binding/storage semantics. The update is installed and its actual
+native screenshot inspected; 566 native UI checks and 24 Web browser cases
+passed. Delivery, images and the open helper's inspection caveat are tracked
+in the linked receipt.
+
+[Native icon picker header](icon-picker-header.md) unifies the search field and
+trailing List/Grid segmented control. Its magnifier is inside the input, controls
+share a density/font-aware centerline, and selection/hover/focus do not move them.
+The update is installed with 563 native UI checks passing; its live open-picker
+screenshot is pending. Geometry, pointer/paint and delivery evidence are tracked
+in the linked receipt.
+
+[Studio media strips](studio-media-strips.md) replaces native hardcoded media
+colors with palette-owned surfaces and keeps media/cue captions pinned to the
+visible strip span. Neutral styling, timeline timing and interactions remain
+intact. The canonical update is installed, with real before/after captures,
+559 native UI checks and final focused paint/contrast checks recorded there.
+
+[Reveal-playhead availability](playhead-action-fade.md) adds the missing brief
+fade to the existing visibility-aware disabled state. Invocation is blocked
+immediately, with reduced-motion support and preserved drag customization;
+555 native UI checks passed and the canonical update is installed with unchanged
+paused playback. Verification and delivery are tracked in the linked receipt.
+
+[Workspace selection and dialog title backgrounds](workspace-switcher-dialog-chrome.md)
+records the saved-profile repair, visible restore errors, leading Workspace
+divider and measured built-in title-frame correction. The package is installed;
+554 native UI checks, live mode-switching checks and actual before/after native
+captures are recorded there. Status caption alignment and CraftUI pane controls
+remain unchanged. Cafe remains deferred.
+
+[CraftUI pane header actions](craft-pane-header-actions.md) tracks individual-tab
+close buttons (default on), the separate three-dot menu, and configurable
+collapse/expand chevrons (default off), without changing egui Dock chrome.
+The canonical update is installed; 56 native checks and actual before/after
+header captures are recorded there. Both visibility settings were exercised
+through the live API and restored to the requested defaults. Cafe is deferred.
+
+[External player lifecycle](external-player-lifecycle.md) covers contextual
+Program Monitor switching, explicit relaunch after Quit, internal fallback,
+rich mode choices and factual executable resolution. The canonical package and
+paused full-application close/recovery checks passed. **Dynamic taskbar artwork
+still fails canonical displayed-pixel acceptance**, including after human focus;
+PR #260 is merged through #268; this does not close that displayed-artwork gate.
+See the linked receipt and remaining gate. Cafe is deferred.
+
+[Movable monitor volume](movable-monitor-volume.md) tracks grouped speaker/slider
+customization, hidden-by-default NLE track pickers, final Fullscreen placement
+and the requested instance's enabled hover thumbnails. The canonical local
+update is installed; native 720/1200/1800-point captures and test/receipt details
+are in PR #259. Cafe remains deferred.
+
+[Paused playback and track state](paused-playback-and-track-state.md) records
+external pause-clock anchoring, paused dual-preview stability, internal exact
+seek/resume intent, authoritative media-strip selection and visibility-aware
+timeline reveal controls. Focused and real finite-file decoder tests are
+separate from user playback acceptance. The local canonical update is verified
+and native 720/1200-point captures are published in PR #258; Cafe remains deferred.
+
+[Native file exchange and attention](native-data-exchange.md) is installed with
+the exact package/runtime receipt. Final native suite: 1,153 passed, zero failed,
+two opt-in tests ignored, including real Shell COM file-description delivery.
+Installed notification dispatch did not steal focus. Actual Explorer/clipboard
+and visible flashing acceptance, cross-authority/browser clipboard parity and
+the user-run historical portable-profile step remain open; Cafe is deferred.
+
+[Measured cross-transport acceptance](window-media-control-results.md) records
+the complete eight-transport Windows fixture and final-source native tests.
+The verified candidate is installed in the regular app and running in the
+isolated current Dock comparison; see the [installed checkpoint](fullscreen-frame-publication.md#installed-checkpoint).
+Both authoring endpoints report clean. Cafe deployment remains user-deferred.
+Keep runtime acceptance separate from all platform/physical gates, and retain
+the October 10 comparison until the user requests removal.
+
+## Preferences wheel responsiveness
+
+[Native scroll performance](preferences-scroll-performance.md) records the
+removed per-frame locale, default-document and filesystem work and real editor
+wheel regressions. The fix is now installed in both current apps. Keep measured
+renderer improvement separate from human native mouse-wheel acceptance, which
+remains open.
+
+## Intermittent fullscreen black flashes
+
+[GPU frame publication](fullscreen-frame-publication.md) records the confirmed
+clear-before-render failure path and a passing real OpenGL injected-failure test.
+Keep the last valid frame until replacement succeeds. The package is installed
+and its paused first frame published without render/update failures. Installed
+long-playback acceptance is still open; the exact trigger of the user's report
+is unconfirmed.
+
 ## Fresh audit: 13 October 2026
 
 [Hardware/status interaction progress](hardware-status-interaction.md) records
@@ -29,6 +203,34 @@ recording repeat modes (#114) and Web/video parity (#63–#66) remain unfinished
 required checks are not passed while the user's test/CI skip remains in effect.
 
 ## Delivered source and deployment
+
+- [Live branding API](../BRANDING-API.md) shares temporary/persistent name,
+  tagline and icon updates across REST/RPC/native commands. Focused native
+  tests and isolated real-window checks pass: unrelated autosaves do not leak
+  temporary branding, selected fields persist, open Preferences follows events,
+  and Web runtime metadata refreshes. [Elapsed pointer selection](elapsed-pointer-selection.md)
+  and [centered ruler labels](timeline-ruler-labels.md) now pass their native
+  rendered regressions too. [Combined release and guarded canonical installation](branding-api-delivery.md)
+  are verified, including four actual displayed taskbar-artwork transitions on
+  the installed app. Cafe remains user-deferred. One debug native-minimize
+  fixture timeout was not reproduced by a fresh three-launch debug recheck or
+  the exact release; retain its failure diagnostics instead of calling the
+  original run a pass. Human Win+Tab and native/Web pointer walkthrough remain.
+
+- [Hardware connection hints](hardware-connection-hint.md) replace raw nested
+  diagnostics with plain-language card copy and an opt-in circled information
+  control in native/Web UI. Native/browser checks, packaging and local graceful
+  installation are verified. The alignment follow-up gives the summary its own
+  direction-aware slot and puts the Check instruction on a deliberate new line;
+  focused native/Web checks, installed delivery and actual before/after captures
+  are recorded in the linked receipt. Its early startup-size observation is
+  historical; use the current window-placement receipt. Cafe remains deferred.
+
+- [The updater console](updater-console.md) now has semantic progress phases,
+  factual transfer speed/ETA, clean redirected logs and explicit JSON output.
+  Full native tests, packaged CLI fixtures and local graceful installation are
+  verified. The preceding Dock correction is also verified installed locally;
+  Cafe installation remains user-deferred, not completed by those local checks.
 
 - Web media/file browsing now exposes shared drive/location selection, mapped and
   remembered network locations, Windows folder shortcuts/known folders and recent
@@ -285,6 +487,15 @@ required checks are not passed while the user's test/CI skip remains in effect.
   applications in two separated live samples. Keep #62 open until its gates pass.
 - [ ] Resolve remaining GPU/native-surface and exact-navigation gates in
   #64–#66; experimental D3D11 must remain optional/default-off until accepted.
+  [Taskbar branding and frame refresh](taskbar-branding-and-frame-refresh.md)
+  fixes the bitmap refresh lease and shell-artwork contract separately; it is
+  not proof of minimized/offscreen or zero-copy rendering acceptance.
+  [Placement and Task View follow-up](window-placement-and-task-view.md)
+  records the reproduced minimized-zero persistence cause, native restart tests,
+  full-UI DWM preview path and repeated live branding/toolbar checks.
+  The user rejected the installed dynamic icon appearance again; native read-only
+  capture confirmed stale taskbar artwork despite correct HWND icons. The
+  follow-up must pass actual displayed-artwork comparisons, not property readback.
 - [ ] Clear applicable platform CI/runtime/package checks and privacy-safe
   screenshots before selecting the next release version and publishing packages.
 

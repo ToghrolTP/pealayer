@@ -1,28 +1,43 @@
 import { useEffect, useRef, useState } from 'react';
-import { Button, Dropdown, InputNumber, Select, Space, Tooltip } from 'antd';
+import { Button, Checkbox, Dropdown, InputNumber, Select, Space, Tooltip } from 'antd';
 import { CopyOutlined, DeleteOutlined, SelectOutlined, ScissorOutlined } from '@ant-design/icons';
-import { deleteSequenceCues, duplicateSequenceCues, editStepInstance, formatTimeMs, moveSequenceStep, selectCueIndices, sequenceKindLabels, sequenceLaneName, sequenceLaneKey, sequenceLaneChoices, sequenceStepTemplate, sequenceNeedsQuantize, quantizeSequence, stepInstances, stepRepetition, SequenceStep } from '../cueAuthoring';
+import { deleteSequenceCues, duplicateSequenceCues, editStepInstance, formatTimeMs, moveSequenceStep, selectCueIndices, sequenceKindLabels, sequenceLaneName, sequenceLaneKey, sequenceLaneChoices, sequenceStepTemplate, sequenceNeedsQuantize, quantizeSequence, sequenceInstances, repeatedSequenceDurationMs, SequenceStep } from '../cueAuthoring';
 import { sequenceDurationMs } from '../melodyCatalog';
+import { designerCueColor, designerCueInk, editEffectRepeatInterval, stepRepetition } from '../cueAuthoring';
+import defaultCueColors from '../../../assets/themes/designer-cue-colors.json';
 import { tr, UiLocale } from '../i18n';
 import { defaultTimelineWheelPreferences, timelineWheelAction, sequenceWheelNavigation, TimelineWheelPreferences } from '../timelineWheel';
 
 /** Pure authoring gestures: never seek, preview or send hardware commands. */
 export interface SequenceTimelineActions { addStep: () => void }
-export function SequenceTimeline<T extends SequenceStep>({ steps, onChange, locale, controls = [], disabled = false, onSelect, onEdit, human = true, extraKinds = [], actionsRef, wheelPreferences = defaultTimelineWheelPreferences }: {
+export function SequenceTimeline<T extends SequenceStep>({ steps, onChange, locale, controls = [], disabled = false, onSelect, onEdit, human = true, extraKinds = [], actionsRef, wheelPreferences = defaultTimelineWheelPreferences, repeatCount = 1, repeatIntervalMs = 0, onRepeatChange, cueColors = defaultCueColors }: {
   steps: T[]; onChange: (steps: T[]) => void; locale: UiLocale;
   controls?: Array<{ key: string; name: string; default_name?: string; kind: string; locked?: boolean }>;
   disabled?: boolean; onSelect?: (index: number) => void; human?: boolean;
   onEdit?: (index: number) => void;
   extraKinds?: string[]; actionsRef?: { current: SequenceTimelineActions | null };
   wheelPreferences?: TimelineWheelPreferences;
+  repeatCount?: number; repeatIntervalMs?: number;
+  onRepeatChange?: (count: number, intervalMs: number) => void;
+  cueColors?: Record<string, string>;
 }) {
+  const ghostsKey = 'pealayer.designer.showRepeatGhosts';
+  const [showRepeats, setShowRepeats] = useState(() => {
+    try { return localStorage.getItem(ghostsKey) !== 'false'; } catch { return true; }
+  });
+  useEffect(() => {
+    const refresh = () => { try { setShowRepeats(localStorage.getItem(ghostsKey) !== 'false'); } catch { /* Storage may be unavailable. */ } };
+    window.addEventListener('storage', refresh); window.addEventListener(ghostsKey, refresh);
+    return () => { window.removeEventListener('storage', refresh); window.removeEventListener(ghostsKey, refresh); };
+  }, []);
   const [selected, setSelected] = useState(() => new Set(steps.length ? [0] : []));
   const primary = useRef(0);
   const anchor = useRef(0);
   const previousSteps = useRef(steps);
   const ownUpdate = useRef<T[] | null>(null);
   const [preview, setPreview] = useState<{ index: number; step: T; copy: boolean } | null>(null);
-  const drag = useRef<null | { index: number; iteration: number; mode: 'move' | 'length'; origin: number; at: number; scale: number; step: T; copy: boolean; moved: boolean }>(null);
+  const [repeatPreview, setRepeatPreview] = useState<number | null>(null);
+  const drag = useRef<null | { index: number; iteration: number; effectIteration: number; mode: 'move' | 'length'; origin: number; at: number; scale: number; step: T; copy: boolean; moved: boolean }>(null);
   const container = useRef<HTMLDivElement>(null);
   const section = useRef<HTMLElement>(null);
   const suppressClick = useRef<number | null>(null);
@@ -44,18 +59,22 @@ export function SequenceTimeline<T extends SequenceStep>({ steps, onChange, loca
     // External draft replacement/reorder must not retain stale destructive
     // selections. Our own atomic edits keep their selected result.
     if (steps !== ownUpdate.current) {
-      drag.current = null; setPreview(null);
+      drag.current = null; setPreview(null); setRepeatPreview(null);
       primary.current = Math.min(primary.current, Math.max(0, steps.length - 1));
       anchor.current = primary.current;
       setSelected(new Set(steps.length ? [primary.current] : []));
     }
     previousSteps.current = steps; ownUpdate.current = null;
   }, [steps]);
-  useEffect(() => { if (disabled) { drag.current = null; setPreview(null); } }, [disabled]);
+  useEffect(() => { if (disabled || !showRepeats) { drag.current = null; setPreview(null); setRepeatPreview(null); } }, [disabled, showRepeats]);
+  useEffect(() => { drag.current = null; setPreview(null); setRepeatPreview(null); }, [repeatCount, repeatIntervalMs]);
   const commit = (next: T[]) => { ownUpdate.current = next; onChange(next); };
   const laneFor = sequenceLaneKey;
   const lanes = [...new Set([...controls.filter(c => ['motion', 'seat'].includes(c.kind) && !c.locked).map(c => c.key), ...steps.map(laneFor)])];
-  const span = Math.max(1000, sequenceDurationMs(steps));
+  const span = Math.max(1000, repeatedSequenceDurationMs(steps, repeatCount, repeatPreview ?? repeatIntervalMs) ?? sequenceDurationMs(steps));
+  const instances = sequenceInstances(steps.map((step, index) => preview?.index === index && !preview.copy ? preview.step : step),
+    repeatCount, repeatPreview ?? repeatIntervalMs, showRepeats, Math.max(0, (viewport.left - 140 - 40) / scale * 1000),
+    (viewport.left + viewport.width) / scale * 1000, drag.current ?? undefined);
   const width = Math.max(600, span * scale + 160);
   useEffect(() => {
     const element = container.current; if (!element) return;
@@ -89,7 +108,7 @@ export function SequenceTimeline<T extends SequenceStep>({ steps, onChange, loca
   };
   const selectAll = () => setSelected(new Set(steps.map((_, index) => index)));
   const reveal = (index: number) => requestAnimationFrame(() => {
-    const element = container.current?.querySelector<HTMLElement>(`[data-step-index="${index}"][data-repeat-index="0"]`);
+    const element = container.current?.querySelector<HTMLElement>(`[data-step-index="${index}"][data-repeat-index="0"][data-effect-repeat-index="0"]`);
     element?.scrollIntoView({ block: 'nearest', inline: 'center', behavior: 'smooth' }); element?.focus({ preventScroll: true });
   });
   const duplicate = (indices: Iterable<number> = selected) => {
@@ -129,6 +148,14 @@ export function SequenceTimeline<T extends SequenceStep>({ steps, onChange, loca
     return choice ? (choice.translated ? tr(locale, choice.name) : choice.name) : sequenceLaneName(key, controls);
   };
   return <section className="sequence-authoring" ref={section} tabIndex={0} aria-label={tr(locale, 'Effect timeline')}
+    onKeyDownCapture={event => {
+      // Cancel before a containing modal handles Escape. Previews are local;
+      // the source and repeat settings are committed only on pointer release.
+      if (event.key === 'Escape' && drag.current) {
+        event.preventDefault(); event.stopPropagation();
+        drag.current = null; setPreview(null); setRepeatPreview(null);
+      }
+    }}
     onCopy={event => {
       if (disabled || !selected.size || (event.target as HTMLElement).closest('input,textarea,select,[contenteditable="true"]')) return;
       event.preventDefault(); event.stopPropagation();
@@ -159,11 +186,22 @@ export function SequenceTimeline<T extends SequenceStep>({ steps, onChange, loca
       else if (['ArrowLeft', 'ArrowRight'].includes(event.key) && selected.size && !command) {
         event.preventDefault(); event.stopPropagation();
         const delta = (event.key === 'ArrowLeft' ? -1 : 1) * quantum * 1000;
+        const proxy = (event.target as HTMLElement).closest<HTMLElement>('[data-step-index]');
+        const cycle = Number(proxy?.dataset.effectRepeatIndex ?? 0), iteration = Number(proxy?.dataset.repeatIndex ?? 0);
+        const source = Number(proxy?.dataset.stepIndex);
+        if (cycle > 0) { onRepeatChange?.(repeatCount,editEffectRepeatInterval(steps,repeatCount,repeatIntervalMs,cycle,delta / 1000 * cycle)); return; }
+        if (iteration > 0 && steps[source]) { commit(steps.map((step,index) => index === source ? editStepInstance(step,iteration,delta / 1000 * iteration,'move') : step)); return; }
         const earliest = Math.min(...[...selected].map(index => steps[index]?.at_us ?? 0));
         commit(steps.map((step, index) => selected.has(index) ? { ...step, at_us: Math.min(2147483647, step.at_us + Math.max(delta, -earliest)) } : step));
       }
     }}>
     <Space wrap><strong>{tr(locale, 'Effect timeline')}</strong><span className="muted">{tr(locale, 'Ctrl-drag to duplicate')}</span>
+      <Tooltip title={tr(locale, 'Repeated cues are linked to their original; hiding them does not disable repetition')}>
+        <Checkbox checked={showRepeats} onChange={event => {
+          const enabled = event.target.checked; drag.current = null; setPreview(null); setRepeatPreview(null); setShowRepeats(enabled);
+          try { localStorage.setItem(ghostsKey, String(enabled)); window.dispatchEvent(new Event(ghostsKey)); } catch { /* Keep the in-session choice. */ }
+        }}>{tr(locale, 'Show repeat ghosts')}</Checkbox>
+      </Tooltip>
       <Tooltip title="Ctrl+A"><Button icon={<SelectOutlined />} disabled={disabled || !steps.length} onClick={selectAll}>{tr(locale, 'Select all cues')}</Button></Tooltip>
       <Button disabled={disabled || !selected.size} onClick={() => setSelected(new Set())}>{tr(locale, 'Clear cue selection')}</Button>
       <Tooltip title="Ctrl+D"><Button icon={<CopyOutlined />} disabled={disabled || !selected.size} onClick={() => duplicate()}>{tr(locale, 'Duplicate selected cues')}</Button></Tooltip>
@@ -188,22 +226,37 @@ export function SequenceTimeline<T extends SequenceStep>({ steps, onChange, loca
           }} onDoubleClick={event => {
             if (event.target === event.currentTarget && !disabled) addStep(lane, Math.round(Math.max(0, event.clientX - event.currentTarget.getBoundingClientRect().left) / scale) * 1000);
           }}>
-            {steps.flatMap((step, index) => stepInstances(preview?.index === index && !preview.copy ? preview.step : step, index,
-              Math.max(0, (viewport.left - 140 - 40) / scale * 1000), (viewport.left + viewport.width) / scale * 1000, drag.current?.index === index ? drag.current.iteration : undefined))
-              .sort((a, b) => Number(a.iteration === 0) - Number(b.iteration === 0)).map(({ source: index, iteration, at_us }) => {
-              const step = steps[index], ghost = iteration > 0;
+            {instances.map(({ source: index, iteration, effectIteration, at_us }) => {
+              const step = steps[index], ghost = iteration > 0 || effectIteration > 0;
+              const repeatLabel = effectIteration > 0 ? `${effectIteration + 1}.${iteration + 1}` : `${iteration + 1}`;
+              const background = designerCueColor(cueColors, step.kind);
               // Keep the captured DOM node in its original lane until release.
               const shown = { ...step, at_us, duration_ms: preview?.index === index && !preview.copy ? preview.step.duration_ms : step.duration_ms };
               if (laneFor(shown) !== lane) return null;
               const length = Math.max(38, Number(shown.duration_ms ?? 0) * scale);
               const label = step.kind === 'motion' ? tr(locale, step.value === 1 ? 'Up' : step.value === 2 ? 'Down' : 'Stop') : tr(locale, sequenceKindLabels[step.kind] ?? step.kind);
-              return <Dropdown key={`${index}:${iteration}`} trigger={['contextMenu']} menu={{ items: [
+              return <Dropdown key={`${index}:${iteration}:${effectIteration}`} trigger={['contextMenu']} menu={{ items: [
+                ...(ghost ? [{ key: 'repeat', label: <Space orientation="vertical" onClick={event => event.stopPropagation()}>
+                  <strong>{tr(locale, effectIteration > 0 ? 'Repeat effect' : 'Repeat step')}</strong>
+                  <label>{tr(locale, 'Count')} <InputNumber aria-label={tr(locale, 'Count')} min={1} max={1000} precision={0} disabled={disabled || (effectIteration > 0 && !onRepeatChange)}
+                    value={effectIteration > 0 ? repeatCount : step.repeat_count ?? 1} onChange={value => {
+                      if (value == null) return;
+                      if (effectIteration > 0) onRepeatChange?.(value, repeatIntervalMs);
+                      else commit(steps.map((s,i) => i === index ? {...s,repeat_count:value} : s));
+                    }} /></label>
+                  <label>{tr(locale, 'Interval')} <InputNumber aria-label={tr(locale, 'Interval')} min={0} max={3600000} precision={0} suffix="ms" disabled={disabled || (effectIteration > 0 && !onRepeatChange)}
+                    value={effectIteration > 0 ? repeatIntervalMs : step.repeat_interval_ms ?? 0} onChange={value => {
+                      if (value == null) return;
+                      if (effectIteration > 0) onRepeatChange?.(repeatCount, value);
+                      else commit(steps.map((s,i) => i === index ? {...s,repeat_interval_ms:value} : s));
+                    }} /></label>
+                </Space> }, {type:'divider' as const}] : []),
                 { key: 'duplicate', label: tr(locale, 'Duplicate selected cues'), icon: <CopyOutlined />, disabled },
                 { key: 'delete', label: tr(locale, 'Delete selected cues'), icon: <DeleteOutlined />, disabled, danger: true },
-              ], onClick: ({ key }) => { if (key === 'duplicate') duplicate(contextSelection(index)); else remove(contextSelection(index)); } }}>
-                <button type="button" className={`sequence-authoring__cue ${ghost ? 'is-repeat' : ''} ${selected.has(index) ? 'is-selected' : ''}`} aria-pressed={selected.has(index)}
-                  data-step-index={index} data-repeat-index={iteration} aria-label={`${label}${ghost ? ` · ${tr(locale, 'Repeat step')} ${iteration + 1}` : ''}`} style={{ left: shown.at_us / 1000 * scale, width: length }} disabled={disabled}
-                  title={`${label} · ${formatTimeMs(shown.at_us / 1000, human)} · ${formatTimeMs(Number(shown.duration_ms ?? 0), human)}\n${tr(locale, 'Ctrl-click to toggle; Shift-click to select a range')}`}
+              ], onClick: ({ key }) => { if (key === 'duplicate') duplicate(contextSelection(index)); else if (key === 'delete') remove(contextSelection(index)); } }}>
+                <button type="button" className={`sequence-authoring__cue ${ghost ? 'is-repeat' : ''} ${effectIteration > 0 ? 'is-effect-repeat' : ''} ${selected.has(index) ? 'is-selected' : ''}`} aria-pressed={selected.has(index)}
+                  data-step-index={index} data-repeat-index={iteration} data-effect-repeat-index={effectIteration} aria-label={`${label}${ghost ? ` · ${tr(locale, 'Repeat step')} ${repeatLabel}` : ''}`} style={{ left: shown.at_us / 1000 * scale, width: length, background, color: ghost ? 'var(--text)' : designerCueInk(background) }} disabled={disabled}
+                  title={`${label} · ${formatTimeMs(shown.at_us / 1000, human)} · ${formatTimeMs(Number(shown.duration_ms ?? 0), human)}\n${tr(locale, ghost ? 'Drag to adjust repeat interval; resize to change shared cue length' : 'Ctrl-click to toggle; Shift-click to select a range')}`}
                   onContextMenu={() => { if (!selected.has(index)) choose(index); }}
                   onDoubleClick={event => { event.stopPropagation(); choose(index); (onEdit ?? onSelect)?.(index); }}
                   onClick={event => { if (suppressClick.current === index) { suppressClick.current = null; return; } choose(index, event.ctrlKey || event.metaKey, event.shiftKey); }} onPointerDown={event => {
@@ -211,28 +264,35 @@ export function SequenceTimeline<T extends SequenceStep>({ steps, onChange, loca
                     event.preventDefault(); event.currentTarget.focus({ preventScroll: true }); event.currentTarget.setPointerCapture(event.pointerId);
                     const rect = event.currentTarget.getBoundingClientRect();
                     const mode = step.duration_ms != null && event.clientX >= rect.right - 8 ? 'length' : 'move';
-                    drag.current = { index, iteration, mode, origin: event.clientX, at: step.at_us, scale, step: structuredClone(step), copy: !ghost && mode === 'move' && (event.ctrlKey || event.metaKey), moved: false };
+                    drag.current = { index, iteration, effectIteration, mode, origin: event.clientX, at: step.at_us, scale, step: structuredClone(step), copy: !ghost && mode === 'move' && (event.ctrlKey || event.metaKey), moved: false };
                     if (!selected.has(index) && !event.ctrlKey && !event.metaKey && !event.shiftKey) choose(index);
                   }} onPointerMove={event => {
-                    const active = drag.current; if (!active || active.index !== index || active.iteration !== iteration) return;
+                    const active = drag.current; if (!active || active.index !== index || active.iteration !== iteration || active.effectIteration !== effectIteration) return;
                     const target = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('[data-sequence-lane]')?.dataset.sequenceLane;
                     const at = active.at + (event.clientX - active.origin) / active.scale * 1000;
                     active.moved ||= Math.abs(event.clientX - active.origin) > 2 || (!ghost && active.mode === 'move' && target != null && target !== laneFor(active.step));
-                    const edited = ghost || active.mode === 'length' ? editStepInstance(active.step, iteration, (event.clientX - active.origin) / active.scale, active.mode) : moveSequenceStep(active.step, at, target) as T;
+                    if (effectIteration > 0 && active.mode === 'move') {
+                      setRepeatPreview(editEffectRepeatInterval(steps, repeatCount, repeatIntervalMs, effectIteration, (event.clientX - active.origin) / active.scale)); return;
+                    }
+                    const edited = (ghost && effectIteration === 0) || active.mode === 'length' ? editStepInstance(active.step, iteration, (event.clientX - active.origin) / active.scale, active.mode) : moveSequenceStep(active.step, at, target) as T;
                     setPreview({ index, step: edited, copy: active.copy });
                   }} onPointerUp={event => {
-                    const active = drag.current; if (!active || active.index !== index || active.iteration !== iteration) return;
+                    const active = drag.current; if (!active || active.index !== index || active.iteration !== iteration || active.effectIteration !== effectIteration) return;
                     const target = document.elementFromPoint(event.clientX, event.clientY)?.closest<HTMLElement>('[data-sequence-lane]')?.dataset.sequenceLane;
-                    const moved = ghost || active.mode === 'length' ? editStepInstance(active.step, iteration, (event.clientX - active.origin) / active.scale, active.mode) : moveSequenceStep(active.step, active.at + (event.clientX - active.origin) / active.scale * 1000, target) as T;
+                    const moved = (ghost && effectIteration === 0) || active.mode === 'length' ? editStepInstance(active.step, iteration, (event.clientX - active.origin) / active.scale, active.mode) : moveSequenceStep(active.step, active.at + (event.clientX - active.origin) / active.scale * 1000, target) as T;
                     if (active.moved) {
                       suppressClick.current = index;
                       window.setTimeout(() => { suppressClick.current = null; }, 0);
+                      if (effectIteration > 0 && active.mode === 'move') {
+                        onRepeatChange?.(repeatCount, editEffectRepeatInterval(steps, repeatCount, repeatIntervalMs, effectIteration, (event.clientX - active.origin) / active.scale));
+                      } else {
                       const next = [...steps]; const destination = active.copy ? next.length : index;
                       if (active.copy) next.push(moved); else next[index] = moved;
                       commit(next); choose(destination); setSelectedLane(laneFor(moved)); if (active.copy) reveal(destination);
+                      }
                     }
-                    drag.current = null; setPreview(null);
-                  }} onPointerCancel={() => { drag.current = null; setPreview(null); }} onLostPointerCapture={() => { drag.current = null; setPreview(null); }}><span aria-hidden>{ghost ? `↻${iteration + 1}` : '⋮'}</span> {label}
+                    drag.current = null; setPreview(null); setRepeatPreview(null);
+                  }} onPointerCancel={() => { drag.current = null; setPreview(null); setRepeatPreview(null); }} onLostPointerCapture={() => { drag.current = null; setPreview(null); setRepeatPreview(null); }}><span aria-hidden>{ghost ? `↻${repeatLabel}` : '⋮'}</span> {label}
                   {step.duration_ms != null && <span className="sequence-authoring__resize" aria-hidden>⋮</span>}</button>
               </Dropdown>;
             })}

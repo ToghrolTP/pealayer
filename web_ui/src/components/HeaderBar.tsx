@@ -29,6 +29,7 @@ interface HeaderBarProps {
   connected: boolean;
   connectionMode: 'ws' | 'http';
   appName?: string;
+  appDescription?: string;
   appIconPath?: string;
   locale: UiLocale;
   connectionTarget: string;
@@ -44,6 +45,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
   connected,
   connectionMode,
   appName,
+  appDescription,
   appIconPath,
   locale,
   connectionTarget,
@@ -76,7 +78,7 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
           </span>
           <div className="studio-brand__copy">
             <Title level={4}>{appName || 'Pealayer'}</Title>
-            <span className="studio-brand__subtitle">{connected ? tr(locale, 'Connected workspace') : tr(locale, 'Connecting')}</span>
+            <span className="studio-brand__subtitle" title={appDescription}>{appDescription || (connected ? tr(locale, 'Connected workspace') : tr(locale, 'Connecting'))}</span>
           </div>
         </div>
       </div>

@@ -53,6 +53,8 @@ jobs:
           cache-dependency-path: web_ui/package-lock.json
       - name: "🔗 Verify canonical controller opcode bindings"
         run: node interfaces/controller-wire/consumer.mjs --pealayer --check --upstream
+      - name: "📚 Verify versioned release history and screenshot integrity"
+        run: node scripts/check-release-history.mjs
       - name: "📦 Restore locked web dependencies"
         run: npm ci --prefix web_ui --ignore-scripts --no-audit --no-fund
       - name: "🌐 Type-check and build the web UI"
@@ -185,7 +187,7 @@ jobs:
           if (-not $asset) { throw 'No x86_64 mpv-dev archive found.' }
           $archive = Join-Path $env:RUNNER_TEMP $asset.name
           $extract = Join-Path $env:RUNNER_TEMP libmpv
-          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $archive
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $archive -MaximumRetryCount 3 -RetryIntervalSec 2 -TimeoutSec 60
           $actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
           $expected = [string]$asset.digest -replace '^sha256:', ''
           if (-not $expected -or $actual -ne $expected.ToLowerInvariant()) { throw "libmpv SHA-256 mismatch: $actual" }
@@ -207,13 +209,19 @@ jobs:
         run: |
           $archive = Join-Path $env:RUNNER_TEMP upx.zip
           $extract = Join-Path $env:RUNNER_TEMP upx
-          Invoke-WebRequest '${{ env.UPX_WINDOWS_URL }}' -OutFile $archive
+          Invoke-WebRequest '${{ env.UPX_WINDOWS_URL }}' -OutFile $archive -MaximumRetryCount 3 -RetryIntervalSec 2 -TimeoutSec 60
           $actual = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
           if ($actual -ne '${{ env.UPX_WINDOWS_SHA256 }}') { throw "UPX SHA-256 mismatch: $actual" }
           Expand-Archive $archive $extract
           $upx = Get-ChildItem $extract -Recurse -Filter upx.exe | Select-Object -First 1
           if (-not $upx) { throw 'UPX executable not found.' }
           "UPX_PATH=$($upx.FullName)" >> $env:GITHUB_ENV
+      - name: "🔨 Compile native test programs"
+        if: runner.os != 'Windows'
+        timeout-minutes: 25
+        # A cold Intel macOS dependency build previously consumed the execution
+        # deadline before tests finished. Keep build and test budgets distinct.
+        run: cargo test --locked --no-run
       - name: "🧪 Run Rust tests"
         if: runner.os != 'Windows'
         timeout-minutes: 15
@@ -229,6 +237,20 @@ jobs:
         # same serial test policy as Linux/macOS; --jobs controls compilation,
         # not the number of concurrently executing tests.
         run: cargo test --locked --jobs 1 --target x86_64-pc-windows-gnu -- --test-threads=1
+      - name: "🧩 Optional workspace feature gates"
+        if: runner.os == 'Linux'
+        run: |
+          cargo check --locked --lib --no-default-features
+          cargo check --locked --lib --no-default-features --features workspace-toolbar
+          cargo check --locked --lib --no-default-features --features workspace-terminal
+      - name: "🧪 Owned terminal PTY lifecycle"
+        if: runner.os == 'Linux'
+        timeout-minutes: 3
+        env:
+          PEALAYER_CONFIG_FILE: ${{ runner.temp }}/pealayer-terminal-tests.json
+          PEALAYER_INSTANCE_ID: terminal-ci-fixture
+          PEALAYER_TEST_PTY_FIXTURE: "1"
+        run: cargo test --locked --lib portable_pty_preserves_unicode_resize_exit_and_owned_child_cancellation -- --ignored --test-threads=1
       - name: "🚀 Build release binary"
         if: runner.os != 'Windows'
         run: cargo build --release --locked -p pealayer -p pealayer-downloader
@@ -347,10 +369,14 @@ jobs:
           if [[ "$GITHUB_REF" == refs/tags/* ]]; then
             prerelease=false
             [[ "$GITHUB_REF_NAME" == *-* ]] && prerelease=true
-            { echo "tag=$GITHUB_REF_NAME"; echo "name=Pealayer $GITHUB_REF_NAME"; echo "prerelease=$prerelease"; } >> "$GITHUB_OUTPUT"
+            notes="docs/releases/$GITHUB_REF_NAME.md"
+            [[ -s "$notes" ]] || { echo "Missing curated version notes: $notes" >&2; exit 1; }
+            name="$(sed -n '1s/^# //p' "$notes" | tr -d '\r')"
+            [[ "$name" == *"Pealayer $GITHUB_REF_NAME — "* ]] || { echo 'Expected a decorated Pealayer version heading' >&2; exit 1; }
+            { echo "tag=$GITHUB_REF_NAME"; echo "name=$name"; echo "prerelease=$prerelease"; } >> "$GITHUB_OUTPUT"
           else
             safe="${GITHUB_REF_NAME//\//-}"
-            { echo "tag=branch-$safe"; echo "name=Pealayer branch build ($safe)"; echo 'prerelease=true'; } >> "$GITHUB_OUTPUT"
+            { echo "tag=branch-$safe"; echo "name=🧪 Pealayer branch build ($safe)"; echo 'prerelease=true'; } >> "$GITHUB_OUTPUT"
           fi
       - name: "📝 Generate release notes, manifest, and checksums"
         env:

@@ -23,6 +23,43 @@ pub enum Mode {
     Dual,
     Remote,
 }
+
+/// Resolve exactly the binary we launch, without invoking a shell or accepting arguments.
+pub fn resolve_executable(input: &str) -> Result<std::path::PathBuf, String> {
+    let input = input.trim().trim_matches('"');
+    if input.is_empty() || input.len() > 4096 || input.contains(['\n', '\r', '\0']) {
+        return Err("Enter an executable name or full path, without arguments".into());
+    }
+    let path = std::path::Path::new(input);
+    let explicit = path.is_absolute() || path.components().count() > 1;
+    let roots: Vec<_> = if explicit { vec![std::path::PathBuf::new()] }
+        else { std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect() };
+    for root in roots {
+        let candidate = root.join(path);
+        #[cfg(windows)]
+        let candidates = if candidate.extension().is_none() {
+            // mpv.com is a console wrapper; always launch the actual GUI executable.
+            vec![candidate.with_extension("exe"), candidate.with_extension("com")]
+        } else { vec![candidate] };
+        #[cfg(not(windows))]
+        let candidates = vec![candidate];
+        for candidate in candidates {
+            if !candidate.is_file() { continue; }
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                if candidate.metadata().map(|meta| meta.permissions().mode() & 0o111 == 0).unwrap_or(true) { continue; }
+            }
+            return candidate.canonicalize().map(|path| {
+                #[cfg(windows)]
+                { std::path::PathBuf::from(path.to_string_lossy().trim_start_matches(r"\\?\")) }
+                #[cfg(not(windows))]
+                { path }
+            }).map_err(|error| error.to_string());
+        }
+    }
+    Err("Executable not found. Choose its full path or add its directory to PATH".into())
+}
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Settings {
@@ -78,6 +115,9 @@ pub struct Status {
     pub mode: Mode,
     pub endpoint: String,
     pub connected: bool,
+    /// Managed process was deliberately closed. Do not reconnect or respawn it.
+    pub closed: bool,
+    pub resolved_executable: Option<std::path::PathBuf>,
     pub owned_process: bool,
     pub revision: u64,
     pub catalog_revision: u64,
@@ -97,6 +137,16 @@ pub struct Status {
     pub clock_at: Option<Instant>,
     #[serde(skip)]
     pending_seek: bool,
+    #[serde(skip)]
+    clock_refresh: u64,
+    #[serde(skip)]
+    clock_refreshed: u64,
+    #[serde(skip)]
+    clock_requested: u64,
+    #[serde(skip)]
+    clock_query: Option<(u64, u64)>,
+    #[serde(skip)]
+    closing: bool,
 }
 const OBSERVED: &[&str] = &[
     "path",
@@ -171,6 +221,12 @@ static BRIDGE: OnceLock<Bridge> = OnceLock::new();
 #[cfg(test)]
 pub(crate) fn initialized_for_test() -> bool { BRIDGE.get().is_some() }
 pub fn configure(mpv: &'static libmpv2::Mpv, ctx: &eframe::egui::Context, mut settings: Settings) {
+    configure_inner(mpv, ctx, &mut settings, false);
+}
+pub fn relaunch(mpv: &'static libmpv2::Mpv, ctx: &eframe::egui::Context, mut settings: Settings) {
+    configure_inner(mpv, ctx, &mut settings, true);
+}
+fn configure_inner(mpv: &'static libmpv2::Mpv, ctx: &eframe::egui::Context, settings: &mut Settings, force: bool) {
     // A Pealayer consumer controls the server's external player, never launches
     // another local playback/hardware authority from mirrored preferences.
     if crate::peer::active() {
@@ -192,15 +248,21 @@ pub fn configure(mpv: &'static libmpv2::Mpv, ctx: &eframe::egui::Context, mut se
         }
     });
     let mut previous = bridge.settings.lock().unwrap();
-    if previous.as_ref() != Some(&settings) {
+    if force || previous.as_ref() != Some(settings) {
         if bridge
             .tx
             .try_send(Work::Configure(settings.clone()))
             .is_ok()
         {
             bridge.generation.fetch_add(1, Ordering::AcqRel);
-            bridge.state.write().unwrap().connected = false;
-            *previous = Some(settings);
+            let mut state = bridge.state.write().unwrap();
+            let now = Instant::now();
+            if let Some(position) = clock_position(&state, now) {
+                state.properties.insert("time-pos".into(), json!(position));
+                state.clock_at = Some(now);
+            }
+            state.connected = false;
+            *previous = Some(settings.clone());
         }
     }
 }
@@ -216,6 +278,7 @@ pub fn active() -> bool {
             b.settings
                 .lock()
                 .is_ok_and(|s| s.as_ref().is_some_and(|s| s.mode != Mode::Internal))
+                && !b.state.read().is_ok_and(|s| s.closed && s.mode == Mode::Dual)
         })
 }
 pub fn preview() -> bool {
@@ -281,11 +344,7 @@ pub fn property(name: &str) -> Option<Value> {
         return Some(json!(true));
     }
     if name == "time-pos" {
-        let mut t = s.properties.get(name)?.as_f64()?;
-        if advancing(&s) {
-            t += s.clock_at?.elapsed().as_secs_f64().min(0.25) * number(&s, "speed", 1.0)
-        }
-        return Some(json!(t.min(number(&s, "duration", f64::MAX))));
+        return clock_position(&s, Instant::now()).map(|t| json!(t));
     }
     lookup(&s.properties, name)
 }
@@ -342,10 +401,43 @@ fn advancing(s: &Status) -> bool {
         && !flag(s, "eof-reached", false)
 }
 
+fn clock_position(s: &Status, now: Instant) -> Option<f64> {
+    let mut position = s.properties.get("time-pos")?.as_f64()?;
+    if advancing(s) {
+        position += s.clock_at.map_or(0.0, |at| now.saturating_duration_since(at).as_secs_f64().min(0.25))
+            * number(s, "speed", 1.0);
+    }
+    Some(position.min(number(s, "duration", f64::MAX)))
+}
+
+fn apply_clock_reply(s: &mut Status, v: &Value) -> bool {
+    let Some((request, revision)) = s.clock_query else { return false; };
+    if v["request_id"].as_u64() != Some(request) { return false; }
+    s.clock_query = None;
+    // A later pause/resume supersedes this query. Never install its old clock.
+    if revision == s.clock_refresh && v["error"] == "success"
+        && let Some(position) = v["data"].as_f64().filter(|t| t.is_finite() && *t >= 0.0) {
+        s.properties.insert("time-pos".into(), json!(position));
+        s.clock_at = Some(Instant::now());
+        s.clock_refreshed = revision;
+    }
+    true
+}
+
 fn apply_event(s: &mut Status, v: &Value) -> bool {
+    // mpv emits unavailable property values while tearing down its file. Keep
+    // the last factual frame/selection until owned-exit recovery or reconnect.
+    if s.closing { return false; }
+    if v["event"] == "shutdown" || v["event"] == "end-file" && v["reason"] == "quit" {
+        s.closing = true;
+        return true;
+    }
+    if apply_clock_reply(s, v) { return true; }
     if v["event"] == "start-file" {
         s.error = None;
         s.pending_seek = true;
+        s.clock_refresh = s.clock_refresh.saturating_add(1);
+        s.clock_query = None;
         for key in ["time-pos", "duration", "seekable"] {
             s.properties.remove(key);
         }
@@ -368,6 +460,18 @@ fn apply_event(s: &mut Status, v: &Value) -> bool {
             return false;
         };
         let data = v.get("data").cloned().unwrap_or(Value::Null);
+        if matches!(name, "pause" | "speed" | "paused-for-cache" | "seeking")
+            && s.properties.get(name) != Some(&data) {
+            // Re-anchor BEFORE changing the clock's advancing/rate flags.
+            // Otherwise resume extrapolates across the entire paused interval,
+            // and pause snaps back to the previous time-pos notification.
+            let now = Instant::now();
+            if let Some(position) = clock_position(s, now) {
+                s.properties.insert("time-pos".into(), json!(position));
+                s.clock_at = Some(now);
+            }
+            s.clock_refresh = s.clock_refresh.saturating_add(1);
+        }
         if name == "time-pos" {
             s.clock_at = Some(Instant::now());
         }
@@ -392,7 +496,7 @@ fn apply_event(s: &mut Status, v: &Value) -> bool {
     }
     false
 }
-fn mirror(mpv: &libmpv2::Mpv, s: &Status, last_path: &mut String) {
+fn mirror(mpv: &libmpv2::Mpv, s: &Status, last_path: &mut String, paused_target: &mut Option<f64>) {
     if s.mode != Mode::Dual {
         return;
     }
@@ -402,12 +506,15 @@ fn mirror(mpv: &libmpv2::Mpv, s: &Status, last_path: &mut String) {
         .and_then(Value::as_str)
         .unwrap_or_default();
     if path != *last_path {
+        *paused_target = None;
         *last_path = path.into();
         if path.is_empty() {
             let _ = mpv.command("stop", &[]);
         } else {
+            let Some(position) = clock_position(s, Instant::now()) else { last_path.clear(); return; };
             let resolved = resolve_path(s, path);
-            if mpv.command("loadfile", &[&resolved, "replace"]).is_err() {
+            let options = format!("start={position},pause=yes");
+            if mpv.command("loadfile", &[&resolved, "replace", "-1", &options]).is_err() {
                 return;
             }
         }
@@ -445,15 +552,28 @@ fn mirror(mpv: &libmpv2::Mpv, s: &Status, last_path: &mut String) {
             set_local(mpv, key, value);
         }
     }
+    let paused = flag(s, "pause", true);
+    if !paused { *paused_target = None; }
+    // The transition's final clock is fetched over the existing IPC socket.
+    // Do not seek a paused preview back to an older time-pos in the meantime.
+    if s.clock_refreshed != s.clock_refresh { return; }
     if let (Some(target), Ok(local)) = (
-        s.properties.get("time-pos").and_then(Value::as_f64),
+        clock_position(s, Instant::now()),
         mpv.get_property::<f64>("time-pos"),
     ) {
-        let tolerance = if flag(s, "pause", true) { 0.05 } else { 0.20 };
+        if paused && *paused_target == Some(target) { return; }
+        // Exact timestamps can fall between frames. Do not replace an already
+        // matching paused frame merely because its decoded PTS is quantized.
+        let fps = number(s, "container-fps", 0.0);
+        let tolerance = if !paused { 0.20 } else if fps > 0.0 { 1.0 / fps + 0.002 } else { 0.05 };
         if (local - target).abs() > tolerance
             && !mpv.get_property::<bool>("seeking").unwrap_or(true)
         {
-            let _ = mpv.command("seek", &[&target.to_string(), "absolute+exact"]);
+            if mpv.command("seek", &[&target.to_string(), "absolute+exact"]).is_ok() && paused {
+                *paused_target = Some(target);
+            }
+        } else if paused && !mpv.get_property::<bool>("seeking").unwrap_or(true) {
+            *paused_target = Some(target);
         }
     }
 }
@@ -507,12 +627,36 @@ fn run(
     ctx: eframe::egui::Context,
 ) {
     let latest = Arc::new((Mutex::new(None::<(u64, Status)>), std::sync::Condvar::new()));
+    // A paused remote may produce no more IPC events while the internal decoder
+    // is still opening/seeking. Its actual PlaybackRestart event completes that
+    // one synchronization, rather than polling or repeatedly seeking a frame.
+    let ready_latest = latest.clone();
+    let ready_state = state.clone();
+    let ready_generation = generation.clone();
+    std::thread::spawn(move || {
+        let Ok(client) = mpv.create_client(None) else { return; };
+        loop {
+            match client.wait_event(-1.0) {
+                Some(Ok(libmpv2::events::Event::PlaybackRestart)) => {
+                    let epoch = ready_generation.load(Ordering::Acquire);
+                    let s = ready_state.read().unwrap().clone();
+                    if s.mode == Mode::Dual && s.connected && !s.closed {
+                        *ready_latest.0.lock().unwrap() = Some((epoch, s));
+                        ready_latest.1.notify_one();
+                    }
+                }
+                Some(Ok(libmpv2::events::Event::Shutdown)) => break,
+                _ => {}
+            }
+        }
+    });
     let preview_latest = latest.clone();
     let preview_generation = generation.clone();
     let preview_lock = Arc::new(Mutex::new(()));
     let preview_worker_lock = preview_lock.clone();
     std::thread::spawn(move || {
         let mut last_path = String::new();
+        let mut paused_target = None;
         let mut previous_epoch = 0;
         loop {
             let (slot, wake) = &*preview_latest;
@@ -527,11 +671,12 @@ fn run(
             }
             if epoch != previous_epoch {
                 last_path.clear();
+                paused_target = None;
                 previous_epoch = epoch;
             }
             let _guard = preview_worker_lock.lock().unwrap();
             if epoch == preview_generation.load(Ordering::Acquire) {
-                mirror(mpv, &s, &mut last_path);
+                mirror(mpv, &s, &mut last_path, &mut paused_target);
             }
         }
     });
@@ -539,7 +684,7 @@ fn run(
     let mut stream: Option<Transport> = None;
     let mut child: Option<std::process::Child> = None;
     let mut managed = false;
-    let mut handoff: Option<(String, f64)> = None;
+    let mut handoff: Option<(String, f64, bool)> = None;
     #[cfg(unix)]
     let mut _owned_socket: Option<OwnedSocket> = None;
     let mut request = 0u64;
@@ -557,6 +702,10 @@ fn run(
                 // Finish any previous raw-decoder update before stopping or
                 // handing it back. A stale preview must not overwrite a mode change.
                 let _preview_guard = preview_lock.lock().unwrap();
+                // Snapshot BEFORE asking the owned player to quit; shutdown
+                // events may otherwise erase its last media/clock properties.
+                let handback = state.read().ok().map(|s| s.clone());
+                let was_fallback = handback.as_ref().is_some_and(|s| s.closed && s.mode == Mode::Dual);
                 if let Some(mut owned) = child.take() {
                     if let Some(mut connection) = Transport::connect(&settings.endpoint).ok() {
                         let _ = connection.write_json(&json!({"command":["quit"]}));
@@ -575,13 +724,16 @@ fn run(
                     _owned_socket = None;
                 }
                 let previous_mode = settings.mode;
-                let handback = state.read().ok().map(|s| s.clone());
                 managed =
                     matches!(next.mode, Mode::External | Mode::Dual) && next.endpoint.is_empty();
-                handoff = if managed && previous_mode == Mode::Internal {
-                    mpv.get_property::<String>("path")
-                        .ok()
-                        .map(|path| (path, mpv.get_property::<f64>("time-pos").unwrap_or(0.0)))
+                handoff = if managed {
+                    if previous_mode != Mode::Internal && !was_fallback {
+                        handback.as_ref().and_then(media_handoff)
+                    } else {
+                        mpv.get_property::<String>("path").ok().map(|path| (path,
+                            mpv.get_property::<f64>("time-pos").unwrap_or(0.0),
+                            mpv.get_property::<bool>("pause").unwrap_or(true)))
+                    }
                 } else {
                     None
                 };
@@ -593,27 +745,17 @@ fn run(
                     reconnects,
                     ..Default::default()
                 };
-                if matches!(settings.mode, Mode::External | Mode::Remote)
-                    || settings.mode == Mode::Internal && previous_mode != Mode::Internal
-                {
+                if matches!(settings.mode, Mode::External | Mode::Remote) {
                     let _ = mpv.command("stop", &[]);
                 }
                 if settings.mode != Mode::Internal {
                     let _ = mpv.set_property("pause", true);
                 }
-                if settings.mode == Mode::Internal && previous_mode != Mode::Internal {
+                if settings.mode == Mode::Internal && previous_mode != Mode::Internal && !was_fallback {
                     let cfg = crate::platform::interop::get_live_config();
                     let _ = mpv.set_property("mute", cfg.is_muted);
-                    if let Some(s) = handback
-                        && let Some(path) = s
-                            .properties
-                            .get("path")
-                            .and_then(Value::as_str)
-                            .filter(|p| !p.is_empty())
-                    {
-                        let resolved = resolve_path(&s, path);
-                        let options = format!("start={},pause=yes", number(&s, "time-pos", 0.0));
-                        let _ = mpv.command("loadfile", &[&resolved, "replace", "-1", &options]);
+                    if let Some(s) = handback {
+                        restore_internal(mpv, &s);
                     }
                 }
                 ctx.request_repaint();
@@ -652,15 +794,29 @@ fn run(
             generation.fetch_add(1, Ordering::AcqRel);
             retry = Instant::now() + Duration::from_millis(500);
         }
-        if let Some(owned) = child.as_mut()
-            && owned.try_wait().ok().flatten().is_some()
-        {
+        let owned_exited = child.as_mut().is_some_and(|owned| owned.try_wait().ok().flatten().is_some());
+        let attached_quit = child.is_none() && matches!(settings.mode, Mode::External | Mode::Dual)
+            && state.read().is_ok_and(|s| s.closing && !s.closed);
+        if owned_exited || attached_quit {
             child = None;
             stream = None;
-            state.write().unwrap().error =
-                Some("The launched mpv exited; switch modes to launch it again".into());
-            settings.mode = Mode::Remote;
+            pending.clear();
+            generation.fetch_add(1, Ordering::AcqRel);
+            *latest.0.lock().unwrap() = None;
+            let _preview_guard = preview_lock.lock().unwrap();
+            let snapshot = state.read().unwrap().clone();
+            if settings.mode == Mode::Dual { restore_internal(mpv, &snapshot); }
+            let mut s = state.write().unwrap();
+            s.closed = true;
+            s.connected = false;
+            s.owned_process = false;
+            s.pending_commands = 0;
+            s.error = Some(if settings.mode == Mode::Dual {
+                "External player closed. Playback is using the internal player."
+            } else { "External player closed. Launch it again or choose the internal player." }.into());
+            ctx.request_repaint();
         }
+        if state.read().is_ok_and(|s| s.closed) { continue; }
         if stream.is_none() && Instant::now() >= retry {
             retry = Instant::now() + Duration::from_millis(750);
             if settings.endpoint.is_empty() {
@@ -690,13 +846,25 @@ fn run(
             }
             if managed && matches!(settings.mode, Mode::External | Mode::Dual) && child.is_none() {
                 let cfg = crate::platform::interop::get_live_config();
-                let mut c = std::process::Command::new(&settings.executable);
+                let executable = match resolve_executable(&settings.executable) {
+                    Ok(path) => path,
+                    Err(error) => {
+                        if settings.mode == Mode::Dual { recover_failed_launch(mpv, &handoff); }
+                        let mut s = state.write().unwrap();
+                        s.error = Some(error); s.closed = true;
+                        ctx.request_repaint(); continue;
+                    }
+                };
+                state.write().unwrap().resolved_executable = Some(executable.clone());
+                let mut c = std::process::Command::new(executable);
                 c.args([
                     "--idle=yes",
                     "--keep-open=yes",
                     "--terminal=no",
                     "--input-media-keys=no",
                 ]);
+                #[cfg(test)]
+                c.args(["--vo=null", "--ao=null"]);
                 if !settings.use_mpv_config {
                     c.arg("--no-config");
                 }
@@ -753,8 +921,10 @@ fn run(
                 match c.spawn() {
                     Ok(p) => child = Some(p),
                     Err(_) => {
-                        state.write().unwrap().error =
-                            Some("Could not launch mpv; configure its executable path".into());
+                        if settings.mode == Mode::Dual { recover_failed_launch(mpv, &handoff); }
+                        let mut s = state.write().unwrap();
+                        s.closed = true;
+                        s.error = Some("Could not launch mpv; configure its executable path".into());
                         ctx.request_repaint();
                         continue;
                     }
@@ -770,6 +940,11 @@ fn run(
                         let mut s = state.write().unwrap();
                         s.properties.clear();
                         s.clock_at = None;
+                        s.clock_refresh = 0;
+                        s.clock_refreshed = 0;
+                        s.clock_requested = 0;
+                        s.clock_query = None;
+                        s.closing = false;
                         s.connected = true;
                         s.mode = settings.mode;
                         s.endpoint = settings.endpoint.clone();
@@ -793,9 +968,9 @@ fn run(
                         read_events(reader, epoch, s, g, latest, reader_ctx)
                     }));
                     stream = Some(connection);
-                    if let Some((path, position)) = handoff.take() {
+                    if let Some((path, position, paused)) = handoff.take() {
                         request = request.saturating_add(1);
-                        let options = format!("start={position},pause=yes");
+                        let options = format!("start={position},pause={}", if paused { "yes" } else { "no" });
                         if stream.as_mut().unwrap().write_json(&json!({"command":["loadfile",path,"replace",-1,options],"request_id":request})).is_ok() {
                             pending.insert(request,Instant::now());
                         }
@@ -807,6 +982,27 @@ fn run(
                     s.endpoint = settings.endpoint.clone();
                     s.owned_process = child.is_some();
                     s.error=Some("Waiting for mpv IPC; start mpv with the configured --input-ipc-server endpoint".into());
+                }
+            }
+        }
+        // One factual clock read per transport-state transition, through the
+        // same serialized writer and correlated reply path. This is not polling.
+        if let Some(connection) = stream.as_mut() {
+            let query = {
+                let mut s = state.write().unwrap();
+                if s.connected && s.properties.get("time-pos").and_then(Value::as_f64).is_some()
+                    && s.clock_query.is_none() && s.clock_requested != s.clock_refresh {
+                    request = request.saturating_add(1);
+                    s.clock_requested = s.clock_refresh;
+                    s.clock_query = Some((request, s.clock_refresh));
+                    Some(request)
+                } else { None }
+            };
+            if let Some(id) = query {
+                if connection.write_json(&json!({"command":["get_property","time-pos"],"request_id":id})).is_ok() {
+                    pending.insert(id, Instant::now());
+                } else {
+                    state.write().unwrap().connected = false;
                 }
             }
         }
@@ -830,6 +1026,39 @@ fn run(
         }
     }
 }
+fn media_handoff(s: &Status) -> Option<(String, f64, bool)> {
+    let path = s.properties.get("path")?.as_str().filter(|path| !path.is_empty())?;
+    Some((resolve_path(s, path), clock_position(s, Instant::now()).unwrap_or(0.0), flag(s, "pause", true)))
+}
+
+fn recover_failed_launch(mpv: &libmpv2::Mpv, handoff: &Option<(String, f64, bool)>) {
+    if let Some((path, position, paused)) = handoff {
+        let mut s = Status::default();
+        s.properties.insert("path".into(), json!(path));
+        s.properties.insert("time-pos".into(), json!(position));
+        s.properties.insert("pause".into(), json!(paused));
+        restore_internal(mpv, &s);
+    }
+}
+
+fn restore_internal(mpv: &libmpv2::Mpv, s: &Status) {
+    let cfg = crate::platform::interop::get_live_config();
+    let _ = mpv.set_property("pause", true);
+    let _ = mpv.set_property("mute", flag(s, "mute", cfg.is_muted));
+    let _ = mpv.set_property("volume", number(s, "volume", cfg.volume));
+    let _ = mpv.set_property("speed", number(s, "speed", cfg.playback_speed));
+    let Some((path, position, paused)) = media_handoff(s) else { return; };
+    // A dual preview already owns the exact displayed frame. Do not reload or
+    // seek it merely because the other window closed (especially while paused).
+    let same_file = mpv.get_property::<String>("path").ok().as_deref() == Some(path.as_str());
+    if !same_file {
+        let options = format!("start={position},pause={}", if paused { "yes" } else { "no" });
+        let _ = mpv.command("loadfile", &[&path, "replace", "-1", &options]);
+    } else {
+        let _ = mpv.set_property("pause", paused);
+    }
+}
+
 fn read_events(
     mut reader: Transport,
     epoch: u64,
@@ -858,6 +1087,7 @@ fn read_events(
                     }
                     let snapshot = {
                         let mut s = state.write().unwrap();
+                        if generation.load(Ordering::Acquire) != epoch { return; }
                         if let Some(id) = value["request_id"].as_u64().filter(|id| *id > 0) {
                             s.acknowledged_commands += 1;
                             if s.acknowledged_ids.len() < 256 {
@@ -894,6 +1124,7 @@ fn read_events(
     }
     if generation.load(Ordering::Acquire) == epoch {
         let mut s = state.write().unwrap();
+        if generation.load(Ordering::Acquire) != epoch { return; }
         s.connected = false;
         s.error = Some("mpv IPC disconnected; controls are paused until reconnection".into());
         let (slot, wake) = &*latest;
@@ -1058,6 +1289,48 @@ mod tests {
         assert_eq!(status.loaded_revision,1);
     }
     use super::*;
+    fn clock_fixture(paused: bool, age: Duration) -> Status {
+        Status {
+            connected: true,
+            clock_at: Some(Instant::now() - age),
+            properties: BTreeMap::from([
+                ("pause".into(), json!(paused)), ("time-pos".into(), json!(10.0)),
+                ("speed".into(), json!(1.0)),
+            ]),
+            ..Default::default()
+        }
+    }
+    #[test]
+    fn resume_does_not_add_time_spent_paused() {
+        let mut s = clock_fixture(true, Duration::from_secs(30));
+        apply_event(&mut s, &json!({"event":"property-change","name":"pause","data":false}));
+        let position = clock_position(&s, Instant::now()).unwrap();
+        assert!((position - 10.0).abs() < 0.01, "resume jumped to {position}");
+        assert_ne!(s.clock_refresh, s.clock_refreshed);
+    }
+    #[test]
+    fn pause_waits_for_one_confirmed_socket_clock_and_keeps_it_exact() {
+        let mut s = clock_fixture(false, Duration::from_millis(40));
+        apply_event(&mut s, &json!({"event":"property-change","name":"pause","data":true}));
+        assert!(clock_position(&s, Instant::now()).unwrap() >= 10.039);
+        s.clock_query = Some((7, s.clock_refresh));
+        assert!(apply_event(&mut s, &json!({"request_id":7,"error":"success","data":10.042})));
+        assert_eq!(clock_position(&s, Instant::now() + Duration::from_secs(30)), Some(10.042));
+        assert_eq!(s.clock_refresh, s.clock_refreshed);
+        s.clock_query = Some((8, s.clock_refresh));
+        apply_event(&mut s, &json!({"event":"property-change","name":"pause","data":false}));
+        apply_event(&mut s, &json!({"request_id":8,"error":"success","data":2.0}));
+        assert!(clock_position(&s, Instant::now()).unwrap() >= 10.042, "old pause reply rewound resume");
+        assert_ne!(s.clock_refresh, s.clock_refreshed);
+    }
+    #[test]
+    fn replacement_media_rejects_the_previous_pause_clock_reply() {
+        let mut s = clock_fixture(true, Duration::ZERO);
+        s.clock_query = Some((9, s.clock_refresh));
+        apply_event(&mut s, &json!({"event":"start-file"}));
+        assert!(!apply_event(&mut s, &json!({"request_id":9,"error":"success","data":50.0})));
+        assert!(clock_position(&s, Instant::now()).is_none());
+    }
     #[test]
     fn shared_config_and_rpc_contract() {
         let mut config = crate::config::AppConfig::default();
@@ -1122,6 +1395,7 @@ mod tests {
     #[test]
     #[ignore = "Starts the explicitly configured real mpv with null outputs; no hardware"]
     fn live_duplex_ipc_and_muted_dual_preview() {
+        let video = crate::app::tests::SyntheticVideo::new();
         fn wait(mut ready: impl FnMut() -> bool) {
             let deadline = Instant::now() + Duration::from_secs(8);
             while !ready() {
@@ -1210,7 +1484,7 @@ mod tests {
             &mut client,
             json!([
                 "loadfile",
-                "av://lavfi:testsrc=duration=8:size=64x64:rate=10",
+                video.0.to_str().unwrap(),
                 "replace"
             ]),
         );
@@ -1230,6 +1504,20 @@ mod tests {
             .set_property("pause", true)
             .unwrap();
         wait(|| property("pause") == Some(json!(true)));
+        wait(|| { let s = status(); s.clock_refreshed == s.clock_refresh });
+        let paused_position = rpc(&mut client, json!(["get_property", "time-pos"])).as_f64().unwrap();
+        let displayed = property("time-pos").and_then(|v| v.as_f64()).unwrap();
+        assert!((displayed - paused_position).abs() < 0.002, "paused socket clock differs: {displayed} vs {paused_position}");
+        std::thread::sleep(Duration::from_millis(350));
+        assert_eq!(property("time-pos").and_then(|v| v.as_f64()), Some(displayed));
+        {
+            let _guard = crate::app::tests::lock_app_tests();
+            let mut app = crate::app::PealayerApp::default();
+            app.process_events();
+            let tracks = crate::ui::layout::web_timeline_tracks(&app);
+            assert!(tracks.iter().any(|row| row.kind == "video" && row.active && row.enabled),
+                "external catalog selection must not leave the video strip falsely faded");
+        }
         assert_eq!(
             rpc(&mut client, json!(["get_property", "pause"])),
             json!(true)
@@ -1272,8 +1560,20 @@ mod tests {
         wait(|| {
             let local = mpv.get_property::<f64>("time-pos").ok();
             let remote = property("time-pos").and_then(|v| v.as_f64());
-            local.zip(remote).is_some_and(|(a, b)| (a - b).abs() < 0.25)
+            local.zip(remote).is_some_and(|(a, b)| (a - b).abs() < 0.042)
+                && mpv.get_property::<bool>("pause").ok() == Some(true)
+                && !mpv.get_property::<bool>("seeking").unwrap_or(true)
         });
+        // File-load and the initial synchronization are allowed to finish
+        // before checking that unrelated events leave the paused frame alone.
+        std::thread::sleep(Duration::from_millis(150));
+        let held = mpv.get_property::<f64>("time-pos").unwrap();
+        for volume in [38, 39, 40] {
+            rpc(&mut client, json!(["set_property", "volume", volume]));
+            std::thread::sleep(Duration::from_millis(120));
+            assert_eq!(mpv.get_property::<f64>("time-pos").unwrap(), held,
+                "unrelated events must not reseek a paused dual preview");
+        }
         assert!(
             !status().owned_process,
             "An attached mpv must never be owned/terminated"
@@ -1284,8 +1584,13 @@ mod tests {
             child.0.try_wait().unwrap().is_none(),
             "Detach must leave an existing mpv running"
         );
+        configure(mpv, &ctx, Settings { mode: Mode::Dual, endpoint: endpoint.clone(), ..Default::default() });
+        wait(|| status().connected && status().mode == Mode::Dual);
         client.write_json(&json!({"command":["quit"]})).unwrap();
         child.0.wait().unwrap();
+        wait(|| status().closed && !active());
+        configure(mpv, &ctx, Settings::default());
+        wait(|| status().mode == Mode::Internal);
         configure(
             mpv,
             &ctx,
@@ -1318,7 +1623,7 @@ mod tests {
             &ctx,
             Settings {
                 mode: Mode::External,
-                executable,
+                executable: executable.clone(),
                 ..Default::default()
             },
         );
@@ -1330,7 +1635,88 @@ mod tests {
             Transport::connect(&owned_endpoint).is_err(),
             "Managed mpv must close on detach"
         );
+        // User closes a real owned process, not a simulated disconnect. Dual
+        // hands back its published paused frame; external-only stays stopped.
+        for mode in [Mode::Dual, Mode::External] {
+            let settings = Settings { mode, executable: executable.clone(), ..Default::default() };
+            configure(mpv, &ctx, settings.clone());
+            wait(|| status().connected && status().mode == mode);
+            let endpoint = status().endpoint;
+            let mut client = Transport::connect(&endpoint).unwrap();
+            rpc(&mut client, json!(["loadfile", video.0.to_str().unwrap(), "replace", -1, "start=2,pause=yes"]));
+            wait(|| property("time-pos").and_then(|value|value.as_f64()).is_some_and(|value|(value-2.0).abs()<0.05));
+            if mode == Mode::Dual {
+                wait(|| mpv.get_property::<f64>("time-pos").is_ok_and(|value|(value-2.0).abs()<0.05)
+                    && mpv.get_property::<bool>("seeking").ok() == Some(false));
+            }
+            let frame = mpv.get_property::<f64>("time-pos").ok();
+            client.write_json(&json!({"command":["quit"]})).unwrap();
+            wait(|| status().closed && !status().connected && !status().owned_process);
+            assert_eq!(active(), mode == Mode::External);
+            assert!(!preview());
+            if mode == Mode::Dual {
+                assert_eq!(mpv.get_property::<f64>("time-pos").ok(), frame, "closing mpv must not reseek/reload the paused internal preview");
+                assert_eq!(mpv.get_property::<bool>("mute").unwrap(), crate::platform::interop::get_live_config().is_muted);
+            } else {
+                assert!(mpv.get_property::<String>("path").is_err(), "external-only exit must not start an internal decoder");
+            }
+            configure(mpv, &ctx, settings.clone()); // Regular per-frame configuration is NOT a relaunch.
+            std::thread::sleep(Duration::from_millis(900));
+            assert!(status().closed && Transport::connect(&endpoint).is_err());
+            relaunch(mpv, &ctx, settings);
+            wait(|| status().connected && status().owned_process && !status().closed);
+            wait(|| property("time-pos").is_some());
+            assert_ne!(status().endpoint, endpoint, "relaunch owns a fresh IPC endpoint");
+            configure(mpv, &ctx, Settings::default());
+            wait(|| status().mode == Mode::Internal);
+        }
+        // Connection/mode ACK is not a decoded-frame ACK. Wait for the real
+        // handback load before checking the failed-launch frame invariant.
+        wait(|| mpv.get_property::<f64>("time-pos").is_ok() && mpv.get_property::<bool>("seeking").ok() == Some(false));
+        let held = mpv.get_property::<f64>("time-pos").unwrap();
+        configure(mpv, &ctx, Settings { mode: Mode::Dual, executable: "no-such-mpv-fixture-532".into(), ..Default::default() });
+        wait(|| status().closed && !active());
+        assert_eq!(mpv.get_property::<f64>("time-pos").unwrap(), held, "failed dual launch keeps the internal paused frame");
+        configure(mpv, &ctx, Settings::default());
+        wait(|| status().mode == Mode::Internal);
+        assert_eq!(mpv.get_property::<f64>("time-pos").unwrap(), held, "selecting internal after fallback must not reload an old clock");
         #[cfg(unix)]
         let _ = std::fs::remove_file(&endpoint);
+    }
+
+    #[test]
+    fn executable_resolution_and_rich_mode_contract_are_factual() {
+        let executable = std::env::current_exe().unwrap();
+        let expected = std::path::PathBuf::from(executable.canonicalize().unwrap().to_string_lossy().trim_start_matches(r"\\?\"));
+        assert_eq!(resolve_executable(&format!(" \"{}\" ", executable.display())).unwrap(), expected);
+        assert!(resolve_executable("definitely-not-a-pealayer-executable-532").is_err());
+        assert!(resolve_executable("mpv\n--run=anything").is_err());
+        assert!(resolve_executable(&format!("{} --anything", executable.display())).is_err());
+        let controls = crate::preferences_contract::preference_controls(&crate::config::AppConfig::default());
+        let modes = &controls.iter().find(|control|control.key == "external_mpv.mode").unwrap().options;
+        assert_eq!(modes.len(), 4);
+        for option in modes {
+            assert!(option.description.as_ref().is_some_and(|description|!description.is_empty()));
+            assert!(crate::ui::icons::named_control_icon(option.icon.unwrap()).is_some());
+        }
+        for mode in ["internal", "external", "dual", "remote"] {
+            let request = serde_json::from_value(json!({"jsonrpc":"2.0","id":1,"method":"pealayer.player.mode","params":{"mode":mode}})).unwrap();
+            assert!(matches!(crate::platform::interop::command_from_json_rpc(&request).unwrap(), Some(crate::platform::interop::InteropCommand::SetPlayerMode { .. })));
+        }
+        let query = crate::platform::interop::InteropCommand::ResolvePlayerExecutable { executable: executable.display().to_string() };
+        assert!(query.query_result().unwrap()["resolved"].is_string());
+    }
+
+    #[test]
+    fn shutdown_retains_the_last_factual_frame_and_selection() {
+        let mut s = Status::default();
+        s.properties.insert("path".into(), json!("movie.mkv"));
+        s.properties.insert("pause".into(), json!(true));
+        s.properties.insert("time-pos".into(), json!(2.125));
+        assert!(apply_event(&mut s, &json!({"event":"end-file","reason":"quit"})));
+        assert!(!apply_event(&mut s, &json!({"event":"property-change","name":"path","data":null})));
+        assert!(!apply_event(&mut s, &json!({"event":"property-change","name":"time-pos","data":null})));
+        assert_eq!(s.properties["path"], "movie.mkv");
+        assert_eq!(s.properties["time-pos"], 2.125);
     }
 }

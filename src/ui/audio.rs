@@ -39,7 +39,11 @@ pub(crate) fn draw_sfx_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     ui.label(crate::ui::effects_library::designer_label(ui, "Group")); crate::ui::group_picker::group_picker(ui, "sfx-group", &mut draft.category, effects.iter().map(|effect| effect.group.as_str()), ui.available_width(), app.language); ui.end_row();
                     ui.label(crate::ui::effects_library::designer_label(ui, "Icon")); crate::ui::icons::searchable_control_icon_picker(ui, "sfx-icon", &mut draft.icon, ui.available_width(), &designer_tr(ui, "Search icons..."), &designer_tr(ui, "Presets"), &designer_tr(ui, "No matching icons"), app.language); ui.end_row();
                     ui.label(crate::ui::effects_library::designer_label(ui, "Audio file / URL")); ui.horizontal(|ui| {
-                        ui.add(dialog::singleline_text_edit(ui, &mut program.source).desired_width((ui.available_width()-86.0).max(100.0)));
+                        let response=ui.add(dialog::singleline_text_edit(ui, &mut program.source).desired_width((ui.available_width()-86.0).max(100.0)));
+                        if let Ok(id)=uuid::Uuid::parse_str(&draft.id) {
+                            ui.ctx().data_mut(|data|data.insert_temp(egui::Id::new("external-assets-audio-source"),(response.rect,id)));
+                            crate::assets::paint_drop_target(ui,response.rect,"");
+                        }
                         if ui.button(format!("{} {}", icons::FOLDER_OPEN, designer_tr(ui, "Browse"))).clicked() {
                             if crate::peer::active() { crate::ui::peer_browser::open(ui.ctx(), crate::ui::peer_browser::Purpose::PreferenceFile { key: "sfx_source".into(), extensions: vec!["wav","mp3","ogg","flac","m4a","aac","opus"].into_iter().map(str::to_string).collect() }, None); }
                             else if let Some(file) = rfd::FileDialog::new().set_title(designer_tr(ui, "Choose sound effect")).add_filter(designer_tr(ui, "Audio"), &["wav","mp3","ogg","flac","m4a","aac","opus"]).pick_file() { program.source = file.to_string_lossy().into(); }

@@ -24,7 +24,16 @@ const REPLACEMENT_ROW_MIN_WIDTH: f32 = REPLACEMENT_ARROW_WIDTH
 
 pub(crate) struct NativePreferencesController {
     child: std::process::Child,
-    navigation: std::sync::mpsc::SyncSender<PreferencesNavigation>,
+    navigation: std::sync::mpsc::SyncSender<PreferencesHelperMessage>,
+    branding_revision: Option<u64>,
+    exit_verified: std::sync::Arc<std::sync::atomic::AtomicBool>,
+}
+
+#[derive(serde::Serialize, serde::Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum PreferencesHelperMessage {
+    Navigate { navigation: PreferencesNavigation },
+    Branding { effective: serde_json::Value, configured: serde_json::Value },
 }
 
 #[derive(Clone)]
@@ -130,6 +139,18 @@ impl PreferencesDraft {
         }
     }
 
+    pub(crate) fn sync_external_branding(&mut self, values: &serde_json::Value) {
+        let Ok(source) = AppConfig::default().apply_patch(values) else { return; };
+        for target in [&mut self.config, &mut self.saved_config, &mut self.previewed_config] {
+            // Do not validate unrelated in-progress fields: a partial draft
+            // must not prevent a committed branding update reaching this UI.
+            macro_rules! copy {
+                ($($field:ident),*) => { $(if values.get(stringify!($field)).is_some() { target.$field = source.$field.clone(); })* };
+            }
+            copy!(app_name, app_description, app_icon, app_icon_preset, app_icon_playing, app_icon_paused, app_icon_stopped);
+        }
+    }
+
     fn from_live_config() -> Self {
         Self::new(
             crate::platform::interop::get_live_config(),
@@ -154,9 +175,9 @@ impl NativePreferencesController {
             .spawn()
             .map_err(|error| format!("open native Preferences window: {error}"))?;
         let mut input = child.stdin.take().expect("piped Preferences input");
-        let (navigation, requests) = std::sync::mpsc::sync_channel::<PreferencesNavigation>(8);
+        let (navigation, requests) = std::sync::mpsc::sync_channel::<PreferencesHelperMessage>(8);
         // Never block the UI on the child or a full OS pipe. Only typed,
-        // bounded navigation requests travel here, not arbitrary commands.
+        // bounded navigation/branding messages travel here, not commands.
         if let Err(error) = std::thread::Builder::new().name("preferences-navigation".into()).spawn(move || {
             use std::io::Write;
             for request in requests {
@@ -170,9 +191,10 @@ impl NativePreferencesController {
             return Err(format!("start Preferences navigation: {error}"));
         }
         crate::diagnostics::record_shell_action("helper_spawned", "preferences");
+        let exit_verified = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         #[cfg(target_os = "windows")]
         {
-            use windows::Win32::{Foundation::CloseHandle, System::Threading::{
+            use windows::Win32::{Foundation::{CloseHandle, WAIT_OBJECT_0}, System::Threading::{
                 OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject, INFINITE,
             }};
             // A closed helper must cause a parent frame even when playback is
@@ -181,11 +203,16 @@ impl NativePreferencesController {
             if let Ok(handle) = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, child.id()) } {
                 let process_handle = handle.0 as usize;
                 let repaint = ctx.clone();
+                let exited = exit_verified.clone();
                 let watcher = std::thread::Builder::new()
                     .name("pealayer-preferences-exit".to_owned())
                     .spawn(move || {
                         let handle = windows::Win32::Foundation::HANDLE(process_handle as *mut _);
-                        unsafe { WaitForSingleObject(handle, INFINITE); let _ = CloseHandle(handle); }
+                        let status = unsafe { WaitForSingleObject(handle, INFINITE) };
+                        if status == WAIT_OBJECT_0 {
+                            exited.store(true, std::sync::atomic::Ordering::Release);
+                        }
+                        unsafe { let _ = CloseHandle(handle); }
                         crate::platform::interop::wake_command_dispatcher(&repaint);
                     });
                 if watcher.is_err() { unsafe { let _ = CloseHandle(handle); } }
@@ -193,11 +220,21 @@ impl NativePreferencesController {
         }
         #[cfg(not(target_os = "windows"))]
         let _ = ctx;
-        Ok(Self { child, navigation })
+        Ok(Self { child, navigation, branding_revision: None, exit_verified })
     }
 
     fn is_open(&mut self) -> bool {
-        self.child.try_wait().is_ok_and(|status| status.is_none())
+        match self.child.try_wait() {
+            Ok(Some(_)) => {
+                self.exit_verified.store(true, std::sync::atomic::Ordering::Release);
+                false
+            }
+            Ok(None) | Err(_) => true, // An uninspectable child is not closed.
+        }
+    }
+
+    pub(crate) fn confirmed_exited(&self) -> bool {
+        self.exit_verified.load(std::sync::atomic::Ordering::Acquire)
     }
 
     fn close(&mut self) {
@@ -227,20 +264,26 @@ pub(crate) fn navigate(app: &mut PealayerApp, ctx: &egui::Context, navigation: P
     app.preferences_draft.as_mut().unwrap().pending_navigation = Some(navigation);
 }
 
-fn receive_navigation(ctx: egui::Context) -> std::sync::mpsc::Receiver<PreferencesNavigation> {
+fn receive_navigation(ctx: egui::Context) -> std::sync::mpsc::Receiver<PreferencesHelperMessage> {
     let (sender, receiver) = std::sync::mpsc::sync_channel(8);
     std::thread::spawn(move || {
         use std::io::{BufRead, Read};
         let input = std::io::stdin();
         let mut input = input.lock();
         loop {
-            // The parent sends < 256-byte records. Bound manual helper input too.
+            // Navigation and branding are bounded typed records, never commands
+            // or arbitrary config. Artwork travels as a path, not image bytes.
             let mut bytes = Vec::new();
-            let mut bounded = (&mut input).take(4097);
+            let mut bounded = (&mut input).take(65537);
             if bounded.read_until(b'\n', &mut bytes).ok().filter(|n| *n > 0).is_none() { break; }
-            if bytes.len() > 4096 { break; }
-            let Ok(request) = serde_json::from_slice::<PreferencesNavigation>(&bytes) else { continue; };
-            if request.validate().is_ok() {
+            if bytes.len() > 65536 { break; }
+            let Ok(request) = serde_json::from_slice::<PreferencesHelperMessage>(&bytes) else { continue; };
+            let valid = match &request {
+                PreferencesHelperMessage::Navigate { navigation } => navigation.validate(),
+                PreferencesHelperMessage::Branding { effective, configured } =>
+                    crate::branding::validate_branding_values(effective).and_then(|()| crate::branding::validate_branding_values(configured)),
+            };
+            if valid.is_ok() {
                 if sender.send(request).is_err() { break; }
                 ctx.request_repaint();
             }
@@ -304,7 +347,7 @@ struct StandalonePreferencesApp {
     config_watcher: Option<crate::config::ConfigFileWatcher>,
     config_reload_due: Option<std::time::Instant>,
     branding_config: Option<AppConfig>,
-    navigation: std::sync::mpsc::Receiver<PreferencesNavigation>,
+    navigation: std::sync::mpsc::Receiver<PreferencesHelperMessage>,
 }
 
 impl StandalonePreferencesApp {
@@ -392,8 +435,11 @@ impl StandalonePreferencesApp {
             self.config_reload_due = None;
             return;
         }
-        let path = AppConfig::get_config_path();
         if self.config_watcher.is_none() {
+            // Resolve storage mode only when attaching the watcher. Without an
+            // explicit config override it probes portable markers on disk;
+            // doing that on every wheel frame can block on the filesystem.
+            let path = AppConfig::get_config_path();
             let repaint = ctx.clone();
             match crate::config::ConfigFileWatcher::new(&path, move || {
                 repaint.request_repaint();
@@ -427,7 +473,7 @@ impl StandalonePreferencesApp {
             return;
         }
         self.config_reload_due = None;
-        match AppConfig::load_from_path(&path) {
+        match AppConfig::load_from_path(&AppConfig::get_config_path()) {
             Ok(config) if config == self.draft.saved_config => {}
             Ok(config) => {
                 let language = self.draft.config.language;
@@ -466,9 +512,23 @@ impl eframe::App for StandalonePreferencesApp {
             self.native_window_initialized = true;
         }
 
+        for request in self.navigation.try_iter().take(8) {
+            match request {
+                PreferencesHelperMessage::Navigate { navigation } => {
+                    self.draft.pending_navigation = Some(navigation);
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+                    ui.ctx().send_viewport_cmd(egui::ViewportCommand::Focus);
+                }
+                PreferencesHelperMessage::Branding { effective, configured } => {
+                    if crate::branding::set_runtime_values(&effective).is_ok() {
+                        self.draft.sync_external_branding(&configured);
+                        self.branding_config = None;
+                    }
+                }
+            }
+        }
         self.apply_appearance(ui.ctx());
         self.watch_external_config(ui.ctx());
-        for request in self.navigation.try_iter().take(8) { self.draft.pending_navigation = Some(request); }
         let close_requested = ui.ctx().input(|input| input.viewport().close_requested());
         if close_requested && self.draft.is_dirty() {
             ui.ctx()
@@ -575,6 +635,13 @@ pub(crate) fn run_native_preferences(owner_hwnd: isize) -> eframe::Result {
 }
 
 pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    // Preview/config reconciliation can hide this dialog before its helper
+    // exits. Reap independently of visibility, otherwise inspection retains a
+    // permanently unknown draft even after the native window was closed.
+    if reap_exited_controller(&mut app.native_preferences) {
+        if let Err(error) = app.cancel_preference_preview(ui.ctx()) { app.config_status = error; }
+        app.show_preferences_dialog = false;
+    }
     if !app.show_preferences_dialog {
         app.preferences_draft = None;
         return;
@@ -603,8 +670,27 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             .is_some_and(NativePreferencesController::is_open)
         {
             if let Some(request) = app.preferences_draft.as_mut().and_then(|draft| draft.pending_navigation.take()) {
-                if let Err(error) = app.native_preferences.as_ref().unwrap().navigation.try_send(request) {
-                    app.config_status = format!("Preferences navigation not delivered: {error}");
+                match app.native_preferences.as_ref().unwrap().navigation.try_send(PreferencesHelperMessage::Navigate { navigation: request }) {
+                    Ok(()) => {},
+                    Err(std::sync::mpsc::TrySendError::Full(PreferencesHelperMessage::Navigate { navigation })) => {
+                        app.preferences_draft.as_mut().unwrap().pending_navigation = Some(navigation);
+                        ui.ctx().request_repaint_after(std::time::Duration::from_millis(20));
+                    }
+                    Err(error) => app.config_status = format!("Preferences navigation not delivered: {error}"),
+                }
+            }
+            let controller = app.native_preferences.as_mut().unwrap();
+            let revision = crate::platform::interop::live_config_revision();
+            if controller.branding_revision != Some(revision) {
+                let config = crate::platform::interop::get_live_config();
+                let message = PreferencesHelperMessage::Branding {
+                    effective: crate::branding::visible_values(&config),
+                    configured: crate::branding::configured_values(&config),
+                };
+                match controller.navigation.try_send(message) {
+                    Ok(()) => controller.branding_revision = Some(revision),
+                    Err(std::sync::mpsc::TrySendError::Full(_)) => ui.ctx().request_repaint_after(std::time::Duration::from_millis(20)),
+                    Err(_) => {},
                 }
             }
             return;
@@ -741,9 +827,12 @@ fn draw_preferences_editor(draft: &mut PreferencesDraft, ui: &mut egui::Ui) -> P
         if let Some(index) = preference_sections().iter().position(|item| item.id == section) { draft.tab = index; }
     }
     crate::ui::sync_elegance_theme(ui.ctx());
-    let language = crate::config::resolved_language_preference(&draft.config);
-    let tr = |key: &'static str| native_tr(language, key);
-    let rtl = crate::config::resolve_language(language) == AppLanguage::Persian;
+    // Resolve System once per pass, not once per caption. On Windows that
+    // resolution reads the locale Registry key. Scrolling repaints many rows.
+    // Keep it frame-local so live language changes still apply immediately.
+    let language = crate::config::resolve_language(crate::config::resolved_language_preference(&draft.config));
+    let tr = |key: &'static str| crate::ui::i18n::tr(language, key);
+    let rtl = language == AppLanguage::Persian;
     let mut outcome = PreferencesOutcome::default();
     let now = std::time::Instant::now();
     if draft.status_until.is_some_and(|until| now >= until) {
@@ -814,6 +903,10 @@ fn draw_preferences_editor(draft: &mut PreferencesDraft, ui: &mut egui::Ui) -> P
     egui::CentralPanel::default().show_inside(ui, |ui| {
         let sections = preference_sections();
         let narrow = ui.available_width() < 560.0;
+        let rail_width = sections.iter().map(|section| {
+            ui.painter().layout_no_wrap(tr(section.label), egui::TextStyle::Button.resolve(ui.style()),
+                ui.visuals().text_color()).size().x + 44.0
+        }).fold(PREFERENCES_RAIL_WIDTH, f32::max);
         if narrow {
             let active = &sections[draft.tab.min(sections.len() - 1)];
             crate::ui::dropdown::ComboBox::from_id_salt("preferences_compact_tab")
@@ -834,7 +927,7 @@ fn draw_preferences_editor(draft: &mut PreferencesDraft, ui: &mut egui::Ui) -> P
         ui.horizontal_top(|ui| {
             if !narrow {
                 ui.allocate_ui_with_layout(
-                    egui::vec2(PREFERENCES_RAIL_WIDTH, ui.available_height()),
+                    egui::vec2(rail_width, ui.available_height()),
                     egui::Layout::top_down(egui::Align::Min),
                     |ui| {
                         crate::ui::dialog::scroll_column(ui, "preferences_navigation", None, |ui| {
@@ -867,7 +960,7 @@ fn draw_preferences_editor(draft: &mut PreferencesDraft, ui: &mut egui::Ui) -> P
             draft.scroll_y = crate::ui::dialog::scroll_column_at(ui, ("preferences_contract_content", section_id), navigation.as_ref().map(|request| request.scroll_y), |ui| {
                 ui.set_max_width((detail_width - 10.0).max(180.0));
                 ui.spacing_mut().item_spacing.y = 8.0;
-                let _ = draw_contract_section(draft, ui, &tr, &sections, rtl);
+                let _ = draw_contract_section(draft, ui, &tr, &sections, language, rtl);
             });
         });
     });
@@ -908,6 +1001,7 @@ fn draw_contract_section(
     ui: &mut egui::Ui,
     tr: &impl Fn(&'static str) -> String,
     sections: &[crate::preferences_contract::PreferenceSection],
+    language: AppLanguage,
     rtl_ui: bool,
 ) -> bool {
     let section = &sections[draft.tab.min(sections.len() - 1)];
@@ -934,7 +1028,16 @@ fn draw_contract_section(
             ui.spacing_mut().item_spacing.y = PREFERENCE_ROW_GAP;
             for control in group_controls {
                 changed |=
-                    render_contract_control(ui, control, &mut values, tr, label_width, rtl_ui);
+                    render_contract_control(ui, control, &mut values, tr, label_width, language, rtl_ui);
+            }
+            if section.id == "timeline_toolbar" {
+                let mut order = crate::config::normalize_timeline_toolbar_order(&draft.config.timeline_toolbar_order);
+                let mut hidden = draft.config.timeline_toolbar_hidden.clone();
+                if super::timeline_toolbar::customization(ui, &mut order, &mut hidden, tr) {
+                    values["timeline_toolbar_order"] = serde_json::to_value(crate::config::persisted_timeline_toolbar_order(&order)).unwrap();
+                    values["timeline_toolbar_hidden"] = serde_json::to_value(hidden).unwrap();
+                    changed = true;
+                }
             }
             if group == "Typography" {
                 ui.add_space(6.0);
@@ -1018,12 +1121,21 @@ fn unique_preference_groups(controls: &[PreferenceControl], section: &str) -> Ve
         .into_iter().filter(|group| group.section == section).map(|group| group.name).collect()
 }
 
+fn preference_defaults() -> &'static serde_json::Value {
+    // Reset values are immutable, not live config. Serializing the entire
+    // document for every numeric row on every wheel-animation frame is wasted
+    // work, including rows outside the current viewport.
+    static DEFAULTS: std::sync::OnceLock<serde_json::Value> = std::sync::OnceLock::new();
+    DEFAULTS.get_or_init(|| serde_json::to_value(AppConfig::default()).expect("serialize preference defaults"))
+}
+
 fn render_contract_control(
     ui: &mut egui::Ui,
     control: &PreferenceControl,
     values: &mut serde_json::Value,
     tr: &impl Fn(&'static str) -> String,
     label_width: f32,
+    language: AppLanguage,
     rtl_ui: bool,
 ) -> bool {
     let current = value_at_path(values, control.key)
@@ -1034,6 +1146,45 @@ fn render_contract_control(
     let mut description_rendered = false;
     let control_icon = preference_control_icon(control.icon);
     match control.kind {
+        PreferenceControlKind::ActionList => {
+            let hidden_key = control.custom_key.expect("action list requires its visibility key");
+            let mut order = Vec::new();
+            for value in current.as_array().into_iter().flatten().chain(control.options.iter().map(|option| &option.value)) {
+                if control.options.iter().any(|option| option.value == *value) && !order.contains(value) { order.push(value.clone()); }
+            }
+            let mut hidden = value_at_path(values, hidden_key).and_then(|value| value.as_array()).cloned().unwrap_or_default();
+            let mut changed = false;
+            for (index, value) in order.clone().into_iter().enumerate() {
+                let option = control.options.iter().find(|option| option.value == value).unwrap();
+                ui.push_id((control.key, value.to_string()), |ui| ui.horizontal(|ui| {
+                    let mut visible = !hidden.contains(&value);
+                    if ui.checkbox(&mut visible, format!("{}  {}", option.icon.unwrap_or(""), tr(option.label))).changed() {
+                        hidden.retain(|candidate| *candidate != value);
+                        if !visible { hidden.push(value.clone()); }
+                        changed = true;
+                    }
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        for (enabled, next, icon, tip) in [
+                            (index + 1 < order.len(), (index + 1).min(order.len() - 1), crate::ui::icons::ARROW_DOWN, "Move down"),
+                            (index > 0, index.saturating_sub(1), crate::ui::icons::ARROW_UP, "Move up"),
+                        ] {
+                            if ui.add_enabled(enabled, egui::Button::new(icon).small()).on_hover_text(tr(tip)).clicked() {
+                                order.swap(index, next); changed = true;
+                            }
+                        }
+                    });
+                }));
+            }
+            if ui.button(format!("{}  {}", crate::ui::icons::ARROW_COUNTER_CLOCKWISE, tr("Reset shortcuts"))).clicked() {
+                order = value_at_path(preference_defaults(), control.key).and_then(|value| value.as_array()).cloned().unwrap_or_default();
+                hidden = value_at_path(preference_defaults(), hidden_key).and_then(|value| value.as_array()).cloned().unwrap_or_default();
+                changed = true;
+            }
+            if changed {
+                replacement = Some(serde_json::Value::Array(order));
+                companion_changed = set_value_at_path(values, hidden_key, serde_json::Value::Array(hidden)).is_ok();
+            }
+        }
         PreferenceControlKind::Accent => {
             let selected = current.as_str().unwrap_or("system");
             let custom_key = control.custom_key.unwrap_or("custom_accent_color");
@@ -1101,6 +1252,10 @@ fn render_contract_control(
                             let caption = if dynamic_label { option.description.clone().unwrap_or_else(|| tr(option.label)) } else { tr(option.label) };
                             let response = if control.key == "color_palette" {
                                 palette_choice(ui, option.value == current, &caption, option.value.as_str().unwrap_or("native"))
+                            } else if control.key == "external_mpv.mode" {
+                                crate::ui::player_mode::rich_choice(ui, option.value == current,
+                                    crate::ui::icons::named_control_icon(option.icon.unwrap_or("monitor-play")).unwrap_or(crate::ui::icons::MONITOR_PLAY),
+                                    &caption, option.description.as_deref().unwrap_or_default(), control_width)
                             } else { ui.dropdown_choice(
                                     option.value == current,
                                     caption,
@@ -1207,12 +1362,10 @@ fn render_contract_control(
         PreferenceControlKind::Number => {
             let mut number = current.as_f64().unwrap_or_default();
             let range = control.minimum.unwrap_or(0.0)..=control.maximum.unwrap_or(100.0);
-            let defaults = serde_json::to_value(AppConfig::default()).unwrap_or_default();
-            let reset = value_at_path(&defaults, control.key).and_then(serde_json::Value::as_f64).unwrap_or(*range.start());
+            let reset = value_at_path(preference_defaults(), control.key).and_then(serde_json::Value::as_f64).unwrap_or(*range.start());
             let mut steps: std::collections::BTreeMap<String, crate::config::NumericInputSteps> =
                 serde_json::from_value(values["numeric_input_steps"].clone()).unwrap_or_default();
             let previous_steps = steps.clone();
-            let language = crate::config::resolve_language(serde_json::from_value(values["language"].clone()).unwrap_or_default());
             let (_, changed) =
                 preference_row(ui, control_icon, &tr(control.label), label_width, |ui| {
                     let mut changed = crate::ui::dialog::receive_numeric_paste(ui, control.key, &mut number, &range, "");
@@ -1329,6 +1482,15 @@ fn render_contract_control(
             }
         }
         PreferenceControlKind::File => {
+            let player_executable = control.key == "external_mpv.executable";
+            let terminal_executable = control.key == "ui.terminal.shell_program";
+            let executable = player_executable || terminal_executable;
+            let picker_title = if terminal_executable { "Choose terminal executable" }
+                else if executable { "Choose mpv executable" } else { "Choose an image file" };
+            let reset_label = if terminal_executable { "Use default shell" }
+                else if executable { "Use default player" } else { "Use default icon" };
+            let mut resolving_allowed = true;
+            let mut refresh_resolution = false;
             let mut text = current.as_str().unwrap_or_default().to_string();
             let mut edited = false;
             if let Some(selected) = crate::ui::peer_browser::take_preference_file(ui.ctx(), control.key) {
@@ -1338,14 +1500,22 @@ fn render_contract_control(
             preference_row(ui, control_icon, &tr(control.label), label_width, |ui| {
                 let controls = file_controls(ui, &mut text, &tr(control.placeholder.unwrap_or_default()), &tr("Browse..."));
                 edited |= controls.0.changed();
-                if controls.1.on_hover_text(tr("Choose an image file")).clicked() {
-                    if crate::peer::active() {
+                resolving_allowed = !controls.0.has_focus();
+                if executable && controls.0.lost_focus() {
+                    let normalized = text.trim().trim_matches('"').to_owned();
+                    edited |= text != normalized; text = normalized;
+                    refresh_resolution = true;
+                }
+                if controls.1.on_hover_text(tr(picker_title)).clicked() {
+                    if crate::peer::active() && !terminal_executable {
                         crate::ui::peer_browser::open(ui.ctx(), crate::ui::peer_browser::Purpose::PreferenceFile {
                             key: control.key.to_owned(), extensions: control.file_extensions.iter().map(|extension| (*extension).to_owned()).collect(),
                         }, None);
                     } else {
-                        let mut dialog = rfd::FileDialog::new().set_title(tr("Choose an image file"))
-                            .add_filter("Images", &control.file_extensions);
+                        let mut dialog = rfd::FileDialog::new().set_title(tr(picker_title));
+                        if !control.file_extensions.is_empty() {
+                            dialog = dialog.add_filter(if executable { "Executable" } else { "Images" }, &control.file_extensions);
+                        }
                         if let Some(parent) = std::path::Path::new(&text).parent().filter(|parent| parent.is_dir()) {
                             dialog = dialog.set_directory(parent);
                         }
@@ -1355,14 +1525,17 @@ fn render_contract_control(
                         }
                     }
                 }
-                if controls.2.on_hover_text(tr("Use default icon")).clicked() {
-                    text.clear();
+                if controls.2.on_hover_text(tr(reset_label)).clicked() {
+                    text = if player_executable { "mpv".into() } else { String::new() };
                     edited = true;
                 }
             });
+            if player_executable {
+                if refresh_resolution { ui.data_mut(|data| data.remove::<String>(ui.id().with("resolved-player-request"))); }
+                resolved_player_hint(ui, &text, resolving_allowed);
+            }
             if edited {
-                replacement = Some(if text.trim().is_empty() { serde_json::Value::Null }
-                    else { serde_json::Value::String(text.trim().to_owned()) });
+                replacement = Some(preference_text_value(control.key, &text, executable));
             }
         }
         PreferenceControlKind::Color => {
@@ -1387,18 +1560,17 @@ fn render_contract_control(
             let text_align = crate::ui::i18n::input_alignment(rtl_ui, &text);
             preference_row(ui, control_icon, &tr(control.label), label_width, |ui| {
                 let control_width = ui.available_width().min(PREFERENCE_CONTROL_MAX_WIDTH);
-                let response = ui.add(
+                let response = if control.key.starts_with("application_shortcuts.") {
+                    crate::ui::keycaps::text_edit(ui, ui.make_persistent_id(control.key),
+                        &mut text, control_width, control.placeholder.unwrap_or_default(), rtl_ui)
+                } else { ui.add(
                     crate::ui::dialog::singleline_text_edit(ui, &mut text)
                         .horizontal_align(text_align)
                         .desired_width(control_width)
                         .hint_text(control.placeholder.unwrap_or_default()),
-                );
+                ) };
                 if response.changed() {
-                    replacement = Some(if text.trim().is_empty() {
-                        serde_json::Value::Null
-                    } else {
-                        serde_json::Value::String(text.trim().to_string())
-                    });
+                    replacement = Some(preference_text_value(control.key, &text, false));
                 }
             });
         }
@@ -1409,6 +1581,42 @@ fn render_contract_control(
     replacement
         .is_some_and(|replacement| set_value_at_path(values, control.key, replacement).is_ok())
         || companion_changed
+}
+
+fn preference_text_value(key: &str, text: &str, executable: bool) -> serde_json::Value {
+    if text.trim().is_empty() && !executable && !key.starts_with("ui.terminal.") {
+        serde_json::Value::Null
+    } else { serde_json::Value::String(text.trim().to_owned()) }
+}
+
+fn resolved_player_hint(ui: &mut egui::Ui, input: &str, resolving_allowed: bool) {
+    let request_id = ui.id().with("resolved-player-request");
+    let result_id = ui.id().with("resolved-player-result");
+    let previous = ui.data(|data| data.get_temp::<String>(request_id));
+    // Resolve once after an edit settles. Never probe PATH or a remote server
+    // on each Preferences animation frame; results are scoped to this draft.
+    if resolving_allowed && previous.as_deref() != Some(input) {
+        let input = input.to_owned();
+        ui.data_mut(|data| { data.insert_temp(request_id, input.clone()); data.remove::<(String, String, bool)>(result_id); });
+        let ctx = ui.ctx().clone();
+        let client = crate::peer::client();
+        std::thread::spawn(move || {
+            let result = if let Some(client) = client {
+                client.post("/api/rpc", &serde_json::json!({"jsonrpc":"2.0","id":1,
+                    "method":"pealayer.player.executable.resolve","params":{"executable":input}}))
+                    .and_then(|reply| reply.get("result").and_then(|value|value.get("resolved")).and_then(serde_json::Value::as_str)
+                        .map(str::to_owned).ok_or_else(|| reply["result"]["error"].as_str().unwrap_or("Could not resolve player on the connected instance").to_owned()))
+            } else { crate::mpv::external::resolve_executable(&input).map(|path| path.display().to_string()) };
+            let (text, valid) = match result { Ok(path) => (path, true), Err(error) => (error, false) };
+            ctx.data_mut(|data| data.insert_temp(result_id, (input, text, valid)));
+            ctx.request_repaint();
+        });
+    }
+    if let Some((query, text, valid)) = ui.data(|data| data.get_temp::<(String, String, bool)>(result_id))
+        && query == input {
+        ui.label(egui::RichText::new(format!("{}  {text}", if valid { crate::ui::icons::CHECK } else { crate::ui::icons::WARNING }))
+            .small().color(if valid { ui.visuals().weak_text_color() } else { ui.visuals().error_fg_color }));
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -1903,6 +2111,8 @@ fn preference_control_icon(name: &str) -> &'static str {
         "text-t" => TEXT_T,
         "list-checks" => LIST_CHECKS,
         "pencil-simple" => PENCIL_SIMPLE,
+        "terminal-window" => TERMINAL_WINDOW,
+        "plug" => PLUG,
         _ => GEAR,
     }
 }
@@ -1915,6 +2125,8 @@ fn preference_option_icon(icon: Option<&str>) -> &'static str {
         "virtual" => crate::ui::icons::CIRCUITRY,
         "loopback" => crate::ui::icons::ARROW_CLOCKWISE,
         "globe" => crate::ui::icons::GLOBE,
+        "plug" => crate::ui::icons::PLUG,
+        "terminal-window" => crate::ui::icons::TERMINAL_WINDOW,
         _ => crate::ui::icons::LINK,
     }
 }
@@ -1975,6 +2187,9 @@ fn section_icon(section: &str) -> &'static str {
         "playback" => crate::ui::icons::PLAY,
         "hardware" => crate::ui::icons::PLUG,
         "input" => crate::ui::icons::SLIDERS_HORIZONTAL,
+        "timeline_toolbar" => crate::ui::icons::SLIDERS_HORIZONTAL,
+        "sidebar_rail" => crate::ui::icons::TABS,
+        "workspace_tools" => crate::ui::icons::TERMINAL_WINDOW,
         "web" => crate::ui::icons::GLOBE,
         _ => crate::ui::icons::GEAR,
     }
@@ -2000,6 +2215,10 @@ fn group_icon(group: &str) -> &'static str {
         "Window movement" => crate::ui::icons::APP_WINDOW,
         "Status bar" => crate::ui::icons::GAUGE,
         "Typography" => crate::ui::icons::TEXT_T,
+        "Timeline toolbar" => crate::ui::icons::SLIDERS_HORIZONTAL,
+        "Sidebar rail" | "Shortcuts" => crate::ui::icons::TABS,
+        "Command toolbar" => crate::ui::icons::COMMAND,
+        "Terminal" | "Terminal connection" | "Terminal appearance" => crate::ui::icons::TERMINAL_WINDOW,
         "Windows graphics and composition" | "Dialog windows" => crate::ui::icons::APP_WINDOW,
         _ => crate::ui::icons::GEAR,
     }
@@ -2011,6 +2230,9 @@ fn section_heading(section: &str) -> &'static str {
         "playback" => "Playback behavior",
         "hardware" => "PCController and hardware",
         "input" => "Keyboard, mouse, and gesture bindings",
+        "timeline_toolbar" => "Timeline toolbar",
+        "sidebar_rail" => "Sidebar rail",
+        "workspace_tools" => "Workspace tools",
         "web" => "Web UI and network APIs",
         _ => "Configuration",
     }
@@ -2020,13 +2242,22 @@ fn section_heading(section: &str) -> &'static str {
 mod tests {
     use super::*;
 
+    #[test]
+    fn clearing_terminal_preferences_returns_to_defaults_without_null_strings() {
+        for key in ["ui.terminal.controller_endpoint", "ui.terminal.shell_program", "ui.terminal.shell_arguments"] {
+            assert_eq!(preference_text_value(key, "  ", false), serde_json::json!(""));
+        }
+        assert!(preference_text_value("app_icon_default", "", false).is_null());
+        assert_eq!(preference_text_value("external_mpv.executable", "mpv", true), serde_json::json!("mpv"));
+    }
+
     fn accent_frame(ctx: &egui::Context, control: &PreferenceControl, values: &mut serde_json::Value,
         events: Vec<egui::Event>) -> egui::FullOutput {
         let mut output = ctx.run_ui(egui::RawInput {
             screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(800.0,800.0))),
             time: Some(ctx.cumulative_frame_nr() as f64 * 0.5),
             events, ..Default::default()
-        }, |ui| { render_contract_control(ui, control, values, &str::to_string, 160.0, false); });
+        }, |ui| { render_contract_control(ui, control, values, &str::to_string, 160.0, AppLanguage::English, false); });
         output.textures_delta.clear();
         output
     }
@@ -2128,7 +2359,11 @@ mod tests {
         let mut command = std::process::Command::new("true");
         let mut child = command.spawn().unwrap();
         child.wait().unwrap();
-        let mut controller = Some(NativePreferencesController { child, navigation: std::sync::mpsc::sync_channel(1).0 });
+        let mut controller = Some(NativePreferencesController { child, navigation: std::sync::mpsc::sync_channel(1).0,
+            branding_revision: None, exit_verified: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)) });
+        assert!(!controller.as_ref().unwrap().confirmed_exited(), "unverified is still unknown");
+        assert!(!controller.as_mut().unwrap().is_open());
+        assert!(controller.as_ref().unwrap().confirmed_exited(), "confirmed process exit is not an open draft");
         assert!(reap_exited_controller(&mut controller));
         assert!(controller.is_none());
         assert!(!reap_exited_controller(&mut controller));
@@ -2149,6 +2384,85 @@ mod tests {
             preferences_helper_owner(&["pealayer.exe".to_string()]),
             None
         );
+    }
+
+    #[test]
+    fn preferences_scrolling_does_not_edit_or_reverse_the_draft() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let mut draft = PreferencesDraft::new(AppConfig::default(), 0);
+        let ctx = egui::Context::default();
+        crate::ui::configure_native_appearance(&ctx, &draft.config);
+        let mut offsets = Vec::new();
+        let started = std::time::Instant::now();
+        for frame in 0..120 {
+            let mut events = vec![egui::Event::PointerMoved(egui::pos2(390.0, 310.0))];
+            if (5..65).contains(&frame) {
+                events.push(egui::Event::MouseWheel {
+                    unit: egui::MouseWheelUnit::Point,
+                    delta: egui::vec2(0.0, -5.0),
+                    modifiers: egui::Modifiers::NONE,
+                    source: egui::MouseWheelSource::Wheel,
+                    phase: egui::TouchPhase::Move,
+                });
+            }
+            ctx.run_ui(egui::RawInput {
+                time: Some(frame as f64 / 60.0),
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(700.0, 450.0))),
+                events,
+                ..Default::default()
+            }, |ui| { draw_preferences_editor(&mut draft, ui); }).drop_without_applying_deltas();
+            offsets.push(draft.scroll_y);
+        }
+        eprintln!("Preferences 120 scroll frames: {:?}", started.elapsed());
+        assert!(offsets.last().copied().unwrap() >= 250.0);
+        assert!(offsets.windows(2).all(|pair| pair[1] >= pair[0]));
+        assert!(!draft.is_dirty(), "scrolling must not trigger live configuration previews");
+    }
+
+    #[test]
+    fn preferences_mouse_notch_smoothing_continues_until_settled() {
+        let _guard = crate::app::tests::lock_app_tests();
+        for width in [440.0, 700.0] {
+            let mut draft = PreferencesDraft::new(AppConfig::default(), 0);
+            let ctx = egui::Context::default();
+            crate::ui::configure_native_appearance(&ctx, &draft.config);
+            let mut offsets = Vec::new();
+            for frame in 0..60 {
+                let mut events = vec![egui::Event::PointerMoved(egui::pos2(300.0, 280.0))];
+                if frame == 5 {
+                    events.push(egui::Event::MouseWheel {
+                        unit: egui::MouseWheelUnit::Line,
+                        delta: egui::vec2(0.0, -3.0),
+                        modifiers: egui::Modifiers::NONE,
+                        source: egui::MouseWheelSource::Unknown, // Windows/winit
+                        phase: egui::TouchPhase::Move,
+                    });
+                }
+                let output = ctx.run_ui(egui::RawInput {
+                    time: Some(frame as f64 / 60.0),
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 450.0))),
+                    events,
+                    ..Default::default()
+                }, |ui| { draw_preferences_editor(&mut draft, ui); });
+                if (6..10).contains(&frame) {
+                    assert_eq!(output.viewport_output[&egui::ViewportId::ROOT].repaint_delay,
+                        std::time::Duration::ZERO, "wheel tail must schedule another paint");
+                }
+                output.drop_without_applying_deltas();
+                offsets.push(draft.scroll_y);
+            }
+            assert!(offsets[6] > offsets[5], "a notch must animate between frames");
+            assert!(offsets.windows(2).all(|pair| pair[1] >= pair[0]), "no backward jumps");
+            assert_eq!(offsets[45], offsets[59], "scrolling settles instead of repainting forever");
+            assert!(!draft.is_dirty());
+        }
+    }
+
+    #[test]
+    fn cached_numeric_resets_match_current_config_defaults() {
+        let expected = serde_json::to_value(AppConfig::default()).unwrap();
+        assert_eq!(preference_defaults(), &expected);
+        assert!(std::ptr::eq(preference_defaults(), preference_defaults()));
     }
 
     #[test]
@@ -2189,6 +2503,55 @@ mod tests {
     }
 
     #[test]
+    fn timeline_toolbar_navigation_opens_exact_page_and_preserves_draft() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let request = PreferencesNavigation::timeline_toolbar();
+        request.validate().unwrap();
+        let round_trip: PreferencesHelperMessage = serde_json::from_value(
+            serde_json::to_value(PreferencesHelperMessage::Navigate { navigation: request.clone() }).unwrap()).unwrap();
+        assert!(matches!(round_trip, PreferencesHelperMessage::Navigate { navigation } if navigation == request));
+        for width in [390.0, 700.0, 1200.0] {
+            let ctx = egui::Context::default();
+            let mut draft = PreferencesDraft::new(AppConfig::default(), 0);
+            draft.config.timeline_toolbar_hidden.clear(); // existing unsaved edits
+            let expected = draft.config.clone();
+            for _ in 0..2 {
+                draft.tab = 1; // another previously selected page
+                draft.pending_navigation = Some(request.clone());
+                for _ in 0..3 {
+                    ctx.run_ui(egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 600.0))),
+                        ..Default::default()
+                    }, |ui| { draw_preferences_editor(&mut draft, ui); }).drop_without_applying_deltas();
+                }
+                assert_eq!(preference_sections()[draft.tab].id, "timeline_toolbar");
+                assert_eq!(draft.scroll_y, 0.0);
+                assert_eq!(draft.config, expected, "navigation must not modify unsaved controls");
+                assert!(draft.is_dirty());
+                assert!(draft.pending_navigation.is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn sidebar_shortcut_preferences_render_without_mutating_values_at_all_widths() {
+        let _guard = crate::app::tests::lock_app_tests();
+        for width in [390.0,700.0,1200.0] {
+            let ctx=egui::Context::default();
+            let mut draft=PreferencesDraft::new(AppConfig::default(),0);
+            let expected=draft.config.clone();
+            draft.pending_navigation=Some(PreferencesNavigation {section:Some("sidebar_rail".into()),scroll_y:0.0});
+            for _ in 0..3 {
+                ctx.run_ui(egui::RawInput {screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(width,600.0))),..Default::default()}, |ui| {
+                    draw_preferences_editor(&mut draft,ui);
+                }).drop_without_applying_deltas();
+            }
+            assert_eq!(preference_sections()[draft.tab].id,"sidebar_rail");
+            assert_eq!(draft.config,expected); assert!(!draft.is_dirty());
+        }
+    }
+
+    #[test]
     fn file_rows_have_identical_bounds_without_cascading() {
         for dark in [false, true] {
             for width in [180.0, 250.0, 420.0] {
@@ -2221,6 +2584,28 @@ mod tests {
     }
 
     #[test]
+    fn external_branding_updates_do_not_save_or_discard_other_draft_fields() {
+        let mut draft = PreferencesDraft::new(AppConfig::default(), 0);
+        draft.config.volume = 17.0;
+        let saved_volume = draft.saved_config.volume;
+        let values = serde_json::json!({"app_name":"Stage","app_description":"Preview","app_icon_preset":"classic"});
+        draft.sync_external_branding(&values);
+        for config in [&draft.config, &draft.saved_config, &draft.previewed_config] {
+            assert_eq!(config.app_name.as_deref(), Some("Stage"));
+            assert_eq!(config.app_description.as_deref(), Some("Preview"));
+            assert_eq!(config.app_icon_preset, crate::config::AppIconPreset::Classic);
+        }
+        assert_eq!(draft.config.volume, 17.0);
+        assert_eq!(draft.saved_config.volume, saved_volume);
+        assert!(draft.is_dirty());
+        let message = PreferencesHelperMessage::Branding {
+            effective: crate::branding::configured_values(&draft.config),
+            configured: crate::branding::configured_values(&draft.saved_config),
+        };
+        assert!(matches!(serde_json::from_slice::<PreferencesHelperMessage>(&serde_json::to_vec(&message).unwrap()).unwrap(), PreferencesHelperMessage::Branding { .. }));
+    }
+
+    #[test]
     fn web_settings_cards_stay_inside_the_detail_column() {
         let _guard = crate::app::tests::lock_app_tests();
         let sections = preference_sections();
@@ -2232,7 +2617,7 @@ mod tests {
             ctx.run_ui(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width + 32.0, 900.0))), ..Default::default() }, |ui| {
                 ui.set_width(width);
                 let right = ui.max_rect().right();
-                draw_contract_section(&mut draft, ui, &str::to_string, &sections, false);
+                draw_contract_section(&mut draft, ui, &str::to_string, &sections, AppLanguage::English, false);
                 assert!(ui.min_rect().right() <= right + 0.5, "{width}: content {} > column {right}", ui.min_rect().right());
             }).drop_without_applying_deltas();
         }
