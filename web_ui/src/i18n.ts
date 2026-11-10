@@ -510,6 +510,7 @@ const fa: Record<string, string> = {
   'Manage': 'مدیریت',
   'Save': 'ذخیره',
   'Studio': 'استودیو',
+  'Pastel': 'پاستل',
   'Remote Control': 'کنترل از راه دور',
   'Media Library': 'کتابخانه رسانه',
   'System Info': 'اطلاعات سامانه',

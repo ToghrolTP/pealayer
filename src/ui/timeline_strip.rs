@@ -12,6 +12,7 @@ pub(super) enum MediaKind {
 #[derive(Clone, Copy, Debug, PartialEq)]
 struct MediaStyle {
     fill: Color32,
+    fill_end: Option<Color32>,
     edge: Color32,
     ink: Color32,
     accent: Color32,
@@ -27,6 +28,7 @@ impl MediaStyle {
             |part| super::palette::color(palette, dark, &format!("timeline-{prefix}-{part}"));
         Self {
             fill: color("fill"),
+            fill_end: (palette == ColorPalette::Pastel).then(|| color("fill-end")),
             edge: color("edge"),
             ink: color("ink"),
             accent: color("accent"),
@@ -48,7 +50,11 @@ pub(super) fn paint_media(
 ) {
     let style = MediaStyle::resolve(palette, dark, kind);
     let opacity = if active && enabled { 1.0 } else { 0.52 };
-    painter.rect_filled(rect, 4.0, style.fill.gamma_multiply(opacity));
+    if let Some(end) = style.fill_end {
+        super::palette::paint_gradient(painter, rect, 4, style.fill, end, opacity);
+    } else {
+        painter.rect_filled(rect, 4.0, style.fill.gamma_multiply(opacity));
+    }
     painter.rect_stroke(
         rect,
         4.0,
@@ -56,7 +62,7 @@ pub(super) fn paint_media(
             1.0,
             style
                 .edge
-                .gamma_multiply(if palette == ColorPalette::Studio {
+                .gamma_multiply(if palette != ColorPalette::Native {
                     opacity
                 } else {
                     1.0
@@ -64,7 +70,7 @@ pub(super) fn paint_media(
         ),
         egui::StrokeKind::Inside,
     );
-    if palette == ColorPalette::Studio && rect.width() > 10.0 {
+    if palette != ColorPalette::Native && rect.width() > 10.0 {
         let cap = Rect::from_min_max(
             rect.min + egui::vec2(4.0, 1.0),
             egui::pos2(rect.right() - 4.0, rect.top() + 2.0),
@@ -146,7 +152,7 @@ mod tests {
 
     #[test]
     fn active_and_disabled_strip_paint_preserves_native_borders_and_semantic_dimming() {
-        for palette in [ColorPalette::Native, ColorPalette::Studio] {
+        for palette in [ColorPalette::Native, ColorPalette::Studio, ColorPalette::Pastel] {
             for active in [false, true] {
                 for enabled in [false, true] {
                     let ctx = egui::Context::default();
@@ -167,7 +173,11 @@ mod tests {
                     });
                     output.textures_delta.clear();
                     let opacity = if active && enabled { 1.0 } else { 0.52 };
-                    assert!(output.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Rect(r) if r.rect==rect && r.fill==style.fill.gamma_multiply(opacity))));
+                    let gradient = palette == ColorPalette::Pastel;
+                    let fill = if gradient { Color32::WHITE } else { style.fill };
+                    assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                        egui::Shape::Rect(r) if r.rect == rect && r.brush.is_some() == gradient
+                            && r.fill == fill.gamma_multiply(opacity))));
                     let edge = if palette == ColorPalette::Native {
                         Color32::WHITE
                     } else {
@@ -175,14 +185,14 @@ mod tests {
                     };
                     assert!(output.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Rect(r) if r.rect==rect && r.stroke.color==edge && r.stroke.width==1.0)));
                     let has_cap=output.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Rect(r) if r.rect.height()==1.0 && r.fill==style.accent.gamma_multiply(0.7*opacity)));
-                    assert_eq!(has_cap, palette == ColorPalette::Studio);
+                    assert_eq!(has_cap, palette != ColorPalette::Native);
                 }
             }
         }
     }
 
     #[test]
-    fn studio_media_roles_are_distinct_readable_and_do_not_restyle_native() {
+    fn studio_and_pastel_media_roles_are_readable_and_preserve_neutral() {
         let luminance = |color: Color32| {
             let linear = |value: u8| {
                 let s = value as f64 / 255.0;
@@ -216,6 +226,15 @@ mod tests {
                     studio,
                     MediaStyle::resolve(ColorPalette::Studio, !dark, kind)
                 );
+                let pastel = MediaStyle::resolve(ColorPalette::Pastel, dark, kind);
+                let end = pastel.fill_end.expect("Pastel gradient endpoint");
+                assert_ne!(end, pastel.fill);
+                for stop in [pastel.fill, end] {
+                    let a = luminance(stop);
+                    let b = luminance(pastel.ink);
+                    assert!((a.max(b) + 0.05) / (a.min(b) + 0.05) >= 4.5,
+                        "Unreadable Pastel caption: {pastel:?}");
+                }
             }
         }
     }

@@ -1,5 +1,6 @@
 //! Shared palette data is also imported by the Web UI; neither renderer owns
 //! a separate copy of the named themes.
+use eframe::egui;
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
@@ -16,6 +17,7 @@ pub fn colors(
     });
     &catalog[match palette {
         crate::config::ColorPalette::Studio => "studio",
+        crate::config::ColorPalette::Pastel => "pastel",
         crate::config::ColorPalette::Native => "native",
     }][if dark { "dark" } else { "light" }]
 }
@@ -74,8 +76,86 @@ pub fn apply(visuals: &mut eframe::egui::Visuals, palette: crate::config::ColorP
     // theme contrast fix. Palette selection never changes geometry or sizing.
 }
 
+/// Paint a rounded gradient with the same clip and edge AA as a solid egui
+/// rectangle. The two texels are cached per context and shared by all strips.
+pub(super) fn paint_gradient(
+    painter: &egui::Painter,
+    rect: egui::Rect,
+    radius: u8,
+    start: egui::Color32,
+    end: egui::Color32,
+    opacity: f32,
+) {
+    if !rect.is_positive() || !rect.intersects(painter.clip_rect()) {
+        return;
+    }
+    if radius == 0 {
+        // egui's thin-rectangle path drops textures. Keep both color stops
+        // on the vertices so a one-point accent line retains its gradient.
+        painter.add(horizontal_gradient(
+            rect,
+            start.gamma_multiply(opacity),
+            end.gamma_multiply(opacity),
+        ));
+        return;
+    }
+    let ctx = painter.ctx();
+    let id = egui::Id::new(("pealayer-palette-gradient", start, end));
+    let texture = ctx.data(|data| data.get_temp::<egui::TextureHandle>(id))
+        .unwrap_or_else(|| {
+            let texture = ctx.load_texture(
+                "palette-gradient",
+                egui::ColorImage::new([2, 1], vec![start, end]),
+                egui::TextureOptions::LINEAR,
+            );
+            ctx.data_mut(|data| data.insert_temp(id, texture.clone()));
+            texture
+        });
+    let uv = egui::Rect::from_min_max(egui::pos2(0.25, 0.0), egui::pos2(0.75, 1.0));
+    painter.add(egui::epaint::RectShape::filled(
+        rect, radius, egui::Color32::WHITE.gamma_multiply(opacity),
+    ).with_texture(texture.id(), uv));
+}
+
+/// Untextured chrome gradient, suitable for a reserved background paint slot.
+pub(super) fn horizontal_gradient(
+    rect: egui::Rect,
+    start: egui::Color32,
+    end: egui::Color32,
+) -> egui::Shape {
+    if !rect.is_positive() {
+        return egui::Shape::Noop;
+    }
+    let mut mesh = egui::Mesh::default();
+    mesh.colored_vertex(rect.left_top(), start);
+    mesh.colored_vertex(rect.right_top(), end);
+    mesh.colored_vertex(rect.right_bottom(), end);
+    mesh.colored_vertex(rect.left_bottom(), start);
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(0, 2, 3);
+    egui::Shape::mesh(mesh)
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn thin_accent_rule_paints_both_gradient_stops() {
+        use eframe::egui::{self, Color32, Shape};
+        let ctx = egui::Context::default();
+        let rect = egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(120.0, 1.0));
+        let start = Color32::from_rgb(163, 147, 244);
+        let end = Color32::from_rgb(239, 133, 188);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            super::paint_gradient(ui.painter(), rect, 0, start, end, 1.0);
+        });
+        output.textures_delta.clear(); // Inspect shapes without uploading textures.
+        assert!(output.shapes.iter().any(|shape| match &shape.shape {
+            Shape::Mesh(mesh) => mesh.vertices.iter().map(|vertex| vertex.color)
+                .eq([start, end, end, start]),
+            _ => false,
+        }));
+    }
     #[test]
     fn expanded_dropdown_paints_the_live_palette_without_changing_geometry() {
         use crate::config::{AppConfig, AppTheme, ColorPalette};
@@ -107,7 +187,7 @@ mod tests {
         for dark in [false, true] {
             let ctx = egui::Context::default();
             let mut previous_rect = None;
-            for palette in [ColorPalette::Studio, ColorPalette::Native, ColorPalette::Studio] {
+            for palette in [ColorPalette::Studio, ColorPalette::Pastel, ColorPalette::Native, ColorPalette::Studio] {
                 let config = AppConfig {
                     color_palette: palette,
                     theme: if dark { AppTheme::Dark } else { AppTheme::Light },
@@ -119,7 +199,12 @@ mod tests {
                 let control = super::color(palette, dark, "surface-2");
                 assert_eq!(style.visuals.widgets.open.bg_fill, surface);
                 assert_eq!(style.visuals.widgets.open.weak_bg_fill, control);
-                assert_eq!(style.visuals.widgets.open.bg_stroke.color, super::color(palette, dark, "line-strong"));
+                let open_edge = if palette == ColorPalette::Pastel {
+                    "hover-line"
+                } else {
+                    "line-strong"
+                };
+                assert_eq!(style.visuals.widgets.open.bg_stroke.color, super::color(palette, dark, open_edge));
                 assert_eq!(style.visuals.widgets.open.fg_stroke.color, super::color(palette, dark, "text"));
                 // Keep the real popup open across live palette switches.
                 let (trigger, _) = frame(&ctx, surface);
@@ -162,27 +247,30 @@ mod tests {
         let old: AppConfig = serde_json::from_str("{}").unwrap();
         assert_eq!(old.color_palette, ColorPalette::Native);
         let changed = old
-            .apply_patch(&serde_json::json!({"color_palette": "studio"}))
+            .apply_patch(&serde_json::json!({"color_palette": "pastel"}))
             .unwrap();
         let restored: AppConfig =
             serde_json::from_str(&serde_json::to_string(&changed).unwrap()).unwrap();
-        assert_eq!(restored.color_palette, ColorPalette::Studio);
+        assert_eq!(restored.color_palette, ColorPalette::Pastel);
+        let live = crate::platform::interop::AppearanceState::new(&restored, true);
+        assert_eq!(serde_json::to_value(live).unwrap()["color_palette"], "pastel");
         let controls = crate::preferences_contract::preference_controls(&restored);
         let control = controls
             .iter()
             .find(|control| control.key == "color_palette")
             .unwrap();
-        assert_eq!(control.options.len(), 2);
-        assert_eq!(control.options[0].value, "native");
+        let options: Vec<_> = control.options.iter().map(|option| option.value.as_str().unwrap()).collect();
+        assert_eq!(options, ["native", "studio", "pastel"]);
     }
 
     #[test]
     fn shared_palettes_are_complete_and_preserve_the_web_studio_colors() {
         use crate::config::ColorPalette;
-        for palette in [ColorPalette::Studio, ColorPalette::Native] {
-            for dark in [true, false] {
+        for dark in [true, false] {
+            let baseline = super::colors(ColorPalette::Native, dark);
+            for palette in [ColorPalette::Native, ColorPalette::Studio, ColorPalette::Pastel] {
                 let values = super::colors(palette, dark);
-                assert_eq!(values.len(), 26);
+                assert!(baseline.keys().all(|role| values.contains_key(role)));
                 for value in values.values() {
                     assert!(crate::config::parse_rgb_hex(value).is_some());
                 }
