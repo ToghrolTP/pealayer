@@ -19,6 +19,14 @@ Right-click empty toolbar space for commands, or double-click it for the
 customization dialog. Drag icons or editor rows to reorder; cancellation,
 workspace locking and modal ownership do not change the layout. The editor
 also provides keyboard-friendly move and visibility controls.
+During a toolbar drag, its trailing menu fades into a red Trash target. Dropping
+there hides the shortcut; hovering and leaving, Escape, or a locked workspace
+do not. The same shared target paints the timeline toolbar's removal affordance.
+Unavailable commands remain draggable, but have subdued ink, no active/hover
+decoration and a blocked invocation cursor. Icons match the rail's scale while
+respecting extra-compact controls. The command palette uses bounded header and
+stable results slots so resizing, large fonts and filtering cannot create an
+oversized blank column or recenter the search field.
 **Ctrl+Shift+P** opens the searchable command
 palette even when the toolbar is hidden. Arrow keys select, Enter invokes one
 available command, and Escape cancels. Existing dialogs retain keyboard priority.

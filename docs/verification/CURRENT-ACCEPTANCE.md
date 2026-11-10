@@ -10,6 +10,13 @@ statements are not the present product state.
 
 ## Publication and workspace tools checkpoint
 
+[Command toolbar completion](workspace-toolbar-completion.md) fixes the oversized
+palette, implements shared dots-to-Trash hiding, matches icon scale and clarifies
+disabled paint/cursors. All 41 focused tests pass. The clean package is installed
+and hash-matched, with inspected real before/after native captures; original
+paused playback, placement and temporary tool visibility are preserved. PR #277
+tracks this follow-up; hosted checks and user-deferred Cafe delivery remain separate.
+
 [Sidebar panel recovery](sidebar-panel-recovery.md) preserves each rail panel's
 location, toggle behavior and assigned size, replaces donor sidebar chrome,
 removes empty menu dividers and fixes disappearing active icons. All 63 distinct

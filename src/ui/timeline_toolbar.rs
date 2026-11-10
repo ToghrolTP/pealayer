@@ -252,10 +252,6 @@ pub(super) fn draw(
     }
 
     let drag = egui::DragAndDrop::payload::<ToolbarDrag>(ui.ctx());
-    let drag_fade = crate::ui::motion::hover_alpha(ui,
-        Id::new("timeline-toolbar-hide-fade"),
-        drag.is_some(),
-    );
     let menu_rect = Rect::from_min_max(
         egui::pos2(output.rect.right() - CELL, output.rect.top()),
         output.rect.max,
@@ -276,32 +272,11 @@ pub(super) fn draw(
         Id::new("timeline-toolbar-removal-preview"),
         hide_hovered,
     );
-    if drag_fade > 0.0 {
-        toolbar.painter().rect_filled(
-            menu_rect.shrink(2.0),
-            4.0,
-            ui.visuals().error_fg_color.gamma_multiply(drag_fade),
-        );
-    }
-    for (icon, alpha) in [
-        (super::icons::DOTS_THREE, 1.0 - drag_fade),
-        (super::icons::TRASH, drag_fade),
-    ] {
-        let color = if icon == super::icons::TRASH {
-            Color32::WHITE
-        } else {
-            ui.visuals().text_color()
-        };
-        toolbar.painter().text(
-            menu_rect.center(),
-            Align2::CENTER_CENTER,
-            icon,
-            FontId::proportional(14.0),
-            color.gamma_multiply(alpha),
-        );
-    }
+    let hidden = super::action_customization::menu_hide_target::<ToolbarDrag>(
+        &mut toolbar, &response, drag.is_some(), FontId::proportional(14.0),
+    );
     if drag.is_some() {
-        if let Some(drag) = drop_payload(&response) {
+        if let Some(drag) = hidden {
             changed |= hide_action(&mut app.timeline_toolbar_hidden, drag.action);
         }
         response
