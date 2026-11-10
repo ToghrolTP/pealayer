@@ -92,6 +92,10 @@ pub struct Status {
     pub owned_process: bool,
     pub revision: u64,
     pub catalog_revision: u64,
+    #[serde(default)]
+    pub loaded_revision: u64,
+    #[serde(skip)]
+    pub(crate) load_failure_revision: u64,
     pub seek_revision: u64,
     pub reconnects: u64,
     pub acknowledged_commands: u64,
@@ -403,6 +407,7 @@ fn apply_event(s: &mut Status, v: &Value) -> bool {
     }
     if apply_clock_reply(s, v) { return true; }
     if v["event"] == "start-file" {
+        s.error = None;
         s.pending_seek = true;
         s.clock_refresh = s.clock_refresh.saturating_add(1);
         s.clock_query = None;
@@ -415,10 +420,12 @@ fn apply_event(s: &mut Status, v: &Value) -> bool {
         return true;
     }
     if v["event"] == "file-loaded" {
+        s.loaded_revision = s.loaded_revision.saturating_add(1);
         s.catalog_revision = s.catalog_revision.saturating_add(1);
         return true;
     }
     if v["event"] == "end-file" && v["reason"] == "error" {
+        s.load_failure_revision = s.load_failure_revision.saturating_add(1);
         s.error = Some("External mpv could not load or decode the media".into());
         return true;
     }
@@ -1244,6 +1251,28 @@ impl Transport {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn failed_load_revision_only_advances_on_decoder_failure() {
+        let mut status = Status::default();
+        apply_event(&mut status, &json!({"event":"start-file"}));
+        apply_event(&mut status, &json!({"event":"end-file","reason":"stop"}));
+        assert_eq!(status.load_failure_revision, 0);
+        apply_event(&mut status, &json!({"event":"end-file","reason":"error"}));
+        assert_eq!(status.load_failure_revision, 1);
+        assert_eq!(status.loaded_revision, 0);
+    }
+
+    #[test]
+    fn loaded_revision_is_not_inferred_from_catalog_or_start_events() {
+        let mut status=super::Status::default();
+        status.error=Some("previous decoder error".into());
+        super::apply_event(&mut status,&serde_json::json!({"event":"start-file"}));
+        assert_eq!(status.loaded_revision,0);assert!(status.error.is_none());
+        super::apply_event(&mut status,&serde_json::json!({"event":"property-change","name":"path","data":"next.mkv"}));
+        assert_eq!(status.loaded_revision,0);
+        super::apply_event(&mut status,&serde_json::json!({"event":"file-loaded"}));
+        assert_eq!(status.loaded_revision,1);
+    }
     use super::*;
     fn clock_fixture(paused: bool, age: Duration) -> Status {
         Status {

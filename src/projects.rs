@@ -190,6 +190,31 @@ pub enum Request {
     },
 }
 
+impl Request {
+    pub(crate) fn mutates_authority(&self) -> bool {
+        matches!(
+            self,
+            Self::Write { .. } | Self::Load { .. } | Self::Stage { .. }
+                | Self::ApplyScene { .. } | Self::CancelScene { .. }
+        )
+    }
+}
+
+pub(crate) fn rpc_payload(payload:&str,web:bool)->Option<String> {
+    let value:serde_json::Value=serde_json::from_str(payload).ok()?;
+    let request=if value.get("method").and_then(|v|v.as_str())==Some("pealayer.documents") {value.get("params").cloned().unwrap_or_default()}
+        else if value.get("command").and_then(|v|v.as_str())==Some("documents") {value.get("request").cloned().unwrap_or_default()} else {return None};
+    let id=value.get("id").cloned();
+    let result=(||{
+        let config=crate::platform::interop::get_live_config();
+        if web && (!config.web_allow_file_access || !config.web_allow_control || !config.web_allow_configuration) {return Err("Document operations require file, configuration and control permissions".into());}
+        let request:Request=serde_json::from_value(request).map_err(|e|format!("Invalid document operation: {e}"))?;
+        let request=serde_json::to_value(request).map_err(|e|e.to_string())?;
+        if let Some(client)=crate::peer::client() {client.post("/api/peer/documents",&request)} else {crate::peer::gui_request("/api/peer/documents",request)}
+    })();
+    Some(match result {Ok(value)=>crate::platform::interop::format_interop_response(id,&value),Err(error)=>crate::platform::interop::format_interop_error(id,-32000,&error)})
+}
+
 fn bounded_text(value: &str, max: usize, name: &str) -> Result<(), String> {
     if value.len() > max || value.contains('\0') {
         Err(format!("Invalid {name}"))
@@ -239,6 +264,22 @@ impl Scene {
             }
         }
         Ok(())
+    }
+    pub fn capture(cap: &crate::four_d::controller::HardwareCapabilities) -> Self {
+        let mut scene = Self { name: cap.board_name.clone(), board_identity: cap.board_profile.as_ref().map(|p|p.board_identity.clone()).unwrap_or_default(), ..Self::default() };
+        for control in crate::ui::hardware_control::managed_controls(cap) {
+            let value = if !cap.board_connected {None}
+            else if let Some(output) = cap.relays.iter().find(|o|o.key==control.key) {
+                cap.relays_sampled.then_some(ChannelValue::Boolean { on: cap.active_relays.contains(&output.id) })
+            } else if let Some(output) = cap.pwm_channels.iter().find(|o|o.key==control.key) {
+                cap.telemetry.pwm_logical_percent_milli.get(output.id as usize).copied().flatten().map(|percent_milli|ChannelValue::Pwm { percent_milli })
+            } else if control.kind == "motion" {
+                cap.motion.as_ref().and_then(|m|match control.key.as_str() {"seat.a"=>Some(&m.left),"seat.b"=>Some(&m.right),_=>None})
+                    .and_then(|side|match side.applied.as_str() {"up"=>Some(MotionDirection::Up),"down"=>Some(MotionDirection::Down),"stop"|"stopped"=>Some(MotionDirection::Stop),_=>None}).map(|direction|ChannelValue::Motion {direction})
+            } else { None };
+            if let Some(value)=value { scene.channels.insert(control.key.clone(),value); } else { scene.unsampled.push(control.key.clone()); }
+        }
+        scene
     }
 }
 
@@ -387,6 +428,9 @@ impl Media {
     }
 }
 pub fn validate_workspace(workspace: &crate::config::WorkspaceProfile) -> Result<(), String> {
+    if workspace.window_geometry.is_some_and(|geometry| !geometry.is_valid()) {
+        return Err("Invalid workspace window geometry".into());
+    }
     if let Some(layout) = &workspace.dock_layout {
         let mut dock = crate::ui::layout::decode_workspace(layout)?;
         if let Some(pane) = workspace
@@ -448,15 +492,7 @@ impl Document {
         }
     }
     pub fn read(path: &Path) -> Result<Self, String> {
-        let mut bytes = Vec::new();
-        std::fs::File::open(path)
-            .map_err(|e| format!("Open {}: {e}", path.display()))?
-            .take(MAX_DOCUMENT_BYTES + 1)
-            .read_to_end(&mut bytes)
-            .map_err(|e| e.to_string())?;
-        if bytes.len() as u64 > MAX_DOCUMENT_BYTES {
-            return Err("Document exceeds 32 MiB".into());
-        }
+        let bytes = read_document_bytes(path)?;
         let value: Self = serde_json::from_slice(&bytes)
             .map_err(|e| format!("Invalid Pealayer document: {e}"))?;
         value.validate()?;
@@ -469,6 +505,47 @@ impl Document {
             return Err("Document exceeds 32 MiB".into());
         }
         atomic_write(path, &bytes)
+    }
+}
+
+fn read_document_bytes(path: &Path) -> Result<Vec<u8>, String> {
+    let mut bytes = Vec::new();
+    std::fs::File::open(path)
+        .map_err(|e| format!("Open {}: {e}", path.display()))?
+        .take(MAX_DOCUMENT_BYTES + 1)
+        .read_to_end(&mut bytes)
+        .map_err(|e| e.to_string())?;
+    if bytes.len() as u64 > MAX_DOCUMENT_BYTES {
+        return Err("Document exceeds 32 MiB".into());
+    }
+    Ok(bytes)
+}
+
+pub(crate) enum TimelineFile {
+    Document(TimelineDocument),
+    Sidecar(Timeline),
+}
+
+/// Explicit timeline opening also accepts the raw media-sidecar format. A
+/// tagged document never falls back to the sidecar reader after an error.
+pub(crate) fn read_timeline_file(path: &Path) -> Result<TimelineFile, String> {
+    let bytes = read_document_bytes(path)?;
+    let value: serde_json::Value = serde_json::from_slice(&bytes)
+        .map_err(|e| format!("Invalid Pealayer timeline: {e}"))?;
+    let tagged = value.get("kind").is_some();
+    drop(value);
+    if tagged {
+        let document: Document = serde_json::from_slice(&bytes)
+            .map_err(|e| format!("Invalid Pealayer document: {e}"))?;
+        let Document::Timeline(timeline) = document else {
+            return Err("Choose a Pealayer timeline document".into());
+        };
+        timeline.validate()?;
+        Ok(TimelineFile::Document(timeline))
+    } else {
+        serde_json::from_slice(&bytes)
+            .map(TimelineFile::Sidecar)
+            .map_err(|e| format!("Invalid Pealayer timeline sidecar: {e}"))
     }
 }
 
@@ -699,6 +776,62 @@ mod tests {
         std::fs::create_dir(&path).unwrap();
         path
     }
+    #[test]
+    fn workspace_document_retains_independent_view_scroll_offsets() {
+        use eframe::egui::{Context, Id, scroll_area::State, vec2};
+
+        let before = Context::default();
+        let views = [
+            (Id::unique("project-appearance-scroll"), vec2(0.0, 184.5)),
+            (Id::unique("project-terminal-scroll"), vec2(0.0, 41.0)),
+        ];
+        for (id, offset) in views {
+            let state: State = serde_json::from_value(serde_json::json!({
+                "offset": offset,
+                "max_offset": vec2(0.0, 1000.0),
+            })).unwrap();
+            state.store(&before, id);
+        }
+        let document = Document::Workspace(crate::config::WorkspaceProfile {
+            egui_memory: before.memory(|memory| serde_json::to_string(memory).ok()),
+            ..Default::default()
+        });
+        let encoded = serde_json::to_vec(&document).unwrap();
+        let decoded: Document = serde_json::from_slice(&encoded).unwrap();
+        decoded.validate().unwrap();
+        let Document::Workspace(workspace) = decoded else { unreachable!() };
+        let restored = Context::default();
+        restored.memory_mut(|memory| {
+            *memory = serde_json::from_str(workspace.egui_memory.as_deref().unwrap()).unwrap();
+        });
+        for (id, offset) in views {
+            assert_eq!(State::load(&restored, id).unwrap().clamped_offset(), offset);
+        }
+    }
+
+    #[test]
+    fn explicit_timeline_open_preserves_sidecars_and_rejects_wrong_tagged_documents() {
+        let dir = temp_dir();
+        let path = dir.join("timeline.json");
+        let mut timeline = Timeline::default();
+        timeline.track_muted.insert(5);
+        timeline.save_to_file(&path).unwrap();
+        assert!(matches!(read_timeline_file(&path).unwrap(), TimelineFile::Sidecar(value) if value == timeline));
+
+        let document = TimelineDocument {
+            timeline,
+            view: TimelineView { position_ms: 3640, zoom: 125.0, ..Default::default() },
+        };
+        Document::Timeline(document.clone()).write(&path).unwrap();
+        assert!(matches!(read_timeline_file(&path).unwrap(), TimelineFile::Document(value) if value == document));
+
+        Document::Scene(Scene::default()).write(&path).unwrap();
+        assert_eq!(read_timeline_file(&path).err().as_deref(), Some("Choose a Pealayer timeline document"));
+        std::fs::write(&path, br#"{"kind":null,"instances":[],"templates":[]}"#).unwrap();
+        assert!(read_timeline_file(&path).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
     #[test]
     fn discovery_requires_identity_and_preserves_requested_media_when_excluded() {
         let dir = temp_dir();

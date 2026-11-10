@@ -511,6 +511,7 @@ pub enum EngineMessage {
         operation: String,
         method: String,
         params: serde_json::Value,
+        deadline: Option<std::time::Instant>,
     },
     CoalescedControllerIntent {
         created: std::time::Instant,
@@ -623,11 +624,19 @@ impl EngineHandle {
         method: impl Into<String>,
         params: serde_json::Value,
     ) -> Result<(), String> {
+        self.request_controller_call_before(operation,method,params,None)
+    }
+
+    pub fn request_controller_call_before(
+        &self, operation: impl Into<String>, method: impl Into<String>,
+        params: serde_json::Value, deadline: Option<std::time::Instant>,
+    ) -> Result<(), String> {
         self.sender
             .send(EngineMessage::TrackedControllerCall {
                 operation: operation.into(),
                 method: method.into(),
                 params,
+                deadline,
             })
             .map_err(|_| "hardware engine is unavailable".to_string())
     }
@@ -1475,8 +1484,12 @@ pub fn spawn_engine() -> EngineHandle {
                         operation,
                         method,
                         params,
+                        deadline,
                     } => {
-                        let result = if engine_estop.load(Ordering::SeqCst)
+                        let result = if deadline.is_some_and(|deadline| std::time::Instant::now()>=deadline) {
+                            let mut error: super::controller::ControllerRpcError="hardware command expired before dispatch".to_string().into();
+                            error.outcome=Some("rejected".into());Err(error)
+                        } else if engine_estop.load(Ordering::SeqCst)
                             && !controller_call_allowed_during_estop(&method, &params)
                         {
                             Err("hardware command blocked while E-STOP is active".to_string().into())
@@ -1500,7 +1513,7 @@ pub fn spawn_engine() -> EngineHandle {
                             let error_detail = result.as_ref().err().map(|error| serde_json::json!({
                                 "message":error.message,"kind":error.kind,"resource":error.resource,
                                 "retryable":error.retryable,"retry_after_ms":error.retry_after_ms,
-                                "transport_failed":error.transport_failed
+                                "transport_failed":error.transport_failed,"outcome":error.outcome
                             }));
                             results.push_back(ControllerCallResult { operation, error_detail, result: result.map_err(|error|error.message) });
                         }
@@ -2249,9 +2262,11 @@ fn spawn_peer_engine() -> EngineHandle {
             for message in incoming {
                     let call=|method:String,params:serde_json::Value| client.post("/api/peer/controller",&serde_json::json!({"method":method,"params":params}));
                     match message {
-                        EngineMessage::TrackedControllerCall {operation,method,params}=>{
-                            let result=call(method,params);
-                            if let Ok(mut values)=results.lock(){values.push_back(ControllerCallResult {operation,result,error_detail:None});}
+                        EngineMessage::TrackedControllerCall {operation,method,params,deadline}=>{
+                            let expired=deadline.is_some_and(|deadline|std::time::Instant::now()>=deadline);
+                            let result=if expired {Err("hardware command expired before dispatch".into())}else{call(method,params)};
+                            let error_detail=expired.then(||serde_json::json!({"outcome":"rejected"}));
+                            if let Ok(mut values)=results.lock(){values.push_back(ControllerCallResult {operation,result,error_detail});}
                             notify_state_change(&notifier);
                         }
                         EngineMessage::ReplyControllerCall {method,params,reply}=>{let _=reply.send(call(method,params));}

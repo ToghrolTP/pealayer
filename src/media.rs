@@ -30,10 +30,16 @@ pub fn timeline_state(
     let Some(target) = target else {
         return MediaTimelineState::NoMedia;
     };
+    let live_transport = is_live_media_target(target);
+    // A live demuxer can report a duration for the received window without
+    // supporting seeking. Keep the live presentation for those windows.
+    if live_transport && !seekable {
+        return MediaTimelineState::Live;
+    }
     if duration.is_finite() && duration > 0.0 {
         return MediaTimelineState::Finite { duration, seekable };
     }
-    if is_live_media_target(target) || metadata_loaded {
+    if live_transport || metadata_loaded {
         MediaTimelineState::Live
     } else {
         MediaTimelineState::Determining
@@ -344,6 +350,28 @@ mod tests {
             MediaTimelineState::Finite {
                 duration: 125.0,
                 seekable: true,
+            }
+        );
+    }
+
+    #[test]
+    fn timeline_keeps_nonseekable_live_transports_live_when_duration_is_reported() {
+        assert_eq!(
+            timeline_state(Some("rtsp://camera.invalid/live"), true, 30.0, false),
+            MediaTimelineState::Live
+        );
+        assert_eq!(
+            timeline_state(Some("rtsp://camera.invalid/recording"), true, 30.0, true),
+            MediaTimelineState::Finite {
+                duration: 30.0,
+                seekable: true,
+            }
+        );
+        assert_eq!(
+            timeline_state(Some("https://cdn.invalid/clip.mp4"), true, 30.0, false),
+            MediaTimelineState::Finite {
+                duration: 30.0,
+                seekable: false,
             }
         );
     }
