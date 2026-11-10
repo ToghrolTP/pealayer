@@ -1,6 +1,14 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { accentForeground, controlDensityHeight, controlDensityText, mergeAppearance, paletteName, resolvedAccent, resolvedAppearanceTheme, uiFontCss, monoFontCss } from '../src/appearance.ts';
+import { accentForeground, controlDensityHeight, controlDensityText, mergeAppearance, paletteName, resolvedAccent, resolvedAppearanceTheme, uiFontCss, monoFontCss, statusFontCss } from '../src/appearance.ts';
+
+test('status uses proportional platform defaults and preserves custom font choices', () => {
+  assert.match(statusFontCss('system', '', 'Windows NT'), /^PealayerInter/);
+  assert.match(statusFontCss('system', '', 'MacIntel'), /^-apple-system/);
+  assert.match(statusFontCss('system', '', 'Linux'), /^Roboto/);
+  assert.match(statusFontCss('custom', 'My UI', 'Windows'), /^"My UI", PealayerInter/);
+  assert.doesNotMatch(statusFontCss('system', '', 'Windows'), /mono/i);
+});
 
 test('the original 18-point density remains available without reinterpreting saved choices', () => {
   for (const [choice, height] of Object.entries({ extra_compact: 18, compact: 24, regular: 28, comfortable: 32, spacious: 36 })) {

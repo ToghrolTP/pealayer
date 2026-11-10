@@ -10,6 +10,15 @@ statements are not the present product state.
 
 ## Publication and workspace tools checkpoint
 
+[Proportional numeric status typography](status-tabular-typography.md) fixes the
+FPS icon/digit-center mismatch, bundles Inter for Windows and shares tabular
+digit layout without requiring a monospace font. All 59 focused native tests and
+seven Web appearance tests pass, plus focused Web status/preview/RF checks. The
+canonical package is installed and hash-matched; inspected enlarged native
+captures show the prior 2-pixel discrepancy removed. The full remaining mono
+inventory and native OpenType limitation are documented. PR #278 owns this work;
+native macOS/Linux visual and deferred Cafe acceptance are not inferred.
+
 [Command toolbar completion](workspace-toolbar-completion.md) fixes the oversized
 palette, implements shared dots-to-Trash hiding, matches icon scale and clarifies
 disabled paint/cursors. All 41 focused tests pass. The clean package is installed

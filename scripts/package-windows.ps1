@@ -226,6 +226,7 @@ $fontDirectory = Join-Path $outputDirectory 'assets\fonts'
 New-Item -ItemType Directory -Force -Path $fontDirectory | Out-Null
 $packagedFont = Join-Path $fontDirectory 'Vazirmatn-Regular.ttf'
 [void](Copy-PealayerFileLowWrite -Source $fontSource -Destination $packagedFont)
+[void](Copy-PealayerFileLowWrite -Source (Join-Path $repositoryRoot 'assets\fonts\Inter-LICENSE.txt') -Destination (Join-Path $fontDirectory 'Inter-LICENSE.txt'))
 $webDistribution = Join-Path $repositoryRoot 'web_ui\dist'
 $webUiPackaged = $false
 if (Test-Path -LiteralPath (Join-Path $webDistribution 'index.html')) {
@@ -247,7 +248,7 @@ if (Test-Path -LiteralPath (Join-Path $webDistribution 'index.html')) {
 }
 Restore-PackageWebDistribution -RepositoryRoot $repositoryRoot
 
-$artifacts = @($effectiveExecutableFile,'pealayer-downloader.exe','libmpv-2.dll','mpv-2.dll','assets/fonts/Vazirmatn-Regular.ttf') | ForEach-Object {
+$artifacts = @($effectiveExecutableFile,'pealayer-downloader.exe','libmpv-2.dll','mpv-2.dll','assets/fonts/Vazirmatn-Regular.ttf','assets/fonts/Inter-LICENSE.txt') | ForEach-Object {
     $path = Join-Path $outputDirectory $_
     [ordered]@{
         path = $_
