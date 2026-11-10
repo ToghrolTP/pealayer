@@ -126,3 +126,27 @@ profiles and generated Web build output are not part of this checkpoint.
   Rollback completed in about one second internally and one and a half seconds
   through managed external mpv. Reordered/stale event fault injection, portable
   controller dependencies, scene output and production deployment remain open.
+
+### Loopback scene verification
+
+The [Virtual Board scene fixture](project-persistence-virtual-scene-fixture.json)
+used a paused synthetic video, a separately owned loopback coordinator, and an
+in-memory board with host peripherals disabled. Staging made no output change
+and apply without confirmation returned HTTP 400. An explicitly selected relay
+changed with a correlated controller acknowledgement and matching sampled
+readback. An unselected relay stayed unchanged. A second confirmed operation
+restored the original output. Both changes appeared in scene capture without a
+manual refresh.
+
+The fixture exposed two integration gaps. The coordinator advertises relay
+transport as control relay and general-purpose ownership as role user-output.
+Scene preflight now consumes both fields and rejects firmware-owned roles.
+IPC-only coordinators may lack push telemetry, so the completed operation
+requests one refresh through the existing catalog path.
+
+After reconciling Terminal on main, 14 scene operation tests, the document
+permission test, the external decoder failure revision test, and the Web
+TypeScript and guardrails passed. Isolated native and external decoder
+restoration and corrupt-file rollback also passed again. Physical output, PWM
+recall revision, cancellation under live transport failure, and deployment
+remain separate acceptance gates.

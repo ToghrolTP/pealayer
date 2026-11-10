@@ -1,0 +1,37 @@
+{
+  "source_revision": "ec0f8e96cb7e66a14cbd45253e059ca17e5ab537",
+  "base_revision": "46939af4a5046ff6d04032fa0e8b1f39ed6e47a3",
+  "executable_sha256": "9111cabb5ee95e6c6147d7a4e837b97e06947081c8d091c475d09caf7600d16c",
+  "coordinator_sha256": "256cd9019b56ad8b323538a79867d97c9d3f734be230f35cdf39d73993b4d85c",
+  "virtual_board_sha256": "872cef4fd38a5d3491857bed630e7c8319534a56ee20f18ba95160be8ec43ba7",
+  "transport": "loopback-only memory Virtual Board",
+  "isolation": "Owned loopback coordinator started with no-connect, in-memory board started with no host peripherals",
+  "physical_board": false,
+  "automatic_catalog_refresh": true,
+  "readback_deadline_seconds": 8,
+  "cases": [
+    {
+      "result": "pass",
+      "case": "scene stage data-only"
+    },
+    {
+      "status": 400,
+      "case": "unconfirmed apply denied"
+    },
+    {
+      "acknowledgement": "acknowledged",
+      "operation": "completed",
+      "unselected_sibling_unchanged": true,
+      "case": "confirmed selected relay write",
+      "target": "relay.5",
+      "readback": true
+    },
+    {
+      "operation": "completed",
+      "target": "relay.5",
+      "case": "confirmed simulated baseline restore",
+      "readback": false,
+      "acknowledgement": "acknowledged"
+    }
+  ]
+}
