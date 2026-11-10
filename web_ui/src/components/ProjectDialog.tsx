@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
 import { Alert, Button, Checkbox, Collapse, Flex, Form, Input, InputNumber, Modal, Select, Space, Typography } from 'antd';
-import { DownloadOutlined, FolderOpenOutlined, SaveOutlined } from '@ant-design/icons';
+import { DownloadOutlined, FolderOpenOutlined, ImportOutlined, SaveOutlined } from '@ant-design/icons';
 import { ServerFilePicker } from './ServerFilePicker';
 import type { UiLocale } from '../i18n';
 import './projects.css';
@@ -9,6 +9,7 @@ type Key = 'scene' | 'timeline' | 'media' | 'workspace';
 type Selection = Record<Key, boolean>;
 interface Document { kind: string; data: any }
 const keys: Key[] = ['scene', 'timeline', 'media', 'workspace'];
+const componentLabels: Record<Key, string> = { scene: 'Scene', timeline: 'Timeline', media: 'Media', workspace: 'Workspace' };
 const all: Selection = { scene: true, timeline: true, media: true, workspace: true };
 
 export function ProjectDialog({ base, locale, onClose }: { base: string; locale: UiLocale; onClose: () => void }) {
@@ -29,6 +30,7 @@ export function ProjectDialog({ base, locale, onClose }: { base: string; locale:
   const [notice, setNotice] = useState('');
   const [picker, setPicker] = useState<{ title: string; extensions: string[]; select: (path: string) => void } | null>(null);
   const [closeConfirm, setCloseConfirm] = useState(false);
+  const importInput = useRef<HTMLInputElement>(null);
   const selected = () => {
     const result = structuredClone(document);
     if (result?.kind === 'pealayer-project') keys.forEach(key => { if (!include[key]) result.data[key] = null; });
@@ -99,8 +101,11 @@ export function ProjectDialog({ base, locale, onClose }: { base: string; locale:
           <Button disabled={!path} onClick={() => void request({ operation: 'read', path })}>Read file</Button>
           <Button onClick={() => void request({ operation: 'snapshot' })}>Capture session</Button>
           <Button onClick={() => void request({ operation: 'capture_scene' })}>Capture hardware scene</Button>
-          <label>Import JSON <input type="file" accept=".json" disabled={busy} onChange={async e => {
-            const file = e.target.files?.[0]; if (!file) return;
+          <Button icon={<ImportOutlined />} onClick={() => importInput.current?.click()}>Import JSON</Button>
+          <input ref={importInput} hidden type="file" accept=".json" disabled={busy} onChange={async e => {
+            const file = e.target.files?.[0];
+            e.target.value = '';
+            if (!file) return;
             try { if (file.size > 32 * 1024 * 1024) throw new Error('Document exceeds 32 MiB'); const value = JSON.parse(await file.text());
               if (!['pealayer-project', 'pealayer-scene', 'pealayer-timeline', 'pealayer-media', 'pealayer-workspace'].includes(value.kind)) throw new Error('Not a Pealayer document');
               // Parse and validate the complete typed contract on the authority
@@ -108,7 +113,7 @@ export function ProjectDialog({ base, locale, onClose }: { base: string; locale:
               const validated = await request({ operation: 'validate', document: value });
               if (validated?.document) { setBaseline(''); setNotice('Imported for review.'); }
             } catch (reason) { setError(String(reason)); }
-          }} /></label>
+          }} />
         </Flex>
         {project && <>
           <Form.Item label="Title"><Input value={project.title} onChange={e => edit(d => { d.data.title = e.target.value; })} /></Form.Item>
@@ -116,7 +121,7 @@ export function ProjectDialog({ base, locale, onClose }: { base: string; locale:
           <Typography.Title level={5}>Save / load components</Typography.Title>
           {keys.map(key => <div className="project-dialog__component" key={key}>
             <Flex gap={12} wrap align="center">
-              <Checkbox checked={include[key]} onChange={e => setInclude({ ...include, [key]: e.target.checked })}>{key}</Checkbox>
+              <Checkbox checked={include[key]} onChange={e => setInclude({ ...include, [key]: e.target.checked })}>{componentLabels[key]}</Checkbox>
               <Checkbox checked={project.load[key]} disabled={!include[key]} onChange={e => edit(d => { d.data.load[key] = e.target.checked; })}>Load</Checkbox>
               <Select aria-label={`${key} source`} value={project[key]?.source ?? 'absent'} options={[{ value: 'embedded', label: 'Embedded' }, { value: 'file', label: 'Separate file' }, { value: 'absent', label: 'Not captured', disabled: true }]}
                 onChange={source => { if (source === 'file') edit(d => { d.data[key] = { source: 'file', path: '' }; }); else setError('Capture the current session to embed this component.'); }} />
