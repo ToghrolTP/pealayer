@@ -547,6 +547,16 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
         PreferenceControl::accent(config),
         PreferenceControl::select("workspace_ui", "appearance", "Interface", "Workspace interface",
             &[("craft_ui", "CraftUI"), ("egui_dock", "egui Dock")]),
+        PreferenceControl::select("native_monitor_style", "appearance", "Workspace panels", "Program Monitor controls",
+            &[("compact", "Compact"), ("film_craft", "FilmCraft")]),
+        PreferenceControl::select("native_transport_style", "appearance", "Workspace panels", "Simple transport controls",
+            &[("compact", "Compact"), ("film_craft", "FilmCraft")]),
+        PreferenceControl::select("monitor_preview.aspect", "appearance", "Program Monitor preview", "Preview aspect ratio",
+            &[("source", "Fit source"), ("wide", "16:9"), ("classic", "4:3"), ("cinema", "2.35:1")]),
+        PreferenceControl::select("monitor_preview.resolution", "appearance", "Program Monitor preview", "Preview render resolution",
+            &[("full", "Full"), ("half", "1/2"), ("quarter", "1/4"), ("eighth", "1/8")]),
+        PreferenceControl::select("native_timeline_style", "appearance", "Workspace panels", "Timeline ruler",
+            &[("standard", "Standard"), ("film_craft", "FilmCraft")]),
         PreferenceControl::boolean("craft_show_close_buttons", "appearance", "Workspace panels", "Show CraftUI panel close buttons"),
         PreferenceControl::boolean("craft_show_collapse_buttons", "appearance", "Workspace panels", "Show CraftUI collapse buttons"),
         PreferenceControl::boolean("preferences_grouped_navigation", "appearance", "Interface", "Group Preferences navigation"),
@@ -1429,6 +1439,11 @@ fn semantic_preference_icon(control: &PreferenceControl) -> &'static str {
         "ui_animation_mode" => "waveform",
         "ui_control_density" => "sliders-horizontal",
         "workspace_ui" => "tabs",
+        "native_monitor_style" => "monitor-play",
+        "native_transport_style" => "play",
+        "monitor_preview.aspect" => "frame-corners",
+        "monitor_preview.resolution" => "monitor",
+        "native_timeline_style" => "ruler",
         "craft_show_close_buttons" => "x",
         "craft_show_collapse_buttons" => "caret-down",
         "preferences_grouped_navigation" => "list-checks",
@@ -1512,6 +1527,50 @@ pub fn set_value_at_path(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn native_panel_styles_have_independent_api_controls_and_preserve_saved_layouts() {
+        use crate::config::{AppConfig, ControlBarAction, WorkspaceUi};
+        for workspace_ui in [WorkspaceUi::EguiDock, WorkspaceUi::CraftUi] {
+            let mut config = AppConfig { workspace_ui, ..Default::default() }
+                .apply_patch(&serde_json::json!({})).unwrap();
+            config.ui.sidebar_rail.width = 396.0;
+            config.workspace_session.name = "Authoring layout".into();
+            config.workspace_session.dialogs.about = true;
+            config.control_bars.monitor.order.swap(0, 3);
+            config.control_bars.monitor.hidden[ControlBarAction::VideoTrack as usize] = false;
+            let original = serde_json::to_value(&config).unwrap();
+            let contract = super::preferences_contract(&config);
+            for (key, default, icon) in [
+                ("native_monitor_style", "compact", "monitor-play"),
+                ("native_timeline_style", "standard", "ruler"),
+            ] {
+                let controls: Vec<_> = contract.controls.iter().filter(|row| row.key == key).collect();
+                assert_eq!(controls.len(), 1, "one shared preference owner for {key}");
+                let control = controls[0];
+                assert!(matches!(control.kind, super::PreferenceControlKind::Select));
+                assert_eq!((control.section, control.group, control.icon), ("appearance", "Workspace panels", icon));
+                assert_eq!(control.options.iter().map(|option| option.value.as_str().unwrap()).collect::<Vec<_>>(), [default, "film_craft"]);
+                assert_eq!(contract.defaults[key], default);
+            }
+            for monitor in ["compact", "film_craft"] {
+                for timeline in ["standard", "film_craft"] {
+                    let patched = config.apply_patch(&serde_json::json!({"native_monitor_style": monitor})).unwrap()
+                        .apply_patch(&serde_json::json!({"native_timeline_style": timeline})).unwrap();
+                    let restored: AppConfig = serde_json::from_value(serde_json::to_value(&patched).unwrap()).unwrap();
+                    let mut expected = original.clone();
+                    expected["native_monitor_style"] = serde_json::json!(monitor);
+                    expected["native_timeline_style"] = serde_json::json!(timeline);
+                    let api = super::preferences_contract(&restored);
+                    assert_eq!(api.values, expected, "style-only API patches must preserve all other settings");
+                }
+            }
+            for patch in [serde_json::json!({"native_monitor_style": "old"}), serde_json::json!({"native_timeline_style": "new"}), serde_json::json!({"native_monitor_style": false})] {
+                assert!(config.apply_patch(&patch).is_err());
+                assert_eq!(serde_json::to_value(&config).unwrap(), original);
+            }
+        }
+    }
+
     #[test]
     fn workspace_tools_contract_preserves_defaults_and_respects_compiled_features() {
         let config = crate::config::AppConfig::default();

@@ -18673,6 +18673,13 @@ impl<'a> PealayerTabViewer<'a> {
                                             egui::Stroke::new(1.0_f32, craft_tokens.separator),
                                         );
 
+                                        let filmcraft_ruler = self.app.native_timeline_style == crate::config::NativeTimelineStyle::FilmCraft;
+                                        if filmcraft_ruler {
+                                            super::craft_theme::paint_buffered_overview(&ruler_painter,ruler_rect,
+                                                rect.left(),zoom,self.app.buffered_until(),&craft_tokens);
+                                            super::craft_theme::paint_frame_ruler(&ruler_painter, ruler_rect,
+                                                rect.left(), zoom, self.app.media_fps, &craft_tokens);
+                                        } else {
                                         let label_step: i32 = if zoom < 30.0 {
                                             5
                                         } else if zoom < 60.0 {
@@ -18729,6 +18736,8 @@ impl<'a> PealayerTabViewer<'a> {
                                                     }
                                                 }
                                             }
+                                        }
+
                                         }
 
                                         // Media chapters are file-owned navigation landmarks,
@@ -18820,6 +18829,11 @@ impl<'a> PealayerTabViewer<'a> {
                                         let current_playhead_time = self.app.seek_pos.unwrap_or(self.app.playback_time);
                                         let playhead_x = rect.min.x + (current_playhead_time as f32 * zoom);
                                         if playhead_x <= rect.max.x {
+                                            if filmcraft_ruler {
+                                                super::craft_theme::paint_filmcraft_playhead(&painter, &ruler_painter,
+                                                    playhead_x, ruler_rect.bottom() - 13.0, ruler_rect.bottom(),
+                                                    rect.bottom(), craft_tokens.playhead);
+                                            } else {
                                             // Keep the playhead handle wholly inside the ruler.
                                             // The timeline line begins at the track boundary so it
                                             // cannot make the first media lane look like the ruler.
@@ -18835,6 +18849,7 @@ impl<'a> PealayerTabViewer<'a> {
                                                 egui::pos2(playhead_x, ruler_rect.bottom()),
                                             ];
                                             ruler_painter.add(egui::Shape::convex_polygon(points, egui::Color32::RED, egui::Stroke::NONE));
+                                            }
                                         }
 
                                         // Draw Snap line if active

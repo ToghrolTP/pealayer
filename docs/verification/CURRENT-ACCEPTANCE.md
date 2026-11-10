@@ -8,6 +8,21 @@ This is the current index. Older handoffs and installed-build receipts remain
 historical evidence; their old open-PR, missing-feature or disconnected-runtime
 statements are not the present product state.
 
+## Configurable native presentation review
+
+[PR #248's preservation review](design-variants-review.md) retains Compact
+monitor controls, the Standard ruler, sidebar and saved workspace behavior,
+with independent optional FilmCraft presentations in both workspace renderers.
+The 34 preceding stacked PRs were consolidated with a history-preserving merge
+into main. Project persistence #227 remains a separate unfinished draft;
+#248 remains open for explicit user merge approval. Local tests and the matched
+native screenshot gallery are recorded in the linked review. Existing taskbar
+artwork acceptance and deferred Cafe delivery are not closed by source merging.
+The follow-up audit confirmed that ancestry alone had concealed lost live
+FilmCraft controls. Those controls and working preview selectors are restored;
+the superseded gallery is replaced with inspected nonzero-playhead comparisons.
+The linked audit records the passing tests and incomplete production-package gate.
+
 ## Publication and workspace tools checkpoint
 
 [Proportional numeric status typography](status-tabular-typography.md) fixes the

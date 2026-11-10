@@ -623,6 +623,10 @@ pub struct PealayerApp {
     pub(crate) direction_preference: crate::config::AppDirection,
     pub(crate) theme_preference: crate::config::AppTheme,
     pub(crate) color_palette: crate::config::ColorPalette,
+    pub(crate) native_monitor_style: crate::config::NativeMonitorStyle,
+    pub(crate) native_transport_style: crate::config::NativeMonitorStyle,
+    pub(crate) monitor_preview: crate::config::MonitorPreview,
+    pub(crate) native_timeline_style: crate::config::NativeTimelineStyle,
     pub(crate) rtl: bool,
     pub(crate) mpv: crate::mpv::player::Player,
     pub(crate) mpv_client: Arc<libmpv2::Mpv>,
@@ -7592,6 +7596,10 @@ impl PealayerApp {
         cfg.direction = self.direction_preference;
         cfg.theme = self.theme_preference;
         cfg.color_palette = self.color_palette;
+        cfg.native_monitor_style = self.native_monitor_style;
+        cfg.native_transport_style = self.native_transport_style;
+        cfg.monitor_preview = self.monitor_preview;
+        cfg.native_timeline_style = self.native_timeline_style;
         cfg.hardware_endpoint =
             (!self.serial_port.trim().is_empty()).then(|| self.serial_port.clone());
         cfg.auto_connect_hardware = self.auto_connect_hardware;
@@ -7958,6 +7966,10 @@ impl PealayerApp {
         self.rtl = crate::config::resolve_rtl(self.direction_preference, self.language);
         self.theme_preference = crate::config::resolved_theme(&config);
         self.color_palette = config.color_palette;
+        self.native_monitor_style = config.native_monitor_style;
+        self.native_transport_style = config.native_transport_style;
+        self.monitor_preview = config.monitor_preview;
+        self.native_timeline_style = config.native_timeline_style;
         self.serial_port = endpoint.clone();
         self.auto_connect_hardware = config.auto_connect_hardware;
         self.pause_on_hardware_disconnect = config.pause_on_hardware_disconnect;
@@ -10103,6 +10115,10 @@ impl Default for PealayerApp {
             direction_preference: crate::config::AppDirection::Auto,
             theme_preference: crate::config::AppTheme::System,
             color_palette: crate::config::ColorPalette::Native,
+            native_monitor_style: crate::config::NativeMonitorStyle::default(),
+            native_transport_style: crate::config::NativeMonitorStyle::default(),
+            monitor_preview: crate::config::MonitorPreview::default(),
+            native_timeline_style: crate::config::NativeTimelineStyle::default(),
             rtl: crate::config::resolve_rtl(
                 crate::config::AppDirection::Auto,
                 crate::config::resolve_language(crate::config::AppLanguage::System),
