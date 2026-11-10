@@ -4,7 +4,9 @@ Verified application code: `019d32828427ad2e02882e400b5e48e960856364`, on draft 
 
 ## Choose a palette
 
-In desktop or Web **Preferences → Appearance → Interface → Color palette**, choose **Neutral (default)** for the original gray palette, or **Studio** for the newer blue-gray palette. Dark/light mode and accent are independent settings. Studio's shared JSON color definitions were preserved unchanged.
+In desktop or Web **Preferences → Appearance → Interface → Color palette**, choose **Neutral (default)** for the original gray palette, **Studio** for blue-gray surfaces, or **Pastel** for slate and lavender surfaces with lilac-to-rose gradients. Theme mode and accent remain independent settings.
+
+Pastel uses the same shared dark and light palette catalog in desktop and Web. The desktop preview, menu accent, and media timeline strips use rounded gradient fills. Web uses the same gradient stops for its header and palette preview. Cyan, mint, and rose distinguish the native voltage, current, and temperature plots. The verification below records the original Studio and Neutral rollout.
 
 The local instance was left on Neutral, with its existing System theme and System accent. Changing factory defaults does not overwrite an explicitly saved Studio preference on another installation.
 

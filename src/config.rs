@@ -414,6 +414,8 @@ pub enum AppTheme {
 pub enum ColorPalette {
     /// The blue-gray Studio palette, shared by the Web and desktop renderers.
     Studio,
+    /// Slate surfaces and lilac-to-rose accents inspired by pastel dashboards.
+    Pastel,
     /// The original neutral desktop palette remains the default.
     #[default]
     Native,

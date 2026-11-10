@@ -302,9 +302,13 @@ const App: React.FC = () => {
 
   useLayoutEffect(() => {
     document.documentElement.dataset.palette = paletteName;
+    const style = document.documentElement.style;
     for (const [role, value] of Object.entries(palette)) {
-      document.documentElement.style.setProperty(`--${role}`, value);
+      style.setProperty(`--${role}`, value);
     }
+    return () => {
+      for (const role of Object.keys(palette)) style.removeProperty(`--${role}`);
+    };
   }, [paletteName, palette]);
 
   useEffect(() => {

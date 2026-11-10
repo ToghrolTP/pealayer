@@ -1,3 +1,5 @@
+export type ColorPalette = 'native' | 'studio' | 'pastel';
+
 export type ControlDensity = 'extra_compact' | 'compact' | 'regular' | 'comfortable' | 'spacious';
 export const controlDensityHeight = (choice: string): number => {
   switch (choice) {
@@ -26,7 +28,7 @@ export interface AppearanceState {
   workspace_ui: 'craft_ui' | 'egui_dock';
   preferences_grouped_navigation: boolean;
   theme: 'system' | 'light' | 'dark';
-  color_palette: 'studio' | 'native';
+  color_palette: ColorPalette;
   accent_color: string;
   custom_accent_color?: string | null;
   resolved_theme?: 'light' | 'dark';
@@ -101,6 +103,7 @@ export function accentForeground(accent: string): string {
   return (red * 299 + green * 587 + blue * 114) > 150_000 ? '#141414' : '#ffffff';
 }
 
-export function paletteName(config: Record<string, any> | null): 'native' | 'studio' {
-  return config?.color_palette === 'studio' ? 'studio' : 'native';
+export function paletteName(config: Record<string, unknown> | null): ColorPalette {
+  const palette = config?.color_palette;
+  return palette === 'studio' || palette === 'pastel' ? palette : 'native';
 }

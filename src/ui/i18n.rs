@@ -501,6 +501,7 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "New group" => "گروه جدید",
         "Color palette" => "پالت رنگ",
         "Studio" => "استودیو",
+        "Pastel" => "پاستل",
         "Neutral" => "خنثی",
         "Neutral (default)" => "خنثی (پیش‌فرض)",
         "Create effect" => "ایجاد جلوه",
