@@ -141,8 +141,8 @@ pub fn request(
     ctx: &eframe::egui::Context,
 ) -> Result<Value, String> {
     if let Operation::Input { data, .. } = &operation {
-        if data.is_empty() || data.len() > 16384 || data.contains('\0') {
-            return Err("Terminal input must contain 1–16384 bytes without NUL".into());
+        if data.is_empty() || data.len() > 16384 {
+            return Err("Terminal input must contain 1–16384 bytes".into());
         }
     }
     if let Some(grant) = grant {

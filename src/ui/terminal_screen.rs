@@ -1,5 +1,6 @@
 //! Native cell-grid view of the VT parser. No process, clipboard OSC, or transport
 //! side effects: the caller owns the parser, input delivery and PTY lifecycle.
+use super::terminal_parser::Parser;
 use eframe::egui;
 
 // One bracketed paste stays below the backend's 32 KiB atomic input limit.
@@ -312,7 +313,7 @@ fn selected_text(screen: &vt100::Screen, selection: Option<(usize, usize)>) -> S
 /// The caller must also suppress earlier global shortcuts while this Id owns focus.
 pub fn show(
     ui: &mut egui::Ui,
-    parser: &mut vt100::Parser,
+    parser: &mut Parser,
     state: &mut ScreenViewState,
     id: egui::Id,
     interactive: bool,
@@ -331,7 +332,7 @@ pub fn show(
 
 pub fn show_with_preferences(
     ui: &mut egui::Ui,
-    parser: &mut vt100::Parser,
+    parser: &mut Parser,
     state: &mut ScreenViewState,
     id: egui::Id,
     interactive: bool,
@@ -351,7 +352,7 @@ pub fn show_with_preferences(
 }
 pub fn show_shared(
     ui: &mut egui::Ui,
-    parser: &mut vt100::Parser,
+    parser: &mut Parser,
     state: &mut ScreenViewState,
     id: egui::Id,
     interactive: bool,
@@ -370,7 +371,7 @@ pub fn show_shared(
 }
 fn show_impl(
     ui: &mut egui::Ui,
-    parser: &mut vt100::Parser,
+    parser: &mut Parser,
     state: &mut ScreenViewState,
     id: egui::Id,
     interactive: bool,
@@ -741,6 +742,11 @@ fn show_impl(
     let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
     let background = ui.visuals().extreme_bg_color;
     let foreground = ui.visuals().text_color();
+    // Snapshot once, outside the grid loop. The selection foreground is not
+    // the theme accent and must remain reserved for selected text contrast.
+    let tokens = super::craft_theme::current(ui.ctx());
+    let accent = tokens.accent;
+    let core = parser.application_palette();
     painter.rect_filled(rect, 0.0, background);
     let mut bold_font = font.clone();
     let bold_family = egui::FontFamily::Name("pealayer-status-mono-strong".into());
@@ -764,13 +770,13 @@ fn show_impl(
             let mut fg = ansi_color(content.fgcolor(), foreground, ui.visuals().dark_mode);
             // PortableShell's default semantic canvas follows the live app
             // surface; explicit non-role ANSI/truecolor values stay untouched.
-            if content.fgcolor() == vt100::Color::Rgb(230, 233, 239) {
+            if core && content.fgcolor() == vt100::Color::Rgb(230, 233, 239) {
                 fg = foreground;
             }
-            if content.fgcolor() == vt100::Color::Rgb(151, 160, 175) {
+            if core && content.fgcolor() == vt100::Color::Rgb(151, 160, 175) {
                 fg = ui.visuals().weak_text_color();
             }
-            if !ui.visuals().dark_mode {
+            if core && !ui.visuals().dark_mode {
                 fg = match content.fgcolor() {
                     vt100::Color::Rgb(126, 224, 163) | vt100::Color::Rgb(166, 218, 149) => {
                         egui::Color32::from_rgb(23, 120, 64)
@@ -782,22 +788,23 @@ fn show_impl(
                     _ => fg,
                 };
             }
-            // Command/prompt role is violet in the freestanding core. Remap
-            // that role only; warnings/errors/numbers retain semantic colors.
-            if preferences.accent_commands
-                && matches!(
-                    content.fgcolor(),
-                    vt100::Color::Rgb(216, 160, 255)
-                        | vt100::Color::Idx(183)
-                        | vt100::Color::Idx(141)
-                        | vt100::Color::Idx(5)
-                )
-            {
-                fg = ui.visuals().selection.stroke.color;
+            // Only explicit semantic output follows the application accent.
+            // Ordinary cyan/violet and identical RGB fallback values do not.
+            if preferences.accent_commands && parser.accent(row, col) {
+                fg = accent;
             }
             let mut bg = ansi_color(content.bgcolor(), background, ui.visuals().dark_mode);
-            if content.bgcolor() == vt100::Color::Rgb(24, 26, 31) {
-                bg = background;
+            if core {
+                bg = match content.bgcolor() {
+                    vt100::Color::Rgb(24, 26, 31) => background,
+                    vt100::Color::Rgb(36, 41, 50) => tokens.card_bg,
+                    vt100::Color::Rgb(48, 55, 67) => tokens.control_surface,
+                    vt100::Color::Rgb(211, 218, 230) => {
+                        fg = ui.visuals().selection.stroke.color;
+                        ui.visuals().selection.bg_fill
+                    }
+                    _ => bg,
+                };
             }
             if content.inverse() {
                 std::mem::swap(&mut fg, &mut bg);
@@ -864,7 +871,7 @@ fn show_impl(
                 egui::Stroke::new(
                     if focused { 2.0 } else { 1.0 },
                     if focused {
-                        ui.visuals().selection.stroke.color
+                        accent
                     } else {
                         ui.visuals().weak_text_color()
                     },
@@ -969,7 +976,7 @@ mod tests {
 
     #[test]
     fn fragmented_ansi_unicode_and_copy_read_real_cells() {
-        let mut parser = vt100::Parser::new(4, 20, 100);
+        let mut parser = Parser::new(4, 20, 100);
         parser.process(b"\x1b[38;2;12;");
         parser.process(b"34;56m");
         let bytes = "界e\u{301}".as_bytes();
@@ -1007,10 +1014,113 @@ mod tests {
     }
 
     #[test]
+    fn explicit_accent_recolors_existing_output_without_recoloring_ordinary_cyan() {
+        let ctx = egui::Context::default();
+        let mut parser = Parser::semantic(4, 20, 100);
+        parser.process(b"\x1b[38;2;216;160;255m\x1b]777;ps;ink;accent\x1b\\A\x1b[36mC");
+        let mut state = ScreenViewState::default();
+        for accent in [
+            egui::Color32::from_rgb(130, 100, 230),
+            egui::Color32::from_rgb(20, 140, 100),
+        ] {
+            let mut tokens = super::super::craft_theme::current(&ctx);
+            tokens.accent = accent;
+            super::super::craft_theme::set_current(&ctx, tokens);
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                ui.visuals_mut().selection.stroke.color = egui::Color32::WHITE;
+                show_shared(
+                    ui,
+                    &mut parser,
+                    &mut state,
+                    egui::Id::unique("accent-test"),
+                    false,
+                    &super::super::terminal::TerminalPreferences::default(),
+                );
+            });
+            output.textures_delta.clear();
+            let color = |glyph: &str| {
+                output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == glyph => {
+                            Some(text.fallback_color)
+                        }
+                        _ => None,
+                    })
+                    .expect("glyph must be painted")
+            };
+            assert_eq!(color("A"), accent);
+            assert_ne!(color("C"), accent);
+        }
+    }
+    #[test]
+    fn core_popups_follow_light_and_dark_surfaces_without_recoloring_system_shell_rgb() {
+        for light in [false, true] {
+            let ctx = egui::Context::default();
+            ctx.set_visuals(if light {
+                egui::Visuals::light()
+            } else {
+                egui::Visuals::dark()
+            });
+            let tokens = super::super::craft_theme::Tokens::for_kind(if light {
+                super::super::craft_theme::ThemeKind::Light
+            } else {
+                super::super::craft_theme::ThemeKind::Dark
+            });
+            super::super::craft_theme::set_current(&ctx, tokens);
+            for core in [false, true] {
+                let mut parser = if core {
+                    Parser::semantic(4, 20, 0)
+                } else {
+                    Parser::new(4, 20, 0)
+                };
+                parser.process(
+                    b"\x1b[38;2;230;233;239;48;2;48;55;67mP\x1b[38;2;24;26;31;48;2;211;218;230mS",
+                );
+                let mut state = ScreenViewState::default();
+                let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                    show_shared(
+                        ui,
+                        &mut parser,
+                        &mut state,
+                        egui::Id::unique("palette-test"),
+                        false,
+                        &super::super::terminal::TerminalPreferences::default(),
+                    );
+                });
+                output.textures_delta.clear();
+                let color = |glyph: &str| {
+                    output
+                        .shapes
+                        .iter()
+                        .find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if text.galley.text() == glyph => {
+                                Some(text.fallback_color)
+                            }
+                            _ => None,
+                        })
+                        .unwrap()
+                };
+                if core {
+                    assert_eq!(color("P"), ctx.style_of(ctx.theme()).visuals.text_color());
+                    assert_eq!(
+                        color("S"),
+                        ctx.style_of(ctx.theme()).visuals.selection.stroke.color
+                    );
+                    assert!(output.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Rect(rect) if rect.fill==tokens.control_surface)));
+                } else {
+                    assert_eq!(color("P"), egui::Color32::from_rgb(230, 233, 239));
+                }
+            }
+        }
+    }
+
+    #[test]
     fn focused_grid_claims_space_text_and_navigation_but_readonly_view_does_not() {
         let ctx = egui::Context::default();
         let id = egui::Id::unique("terminal-input-test");
-        let mut parser = vt100::Parser::new(4, 20, 100);
+        let mut parser = Parser::new(4, 20, 100);
         let mut state = ScreenViewState::default();
         let mut frame = ctx.run_ui(egui::RawInput::default(), |ui| {
             show(ui, &mut parser, &mut state, id, true, 12.0);

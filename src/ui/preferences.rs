@@ -2637,7 +2637,11 @@ mod tests {
             assert!(std::time::Instant::now() < until, "{}", helper.draft.status);
             std::thread::sleep(std::time::Duration::from_millis(10));
         }
-        assert!(matches!(receiver.recv_timeout(std::time::Duration::from_secs(1)).unwrap(),
+        let preview=receiver.recv_timeout(std::time::Duration::from_secs(1)).unwrap();
+        let crate::platform::interop::InteropCommand::NativeLocal {command}=preview else {
+            panic!("Preferences preview must retain native transport provenance");
+        };
+        assert!(matches!(*command,
             crate::platform::interop::InteropCommand::PreviewConfig { config } if config.color_palette == crate::config::ColorPalette::Studio));
         assert!(helper.finish_preview(false));
         assert!(matches!(receiver.recv_timeout(std::time::Duration::from_secs(1)).unwrap(),

@@ -1,4 +1,39 @@
 /* Private implementation: shared renderer/editor primitives, no OS/runtime imports. */
+static const char *control_label(ps_session *s,const ps_control *c){
+#if PS_PANEL_PRESENTATION
+    const ps_panel_presentation *p=s->panel_presentation;const char *text=0;
+    if(p){ps_panel_name_fn fn=s->panel_key_names?p->key:p->label;if(fn)text=fn(p->context,c->id);}
+    if(text)return text;
+#else
+    (void)s;
+#endif
+    return c->label;
+}
+static const char *control_choice_label(ps_session *s,const ps_control *c,unsigned index){
+#if PS_PANEL_PRESENTATION
+    const ps_panel_presentation *p=s->panel_presentation;const char *text=0;
+    if(p&&p->choice)text=p->choice(p->context,c->id,index);
+    if(text)return text;
+#else
+    (void)s;
+#endif
+    return c->choices[index];
+}
+PS_API void ps_panel_set_presentation(ps_session *s,const ps_panel_presentation *p){
+#if PS_PANEL_PRESENTATION
+    if(s&&!s->editing){s->panel_presentation=p;s->dirty=1;}
+#else
+    (void)s;(void)p;
+#endif
+}
+PS_API int ps_panel_set_key_names(ps_session *s,int enabled){
+#if PS_PANEL_PRESENTATION
+    if(s&&!s->editing){s->panel_key_names=!!enabled;s->dirty=1;return 1;}
+#else
+    (void)s;(void)enabled;
+#endif
+    return 0;
+}
 static int control_sections(const ps_session *s) {
 #if PS_DASHBOARD
     if(s->dashboard)return 0;
@@ -91,7 +126,7 @@ static int control_read(ps_session *s, const ps_control *c, ps_control_value *v)
     if (c->kind == PS_CONTROL_LEVEL && (v->number < c->minimum || v->number > c->maximum))
         v->flags &= ~PS_CONTROL_VALID;
     if ((c->kind == PS_CONTROL_TOGGLE && v->number > 1) ||
-        (c->kind == PS_CONTROL_CHOICE && v->number >= c->choice_count))
+        (c->kind == PS_CONTROL_CHOICE && (!c->choices||!c->choice_count||c->choice_count>128||v->number >= c->choice_count||!c->choices[v->number])))
         v->flags &= ~PS_CONTROL_VALID;
     return (v->flags & PS_CONTROL_VALID) != 0;
 }
@@ -168,7 +203,7 @@ static void control_value_text(ps_session *s, const ps_control *c, const ps_cont
                                        : (v->number ? "[x] On" : "[ ] Off"),
             cap);
     else if (c->kind == PS_CONTROL_CHOICE)
-        str(text, c->choices[v->number], cap);
+        str(text, control_choice_label(s,c,v->number), cap);
     else if (c->kind == PS_CONTROL_LEVEL)
         dec(text, v->number);
     else if (c->kind == PS_CONTROL_ACTION)
@@ -216,7 +251,7 @@ static int control_styled_text(ps_session *s,unsigned id,unsigned columns) {
         while(end<n&&roles[end]==roles[at])end=next(text,end);
         saved=text[end];text[end]=0;
         span=min(cells(text+at,end-at,s->io.flags),limit-used);
-        ink(s,roles[at]<=PS_INK_ACTION?roles[at]:PS_INK_TEXT);
+        ink(s,roles[at]<=PS_INK_ACCENT?roles[at]:PS_INK_TEXT);
         field(s,text+at,span);used+=span;text[end]=saved;at=end;
     }
     ink(s,PS_INK_MUTED);spaces(s,limit-used);
@@ -238,6 +273,9 @@ static void control_row(ps_session *s, unsigned index, const Grid *g) {
         grid_divide(s);
     }
     ink(s, v.flags&PS_CONTROL_ATTENTION?PS_INK_WARNING:v.flags&PS_CONTROL_INACTIVE?PS_INK_INACTIVE:PS_INK_TEXT);
+#if PS_PANEL_PRESENTATION
+    if(s->panel_key_names)ink(s,PS_INK_COMMAND);
+#endif
     {
         const ps_control_page *page=&s->panel->pages[s->tab];unsigned j,categories=0;
         if(control_sections(s))for(j=0;j<page->count;++j)if(*page->controls[j].group){categories=1;break;}
@@ -246,7 +284,7 @@ static void control_row(ps_session *s, unsigned index, const Grid *g) {
             (s->io.flags&PS_UNICODE)&&!(s->table_style&(PS_TABLE_SECTION_PLUS_MINUS|PS_TABLE_SECTION_NO_ICONS)));
         unsigned marker=min(cells(text,length(text),s->io.flags),g->widths[col]);
         field(s,!s->control_header && s->selected==index?text:"",marker);
-        grid_text(s,c->label,g->widths[col++]-marker);
+        grid_text(s,control_label(s,c),g->widths[col++]-marker);
     }
     grid_divide(s);
     w = g->widths[col];
@@ -313,6 +351,9 @@ static const char *control_hint(ps_session *s) {
     if (s->control_header)
         return (s->io.flags & PS_UNICODE) ? "Enter/Space toggle  ← collapse  → expand"
                                          : "Enter/Space toggle  Left close Right open";
+#if PS_CONTROL_CHOICE_POPUP
+    if(s->editing&&s->choice_popup)return (s->io.flags&PS_UNICODE)?"↑/↓ select  Enter apply  Esc cancel":"Up/Down select Enter apply Esc cancel";
+#endif
     if (s->editing)
         return s->dialog ? "Tab focus   Enter apply   Esc cancel"
                          : "Enter apply  Esc cancel  ^U clear";
@@ -335,7 +376,7 @@ static const char *control_hint(ps_session *s) {
         return s->io.columns < 60 ? "Space toggle  Enter toggle  F2 edit"
                                   : "Space toggle   Enter toggle   F2 dialog";
     if (c->kind == PS_CONTROL_CHOICE)
-        return (s->io.flags & PS_UNICODE) ? "←/→ choose   F2 dialog"
+        return (s->io.flags & PS_UNICODE) ? "←/→ choose   Enter/F2 options"
                                           : "Left/Right choose   F2 dialog";
     if (c->kind == PS_CONTROL_ACTION)
         return "Enter open confirmation";
@@ -343,6 +384,111 @@ static const char *control_hint(ps_session *s) {
         return "Enter inline edit   F2 dialog";
     return "Read only";
 }
+#if PS_CONTROL_CHOICE_POPUP
+enum { CHOICE_VISIBLE_MAX=12, CHOICE_WIDTH_MIN=44, CHOICE_INLINE_WIDTH_MIN=28, CHOICE_WIDTH_MAX=72,
+       CHOICE_RESERVED_ROWS=10, CHOICE_PADDING=8 };
+typedef struct {unsigned x,y,width,visible,start,extra;} ChoiceBox;
+static ps_u32 control_choice_schema(ps_session *s,const ps_control *c){
+    ps_u32 h=2166136261u;unsigned i,j;
+    for(i=0;i<c->choice_count;++i){
+        const char *texts[2]={c->choices[i],control_choice_label(s,c,i)};
+        for(j=0;j<PS_COUNT_OF(texts);++j){const char *p=texts[j];
+            while(*p){h^=(ps_byte)*p++;h*=16777619u;}h*=16777619u;}
+    }
+    return h^c->choice_count;
+}
+static int control_choice_valid(ps_session *s){
+    const ps_control *c=control_selected(s);ps_control_value v;unsigned i;
+    if(c&&c->id==s->choice_id&&c->kind==PS_CONTROL_CHOICE&&c->choices&&
+       c->choice_count&&c->choice_count<=128&&s->choice_index<c->choice_count){
+        for(i=0;i<c->choice_count&&c->choices[i];++i){}
+        if(i==c->choice_count&&control_read(s,c,&v)&&s->panel->write&&
+           !(v.flags&(PS_CONTROL_LOCKED|PS_CONTROL_PENDING))&&v.revision==s->draft_revision&&
+           v.number==s->choice_initial&&control_choice_schema(s,c)==s->choice_schema)return 1;
+    }
+    s->editing=s->dialog=s->choice_popup=0;
+    notice(s,"State changed; reopen options");return 0;
+}
+static ChoiceBox control_choice_box(ps_session *s,const ps_control *c){
+    ChoiceBox b;unsigned i,w=s->choice_popup==1?CHOICE_INLINE_WIDTH_MIN:CHOICE_WIDTH_MIN;
+    for(i=0;i<c->choice_count;++i){const char *p=control_choice_label(s,c,i);
+        unsigned n=cells(p,length(p),s->io.flags)+CHOICE_PADDING;if(n>w)w=n;}
+    b.width=min(min(w,CHOICE_WIDTH_MAX),s->io.columns>4?s->io.columns-4:0);
+    b.visible=min(c->choice_count,min(CHOICE_VISIBLE_MAX,s->io.rows>CHOICE_RESERVED_ROWS?s->io.rows-CHOICE_RESERVED_ROWS:1));
+    b.start=s->choice_index>=b.visible?s->choice_index-b.visible+1:0;
+    b.start=min(b.start,c->choice_count-b.visible);
+    b.extra=(c->choice_count>b.visible?1u:0u)+(s->notice[0]?1u:0u);
+    b.x=(s->io.columns-b.width)/2+1;b.y=s->io.rows>b.visible+4?(s->io.rows-b.visible-4)/2+1:1;
+    /* Enter/Space attaches the list to its value cell; F2 keeps the modal view. */
+    if(s->choice_popup==1&&s->mouse_edit_x&&s->mouse_edit_y){
+        unsigned height=b.visible+2+b.extra,bottom=s->io.rows>4?s->io.rows-4:1;
+        b.x=min(s->mouse_edit_x,s->io.columns-b.width+1);
+        if(s->mouse_edit_y+height<bottom)b.y=s->mouse_edit_y+1;
+        else b.y=s->mouse_edit_y>height?s->mouse_edit_y-height:1;
+    }
+    return b;
+}
+static void control_choice_key(ps_session *s,unsigned key){
+    const ps_control *c;ps_control_value v;ChoiceBox b;
+    if(!control_choice_valid(s))return;
+    c=control_selected(s);b=control_choice_box(s,c);s->dirty=1;
+    if(key==27||key==3){s->editing=s->dialog=s->choice_popup=0;notice(s,"Cancelled");}
+    else if(key==13){zero(&v,sizeof v);v.number=s->choice_index;
+        if(v.number==s->choice_initial||control_commit(s,c,&v,s->draft_revision))s->editing=s->dialog=s->choice_popup=0;
+    }else if(key==PS_KEY_UP||key==PS_KEY_BACKTAB)s->choice_index=(s->choice_index+c->choice_count-1)%c->choice_count;
+    else if(key==PS_KEY_DOWN||key==9||key==' ')s->choice_index=(s->choice_index+1)%c->choice_count;
+    else if(key==PS_KEY_HOME)s->choice_index=0;
+    else if(key==PS_KEY_END)s->choice_index=c->choice_count-1;
+    else if(key==PS_KEY_PAGEUP)s->choice_index=s->choice_index>b.visible?s->choice_index-b.visible:0;
+    else if(key==PS_KEY_PAGEDOWN)s->choice_index=min(s->choice_index+b.visible,c->choice_count-1);
+}
+static void control_choice_draw(ps_session *s){
+    const ps_control *c;ChoiceBox b;unsigned i,j,unicode=!!(s->io.flags&PS_UNICODE);
+    if(!control_choice_valid(s))return;
+    c=control_selected(s);b=control_choice_box(s,c);
+    for(i=0;i<b.visible+2+b.extra;++i){
+        at(s,b.y+i,b.x);surface(s,2);ink(s,PS_INK_BORDER);
+        if(i==0||i==b.visible+1){
+            out(s,unicode?(i?"╰":"╭") : "+");
+            for(j=0;j<b.width-2;++j)out(s,unicode?"─":"-");
+            out(s,unicode?(i?"╯":"╮") : "+");
+        }else if(i<=b.visible){unsigned index=b.start+i-1,selected=index==s->choice_index;
+            out(s,unicode?"│":"|");
+            if(selected){surface(s,1);if(!(s->io.flags&PS_COLOR))ansi(s,"\033[7m");}
+            ink(s,selected?PS_INK_ACCENT:PS_INK_MUTED);out(s,selected?(unicode?" ❯ ":" > "):"   ");
+            /* The marker identifies focus; the circle identifies the saved choice. */
+            ink(s,index==s->choice_initial?PS_INK_SUCCESS:PS_INK_TEXT);
+            out(s,index==s->choice_initial?(unicode?"● ":"* "):"  ");
+            if(selected)color(s,"\033[30m");else ink(s,PS_INK_TEXT);
+            grid_text(s,control_choice_label(s,c,index),b.width-8);
+            surface(s,2);ink(s,PS_INK_BORDER);out(s," ");
+            if(c->choice_count>b.visible){unsigned thumb=b.visible*b.visible/c->choice_count;
+                if(!thumb)thumb=1;
+                unsigned top=b.start*(b.visible-thumb)/(c->choice_count-b.visible);
+                ink(s,PS_INK_ACCENT);out(s,unicode?(i-1>=top&&i-1<top+thumb?"┃":"│"):(i-1>=top&&i-1<top+thumb?"#":"|"));
+            }else out(s,unicode?"│":"|");
+        }else{char range[32];ps_terminal_format(range,sizeof range,"%u-%u / %u",b.start+1,b.start+b.visible,c->choice_count);
+            ink(s,PS_INK_MUTED);grid_text(s,i==b.visible+2&&c->choice_count>b.visible?range:s->notice,b.width);}
+        reset(s);
+    }
+    at(s,b.y,b.x+2);surface(s,2);ink(s,PS_INK_ACCENT);out(s," ");grid_text(s,control_label(s,c),min(b.width-6,cells(control_label(s,c),length(control_label(s,c)),s->io.flags)));out(s," ");reset(s);
+    ansi(s,"\033[?25l");
+}
+#if PS_MOUSE
+static void control_choice_mouse(ps_session *s,const ps_mouse_event *e){
+    ChoiceBox b;const ps_control *c;unsigned button=e->button&3;
+    if(!control_choice_valid(s))return;
+    if(e->button&64u){if(button<2)control_choice_key(s,button?PS_KEY_DOWN:PS_KEY_UP);return;}
+    if(e->button&32u)return;
+    if(button==2){control_choice_key(s,27);return;}
+    if(button)return;
+    c=control_selected(s);b=control_choice_box(s,c);
+    if(e->column>b.x&&e->column<b.x+b.width-1&&e->row>b.y&&e->row<=b.y+b.visible){
+        s->choice_index=b.start+e->row-b.y-1;control_choice_key(s,13);
+    }
+}
+#endif
+#endif
 static void control_overlay(ps_session *s, const Grid *table) {
     const ps_control *c = control_selected(s);
     unsigned w, x, y, i, start = 0, cursor_x, cursor_y;
@@ -350,6 +496,17 @@ static void control_overlay(ps_session *s, const Grid *table) {
     char b[80];
     if (!c || !s->editing)
         return;
+#if PS_CONTROL_CHOICE_POPUP
+    if(s->choice_popup){
+#if PS_DASHBOARD
+        if(!s->dashboard)
+#endif
+        {s->mouse_edit_x=4;s->mouse_edit_y=s->control_edit_row;
+            for(i=0;i+1<table->count;++i)s->mouse_edit_x+=table->widths[i]+3;
+            s->mouse_edit_width=table->widths[table->count-1];}
+        control_choice_draw(s);return;
+    }
+#endif
     if (!s->dialog) {
         w = table->widths[table->count - 1];
         x = 4;
@@ -382,7 +539,7 @@ static void control_overlay(ps_session *s, const Grid *table) {
     }
     at(s, y + 1, x + 3);
     ink(s, 1);
-    grid_text(s, c->label, w - 6);
+    grid_text(s, control_label(s,c), w - 6);
     at(s, y + 2, x + 3);
     ink(s, 0);
     grid_text(s, c->group, w - 6);
@@ -455,12 +612,20 @@ static void control_begin(ps_session *s, const ps_control *c, unsigned dialog) {
     s->notice[0] = 0;
     s->dialog = dialog || c->kind == PS_CONTROL_ACTION;
     s->dialog_focus = c->kind == PS_CONTROL_ACTION ? 2 : 0;
+#if PS_CONTROL_CHOICE_POPUP
+    s->choice_popup=c->kind==PS_CONTROL_CHOICE?(dialog?2u:1u):0u;
+    if(s->choice_popup){s->dialog=1;s->choice_id=c->id;s->choice_index=s->choice_initial=v.number;
+        s->choice_schema=control_choice_schema(s,c);}
+#endif
 }
 static void control_key(ps_session *s, unsigned key) {
     const ps_control *c = control_selected(s);
     unsigned n = tab_count(s), step = table_slots(s);
     ps_control_value v;
     s->dirty = 1;
+#if PS_CONTROL_CHOICE_POPUP
+    if(s->editing&&s->choice_popup){control_choice_key(s,key);return;}
+#endif
     if (s->editing && c) {
         if (key == 27 || key == 3) {
             s->editing = s->dialog = 0;
@@ -527,7 +692,7 @@ static void control_key(ps_session *s, unsigned key) {
     else if (key == PS_KEY_PAGEUP)
         s->selected = s->selected > step ? s->selected - step : 0;
     else if (c) {
-        if (key == PS_KEY_F2 || ((key == 13 || key == ' ') && c->kind != PS_CONTROL_TOGGLE &&
+        if ((PS_CONTROL_CHOICE_POPUP&&c->kind==PS_CONTROL_CHOICE&&(key==13||key==' ')) || key == PS_KEY_F2 || ((key == 13 || key == ' ') && c->kind != PS_CONTROL_TOGGLE &&
                                  c->kind != PS_CONTROL_CHOICE)) {
             control_begin(s, c, key == PS_KEY_F2);
             return;
@@ -593,6 +758,9 @@ PS_API int ps_panel_attach(ps_session *s, const ps_panel *panel) {
     if (s->control_view)
         table_close(s);
     s->panel = panel;
+#if PS_PANEL_PRESENTATION
+    s->panel_presentation=0;s->panel_key_names=0;
+#endif
 #if PS_PANEL_KEYS
     s->panel_chrome=0;s->panel_key=0;s->panel_key_context=0;
 #endif

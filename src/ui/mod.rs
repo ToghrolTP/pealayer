@@ -59,9 +59,13 @@ mod terminal_backend;
 #[cfg(feature = "workspace-terminal")]
 mod portable_shell_host;
 #[cfg(feature = "workspace-terminal")]
+mod shell_status;
+#[cfg(feature = "workspace-terminal")]
 pub mod terminal_profiles;
 #[cfg(feature = "workspace-terminal")]
 mod terminal_screen;
+#[cfg(feature = "workspace-terminal")]
+mod terminal_parser;
 pub(crate) mod action_customization;
 pub(crate) mod control_bar;
 pub mod subtitles;

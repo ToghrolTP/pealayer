@@ -18,6 +18,7 @@ pub enum Action {
     Volume(f64),
     Mute(bool),
     Preferences,
+    EditSetting(String),
     Configure,
     Get(Option<String>),
     Set {
@@ -67,6 +68,107 @@ struct PromptPart {
     text: *const c_char,
     style: c_uint,
 }
+#[repr(C)]
+struct ReportRow {
+    label: *const c_char,
+    annotation: *const c_char,
+    value: *const c_char,
+    flags: c_uint,
+}
+#[repr(C)]
+struct EditorDefinition {
+    key: *const c_char,
+    label: *const c_char,
+    page: *const c_char,
+    group: *const c_char,
+    choices: *const *const c_char,
+    choice_labels: *const *const c_char,
+    choice_count: c_uint,
+    kind: c_uint,
+    read_only: c_uint,
+}
+struct OwnedSetting {
+    key: CString,
+    label: CString,
+    page: CString,
+    group: CString,
+    _values: Vec<CString>,
+    _labels: Vec<CString>,
+    values: Vec<*const c_char>,
+    labels: Vec<*const c_char>,
+    kind: u32,
+    read_only: bool,
+}
+impl OwnedSetting {
+    fn matches(&self, setting: &super::terminal_settings::Setting) -> bool {
+        self.key.as_bytes() == setting.key.as_bytes()
+            && self.label.as_bytes() == setting.label.as_bytes()
+            && self.page.as_bytes() == setting.page.as_bytes()
+            && self.group.as_bytes() == setting.group.as_bytes()
+            && self.kind == setting.kind
+            && self.read_only == setting.read_only
+            && self._values.len() == setting.choices.len()
+            && self
+                ._values
+                .iter()
+                .zip(&self._labels)
+                .zip(&setting.choices)
+                .all(|((value, label), (v, l))| {
+                    value.as_bytes() == v.as_bytes() && label.as_bytes() == l.as_bytes()
+                })
+    }
+    fn new(setting: &super::terminal_settings::Setting) -> Result<Self, String> {
+        let string =
+            |value: &str| CString::new(value).map_err(|_| "Setting contains NUL".to_string());
+        let values = setting
+            .choices
+            .iter()
+            .map(|(value, _)| string(value))
+            .collect::<Result<Vec<_>, _>>()?;
+        let labels = setting
+            .choices
+            .iter()
+            .map(|(_, label)| string(label))
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(Self {
+            key: string(&setting.key)?,
+            label: string(&setting.label)?,
+            page: string(&setting.page)?,
+            group: string(&setting.group)?,
+            values: values.iter().map(|value| value.as_ptr()).collect(),
+            labels: labels.iter().map(|value| value.as_ptr()).collect(),
+            _values: values,
+            _labels: labels,
+            kind: setting.kind,
+            read_only: setting.read_only,
+        })
+    }
+    fn definition(&self) -> EditorDefinition {
+        EditorDefinition {
+            key: self.key.as_ptr(),
+            label: self.label.as_ptr(),
+            page: self.page.as_ptr(),
+            group: self.group.as_ptr(),
+            choices: if self.kind == 3 {
+                self.values.as_ptr()
+            } else {
+                std::ptr::null()
+            },
+            choice_labels: if self.kind == 3 {
+                self.labels.as_ptr()
+            } else {
+                std::ptr::null()
+            },
+            choice_count: if self.kind == 3 {
+                self.values.len() as u32
+            } else {
+                0
+            },
+            kind: self.kind,
+            read_only: u32::from(self.read_only),
+        }
+    }
+}
 
 unsafe extern "C" {
     fn ps_sizeof_session() -> c_uint;
@@ -89,16 +191,15 @@ unsafe extern "C" {
             *const c_char,
             *const c_char,
         ) -> c_int,
+        open: unsafe extern "C" fn(*mut c_void, *const c_char),
         context: *mut c_void,
     );
-    fn ph_editor_value(
-        editor: *mut c_void,
-        name: *const c_char,
-        value: *const c_char,
-        kind: c_uint,
-    ) -> c_int;
+    fn ph_editor_value(editor: *mut c_void, name: *const c_char, value: *const c_char) -> c_int;
+    fn ph_editor_define(editor: *mut c_void, definition: *const EditorDefinition) -> c_int;
+    fn ps_panel_attach(session: *mut Session, panel: *const c_void) -> c_int;
     fn ph_editor_open(editor: *mut c_void, session: *mut Session) -> c_int;
     fn ph_help_setup(session: *mut Session);
+    fn ph_shell_style(session: *mut Session);
     fn ps_start(session: *mut Session);
     fn ps_feed(session: *mut Session, bytes: *const c_void, count: c_uint);
     fn ps_tick(session: *mut Session, monotonic_ms: c_uint);
@@ -107,9 +208,20 @@ unsafe extern "C" {
     fn ps_exited(session: *const Session) -> c_int;
     fn ps_request_exit(session: *mut Session);
     fn ps_clear(session: *mut Session);
-    fn ps_write(session: *mut Session, text: *const c_char);
-    fn ps_newline(session: *mut Session);
     fn ps_message(session: *mut Session, style: c_uint, text: *const c_char);
+    fn ps_message_block(
+        session: *mut Session,
+        style: c_uint,
+        text: *const c_char,
+        bytes: c_uint,
+    ) -> c_uint;
+    fn ps_message_report(
+        session: *mut Session,
+        rows: *const ReportRow,
+        count: c_uint,
+        style: c_uint,
+    ) -> c_uint;
+    fn ps_set_status(session: *mut Session, status: c_int);
 }
 
 struct Buffers {
@@ -125,10 +237,12 @@ impl Buffers {
             output: Vec::with_capacity(OUTPUT_LIMIT),
             output_overflow: false,
             actions: Vec::with_capacity(ACTION_LIMIT),
-            completion_keys: super::terminal_settings::KEYS
-                .iter()
-                .filter_map(|key| CString::new(*key).ok())
-                .collect(),
+            completion_keys: crate::preferences_contract::preference_controls(
+                &crate::config::AppConfig::default(),
+            )
+            .iter()
+            .filter_map(|entry| CString::new(entry.key).ok())
+            .collect(),
         }
     }
 }
@@ -143,6 +257,8 @@ pub struct Host {
     editor: NonNull<u8>,
     editor_layout: Layout,
     branding: CString,
+    prompt_status: CString,
+    catalog: Vec<OwnedSetting>,
 }
 
 impl Host {
@@ -165,8 +281,9 @@ impl Host {
             columns: u32::from(columns.clamp(8, 240)),
             rows: u32::from(rows.clamp(4, 80)),
             // Interactive, color, Unicode, truecolor, case-insensitive, no builtins,
-            // extended keys, no OSC (terminal title/clipboard are application-owned).
-            flags: 1 | 2 | 4 | 16 | 32 | 64 | 1024 | 4096,
+            // extended keys. Allow the explicit semantic OSC marker; the VT
+            // renderer ignores title/clipboard OSC and has no OS side effects.
+            flags: 1 | 2 | 4 | 16 | 32 | 64 | 1024,
         };
         let Some(session) =
             NonNull::new(unsafe { ps_init(allocation.as_ptr().cast(), bytes, &config) })
@@ -182,22 +299,34 @@ impl Host {
         let editor = NonNull::new(unsafe { alloc_zeroed(editor_layout) })
             .ok_or("Could not allocate settings editor")?;
         unsafe {
-            ph_editor_init(editor.as_ptr().cast(), queue_setting, context);
+            ph_editor_init(
+                editor.as_ptr().cast(),
+                queue_setting,
+                queue_open_setting,
+                context,
+            );
         }
-        let host = Self {
+        let mut host = Self {
             session,
             allocation,
             layout,
             buffers,
             editor,
             editor_layout,
-            branding: CString::new("Pealayer").unwrap(),
+            branding: CString::new("Pealayer Shell").unwrap(),
+            prompt_status: CString::new("■ Idle").unwrap(),
+            catalog: Vec::new(),
         };
         for (name, usage) in COMMANDS {
             let command = Command {
                 name: name.as_ptr(),
                 usage: usage.as_ptr(),
-                category: c"Pealayer".as_ptr(),
+                category: match name.to_bytes() {
+                    b"play" | b"pause" | b"stop" | b"seek" => c"Playback".as_ptr(),
+                    b"volume" | b"mute" => c"Audio".as_ptr(),
+                    b"get" | b"set" | b"configure" | b"preferences" => c"Preferences".as_ptr(),
+                    _ => c"Session".as_ptr(),
+                },
                 run: Some(dispatch_command),
                 complete: Some(complete_setting),
                 context,
@@ -208,22 +337,10 @@ impl Host {
         }
         unsafe {
             ph_help_setup(session.as_ptr());
-            ps_set_application_title(session.as_ptr(), c"Pealayer · Command workspace".as_ptr());
-            let parts = [
-                PromptPart {
-                    text: c"╭─ ".as_ptr(),
-                    style: 6,
-                },
-                PromptPart {
-                    text: c"Pealayer".as_ptr(),
-                    style: 7,
-                },
-                PromptPart {
-                    text: c" · host\n╰─❯ ".as_ptr(),
-                    style: 6,
-                },
-            ];
-            ps_set_prompt_parts(session.as_ptr(), parts.as_ptr(), parts.len() as u32);
+            ph_shell_style(session.as_ptr());
+        }
+        host.update_prompt();
+        unsafe {
             ps_start(session.as_ptr());
         }
         Ok(host)
@@ -294,13 +411,27 @@ impl Host {
     }
     pub fn branding(&mut self, name: &str) {
         let name: String = name.chars().filter(|c| !c.is_control()).take(40).collect();
-        let Ok(name) = CString::new(name) else {
+        let Ok(name) = CString::new(format!("{name} Shell")) else {
             return;
         };
         if name == self.branding {
             return;
         }
         self.branding = name;
+        self.update_prompt();
+    }
+    pub fn prompt_status(&mut self, text: &str) {
+        let text: String = text.chars().filter(|c| !c.is_control()).take(200).collect();
+        let Ok(text) = CString::new(text) else {
+            return;
+        };
+        if text == self.prompt_status {
+            return;
+        }
+        self.prompt_status = text;
+        self.update_prompt();
+    }
+    fn update_prompt(&mut self) {
         let parts = [
             PromptPart {
                 text: c"╭─ ".as_ptr(),
@@ -311,8 +442,20 @@ impl Host {
                 style: 7,
             },
             PromptPart {
-                text: c" · host\n╰─❯ ".as_ptr(),
+                text: c" · ".as_ptr(),
                 style: 6,
+            },
+            PromptPart {
+                text: self.prompt_status.as_ptr(),
+                style: 0,
+            },
+            PromptPart {
+                text: c"\n╰─".as_ptr(),
+                style: 6,
+            },
+            PromptPart {
+                text: c"❯ ".as_ptr(),
+                style: 9,
             },
         ];
         unsafe {
@@ -320,54 +463,166 @@ impl Host {
             ps_set_prompt_parts(self.session.as_ptr(), parts.as_ptr(), parts.len() as u32);
         }
     }
-    pub fn settings(&mut self, values: &[(String, String)], open: bool) {
-        for (key, value) in values {
-            let kind = if matches!(value.as_str(), "true" | "false") {
-                0
-            } else if key == "ui.terminal.scrollback_lines" {
-                1
-            } else {
-                4
-            };
-            if let (Ok(key), Ok(value)) = (CString::new(key.as_str()), CString::new(value.as_str()))
-            {
-                unsafe {
-                    ph_editor_value(
-                        self.editor.as_ptr().cast(),
-                        key.as_ptr(),
-                        value.as_ptr(),
-                        kind,
-                    );
+    pub fn settings(
+        &mut self,
+        values: &[super::terminal_settings::Setting],
+        open: bool,
+    ) -> Result<(), String> {
+        let same = self.catalog.len() == values.len()
+            && self
+                .catalog
+                .iter()
+                .zip(values)
+                .all(|(owned, value)| owned.matches(value));
+        let rebuild = open || (!self.table_active() && !same);
+        if rebuild {
+            let catalog = values
+                .iter()
+                .map(OwnedSetting::new)
+                .collect::<Result<Vec<_>, _>>()?;
+            // Detach before changing borrowed metadata or registry membership.
+            unsafe {
+                ps_panel_attach(self.session.as_ptr(), std::ptr::null());
+            }
+            self.catalog = catalog;
+            unsafe {
+                ph_editor_init(
+                    self.editor.as_ptr().cast(),
+                    queue_setting,
+                    queue_open_setting,
+                    (&mut *self.buffers as *mut Buffers).cast(),
+                );
+            }
+            for entry in &self.catalog {
+                if unsafe { ph_editor_define(self.editor.as_ptr().cast(), &entry.definition()) }
+                    == 0
+                {
+                    return Err("Settings catalog exceeded the supported page/field bounds".into());
                 }
             }
+            self.buffers.completion_keys =
+                self.catalog.iter().map(|entry| entry.key.clone()).collect();
         }
-        unsafe {
-            if open {
-                ph_editor_open(self.editor.as_ptr().cast(), self.session.as_ptr());
-            } else {
+        for entry in values {
+            let key = CString::new(entry.key.as_str()).map_err(|_| "Invalid setting key")?;
+            let value = CString::new(entry.value.as_str()).map_err(|_| "Invalid setting value")?;
+            if unsafe { ph_editor_value(self.editor.as_ptr().cast(), key.as_ptr(), value.as_ptr()) }
+                == 0
+                && rebuild
+            {
+                return Err(format!("Setting could not be represented: {}", entry.key));
+            }
+        }
+        if open {
+            if unsafe { ph_editor_open(self.editor.as_ptr().cast(), self.session.as_ptr()) } == 0 {
+                return Err("Settings editor could not open".into());
+            }
+        } else {
+            unsafe {
                 ps_panel_refresh(self.session.as_ptr());
             }
         }
+        Ok(())
+    }
+    #[cfg(test)]
+    fn settings_pairs(&mut self, pairs: &[(String, String)], open: bool) {
+        let mut values = super::terminal_settings::snapshot(&crate::config::AppConfig::default());
+        values.retain(|entry| pairs.iter().any(|(key, _)| *key == entry.key));
+        for entry in &mut values {
+            entry.value = pairs
+                .iter()
+                .find(|(key, _)| *key == entry.key)
+                .unwrap()
+                .1
+                .clone();
+        }
+        self.settings(&values, open).unwrap();
     }
 
     /// Owner-loop completion/readback. Safe output strips controls and preserves input.
     pub fn response(&mut self, text: &str, is_error: bool) {
+        unsafe {
+            ps_set_status(self.session.as_ptr(), c_int::from(is_error));
+        }
         let mut bounded: String = text.chars().take(8192).filter(|ch| *ch != '\0').collect();
         if text.chars().count() > 8192 {
             bounded.push_str(" … [response truncated]");
         }
-        // ps_message deliberately strips embedded control characters. Submit
-        // logical lines separately instead of losing line boundaries, while
-        // letting the core suspend/redraw the current unfinished prompt.
-        for line in bounded.lines() {
-            if let Ok(text) = CString::new(line) {
-                unsafe {
-                    ps_message(
-                        self.session.as_ptr(),
-                        if is_error { 4 } else { 0 },
-                        text.as_ptr(),
-                    )
-                };
+        // One whole reply owns one suspend/redraw, including all logical lines.
+        if let Ok(text) = CString::new(format!("{} {bounded}", if is_error { "✕" } else { "✓" }))
+        {
+            unsafe {
+                ps_message_block(
+                    self.session.as_ptr(),
+                    if is_error { 4 } else { 2 },
+                    text.as_ptr(),
+                    text.as_bytes().len() as u32,
+                );
+            }
+        }
+    }
+    pub fn status_report(&mut self, status: &super::shell_status::Status) {
+        const SECTION: u32 = 1;
+        const NUMBER: u32 = 4;
+        const DIVIDER: u32 = 8;
+        const SUCCESS: u32 = 16;
+        const INACTIVE: u32 = 128;
+        let positions = CString::new(if status.loaded {
+            format!(
+                "{} / {}",
+                super::shell_status::precise_time(status.position),
+                super::shell_status::precise_time(status.duration)
+            )
+        } else {
+            "—".into()
+        })
+        .unwrap();
+        let audio = CString::new(status.audio()).unwrap();
+        let state = CString::new(status.state()).unwrap();
+        let row = |label: &CStr, value: &CStr, flags| ReportRow {
+            label: label.as_ptr(),
+            annotation: std::ptr::null(),
+            value: value.as_ptr(),
+            flags,
+        };
+        let rows = [
+            row(c"Playback", c"", SECTION),
+            row(
+                c"State",
+                &state,
+                if status.playing { SUCCESS } else { INACTIVE },
+            ),
+            row(
+                c"Position",
+                &positions,
+                if status.loaded { NUMBER } else { INACTIVE },
+            ),
+            row(c"Audio", &audio, NUMBER),
+            row(c"Hardware", c"", SECTION | DIVIDER),
+            row(
+                c"Controller",
+                if status.controller {
+                    c"● Connected"
+                } else {
+                    c"○ Disconnected"
+                },
+                if status.controller { SUCCESS } else { INACTIVE },
+            ),
+        ];
+        unsafe {
+            ps_message_report(
+                self.session.as_ptr(),
+                rows.as_ptr(),
+                rows.len() as u32,
+                1 | 4,
+            );
+        }
+    }
+    pub fn pending(&mut self, text: &str) {
+        let text: String = text.chars().filter(|c| !c.is_control()).take(200).collect();
+        if let Ok(text) = CString::new(format!("… {text}")) {
+            unsafe {
+                ps_message(self.session.as_ptr(), 3, text.as_ptr());
             }
         }
     }
@@ -404,9 +659,12 @@ const COMMANDS: &[(&CStr, &CStr)] = &[
         c"seek",
         c"seek SECONDS — seek to an absolute nonnegative position",
     ),
-    (c"volume", c"volume PERCENT — set volume from 0 to 100"),
+    (c"volume", c"volume PERCENT — set volume from 0 to 130"),
     (c"mute", c"mute on|off — explicitly set mute"),
-    (c"preferences", c"preferences — open Pealayer Preferences"),
+    (
+        c"preferences",
+        c"preferences [KEY] — open Preferences or a setting's native editor",
+    ),
     (c"clear", c"clear — clear the terminal display"),
     (c"exit", c"exit — close this terminal session, not Pealayer"),
 ];
@@ -423,6 +681,18 @@ unsafe extern "C" fn collect_output(context: *mut c_void, bytes: *const u8, coun
     buffers.output_overflow |= accepted != bytes.len();
 }
 
+unsafe extern "C" fn queue_open_setting(context: *mut c_void, key: *const c_char) {
+    if context.is_null() || key.is_null() {
+        return;
+    }
+    let buffers = unsafe { &mut *context.cast::<Buffers>() };
+    if buffers.actions.len() >= ACTION_LIMIT {
+        return;
+    }
+    if let Ok(key) = unsafe { CStr::from_ptr(key) }.to_str() {
+        buffers.actions.push(Action::EditSetting(key.into()));
+    }
+}
 unsafe extern "C" fn queue_setting(
     context: *mut c_void,
     key: *const c_char,
@@ -466,7 +736,7 @@ unsafe extern "C" fn complete_setting(
         return 0;
     }
     let command = unsafe { CStr::from_ptr(*argv) };
-    if command != c"get" && command != c"set" {
+    if command != c"get" && command != c"set" && command != c"preferences" {
         return 0;
     }
     let prefix = unsafe { CStr::from_ptr(prefix) }.to_bytes();
@@ -520,7 +790,10 @@ unsafe extern "C" fn dispatch_command(
                 return 0;
             }
             "exit" => {
-                unsafe { ps_request_exit(session) };
+                unsafe {
+                    ps_message(session, 2, c"✓ Shell session closed".as_ptr());
+                    ps_request_exit(session)
+                };
                 return 0;
             }
             _ => {}
@@ -537,7 +810,7 @@ unsafe extern "C" fn dispatch_command(
     let action = parse_action(args);
     match action {
         Ok(action) => {
-            // Release queue borrow before ps_write can synchronously call the sink.
+            // Release the queue borrow before printing can call the byte sink.
             let queued = {
                 let buffers = unsafe { &mut *context.cast::<Buffers>() };
                 if buffers.actions.len() == ACTION_LIMIT {
@@ -549,20 +822,21 @@ unsafe extern "C" fn dispatch_command(
             };
             if !queued {
                 unsafe {
-                    ps_write(
+                    ps_message(
                         session,
-                        c"Command queue is full; wait for pending commands, then retry.".as_ptr(),
+                        4,
+                        c"✕ Command queue is full; wait for pending commands, then retry.".as_ptr(),
                     );
-                    ps_newline(session);
                 }
                 return 1;
             }
             0
         }
         Err(error) => {
-            unsafe {
-                ps_write(session, error.as_ptr());
-                ps_newline(session);
+            if let Ok(message) = CString::new(format!("✕ {}", error.to_string_lossy())) {
+                unsafe {
+                    ps_message(session, 4, message.as_ptr());
+                }
             }
             1
         }
@@ -581,6 +855,7 @@ fn parse_action(args: &[&str]) -> Result<Action, &'static CStr> {
         ["pause"] => Ok(Action::Pause),
         ["stop"] => Ok(Action::Stop),
         ["preferences"] => Ok(Action::Preferences),
+        ["preferences", key] => Ok(Action::EditSetting((*key).into())),
         ["configure"] => Ok(Action::Configure),
         ["get"] => Ok(Action::Get(None)),
         ["get", key] => Ok(Action::Get(Some((*key).into()))),
@@ -593,9 +868,9 @@ fn parse_action(args: &[&str]) -> Result<Action, &'static CStr> {
             .map(Action::Seek)
             .ok_or(c"Seek needs a finite, nonnegative number of seconds."),
         ["volume", percent] => number(percent)
-            .filter(|n| *n <= 100.0)
+            .filter(|n| *n <= 130.0)
             .map(Action::Volume)
-            .ok_or(c"Volume must be a number between 0 and 100."),
+            .ok_or(c"Volume must be a number between 0 and 130."),
         ["mute", "on"] => Ok(Action::Mute(true)),
         ["mute", "off"] => Ok(Action::Mute(false)),
         _ => Err(c"Invalid command arguments. Type help for accepted commands."),
@@ -614,11 +889,11 @@ mod tests {
         host.feed(b"help set\r");
         parser.process(&host.take_output());
         assert!(parser.screen().contents().contains("VALUE"));
-        host.settings(&[("ui.terminal.font_size".into(), "13".into())], true);
+        host.settings_pairs(&[("ui.terminal.font_size".into(), "13".into())], true);
         host.tick(100);
         parser.process(&host.take_output());
         assert!(parser.screen().alternate_screen());
-        assert!(parser.screen().contents().contains("ui.terminal.font_size"));
+        assert!(parser.screen().contents().contains("Font size"));
         host.feed(b"\r\x1514\r");
         assert_eq!(
             host.take_actions(),
@@ -628,7 +903,7 @@ mod tests {
                 expected: Some("13".into())
             }]
         );
-        host.settings(&[("ui.terminal.font_size".into(), "14".into())], false);
+        host.settings_pairs(&[("ui.terminal.font_size".into(), "14".into())], false);
         host.tick(200);
         parser.process(&host.take_output());
         assert!(parser.screen().contents().contains("14"));
@@ -652,7 +927,7 @@ mod tests {
                 Action::Status
             ]
         );
-        host.feed(b"powershell\rvolume 101\rseek NaN\rplay extra\rmute toggle\r");
+        host.feed(b"powershell\rvolume 131\rseek NaN\rplay extra\rmute toggle\r");
         assert!(host.take_actions().is_empty());
     }
 
@@ -683,7 +958,7 @@ mod tests {
     fn settings_toggles_wait_for_owner_readback_without_duplicate_writes() {
         let mut host = Host::new(30, 100).unwrap();
         host.take_output();
-        host.settings(&[("ui.terminal.cursor_blink".into(), "true".into())], true);
+        host.settings_pairs(&[("ui.terminal.cursor_blink".into(), "true".into())], true);
         host.tick(100);
         host.feed(b" ");
         assert_eq!(
@@ -696,7 +971,7 @@ mod tests {
         );
         host.feed(b" ");
         assert!(host.take_actions().is_empty());
-        host.settings(
+        host.settings_pairs(
             &[("ui.terminal.cursor_blink".into(), "false".into())],
             false,
         );
@@ -709,6 +984,161 @@ mod tests {
                 value: "true".into(),
                 expected: Some("false".into())
             }]
+        );
+    }
+
+    #[test]
+    fn settings_use_friendly_labels_and_switch_to_distinct_stable_keys() {
+        let mut host = Host::new(30, 110).unwrap();
+        let mut parser = vt100::Parser::new(30, 110, 0);
+        parser.process(&host.take_output());
+        host.settings_pairs(&[("color_palette".into(), "studio".into())], true);
+        host.tick(100);
+        parser.process(&host.take_output());
+        assert!(parser.screen().contents().contains("Color palette"));
+        assert!(!parser.screen().contents().contains("color_palette"));
+        host.feed(b"\x1b[17~");
+        host.tick(300);
+        parser.process(&host.take_output());
+        assert!(parser.screen().contents().contains("color_palette"));
+        host.feed(b"\x1b[17~");
+        host.tick(500);
+        parser.process(&host.take_output());
+        assert!(parser.screen().contents().contains("Color palette"));
+        assert!(
+            host.take_actions().is_empty(),
+            "presentation must never write a setting"
+        );
+    }
+
+    #[test]
+    fn complete_preferences_catalog_opens_and_routes_every_section_page() {
+        let values =
+            super::super::terminal_settings::snapshot(&crate::config::AppConfig::default());
+        let mut firsts = Vec::new();
+        for entry in &values {
+            if firsts
+                .last()
+                .is_none_or(|previous: &&super::super::terminal_settings::Setting| {
+                    previous.page != entry.page
+                })
+            {
+                firsts.push(entry);
+            }
+        }
+        let mut host = Host::new(45, 160).unwrap();
+        let mut parser = vt100::Parser::new(45, 160, 0);
+        parser.process(&host.take_output());
+        host.settings(&values, true).unwrap();
+        for (index, entry) in firsts.iter().enumerate() {
+            host.tick((index as u32 + 1) * 200);
+            parser.process(&host.take_output());
+            let contents = parser.screen().contents();
+            assert!(
+                contents.contains(&entry.label.chars().take(32).collect::<String>()),
+                "missing {} page first control {}: {contents}",
+                entry.page,
+                entry.label
+            );
+            host.feed(b"\t");
+        }
+        assert!(
+            host.take_actions().is_empty(),
+            "page navigation must not change outputs/configuration"
+        );
+    }
+
+    #[test]
+    fn choice_popup_cancels_or_commits_canonical_values_with_owner_cas() {
+        let mut host = Host::new(30, 100).unwrap();
+        host.take_output();
+        host.settings_pairs(&[("theme".into(), "system".into())], true);
+        host.tick(100);
+        host.feed(b"\x1bOQ");
+        host.tick(300); // F2: real choice popup.
+        host.feed(b"\x1b[B\x1b");
+        host.tick(500);
+        assert!(
+            host.take_actions().is_empty(),
+            "cancel must leave owner unchanged"
+        );
+        host.feed(b"\x1bOQ\x1b[B\r");
+        host.tick(700);
+        assert_eq!(
+            host.take_actions(),
+            vec![Action::Set {
+                key: "theme".into(),
+                value: "light".into(),
+                expected: Some("system".into())
+            }]
+        );
+    }
+
+    #[test]
+    fn prompt_emits_explicit_semantic_accent_with_standard_fallback() {
+        let mut host = Host::new(24, 100).unwrap();
+        let output = host.take_output();
+        assert!(
+            output
+                .windows(b"\x1b]777;ps;ink;accent\x1b\\".len())
+                .any(|bytes| bytes == b"\x1b]777;ps;ink;accent\x1b\\")
+        );
+        let mut parser = super::super::terminal_parser::Parser::semantic(24, 100, 0);
+        parser.process(&output);
+        assert!((0..24).any(|row| (0..100).any(|col| parser.accent(row, col))));
+    }
+
+    #[test]
+    fn structured_status_is_one_aligned_block_and_does_not_duplicate_the_prompt() {
+        let mut host = Host::new(30, 100).unwrap();
+        let mut parser = vt100::Parser::new(30, 100, 100);
+        parser.process(&host.take_output());
+        host.feed(b"vol");
+        host.status_report(&super::super::shell_status::Status {
+            loaded: true,
+            position: 61.25,
+            duration: 3600.0,
+            volume: 57.0,
+            muted: true,
+            ..Default::default()
+        });
+        parser.process(&host.take_output());
+        let text = parser.screen().contents();
+        assert_eq!(text.matches("╭─").count(), 1, "{text}");
+        assert!(text.contains("00:01:01.250 / 01:00:00.000"), "{text}");
+        assert!(text.contains("○ Disconnected"));
+        assert!(text.contains("─"));
+        let positions: Vec<_> = [
+            "Ⅱ Paused",
+            "00:01:01.250",
+            "⊘ Muted (57%)",
+            "○ Disconnected",
+        ]
+        .iter()
+        .map(|value| {
+            text.lines()
+                .find_map(|line| line.find(value))
+                .expect("status value must be visible")
+        })
+        .collect();
+        assert!(
+            positions.iter().all(|column| *column == positions[0]),
+            "aligned value starts: {positions:?}"
+        );
+        host.prompt_status("Ⅱ Paused 00:01:01 / 01:00:00 · ⊘ Muted (57%) · ○ Hardware");
+        host.feed(b"ume 25\r");
+        assert_eq!(host.take_actions(), [Action::Volume(25.0)]);
+    }
+
+    #[test]
+    fn f4_reuses_the_native_editor_without_writing_a_value() {
+        let mut host = Host::new(30, 100).unwrap();
+        host.settings_pairs(&[("ui.terminal.font_size".into(), "13".into())], true);
+        host.tick(100);
+        host.feed(b"\x1bOS");
+        assert_eq!(
+            host.take_actions(),
+            [Action::EditSetting("ui.terminal.font_size".into())]
         );
     }
 
@@ -751,7 +1181,7 @@ mod tests {
         parser.process(&host.take_output());
         let text = parser.screen().contents();
         assert!(
-            text.lines().any(|line| line.trim() == "Playback: idle"),
+            text.lines().any(|line| line.trim() == "✓ Playback: idle"),
             "{text}"
         );
         assert!(
@@ -761,6 +1191,11 @@ mod tests {
         assert!(
             text.lines().any(|line| line.trim() == "Volume: 100%"),
             "{text}"
+        );
+        assert_eq!(
+            text.matches("╭─").count(),
+            1,
+            "one response must restore the prompt only once: {text}"
         );
         host.feed(b"ume 25\r");
         assert_eq!(host.take_actions(), [Action::Volume(25.0)]);

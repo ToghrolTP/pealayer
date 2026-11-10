@@ -44,6 +44,7 @@ static void dashboard_render(ps_session *s){
     at(s,s->io.rows-1,2);footer_field(s,editing?"Enter Apply  Esc Cancel  ^U Clear":(s->io.flags&PS_UNICODE)?"Tab Panel  ↑/↓ Row  ←/→ Adjust  Enter Edit":"Tab Panel  Up/Down Row  Left/Right Adjust  Enter Edit",s->io.columns-3,0);
     at(s,s->io.rows,2);footer_field(s,editing?"F2 Dialog":"F2 Dialog  Esc Close",s->io.columns-3,0);
     if(editing){
+        s->mouse_edit_x=editx;s->mouse_edit_y=edity;s->mouse_edit_width=editwidth;
         if(s->dialog)control_overlay(s,&active);
         else{
             unsigned start=0;

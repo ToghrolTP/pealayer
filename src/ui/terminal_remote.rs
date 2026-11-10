@@ -13,7 +13,7 @@ pub struct State {
     viewer: Option<Viewer>,
     snapshot: Value,
     error: Option<String>,
-    parser: Option<vt100::Parser>,
+    parser: Option<super::terminal_parser::Parser>,
     screen: super::terminal_screen::ScreenViewState,
     input: String,
 }
@@ -193,6 +193,9 @@ fn install(state: &mut State, snapshot: Value) -> Result<(), String> {
         if screen["mouse"] == true {
             bytes.extend_from_slice(b"\x1b[?1002h\x1b[?1006h");
         }
+        if screen["application_cursor"] == true {
+            bytes.extend_from_slice(b"\x1b[?1h");
+        }
         for (row, runs) in lines.iter().enumerate() {
             bytes.extend_from_slice(format!("\x1b[{};1H", row + 1).as_bytes());
             for run in runs.as_array().ok_or("Invalid terminal row")? {
@@ -214,6 +217,11 @@ fn install(state: &mut State, snapshot: Value) -> Result<(), String> {
                             .as_bytes(),
                         );
                     }
+                }
+                match run["fg_role"].as_str() {
+                    Some("accent") => bytes.extend_from_slice(b"\x1b]777;ps;ink;accent\x1b\\"),
+                    None if run["fg_role"].is_null() => {}
+                    _ => return Err("Invalid terminal foreground role".into()),
                 }
                 for (name, code) in [("bold", 1), ("inverse", 7), ("underline", 4)] {
                     if run[name] == true {
@@ -257,7 +265,11 @@ fn install(state: &mut State, snapshot: Value) -> Result<(), String> {
             )
             .as_bytes(),
         );
-        let mut parser = vt100::Parser::new(rows, cols, 0);
+        let mut parser = if session["target"] == "portable_shell" {
+            super::terminal_parser::Parser::semantic(rows, cols, 0)
+        } else {
+            super::terminal_parser::Parser::new(rows, cols, 0)
+        };
         parser.process(&bytes);
         state.parser = Some(parser);
     } else {
@@ -414,5 +426,23 @@ mod tests {
         let mut state = State::default();
         assert!(install(&mut state,json!({"screen":{"id":1,"lines":[[{"text":"\u{1b}[2J"}]]},"sessions":[{"id":1,"rows":1,"cols":20}]})).is_err());
         assert!(state.parser.is_none());
+    }
+    #[test]
+    fn shared_semantic_role_survives_native_viewer_reconstruction() {
+        let mut state = State::default();
+        let mut snapshot = json!({"sessions":[{"id":1,"rows":1,"cols":20,"target":"portable_shell"}],"screen":{
+            "id":1,"cursor":[0,1],"lines":[[{"text":"A","fg":"#d8a0ff","bg":null,
+            "fg_role":"accent","bold":false,"inverse":false,"underline":false}]]}});
+        install(&mut state, snapshot.clone()).unwrap();
+        assert!(state.parser.as_ref().unwrap().accent(0, 0));
+        assert_eq!(state.parser.as_ref().unwrap().screen().contents(), "A");
+        snapshot["screen"]["lines"][0][0]["fg_role"] = Value::Null;
+        install(&mut state, snapshot.clone()).unwrap();
+        assert!(
+            !state.parser.as_ref().unwrap().accent(0, 0),
+            "identical RGB is not a semantic role"
+        );
+        snapshot["screen"]["lines"][0][0]["fg_role"] = json!("unknown");
+        assert!(install(&mut state, snapshot).is_err());
     }
 }

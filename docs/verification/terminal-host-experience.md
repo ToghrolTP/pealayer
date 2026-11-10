@@ -11,7 +11,8 @@ Continuation: [#80](https://github.com/ToghrolTP/pealayer/issues/80).
 - Terminal has a dedicated Preferences page. Its menu and screen context menu
   navigate there directly. Cursor shape, blinking, command-accent coloring,
   font size, scrollback, default target and security are configurable.
-- The existing pinned PortableShell framework is embedded, not launched as an
+- The built-in session is named **Pealayer Shell**. The pinned PortableShell
+  framework is embedded, not launched as an
   executable. Its multiline prompt, categorized help/usage, command and setting
   completion, F7 history, bracketed paste and editable settings registry are used.
   `configure` opens the upstream in-place table; `get [KEY]`, `set KEY VALUE`,
@@ -19,12 +20,27 @@ Continuation: [#80](https://github.com/ToghrolTP/pealayer/issues/80).
   state. A queued setting is pending, not falsely reported as applied.
 - Shell configuration uses the application's validation, persistence and runtime
   side-effect owner. Inline writes compare their observed value before applying;
-  a stale edit refreshes instead of overwriting another surface. The curated
-  scalar registry excludes secrets, executable paths and security grants. Native
-  Preferences and the existing configuration API remain available for other keys.
+  a stale edit refreshes instead of overwriting another surface. The catalog is
+  generated from the shared Preferences contract, grouped into section pages,
+  rather than a second hand-maintained demonstration subset. Labels, choices,
+  numeric ranges and runtime validation have the same owner as Preferences.
+  Private paths/values are redacted and execution grants remain native-only.
+  Complex/oversized values are locked in the inline table rather than truncated
+  into a destructive write; use bounded JSON `get`/`set` or
+  `preferences KEY` to open that section's existing native editor.
 - Real semantic colors are retained. The optional command/accent role follows
   the live app palette without recoloring warnings, errors or numeric values.
   Generic success notices expire; command history and errors are not deleted.
+  Active session outlines use the actual live accent, not selection text ink.
+  The paint regression deliberately makes selection ink white and changes the
+  accent twice, checking that neither theme produces the reported white frame.
+- The prompt contains the live playback/position/audio/controller summary,
+  updated from host observations without a hidden polling loop. Playback
+  commands serialize per session and remain pending until the decoder reports
+  the requested state; a timeout is explicitly unconfirmed and never replayed.
+  `status` uses the owner's prompt-safe structured report, aligned value starts,
+  semantic state symbols and section dividers. One whole response suspends and
+  restores the complete multiline prompt once, preserving unfinished input.
 - Alternate-screen mouse reporting is forwarded only when advertised, with Shift
   retaining text selection. Prompt-mode wheel scrolling remains scrollback.
   Control-code/oversized paste is rejected atomically. Multiline paste requires
@@ -38,8 +54,27 @@ message, and the actual pinned gallery/settings-editor implementation inspected.
 Relevant defaults include semantic colors, multiline prompts, inline editing,
 completion rollover/history, distinct prompt/table mouse ownership and no static
 introductory narration. OS-specific demos, firmware controls and sample data are
-not imported as fake Pealayer capabilities. Vendored upstream files are unchanged;
-the small application adapter supplies required panel metadata and callbacks.
+not imported as fake Pealayer capabilities. Vendored files come from the verified
+owner checkpoint recorded in `third_party/portable-shell/PEALAYER-VENDOR.md`;
+the small application adapter supplies Pealayer metadata and callbacks.
+
+### Editable choices and explicit accent protocol
+
+The owner-provided choice popup is consumed instead of creating a second native
+editor. Theme, palette, accent, density and cursor choices retain their canonical
+configuration tokens for validation/writes, with separate friendly display labels.
+F6 switches readable setting names to technical keys; those keys use distinct
+coloring and never replace the identity used for completion, CAS or persistence.
+
+Pealayer opts into PortableShell's foreground role protocol:
+ordinary fallback SGR followed by `OSC 777;ps;ink;accent ST`. A standard terminal
+keeps the fallback color. Pealayer retains an explicit semantic mask, following
+the same VT cursor/erasure/scrollback/alternate-screen operations as the actual
+grid. It never infers accent from cyan, violet or an RGB/index collision. Normal
+foreground/reset SGR clears the role; background/bold-only changes preserve it.
+The private shared screen serializes `fg_role: "accent"` independently from its
+fallback `fg`; Web and native viewers resolve that role at paint time. Existing
+output therefore follows live theme changes without rerunning commands.
 
 ## Shared sessions and remote security
 

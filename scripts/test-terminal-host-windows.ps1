@@ -4,28 +4,39 @@ param(
     [Parameter(Mandatory=$true)][string]$Executable,
     [Parameter(Mandatory=$true)][string]$OutputDirectory,
     [int]$Port=18192,
+    [int]$ExistingProcessId=0,
     [switch]$KeepOpen
 )
 $ErrorActionPreference='Stop'
 $root=[IO.Path]::GetFullPath((Join-Path $env:LOCALAPPDATA 'Programs\Pealayer\verification'))
 $output=[IO.Path]::GetFullPath($OutputDirectory)
 if(-not $output.StartsWith($root+[IO.Path]::DirectorySeparatorChar,[StringComparison]::OrdinalIgnoreCase)){throw 'Use a private directory under Pealayer verification.'}
-try {$null=Invoke-RestMethod -NoProxy "http://127.0.0.1:$Port/healthz" -TimeoutSec 1;throw 'Fixture port already owned.'}catch{if($_.Exception.Message -eq 'Fixture port already owned.'){throw}}
+if(-not $ExistingProcessId){
+    try {$null=Invoke-RestMethod -NoProxy "http://127.0.0.1:$Port/healthz" -TimeoutSec 1;throw 'Fixture port already owned.'}catch{if($_.Exception.Message -eq 'Fixture port already owned.'){throw}}
+}
 $null=New-Item -ItemType Directory -Force -Path $output
 $configPath=Join-Path $output 'config.json'
-if(Test-Path -LiteralPath $configPath){throw 'Refusing to overwrite an existing fixture configuration.'}
+if((Test-Path -LiteralPath $configPath) -and -not $ExistingProcessId){throw 'Refusing to overwrite an existing fixture configuration.'}
 $config=@{app_name='Pealayer Terminal Review';auto_connect_hardware=$false;clipboard_url_detection=$false;restore_last_media=$false;last_media_target=$null;
     theme='dark';color_palette='studio';web_enabled=$true;web_allow_control=$true;web_allow_configuration=$true;
     window_geometry=@{x=60;y=50;width=1480;height=940;maximized=$false};
     ui=@{terminal=@{enabled=$true;target='portable_shell';allow_remote=$true;allow_system_shell=$false;allow_remote_system_shell=$false}}}
-[IO.File]::WriteAllText($configPath,($config|ConvertTo-Json -Depth 10),[Text.UTF8Encoding]::new($false))
+if(-not $ExistingProcessId){[IO.File]::WriteAllText($configPath,($config|ConvertTo-Json -Depth 10),[Text.UTF8Encoding]::new($false))}
 $names=@('PEALAYER_CONFIG_FILE','PEALAYER_INSTANCE_ID','PEALAYER_PORT','PEALAYER_WEB_BIND')
 $previous=@{};foreach($name in $names){$previous[$name]=[Environment]::GetEnvironmentVariable($name,'Process')}
 $process=$null;$owned=[Collections.Generic.List[long]]::new();$key=$null
 function Native([string]$method,$params=@{}) {
     $payload=@{jsonrpc='2.0';id=1;method=$method;params=$params}|ConvertTo-Json -Depth 12 -Compress
-    $raw=& $Executable --remote $payload
-    if($LASTEXITCODE -ne 0){throw 'Native fixture request failed.'}
+    $catalog=Invoke-RestMethod -NoProxy "http://127.0.0.1:$Port/api/player/commands"
+    $pipeName=($catalog.native_ipc.endpoint -split '\\')[-1]
+    $pipe=[IO.Pipes.NamedPipeClientStream]::new('.', $pipeName, [IO.Pipes.PipeDirection]::InOut)
+    try {
+        $pipe.Connect(2000);$pipe.ReadMode=[IO.Pipes.PipeTransmissionMode]::Message
+        $bytes=[Text.Encoding]::UTF8.GetBytes($payload+"`n");$pipe.Write($bytes,0,$bytes.Length)
+        $buffer=[byte[]]::new(65536);$count=$pipe.Read($buffer,0,$buffer.Length)
+        $raw=[Text.Encoding]::UTF8.GetString($buffer,0,$count)
+        if(-not $pipe.IsMessageComplete){throw 'Native terminal reply exceeded its bounded buffer.'}
+    } finally {$pipe.Dispose()}
     $reply=$raw|ConvertFrom-Json
     if($reply.error){throw $reply.error.message}
     $reply.result
@@ -39,7 +50,12 @@ function Denied([string]$path,$body,$headers=@{}) {
 }
 try {
     $env:PEALAYER_CONFIG_FILE=$configPath;$env:PEALAYER_INSTANCE_ID='terminal-host-review';$env:PEALAYER_PORT="$Port";$env:PEALAYER_WEB_BIND='127.0.0.1'
-    $process=Start-Process -FilePath $Executable -WorkingDirectory (Join-Path $env:LOCALAPPDATA 'Programs\Pealayer\bin') -ArgumentList '--workspace nle --pause' -WindowStyle Hidden -PassThru
+    if($ExistingProcessId){
+        $status=Invoke-RestMethod -NoProxy "http://127.0.0.1:$Port/api/process/status"
+        $live=Invoke-RestMethod -NoProxy "http://127.0.0.1:$Port/api/config"
+        if($status.process_id -ne $ExistingProcessId -or $live.app_name -ne 'Pealayer Terminal Review' -or $live.auto_connect_hardware -or $status.runtime.executable.sha256 -ne (Get-FileHash -LiteralPath $Executable -Algorithm SHA256).Hash.ToLowerInvariant()){throw 'Existing process is not the exact owned isolated fixture.'}
+        $process=Get-Process -Id $ExistingProcessId
+    }else{$process=Start-Process -FilePath $Executable -WorkingDirectory (Join-Path $env:LOCALAPPDATA 'Programs\Pealayer\bin') -ArgumentList '--workspace nle --pause' -WindowStyle Hidden -PassThru}
     $ready=$false
     for($n=0;$n -lt 100;$n++){try{$status=Invoke-RestMethod -NoProxy "http://127.0.0.1:$Port/api/process/status" -TimeoutSec 1;if($status.process_id -eq $process.Id){$ready=$true;break}}catch{};Start-Sleep -Milliseconds 100}
     if(-not $ready){throw 'Isolated terminal fixture did not start.'}
@@ -80,7 +96,7 @@ try {
         foreach($id in $owned){try{$null=Native 'pealayer.terminal.control' @{operation='close';id=$id}}catch{}}
         try{$null=Native 'pealayer.terminal.revoke'}catch{}
         for($n=0;$n -lt 40;$n++){try{$authoring=Invoke-RestMethod -NoProxy "http://127.0.0.1:$Port/api/process/authoring";if($authoring.safe_to_replace_native){break}}catch{};Start-Sleep -Milliseconds 100}
-        if($authoring.safe_to_replace_native){$null=& $Executable --remote '{"command":"quit_local"}'}
+        if($authoring.safe_to_replace_native){$null=Invoke-RestMethod -NoProxy "http://127.0.0.1:$Port/api/ipc" -Method Post -ContentType application/json -Body '{"command":"quit_local"}'}
     }
     foreach($name in $names){[Environment]::SetEnvironmentVariable($name,$previous[$name],'Process')}
 }

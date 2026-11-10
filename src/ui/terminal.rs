@@ -15,7 +15,7 @@ impl TerminalTarget {
         match self {
             Self::PcController => "PCController",
             Self::SystemShell => "System shell",
-            Self::PortableShell => "PortableShell",
+            Self::PortableShell => "Pealayer Shell",
         }
     }
 }
@@ -384,7 +384,7 @@ pub fn control(
 struct View {
     id: u64,
     target: TerminalTarget,
-    parser: vt100::Parser,
+    parser: super::terminal_parser::Parser,
     screen: super::terminal_screen::ScreenViewState,
     session: Option<super::terminal_backend::Session>,
     phase: &'static str,
@@ -402,6 +402,8 @@ struct View {
     notice_at: std::time::Instant,
     output_revision: u64,
     settings_revision: u64,
+    prompt_status: String,
+    pending_command: Option<super::shell_status::Pending>,
 }
 
 #[cfg(feature = "workspace-terminal")]
@@ -413,12 +415,17 @@ impl View {
         if self.target == TerminalTarget::PortableShell && self.phase == "ready" {
             self.send(super::terminal_backend::Input::Bytes(vec![12]));
         }
-        self.parser = vt100::Parser::new(self.size.0, self.size.1, scrollback_lines);
+        self.parser = if self.target == TerminalTarget::PortableShell {
+            super::terminal_parser::Parser::semantic(self.size.0, self.size.1, scrollback_lines)
+        } else {
+            super::terminal_parser::Parser::new(self.size.0, self.size.1, scrollback_lines)
+        };
         self.screen = Default::default();
         self.queries = QueryState::default();
     }
     fn begin_close(&mut self) {
         self.actions.clear();
+        self.pending_command = None;
         if let Some(session) = &self.session {
             session.request_close();
             self.phase = "closing";
@@ -428,7 +435,11 @@ impl View {
         Self {
             id,
             target: preferences.target,
-            parser: vt100::Parser::new(24, 80, preferences.scrollback_lines.clamp(100, 10000)),
+            parser: super::terminal_parser::Parser::new(
+                24,
+                80,
+                preferences.scrollback_lines.clamp(100, 10000),
+            ),
             screen: Default::default(),
             session: None,
             phase: "disconnected",
@@ -446,6 +457,8 @@ impl View {
             notice_at: std::time::Instant::now(),
             output_revision: 0,
             settings_revision: u64::MAX,
+            prompt_status: String::new(),
+            pending_command: None,
         }
     }
     fn send(&mut self, input: super::terminal_backend::Input) -> bool {
@@ -849,8 +862,19 @@ fn connect(
             // A new endpoint/process owns a new VT state. Reusing modes from a
             // previous TUI (alternate screen, application keys, paste) corrupts
             // the next session even when its text happens to look unchanged.
-            view.parser =
-                vt100::Parser::new(view.size.0, view.size.1, preferences.scrollback_lines);
+            view.parser = if view.target == TerminalTarget::PortableShell {
+                super::terminal_parser::Parser::semantic(
+                    view.size.0,
+                    view.size.1,
+                    preferences.scrollback_lines,
+                )
+            } else {
+                super::terminal_parser::Parser::new(
+                    view.size.0,
+                    view.size.1,
+                    preferences.scrollback_lines,
+                )
+            };
             view.screen = Default::default();
             view.session = Some(session);
             view.phase = "opening";
@@ -887,13 +911,15 @@ pub(super) fn session_tab(
         ui.allocate_exact_size(egui::vec2(width, height + 4.0), egui::Sense::click());
     let selected =
         super::motion::hover_alpha(ui, egui::Id::unique(("terminal-active", id)), active);
-    let tint = ui.visuals().selection.bg_fill;
+    // Selection's stroke is its contrasting text ink (often white), not the
+    // application accent. Keep session chrome independent of text selection.
+    let accent = super::craft_theme::current(ui.ctx()).accent;
     let bg = ui
         .visuals()
         .widgets
         .inactive
         .bg_fill
-        .lerp_to_gamma(tint, selected * 0.20);
+        .lerp_to_gamma(accent, selected * 0.12);
     let painter = ui.painter().with_clip_rect(rect.intersect(ui.clip_rect()));
     painter.rect_filled(rect, 6.0, bg.gamma_multiply(alpha));
     painter.rect_stroke(
@@ -902,7 +928,7 @@ pub(super) fn session_tab(
         egui::Stroke::new(
             1.0,
             if active {
-                ui.visuals().selection.stroke.color
+                accent.gamma_multiply(0.55)
             } else {
                 ui.visuals().widgets.noninteractive.bg_stroke.color
             }
@@ -916,14 +942,7 @@ pub(super) fn session_tab(
                 rect.left_bottom() + egui::vec2(8.0, -1.0),
                 rect.right_bottom() - egui::vec2(8.0, 1.0),
             ],
-            egui::Stroke::new(
-                2.0,
-                ui.visuals()
-                    .selection
-                    .stroke
-                    .color
-                    .gamma_multiply(selected * alpha),
-            ),
+            egui::Stroke::new(2.0, accent.gamma_multiply(selected * alpha)),
         );
     }
     let caption_x = rect.left() + 10.0 + icon.size().x + 8.0;
@@ -1388,7 +1407,7 @@ fn panel_contents(
             ui.label(
                 egui::RichText::new("pc›")
                     .monospace()
-                    .color(ui.visuals().selection.stroke.color),
+                    .color(super::craft_theme::current(ui.ctx()).accent),
             );
             let edit_id = egui::Id::unique(("terminal-command", view.id));
             // Consume terminal-specific keys before TextEdit handles Enter
@@ -1502,6 +1521,76 @@ pub fn tick(app: &mut crate::app::PealayerApp, ctx: &egui::Context) {
     }
     #[cfg(feature = "workspace-terminal")]
     {
+        let live = crate::platform::interop::get_live_status();
+        let shell_status = super::shell_status::Status {
+            loaded: live.current_video.is_some(),
+            playing: live.playing,
+            position: live.playback_time,
+            duration: live.duration,
+            volume: live.volume,
+            muted: live.muted,
+            controller: live.controller_connected,
+        };
+        let prompt = shell_status.summary();
+        for view in &mut app.terminal_state.views {
+            if view.target == TerminalTarget::PortableShell
+                && view.phase == "ready"
+                && view.prompt_status != prompt
+                && view.send(super::terminal_backend::Input::PromptStatus(prompt.clone()))
+            {
+                view.prompt_status = prompt.clone();
+            }
+        }
+        if app
+            .terminal_state
+            .views
+            .iter()
+            .any(|view| view.pending_command.is_some())
+        {
+            let observed = if crate::peer::active() && !crate::peer::mirroring() {
+                super::shell_status::Observed {
+                    idle: Some(live.current_video.is_none()),
+                    paused: Some(!live.playing),
+                    position: Some(live.playback_time),
+                    seeking: None,
+                    volume: Some(live.volume),
+                    muted: Some(live.muted),
+                }
+            } else {
+                super::shell_status::Observed {
+                    idle: app.mpv.get_property("idle-active").ok(),
+                    paused: app.mpv.get_property("pause").ok(),
+                    position: app.mpv.get_property("time-pos").ok(),
+                    seeking: app.mpv.get_property("seeking").ok(),
+                    volume: app.mpv.get_property("volume").ok(),
+                    muted: app.mpv.get_property("mute").ok(),
+                }
+            };
+            for view in &mut app.terminal_state.views {
+                if let Some(pending) = &view.pending_command {
+                    let result = if let Some(text) = pending.confirmed(&observed) {
+                        Some((text, false))
+                    } else if pending.started.elapsed() >= std::time::Duration::from_secs(6) {
+                        Some((
+                            format!(
+                                "{} was not confirmed by the player. Not retried.",
+                                pending.label()
+                            ),
+                            true,
+                        ))
+                    } else {
+                        None
+                    };
+                    if let Some((text, error)) = result {
+                        view.pending_command = None;
+                        view.send(super::terminal_backend::Input::Response { text, error });
+                    }
+                }
+            }
+            // Only bounded outstanding acknowledgments need this wakeup. Idle
+            // prompts follow existing media events; they never install a poll.
+            ctx.request_repaint_after(std::time::Duration::from_millis(50));
+        }
         let revision = crate::platform::interop::live_config_revision();
         if app.terminal_state.views.iter().any(|v| {
             v.target == TerminalTarget::PortableShell
@@ -1554,10 +1643,12 @@ pub fn tick(app: &mut crate::app::PealayerApp, ctx: &egui::Context) {
             .terminal_state
             .views
             .iter_mut()
-            .flat_map(|view| {
-                std::mem::take(&mut view.actions)
-                    .into_iter()
-                    .map(move |action| (view.id, action))
+            .filter_map(|view| {
+                if view.pending_command.is_none() && !view.actions.is_empty() {
+                    Some((view.id, view.actions.remove(0)))
+                } else {
+                    None
+                }
             })
             .collect();
         for (id, action) in actions {
@@ -1590,20 +1681,17 @@ pub fn tick(app: &mut crate::app::PealayerApp, ctx: &egui::Context) {
                             expected.as_deref(),
                         )
                         .and_then(|patch| app.apply_config_patch(ctx, &patch))
-                        .map(|()| format!("Saved {key}"));
+                        .map(|()| format!("Saved {key} = {value}"));
                     }
                     Action::Get(key) => {
                         let values = super::terminal_settings::snapshot(&config);
                         result = if let Some(key) = key {
-                            values
-                                .iter()
-                                .find(|(name, _)| name == key)
-                                .map(|(k, v)| format!("{k} = {v}"))
-                                .ok_or_else(|| "Setting is not exposed by this host".into())
+                            super::terminal_settings::read(&config, key)
+                                .map(|value| format!("{key} = {value}"))
                         } else {
                             Ok(values
                                 .iter()
-                                .map(|(k, v)| format!("{k} = {v}"))
+                                .map(|entry| format!("{} = {}", entry.key, entry.value))
                                 .collect::<Vec<_>>()
                                 .join("\n"))
                         };
@@ -1631,7 +1719,7 @@ pub fn tick(app: &mut crate::app::PealayerApp, ctx: &egui::Context) {
                 }
                 continue;
             }
-            let command = match action {
+            let command = match action.clone() {
                 Action::Configure | Action::Get(_) | Action::Set { .. } => unreachable!(),
                 Action::Status => None,
                 Action::Play => Some(InteropCommand::Play),
@@ -1641,36 +1729,116 @@ pub fn tick(app: &mut crate::app::PealayerApp, ctx: &egui::Context) {
                 Action::Volume(value) => Some(InteropCommand::SetVolume { value }),
                 Action::Mute(muted) => Some(InteropCommand::SetMute { muted }),
                 Action::Preferences => Some(InteropCommand::OpenPreferences),
+                Action::EditSetting(ref key) => {
+                    let controls = crate::preferences_contract::preference_controls(
+                        &app.runtime_config_snapshot(),
+                    );
+                    if let Some(control) = controls.iter().find(|control| {
+                        control.key == key || control.custom_key == Some(key.as_str())
+                    }) {
+                        Some(InteropCommand::NavigatePreferences {
+                            navigation: crate::preferences_contract::PreferencesNavigation {
+                                section: Some(control.section.into()),
+                                scroll_y: 0.0,
+                            },
+                        })
+                    } else {
+                        if let Some(view) = app
+                            .terminal_state
+                            .views
+                            .iter_mut()
+                            .find(|view| view.id == id)
+                        {
+                            view.send(super::terminal_backend::Input::Response {
+                                text: "Setting is not in Preferences".into(),
+                                error: true,
+                            });
+                        }
+                        continue;
+                    }
+                }
             };
             let result = if let Some(command) = command {
+                let requires_media =
+                    matches!(action, Action::Play | Action::Pause | Action::Seek(_));
+                if requires_media && app.current_video_path.is_none() {
+                    if let Some(view) = app
+                        .terminal_state
+                        .views
+                        .iter_mut()
+                        .find(|view| view.id == id)
+                    {
+                        view.send(super::terminal_backend::Input::Response {
+                            text: "No media is loaded. Open a file first.".into(),
+                            error: true,
+                        });
+                    }
+                    continue;
+                }
+                if matches!(action, Action::Seek(_)) && !app.is_seekable {
+                    if let Some(view) = app
+                        .terminal_state
+                        .views
+                        .iter_mut()
+                        .find(|view| view.id == id)
+                    {
+                        view.send(super::terminal_backend::Input::Response {
+                            text: "This media cannot seek.".into(),
+                            error: true,
+                        });
+                    }
+                    continue;
+                }
                 match command.validate() {
                     Ok(()) => {
+                        let previous_error = app.show_error.clone();
                         app.apply_interop_command(ctx, command, "Pealayer shell");
-                        Ok("Request sent to Pealayer. Use status to inspect playback.".to_string())
+                        if app.show_error != previous_error
+                            && let Some(error) = app.show_error.clone()
+                        {
+                            Err(error)
+                        } else if matches!(action, Action::Preferences | Action::EditSetting(_)) {
+                            if app.show_preferences_dialog {
+                                Ok("Preferences opened".into())
+                            } else {
+                                Err("Preferences did not open".into())
+                            }
+                        } else {
+                            let action = if let Action::Seek(value) = action {
+                                Action::Seek(value.min(app.duration).max(0.0))
+                            } else {
+                                action
+                            };
+                            let pending = super::shell_status::Pending::new(action);
+                            if let Some(view) = app
+                                .terminal_state
+                                .views
+                                .iter_mut()
+                                .find(|view| view.id == id)
+                            {
+                                view.send(super::terminal_backend::Input::Pending(
+                                    pending.label().into(),
+                                ));
+                                view.pending_command = Some(pending);
+                            }
+                            ctx.request_repaint();
+                            continue;
+                        }
                     }
                     Err(error) => Err(error),
                 }
             } else {
-                let status = crate::platform::interop::get_live_status();
-                Ok(format!(
-                    "Playback: {}\nPosition: {:.3} / {:.3} s\nVolume: {:.0}%{}\nController: {}",
-                    if status.current_video.is_none() {
-                        "idle"
-                    } else if status.playing {
-                        "playing"
-                    } else {
-                        "paused"
-                    },
-                    status.playback_time,
-                    status.duration,
-                    status.volume,
-                    if status.muted { " (muted)" } else { "" },
-                    if status.controller_connected {
-                        "connected"
-                    } else {
-                        "disconnected"
-                    }
-                ))
+                if let Some(view) = app
+                    .terminal_state
+                    .views
+                    .iter_mut()
+                    .find(|view| view.id == id)
+                {
+                    view.send(super::terminal_backend::Input::StatusReport(
+                        shell_status.clone(),
+                    ));
+                }
+                continue;
             };
             if let Some(view) = app
                 .terminal_state
@@ -1874,12 +2042,13 @@ fn private_snapshot(state: &TerminalState, remote: bool) -> serde_json::Value {
                 if cell.is_wide_continuation() {continue;}
                 let text=if cell.contents().is_empty(){" ".to_string()}else{cell.contents()};
                 let fg=super::terminal_screen::web_color(cell.fgcolor());let bg=super::terminal_screen::web_color(cell.bgcolor());
-                if let Some(last)=runs.last_mut() && last["fg"]==json!(fg) && last["bg"]==json!(bg) && last["bold"]==cell.bold() && last["inverse"]==cell.inverse() && last["underline"]==cell.underline() {
+                let fg_role=if v.parser.accent(row,col){Some("accent")}else{None};
+                if let Some(last)=runs.last_mut() && last["fg"]==json!(fg) && last["fg_role"]==json!(fg_role) && last["bg"]==json!(bg) && last["bold"]==cell.bold() && last["inverse"]==cell.inverse() && last["underline"]==cell.underline() {
                     let mut joined=last["text"].as_str().unwrap().to_string();joined.push_str(&text);last["text"]=json!(joined);
-                } else {runs.push(json!({"text":text,"fg":fg,"bg":bg,"bold":cell.bold(),"inverse":cell.inverse(),"underline":cell.underline()}));}
+                } else {runs.push(json!({"text":text,"fg":fg,"fg_role":fg_role,"bg":bg,"bold":cell.bold(),"inverse":cell.inverse(),"underline":cell.underline()}));}
             } runs
         }).collect::<Vec<_>>();
-        json!({"id":v.id,"lines":lines,"cursor":screen.cursor_position(),"hide_cursor":screen.hide_cursor(),"alternate":screen.alternate_screen(),"bracketed_paste":screen.bracketed_paste(),
+            json!({"id":v.id,"lines":lines,"cursor":screen.cursor_position(),"hide_cursor":screen.hide_cursor(),"alternate":screen.alternate_screen(),"bracketed_paste":screen.bracketed_paste(),"application_cursor":screen.application_cursor(),
             "mouse":screen.mouse_protocol_mode()!=vt100::MouseProtocolMode::None && screen.mouse_protocol_encoding()==vt100::MouseProtocolEncoding::Sgr})
     });
     json!({"owner_id":crate::peer::instance_id(),"sessions":sessions,"screen":screen,
@@ -2055,6 +2224,34 @@ mod tests {
     }
     #[cfg(feature = "workspace-terminal")]
     #[test]
+    fn active_session_chrome_uses_live_accent_not_selection_text_ink() {
+        let ctx = egui::Context::default();
+        for accent in [
+            egui::Color32::from_rgb(139, 121, 235),
+            egui::Color32::from_rgb(30, 150, 100),
+        ] {
+            let mut tokens = super::super::craft_theme::current(&ctx);
+            tokens.accent = accent;
+            super::super::craft_theme::set_current(&ctx, tokens);
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                ui.visuals_mut().selection.stroke.color = egui::Color32::WHITE;
+                session_tab(ui, 9, TerminalTarget::PortableShell, true, "ready", 1.0);
+            });
+            output.textures_delta.clear();
+            let outline = output
+                .shapes
+                .iter()
+                .find_map(|shape| match &shape.shape {
+                    egui::Shape::Rect(rect) if rect.stroke.width == 1.0 => Some(rect.stroke.color),
+                    _ => None,
+                })
+                .expect("session outline must be painted");
+            assert_eq!(outline, accent.gamma_multiply(0.55));
+            assert_ne!(outline, egui::Color32::WHITE);
+        }
+    }
+    #[cfg(feature = "workspace-terminal")]
+    #[test]
     fn session_tab_centers_actual_ink_and_close_is_independent_at_fractional_scales() {
         for scale in [1.0, 1.25, 1.5, 2.0] {
             let ctx = egui::Context::default();
@@ -2096,7 +2293,7 @@ mod tests {
                 .filter(|t| {
                     [
                         super::super::icons::TERMINAL_WINDOW,
-                        "PortableShell",
+                        "Pealayer Shell",
                         super::super::icons::X,
                     ]
                     .contains(&t.galley.text())

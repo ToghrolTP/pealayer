@@ -1566,8 +1566,11 @@ fn config_update_response(body: &[u8], state: &ControlState) -> HttpResponse {
         .map_err(|error| format!("invalid configuration JSON: {error}"))
         .and_then(|values| {
             crate::config::AppConfig::validate_patch_shape(&values)?;
-            if !crate::terminal_access::remote_policy_patch_allowed(&values) {return Err("Terminal security policy can only be changed by the native owner".into());}
+            // Report the actual malformed value before classifying a valid
+            // patch as a forbidden security-policy change. This never queues
+            // an invalid patch or bypasses the owner-side policy recheck.
             crate::platform::interop::get_live_config().apply_patch(&values)?;
+            if !crate::terminal_access::remote_policy_patch_allowed(&values) {return Err("Terminal security policy can only be changed by the native owner".into());}
             Ok(values)
         });
     match parsed {

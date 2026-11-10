@@ -1,6 +1,7 @@
 #ifndef PORTABLE_STYLE_H
 #define PORTABLE_STYLE_H
 #include "portable_util.h"
+#include "portable_semantic.h"
 #ifndef PS_SYNC_OUTPUT
 #define PS_SYNC_OUTPUT 1
 #endif
@@ -83,7 +84,7 @@ enum { PS_THEME_VIOLET, PS_THEME_RED, PS_THEME_CYAN, PS_THEME_ONE_DARK, PS_THEME
 enum { PS_INK_MUTED=0, PS_INK_COMMAND=1,
        PS_INK_WARNING=2, PS_INK_ERROR=3, PS_INK_TEXT=4, PS_INK_SUCCESS=5,
        PS_INK_HEADING=6, PS_INK_BORDER=7, PS_INK_STRING=8,
-       PS_INK_NUMBER=9, PS_INK_INACTIVE=10, PS_INK_ACTION=11 };
+       PS_INK_NUMBER=9, PS_INK_INACTIVE=10, PS_INK_ACTION=11, PS_INK_ACCENT=12 };
 static inline const char *ps_style_base(unsigned theme, int rgb) {
     if (!PS_STYLE_THEMES) return "\033[0m";
     if(theme==PS_THEME_DEFAULT)return rgb?"\033[0;38;2;230;233;239;48;2;24;26;31m":"\033[0;38;5;255;48;5;234m";
@@ -94,6 +95,7 @@ static inline const char *ps_style_base(unsigned theme, int rgb) {
                       "\033[0;38;2;241;231;255;48;2;23;19;31m";
 }
 static inline const char *ps_style_ink(unsigned theme, int rgb, int red_border, unsigned kind) {
+    if(kind==PS_INK_ACCENT)return rgb?"\033[38;2;216;160;255m":"\033[38;5;183m";
     if (!PS_STYLE_THEMES) return "";
     static const char *const semantic_rgb[]={
         "\033[38;2;151;160;175m", "\033[38;2;216;160;255m",

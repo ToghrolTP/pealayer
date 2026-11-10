@@ -425,7 +425,7 @@ fn workspace_tool_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
         enabled.description = Some("Showing the panel does not start a shell or connect to a host. Choose Connect in the terminal when ready.");
         controls.push(enabled);
         let mut target = PreferenceControl::select("ui.terminal.target", "workspace_tools", "Terminal", "Default session", &[
-            ("pc_controller", "PCController"), ("system_shell", "System shell"), ("portable_shell", "PortableShell"),
+            ("pc_controller", "PCController"), ("system_shell", "System shell"), ("portable_shell", "Pealayer Shell"),
         ]);
         for (option, (icon, description)) in target.options.iter_mut().zip([
             ("plug", "Connect to the selected PCController host's interactive terminal."),

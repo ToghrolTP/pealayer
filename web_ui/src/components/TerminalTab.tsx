@@ -2,9 +2,10 @@ import React, {useEffect, useRef, useState} from 'react';
 import {Alert, Button, Dropdown, Input, Space, Tag, Typography} from 'antd';
 import {CloseOutlined, CodeOutlined, CopyOutlined, LinkOutlined, PlusOutlined, ReloadOutlined, DisconnectOutlined} from '@ant-design/icons';
 import './terminal.css';
+import {terminalKey} from '../terminalKeys';
 type Session={id:number;target:string;phase:string;rows:number;cols:number};
-type Run={text:string;fg:string|null;bg:string|null;bold:boolean;inverse:boolean;underline:boolean};
-type Snapshot={owner_id:string;sessions:Session[];profiles:{id:string;name:string;ready:boolean}[];screen:{id:number;lines:Run[][];cursor:[number,number];hide_cursor:boolean;alternate:boolean;bracketed_paste:boolean;mouse:boolean}|null;cursor_style:string;cursor_blink:boolean;font_size:number;accent_commands:boolean;system_shell_available:boolean};
+type Run={text:string;fg:string|null;fg_role:'accent'|null;bg:string|null;bold:boolean;inverse:boolean;underline:boolean};
+type Snapshot={owner_id:string;sessions:Session[];profiles:{id:string;name:string;ready:boolean}[];screen:{id:number;lines:Run[][];cursor:[number,number];hide_cursor:boolean;alternate:boolean;bracketed_paste:boolean;mouse:boolean;application_cursor:boolean}|null;cursor_style:string;cursor_blink:boolean;font_size:number;accent_commands:boolean;system_shell_available:boolean};
 /** Frontend only. The native host owns sessions, profiles, parser and history. */
 export function TerminalTab({apiBaseUrl}:{apiBaseUrl:string}) {
   const [draft,setDraft]=useState(''),[key,setKey]=useState(''),[state,setState]=useState<Snapshot|null>(null),[error,setError]=useState(''),[line,setLine]=useState('');
@@ -35,8 +36,10 @@ export function TerminalTab({apiBaseUrl}:{apiBaseUrl:string}) {
     return()=>{alive=false;generation.current++;controller.abort();};
   },[base,key]);
   const selected=state?.sessions.find(s=>s.id===state.screen?.id);
-  const role=(color:string|null)=>({'#e6e9ef':'var(--text)','#97a0af':'var(--muted)','#181a1f':'var(--canvas)','#7ee0a3':'var(--green)','#a6da95':'var(--green)','#ffcc66':'var(--amber)','#ff6b7a':'var(--red)'}[color||'']||color||undefined);
-  const ink=(run:Run)=>state?.accent_commands&&!run.inverse&&['#d8a0ff','#d787ff','#bc8bda'].includes(run.fg||'')?'var(--accent)':role(run.inverse?run.bg:run.fg);
+  const core=selected?.target==='portable_shell';
+  const role=(color:string|null)=>core?({'#e6e9ef':'var(--text)','#97a0af':'var(--muted)','#181a1f':'var(--canvas)','#242932':'var(--surface-1)','#303743':'var(--surface-2)','#d3dae6':'var(--accent)','#7ee0a3':'var(--green)','#a6da95':'var(--green)','#ffcc66':'var(--amber)','#ff6b7a':'var(--red)'}[color||'']||color||undefined):(color||undefined);
+  const foreground=(run:Run)=>core&&run.bg==='#d3dae6'?'var(--accent-text)':state?.accent_commands&&run.fg_role==='accent'?'var(--accent)':role(run.fg);
+  const ink=(run:Run)=>run.inverse?role(run.bg):foreground(run);
   function paste(value:string){
     if(new TextEncoder().encode(value).length>16384){setError('Paste is limited to 16 KiB; nothing was sent.');return;}
     if(/[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]/.test(value)){setError('Paste contains control codes; nothing was sent.');return;}
@@ -53,21 +56,19 @@ export function TerminalTab({apiBaseUrl}:{apiBaseUrl:string}) {
     input(`\x1b[<${code};${col};${row}${released?'m':'M'}`);
   }
   function keydown(e:React.KeyboardEvent){
-    if(!selected||selected.target==='pc_controller')return;
-    let data='';const keys:Record<string,string>={Enter:'\r',Backspace:'\x7f',Tab:e.shiftKey?'\x1b[Z':'\t',Escape:'\x1b',ArrowUp:'\x1b[A',ArrowDown:'\x1b[B',ArrowRight:'\x1b[C',ArrowLeft:'\x1b[D',Home:'\x1b[H',End:'\x1b[F',Delete:'\x1b[3~',PageUp:'\x1b[5~',PageDown:'\x1b[6~',F7:'\x1b[18~'};
+    if(!selected||selected.phase!=='ready'||selected.target==='pc_controller')return;
     if(e.ctrlKey&&e.key.toLowerCase()==='c'&&window.getSelection()?.toString())return;
     if(e.ctrlKey&&e.shiftKey&&(e.key.toLowerCase()==='c'||e.key.toLowerCase()==='v'))return;
-    if(e.ctrlKey&&e.key.length===1 && /^[a-z]$/i.test(e.key))data=String.fromCharCode(e.key.toUpperCase().charCodeAt(0)-64);
-    else if(!e.metaKey)data=keys[e.key]||(e.key.length===1?e.key:'');
-    if(data){e.preventDefault();input(data);}
+    const data=terminalKey(e,state?.screen?.application_cursor);
+    if(data!==null){e.preventDefault();e.stopPropagation();input(data);}
   }
   if(!key)return <div className="terminal-pair"><CodeOutlined/><Typography.Title level={3}>Host terminal</Typography.Title><Typography.Paragraph type="secondary">View and control the same sessions as the desktop. Enable paired access in the host’s Terminal preferences, then copy an access key from its terminal menu. Keys expire after eight hours and are never saved by this page.</Typography.Paragraph><Space.Compact><Input.Password value={draft} onChange={e=>setDraft(e.target.value)} autoComplete="off" placeholder="Access key" aria-label="Terminal access key"/><Button icon={<LinkOutlined/>} type="primary" disabled={draft.length!==64} onClick={()=>{owner.current='';setKey(draft);setDraft('');}}>Connect</Button></Space.Compact></div>;
   return <section className="host-terminal">
     <div className="terminal-session-bar" role="tablist" aria-label="Host terminal sessions">
       {state?.sessions.map(s=><div className={`terminal-session ${selected?.id===s.id?'is-active':''}`} key={s.id}>
-        <button role="tab" aria-selected={selected?.id===s.id} onClick={()=>send({operation:'select',id:s.id})}><CodeOutlined/><span>{s.target==='portable_shell'?'PortableShell':s.target==='system_shell'?'System shell':'PCController'}</span><Tag bordered={false}>{s.phase}</Tag></button>
+        <button role="tab" aria-selected={selected?.id===s.id} onClick={()=>send({operation:'select',id:s.id})}><CodeOutlined/><span>{s.target==='portable_shell'?'Pealayer Shell':s.target==='system_shell'?'System shell':'PCController'}</span><Tag bordered={false}>{s.phase}</Tag></button>
         <Button type="text" icon={<CloseOutlined/>} aria-label={`Close session ${s.id}`} onClick={()=>send({operation:'close',id:s.id})}/></div>)}
-      <Dropdown menu={{items:[{key:'portable_shell',icon:<CodeOutlined/>,label:'PortableShell'},{key:'pc_controller',icon:<LinkOutlined/>,label:'PCController'},
+      <Dropdown trigger={['click']} menu={{items:[{key:'portable_shell',icon:<CodeOutlined/>,label:'Pealayer Shell'},{key:'pc_controller',icon:<LinkOutlined/>,label:'PCController'},
         ...(state?.system_shell_available?[{key:'system_shell',icon:<CodeOutlined/>,label:'Host system shell'},...(state.profiles||[]).map(p=>({key:`profile:${p.id}`,icon:<CodeOutlined/>,label:p.name,disabled:!p.ready}))]:[])],
         onClick:({key})=>send(key.startsWith('profile:')?{operation:'create_profile',profile_id:key.slice(8)}:{operation:'create',target:key})}} disabled={(state?.sessions.length||0)>=4}>
         <Button icon={<PlusOutlined/>}>Session</Button></Dropdown>
@@ -83,9 +84,9 @@ export function TerminalTab({apiBaseUrl}:{apiBaseUrl:string}) {
       onPaste={e=>{e.preventDefault();paste(e.clipboardData.getData('text'));}}
       style={{fontSize:state?.font_size||13}}>
       <span className="terminal-cell-probe" aria-hidden>0</span>
-      {state?.screen?.lines.map((row,i)=><div className="terminal-line" key={i}>{row.map((run,j)=><span key={j} style={{color:ink(run),backgroundColor:role(run.inverse?run.fg:run.bg),fontWeight:run.bold?600:400,textDecoration:run.underline?'underline':undefined}}>{run.text}</span>)}</div>)}
-      {state?.screen&&!state.screen.hide_cursor&&<span aria-hidden className={`terminal-caret ${state.cursor_style} ${state.cursor_blink?'blink':''}`} style={{top:`calc(12px + ${state.screen.cursor[0]} * 1.5em)`,left:`calc(12px + ${state.screen.cursor[1]}ch)`}}/>}
-      {!state?.sessions.length&&<div className="terminal-empty"><CodeOutlined/><p>Open a session to begin</p><Button icon={<PlusOutlined/>} onClick={()=>send({operation:'create',target:'portable_shell'})}>Open PortableShell</Button></div>}
+      {state?.screen?.lines.map((row,i)=><div className="terminal-line" key={i}>{row.map((run,j)=><span key={j} style={{color:ink(run),backgroundColor:run.inverse?foreground(run):role(run.bg),fontWeight:run.bold?600:400,textDecoration:run.underline?'underline':undefined}}>{run.text}</span>)}</div>)}
+      {selected?.phase==='ready'&&state?.screen&&!state.screen.hide_cursor&&<span aria-hidden className={`terminal-caret ${state.cursor_style} ${state.cursor_blink?'blink':''}`} style={{top:`calc(12px + ${state.screen.cursor[0]} * 1.5em)`,left:`calc(12px + ${state.screen.cursor[1]}ch)`}}/>}
+      {!state?.sessions.length&&<div className="terminal-empty"><CodeOutlined/><p>Open a session to begin</p><Button icon={<PlusOutlined/>} onClick={()=>send({operation:'create',target:'portable_shell'})}>Open Pealayer Shell</Button></div>}
     </div>
     {selected?.target==='pc_controller'&&<Space.Compact><Input value={line} onChange={e=>setLine(e.target.value)} onPressEnter={()=>{input(line);setLine('');}} placeholder="PCController command"/><Button onClick={()=>{input(line);setLine('');}}>Send</Button></Space.Compact>}
     <footer><CodeOutlined/> Shared host sessions <span>{state?.profiles.length||0} host profiles · {selected?`${selected.cols} × ${selected.rows}`:'No session selected'}</span></footer>

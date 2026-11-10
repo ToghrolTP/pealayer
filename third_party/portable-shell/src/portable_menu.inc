@@ -25,6 +25,7 @@ static void menu_heading(ps_session *s,unsigned width_){
     ink(s,PS_INK_HEADING);field(s,s->menu_stack[s->menu_depth-1]->title,width_);reset(s);
 }
 static int menu_notice(ps_session *s,unsigned width_){
+    if(s->notice[0]){ink(s,PS_INK_MUTED);field(s,s->notice,width_);reset(s);return 1;}
 #if PS_MENU_CONTEXT
     unsigned role=PS_INK_MUTED;
     const char *text=s->menu_notice?s->menu_notice(s->menu_notice_context,s->menu_stack[s->menu_depth-1],&role):0;
