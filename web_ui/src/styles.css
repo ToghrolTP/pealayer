@@ -122,9 +122,7 @@ body {
   border-bottom: 1px solid var(--line);
 }
 :root[data-palette="pastel"] .studio-header {
-  background: linear-gradient(105deg,
-    color-mix(in srgb, var(--gradient-start) 13%, var(--surface-0)),
-    color-mix(in srgb, var(--gradient-end) 13%, var(--surface-0))) !important;
+  background: linear-gradient(105deg, var(--chrome-start), var(--chrome-end)) !important;
   border-image: linear-gradient(90deg, var(--gradient-start), var(--gradient-end)) 1;
 }
 :root[data-palette="pastel"] .studio-brand__mark {
@@ -134,8 +132,8 @@ body {
 }
 :root[data-palette="pastel"] .app-content {
   background:
-    radial-gradient(ellipse at 12% 0%, color-mix(in srgb, var(--gradient-start) 10%, transparent), transparent 55%),
-    radial-gradient(ellipse at 88% 0%, color-mix(in srgb, var(--gradient-end) 8%, transparent), transparent 55%),
+    radial-gradient(ellipse at 12% 0%, var(--chrome-start), transparent 62%),
+    radial-gradient(ellipse at 88% 0%, var(--chrome-end), transparent 57%),
     var(--canvas);
 }
 .studio-header__leading {
@@ -1043,6 +1041,29 @@ html[data-motion="disabled"] *, html[data-motion="disabled"] *::before, html[dat
   border: 1px solid var(--line);
   border-radius: 12px;
   box-shadow: var(--shadow);
+}
+:root[data-palette="pastel"] .remote-player {
+  background: linear-gradient(130deg, var(--surface-1) 64%, var(--chrome-end));
+  border-color: var(--line-strong);
+}
+:root[data-palette="pastel"] .remote-player .ant-btn-default:not(:disabled):hover {
+  background: var(--surface-3);
+  border-color: var(--hover-line);
+  color: var(--text);
+}
+:root[data-palette="pastel"] .remote-player .ant-btn-default:not(:disabled):active {
+  background: color-mix(in srgb, var(--accent) 22%, var(--surface-2));
+  border-color: var(--accent);
+  color: var(--text);
+}
+:root[data-palette="pastel"] .remote-player .ant-slider:not(.ant-slider-disabled) .ant-slider-rail {
+  background: var(--line);
+}
+:root[data-palette="pastel"] .remote-player .ant-slider:not(.ant-slider-disabled) .ant-slider-track {
+  background: linear-gradient(to right, color-mix(in srgb, var(--accent) 65%, var(--blue)), var(--accent));
+}
+:root[data-palette="pastel"] .remote-player .ant-slider-rtl:not(.ant-slider-disabled) .ant-slider-track {
+  background: linear-gradient(to left, color-mix(in srgb, var(--accent) 65%, var(--blue)), var(--accent));
 }
 .remote-player__preview { aspect-ratio: 16 / 9; min-height: 240px; display: grid; place-items: center; overflow: hidden; background: #05070a; border-bottom: 1px solid var(--line); }
 .remote-player__preview img { width: 100%; height: 100%; object-fit: contain; object-position: center; }
