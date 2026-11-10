@@ -87,7 +87,7 @@ done
 
 {
   printf '{\n'
-  printf '  "format": "pealayer-screenshots/v1",\n'
+  printf '  "format": "pealayer-screenshots",\n'
   printf '  "generated_at_utc": "%s",\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
   printf '  "git_commit": "%s",\n' "$source_commit"
   printf '  "executable": "%s",\n' "$(basename "$executable")"

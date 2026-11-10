@@ -1,0 +1,1682 @@
+{
+  "repository": "ToghrolTP/pealayer",
+  "captured_at": "2026-10-06",
+  "active_pr": 46,
+  "initial_inventory": [
+    {
+      "commentsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpHPAAAAAWW_1_Y=",
+        "hasNextPage": false
+      },
+      "commentsTotal": 1,
+      "number": 58,
+      "reviewsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "reviewsTotal": 0,
+      "state": "MERGED",
+      "threads": [],
+      "threadsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "threadsTotal": 0,
+      "title": "Fix live effect recording and controller playback",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/58"
+    },
+    {
+      "commentsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpHPAAAAAWImQrw=",
+        "hasNextPage": false
+      },
+      "commentsTotal": 2,
+      "number": 55,
+      "reviewsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpO0MjAyNi0xMC0wMlQxMTo0OTozM1q0MjAyNi0xMC0wMlQxMTo0OToyOVrPAAAAAUFaTdE=",
+        "hasNextPage": false
+      },
+      "reviewsTotal": 1,
+      "state": "MERGED",
+      "threads": [
+        {
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "copilot-pull-request-reviewer"
+                },
+                "body": "The wildcard CORS policy exposes every API route—not just read-only status—to arbitrary websites. A page visited by the operator can browse local directories and POST to `/api/fs/trash`, `/api/config`, or control endpoints on localhost (and the listener can also be configured on `0.0.0.0`). Restrict allowed origins and protect destructive/control routes with authentication rather than granting `*` globally.",
+                "databaseId": 4165413758,
+                "url": "https://github.com/ToghrolTP/pealayer/pull/55#discussion_r4165413758"
+              }
+            ],
+            "pageInfo": {
+              "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMC0wMlQxMTo0OToyOVrO-Ecrfg==",
+              "hasNextPage": false
+            },
+            "totalCount": 1
+          },
+          "id": "PRRT_kwDOSxEquc6oUurN",
+          "isOutdated": false,
+          "isResolved": false,
+          "line": 454,
+          "path": "src/server/mod.rs"
+        },
+        {
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "copilot-pull-request-reviewer"
+                },
+                "body": "All requests for the same uncached video share this temporary filename. Concurrent clients can remove or truncate each other's output, and one rename can publish the file while another encoder still has it open and is writing. Give each generation attempt a unique staging path before atomically renaming it to the shared cache path.",
+                "databaseId": 4165413803,
+                "url": "https://github.com/ToghrolTP/pealayer/pull/55#discussion_r4165413803"
+              }
+            ],
+            "pageInfo": {
+              "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMC0wMlQxMTo0OToyOVrO-Ecrqw==",
+              "hasNextPage": false
+            },
+            "totalCount": 1
+          },
+          "id": "PRRT_kwDOSxEquc6oUurm",
+          "isOutdated": false,
+          "isResolved": false,
+          "line": 40,
+          "path": "src/server/thumbnails.rs"
+        },
+        {
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "copilot-pull-request-reviewer"
+                },
+                "body": "The polling fallback sends the UI command name to `/api/player/command`, which deserializes `InteropCommand` names. Studio commands such as `controller_effect_cue.add`, `controller_effect.play`, `controller_effect.save`, and `controller_effect.delete` are JSON-RPC method names, not enum command names, so they return 400 whenever WebSocket is unavailable. Use `/api/rpc` with the same JSON-RPC envelope (or fully translate every method and payload) so Polling mode remains functional.",
+                "databaseId": 4165413838,
+                "url": "https://github.com/ToghrolTP/pealayer/pull/55#discussion_r4165413838"
+              }
+            ],
+            "pageInfo": {
+              "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMC0wMlQxMTo0OTozMFrO-Ecrzg==",
+              "hasNextPage": false
+            },
+            "totalCount": 1
+          },
+          "id": "PRRT_kwDOSxEquc6oUur6",
+          "isOutdated": false,
+          "isResolved": false,
+          "line": 82,
+          "path": "web_ui/src/App.tsx"
+        },
+        {
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "copilot-pull-request-reviewer"
+                },
+                "body": "Dropping every JSON-RPC response makes command validation failures invisible. For example, an invalid effect save receives an RPC error, but the modal closes and the operator gets no feedback. Correlate responses by request ID and surface errors (and let callers await success before dismissing editors).",
+                "databaseId": 4165413871,
+                "url": "https://github.com/ToghrolTP/pealayer/pull/55#discussion_r4165413871"
+              }
+            ],
+            "pageInfo": {
+              "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMC0wMlQxMTo0OTozMFrO-Ecr7w==",
+              "hasNextPage": false
+            },
+            "totalCount": 1
+          },
+          "id": "PRRT_kwDOSxEquc6oUusQ",
+          "isOutdated": false,
+          "isResolved": false,
+          "line": 181,
+          "path": "web_ui/src/App.tsx"
+        },
+        {
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "copilot-pull-request-reviewer"
+                },
+                "body": "Editing any existing sequence initializes its color to `green`, but the advertised sequence model does not carry the current color. Saving an unrelated edit therefore sends `effect update ... green` and can overwrite the effect's existing color. Include the authoritative color in the controller/status model and initialize the draft from it.",
+                "databaseId": 4165413909,
+                "url": "https://github.com/ToghrolTP/pealayer/pull/55#discussion_r4165413909"
+              }
+            ],
+            "pageInfo": {
+              "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMC0wMlQxMTo0OTozMVrO-EcsFQ==",
+              "hasNextPage": false
+            },
+            "totalCount": 1
+          },
+          "id": "PRRT_kwDOSxEquc6oUusq",
+          "isOutdated": false,
+          "isResolved": false,
+          "line": 79,
+          "path": "web_ui/src/components/StudioTab.tsx"
+        },
+        {
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "copilot-pull-request-reviewer"
+                },
+                "body": "The PR states that Record Mode is disabled when no recordable tracks exist, but this condition removes the control entirely. That also leaves the newly added “No recordable hardware tracks are available” guidance unreachable. Keep the control visible and disabled so the state is truthful and discoverable.",
+                "databaseId": 4165413944,
+                "url": "https://github.com/ToghrolTP/pealayer/pull/55#discussion_r4165413944"
+              }
+            ],
+            "pageInfo": {
+              "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMC0wMlQxMTo0OTozMVrO-EcsOA==",
+              "hasNextPage": false
+            },
+            "totalCount": 1
+          },
+          "id": "PRRT_kwDOSxEquc6oUutB",
+          "isOutdated": false,
+          "isResolved": false,
+          "line": 116,
+          "path": "web_ui/src/components/StudioTab.tsx"
+        },
+        {
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "copilot-pull-request-reviewer"
+                },
+                "body": "This URL never changes when `current_video` changes between two non-empty paths, so React keeps the existing `<img>` resource and the Studio can continue showing the previous video's cached frame. Include the current path (or another media revision token) in the URL so media changes force a reload.",
+                "databaseId": 4165413988,
+                "url": "https://github.com/ToghrolTP/pealayer/pull/55#discussion_r4165413988"
+              }
+            ],
+            "pageInfo": {
+              "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMC0wMlQxMTo0OTozMVrO-EcsZA==",
+              "hasNextPage": false
+            },
+            "totalCount": 1
+          },
+          "id": "PRRT_kwDOSxEquc6oUutd",
+          "isOutdated": false,
+          "isResolved": false,
+          "line": 230,
+          "path": "web_ui/src/components/StudioTab.tsx"
+        },
+        {
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "copilot-pull-request-reviewer"
+                },
+                "body": "The percentage is relative to the full grid width, while the playhead also has a 180px start margin and the actual lane ends 82px before the grid edge. It is correct only at time zero; at 100% it is 262px past the lane end. Position it inside an overlay constrained to the timeline lane, using the responsive label/duration widths.",
+                "databaseId": 4165414025,
+                "url": "https://github.com/ToghrolTP/pealayer/pull/55#discussion_r4165414025"
+              }
+            ],
+            "pageInfo": {
+              "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMC0wMlQxMTo0OTozMlrO-EcsiQ==",
+              "hasNextPage": false
+            },
+            "totalCount": 1
+          },
+          "id": "PRRT_kwDOSxEquc6oUut0",
+          "isOutdated": false,
+          "isResolved": false,
+          "line": 322,
+          "path": "web_ui/src/components/StudioTab.tsx"
+        },
+        {
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "copilot-pull-request-reviewer"
+                },
+                "body": "A cue is rendered as a `<button>` containing Ant Design's delete `<Button>`, producing invalid nested interactive controls and unreliable keyboard/screen-reader behavior. Use a non-button cue container with explicit keyboard activation, while keeping the delete action as its own labeled button.",
+                "databaseId": 4165414066,
+                "url": "https://github.com/ToghrolTP/pealayer/pull/55#discussion_r4165414066"
+              }
+            ],
+            "pageInfo": {
+              "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMC0wMlQxMTo0OTozMlrO-Ecssg==",
+              "hasNextPage": false
+            },
+            "totalCount": 1
+          },
+          "id": "PRRT_kwDOSxEquc6oUuuM",
+          "isOutdated": false,
+          "isResolved": false,
+          "line": 337,
+          "path": "web_ui/src/components/StudioTab.tsx"
+        },
+        {
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "copilot-pull-request-reviewer"
+                },
+                "body": "The new UI requests many strings that are absent from this Persian map, including “Web Studio”, “Connected workspace”, “Connecting”, “Pealayer connection”, “New effect”, “Armed”, and “Record hardware”. Because `tr` falls back to the English input, the advertised Persian workspace renders mixed-language labels; add translations for all newly introduced visible strings.",
+                "databaseId": 4165414096,
+                "url": "https://github.com/ToghrolTP/pealayer/pull/55#discussion_r4165414096"
+              }
+            ],
+            "pageInfo": {
+              "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMC0wMlQxMTo0OTozMlrO-Ecs0A==",
+              "hasNextPage": false
+            },
+            "totalCount": 1
+          },
+          "id": "PRRT_kwDOSxEquc6oUuuf",
+          "isOutdated": false,
+          "isResolved": false,
+          "line": 89,
+          "path": "web_ui/src/i18n.ts"
+        }
+      ],
+      "threadsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMC0wMlQxMTo0OTozMlrOqFLrnw==",
+        "hasNextPage": false
+      },
+      "threadsTotal": 10,
+      "title": "Build the production Pealayer Web Studio suite",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/55"
+    },
+    {
+      "commentsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "commentsTotal": 0,
+      "number": 54,
+      "reviewsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "reviewsTotal": 0,
+      "state": "MERGED",
+      "threads": [],
+      "threadsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "threadsTotal": 0,
+      "title": "build(deps): bump the actions group with 4 updates",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/54"
+    },
+    {
+      "commentsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpHPAAAAAWFnNa4=",
+        "hasNextPage": false
+      },
+      "commentsTotal": 2,
+      "number": 53,
+      "reviewsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "reviewsTotal": 0,
+      "state": "MERGED",
+      "threads": [],
+      "threadsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "threadsTotal": 0,
+      "title": "build(deps): bump the cargo-dependencies group with 3 updates",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/53"
+    },
+    {
+      "commentsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "commentsTotal": 0,
+      "number": 52,
+      "reviewsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "reviewsTotal": 0,
+      "state": "MERGED",
+      "threads": [],
+      "threadsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "threadsTotal": 0,
+      "title": "build(deps-dev): bump vite from 8.3.0 to 8.3.1 in /web_ui in the npm-dependencies group",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/52"
+    },
+    {
+      "commentsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "commentsTotal": 0,
+      "number": 50,
+      "reviewsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpO0MjAyNi0wOS0zMFQxODo0MToyMFq0MjAyNi0wOS0zMFQxODo0MToyMFrPAAAAAUAbLJQ=",
+        "hasNextPage": false
+      },
+      "reviewsTotal": 1,
+      "state": "MERGED",
+      "threads": [],
+      "threadsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "threadsTotal": 0,
+      "title": "feat: unify HTTP, WebSocket, and IPC on one port",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/50"
+    },
+    {
+      "commentsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpHPAAAAAWCcGQ4=",
+        "hasNextPage": false
+      },
+      "commentsTotal": 1,
+      "number": 49,
+      "reviewsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpO0MjAyNi0wOS0zMFQxNTo0Njo0NFq0MjAyNi0wOS0zMFQxNTo0Njo0NFrPAAAAAT_-4Ko=",
+        "hasNextPage": false
+      },
+      "reviewsTotal": 1,
+      "state": "MERGED",
+      "threads": [],
+      "threadsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "threadsTotal": 0,
+      "title": "feat: play live and buffered remote media",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/49"
+    },
+    {
+      "commentsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpHPAAAAAWBh9p0=",
+        "hasNextPage": false
+      },
+      "commentsTotal": 1,
+      "number": 48,
+      "reviewsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpO0MjAyNi0wOS0zMFQxMzoxMToxNlq0MjAyNi0wOS0zMFQxMzoxMToxNVrPAAAAAT_gPKA=",
+        "hasNextPage": false
+      },
+      "reviewsTotal": 1,
+      "state": "MERGED",
+      "threads": [],
+      "threadsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "threadsTotal": 0,
+      "title": "ci: bring PCController-grade workflow presentation",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/48"
+    },
+    {
+      "commentsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpHPAAAAAWCubkQ=",
+        "hasNextPage": false
+      },
+      "commentsTotal": 2,
+      "number": 47,
+      "reviewsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "reviewsTotal": 0,
+      "state": "MERGED",
+      "threads": [],
+      "threadsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "threadsTotal": 0,
+      "title": "feat(ui): industrial-standard workspace panel restoration and layout persistence",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/47"
+    },
+    {
+      "commentsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpHPAAAAAWP_pf4=",
+        "hasNextPage": true
+      },
+      "commentsTotal": 238,
+      "number": 46,
+      "reviewsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpO0MjAyNi0xMC0wNlQwMzo1Njo1MFq0MjAyNi0xMC0wNlQwMzo1Njo0OVrPAAAAAUNF7TY=",
+        "hasNextPage": false
+      },
+      "reviewsTotal": 5,
+      "state": "OPEN",
+      "threads": [
+        {
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "github-advanced-security"
+                },
+                "body": "## CodeQL / Missing origin verification in `postMessage` handler\n\nPostmessage handler has no origin check.\n\n[Show more details](https://github.com/ToghrolTP/pealayer/security/code-scanning/3)",
+                "databaseId": 4191381265,
+                "url": "https://github.com/ToghrolTP/pealayer/pull/46#discussion_r4191381265"
+              }
+            ],
+            "pageInfo": {
+              "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMC0wNlQwMzo1Njo1MFrO-dNnEQ==",
+              "hasNextPage": false
+            },
+            "totalCount": 1
+          },
+          "id": "PRRT_kwDOSxEquc6pUC3i",
+          "isOutdated": false,
+          "isResolved": false,
+          "line": 71,
+          "path": "web_ui/dist/sw.js"
+        },
+        {
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "github-advanced-security"
+                },
+                "body": "## CodeQL / Missing origin verification in `postMessage` handler\n\nPostmessage handler has no origin check.\n\n[Show more details](https://github.com/ToghrolTP/pealayer/security/code-scanning/2)",
+                "databaseId": 4191381271,
+                "url": "https://github.com/ToghrolTP/pealayer/pull/46#discussion_r4191381271"
+              }
+            ],
+            "pageInfo": {
+              "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMC0wNlQwMzo1Njo1MFrO-dNnFw==",
+              "hasNextPage": false
+            },
+            "totalCount": 1
+          },
+          "id": "PRRT_kwDOSxEquc6pUC3m",
+          "isOutdated": false,
+          "isResolved": false,
+          "line": 29,
+          "path": "web_ui/public/sw.js"
+        }
+      ],
+      "threadsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0xMC0wNlQwMzo1Njo1MFrOqVAt5g==",
+        "hasNextPage": false
+      },
+      "threadsTotal": 4,
+      "title": "Polish the live hardware workspace layout",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/46"
+    },
+    {
+      "commentsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "commentsTotal": 0,
+      "number": 45,
+      "reviewsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpO0MjAyNi0wOS0zMFQwNzoyMTozM1q0MjAyNi0wOS0zMFQwNzoyMTozM1rPAAAAAT-ma9I=",
+        "hasNextPage": false
+      },
+      "reviewsTotal": 1,
+      "state": "MERGED",
+      "threads": [],
+      "threadsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "threadsTotal": 0,
+      "title": "Build a professional capability-driven hardware workspace",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/45"
+    },
+    {
+      "commentsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpHPAAAAAV_V-nI=",
+        "hasNextPage": false
+      },
+      "commentsTotal": 1,
+      "number": 43,
+      "reviewsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpO0MjAyNi0wOS0zMFQwMTo0Mjo0Mlq0MjAyNi0wOS0zMFQwMTo0Mjo0MlrPAAAAAT-C6C8=",
+        "hasNextPage": false
+      },
+      "reviewsTotal": 1,
+      "state": "MERGED",
+      "threads": [],
+      "threadsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "threadsTotal": 0,
+      "title": "Add PCController hardware effect authoring",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/43"
+    },
+    {
+      "commentsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "commentsTotal": 0,
+      "number": 42,
+      "reviewsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpO0MjAyNi0wOS0zMFQwMTowMToyMFq0MjAyNi0wOS0zMFQwMTowMToyMFrPAAAAAT9_WZM=",
+        "hasNextPage": false
+      },
+      "reviewsTotal": 1,
+      "state": "MERGED",
+      "threads": [],
+      "threadsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "threadsTotal": 0,
+      "title": "Add profile-driven semantic hardware controls",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/42"
+    },
+    {
+      "commentsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpHPAAAAAV-6zCo=",
+        "hasNextPage": false
+      },
+      "commentsTotal": 1,
+      "number": 41,
+      "reviewsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpO0MjAyNi0wOS0yOVQyMzoyNzoyMlq0MjAyNi0wOS0yOVQyMzoyNzoyMlrPAAAAAT92-Lw=",
+        "hasNextPage": false
+      },
+      "reviewsTotal": 1,
+      "state": "MERGED",
+      "threads": [],
+      "threadsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "threadsTotal": 0,
+      "title": "Add video-synchronized PCController macro clips",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/41"
+    },
+    {
+      "commentsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpHPAAAAAV6qSpU=",
+        "hasNextPage": false
+      },
+      "commentsTotal": 1,
+      "number": 39,
+      "reviewsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpO0MjAyNi0wOS0yOFQyMToxMzowN1q0MjAyNi0wOS0yOFQyMToxMzowN1rPAAAAAT6R-e0=",
+        "hasNextPage": false
+      },
+      "reviewsTotal": 1,
+      "state": "MERGED",
+      "threads": [],
+      "threadsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "threadsTotal": 0,
+      "title": "Preserve recovered local Pealayer work without regressions",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/39"
+    },
+    {
+      "commentsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpHPAAAAAV5ylzM=",
+        "hasNextPage": false
+      },
+      "commentsTotal": 1,
+      "number": 38,
+      "reviewsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpO0MjAyNi0wOS0yOFQyMDo0MjoxN1q0MjAyNi0wOS0yOFQyMDo0MjoxN1rPAAAAAT6M1aQ=",
+        "hasNextPage": false
+      },
+      "reviewsTotal": 1,
+      "state": "MERGED",
+      "threads": [],
+      "threadsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "threadsTotal": 0,
+      "title": "Allow custom hardware endpoints and compact subtitle settings",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/38"
+    },
+    {
+      "commentsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpHPAAAAAV5UMNg=",
+        "hasNextPage": false
+      },
+      "commentsTotal": 1,
+      "number": 37,
+      "reviewsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpO0MjAyNi0wOS0yOFQxOTo1NzoyN1q0MjAyNi0wOS0yOFQxOTo1NzoyN1rPAAAAAT6Fbws=",
+        "hasNextPage": false
+      },
+      "reviewsTotal": 1,
+      "state": "MERGED",
+      "threads": [],
+      "threadsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "threadsTotal": 0,
+      "title": "Restore NLE after remote fullscreen and advertise actions",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/37"
+    },
+    {
+      "commentsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpHPAAAAAV42ZGE=",
+        "hasNextPage": false
+      },
+      "commentsTotal": 1,
+      "number": 36,
+      "reviewsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpO0MjAyNi0wOS0yOFQxNzoyNDoxN1q0MjAyNi0wOS0yOFQxNzoyNDoxN1rPAAAAAT5tRwk=",
+        "hasNextPage": false
+      },
+      "reviewsTotal": 3,
+      "state": "MERGED",
+      "threads": [],
+      "threadsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "threadsTotal": 0,
+      "title": "Make hardware and player UI contextual, live, and consistent",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/36"
+    },
+    {
+      "commentsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpHPAAAAAV19IIw=",
+        "hasNextPage": false
+      },
+      "commentsTotal": 2,
+      "number": 35,
+      "reviewsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpO0MjAyNi0wOS0yOFQwNDoyNDoyNFq0MjAyNi0wOS0yOFQwNDoyNDoyM1rPAAAAAT3tMLQ=",
+        "hasNextPage": false
+      },
+      "reviewsTotal": 3,
+      "state": "MERGED",
+      "threads": [],
+      "threadsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0wOS0yOFQwNDowOTozMVrOpohEsQ==",
+        "hasNextPage": false
+      },
+      "threadsTotal": 2,
+      "title": "Enforce branded Windows GUI ownership",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/35"
+    },
+    {
+      "commentsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpHPAAAAAV8DfXE=",
+        "hasNextPage": false
+      },
+      "commentsTotal": 21,
+      "number": 25,
+      "reviewsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpO0MjAyNi0wOS0yOFQwNDoxMDoxM1q0MjAyNi0wOS0yOFQwNDoxMDoxMFrPAAAAAT3sQM8=",
+        "hasNextPage": false
+      },
+      "reviewsTotal": 7,
+      "state": "MERGED",
+      "threads": [
+        {
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "copilot-pull-request-reviewer"
+                },
+                "body": "This package path may select `mpv-2.dll` while the staging code below copies it as `libmpv-2.dll`. The import library can contain `mpv-2.dll` as its dependency name, so the smoke test and final package can fail to load the DLL. Keep the selected runtime basename or ship and validate both aliases.",
+                "databaseId": 4118467444,
+                "url": "https://github.com/ToghrolTP/pealayer/pull/25#discussion_r4118467444"
+              }
+            ],
+            "pageInfo": {
+              "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0wOS0yOFQwNDoxMDoxMFrO9XrTdA==",
+              "hasNextPage": false
+            },
+            "totalCount": 1
+          },
+          "id": "PRRT_kwDOSxEquc6miEu7",
+          "isOutdated": false,
+          "isResolved": false,
+          "line": 73,
+          "path": "scripts/package-windows.ps1"
+        },
+        {
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "copilot-pull-request-reviewer"
+                },
+                "body": "The runtime DLL is selected independently from the import library and may be `mpv-2.dll`, but the later staging step unconditionally renames it to `libmpv-2.dll`. If the selected import library embeds `mpv-2.dll` as its dependency name, Windows cannot resolve the packaged binary even though the file exists. Preserve the selected runtime basename (or stage/validate both aliases) instead of renaming it unconditionally.",
+                "databaseId": 4118467481,
+                "url": "https://github.com/ToghrolTP/pealayer/pull/25#discussion_r4118467481"
+              }
+            ],
+            "pageInfo": {
+              "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0wOS0yOFQwNDoxMDoxMVrO9XrTmQ==",
+              "hasNextPage": false
+            },
+            "totalCount": 1
+          },
+          "id": "PRRT_kwDOSxEquc6miEvQ",
+          "isOutdated": false,
+          "isResolved": false,
+          "line": 58,
+          "path": "scripts/run-windows.ps1"
+        },
+        {
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "copilot-pull-request-reviewer"
+                },
+                "body": "This removes every legacy `HardwareTarget` variant without a deserialization/migration path, so existing `.4d.json` timelines containing targets such as `\"Water\"` or `\"Auxiliary\"` now fail in `Timeline::load_from_file` (`models.rs:166-170`). The deleted test previously covered this backward-compatibility contract. Preserve legacy target names during load (with an explicit migration policy) before dropping the variants, otherwise existing projects cannot be opened.",
+                "databaseId": 4118467498,
+                "url": "https://github.com/ToghrolTP/pealayer/pull/25#discussion_r4118467498"
+              }
+            ],
+            "pageInfo": {
+              "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0wOS0yOFQwNDoxMDoxMVrO9XrTqg==",
+              "hasNextPage": false
+            },
+            "totalCount": 1
+          },
+          "id": "PRRT_kwDOSxEquc6miEvc",
+          "isOutdated": false,
+          "isResolved": false,
+          "line": 24,
+          "path": "src/four_d/models.rs"
+        },
+        {
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "copilot-pull-request-reviewer"
+                },
+                "body": "The fallback migration from the legacy `~/.config/pealayer/recent.json` file was removed, so an existing installation with no new `config.json` silently loses its recent-media list on the first launch after this update. Since this PR makes recent media part of the persistent configuration, keep the legacy import (or add an equivalent one-time migration) when the new config is absent.",
+                "databaseId": 4118467522,
+                "url": "https://github.com/ToghrolTP/pealayer/pull/25#discussion_r4118467522"
+              }
+            ],
+            "pageInfo": {
+              "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0wOS0yOFQwNDoxMDoxMlrO9XrTwg==",
+              "hasNextPage": false
+            },
+            "totalCount": 1
+          },
+          "id": "PRRT_kwDOSxEquc6miEvq",
+          "isOutdated": false,
+          "isResolved": false,
+          "line": 282,
+          "path": "src/config.rs"
+        },
+        {
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "copilot-pull-request-reviewer"
+                },
+                "body": "`Relay(u8)` still permits `Relay(0)` through public constructors and serde, despite the new contract saying relay IDs are non-zero. `primary_relay_id()` then returns `Some(0)` and a loaded/custom effect can reach `Command::RelaySet { id: 0, ... }`, bypassing the `for_relay(0) -> Any` normalization. Enforce non-zero at deserialization/construction or reject invalid targets before compiling/sending hardware commands.",
+                "databaseId": 4118467539,
+                "url": "https://github.com/ToghrolTP/pealayer/pull/25#discussion_r4118467539"
+              }
+            ],
+            "pageInfo": {
+              "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0wOS0yOFQwNDoxMDoxMlrO9XrT0w==",
+              "hasNextPage": false
+            },
+            "totalCount": 1
+          },
+          "id": "PRRT_kwDOSxEquc6miEvw",
+          "isOutdated": false,
+          "isResolved": false,
+          "line": 24,
+          "path": "src/four_d/models.rs"
+        },
+        {
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "copilot-pull-request-reviewer"
+                },
+                "body": "This guard only checks whether the numeric times are undefined, but authoritative no-media snapshots from `PealayerApp` send `current_video: null` together with `playback_time: 0` and `duration: 0` (`app.rs:286-295`). Consequently the seek slider becomes enabled at 0% after initialization even when no media is loaded, and the adjacent seek buttons remain enabled as well. Include `state.current_video` in the disabled predicate and apply the same predicate to the seek controls.",
+                "databaseId": 4118467557,
+                "url": "https://github.com/ToghrolTP/pealayer/pull/25#discussion_r4118467557"
+              }
+            ],
+            "pageInfo": {
+              "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0wOS0yOFQwNDoxMDoxMlrO9XrT5Q==",
+              "hasNextPage": false
+            },
+            "totalCount": 1
+          },
+          "id": "PRRT_kwDOSxEquc6miEv3",
+          "isOutdated": false,
+          "isResolved": false,
+          "line": 209,
+          "path": "web_ui/src/components/RemoteControlTab.tsx"
+        }
+      ],
+      "threadsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0wOS0yOFQwNDoxMDoxMlrOpohL9w==",
+        "hasNextPage": false
+      },
+      "threadsTotal": 11,
+      "title": "Windows production packaging and PCController integration",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/25"
+    },
+    {
+      "commentsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "commentsTotal": 0,
+      "number": 24,
+      "reviewsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "reviewsTotal": 0,
+      "state": "MERGED",
+      "threads": [],
+      "threadsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "threadsTotal": 0,
+      "title": "build(deps): bump the cargo-dependencies group across 1 directory with 3 updates",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/24"
+    },
+    {
+      "commentsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "commentsTotal": 0,
+      "number": 23,
+      "reviewsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "reviewsTotal": 0,
+      "state": "MERGED",
+      "threads": [],
+      "threadsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "threadsTotal": 0,
+      "title": "build(deps): bump the npm-dependencies group in /web_ui with 9 updates",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/23"
+    },
+    {
+      "commentsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpHPAAAAAVrS9po=",
+        "hasNextPage": false
+      },
+      "commentsTotal": 2,
+      "number": 22,
+      "reviewsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "reviewsTotal": 0,
+      "state": "CLOSED",
+      "threads": [],
+      "threadsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "threadsTotal": 0,
+      "title": "build(deps): bump the actions group with 4 updates",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/22"
+    },
+    {
+      "commentsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpHPAAAAAVrTB9I=",
+        "hasNextPage": false
+      },
+      "commentsTotal": 2,
+      "number": 21,
+      "reviewsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "reviewsTotal": 0,
+      "state": "CLOSED",
+      "threads": [],
+      "threadsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "threadsTotal": 0,
+      "title": "build(deps): bump the cargo-dependencies group with 8 updates",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/21"
+    },
+    {
+      "commentsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpHPAAAAAVrS8o4=",
+        "hasNextPage": false
+      },
+      "commentsTotal": 2,
+      "number": 20,
+      "reviewsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "reviewsTotal": 0,
+      "state": "CLOSED",
+      "threads": [],
+      "threadsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "threadsTotal": 0,
+      "title": "build(deps-dev): bump typescript from 5.9.3 to 7.0.2 in /web_ui",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/20"
+    },
+    {
+      "commentsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpHPAAAAAVrS7mw=",
+        "hasNextPage": false
+      },
+      "commentsTotal": 2,
+      "number": 19,
+      "reviewsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "reviewsTotal": 0,
+      "state": "CLOSED",
+      "threads": [],
+      "threadsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "threadsTotal": 0,
+      "title": "build(deps): bump @ant-design/icons from 5.6.1 to 6.3.4 in /web_ui",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/19"
+    },
+    {
+      "commentsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpHPAAAAAVrS6iI=",
+        "hasNextPage": false
+      },
+      "commentsTotal": 2,
+      "number": 18,
+      "reviewsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "reviewsTotal": 0,
+      "state": "CLOSED",
+      "threads": [],
+      "threadsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "threadsTotal": 0,
+      "title": "build(deps): bump antd from 5.29.3 to 6.6.5 in /web_ui",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/18"
+    },
+    {
+      "commentsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpHPAAAAAVrS5jM=",
+        "hasNextPage": false
+      },
+      "commentsTotal": 2,
+      "number": 17,
+      "reviewsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "reviewsTotal": 0,
+      "state": "CLOSED",
+      "threads": [],
+      "threadsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "threadsTotal": 0,
+      "title": "build(deps): bump react, react-dom and @types/react in /web_ui",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/17"
+    },
+    {
+      "commentsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpHPAAAAAVrSIcg=",
+        "hasNextPage": false
+      },
+      "commentsTotal": 1,
+      "number": 16,
+      "reviewsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "reviewsTotal": 0,
+      "state": "CLOSED",
+      "threads": [],
+      "threadsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "threadsTotal": 0,
+      "title": "build(deps): bump uuid from 1.23.2 to 1.26.1",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/16"
+    },
+    {
+      "commentsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpHPAAAAAVrSHt8=",
+        "hasNextPage": false
+      },
+      "commentsTotal": 1,
+      "number": 15,
+      "reviewsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "reviewsTotal": 0,
+      "state": "CLOSED",
+      "threads": [],
+      "threadsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "threadsTotal": 0,
+      "title": "build(deps): bump env_logger from 0.11.10 to 0.11.11",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/15"
+    },
+    {
+      "commentsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpHPAAAAAVrS4f0=",
+        "hasNextPage": false
+      },
+      "commentsTotal": 2,
+      "number": 14,
+      "reviewsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "reviewsTotal": 0,
+      "state": "CLOSED",
+      "threads": [],
+      "threadsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "threadsTotal": 0,
+      "title": "build(deps-dev): bump @vitejs/plugin-react from 4.7.0 to 5.2.0 in /web_ui",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/14"
+    },
+    {
+      "commentsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpHPAAAAAVrSHB0=",
+        "hasNextPage": false
+      },
+      "commentsTotal": 1,
+      "number": 13,
+      "reviewsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "reviewsTotal": 0,
+      "state": "CLOSED",
+      "threads": [],
+      "threadsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "threadsTotal": 0,
+      "title": "build(deps): bump tungstenite from 0.26.2 to 0.30.0",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/13"
+    },
+    {
+      "commentsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpHPAAAAAVrSGeg=",
+        "hasNextPage": false
+      },
+      "commentsTotal": 1,
+      "number": 12,
+      "reviewsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "reviewsTotal": 0,
+      "state": "CLOSED",
+      "threads": [],
+      "threadsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "threadsTotal": 0,
+      "title": "build(deps): bump serde from 1.0.228 to 1.0.229",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/12"
+    },
+    {
+      "commentsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpHPAAAAAVrSFoU=",
+        "hasNextPage": false
+      },
+      "commentsTotal": 1,
+      "number": 11,
+      "reviewsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "reviewsTotal": 0,
+      "state": "CLOSED",
+      "threads": [],
+      "threadsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "threadsTotal": 0,
+      "title": "build(deps): bump serialport from 4.9.0 to 4.10.1",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/11"
+    },
+    {
+      "commentsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpHPAAAAAVrSj2E=",
+        "hasNextPage": false
+      },
+      "commentsTotal": 1,
+      "number": 10,
+      "reviewsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "reviewsTotal": 0,
+      "state": "CLOSED",
+      "threads": [],
+      "threadsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "threadsTotal": 0,
+      "title": "build(deps): bump actions/download-artifact from 4 to 8",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/10"
+    },
+    {
+      "commentsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpHPAAAAAVrSjU8=",
+        "hasNextPage": false
+      },
+      "commentsTotal": 1,
+      "number": 9,
+      "reviewsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "reviewsTotal": 0,
+      "state": "CLOSED",
+      "threads": [],
+      "threadsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "threadsTotal": 0,
+      "title": "build(deps): bump softprops/action-gh-release from 2 to 3",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/9"
+    },
+    {
+      "commentsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpHPAAAAAVrSiyw=",
+        "hasNextPage": false
+      },
+      "commentsTotal": 1,
+      "number": 8,
+      "reviewsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "reviewsTotal": 0,
+      "state": "CLOSED",
+      "threads": [],
+      "threadsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "threadsTotal": 0,
+      "title": "build(deps): bump actions/checkout from 4 to 7",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/8"
+    },
+    {
+      "commentsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpHPAAAAAVrSiRE=",
+        "hasNextPage": false
+      },
+      "commentsTotal": 1,
+      "number": 7,
+      "reviewsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "reviewsTotal": 0,
+      "state": "CLOSED",
+      "threads": [],
+      "threadsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "threadsTotal": 0,
+      "title": "build(deps): bump actions/upload-artifact from 4 to 7",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/7"
+    },
+    {
+      "commentsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpHPAAAAAVukneM=",
+        "hasNextPage": false
+      },
+      "commentsTotal": 1,
+      "number": 6,
+      "reviewsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpO0MjAyNi0wNi0xMFQxNTo0NjoyNFq0MjAyNi0wNi0xMFQxNTo0NjoyM1rPAAAAAQpllJk=",
+        "hasNextPage": false
+      },
+      "reviewsTotal": 1,
+      "state": "CLOSED",
+      "threads": [
+        {
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "copilot-pull-request-reviewer"
+                },
+                "body": "The drag-and-drop highlight is painted before the mpv render `PaintCallback`. Since `ui.painter().add(callback)` is submitted later, the video rendering will be drawn on top of this overlay, likely making the blue drop-zone highlight/text invisible in practice. Paint the overlay after the video callback (or on a higher layer/order) so it appears above the video.",
+                "databaseId": 3389645388,
+                "url": "https://github.com/ToghrolTP/pealayer/pull/6#discussion_r3389645388"
+              }
+            ],
+            "pageInfo": {
+              "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0wNi0xMFQxNTo0NjoyM1rOygniTA==",
+              "hasNextPage": false
+            },
+            "totalCount": 1
+          },
+          "id": "PRRT_kwDOSxEquc6IicbM",
+          "isOutdated": false,
+          "isResolved": false,
+          "line": 67,
+          "path": "src/ui/video.rs"
+        },
+        {
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "copilot-pull-request-reviewer"
+                },
+                "body": "`smooth_scroll_delta.y` is measured in points/pixels, so rounding it and using it directly as a volume delta can jump volume by very large amounts on many mice/trackpads. Scale the scroll delta into small, consistent volume steps before sending `add volume …`.",
+                "databaseId": 3389645430,
+                "url": "https://github.com/ToghrolTP/pealayer/pull/6#discussion_r3389645430"
+              }
+            ],
+            "pageInfo": {
+              "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0wNi0xMFQxNTo0NjoyM1rOygnidg==",
+              "hasNextPage": false
+            },
+            "totalCount": 1
+          },
+          "id": "PRRT_kwDOSxEquc6Iicbp",
+          "isOutdated": false,
+          "isResolved": false,
+          "line": 119,
+          "path": "src/ui/controls.rs"
+        },
+        {
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "copilot-pull-request-reviewer"
+                },
+                "body": "Keyboard shortcuts are handled globally even when the \"Open URL\" modal's `TextEdit` has focus. This can trigger playback actions while the user is typing (Space, arrows, comma/period, etc.). Guard these shortcuts with `!ctx.wants_keyboard_input()` to avoid interfering with text entry.",
+                "databaseId": 3389645465,
+                "url": "https://github.com/ToghrolTP/pealayer/pull/6#discussion_r3389645465"
+              }
+            ],
+            "pageInfo": {
+              "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0wNi0xMFQxNTo0NjoyNFrOygnimQ==",
+              "hasNextPage": false
+            },
+            "totalCount": 1
+          },
+          "id": "PRRT_kwDOSxEquc6IiccE",
+          "isOutdated": false,
+          "isResolved": false,
+          "line": 148,
+          "path": "src/app.rs"
+        },
+        {
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "copilot-pull-request-reviewer"
+                },
+                "body": "Same as above: remaining shortcuts (volume up/down and frame stepping) should also be disabled while egui wants keyboard input (e.g., when the URL dialog text field is focused), otherwise typing punctuation or using arrow keys to move the caret can trigger playback commands.",
+                "databaseId": 3389645488,
+                "url": "https://github.com/ToghrolTP/pealayer/pull/6#discussion_r3389645488"
+              }
+            ],
+            "pageInfo": {
+              "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0wNi0xMFQxNTo0NjoyNFrOygnisA==",
+              "hasNextPage": false
+            },
+            "totalCount": 1
+          },
+          "id": "PRRT_kwDOSxEquc6IiccV",
+          "isOutdated": false,
+          "isResolved": false,
+          "line": 165,
+          "path": "src/app.rs"
+        },
+        {
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "copilot-pull-request-reviewer"
+                },
+                "body": "`open_file_dialog` duplicates the File->Open logic (filters + non-UTF-8 handling) that also exists in `src/ui/menu.rs`. Keeping two copies increases the chance they drift (e.g., different extension lists or error behavior). Consider centralizing this into a shared helper (e.g., `PealayerApp::open_file_dialog()` or a `ui::file_dialog` module) and reusing it from both call sites.",
+                "databaseId": 3389645515,
+                "url": "https://github.com/ToghrolTP/pealayer/pull/6#discussion_r3389645515"
+              }
+            ],
+            "pageInfo": {
+              "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0wNi0xMFQxNTo0NjoyNFrOygniyw==",
+              "hasNextPage": false
+            },
+            "totalCount": 1
+          },
+          "id": "PRRT_kwDOSxEquc6Iiccn",
+          "isOutdated": false,
+          "isResolved": false,
+          "line": 119,
+          "path": "src/ui/video.rs"
+        }
+      ],
+      "threadsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0wNi0xMFQxNTo0NjoyNFrOiInHJw==",
+        "hasNextPage": false
+      },
+      "threadsTotal": 5,
+      "title": "Fix control bar UX bugs and add drag-drop, OSD, context menu, URL loading, frame-step",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/6"
+    },
+    {
+      "commentsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpHPAAAAAVtq7lE=",
+        "hasNextPage": false
+      },
+      "commentsTotal": 1,
+      "number": 5,
+      "reviewsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpO0MjAyNi0wNi0xMFQxMzo1OTozMFq0MjAyNi0wNi0xMFQxMzo1OTozMFrPAAAAAQpYZbg=",
+        "hasNextPage": false
+      },
+      "reviewsTotal": 2,
+      "state": "CLOSED",
+      "threads": [
+        {
+          "comments": {
+            "nodes": [
+              {
+                "author": {
+                  "login": "DRSDavidSoft"
+                },
+                "body": "<div class=\"markdown-body MarkdownRenderer-module__container__sJ8jf MarkdownViewer-module__markdownOverrides__sSQCQ\" data-copilot-markdown=\"true\" style=\"--MarkdownRenderer_streaming-fade-duration: 750ms;\"><p>This change widens the allowed UI input range for the audio delay control.</p>\n<p>Previously, the <code node=\"[object Object]\">egui::DragValue</code> only let the user set <code node=\"[object Object]\">delay</code> between <strong>-10.0 and 10.0</strong>. The selected line changes that to <strong>-600.0 to 600.0</strong>, so the audio delay slider/input can now represent much larger offsets.</p>\n<p>In context:</p>\n<ul>\n<li node=\"[object Object]\"><code node=\"[object Object]\">DragValue::new(&amp;mut delay)</code> creates an editable numeric control for the audio delay.</li>\n<li node=\"[object Object]\"><code node=\"[object Object]\">.range(-600.0..=600.0)</code> clamps what the user can enter/drag to that range.</li>\n<li node=\"[object Object]\">After the value changes, the code calls <code node=\"[object Object]\">app.mpv.set_property(\"audio-delay\", delay)</code>, so this UI control updates mpv’s <code node=\"[object Object]\">audio-delay</code> property.</li>\n</ul>\n<p>So the practical effect is: <strong>users can now adjust audio sync over a much larger interval</strong>, likely fixing a UI limitation where valid delay values were being artificially restricted.</p></div>",
+                "databaseId": 3388912329,
+                "url": "https://github.com/ToghrolTP/pealayer/pull/5#discussion_r3388912329"
+              }
+            ],
+            "pageInfo": {
+              "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0wNi0xMFQxMzo1ODozMFrOyf6yyQ==",
+              "hasNextPage": false
+            },
+            "totalCount": 1
+          },
+          "id": "PRRT_kwDOSxEquc6IgaZk",
+          "isOutdated": false,
+          "isResolved": false,
+          "line": 90,
+          "path": "src/ui/audio.rs"
+        }
+      ],
+      "threadsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0wNi0xMFQxMzo1OTozMFrOiIG7mw==",
+        "hasNextPage": false
+      },
+      "threadsTotal": 2,
+      "title": "Addressing interface bugs and features",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/5"
+    },
+    {
+      "commentsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpHPAAAAAVtn3WQ=",
+        "hasNextPage": false
+      },
+      "commentsTotal": 1,
+      "number": 4,
+      "reviewsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpO0MjAyNi0wNi0xMFQxMzo0ODo0N1q0MjAyNi0wNi0xMFQxMzo0ODo0N1rPAAAAAQpWyE8=",
+        "hasNextPage": false
+      },
+      "reviewsTotal": 1,
+      "state": "CLOSED",
+      "threads": [],
+      "threadsPage": {
+        "endCursor": null,
+        "hasNextPage": false
+      },
+      "threadsTotal": 0,
+      "title": "Fix video render area clipped to ~75% on high-DPI Windows displays",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/4"
+    },
+    {
+      "commentsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpHPAAAAARZKPhY=",
+        "hasNextPage": false
+      },
+      "commentsTotal": 8,
+      "number": 1,
+      "reviewsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpO0MjAyNi0wNi0xMFQxMDozNjo1Mlq0MjAyNi0wNi0xMFQxMDozNjo1MlrPAAAAAQpAKWc=",
+        "hasNextPage": false
+      },
+      "reviewsTotal": 3,
+      "state": "MERGED",
+      "threads": [],
+      "threadsPage": {
+        "endCursor": "Y3Vyc29yOnYyOpK0MjAyNi0wNi0xMFQxMDozNjo1MlrOiHJswg==",
+        "hasNextPage": false
+      },
+      "threadsTotal": 2,
+      "title": "Add multi-platform GitHub CI/CD with dynamic Windows libmpv resolution, Dependabot updates, and release automation",
+      "url": "https://github.com/ToghrolTP/pealayer/pull/1"
+    }
+  ],
+  "findings": [
+    {
+      "pr": 55,
+      "comment_id": 4165413758,
+      "finding": "Wildcard API CORS / unauthenticated host control",
+      "disposition": "Partial — remains open",
+      "response": "`src/server/mod.rs` rejects untrusted HTTP and WebSocket origins before routing/proxying, checks Host against the receiving interface to prevent browser DNS rebinding, and reflects only allowed origins. Range responses no longer use wildcard CORS. Native clients still have trusted-LAN access without a token; origin checks are not authentication. Shared-token policy awaits the user."
+    },
+    {
+      "pr": 55,
+      "comment_id": 4165413803,
+      "finding": "Concurrent thumbnail staging race",
+      "disposition": "Fixed",
+      "response": "All local, remote and seek extractors use `thumbnail_stage_path` (process ID + monotonic attempt ID) in `src/server/thumbnails.rs`; each cleans up only its own staging file and publishes a completed image."
+    },
+    {
+      "pr": 55,
+      "comment_id": 4165413838,
+      "finding": "HTTP fallback uses a different command contract",
+      "disposition": "Fixed",
+      "response": "`web_ui/src/App.tsx` now posts the same JSON-RPC method, params and request ID to `/api/rpc` as WebSocket. Remote HTTP status polling is no longer suppressed; runtime/config fetches follow the selected authority. The old server fallback parser had also already gained dotted-method support."
+    },
+    {
+      "pr": 55,
+      "comment_id": 4165413871,
+      "finding": "RPC errors ignored; editors close on failure",
+      "disposition": "Partial — remains open",
+      "response": "`App.tsx` correlates responses, displays errors, detects `accepted:false`, times out without replaying mutations, and returns an awaited result. Both effect editors and inline rename retain edits on RPC rejection; save controls have a pending state. `WebControllerEffectDraft::validate` rejects malformed sequence data before acknowledgement. Remaining: `accepted:true` still means dispatch-queue acceptance, not PCController persistence completion; later coordinator rejection needs a correlated completion receipt."
+    },
+    {
+      "pr": 55,
+      "comment_id": 4165413909,
+      "finding": "Editing overwrites an effect's sequence color",
+      "disposition": "Fixed",
+      "response": "Both Web effect editors read `program.properties.color`, preserve existing properties, and do not inject a fallback color when editing an existing definition. Inline identity edits preserve the authoritative program/color."
+    },
+    {
+      "pr": 55,
+      "comment_id": 4165413944,
+      "finding": "Recording control disappears without tracks",
+      "disposition": "Already addressed",
+      "response": "Recording is now in the shared `EffectRecorder.tsx` editor control, not hidden behind a track-count conditional. The Record button remains visible and is disabled without the required controller/board/name; the previous track-arming implementation has been superseded."
+    },
+    {
+      "pr": 55,
+      "comment_id": 4165413988,
+      "finding": "Current-media preview image remains stale after opening another file",
+      "disposition": "Fixed",
+      "response": "Studio preview URL now carries the encoded current media identity, changing the image request when media changes. This does not claim a continuous streamed video preview."
+    },
+    {
+      "pr": 55,
+      "comment_id": 4165414025,
+      "finding": "Playhead percentage includes label/end columns",
+      "disposition": "Fixed",
+      "response": "`timeline-markers-web` is bounded to the lane with shared CSS label/end width variables; playhead and chapter percentages use that layer. Desktop and narrow layouts use the same variables as their rows/ruler."
+    },
+    {
+      "pr": 55,
+      "comment_id": 4165414066,
+      "finding": "Delete button nested inside cue button",
+      "disposition": "Fixed",
+      "response": "Cue outer element is a focusable `div` with button role and Enter/Space handling; the real delete button is not nested in another button, and its pointer/click handling remains isolated."
+    },
+    {
+      "pr": 55,
+      "comment_id": 4165414096,
+      "finding": "Missing Persian interface translations",
+      "disposition": "Fixed",
+      "response": "Added the seven cited keys to `web_ui/src/i18n.ts`: Web Studio, Connected workspace, Connecting, Pealayer connection, New effect, Armed and Record hardware."
+    },
+    {
+      "pr": 46,
+      "comment_id": 4191381265,
+      "finding": "Generated service-worker message lacks origin verification",
+      "disposition": "Fixed; scanner confirmation pending",
+      "response": "Regenerated `web_ui/dist/sw.js` from the guarded public source. Handler requires matching origin and resolves/verifies the sending WindowClient before cache/lifecycle mutation. This is a source fix, not a claim that GitHub CodeQL has already cleared alert 3."
+    },
+    {
+      "pr": 46,
+      "comment_id": 4191381271,
+      "finding": "Source service-worker message lacks origin verification",
+      "disposition": "Fixed; scanner confirmation pending",
+      "response": "`web_ui/public/sw.js` verifies `event.origin`, sender client ID, WindowClient type and its URL origin before SKIP_WAITING or CLEAR_RUNTIME_CACHE. The handler's async work is held by `event.waitUntil`. GitHub CodeQL alert 2 needs the next exact-head scan."
+    },
+    {
+      "pr": 25,
+      "comment_id": 4118467444,
+      "finding": "Packaged DLL basename mismatches import library",
+      "disposition": "Fixed",
+      "response": "Shared `Copy-PealayerLibmpvRuntime` stages both `libmpv-2.dll` and `mpv-2.dll` from the same host-selected runtime. Packaging manifests hash both aliases. No Cafe-PC DLL is substituted for David-PC's runtime."
+    },
+    {
+      "pr": 25,
+      "comment_id": 4118467481,
+      "finding": "Development runner DLL basename mismatches import library",
+      "disposition": "Fixed",
+      "response": "`scripts/run-windows.ps1` uses the same runtime-copy helper as packaging; either supported import-library basename can resolve."
+    },
+    {
+      "pr": 25,
+      "comment_id": 4118467498,
+      "finding": "Old target labels make saved timeline files unreadable",
+      "disposition": "Fixed with one-way migration",
+      "response": "`Timeline::load_from_file` migrates retired labels in memory using the explicit relay IDs in each effect's authored actions: one ID becomes `Relay(id)`, multiple/no IDs become `Any`. It preserves actions and timing and never infers physical assignments from Water/Wind/etc. Source files are not rewritten during load; the public taxonomy remains unified."
+    },
+    {
+      "pr": 25,
+      "comment_id": 4118467522,
+      "finding": "Legacy recent.json migration removed",
+      "disposition": "Already restored; strengthened",
+      "response": "The system-config loader already reads the old `.config/pealayer/recent.json` list when no current config is available. This pass adds USERPROFILE fallback when HOME is absent on Windows."
+    },
+    {
+      "pr": 25,
+      "comment_id": 4118467539,
+      "finding": "Relay(0) admitted by imported/programmatic values",
+      "disposition": "Fixed",
+      "response": "Serde rejects zero IDs in HardwareTarget::Relay and AtomicAction. Target lookup/compatibility refuses zero; the compiler already filters zero IDs. Both HardwareTransport::send and ControllerClient::send_command now reject a programmatic zero before any wire write."
+    },
+    {
+      "pr": 25,
+      "comment_id": 4118467557,
+      "finding": "Seek controls enabled without media",
+      "disposition": "Fixed",
+      "response": "Remote player slider and skip buttons now explicitly require `current_video` plus seek capability (and finite duration for the slider), rather than treating an initialized numeric snapshot as evidence of media."
+    },
+    {
+      "pr": 6,
+      "comment_id": 3389645388,
+      "finding": "File-drop highlight painted underneath MPV",
+      "disposition": "Already addressed",
+      "response": "`src/ui/video.rs` adds the MPV PaintCallback first, then paints file-hover shading and drop text. Current paint ordering is the inverse of the old finding; no unrelated renderer rewrite was made."
+    },
+    {
+      "pr": 6,
+      "comment_id": 3389645430,
+      "finding": "Raw scroll pixels create huge volume changes",
+      "disposition": "Already addressed",
+      "response": "Video/transport scroll handlers use the wheel sign for a bounded ±2 volume change, clamped to 0–130, rather than adding raw smooth-scroll pixel distance."
+    },
+    {
+      "pr": 6,
+      "comment_id": 3389645465,
+      "finding": "Global playback keys fire while typing URLs",
+      "disposition": "Already addressed",
+      "response": "`transport_shortcuts_enabled` requires `!ctx.egui_wants_keyboard_input()` and no timeline keyboard ownership; application bindings also receive the text-editing context."
+    },
+    {
+      "pr": 6,
+      "comment_id": 3389645488,
+      "finding": "Volume/frame keyboard shortcuts fire during text entry",
+      "disposition": "Already addressed",
+      "response": "The same transport guard covers volume and legacy frame keys; `take_frame_step_shortcut` respects text-edit focus. This pass does not remove the existing keyboard-protection logic."
+    },
+    {
+      "pr": 6,
+      "comment_id": 3389645515,
+      "finding": "Duplicate native media picker code",
+      "disposition": "Fixed",
+      "response": "Menu, video empty-state click, video context menu and tray now call `PealayerApp::open_media_file_dialog`, sharing translated filters and PathBuf handling. Consumer mode still uses the remote master browser, not a local picker."
+    },
+    {
+      "pr": 5,
+      "comment_id": 3388912329,
+      "finding": "Human review explanation of ±600s audio delay",
+      "disposition": "Informational; acknowledged",
+      "response": "The comment explains the old change rather than requesting a fix. `MIN_AUDIO_DELAY = -600` and `MAX_AUDIO_DELAY = 600` remain in `src/ui/audio.rs`; the useful range has not been removed."
+    }
+  ]
+}

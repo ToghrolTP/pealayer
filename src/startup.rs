@@ -1,0 +1,1037 @@
+// Startup belongs to the library so crate-private application internals remain
+// private, while the executable reuses the same contracts and process globals.
+use crate::*;
+
+use app::PealayerApp;
+use eframe::egui;
+use libmpv2::{
+    Mpv,
+    render::{OpenGLInitParams, RenderParam, RenderParamApiType},
+};
+use mpv::render::RenderContextWrapper;
+use mpv::render::mpv_get_proc_address;
+use std::sync::{Arc, Mutex};
+
+fn subtitle_font_directory() -> Option<std::path::PathBuf> {
+    let packaged = std::env::current_exe()
+        .ok()
+        .and_then(|executable| {
+            executable
+                .parent()
+                .map(|directory| directory.join("assets/fonts"))
+        })
+        .filter(|directory| directory.join("Vazirmatn-Regular.ttf").is_file());
+    packaged.or_else(|| {
+        let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("assets/fonts");
+        source
+            .join("Vazirmatn-Regular.ttf")
+            .is_file()
+            .then_some(source)
+    })
+}
+
+pub fn run() -> eframe::Result {
+    crate::diagnostics::install_panic_reporter();
+    let startup_args: Vec<String> = std::env::args().collect();
+    if let Some(payload) = crate::process_control::helper_invocation(&startup_args) {
+        if let Err(error) = crate::process_control::run_helper(payload) {
+            crate::cli_eprintln!("Pealayer process connection helper failed: {error}");
+            std::process::exit(4);
+        }
+        return Ok(());
+    }
+    for action in crate::platform::windows_quick_actions::WINDOWS_QUICK_ACTIONS {
+        if startup_args.iter().any(|argument| argument == action.arguments) {
+            crate::diagnostics::record_shell_action("launch_requested", action.arguments);
+        }
+    }
+    if let Some(journal_path) = crate::update::helper_invocation(&startup_args) {
+        if let Err(error) = crate::update::run_update_helper(journal_path) {
+            crate::cli_eprintln!("Pealayer update helper failed: {error}");
+            std::process::exit(4);
+        }
+        return Ok(());
+    }
+    if startup_args
+        .iter()
+        .any(|argument| argument == "--smoke-test")
+    {
+        match Mpv::new() {
+            Ok(_) => std::process::exit(0),
+            Err(error) => {
+                crate::cli_eprintln!("libmpv smoke test failed: {error}");
+                std::process::exit(2);
+            }
+        }
+    }
+
+    env_logger::init();
+
+    if let Some(owner_hwnd) = crate::ui::preferences::preferences_helper_owner(&startup_args) {
+        crate::diagnostics::record_shell_action("helper_started", "preferences");
+        let result = crate::ui::preferences::run_native_preferences(owner_hwnd);
+        crate::diagnostics::record_shell_action(
+            if result.is_ok() { "helper_closed" } else { "helper_failed" }, "preferences",
+        );
+        return result;
+    }
+
+    #[cfg(target_os = "windows")]
+    let mut gui_ownership = None;
+
+    let action = crate::cli::parse_cli_args(startup_args);
+    let action = match action {
+        Ok(crate::cli::CliAction::RunClient {endpoint,port,options}) => {
+            match crate::peer::connect(&endpoint,port) {
+                Ok(()) => Ok(crate::cli::CliAction::RunGui(options)),
+                Err(error) => Err(format!("Cannot connect to remote Pealayer: {error}")),
+            }
+        }
+        action => action,
+    };
+    let cli_options = match action {
+        Ok(crate::cli::CliAction::RunClient {..}) => unreachable!(),
+        Ok(crate::cli::CliAction::PrintHelp(msg)) => {
+            crate::cli_println!("{}", msg);
+            return Ok(());
+        }
+        Ok(crate::cli::CliAction::PrintVersion(ver)) => {
+            crate::cli_println!("{}", ver);
+            return Ok(());
+        }
+        Ok(crate::cli::CliAction::SendRemote(cmd)) => match crate::cli::send_remote_command(&cmd) {
+            Ok(resp) => {
+                crate::cli_println!("{}", resp);
+                return Ok(());
+            }
+            Err(e) => {
+                crate::cli_eprintln!("{}", e);
+                std::process::exit(1);
+            }
+        },
+        Ok(crate::cli::CliAction::PushUpdate { target, output }) => {
+            let mut reporter = crate::update::console::Reporter::open("Peer update", &target, output);
+            let result = crate::update::push_current_to_peer(&target, |progress| reporter.progress(progress));
+            reporter.finish(&result);
+            drop(reporter);
+            if result.is_err() { std::process::exit(4); }
+            return Ok(());
+        }
+        Ok(crate::cli::CliAction::UpdateFrom { url, sha256, output }) => {
+            let target = format!("http://127.0.0.1:{}", crate::config::control_port());
+            let mut reporter = crate::update::console::Reporter::open("URL update", &target, output);
+            let result = crate::update::request_update_from_url(&target, &url, sha256.as_deref(), |progress| reporter.progress(progress));
+            reporter.finish(&result);
+            drop(reporter);
+            if result.is_err() { std::process::exit(4); }
+            return Ok(());
+        }
+        Ok(crate::cli::CliAction::UpdateStatus { target, output }) => {
+            let mut reporter = crate::update::console::Reporter::open("Update status", &target, output);
+            let result = crate::update::peer_update_status(&target);
+            reporter.finish(&result);
+            drop(reporter);
+            if result.is_err() { std::process::exit(4); }
+            return Ok(());
+        }
+        Ok(crate::cli::CliAction::RegisterAssociations) => {
+            match crate::platform::associations::register_file_associations(None) {
+                Ok(count) => {
+                    crate::cli_println!(
+                        "Successfully registered Pealayer for {} media file types.",
+                        count
+                    );
+                    return Ok(());
+                }
+                Err(e) => {
+                    crate::cli_eprintln!("Failed to register file associations: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        Ok(crate::cli::CliAction::UnregisterAssociations) => {
+            match crate::platform::associations::unregister_file_associations() {
+                Ok(count) => {
+                    crate::cli_println!(
+                        "Successfully unregistered Pealayer media file associations ({} processed).",
+                        count
+                    );
+                    return Ok(());
+                }
+                Err(e) => {
+                    crate::cli_eprintln!("Failed to unregister file associations: {}", e);
+                    std::process::exit(1);
+                }
+            }
+        }
+        Ok(crate::cli::CliAction::RunGui(opts)) => {
+            let config = crate::config::AppConfig::load();
+            let launch_request = crate::cli::launch_request(&opts);
+            if config.single_instance && crate::cli::try_forward_launch_request(&launch_request) {
+                crate::cli_println!("Forwarded launch request to active Pealayer instance.");
+                return Ok(());
+            }
+            #[cfg(target_os = "windows")]
+            if config.single_instance {
+                let app_identity = crate::cli::resolved_instance_identity();
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+                loop {
+                    match crate::platform::windows::acquire_gui_ownership(&app_identity) {
+                        Ok(crate::platform::windows::GuiOwnership::Primary(owner)) => {
+                            gui_ownership = Some(owner);
+                            break;
+                        }
+                        Ok(crate::platform::windows::GuiOwnership::Existing) => {
+                            if crate::cli::try_forward_launch_request(&launch_request) {
+                                crate::cli_println!("Forwarded launch request to active Pealayer instance.");
+                                return Ok(());
+                            }
+                            if std::time::Instant::now() >= deadline {
+                                crate::cli_eprintln!(
+                                    "The active Pealayer instance did not accept the launch request."
+                                );
+                                std::process::exit(3);
+                            }
+                            std::thread::sleep(std::time::Duration::from_millis(100));
+                        }
+                        Err(error) => {
+                            crate::cli_eprintln!("Could not establish Pealayer GUI ownership: {error}");
+                            std::process::exit(3);
+                        }
+                    }
+                }
+            }
+            opts
+        }
+        Err(err) => {
+            crate::cli_eprintln!("Error: {}\nRun 'pealayer --help' for usage.", err);
+            std::process::exit(1);
+        }
+    };
+
+    #[cfg(target_os = "windows")]
+    let _gui_ownership = gui_ownership;
+
+    let launch_config = crate::config::AppConfig::load();
+    crate::platform::interop::set_live_config(launch_config.clone());
+    let app_name = crate::config::resolved_app_name(&launch_config);
+    let language_preference = crate::config::resolved_language_preference(&launch_config);
+    let language = crate::config::resolve_language(language_preference);
+    let direction_preference = crate::config::resolved_direction_preference(&launch_config);
+    let rtl = crate::config::resolve_rtl(direction_preference, language);
+    crate::platform::windows::configure_window_composition(
+        launch_config.windows_dwm_theming,
+        launch_config.windows_mica_backdrop,
+    );
+    crate::platform::windows::configure_window_magnetic_snap(
+        launch_config.window_magnetic_snap,
+        launch_config.window_magnetic_snap_distance as i32,
+    );
+    crate::platform::windows::configure_live_video_during_window_move(
+        launch_config.live_video_during_window_move,
+    );
+    crate::platform::windows::configure_compositor_paced_window_move(
+        launch_config.compositor_paced_window_move,
+    );
+    let initial_window_title = app_name.clone();
+    let icon_data = (!crate::peer::active()).then(||crate::branding::icon_bytes(&launch_config, crate::branding::PlaybackIconState::Stopped)).flatten()
+        .and_then(|(_, bytes)| crate::branding::icon_data_from_bytes(&bytes))
+        .or_else(|| {
+            eframe::icon_data::from_png_bytes(include_bytes!("../assets/pealayer-icon.png")).ok()
+        });
+
+    let initial_geometry = crate::platform::window_placement::initial(&launch_config, crate::peer::active());
+    let mut viewport = crate::platform::window_placement::builder(egui::ViewportBuilder::default(), initial_geometry, cli_options.fullscreen)
+        .with_clamp_size_to_monitor_size(true);
+    if cli_options.fullscreen {
+        viewport = viewport.with_fullscreen(true);
+    }
+    if cli_options.web_only {
+        viewport = viewport.with_visible(false);
+    }
+    if let Some(icon) = icon_data {
+        viewport = viewport.with_icon(icon);
+    }
+
+    let effective_vsync = crate::platform::linux::resolve_effective_opengl_vsync(
+        launch_config.opengl_vsync,
+        crate::platform::linux::is_wayland_session(),
+    );
+    let options = eframe::NativeOptions {
+        viewport,
+        renderer: eframe::Renderer::Glow,
+        // The application owns placement. Keep eframe's widget memory, not a
+        // second, possibly minimized WindowSettings geometry authority.
+        persist_window: false,
+        window_builder: Some(Box::new(move |builder| crate::platform::window_placement::builder(builder, initial_geometry, cli_options.fullscreen))),
+        persistence_path: (!crate::peer::active()).then(||
+            crate::config::AppConfig::get_config_path().with_file_name("workspace-state.ron"),
+        ),
+        glow_options: eframe::egui_glow::GlowConfiguration {
+            vsync: effective_vsync,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    #[cfg(target_os = "windows")]
+    if cli_options.web_only {
+        // Winit can make the primary HWND visible after the first eframe
+        // callback even when ViewportBuilder starts hidden. Keep the
+        // implementation window hidden for the lifetime of Web-only mode;
+        // the native event loop is still required by libmpv and egui.
+        std::thread::spawn(|| {
+            loop {
+                let hwnd = crate::platform::windows::get_registered_hwnd();
+                if hwnd != 0 {
+                    crate::platform::windows::hide_native_window(hwnd);
+                }
+                crate::platform::windows::hide_current_process_windows();
+                std::thread::sleep(std::time::Duration::from_millis(250));
+            }
+        });
+    }
+
+    eframe::run_native(
+        &initial_window_title,
+        options,
+        Box::new(move |cc| {
+            if let Some(window) = cc.winit_window() {
+                crate::platform::window_placement::restore(window, initial_geometry, cli_options.fullscreen, cc.egui_ctx.zoom_factor());
+            }
+            let loaded_config = launch_config.clone();
+            crate::platform::windows::start_window_move_frame_pump(cc.egui_ctx.clone());
+            crate::ui::i18n::configure_ui_fonts(
+                &cc.egui_ctx,
+                language == crate::config::AppLanguage::Persian,
+            );
+            crate::ui::configure_native_appearance(&cc.egui_ctx, &loaded_config);
+            crate::ui::configure_main_window_style(&cc.egui_ctx);
+            egui_extras::install_image_loaders(&cc.egui_ctx);
+
+            let get_proc = cc
+                .get_proc_address
+                .clone()
+                .expect("Glow backend must provide get_proc_address");
+
+            let subtitle_font_directory = subtitle_font_directory();
+            if let Some(font_path) = subtitle_font_directory
+                .as_ref()
+                .map(|directory| directory.join("Vazirmatn-Regular.ttf"))
+            {
+                match crate::platform::windows::register_private_font(&font_path) {
+                    Ok(faces) if faces > 0 => log::info!(
+                        "registered {faces} bundled {} font face(s) for subtitle overlays",
+                        crate::subtitle::SUBTITLE_FONT_FAMILY
+                    ),
+                    Ok(_) => {}
+                    Err(error) => log::warn!(
+                        "could not register bundled {} subtitle font: {error}",
+                        crate::subtitle::SUBTITLE_FONT_FAMILY
+                    ),
+                }
+            }
+            let mpv = Mpv::with_initializer(|init| {
+                init.set_property("vo", "libmpv")?;
+                // Stop libmpv from blocking the UI thread during render passes.
+                // By default video-timing-offset is 0.050s, which forces mpv_render_context_render
+                // to sleep until the next frame's presentation timestamp (e.g. ~41.7ms for 23.976 fps),
+                // truncating the entire UI event loop to the video's frame rate.
+                init.set_property(
+                    "video-timing-offset",
+                    crate::app::MPV_VIDEO_TIMING_OFFSET_SECONDS,
+                )?;
+                let audio_device = if loaded_config.audio_device.trim().is_empty() {
+                    "auto"
+                } else {
+                    loaded_config.audio_device.as_str()
+                };
+                if init.set_property("audio-device", audio_device).is_err() {
+                    init.set_property("audio-device", "auto")?;
+                }
+                init.set_property("keep-open", "always")?;
+                crate::mpv::proxy::apply_before_initialize(
+                    &init,
+                    loaded_config.open_url_use_proxy,
+                    loaded_config
+                        .open_url_proxy_url
+                        .as_deref()
+                        .unwrap_or_default(),
+                )?;
+
+                // Set up Arabic/Farsi Vazirmatn font for subtitles
+                if let Some(font_dir_str) = subtitle_font_directory
+                    .as_deref()
+                    .and_then(std::path::Path::to_str)
+                {
+                    init.set_property("sub-fonts-dir", font_dir_str)?;
+                }
+                init.set_property("sub-font", crate::subtitle::SUBTITLE_FONT_FAMILY)?;
+                init.set_property("sub-align-x", loaded_config.subtitle_alignment.mpv_value())?;
+                init.set_property("sub-justify", loaded_config.subtitle_alignment.mpv_value())?;
+                // Processed Persian captions are rendered through
+                // `osd-overlay ass-events`, whose default face comes from the
+                // OSD renderer rather than the subtitle renderer.
+                init.set_property("osd-font", crate::subtitle::SUBTITLE_FONT_FAMILY)?;
+                // ASS/SSA tracks normally keep their embedded FontName and
+                // ignore `sub-font`. Force mpv's normal subtitle styling so
+                // the bundled Vazirmatn face is also stable in the native
+                // fallback path (processed text uses the same face explicitly).
+                init.set_property("sub-ass-override", "force")?;
+
+                Ok(())
+            })
+            .unwrap();
+
+            let mpv_static: &'static Mpv = Box::leak(Box::new(mpv));
+
+            let mut render_context = mpv_static
+                .create_render_context(vec![
+                    RenderParam::ApiType(RenderParamApiType::OpenGl),
+                    RenderParam::InitParams(OpenGLInitParams {
+                        get_proc_address: mpv_get_proc_address,
+                        ctx: get_proc,
+                    }),
+                ])
+                .expect("Failed creating render context");
+
+            let egui_ctx = cc.egui_ctx.clone();
+            let video_update_pending = crate::mpv::render::VideoUpdateSignal::default();
+            let callback_pending = video_update_pending.clone();
+            crate::remote_location::install_context(&egui_ctx);
+            render_context.set_update_callback(move || {
+                // Remember decoder/configuration work even when window-move
+                // pacing defers its repaint. No MPV/GL API runs in this callback.
+                callback_pending.mark();
+                // Outside a native move, the decoder remains the most efficient
+                // repaint clock. During WM_ENTERSIZEMOVE, the dedicated DWM
+                // pump presents the newest decoded frame at compositor cadence;
+                // allowing this media-rate callback to inject extra paints
+                // would recreate the uneven 24/25/30 Hz pointer lag.
+                if crate::platform::windows::native_window_video_rendering_allowed()
+                    && !crate::platform::windows::native_window_compositor_pacing_active()
+                {
+                    egui_ctx.request_repaint();
+                }
+            });
+
+            let mut mpv_client = mpv_static.create_client(None).unwrap();
+
+            // Observe MPV properties for UI state ON THE CLIENT that receives events
+            mpv_client
+                .observe_property("time-pos", libmpv2::Format::Double, 1)
+                .unwrap();
+            mpv_client
+                .observe_property("duration", libmpv2::Format::Double, 2)
+                .unwrap();
+            mpv_client
+                .observe_property("pause", libmpv2::Format::Flag, 3)
+                .unwrap();
+            mpv_client
+                .observe_property("volume", libmpv2::Format::Double, 4)
+                .unwrap();
+            mpv_client
+                .observe_property("mute", libmpv2::Format::Flag, 5)
+                .unwrap();
+            mpv_client
+                .observe_property("sub-visibility", libmpv2::Format::Flag, 6)
+                .unwrap();
+            mpv_client
+                .observe_property("sub-font-size", libmpv2::Format::Double, 7)
+                .unwrap();
+            mpv_client
+                .observe_property("sub-delay", libmpv2::Format::Double, 8)
+                .unwrap();
+            mpv_client
+                .observe_property("sid", libmpv2::Format::String, 9)
+                .unwrap();
+            mpv_client
+                .observe_property("audio-delay", libmpv2::Format::Double, 10)
+                .unwrap();
+            mpv_client
+                .observe_property("aid", libmpv2::Format::String, 11)
+                .unwrap();
+            mpv_client
+                .observe_property("eof-reached", libmpv2::Format::Flag, 12)
+                .unwrap();
+            mpv_client
+                // `estimated-vf-fps` is a live decoder estimate and visibly jitters
+                // whenever the UI repaints.  The status bar promises the media rate,
+                // so observe the stable container metadata instead.
+                .observe_property("container-fps", libmpv2::Format::Double, 13)
+                .unwrap();
+            mpv_client
+                .observe_property("seekable", libmpv2::Format::Flag, 14)
+                .unwrap();
+            mpv_client
+                .observe_property("demuxer-cache-duration", libmpv2::Format::Double, 15)
+                .unwrap();
+            mpv_client
+                .observe_property("cache-buffering-state", libmpv2::Format::Int64, 16)
+                .unwrap();
+            mpv_client
+                .observe_property("paused-for-cache", libmpv2::Format::Flag, 22)
+                .unwrap();
+            mpv_client
+                .observe_property("speed", libmpv2::Format::Double, 17)
+                .unwrap();
+            mpv_client
+                .observe_property("vid", libmpv2::Format::String, 18)
+                .unwrap();
+            mpv_client
+                .observe_property("sub-text", libmpv2::Format::String, 19)
+                .unwrap();
+            mpv_client
+                .observe_property("sub-pos", libmpv2::Format::Double, 20)
+                .unwrap();
+            mpv_client
+                .observe_property("video-out-params/aspect", libmpv2::Format::Double, 21)
+                .unwrap();
+            // Event-driven OS metadata/playlist capabilities, not per-frame probes.
+            mpv_client.observe_property("playlist/count", libmpv2::Format::Int64, 23).unwrap();
+            mpv_client.observe_property("playlist-pos", libmpv2::Format::Int64, 24).unwrap();
+            mpv_client.observe_property("metadata", libmpv2::Format::String, 25).unwrap();
+
+            let egui_ctx2 = cc.egui_ctx.clone();
+            mpv_client.set_wakeup_callback(move || {
+                // Decoder-frame updates above are sufficient to present video
+                // during the modal move loop. Coalesce property-event wakeups
+                // until release so time-pos and other observations cannot add
+                // a second repaint stream that makes the window trail.
+                if !crate::platform::windows::native_window_operation_active() {
+                    egui_ctx2.request_repaint();
+                }
+            });
+
+            let initial_volume = cli_options.volume.unwrap_or(loaded_config.volume);
+            let startup_media_target = if crate::peer::active() { cli_options.target.clone() } else { crate::media::startup_media_target(
+                cli_options.target.as_deref(),
+                loaded_config.restore_last_media_on_startup && (loaded_config.external_mpv.mode == crate::mpv::external::Mode::Internal || matches!(loaded_config.external_mpv.mode,crate::mpv::external::Mode::External|crate::mpv::external::Mode::Dual) && loaded_config.external_mpv.endpoint.is_empty()),
+                loaded_config.last_media_target.as_deref(),
+                &loaded_config.recent_media,
+                &loaded_config.playback_positions,
+            ) };
+            // An explicit CLI media target starts normally. Only an automatic
+            // last-session restore inherits the persisted pause state.
+            let restore_startup_pause = cli_options
+                .target
+                .as_deref()
+                .map(str::trim)
+                .filter(|target| !target.is_empty())
+                .is_none()
+                && startup_media_target.is_some()
+                && loaded_config.last_media_paused;
+            let startup_effect_cue_timeline = startup_media_target
+                .as_deref()
+                .and_then(|target| {
+                    let target_key = crate::media::playback_history_key(target);
+                    loaded_config.effect_cue_session.as_ref().filter(|session| {
+                        crate::media::playback_history_key(&session.media_target) == target_key
+                    })
+                })
+                .map(|session| session.timeline.clone())
+                .unwrap_or_default();
+            let _ = mpv_static.set_property("volume", initial_volume);
+            let _ = mpv_static.set_property("mute", loaded_config.is_muted);
+            let _ = mpv_static.set_property("speed", loaded_config.playback_speed);
+            let _ = mpv_static.set_property("sub-font-size", loaded_config.subtitle_font_size);
+            let _ = mpv_static.set_property("sub-delay", loaded_config.subtitle_delay_seconds);
+            let _ = mpv_static.set_property("sub-pos", loaded_config.subtitle_position_percent);
+            let _ = mpv_static.set_property("audio-delay", loaded_config.audio_delay_seconds);
+            if !crate::peer::active() { crate::platform::windows::sync_windows_jump_list_with_options(
+                &loaded_config.recent_media,
+                loaded_config.windows_jump_list_quick_actions,
+            ); }
+
+            let (interop_tx, interop_rx) = std::sync::mpsc::channel();
+            crate::platform::interop::spawn_interop_listener(
+                interop_tx.clone(),
+                cc.egui_ctx.clone(),
+                crate::cli::resolved_instance_identity(),
+            );
+
+            let web_runtime = crate::server::WebRuntimeConfig::production(
+                app_name.clone(),
+                match language {
+                    crate::config::AppLanguage::Persian => "fa",
+                    _ => "en",
+                }
+                .to_string(),
+                if rtl { "rtl" } else { "ltr" }.to_string(),
+                match crate::config::resolved_theme(&loaded_config) {
+                    crate::config::AppTheme::Light => "light",
+                    crate::config::AppTheme::Dark => "dark",
+                    crate::config::AppTheme::System => "system",
+                }
+                .to_string(),
+                crate::ui::platform_accent_rgb(&loaded_config),
+            );
+            let mut listener_config=loaded_config.clone();
+            if let Some(client)=crate::peer::client() {listener_config.web_enabled=true;listener_config.web_port=client.local_port;listener_config.web_listen_addresses=vec!["127.0.0.1".into()];}
+            let web_state_tx = crate::server::spawn_control_server_for_config(
+                &listener_config,
+                cc.egui_ctx.clone(),
+                web_runtime,
+                interop_tx.clone(),
+                crate::cli::resolved_instance_identity(),
+            );
+            let (_web_cmd_tx, web_cmd_rx) = std::sync::mpsc::channel();
+            let (media_cmd_tx, media_cmd_rx) = std::sync::mpsc::channel();
+            let engine_handle = crate::four_d::engine::spawn_engine();
+            let engine_repaint = cc.egui_ctx.clone();
+            engine_handle.set_state_notifier(move || engine_repaint.request_repaint());
+            crate::peer::register_server(&engine_handle,mpv_static,cc.egui_ctx.clone());
+            if !crate::peer::active() {engine_handle.attach_playback_clock(mpv_static);}
+            let controller_cmd_rx = if crate::peer::active(){std::sync::mpsc::channel().1}else{crate::platform::interop::spawn_pccontroller_action_bridge(
+                cc.egui_ctx.clone(),
+                engine_handle.controller_push_target(),
+            )};
+
+            let dock_state = loaded_config
+                .workspace_session
+                .dock_layout
+                .as_deref()
+                .or(loaded_config.workspace_dock_layout.as_deref())
+                .and_then(|json| {
+                    match crate::ui::layout::decode_workspace(json) {
+                        Ok(workspace) => Some(workspace),
+                        Err(error) => {
+                            log::warn!("{error}; using the default workspace");
+                            None
+                        }
+                    }
+                })
+                .unwrap_or_else(crate::ui::layout::create_initial_layout);
+            let mut workspace_profiles = loaded_config.workspace_profiles.clone();
+            let default_dock_layout =
+                serde_json::to_string(&crate::ui::layout::create_initial_layout()).ok();
+            for id in ["simple", "nle"] {
+                if let Some(profile) = workspace_profiles.get_mut(id)
+                    && profile.dock_layout.is_none()
+                {
+                    profile.dock_layout = default_dock_layout.clone();
+                }
+            }
+
+            let frame_cache = Arc::new(std::sync::RwLock::new(
+                crate::mpv::frame_cache::FrameCache::new(128 * 1024 * 1024),
+            ));
+
+            let mut native_seek_client = crate::mpv::seek_completion::NativeSeekClient::new(mpv_static)
+                .expect("Failed to create seek completion client");
+            let seek_repaint = cc.egui_ctx.clone();
+            native_seek_client.set_wakeup_callback(move || {
+                if !crate::platform::windows::native_window_operation_active() {
+                    seek_repaint.request_repaint();
+                }
+            });
+            let native_seek_client = Arc::new(native_seek_client);
+
+            let mut app = PealayerApp {
+                native_service_policy: crate::app::NativeServicePolicy::Production,
+                web_only: cli_options.web_only,
+                app_name: app_name.clone(),
+                local_media_title_format: loaded_config.local_media_title_format,
+                remote_media_title_format: loaded_config.remote_media_title_format,
+                app_publisher: crate::config::resolved_app_publisher(&loaded_config),
+                app_copyright: crate::config::resolved_app_copyright(&loaded_config),
+                last_window_title: String::new(),
+                window_geometry: initial_geometry,
+                language_preference,
+                language,
+                direction_preference,
+                theme_preference: crate::config::resolved_theme(&loaded_config),
+                color_palette: loaded_config.color_palette,
+                native_monitor_style: loaded_config.native_monitor_style,
+                native_transport_style: loaded_config.native_transport_style,
+                monitor_preview: loaded_config.monitor_preview,
+                native_timeline_style: loaded_config.native_timeline_style,
+                rtl,
+                mpv: crate::mpv::player::Player(mpv_static),
+                mpv_client: Arc::new(mpv_client),
+                native_seek_client: Arc::clone(&native_seek_client),
+                seek_epoch: 0,
+                external_catalog_revision: 0,
+                external_seek_revision: 0,
+                pending_external_media: None,
+                pending_external_pause: false,
+                render_context: Arc::new(Mutex::new(Some(RenderContextWrapper(render_context, video_update_pending)))),
+                playback_time: 0.0,
+                duration: 0.0,
+                is_seekable: false,
+                media_metadata_loaded: false,
+                cache_duration: None,
+                cache_buffering_percent: None,
+                media_fps: 0.0,
+                video_aspect_ratio: 16.0 / 9.0,
+                consistent_video_aspect_ratio: loaded_config.consistent_video_aspect_ratio,
+                always_on_top: loaded_config.always_on_top,
+                applied_always_on_top: None,
+                pending_video_aspect_resize: false,
+                is_paused: false,
+                is_eof: false,
+                volume: initial_volume,
+                is_muted: loaded_config.is_muted,
+                playback_rate: loaded_config.playback_speed,
+                configured_playback_speed: loaded_config.playback_speed,
+                temporary_fast_forward_speed: loaded_config.temporary_fast_forward_speed,
+                video_surface_gesture: None,
+                show_sub_settings: loaded_config.workspace_session.dialogs.subtitles,
+                sub_visibility: true,
+                sub_font_size: loaded_config.subtitle_font_size,
+                numeric_input_steps: loaded_config.numeric_input_steps.clone(),
+                human_readable_time_units: loaded_config.human_readable_time_units,
+                sub_delay: loaded_config.subtitle_delay_seconds,
+                sub_position_percent: loaded_config.subtitle_position_percent,
+                current_sid: "no".to_string(),
+                sub_tracks: Vec::new(),
+                subtitle_direction: loaded_config.subtitle_direction,
+                subtitle_alignment: loaded_config.subtitle_alignment,
+                subtitle_text_replacements: loaded_config.subtitle_text_replacements.clone(),
+                subtitle_text: String::new(),
+                current_vid: "no".to_string(),
+                video_tracks: Vec::new(),
+                show_audio_settings: loaded_config.workspace_session.dialogs.audio,
+                audio_delay: loaded_config.audio_delay_seconds,
+                current_aid: "no".to_string(),
+                audio_tracks: Vec::new(),
+                media_tracks: Vec::new(),
+                media_file_info: crate::media_info::MediaFileInfo::default(),
+                cached_media_chapters: Vec::new(),
+                timeline_revision: std::sync::atomic::AtomicU64::new(1),
+                last_published_timeline_revision: std::sync::atomic::AtomicU64::new(0),
+                media_view_revision: std::sync::atomic::AtomicU64::new(1),
+                last_published_media_view_revision: std::sync::atomic::AtomicU64::new(0),
+                media_track_properties: None,
+                selected_timeline_track: None,
+                seek_pos: None,
+                seek_controller: crate::mpv::seek::SeekController::with_cache(
+                    crate::mpv::seek::MpvSeekBackend::new(mpv_static, Arc::clone(&native_seek_client)),
+                    frame_cache.clone(),
+                ),
+                frame_cache,
+        active_pseudo_frame: None,
+        settled_seek_revision: 0,
+        settled_seek_target: None,
+                was_playing_before_scrub: false,
+                is_scrubbing: false,
+                pending_scrub_commit: None,
+                last_mouse_activity: std::time::Instant::now(),
+                frame_rate_tracker: crate::app::FrameRateTracker::default(),
+                display_refresh_rate: 60.0,
+                pin_controls: loaded_config.pin_controls,
+                simple_workspace: loaded_config.simple_workspace,
+                show_error: None,
+                show_four_d_editor: loaded_config.workspace_session.nle,
+
+                timeline: startup_effect_cue_timeline.clone(),
+                timeline_saved_baseline: Some(crate::four_d::history::TimelineSnapshot::from(&startup_effect_cue_timeline)),
+                pending_timeline_close_action: None,
+                engine_handle,
+                recording_session: crate::four_d::curve_record::RecordingSession::new(),
+                input_capture: crate::four_d::input_capture::InputCaptureState::new(),
+                is_recording: false,
+                hardware_effect_authoring: crate::app::HardwareEffectAuthoringState::default(),
+                recording_keys: std::collections::HashMap::new(),
+                dock_state,
+                sidebar_rail_state: loaded_config.ui.sidebar_rail,
+                sidebar_shortcuts: loaded_config.ui.sidebar_shortcuts.clone(),
+                toolbar_state: crate::ui::workspace_toolbar::ToolbarState::with_preferences(loaded_config.ui.toolbar.clone()),
+                terminal_state: crate::ui::terminal::TerminalState::with_preferences(loaded_config.ui.terminal.clone()),
+                rtt_state: Arc::new(Mutex::new(crate::app::RttState {
+                    video_texture: None,
+                    video_fbo: None,
+                    video_texture_id: None,
+                    texture_width: 1920,
+                    texture_height: 1080,
+                    has_rendered_frame: false,
+                    render_target: None,
+                    consecutive_render_failures: 0,
+                })),
+                selected_instance_ids: std::collections::HashSet::new(),
+                selected_keyframes: std::collections::HashSet::new(),
+                selected_timeline_keyframe: None,
+                active_keyframe_drag: None,
+                timeline_zoom: 100.0,
+                undo_stack: crate::four_d::history::UndoStack::default(),
+                effects_search_query: String::new(),
+                show_effect_library_editor: loaded_config.workspace_session.dialogs.effects_manager,
+                effect_library_selection: loaded_config
+                    .workspace_session
+                    .dialogs
+                    .effects_selection
+                    .clone(),
+                effect_library_draft: loaded_config
+                    .effect_working_draft
+                    .clone()
+                    .unwrap_or_default(),
+                effect_group_draft: None,
+                asset_import: Default::default(),
+                track_muted: std::collections::BTreeSet::new(),
+                track_soloed: std::collections::BTreeSet::new(),
+                track_locked: std::collections::BTreeSet::new(),
+                active_drag: None,
+                estop_active: false,
+                show_estop_control: loaded_config.show_estop_control,
+                confirm_estop_release: loaded_config.confirm_estop_release,
+                show_estop_release_dialog: false,
+                skip_estop_release_confirmation_draft: false,
+                seat_kinematics: crate::four_d::seat_kinematics::CinemaSeatKinematics::default(),
+                show_digital_twin_window: false,
+                serial_port: loaded_config
+                    .hardware_endpoint
+                    .clone()
+                    .unwrap_or_else(|| crate::four_d::controller::DEFAULT_ENDPOINT.to_string()),
+                is_connected: false,
+                lasso_origin: None,
+                lasso_rect: None,
+                lasso_initial_instance_ids: std::collections::HashSet::new(),
+                lasso_initial_keyframes: std::collections::HashSet::new(),
+                current_video_path: None,
+                show_remaining_time: loaded_config.show_remaining_time,
+                editing_elapsed_time: false,
+                elapsed_time_input: String::new(),
+                elapsed_time_original: String::new(),
+                elapsed_time_group: 0,
+                elapsed_time_group_digits: 0,
+                elapsed_edit_focus_requested: false,
+                osd_message: None,
+                osd_display_options: None,
+                recent_media: loaded_config.recent_media.clone(),
+                last_media_target: loaded_config.last_media_target.clone(),
+                restore_last_media_on_startup: loaded_config.restore_last_media_on_startup,
+                remember_playback_position: loaded_config.remember_playback_position,
+                playback_position_history_limit: loaded_config.playback_position_history_limit,
+                playback_positions: loaded_config.playback_positions.clone(),
+                pending_resume_position: None,
+                last_playback_position_checkpoint: std::time::Instant::now(),
+                show_open_url_dialog: loaded_config.workspace_session.dialogs.open_location,
+                url_input_buffer: String::new(),
+                open_url_multiline: loaded_config.open_url_multiline,
+                open_url_history_expanded: loaded_config.open_url_history_expanded,
+                open_url_recent_click_edits: loaded_config.open_url_recent_click_edits,
+                open_url_fetch_remote_info: loaded_config.open_url_fetch_remote_info,
+                open_url_fetch_remote_thumbnail: loaded_config.open_url_fetch_remote_thumbnail,
+                open_url_use_proxy: loaded_config.open_url_use_proxy,
+                open_url_proxy_url: loaded_config.open_url_proxy_url.clone().unwrap_or_default(),
+                url_inspector: crate::ui::open_url::UrlInspector::default(),
+                is_window_operating: false,
+                show_shortcuts_dialog: loaded_config.workspace_session.dialogs.shortcuts,
+                show_about_dialog: loaded_config.workspace_session.dialogs.about,
+                about_tab: loaded_config.workspace_session.dialogs.about_tab,
+                about_icon: None,
+                show_preferences_dialog: loaded_config.workspace_session.dialogs.preferences,
+                preferences_tab: loaded_config.workspace_session.dialogs.preferences_tab,
+                preferences_draft: None,
+                show_board_info_dialog: loaded_config.workspace_session.dialogs.board_information,
+                board_info_tab: loaded_config
+                    .workspace_session
+                    .dialogs
+                    .board_information_tab,
+                board_name_draft: String::new(),
+                show_hardware_channels_dialog: loaded_config
+                    .workspace_session
+                    .dialogs
+                    .channel_manager,
+                show_workspace_profiles_dialog: loaded_config
+                    .workspace_session
+                    .dialogs
+                    .workspace_profiles,
+                effect_controls_ping_at: None,
+                pending_tab_reveals: Vec::new(),
+                workspace_profile_name_draft: String::new(),
+                workspace_profile_icon_draft: "window".to_string(),
+                workspace_profiles,
+                active_workspace_profile: loaded_config.active_workspace_profile.clone(),
+                hardware_control_dialog_key: loaded_config
+                    .workspace_session
+                    .dialogs
+                    .hardware_control_key
+                    .clone(),
+                hardware_channel_detail_active: loaded_config
+                    .workspace_session
+                    .dialogs
+                    .hardware_channel_detail_active,
+                hardware_control_name_draft: String::new(),
+                hardware_control_group_draft: String::new(),
+                channel_folder_pending: false,
+                channel_folder_sequence: 0,
+                channel_folder_error: None,
+                channel_folder_result: None,
+                hardware_control_icon_draft: String::new(),
+                hardware_control_color_draft: String::new(),
+                hardware_control_up_color_draft: String::new(),
+                hardware_control_down_color_draft: String::new(),
+                hardware_control_pwm_percent: 0.0,
+                keyboard_shortcuts_enabled: loaded_config.keyboard_shortcuts_enabled,
+                media_keys_enabled: loaded_config.media_keys_enabled,
+                media_keys_background_enabled: loaded_config.media_keys_background_enabled,
+                application_shortcuts: loaded_config.application_shortcuts.clone(),
+                global_hardware_hotkeys_enabled: loaded_config.global_hardware_hotkeys_enabled,
+                hardware_key_bindings: loaded_config.hardware_key_bindings.clone(),
+                hardware_number_shortcuts_enabled: loaded_config.hardware_number_shortcuts_enabled,
+                hardware_sequence_matcher: Default::default(),
+                hardware_binding_dialog_channel: None,
+                hardware_binding_draft: None,
+                hardware_binding_capturing: false,
+                hardware_hotkey_runtime:
+                    crate::hardware_shortcuts::GlobalHardwareShortcutRuntime::default(),
+                active_hardware_bindings: std::collections::BTreeSet::new(),
+                board_operation: None,
+                board_operation_status: String::new(),
+                rf: crate::ui::rf::RfState::default(),
+                board_settings_draft: None,
+                board_settings_dirty: false,
+                board_reboot_armed: false,
+                front_panel_refresh_attempted: false,
+                front_panel_pending_key: None,
+                pause_on_hardware_disconnect: loaded_config.pause_on_hardware_disconnect,
+                auto_connect_hardware: loaded_config.auto_connect_hardware,
+                click_player_to_toggle: loaded_config.click_player_to_toggle,
+                video_click_frame_only: loaded_config.video_click_frame_only,
+                show_subseconds: loaded_config.show_subseconds,
+                seekbar_hover_thumbnails: loaded_config.seekbar_hover_thumbnails,
+                nle_seekbar_hover_thumbnails: loaded_config.nle_seekbar_hover_thumbnails,
+                seekbar_markers: loaded_config.seekbar_markers.clone(),
+                effect_designer_cue_colors: loaded_config.effect_designer_cue_colors.clone(),
+                seekbar_thumbnail_preview:
+                    crate::ui::seek_preview::SeekbarThumbnailPreview::default(),
+                quick_seek_seconds: loaded_config.quick_seek_seconds,
+                frame_step_count: loaded_config.frame_step_count,
+                wheel_seek_seconds: loaded_config.wheel_seek_seconds,
+                osd_position: loaded_config.osd_position,
+                osd_timeout_seconds: loaded_config.osd_timeout_seconds,
+                paused_drag_action: loaded_config.paused_drag_action,
+                playing_drag_action: loaded_config.playing_drag_action,
+                middle_click_action: loaded_config.middle_click_action,
+                mouse_bindings: loaded_config.mouse_bindings.clone(),
+                middle_hold_action: loaded_config.middle_hold_action,
+                right_click_action: loaded_config.right_click_action,
+                right_hold_action: loaded_config.right_hold_action,
+                fullscreen_video_background: loaded_config.fullscreen_video_background,
+                motion_control_mode: loaded_config.motion_control_mode,
+                held_motion_action: None,
+                compact_hardware_controls: loaded_config.compact_hardware_controls,
+                compact_timeline_tracks: loaded_config.compact_timeline_tracks,
+                timeline_hide_cue_text_overflow: loaded_config.timeline_hide_cue_text_overflow,
+                timeline_cue_editor_presentation: loaded_config.timeline_cue_editor_presentation,
+                timeline_header_wheel_vertical_scroll: loaded_config
+                    .timeline_header_wheel_vertical_scroll,
+                timeline_plain_wheel_action: loaded_config.timeline_plain_wheel_action,
+                timeline_ctrl_wheel_action: loaded_config.timeline_ctrl_wheel_action,
+                timeline_shift_wheel_action: loaded_config.timeline_shift_wheel_action,
+                timeline_alt_wheel_action: loaded_config.timeline_alt_wheel_action,
+                timeline_middle_button_pan: loaded_config.timeline_middle_button_pan,
+                timeline_middle_axis_lock_modifiers: loaded_config
+                    .timeline_middle_axis_lock_modifiers,
+                timeline_animated_navigation: loaded_config.timeline_animated_navigation,
+                timeline_navigation_transition_ms: loaded_config.timeline_navigation_transition_ms,
+                timeline_follow_playhead: loaded_config.timeline_follow_playhead,
+                timeline_subtitle_segments: loaded_config.timeline_subtitle_segments,
+                subtitle_timing: Default::default(),
+                timeline_toolbar_visible: loaded_config.timeline_toolbar_visible,
+                timeline_toolbar_order: crate::config::normalize_timeline_toolbar_order(
+                    &loaded_config.timeline_toolbar_order,
+                ),
+                timeline_toolbar_hidden: loaded_config.timeline_toolbar_hidden.clone(),
+                pending_timeline_toolbar_save: None,
+                pending_status_bar_save: None,
+                pending_control_bar_save: None,
+                pending_simple_workspace_save: None,
+                workspace_rendering: false,
+                deferred_config_save: false,
+                non_user_control_visibility: loaded_config.non_user_control_visibility,
+                prefix_relay_identifiers: loaded_config.prefix_relay_identifiers,
+                live_pwm_updates: loaded_config.live_pwm_updates,
+                pwm_card: loaded_config.pwm_card.clone(),
+                hardware_actions_on_press: loaded_config.hardware_actions_on_press,
+                single_instance: loaded_config.single_instance,
+                window_magnetic_snap: loaded_config.window_magnetic_snap,
+                window_magnetic_snap_distance: loaded_config.window_magnetic_snap_distance,
+                windows_mica_backdrop: loaded_config.windows_mica_backdrop,
+                windows_dwm_theming: loaded_config.windows_dwm_theming,
+                windows_video_taskbar_thumbnail: loaded_config.windows_video_taskbar_thumbnail,
+                windows_thumbnail_toolbar: loaded_config.windows_thumbnail_toolbar,
+                windows_jump_list_quick_actions: loaded_config.windows_jump_list_quick_actions,
+                opengl_vsync: loaded_config.opengl_vsync,
+                live_video_during_window_move: loaded_config.live_video_during_window_move,
+                compositor_paced_window_move: loaded_config.compositor_paced_window_move,
+                native_dialog_windows: loaded_config.native_dialog_windows,
+                native_preferences: None,
+                status_bar: loaded_config.status_bar,
+                control_bars: loaded_config.control_bars,
+                config_fingerprint: crate::config::AppConfig::fingerprint(
+                    &crate::config::AppConfig::get_config_path(),
+                )
+                .ok(),
+                config_watcher: None,
+                config_reload_due: None,
+                auto_reload_config: loaded_config.auto_reload_config,
+                preference_preview_original: None,
+                config_status: String::new(),
+                was_hardware_connected: false,
+                was_board_connected: false,
+                connection_notice: None,
+                workspace_before_fullscreen: None,
+                // Let the first frame observe a CLI-started fullscreen viewport
+                // as an entry transition so it always switches to Simple mode.
+                was_fullscreen: false,
+                desired_fullscreen: None,
+                interop_rx,
+                controller_cmd_rx,
+                web_state_tx,
+                web_cmd_rx,
+                last_web_broadcast: None,
+                last_web_hardware: None,
+                last_web_hardware_revision: 0,
+                cached_hardware_capabilities: std::sync::Mutex::new((0, None)),
+                media_controls: None,
+                media_cmd_tx,
+                media_cmd_rx,
+                window_handle: None,
+                shell_initialized: false,
+                last_taskbar_state: None,
+                last_thumbnail_button_state: None,
+                last_update_notice_state: None,
+            };
+
+            if app.auto_connect_hardware && !crate::peer::active() {
+                let configured_endpoint = app.serial_port.clone();
+                let selected_endpoint = crate::four_d::controller::select_autoconnect_endpoint(
+                    &configured_endpoint,
+                    std::time::Duration::from_millis(250),
+                );
+                if let Some(endpoint) = selected_endpoint {
+                    app.serial_port = endpoint.clone();
+                    if let Ok(mut selected) = app.engine_handle.serial_port.lock() {
+                        *selected = endpoint;
+                    }
+                    app.engine_handle
+                        .connection_requested
+                        .store(true, std::sync::atomic::Ordering::Relaxed);
+                }
+            }
+
+            crate::mpv::external::configure(mpv_static, &cc.egui_ctx, loaded_config.external_mpv.clone());
+            if let Some(target) = startup_media_target {
+                app.pending_external_pause=restore_startup_pause;
+                app.load_media_target(&target);
+                // A matching sidecar project, when present, deliberately wins
+                // inside load_media_target. Otherwise these stable references
+                // are immediately available for offline editing and become
+                // executable as soon as PCController reconnects.
+                app.sync_timeline_engine();
+                if restore_startup_pause {
+                    app.pause();
+                }
+            }
+            for command in cli_options.commands {
+                app.apply_interop_command(&cc.egui_ctx, command, "Command line");
+            }
+
+            crate::update::schedule_startup_health_acknowledgement();
+
+            Ok(Box::new(app))
+        }),
+    )
+}

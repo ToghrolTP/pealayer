@@ -13,11 +13,17 @@ fn test_undo_redo_stack_basic_flow() {
         instances: vec![],
         analog_tracks: vec![AnalogTrack::new("Wind", 0)],
         templates: vec![],
+        keyframes: vec![],
+        track_states: Default::default(),
+        ..Default::default()
     };
     let state1 = TimelineSnapshot {
         instances: vec![],
         analog_tracks: vec![AnalogTrack::new("Wind", 0), AnalogTrack::new("Water", 1)],
         templates: vec![],
+        keyframes: vec![],
+        track_states: Default::default(),
+        ..Default::default()
     };
     let state2 = TimelineSnapshot {
         instances: vec![],
@@ -27,6 +33,9 @@ fn test_undo_redo_stack_basic_flow() {
             AnalogTrack::new("Vibe", 2),
         ],
         templates: vec![],
+        keyframes: vec![],
+        track_states: Default::default(),
+        ..Default::default()
     };
 
     stack.push(state0.clone());
@@ -58,6 +67,9 @@ fn test_undo_stack_max_depth_cap() {
             instances: vec![],
             analog_tracks: vec![AnalogTrack::new(&format!("Track{}", i), i as u8)],
             templates: vec![],
+            keyframes: vec![],
+            track_states: Default::default(),
+            ..Default::default()
         });
     }
 
@@ -65,6 +77,9 @@ fn test_undo_stack_max_depth_cap() {
         instances: vec![],
         analog_tracks: vec![],
         templates: vec![],
+        keyframes: vec![],
+        track_states: Default::default(),
+        ..Default::default()
     };
     // Should be capped to 2 undos
     let u1 = stack.undo(cur).unwrap();
@@ -84,11 +99,17 @@ fn test_undo_redo_with_effect_instances() {
         instances: vec![],
         analog_tracks: vec![],
         templates: vec![],
+        keyframes: vec![],
+        track_states: Default::default(),
+        ..Default::default()
     };
     let state1 = TimelineSnapshot {
         instances: vec![instance.clone()],
         analog_tracks: vec![],
         templates: vec![],
+        keyframes: vec![],
+        track_states: Default::default(),
+        ..Default::default()
     };
 
     stack.push(state0.clone());
@@ -109,16 +130,25 @@ fn test_undo_stack_clear_and_redo_invalidation() {
         instances: vec![],
         analog_tracks: vec![],
         templates: vec![],
+        keyframes: vec![],
+        track_states: Default::default(),
+        ..Default::default()
     };
     let state1 = TimelineSnapshot {
         instances: vec![],
         analog_tracks: vec![AnalogTrack::new("TrackA", 0)],
         templates: vec![],
+        keyframes: vec![],
+        track_states: Default::default(),
+        ..Default::default()
     };
     let state2 = TimelineSnapshot {
         instances: vec![],
         analog_tracks: vec![AnalogTrack::new("TrackB", 1)],
         templates: vec![],
+        keyframes: vec![],
+        track_states: Default::default(),
+        ..Default::default()
     };
 
     stack.push(state0.clone());

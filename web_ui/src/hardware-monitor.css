@@ -1,0 +1,10 @@
+.hardware-empty-state { width: 100%; max-width: 680px; align-self: flex-start; }
+.hardware-empty-state__heading { display: flex; gap: 12px; align-items: center; margin-bottom: 12px; min-width: 0; }
+.hardware-empty-state__heading .ant-typography { margin: 0; overflow-wrap: anywhere; }
+.hardware-empty-state__icon { width: 40px; height: 40px; flex: 0 0 40px; border-radius: 10px; display: inline-flex; align-items: center; justify-content: center; background: var(--surface-2); color: var(--muted); font-size: 22px; }
+.hardware-empty-state .ant-card-body { min-width: 0; }
+.hardware-empty-state .ant-typography { overflow-wrap: anywhere; }
+.hardware-empty-state .ant-btn { display: inline-flex; align-items: center; justify-content: center; }
+.hardware-empty-state__message { display: flex; align-items: flex-start; gap: 8px; margin-bottom: 16px; min-width: 0; }
+.hardware-empty-state__message .ant-typography { flex: 1; min-width: 0; margin: 0; white-space: pre-line; text-align: start; }
+.hardware-empty-state__message > .ant-btn { flex: 0 0 auto; color: var(--muted); }

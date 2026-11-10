@@ -1,5 +1,102 @@
+#[path = "scripts/build-metadata.rs"]
+mod build_metadata;
+use build_metadata::emit_build_metadata;
+
+fn build_embedded_terminal() {
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_WORKSPACE_TERMINAL");
+    if std::env::var_os("CARGO_FEATURE_WORKSPACE_TERMINAL").is_none() {
+        return;
+    }
+    let root = "third_party/portable-shell";
+    println!("cargo:rerun-if-changed={root}/include");
+    println!("cargo:rerun-if-changed={root}/src");
+    println!("cargo:rerun-if-changed={root}/host/terminal_profiles.c");
+    println!("cargo:rerun-if-changed=src/ui/portable_shell_editor.c");
+    // The freestanding byte core, not the desktop workbench, OS shell or CRT
+    // replacements. The Rust host owns allocation, lifetime and dispatch.
+    cc::Build::new()
+        .include(format!("{root}/include"))
+        .file(format!("{root}/src/portable_shell.c"))
+        .file("src/ui/portable_shell_editor.c")
+        .define("PS_WORKBENCH", "0")
+        .define("PS_BORDER_STYLES", "1")
+        .define("PS_DIALOG_STYLES", "1")
+        .std("c99")
+        .flag_if_supported("-fno-builtin")
+        // This archive includes the Pealayer adapter as well as the byte core.
+        // Do not reuse the core-only archive identity from comparison builds
+        // that share the host's Cargo cache.
+        .compile("pealayer_portable_shell_host");
+    // Optional native discovery adapter reads bounded terminal profile files;
+    // unlike the shell core this small adapter intentionally uses platform IO.
+    cc::Build::new()
+        .include(format!("{root}/include"))
+        .files([
+            format!("{root}/src/portable_terminal_profiles.c"),
+            format!("{root}/host/terminal_profiles.c"),
+        ])
+        .std("c99")
+        .compile("pealayer_terminal_profiles");
+}
+
+// About reports the versions actually linked by this package, not a second
+// hand-maintained inventory that becomes stale after dependency upgrades.
+fn emit_about_library_versions() {
+    println!("cargo:rerun-if-changed=Cargo.lock");
+    let lock = include_str!("Cargo.lock");
+    for package in [
+        "egui",
+        "eframe",
+        "craft-ui",
+        "egui-phosphor",
+        "libmpv2",
+        "serde",
+        "serde_json",
+        "tungstenite",
+        "serialport",
+        "souvlaki",
+        "rfd",
+        "uuid",
+    ] {
+        let versions: Vec<String> = lock
+            .split("[[package]]")
+            .filter_map(|entry| {
+                // Cargo's generated lockfile stores package name/version as quoted
+                // strings. Read only those top-level fields, never dependencies.
+                let field = |key: &str| {
+                    entry.lines().find_map(|line| {
+                        let value = line.strip_prefix(key)?.strip_prefix(" = ")?;
+                        serde_json::from_str::<String>(value).ok()
+                    })
+                };
+                (field("name").as_deref() == Some(package))
+                    .then(|| field("version"))
+                    .flatten()
+            })
+            .collect();
+        assert_eq!(
+            versions.len(),
+            1,
+            "About inventory requires exactly one locked {package}"
+        );
+        let key = package.replace('-', "_").to_ascii_uppercase();
+        println!("cargo:rustc-env=PEALAYER_DEP_{key}={}", versions[0]);
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[allow(dead_code)]
+#[path = "src/platform/windows_quick_actions.rs"]
+mod windows_quick_actions;
+#[cfg(target_os = "windows")]
+#[path = "src/platform/windows_shell_icons.rs"]
+mod windows_shell_icons;
+
 #[cfg(target_os = "windows")]
 fn main() {
+    build_embedded_terminal();
+    emit_build_metadata();
+    emit_about_library_versions();
     for name in [
         "APP_NAME",
         "APP_PUBLISHER",
@@ -29,12 +126,19 @@ fn main() {
     let brand_path = std::env::var_os("APPLICATION_BRAND").map(std::path::PathBuf::from);
     let brand = brand_path.as_ref().map(|path| {
         println!("cargo:rerun-if-changed={}", path.display());
-        let source = std::fs::read_to_string(path)
-            .unwrap_or_else(|error| panic!("could not read application branding file {}: {error}", path.display()));
+        let source = std::fs::read_to_string(path).unwrap_or_else(|error| {
+            panic!(
+                "could not read application branding file {}: {error}",
+                path.display()
+            )
+        });
         let value: serde_json::Value = serde_json::from_str(&source)
             .unwrap_or_else(|error| panic!("invalid branding JSON {}: {error}", path.display()));
         if let Some(format) = value.get("format").and_then(serde_json::Value::as_str) {
-            assert_eq!(format, "application-brand", "unsupported application branding format");
+            assert_eq!(
+                format, "application-brand",
+                "unsupported application branding format"
+            );
         }
         value
     });
@@ -75,7 +179,10 @@ fn main() {
     );
     let document_icon = brand.as_ref().and_then(|value| {
         let relative = value.get("windowsIcons")?.get("APP")?.as_str()?;
-        let base = brand_path.as_ref()?.parent().unwrap_or_else(|| std::path::Path::new("."));
+        let base = brand_path
+            .as_ref()?
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."));
         Some(base.join(relative).to_string_lossy().into_owned())
     });
     let icon = std::env::var("APP_ICON_ICO")
@@ -99,22 +206,38 @@ fn main() {
     if std::path::Path::new(&icon).exists() {
         res.set_icon(&icon);
     }
-    res.compile()
-        .expect("failed to compile Windows resources");
-
-    // This package exposes both a library and a binary.  GNU ld can discard
-    // winres' otherwise-unreferenced static archive while linking the binary
-    // through the library, so attach the COFF resource object to the executable
-    // explicitly.  (MSVC consumes winres' emitted library in the usual way.)
-    if std::env::var("CARGO_CFG_TARGET_ENV").as_deref() == Ok("gnu") {
-        let resource = std::path::PathBuf::from(
-            std::env::var_os("OUT_DIR").expect("Cargo did not provide OUT_DIR"),
+    let out_dir = std::path::PathBuf::from(
+        std::env::var_os("OUT_DIR").expect("Cargo did not provide OUT_DIR"),
+    );
+    for action in windows_quick_actions::WINDOWS_QUICK_ACTIONS {
+        let task_icon = out_dir.join(format!("quick-action-{}.ico", action.icon_resource_id));
+        std::fs::write(
+            &task_icon,
+            windows_shell_icons::shell_icon_ico(action.icon_glyph),
         )
-        .join("resource.o");
-        println!(
-            "cargo:rustc-link-arg-bin=pealayer={}",
-            resource.display()
+        .expect("write generated Windows task icon");
+        res.set_icon_with_id(
+            &task_icon.to_string_lossy(),
+            &action.icon_resource_id.to_string(),
         );
+    }
+    println!("cargo:rerun-if-changed=src/platform/windows_quick_actions.rs");
+    println!("cargo:rerun-if-changed=src/platform/windows_shell_icons.rs");
+    res.compile().expect("failed to compile Windows resources");
+
+    // The thin executable links the library. winres's MSVC directive already
+    // propagates its COFF resource object through that library; attaching it
+    // again to the binary causes duplicate VERSION/icon resources. GNU emits a
+    // symbol-less archive instead, so attach its object directly to the binary.
+    let out_dir = std::path::PathBuf::from(
+        std::env::var_os("OUT_DIR").expect("Cargo did not provide OUT_DIR"),
+    );
+    match std::env::var("CARGO_CFG_TARGET_ENV").as_deref() {
+        Ok("gnu") => {
+            let resource = out_dir.join("resource.o");
+            println!("cargo:rustc-link-arg-bin=pealayer={}", resource.display());
+        }
+        _ => {}
     }
     println!("cargo:rerun-if-changed=assets/icon.ico");
     if icon != "assets/icon.ico" {
@@ -123,4 +246,34 @@ fn main() {
 }
 
 #[cfg(not(target_os = "windows"))]
-fn main() {}
+fn main() {
+    build_embedded_terminal();
+    emit_build_metadata();
+    emit_about_library_versions();
+    if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
+        if let Ok(output) = std::process::Command::new("brew")
+            .args(["--prefix", "mpv"])
+            .output()
+        {
+            if output.status.success() {
+                let prefix = String::from_utf8_lossy(&output.stdout).trim().to_string();
+                let lib_dir = std::path::PathBuf::from(&prefix).join("lib");
+                if lib_dir.exists() {
+                    println!("cargo:rustc-link-search=native={}", lib_dir.display());
+                    println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib_dir.display());
+                }
+            }
+        }
+        for path in [
+            "/opt/homebrew/lib",
+            "/opt/homebrew/opt/mpv/lib",
+            "/usr/local/lib",
+            "/usr/local/opt/mpv/lib",
+        ] {
+            if std::path::Path::new(path).exists() {
+                println!("cargo:rustc-link-search=native={path}");
+                println!("cargo:rustc-link-arg=-Wl,-rpath,{path}");
+            }
+        }
+    }
+}

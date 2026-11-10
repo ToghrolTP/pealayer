@@ -1,6 +1,6 @@
 pub const SUPPORTED_EXTENSIONS: &[&str] = &[
-    "mp4", "mkv", "avi", "mov", "webm", "flv", "wmv", "ts", "m3u8",
-    "mp3", "flac", "wav", "aac", "ogg"
+    "mp4", "mkv", "avi", "mov", "webm", "flv", "wmv", "ts", "m3u8", "mp3", "flac", "wav", "aac",
+    "ogg",
 ];
 
 pub const PROGID: &str = "Pealayer.Media";
@@ -8,34 +8,41 @@ pub const PROGID_DESCRIPTION: &str = "Pealayer Media File";
 
 #[cfg(target_os = "windows")]
 pub fn register_file_associations(exe_path: Option<&std::path::Path>) -> Result<usize, String> {
-    use winreg::enums::*;
+    use windows::Win32::UI::Shell::{SHCNE_ASSOCCHANGED, SHCNF_IDLIST, SHChangeNotify};
     use winreg::RegKey;
-    use windows::Win32::UI::Shell::{SHChangeNotify, SHCNE_ASSOCCHANGED, SHCNF_IDLIST};
+    use winreg::enums::*;
 
     let current_exe = match exe_path {
         Some(p) => p.to_path_buf(),
-        None => std::env::current_exe().map_err(|e| format!("Failed to get current executable path: {}", e))?,
+        None => std::env::current_exe()
+            .map_err(|e| format!("Failed to get current executable path: {}", e))?,
     };
-    let exe_str = current_exe.to_str().ok_or("Invalid executable path string")?;
+    let exe_str = current_exe
+        .to_str()
+        .ok_or("Invalid executable path string")?;
 
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let classes_key = hkcu.open_subkey_with_flags(r"Software\Classes", KEY_ALL_ACCESS)
+    let classes_key = hkcu
+        .open_subkey_with_flags(r"Software\Classes", KEY_ALL_ACCESS)
         .or_else(|_| hkcu.create_subkey(r"Software\Classes").map(|(k, _)| k))
         .map_err(|e| format!("Failed to open HKCU\\Software\\Classes: {}", e))?;
 
     // 1. Create ProgID: Software\Classes\Pealayer.Media
-    let (progid_key, _) = classes_key.create_subkey(PROGID)
+    let (progid_key, _) = classes_key
+        .create_subkey(PROGID)
         .map_err(|e| format!("Failed to create ProgID key: {}", e))?;
     let _ = progid_key.set_value("", &PROGID_DESCRIPTION);
 
     // DefaultIcon
-    let (icon_key, _) = progid_key.create_subkey("DefaultIcon")
+    let (icon_key, _) = progid_key
+        .create_subkey("DefaultIcon")
         .map_err(|e| format!("Failed to create DefaultIcon key: {}", e))?;
     let icon_val = format!("\"{}\",0", exe_str);
     let _ = icon_key.set_value("", &icon_val);
 
     // shell\open\command
-    let (cmd_key, _) = progid_key.create_subkey(r"shell\open\command")
+    let (cmd_key, _) = progid_key
+        .create_subkey(r"shell\open\command")
         .map_err(|e| format!("Failed to create shell\\open\\command key: {}", e))?;
     let cmd_val = format!("\"{}\" \"%1\"", exe_str);
     let _ = cmd_key.set_value("", &cmd_val);
@@ -74,12 +81,13 @@ pub fn register_file_associations(_exe_path: Option<&std::path::Path>) -> Result
 
 #[cfg(target_os = "windows")]
 pub fn unregister_file_associations() -> Result<usize, String> {
-    use winreg::enums::*;
+    use windows::Win32::UI::Shell::{SHCNE_ASSOCCHANGED, SHCNF_IDLIST, SHChangeNotify};
     use winreg::RegKey;
-    use windows::Win32::UI::Shell::{SHChangeNotify, SHCNE_ASSOCCHANGED, SHCNF_IDLIST};
+    use winreg::enums::*;
 
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
-    let classes_key = hkcu.open_subkey_with_flags(r"Software\Classes", KEY_ALL_ACCESS)
+    let classes_key = hkcu
+        .open_subkey_with_flags(r"Software\Classes", KEY_ALL_ACCESS)
         .map_err(|e| format!("Failed to open HKCU\\Software\\Classes: {}", e))?;
 
     // 1. Remove extension bindings
@@ -92,7 +100,9 @@ pub fn unregister_file_associations() -> Result<usize, String> {
                     let _ = ext_key.delete_value("");
                 }
             }
-            if let Ok(openwith_key) = ext_key.open_subkey_with_flags("OpenWithProgids", KEY_ALL_ACCESS) {
+            if let Ok(openwith_key) =
+                ext_key.open_subkey_with_flags("OpenWithProgids", KEY_ALL_ACCESS)
+            {
                 let _ = openwith_key.delete_value(PROGID);
             }
             count += 1;
@@ -132,8 +142,8 @@ pub fn unregister_file_associations() -> Result<usize, String> {
 
 #[cfg(target_os = "windows")]
 pub fn is_file_association_registered(ext: &str) -> bool {
-    use winreg::enums::*;
     use winreg::RegKey;
+    use winreg::enums::*;
 
     let clean_ext = ext.trim_start_matches('.');
     let hkcu = RegKey::predef(HKEY_CURRENT_USER);
@@ -162,8 +172,17 @@ mod tests {
         assert!(SUPPORTED_EXTENSIONS.contains(&"mkv"));
         assert!(SUPPORTED_EXTENSIONS.contains(&"mp3"));
         for ext in SUPPORTED_EXTENSIONS {
-            assert!(!ext.starts_with('.'), "Extension '{}' should not have leading dot", ext);
-            assert_eq!(*ext, ext.to_lowercase(), "Extension '{}' should be lowercase", ext);
+            assert!(
+                !ext.starts_with('.'),
+                "Extension '{}' should not have leading dot",
+                ext
+            );
+            assert_eq!(
+                *ext,
+                ext.to_lowercase(),
+                "Extension '{}' should be lowercase",
+                ext
+            );
         }
     }
 

@@ -1,0 +1,169 @@
+# Status bar widgets
+
+Owner: [issue #80](https://github.com/ToghrolTP/pealayer/issues/80).
+
+Native and Web footers share fourteen stable widget IDs, independent visibility,
+and a persisted complete order. Dragging uses the original grab offset and a
+before/after insertion marker; context menus also offer Move earlier/later.
+An individual widget owns its menu, with a separated Hide action containing its
+icon and name. Hiding hardware connection does not hide voltage/current/temperature.
+Hiding the footer E-STOP indicator does not remove the main emergency control.
+Widgets have persistent logical start/end membership and independent scrollers.
+Workspace defaults to the end and is last within its chosen group; moving another
+widget cannot regress that default anchor. Dragging or the context menu can move
+widgets between either group. Both side backgrounds can add, move or hide widgets;
+native dragging outside the footer shows a Hide hint and removes that widget.
+Updating labels have compact fixed-width, truncated slots with full
+hover text. FPS and hardware numbers use fixed slots and monospaced digits, so
+digit-count changes cannot move neighboring widgets. Connection, workspace and
+alerts retain emphasis without increasing font size. Unflagged hardware readings
+are regular and muted, including values inside configured limits.
+
+## Styling, fonts and contextual actions
+
+Show dividers is a shared optional setting. Dividers consume predictable space
+only between rendered widgets. Every widget uses the same grey hover fade and the
+existing System/Enabled/Disabled animation preference, without a hover border
+that changes geometry. Number galleys are positioned by their actual height at
+the slot's vertical center, rather than relying on Label's baseline allocation.
+
+Appearance / Typography selects System, Bundled Ubuntu or Vazirmatn for normal
+UI and System or Bundled Hack for monospace. Native faces load on selection
+changes, not each paint. Web bundles the same regular fonts for offline use;
+font licences are retained. System faces retain safe bundled/glyph fallbacks.
+FPS and metric context menus can independently disable monospace.
+
+Semantic colors is opt-in. Metric menus expose optional minimum/maximum bounds
+in V, mA and degrees C; persisted bounds use mV, mA and centi-C. There are no
+invented universal electrical safety limits. Configured out-of-range values
+use warning color; authoritative HOT makes temperature red. Missing readings
+remain absent. Ordinary or unclassified values stay muted rather than green/bold.
+
+Primary actions use the widget's meaning: FPS changes source; hardware values,
+RGB and warnings reveal Hardware Monitor; timing reveals Timeline; E-STOP follows
+the existing release/confirmation path; download progress opens Downloads; other
+native progress, messages and chart settings disclose their relevant details.
+Workspace retains its selection dropdown. Merely opening these menus does not
+actuate hardware. Alerts/progress exist only when their current context exists.
+
+Native dragging renders the widget once on a translated tooltip layer, using
+the original grab offset, font and appearance. The old separately painted framed
+copy is gone; the source slot remains empty so neighbors do not shift. Browser
+dragging uses its native drag image and hides the original while moving.
+
+### Earlier connection-caption changes
+
+Commit a242919 replaced the combined connection caption and dot with independent
+widgets. Its predecessor appended the internal active transport to the board
+title (for example `via external:tcp`). That detail is diagnostic, not a board
+name or operator action, so it is not restored in the compact caption. The generic
+connection dot was redundant with the labelled connection state and ambiguous
+beside physical RGB. The plug/connection icon is retained; physical RGB remains
+a separate authoritative widget, not an invented connection-status LED.
+
+## Unified workspace selector
+
+The default trailing workspace widget is a real dropdown instead of a label with
+only a context menu. It reserves its existing 130-point slot and separately
+paints the profile icon, renamed caption and open chevron. The icon uses the
+normal icon-capable family; caption emphasis/truncation cannot consume its slot.
+The shared font definitions already include Phosphor fallback; this change is
+not a claim that the bold family lacks all icon coverage or that a screenshot
+alone identifies the installed-build cause.
+
+Primary click, Enter and focused Up/Down open the profile choices above the
+footer. Native menu and status selector share the same ordered stable-ID
+choices, icons and active marking. Choosing one uses the existing workspace
+restore path, including fullscreen handling and persistence; opening the menu
+does not select/cycle a workspace. Native Manage workspaces opens the existing
+manager. Right-click retains the independent widget visibility menu.
+
+Simple transport no longer duplicates the workspace cycling button. The main
+Workspace menu remains available when the footer/widget is hidden. Web footer
+uses the advertised profile names/icons and existing `set_workspace` command,
+not profile IDs as titles, hard-coded modes or the active browser tab. Missing
+or disconnected profile data cannot produce selectable invented workspaces.
+
+Pure native fixtures verify real pointer/keyboard selection by ID, upward popup
+placement, separate icon font, fixed geometry with long renamed captions and
+RTL placement across themes/display scales. Existing status end-anchor/value
+stability and workspace/fullscreen contract tests passed. Isolated native suite:
+834 passed, one existing ignored (835 total). Web/PWA build and 51 parity
+contracts passed. Runtime restart readiness and Cafe's existing GUI/smoke-launch
+denial remain independent delivery gates; these are not live visual acceptance.
+
+Frame rate stays visible when unavailable (`— fps`). Clicking cycles Media,
+Screen and Auto. Screen means measured native rendering cadence, not the
+monitor's advertised refresh rate. Auto uses media FPS while loaded and playing,
+and screen rendering cadence when paused or unloaded; playback speed and pointer
+interaction do not change source media FPS. Existing explicit source selections
+and widget visibility remain user preferences.
+The visible FPS caption contains only its source icon and number/unit. Mode names
+(including Auto) remain in the tooltip/menu, not in the changing footer text.
+Reactive idle frames use their actual measured interval (for example 2 FPS at
+500 ms) rather than losing the number whenever the active rendering window
+resets. This does not force a continuous rendering loop or assume monitor Hz.
+
+Hardware monospace values use compact 12-point native / 11-pixel Web text and
+three-point inter-widget spacing. Missing/disconnected readings are absent, not
+zero. The Effects Library heading starts at its content edge, vertically centered.
+
+## Logging and progress contract
+
+- The optional chart is hidden by default. It retains at most 240 RAM-only
+  samples at no more than two samples per second, with voltage/current/temperature
+  selection, range/units, and Clear history. Disconnections break the line.
+  This is bounded session history, not persistent logging or an export service.
+- `status_operations` exposes actual active app updater, controller artifact and
+  initialized download-manager operations to native peers and Web clients.
+  Controller `controller.update.status` seeds a mid-operation connection; changed
+  events carry subsequent real stage/byte progress. Percent is shown only when
+  `progress_known` is true. Preflight/unknown totals remain indeterminate.
+- Controller operation timestamps are compared with normalized RFC3339Nano
+  fractions. Older events/catalog snapshots cannot resurrect a completed operation.
+  Operations from a different coordinator instance are not retained.
+- The download footer reads a narrow memory-only progress projection: no engine
+  provisioning, download-store initialization, filesystem probing, or duplicate
+  per-frame speed-history copies. Completed/failed/cancelled operations disappear.
+- HOT uses the controller's status flag and typed HOT alert events (including the
+  Go omitted-false clear representation), never a guessed temperature threshold.
+  No physical alert is induced for UI verification.
+
+## Verification and delivery boundaries
+
+### Peer RGB cache invalidation
+
+The hardware cache introduced in `fff09372` required each producer to advance
+`hardware_revision`. Native peer workers installed changed snapshots and woke
+the UI, but omitted that invalidation: a paused status RGB dot could keep its
+cached color even after a new authoritative frame arrived. Full peer snapshot
+installation now changes the snapshot and revision in one critical section,
+before the worker requests repaint. Identical snapshots do not advance it.
+The cache remains enabled; no animation timer, synthetic color, disk logging,
+or extra controller polling is introduced.
+
+Regressions prime the cache first, install RGB-only peer changes (including off),
+render the paused status dot with no input, and verify native/Web projections.
+They also cover unchanged snapshots, missing hardware, a restarted source and
+the existing direct-controller RGB push path. These fixtures do not command a
+physical LED or claim live animation acceptance when the board reports steady RGB.
+
+The layout/typography refinement passed 842 native library tests (one ignored),
+including vertical galley centering, regular/muted metric state, persisted side/
+monospace preferences, and one-render dragging across both anchored groups.
+Web type checking, status guards and PWA build passed. Existing runtime captures
+and dated counts below are historical, not a new installed-build acceptance claim.
+
+Focused tests cover real native FPS clicks, menu ownership/hiding and drag/drop,
+title placement, unavailable telemetry, bounded charts, source switching, typed
+HOT activation/clear, and ordered operation recovery. Web model tests cover the
+same order/visibility/FPS/logging rules; TypeScript/PWA builds verify integration.
+
+Local verification: 786 native library tests passed, one existing test ignored;
+14 download unit/integration tests passed, three external-engine acceptance
+tests remain explicitly ignored. The Web model, parity, TypeScript and packaged
+PWA checks passed. Installed runtime captures are recorded in the delivery receipt.
+Source/fixtures do not prove physical HOT events, firmware programming progress,
+interactive human acceptance or a sustained production soak. Cafe runtime
+deployment remains blocked by the previously recorded smoke-launch denial; do
+not bypass it with another launch mechanism or build on Cafe.

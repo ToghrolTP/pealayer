@@ -1,10 +1,14 @@
 use pealayer::app::PealayerApp;
-use pealayer::four_d::curve::{Interpolation, Keyframe};
+use pealayer::four_d::curve::{AnalogTrack, Interpolation, Keyframe};
 
 #[test]
 fn test_undo_redo_timeline_keyframe_deletion() {
     let mut app = PealayerApp::default();
-    // Add keyframe to existing track 0
+    // Tests create explicit project fixtures; production Timeline::default()
+    // intentionally contains no invented actuator tracks.
+    app.timeline
+        .analog_tracks
+        .push(AnalogTrack::new("Test actuator", 0));
     app.timeline.analog_tracks[0].add_keyframe(Keyframe::new(1000, 0.5, Interpolation::Linear));
 
     // Save initial state

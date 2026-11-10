@@ -1,0 +1,16 @@
+import assert from 'node:assert/strict';
+import {terminalKey} from '../src/terminalKeys.ts';
+assert.equal(terminalKey({key:'F2'}),'\x1bOQ');
+assert.equal(terminalKey({key:'F7'}),'\x1b[18~');
+assert.equal(terminalKey({key:'F12',ctrlKey:true}),'\x1b[24;5~');
+assert.equal(terminalKey({key:'Tab',shiftKey:true}),'\x1b[Z');
+assert.equal(terminalKey({key:'ArrowLeft'},true),'\x1bOD');
+assert.equal(terminalKey({key:'ArrowLeft',ctrlKey:true},true),'\x1b[1;5D');
+assert.equal(terminalKey({key:'c',ctrlKey:true}),'\x03');
+assert.equal(terminalKey({key:' ',ctrlKey:true}),'\0');
+assert.equal(terminalKey({key:'Backspace',ctrlKey:true}),'\x17');
+assert.equal(terminalKey({key:'خ'}),'خ');
+assert.equal(terminalKey({key:'🙂'}),'🙂');
+assert.equal(terminalKey({key:'Dead'}),null);
+assert.equal(terminalKey({key:'c',metaKey:true}),null);
+console.log('Terminal keys: function/navigation/editing keys, modifiers, application cursor, Unicode and native clipboard ownership passed.');
