@@ -202,7 +202,14 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let language = app.language;
     let rtl = app.rtl;
 
-    egui::Panel::top("menu_bar").show_inside(ui, |ui| {
+    let pastel = app.color_palette == crate::config::ColorPalette::Pastel;
+    let menu = egui::Panel::top("menu_bar").show_inside(ui, |ui| {
+        // Reserve paint order before laying out buttons and hit targets.
+        let background = pastel.then(|| {
+            let painter = ui.painter().clone();
+            let slot = painter.add(egui::Shape::Noop);
+            (painter, slot)
+        });
         egui::MenuBar::new().ui(ui, |ui| {
             ui.with_layout(crate::ui::i18n::layout(rtl, egui::Align::Center), |ui| {
                 top_menu_button(ui, app.tr("File"), |ui| {
@@ -828,7 +835,22 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 });
             });
         });
+        background
     });
+    if let Some((painter, slot)) = menu.inner {
+        let rect = menu.response.rect;
+        let stripe = egui::Rect::from_min_max(
+            egui::pos2(rect.left(), rect.bottom() - 1.0),
+            rect.max,
+        );
+        let color = |role| crate::ui::palette::color(app.color_palette, ui.visuals().dark_mode, role);
+        painter.set(slot, crate::ui::palette::horizontal_gradient(
+            rect, color("chrome-start"), color("chrome-end"),
+        ));
+        crate::ui::palette::paint_gradient(
+            ui.painter(), stripe, 0, color("gradient-start"), color("gradient-end"), 1.0,
+        );
+    }
 }
 
 pub fn format_track_label(id: i64, lang: Option<&str>, title: Option<&str>) -> String {

@@ -260,6 +260,19 @@ pub fn configure_native_visuals(ctx: &eframe::egui::Context, config: &crate::con
     light.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, tokens_light.field_border);
     light.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, tokens_light.separator);
 
+    if config.color_palette == crate::config::ColorPalette::Pastel {
+        for visuals in [&mut dark, &mut light] {
+            let edge = Stroke::new(
+                1.0,
+                palette::color(config.color_palette, visuals.dark_mode, "hover-line"),
+            );
+            visuals.widgets.hovered.bg_stroke = edge;
+            visuals.widgets.open.bg_stroke = edge;
+            visuals.widgets.active.bg_stroke = Stroke::new(1.0, accent);
+            visuals.widgets.active.weak_bg_fill = visuals.widgets.active.bg_fill;
+        }
+    }
+
     ctx.set_visuals_of(Theme::Dark, dark);
     ctx.set_visuals_of(Theme::Light, light);
     ctx.all_styles_mut(configure_interaction_style);

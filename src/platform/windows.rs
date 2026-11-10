@@ -156,7 +156,8 @@ pub fn configure_config_directory(
 
 static WINDOW_HWND: AtomicIsize = AtomicIsize::new(0);
 static WINDOW_DARK_THEME: AtomicBool = AtomicBool::new(true);
-static WINDOW_STUDIO_PALETTE: AtomicBool = AtomicBool::new(false);
+static WINDOW_COLOR_PALETTE: AtomicU32 =
+    AtomicU32::new(crate::config::ColorPalette::Native as u32);
 static WINDOW_DWM_THEMING: AtomicBool = AtomicBool::new(true);
 static WINDOW_MICA_BACKDROP: AtomicBool = AtomicBool::new(false);
 static WINDOW_MOVE_RESIZE_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -1242,8 +1243,8 @@ pub fn set_window_owner(_hwnd_raw: isize, _owner_raw: isize) -> Result<(), Strin
 
 pub fn set_window_appearance(dark: bool, palette: crate::config::ColorPalette) {
     let theme_changed = WINDOW_DARK_THEME.swap(dark, Ordering::SeqCst) != dark;
-    let studio = palette == crate::config::ColorPalette::Studio;
-    let palette_changed = WINDOW_STUDIO_PALETTE.swap(studio, Ordering::SeqCst) != studio;
+    let palette = palette as u32;
+    let palette_changed = WINDOW_COLOR_PALETTE.swap(palette, Ordering::SeqCst) != palette;
     let hwnd = get_registered_hwnd();
     if hwnd != 0 && (theme_changed || palette_changed) {
         apply_windows_window_decorations(hwnd);
@@ -1302,10 +1303,10 @@ pub fn apply_windows_window_decorations(hwnd_raw: isize) {
         WINDOW_DARK_THEME.load(Ordering::SeqCst),
         WINDOW_DWM_THEMING.load(Ordering::SeqCst),
         WINDOW_MICA_BACKDROP.load(Ordering::SeqCst),
-        if WINDOW_STUDIO_PALETTE.load(Ordering::SeqCst) {
-            crate::config::ColorPalette::Studio
-        } else {
-            crate::config::ColorPalette::Native
+        match WINDOW_COLOR_PALETTE.load(Ordering::SeqCst) {
+            value if value == crate::config::ColorPalette::Studio as u32 => crate::config::ColorPalette::Studio,
+            value if value == crate::config::ColorPalette::Pastel as u32 => crate::config::ColorPalette::Pastel,
+            _ => crate::config::ColorPalette::Native,
         },
     );
 }
@@ -3126,6 +3127,14 @@ mod tests {
         assert_eq!(
             decoration_colors(false, ColorPalette::Studio),
             (0x00fcfaf8, 0x002b2017)
+        );
+        assert_eq!(
+            decoration_colors(true, ColorPalette::Pastel),
+            (0x00301b15, 0x00fff5f4)
+        );
+        assert_eq!(
+            decoration_colors(false, ColorPalette::Pastel),
+            (0x00fcf1f1, 0x00422726)
         );
         assert_eq!(
             decoration_colors(true, ColorPalette::Native),

@@ -557,7 +557,7 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
         ),
         PreferenceControl::select(
             "color_palette", "appearance", "Interface", "Color palette",
-            &[("native", "Neutral (default)"), ("studio", "Studio")],
+            &[("native", "Neutral (default)"), ("studio", "Studio"), ("pastel", "Pastel")],
         ),
         PreferenceControl::accent(config),
         PreferenceControl::select("workspace_ui", "appearance", "Interface", "Workspace interface",
