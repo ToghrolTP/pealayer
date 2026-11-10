@@ -68,10 +68,35 @@ playhead mutation, live pentagon/ring paint checks, and volume drag/reorder test
 in both presentations and both directions. Existing seek/keyboard, marker,
 hover-thumbnail, responsive footer, workspace/sidebar and palette regressions remain.
 
-Final source-test results, clean package identity and runtime/capture receipts are
-recorded in the PR after verification. A parallel repeat exposed an existing global
-asset-review snapshot fixture race; the full serial run is recorded separately,
-not silently presented as a clean parallel pass.
+- Full native suite at restoration checkpoint `cfc4ffa`: **1,252 passed, zero
+  failed, four ignored**, serial run with a private configuration file.
+- Final `f2e08c0` focused FilmCraft suite: **16 passed, zero failed**. This adds
+  the final live blue-timecode correction and capture freshness guard; the full
+  suite result above belongs to the preceding checkpoint, not this later one.
+- Web appearance tests: seven passed; application parity contracts: 53 passed;
+  control-bar contracts passed. TypeScript, Vite and PWA integrity passed during
+  the package build. These are not browser-interaction evidence.
+- Earlier reruns exposed the existing global asset-review snapshot race and a
+  remote-parent socket fixture timeout. The subsequent full serial run passed;
+  those failures are not silently relabeled as clean parallel passes.
+- Native release compilation and isolated DLL smoke test passed. The seven
+  QuickAction icon resources were checked in the preceding review build.
+
+### Review identity and packaging limit
+
+The inspected executable is source `f2e08c0c2a15a5563246862e293d549f9a668b17`,
+SHA-256 `f185bd51eece43c86fde8bf36c77ac9624dae894595c7a55e3b7866b8421282e`.
+Its build-info honestly reports `dirty: true`: generated `web_ui/dist` outputs
+from the attempted package remain different. All authored source outside that
+generated directory was verified identical to the committed checkpoint before
+capture. The flag was not overridden to manufacture a clean-package claim.
+
+The official packaging workflow compiled the application and Web assets but
+could not replace its shared packaging-cache executable (Windows access denied).
+That protected target was not removed or bypassed. A fresh, isolated review copy
+of the compiled executable and matching libmpv DLLs supplied these captures; it
+is **not a completed production package**. Generated-output cleanup was separately
+denied by tool policy and remains a worktree-hygiene gate, not missing source.
 
 ## Updated native screenshots
 
@@ -86,7 +111,43 @@ or unsettled captures are not accepted. Compact/Standard baseline and restored
 FilmCraft are captured from the same review executable in both workspace renderers;
 “before” means the preserved presentation, not a fabricated historical build.
 
-Updated image embeds and manifests are published only after inspecting actual
-native captures. This is an isolated PR review build, not a replacement of the
-regular application or another review session. Production/Cafe deployment,
-physical hardware, GPU soak and the user's merge decision remain separate gates.
+All eight PNGs below were inspected individually: current nonblank native UI,
+synthetic video visibly at 5.250 seconds, settled paused readback, matching
+Studio dark palette, 150% display scale and 1,200/720-point viewports. The wide
+views also show the nonzero main-timeline playhead; in narrow views it is outside
+the deliberately unchanged timeline viewport. The custom monitor playhead remains
+visible. Sidebar and existing standard controls remain present.
+
+One earlier private capture showed a stale first video frame despite correct API
+readback and was rejected, not published. The fixture now forces a real placement
+change before capture; this is a capture freshness guard, not a GPU-soak fix.
+Manifests retain their original machine-generated `inspected: false` field; this
+paragraph records the subsequent actual inspection rather than rewriting provenance.
+
+### CraftUI: preserved Compact/Standard
+
+![CraftUI Compact at 5.25 seconds](../screenshots/pr248/preserved-compact-craft_ui-1200.png)
+
+### CraftUI: restored optional FilmCraft
+
+![CraftUI FilmCraft at 5.25 seconds](../screenshots/pr248/final-filmcraft-craft_ui-1200.png)
+
+### egui Dock: preserved Compact/Standard
+
+![egui Dock Compact at 5.25 seconds](../screenshots/pr248/preserved-compact-egui_dock-1200.png)
+
+### egui Dock: restored optional FilmCraft
+
+![egui Dock FilmCraft at 5.25 seconds](../screenshots/pr248/final-filmcraft-egui_dock-1200.png)
+
+### Narrow views and capture provenance
+
+| Renderer | Preserved Compact/Standard | Restored FilmCraft | Original manifests |
+| --- | --- | --- | --- |
+| CraftUI | [720-point capture](../screenshots/pr248/preserved-compact-craft_ui-720.png) | [720-point capture](../screenshots/pr248/final-filmcraft-craft_ui-720.png) | [Compact](../screenshots/pr248/preserved-compact-craft_ui-manifest.json), [FilmCraft](../screenshots/pr248/final-filmcraft-craft_ui-manifest.json) |
+| egui Dock | [720-point capture](../screenshots/pr248/preserved-compact-egui_dock-720.png) | [720-point capture](../screenshots/pr248/final-filmcraft-egui_dock-720.png) | [Compact](../screenshots/pr248/preserved-compact-egui_dock-manifest.json), [FilmCraft](../screenshots/pr248/final-filmcraft-egui_dock-manifest.json) |
+
+This is an isolated PR review build, not a replacement of the regular application
+or another review session. Production/Cafe deployment is deferred for the user's
+explicit PR review hold and incomplete production package. Physical hardware,
+GPU soak, final user acceptance and the merge decision remain separate gates.

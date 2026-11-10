@@ -18,6 +18,10 @@ into main. Project persistence #227 remains a separate unfinished draft;
 #248 remains open for explicit user merge approval. Local tests and the matched
 native screenshot gallery are recorded in the linked review. Existing taskbar
 artwork acceptance and deferred Cafe delivery are not closed by source merging.
+The follow-up audit confirmed that ancestry alone had concealed lost live
+FilmCraft controls. Those controls and working preview selectors are restored;
+the superseded gallery is replaced with inspected nonzero-playhead comparisons.
+The linked audit records the passing tests and incomplete production-package gate.
 
 ## Remote folder navigation
 
