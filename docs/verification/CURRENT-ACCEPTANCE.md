@@ -10,6 +10,13 @@ statements are not the present product state.
 
 ## Publication and workspace tools checkpoint
 
+[Remote directory encoding](remote-directory-encoding.md) corrects empty listings
+when query-based folder names and file links use equivalent escaping. All 19
+focused browser tests pass. The canonical local package now renders the user's
+six files with metadata and beginning thumbnails; paused media is preserved.
+Matched synthetic native before/after captures exclude the private URL. Cafe
+deployment remains user-deferred/offline; hosted CI is a separate merge gate.
+
 [Native FPS sizing](status-fps-width.md) fixes the fixed-slot clipping of larger
 frame rates and reduces the counter's secondary text size without changing other
 status fonts or tooltip typography. All 29 focused native status tests pass,
