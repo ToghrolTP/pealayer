@@ -164,28 +164,34 @@ pub(super) fn entry(
             rect.max - egui::vec2(43.0, 4.0),
         )
     };
-    ui.scope_builder(egui::UiBuilder::new().max_rect(text), |ui| {
-        ui.set_clip_rect(ui.clip_rect().intersect(text));
-        ui.add(egui::Label::new(&entry.name).selectable(false).truncate())
-            .on_hover_text(&entry.name);
-        let details = super::entry_details(entry, parent).unwrap_or_else(|| {
-            if parent {
-                "Go up one level"
-            } else if entry.is_dir {
-                "Folder"
-            } else if entry.playable {
-                "Media file"
-            } else {
-                "File"
-            }
-            .into()
-        });
-        ui.add(
-            egui::Label::new(egui::RichText::new(details).small().weak())
-                .selectable(false)
-                .truncate(),
-        );
-    });
+    ui.scope_builder(
+        egui::UiBuilder::new()
+            .max_rect(text)
+            .layout(egui::Layout::top_down(egui::Align::Min)),
+        |ui| {
+            ui.spacing_mut().item_spacing.y = 3.0;
+            ui.set_clip_rect(ui.clip_rect().intersect(text));
+            ui.add(egui::Label::new(&entry.name).selectable(false).truncate())
+                .on_hover_text(&entry.name);
+            let details = super::entry_details(entry, parent).unwrap_or_else(|| {
+                if parent {
+                    "Go up one level"
+                } else if entry.is_dir {
+                    "Folder"
+                } else if entry.playable {
+                    "Media file"
+                } else {
+                    "File"
+                }
+                .into()
+            });
+            ui.add(
+                egui::Label::new(egui::RichText::new(details).small().weak())
+                    .selectable(false)
+                    .truncate(),
+            );
+        },
+    );
     let mut action = None;
     let button = egui::Rect::from_center_size(
         egui::pos2(
@@ -426,9 +432,26 @@ fn placeholder(ui: &mut egui::Ui, rect: egui::Rect, error: Option<&str>) {
             ui.visuals().weak_text_color(),
         );
     } else {
-        egui::Spinner::new().size(18.0).paint_at(
+        let center = rect.center() - egui::vec2(0.0, 7.0);
+        let ink = ui.visuals().weak_text_color();
+        ui.painter().circle_stroke(
+            center,
+            7.0,
+            egui::Stroke::new(1.0, ink.gamma_multiply(0.42)),
+        );
+        egui::Spinner::new().size(16.0).paint_at(
             ui,
-            egui::Rect::from_center_size(rect.center(), egui::Vec2::splat(18.0)),
+            egui::Rect::from_center_size(center, egui::Vec2::splat(16.0)),
+        );
+        centered(
+            ui,
+            egui::Rect::from_center_size(
+                rect.center() + egui::vec2(0.0, 10.0),
+                egui::vec2(rect.width(), 13.0),
+            ),
+            "Loading…",
+            10.0,
+            ink,
         );
     }
     ui.interact(rect, ui.id().with("preview-hint"), egui::Sense::hover())
@@ -650,19 +673,51 @@ mod tests {
             |ui| {
                 apply_style(ui);
                 let (_, item_width, height) = item_geometry(ui, grid);
-                action = entry(
-                    ui,
-                    &file,
-                    false,
-                    &state,
-                    grid,
-                    egui::vec2(item_width, height),
-                );
-                geometry = ui.data(|data| data.get_temp(ui.id().with("entry-geometry")));
+                ui.horizontal(|ui| {
+                    action = entry(
+                        ui,
+                        &file,
+                        false,
+                        &state,
+                        grid,
+                        egui::vec2(item_width, height),
+                    );
+                    geometry = ui.data(|data| data.get_temp(ui.id().with("entry-geometry")));
+                });
             },
         );
         output.textures_delta.clear(); // Actual headless paint/input; no GPU uploads.
         (output, geometry.unwrap(), action)
+    }
+    #[test]
+    fn file_captions_stack_even_inside_horizontal_rows_of_cards() {
+        fn find(shape: &egui::Shape, expected: &str) -> Option<egui::Rect> {
+            match shape {
+                egui::Shape::Text(text) if text.galley.job.text == expected => {
+                    Some(text.galley.rect.translate(text.pos.to_vec2()))
+                }
+                egui::Shape::Vec(shapes) => shapes.iter().find_map(|shape| find(shape, expected)),
+                _ => None,
+            }
+        }
+        let file = fixture();
+        let details = super::super::entry_details(&file, false).unwrap();
+        for grid in [false, true] {
+            let ctx = setup(true, crate::config::ColorPalette::Studio, 22.0);
+            let (output, (_, _, text, _), _) = frame(&ctx, false, grid, 700.0, vec![]);
+            let name = output
+                .shapes
+                .iter()
+                .find_map(|shape| find(&shape.shape, &file.name))
+                .unwrap();
+            let meta = output
+                .shapes
+                .iter()
+                .find_map(|shape| find(&shape.shape, &details))
+                .unwrap();
+            assert!(meta.top() >= name.bottom());
+            assert!(text.contains_rect(meta));
+        }
     }
     fn fill(output: &egui::FullOutput, rect: egui::Rect) -> egui::Color32 {
         fn find(shape: &egui::Shape, rect: egui::Rect) -> Option<egui::Color32> {
