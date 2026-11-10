@@ -10,6 +10,14 @@ statements are not the present product state.
 
 ## Publication and workspace tools checkpoint
 
+[Native FPS sizing](status-fps-width.md) fixes the fixed-slot clipping of larger
+frame rates and reduces the counter's secondary text size without changing other
+status fonts or tooltip typography. All 29 focused native status tests pass,
+including real clip containment through four-digit values and scale/direction/font
+coverage. The clean package is installed, independently hash-matched and captured
+before/after; paused media position and volume are preserved. Full hosted CI and
+user-deferred Cafe delivery are not implied by this local receipt.
+
 [Workspace tools](workspace-tools.md) records the standard full-featured package,
 local graceful installation, dockable Terminal, dedicated embedded Pealayer shell,
 editable toolbar and actual before/after captures. Both tools remain hidden by
