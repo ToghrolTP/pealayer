@@ -138,7 +138,7 @@ Authenticated HTTP uses `Authorization: Bearer ACCESS_KEY`:
 - Web UI: `#terminal`; its navigation entry remains hidden until the Terminal or
   remote access is enabled. Disconnecting that view does not close host sessions.
 
-## Evidence and remaining gates
+## Verification
 
 Focused native/core/type checks and actual native/Web captures belong to the PR
 receipt. A before image was captured from the installed build, cropped to the
@@ -170,10 +170,10 @@ visible in this checkpoint were subsequently consolidated in source.
 keeps the host's same session/grid; its contained horizontal scrolling is
 intentional, not a separate browser-owned shell or a host resize.
 
-### Verification and final-package gate
+### Earlier package verification
 
-- Latest focused source checks: 58 Terminal tests, 15 embedded-host tests and
-  three status tests pass. Two opt-in OS-PTY cases remain ignored. The specific
+- The initial focused checks passed 58 Terminal tests, 15 embedded-host tests and
+  three status tests. Two opt-in OS-PTY cases were skipped. The specific
   native Preferences provenance and invalid-config API CI failures also pass
   their repaired local checks.
 - TypeScript, keyboard codec, 53 Web parity contracts and responsive guardrails
@@ -189,18 +189,55 @@ intentional, not a separate browser-owned shell or a host resize.
 - Visual review discovered a one-frame stale immediate status report. The final
   source reconciles actual decoder observations and adds a regression. It also
   groups settings contiguously and consumes the owner's framed-dialog update.
-- Final clean package source:
+- Initial clean package source:
   `b3b26d791366e8617458b15a4b0f09dda75f7315`; executable SHA-256:
   `9401ff393fc839743911d2f5a91c4be2da299a024cd2c0886d5c624d81ae9dd0`.
   Native/downloader smoke, PWA integrity and Windows resource checks pass.
-  **Its launch was blocked by tool policy. Final-build runtime/captures remain
-  pending the requested isolated launcher command; the images above are not
-  claimed as final-build evidence.**
-- PR [#281](https://github.com/ToghrolTP/pealayer/pull/281) stays draft until that
-  final native/Web gate and hosted platform checks finish. CodeQL's two browser
-  test findings were fixed by passing data as CDP arguments, then replied to and
-  resolved. No failure or required check is bypassed.
+  The maintained Windows acceptance suite subsequently passed against this
+  package both in the launching user's context and in a new isolated review.
+  The final captures below come from the newer build.
+- CodeQL's two browser test findings were fixed by passing data as CDP
+  arguments. Both threads were resolved, and all hosted platform and private
+  D-Bus checks passed on the initial review head.
 - Only review-only sessions were discarded under explicit permission. Regular
   Pealayer, Workspace Tools and the historical comparison remain untouched.
   Canonical production replacement, Cafe deployment and human acceptance are not
   inferred from an isolated review, source tests or a package smoke check.
+
+### Final Windows and Web verification
+
+| Live updater status in the dock | Real settings and choice popup |
+| --- | --- |
+| ![Shared CLI phase and aligned shell status](../screenshots/terminal-prompt-final.png) | ![Native active and inactive tabs and theme choices](../screenshots/terminal-settings-final.png) |
+
+[Desktop Web terminal](../screenshots/terminal-web-final.png) ·
+[390-pixel Web terminal](../screenshots/terminal-web-phone-final.png)
+
+- Built and served embedded PWA `1503497e79f94ed0` from the clean application
+  source `7e8d91d1a6a233c4d7271669b05c18fdcb1b99f1`. The graceful peer updater
+  replaced the isolated review, restarted it on the same loopback endpoint,
+  and acknowledged executable SHA-256
+  `1532d680ea3a84acef3a867473b036e10a5f32f5b5a2f53a2f6bf685f074e3e1`.
+- Verified the dedicated Terminal Preferences catalog and repeated the maintained
+  Windows native/HTTP acceptance suite against the restarted executable.
+  The external `--remote` CLI reached the same session owner. Actual browser
+  testing covered pairing, session creation, real config writes/readback, the
+  settings table at desktop and phone widths, and disconnect without closing
+  the host session. Test access grants were revoked.
+- The CLI and Pealayer Shell use the updater's same phase labels and progress.
+  A loopback upload fixture showed the actual active phase in `status` and in
+  the prompt. Aborting it removed the active line while preserving submitted
+  command history. Transfer percentages are omitted for verification and restart.
+- The native 63-column dock capture checks startup and resize ordering. The
+  shell and parser share the grid, so neither the prompt nor the report divider
+  wraps when the dock opens. The prompt regression also preserves unfinished
+  input through a width and activity change.
+- Passed 71 focused native tests and the separate opt-in Windows PTY fixture.
+  Web type checking, terminal keyboard, responsive layout and 53 parity
+  guardrails also passed.
+- Rechecked the owner's current PortableShell main against the embedded source
+  receipt. The consumed C files, headers and terminal profile adapter have no
+  upstream delta.
+- PR [#281](https://github.com/ToghrolTP/pealayer/pull/281) owns the change.
+  The regular installation was closed. Its binary and the other review
+  instances were left in place. The Cafe API tunnel did not respond.

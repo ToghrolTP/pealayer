@@ -10,13 +10,12 @@ statements are not the present product state.
 
 ## Publication and workspace tools checkpoint
 
-[Shared Terminal and Pealayer Shell](terminal-host-experience.md) adds the real
-Preferences catalog, readable labels and choices, prompt-safe structured reports,
-live status and decoder-confirmed command results. Native/Web integration checks
-and actual checkpoint captures are recorded there. Final-package launch is
-tool-policy blocked and awaits the requested isolated launcher command; PR #281
-remains draft for final runtime/capture and hosted-platform gates. Other running
-instances and user-deferred Cafe deployment remain unchanged.
+[Shared Terminal and Pealayer Shell](terminal-host-experience.md) includes live
+updater phases, prompt-safe structured status, the typed Preferences table, and
+native/Web views of the same paired host sessions. The graceful updater
+restarted the isolated review with the matching embedded Web bundle. Final
+native and Web captures and the runtime receipt are recorded in PR #281.
+The regular installation was closed and the Cafe API tunnel was unreachable.
 
 [Proportional numeric status typography](status-tabular-typography.md) fixes the
 FPS icon/digit-center mismatch, bundles Inter for Windows and shares tabular
