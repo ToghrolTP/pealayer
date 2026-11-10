@@ -316,12 +316,38 @@ pub(crate) fn compact_number(value: f64) -> String {
 /// Preserve the mode crossfade while the shared control owns input and dragging.
 pub(crate) fn paint_transport_nudge(app:&PealayerApp, ui:&egui::Ui, rect:egui::Rect, id:egui::Id, direction:i32, enabled:bool) {
     let alpha=super::motion::hover_alpha(ui,id.with("paused-mode"),app.is_paused);
-    let seek=format!("{} {}",if direction<0{super::icons::REWIND}else{super::icons::FAST_FORWARD},compact_number(app.quick_seek_seconds));
-    let frames=format!("{} {}",if direction<0{super::icons::SKIP_BACK}else{super::icons::SKIP_FORWARD},app.frame_step_count);
     let color=if enabled{ui.visuals().text_color()}else{ui.visuals().weak_text_color()};
     let font=egui::TextStyle::Button.resolve(ui.style());
-    ui.painter().text(rect.center()-egui::vec2(0.0,4.0*alpha),egui::Align2::CENTER_CENTER,seek,font.clone(),color.gamma_multiply(1.0-alpha));
-    ui.painter().text(rect.center()+egui::vec2(0.0,4.0*(1.0-alpha)),egui::Align2::CENTER_CENTER,frames,font,color.gamma_multiply(alpha));
+    paint_nudge_caption(ui,rect.center()-egui::vec2(0.0,4.0*alpha),direction,false,&compact_number(app.quick_seek_seconds),font.clone(),color.gamma_multiply(1.0-alpha));
+    paint_nudge_caption(ui,rect.center()+egui::vec2(0.0,4.0*(1.0-alpha)),direction,true,&app.frame_step_count.to_string(),font,color.gamma_multiply(alpha));
+}
+
+/// Physical left/right geometry is deliberate: playback direction must not
+/// depend on font fallback, a mixed text run or the application's RTL layout.
+fn nudge_triangles(center: egui::Pos2, direction: i32, frame: bool) -> Vec<Vec<egui::Pos2>> {
+    let sign = if direction < 0 { -1.0 } else { 1.0 };
+    let offsets: &[f32] = if frame { &[-1.5] } else { &[-3.5, 3.5] };
+    offsets.iter().map(|offset| {
+        [egui::vec2(offset - 3.0, -5.0), egui::vec2(offset + 3.0, 0.0), egui::vec2(offset - 3.0, 5.0)]
+            .into_iter().map(|p| center + egui::vec2(p.x * sign, p.y)).collect()
+    }).collect()
+}
+
+fn paint_nudge_caption(ui: &egui::Ui, center: egui::Pos2, direction: i32, frame: bool,
+    text: &str, font: egui::FontId, color: egui::Color32) {
+    if color.a() == 0 { return; }
+    let galley = ui.painter().layout_no_wrap(text.to_owned(), font, color);
+    let gap = if text.is_empty() { 0.0 } else { 4.0 };
+    let left = center.x - (14.0 + gap + galley.size().x) / 2.0;
+    let icon_center = egui::pos2(left + 7.0, center.y);
+    for triangle in nudge_triangles(icon_center, direction, frame) {
+        ui.painter().add(egui::Shape::convex_polygon(triangle, color, egui::Stroke::NONE));
+    }
+    if frame {
+        let x = icon_center.x + if direction < 0 { -5.0 } else { 5.0 };
+        ui.painter().line_segment([egui::pos2(x,center.y-5.0),egui::pos2(x,center.y+5.0)],egui::Stroke::new(1.6,color));
+    }
+    ui.painter().galley(egui::pos2(left + 14.0 + gap, center.y - galley.size().y / 2.0),galley,color);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -371,26 +397,16 @@ pub fn draw_contextual_transport_nudge(
     );
     let backwards = direction < 0;
     let quick_text = compact_number(app.quick_seek_seconds);
-    let seek_icon = if backwards {
-        crate::ui::icons::REWIND
-    } else {
-        crate::ui::icons::FAST_FORWARD
-    };
-    let frame_icon = if backwards {
-        crate::ui::icons::SKIP_BACK
-    } else {
-        crate::ui::icons::SKIP_FORWARD
-    };
     let width = transport_nudge_width(density);
     let (seek_caption, frame_caption, font_size) = match density {
         TransportNudgeDensity::Compact => (
-            format!("{seek_icon} {quick_text}"),
-            frame_icon.to_string(),
+            quick_text.clone(),
+            String::new(),
             11.5,
         ),
         TransportNudgeDensity::Labeled => (
-            format!("{seek_icon} {quick_text} {}", app.tr("sec")),
-            format!("{frame_icon} {}", app.frame_step_count),
+            format!("{quick_text} {}", app.tr("sec")),
+            app.frame_step_count.to_string(),
             11.0,
         ),
     };
@@ -408,17 +424,15 @@ pub fn draw_contextual_transport_nudge(
         let font = egui::FontId::proportional(font_size);
         let text_color = visuals.text_color();
         let travel = 4.0;
-        ui.painter().text(
+        paint_nudge_caption(ui,
             rect.center() - egui::vec2(0.0, travel * paused_t),
-            egui::Align2::CENTER_CENTER,
-            seek_caption,
+            direction, false, &seek_caption,
             font.clone(),
             text_color.gamma_multiply(1.0 - paused_t),
         );
-        ui.painter().text(
+        paint_nudge_caption(ui,
             rect.center() + egui::vec2(0.0, travel * (1.0 - paused_t)),
-            egui::Align2::CENTER_CENTER,
-            frame_caption,
+            direction, true, &frame_caption,
             font,
             text_color.gamma_multiply(paused_t),
         );
@@ -1380,6 +1394,46 @@ pub fn parse_timecode(value: &str) -> Option<f64> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn nudge_caption_paints_directional_vectors_without_icon_font_dependency() {
+        for rtl in [false, true] { for scale in [1.0, 1.25, 2.0] { for frame in [false, true] {
+            let ctx = egui::Context::default();
+            ctx.set_pixels_per_point(scale);
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                ui.with_layout(if rtl { egui::Layout::right_to_left(egui::Align::Center) }
+                    else { egui::Layout::left_to_right(egui::Align::Center) }, |ui| {
+                    for (x, direction) in [(40.0,-1),(100.0,1)] {
+                        super::paint_nudge_caption(ui,egui::pos2(x,30.0),direction,frame,"5",egui::FontId::proportional(12.0),egui::Color32::WHITE);
+                    }
+                });
+            });
+            let paths: Vec<_> = output.shapes.iter().filter_map(|shape| match &shape.shape {
+                egui::Shape::Path(path) if path.closed && path.points.len()==3 => Some(path), _=>None,
+            }).collect();
+            assert_eq!(paths.len(), if frame {2} else {4});
+            let half=paths.len()/2;
+            for path in &paths[..half] { assert!(path.points[1].x < path.points[0].x); }
+            for path in &paths[half..] { assert!(path.points[1].x > path.points[0].x); }
+            output.textures_delta.clear();
+        } } }
+    }
+    #[test]
+    fn nudge_glyphs_have_opposite_physical_directions_in_both_modes() {
+        for frame in [false, true] {
+            let left = super::nudge_triangles(egui::Pos2::ZERO, -1, frame);
+            let right = super::nudge_triangles(egui::Pos2::ZERO, 1, frame);
+            assert_eq!(right.len(), if frame { 1 } else { 2 });
+            assert_ne!(left, right);
+            for (left, right) in left.iter().zip(&right) {
+                assert!(left[1].x < left[0].x);
+                assert!(right[1].x > right[0].x);
+                for (left, right) in left.iter().zip(right) {
+                    assert_eq!(left.x, -right.x);
+                    assert_eq!(left.y, right.y);
+                }
+            }
+        }
+    }
     use super::*;
 
     #[test]

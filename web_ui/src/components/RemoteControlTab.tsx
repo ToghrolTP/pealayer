@@ -7,7 +7,6 @@ import {
   VideoCameraOutlined,
 } from '@ant-design/icons';
 import { tr, UiLocale } from '../i18n';
-import { mediaBasename } from '../mediaLabel';
 import { MediaSurface } from './MediaSurface';
 import type { MediaGesturePreferences } from './MediaSurface';
 import { SeekThumbnailPreview } from './SeekThumbnailPreview';
@@ -49,6 +48,8 @@ export interface PlayerState {
   ui_fps?: number | null;
   status_operations?: Array<{ id: string; source: string; label: string; phase: string; fraction: number | null; detail: string }>;
   current_video?: string | null;
+  media_display_name?: string | null;
+  media_location_display?: string | null;
   media_session?: { track_id: string | null; title: string | null; artist: string | null; album: string | null; video: boolean };
   media_session_capabilities?: import('../mediaSession').SessionCapabilities;
   quick_seek_seconds?: number;
@@ -317,7 +318,7 @@ export const RemoteControlTab: React.FC<RemoteControlTabProps> = ({
   const seek = useSeekbar(state, sendCmd);
 
   const videoName = state.current_video
-    ? mediaBasename(state.current_video, tr(locale, 'Untitled'))
+    ? state.media_display_name || tr(locale, 'Untitled')
     : state.current_video === null ? tr(locale, 'No Media Playing') : tr(locale, 'Initializing…');
 
   return (

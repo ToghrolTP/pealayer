@@ -631,6 +631,8 @@ pub fn run() -> eframe::Result {
                 native_service_policy: crate::app::NativeServicePolicy::Production,
                 web_only: cli_options.web_only,
                 app_name: app_name.clone(),
+                local_media_title_format: loaded_config.local_media_title_format,
+                remote_media_title_format: loaded_config.remote_media_title_format,
                 app_publisher: crate::config::resolved_app_publisher(&loaded_config),
                 app_copyright: crate::config::resolved_app_copyright(&loaded_config),
                 last_window_title: String::new(),

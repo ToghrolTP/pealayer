@@ -566,6 +566,10 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             &[("native", "Neutral (default)"), ("studio", "Studio")],
         ),
         PreferenceControl::accent(config),
+        PreferenceControl::select("local_media_title_format", "appearance", "Window title", "Local media title",
+            &[("file_name", "Filename"), ("file_stem", "Filename without extension"), ("location", "Full location")]),
+        PreferenceControl::select("remote_media_title_format", "appearance", "Window title", "Remote media title",
+            &[("file_name", "Filename"), ("file_stem", "Filename without extension"), ("location", "Full location")]),
         PreferenceControl::select("workspace_ui", "appearance", "Interface", "Workspace interface",
             &[("craft_ui", "CraftUI"), ("egui_dock", "egui Dock")]),
         PreferenceControl::boolean("craft_show_close_buttons", "appearance", "Workspace panels", "Show CraftUI panel close buttons"),
@@ -1539,6 +1543,17 @@ pub fn set_value_at_path(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn media_title_choices_have_independent_shared_settings_and_filename_defaults() {
+        let contract = super::preferences_contract(&crate::config::AppConfig::default());
+        for key in ["local_media_title_format", "remote_media_title_format"] {
+            let control = contract.controls.iter().find(|c| c.key == key).unwrap();
+            assert_eq!(control.section, "appearance");
+            assert_eq!(control.group, "Window title");
+            assert_eq!(control.options.iter().map(|o| o.value.as_str().unwrap()).collect::<Vec<_>>(), ["file_name", "file_stem", "location"]);
+            assert_eq!(super::value_at_path(&contract.defaults, key), Some(&serde_json::json!("file_name")));
+        }
+    }
     #[test]
     fn workspace_tools_contract_preserves_defaults_and_respects_compiled_features() {
         let config = crate::config::AppConfig::default();

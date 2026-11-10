@@ -589,27 +589,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         app.tr("Open Recent")
                     ),
                     |ui| {
-                        if app.recent_media.is_empty() {
-                            ui.label(app.tr("No recent media"));
-                        } else {
-                            for path in app.recent_media.clone() {
-                                let target = path.to_string_lossy();
-                                let label = crate::media::media_target_label(&target);
-                                if ui
-                                    .button(app.display_text(&label))
-                                    .on_hover_text(crate::media::redact_media_target(&target))
-                                    .clicked()
-                                {
-                                    ui.close();
-                                    app.load_media_target(&target);
-                                }
-                            }
-                            ui.separator();
-                            if ui.button(app.tr("Clear Recent")).clicked() {
-                                ui.close();
-                                app.clear_recent_media();
-                            }
-                        }
+                        super::menu::recent_media_menu(app, ui);
                     },
                 );
 

@@ -27,6 +27,12 @@ physical media keys and actual new-build screenshots remain explicit gates.
 [#292](https://github.com/ToghrolTP/pealayer/issues/292) tracks deferred tabular
 elapsed/duration typography separately.
 
+[Media presentation](media-presentation.md) adds distinct native seek/frame
+glyphs, independently configurable filename-first local/remote titles, decoded
+Recent names and globe markers. Original playback/copy/history targets remain
+unchanged. Packaging, installed visual verification and deferred Cafe delivery
+remain separate acceptance gates.
+
 [Proportional numeric status typography](status-tabular-typography.md) fixes the
 FPS icon/digit-center mismatch, bundles Inter for Windows and shares tabular
 digit layout without requiring a monospace font. All 59 focused native tests and

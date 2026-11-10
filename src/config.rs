@@ -432,6 +432,15 @@ pub enum AppTheme {
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum MediaTitleFormat {
+    #[default]
+    FileName,
+    FileStem,
+    Location,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum ColorPalette {
     /// The blue-gray Studio palette, shared by the Web and desktop renderers.
     Studio,
@@ -1141,6 +1150,8 @@ pub struct AppConfig {
     pub playback_positions: Vec<PlaybackPositionEntry>,
     pub app_name: Option<String>,
     pub app_description: Option<String>,
+    pub local_media_title_format: MediaTitleFormat,
+    pub remote_media_title_format: MediaTitleFormat,
     pub app_icon: Option<PathBuf>,
     pub app_icon_preset: AppIconPreset,
     pub app_icon_playing: Option<PathBuf>,
@@ -1353,6 +1364,8 @@ impl Default for AppConfig {
             playback_positions: Vec::new(),
             app_name: None,
             app_description: None,
+            local_media_title_format: MediaTitleFormat::FileName,
+            remote_media_title_format: MediaTitleFormat::FileName,
             app_icon: None,
             app_icon_preset: AppIconPreset::Current,
             app_icon_playing: None,

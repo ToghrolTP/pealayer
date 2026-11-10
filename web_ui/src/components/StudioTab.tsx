@@ -37,7 +37,6 @@ import { Typography } from 'antd';
 import { GroupSelect } from './GroupSelect';
 import { EffectRecorder } from './EffectRecorder';
 import recordingColors from '../../../assets/themes/recording-colors.json';
-import { mediaBasename } from '../mediaLabel';
 import { formatTimelineTime } from '../timelineTime';
 import { SeekThumbnailPreview } from './SeekThumbnailPreview';
 import { hardwareAvailability, hardwareLabels, hardwareOutputsAvailable } from '../hardwareAvailability';
@@ -331,7 +330,7 @@ export const StudioTab: React.FC<StudioTabProps> = ({ state, sendCmd, locale, ap
   }, [cues, durationSeconds]);
   const selected = selectedEffect ? controllerEffects.find((effect) => effect.reference === selectedEffect) : undefined;
   const mediaName = state.current_video
-    ? mediaBasename(state.current_video, tr(locale, 'Untitled'))
+    ? state.media_display_name || tr(locale, 'Untitled')
     : tr(locale, 'No Media Playing');
   const activeSeek = seek.value;
   const directControls = useMemo(

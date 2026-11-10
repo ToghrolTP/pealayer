@@ -615,6 +615,8 @@ pub struct PealayerApp {
     pub(crate) native_service_policy: NativeServicePolicy,
     pub(crate) web_only: bool,
     pub(crate) app_name: String,
+    pub(crate) local_media_title_format: crate::config::MediaTitleFormat,
+    pub(crate) remote_media_title_format: crate::config::MediaTitleFormat,
     pub(crate) app_publisher: Option<String>,
     pub(crate) app_copyright: Option<String>,
     pub(crate) last_window_title: String,
@@ -1386,6 +1388,8 @@ impl eframe::App for PealayerApp {
             self.current_video_path.as_deref(),
             self.is_connected,
             connection_requested,
+            self.local_media_title_format,
+            self.remote_media_title_format,
         );
         if self.last_window_title != window_title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(window_title.clone()));
@@ -1607,6 +1611,8 @@ impl eframe::App for PealayerApp {
                     .as_ref()
                     .map(|p| crate::media::redact_media_target(&p.to_string_lossy())),
                 media_session: self.media_session_metadata(),
+                media_display_name: self.current_video_path.as_ref().map(|p| crate::media::media_target_label(&p.to_string_lossy())),
+                media_location_display: self.current_video_path.as_ref().map(|p| crate::media::media_location_display(&p.to_string_lossy())),
                 media_session_capabilities: self.media_session_capabilities(),
                 quick_seek_seconds: self.quick_seek_seconds,
                 media_tracks: self
@@ -7385,8 +7391,8 @@ impl PealayerApp {
             self.cache_buffering_percent = None;
             self.add_recent_media(path);
             self.set_media_file_info(crate::media_info::MediaFileInfo::default());
-            let safe_target = crate::media::redact_media_target(trimmed);
-            self.set_osd(format!("Loading URL: {safe_target}"));
+            let name = crate::media::media_target_label(trimmed);
+            self.set_osd(format!("Loading: {name}"));
         }
     }
 
@@ -7600,6 +7606,8 @@ impl PealayerApp {
         cfg.direction = self.direction_preference;
         cfg.theme = self.theme_preference;
         cfg.color_palette = self.color_palette;
+        cfg.local_media_title_format = self.local_media_title_format;
+        cfg.remote_media_title_format = self.remote_media_title_format;
         cfg.hardware_endpoint =
             (!self.serial_port.trim().is_empty()).then(|| self.serial_port.clone());
         cfg.auto_connect_hardware = self.auto_connect_hardware;
@@ -7987,6 +7995,8 @@ impl PealayerApp {
         self.rtl = crate::config::resolve_rtl(self.direction_preference, self.language);
         self.theme_preference = crate::config::resolved_theme(&config);
         self.color_palette = config.color_palette;
+        self.local_media_title_format = config.local_media_title_format;
+        self.remote_media_title_format = config.remote_media_title_format;
         self.serial_port = endpoint.clone();
         self.auto_connect_hardware = config.auto_connect_hardware;
         self.pause_on_hardware_disconnect = config.pause_on_hardware_disconnect;
@@ -10129,6 +10139,8 @@ impl Default for PealayerApp {
             native_service_policy: NativeServicePolicy::ModelOnly,
             web_only: false,
             app_name: crate::config::resolved_app_name(&crate::config::AppConfig::default()),
+            local_media_title_format: Default::default(),
+            remote_media_title_format: Default::default(),
             app_publisher: crate::config::resolved_app_publisher(
                 &crate::config::AppConfig::default(),
             ),
@@ -10464,10 +10476,13 @@ pub fn contextual_window_title(
     media_path: Option<&std::path::Path>,
     connected: bool,
     connection_requested: bool,
+    local_format: crate::config::MediaTitleFormat,
+    remote_format: crate::config::MediaTitleFormat,
 ) -> String {
     if let Some(media_path) = media_path {
         let target = media_path.to_string_lossy();
-        let media_name = crate::media::media_target_label(&target);
+        let format = if crate::media::is_remote_media_target(&target) { remote_format } else { local_format };
+        let media_name = crate::media::media_title(&target, format);
         return format!("{media_name} — {app_name}");
     }
     if connected {
@@ -11920,16 +11935,19 @@ pub(crate) mod tests {
     }
     #[test]
     fn window_title_reflects_media_and_connection_context() {
+        use crate::config::MediaTitleFormat::{FileName, FileStem, Location};
+        assert_eq!(contextual_window_title("Studio", Some(std::path::Path::new("https://example.invalid/My%20movie.mp4")),false,false,Location,FileStem),"My movie — Studio");
+        assert_eq!(contextual_window_title("Studio", Some(std::path::Path::new("C:/media/My movie.mp4")),false,false,Location,FileName),"C:/media/My movie.mp4 — Studio");
         assert_eq!(
-            contextual_window_title("Studio", None, false, false),
+            contextual_window_title("Studio", None, false, false, Default::default(), Default::default()),
             "Studio"
         );
         assert_eq!(
-            contextual_window_title("Studio", None, false, true),
+            contextual_window_title("Studio", None, false, true, Default::default(), Default::default()),
             "Studio — Connecting…"
         );
         assert_eq!(
-            contextual_window_title("Studio", None, true, true),
+            contextual_window_title("Studio", None, true, true, Default::default(), Default::default()),
             "Studio — Hardware connected"
         );
         assert_eq!(
@@ -11938,6 +11956,7 @@ pub(crate) mod tests {
                 Some(std::path::Path::new("C:/media/demo.mp4")),
                 true,
                 true,
+                Default::default(), Default::default(),
             ),
             "demo.mp4 — Studio"
         );
@@ -11949,8 +11968,9 @@ pub(crate) mod tests {
                 )),
                 false,
                 false,
+                Default::default(), Default::default(),
             ),
-            "rtsp://***@camera.invalid/live — Studio"
+            "live — Studio"
         );
     }
 
