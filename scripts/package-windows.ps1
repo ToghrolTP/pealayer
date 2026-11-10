@@ -3,7 +3,9 @@ param(
     [switch]$NoUpx,
     [switch]$SkipTests,
     [switch]$Run,
-    [string]$Branding
+    [string]$Branding,
+    [string]$LibmpvDirectory,
+    [string]$OutputDirectory
 )
 
 $ErrorActionPreference = 'Stop'
@@ -18,11 +20,53 @@ function Get-BrandValue([object]$Document, [string]$Name) {
     return $value.Trim()
 }
 
+function Assert-PackageSourceStable([string]$RepositoryRoot, [string]$ExpectedCommit) {
+    $currentCommit = (& git -C $RepositoryRoot rev-parse HEAD).Trim()
+    if ($LASTEXITCODE -ne 0 -or $currentCommit -ne $ExpectedCommit) {
+        throw 'Package source commit changed during the build; refusing publication.'
+    }
+    $unexpected = @(& git -C $RepositoryRoot status --porcelain --untracked-files=all -- . ':(exclude)web_ui/dist/**')
+    if ($LASTEXITCODE -ne 0) { throw 'Could not verify package source status.' }
+    if ($unexpected.Count -ne 0) {
+        throw "Package source outside web_ui/dist changed during the build: $($unexpected -join '; ')"
+    }
+}
+
+function Restore-PackageWebDistribution([string]$RepositoryRoot) {
+    & git -C $RepositoryRoot restore --worktree -- web_ui/dist
+    if ($LASTEXITCODE -ne 0) { throw 'Could not restore the tracked Web distribution after packaging.' }
+    $untracked = @(& git -C $RepositoryRoot ls-files --others --exclude-standard -- web_ui/dist)
+    if ($LASTEXITCODE -ne 0) { throw 'Could not inspect generated Web distribution files.' }
+    $distributionRoot = [System.IO.Path]::GetFullPath((Join-Path $RepositoryRoot 'web_ui\dist')).TrimEnd('\', '/')
+    foreach ($relativePath in $untracked) {
+        $candidate = [System.IO.Path]::GetFullPath((Join-Path $RepositoryRoot $relativePath))
+        if (-not $candidate.StartsWith(
+            $distributionRoot + [System.IO.Path]::DirectorySeparatorChar,
+            [System.StringComparison]::OrdinalIgnoreCase
+        )) {
+            throw "Refusing to remove generated content outside web_ui/dist: $candidate"
+        }
+        Remove-Item -LiteralPath $candidate -Force
+    }
+    if (& git -C $RepositoryRoot status --porcelain --untracked-files=all) {
+        throw 'Package source did not return to its original clean state.'
+    }
+}
+
 if ([Environment]::OSVersion.Platform -ne [PlatformID]::Win32NT) {
     throw 'scripts/package-windows.ps1 is intended for native Windows packaging.'
 }
 
 $repositoryRoot = Split-Path -Parent $PSScriptRoot
+. (Join-Path $PSScriptRoot 'libmpv-windows.ps1')
+. (Join-Path $PSScriptRoot 'package-probe-windows.ps1')
+$packageCommit = (& git -C $repositoryRoot rev-parse HEAD).Trim()
+if ($LASTEXITCODE -ne 0 -or !$packageCommit) { throw 'Cannot identify package source.' }
+if (& git -C $repositoryRoot status --porcelain) { throw 'Commit or preserve local changes before packaging a production build.' }
+# Pin the existing build-metadata contract, invalidating stale shared-cache
+# metadata even when the worktree commit changed without a source-file change.
+$env:GITHUB_SHA = $packageCommit
+$env:GITHUB_REF_NAME = (& git -C $repositoryRoot rev-parse --abbrev-ref HEAD).Trim()
 if ($Branding) {
     $resolvedBranding = (Resolve-Path -LiteralPath $Branding -ErrorAction Stop).Path
     $brandDocument = Get-Content -Raw -LiteralPath $resolvedBranding | ConvertFrom-Json
@@ -34,46 +78,43 @@ if ($Branding) {
 }
 $machineRustupHome = [Environment]::GetEnvironmentVariable('RUSTUP_HOME', 'Machine')
 if ($machineRustupHome) { $env:RUSTUP_HOME = $machineRustupHome }
-$systemRustBin = Join-Path $env:ProgramFiles 'Rust\bin'
-if (Test-Path -LiteralPath (Join-Path $systemRustBin 'cargo.exe')) {
-    $env:Path = $systemRustBin + ';' + $env:Path
+$userProfileDirectory = [Environment]::GetFolderPath([Environment+SpecialFolder]::UserProfile)
+$rustBin = @(
+    (Join-Path $env:ProgramFiles 'Rust\bin')
+    (Join-Path $userProfileDirectory '.cargo\bin')
+) + @(
+    Get-ChildItem -LiteralPath (Join-Path $userProfileDirectory '.rustup\toolchains') -Directory -ErrorAction SilentlyContinue |
+        Sort-Object -Property Name |
+        ForEach-Object { Join-Path $_.FullName 'bin' }
+) | Where-Object {
+    $cargo = Get-Item -LiteralPath (Join-Path $_ 'cargo.exe') -ErrorAction SilentlyContinue
+    $rustc = Get-Item -LiteralPath (Join-Path $_ 'rustc.exe') -ErrorAction SilentlyContinue
+    $cargo -and $cargo.Length -gt 0 -and $rustc -and $rustc.Length -gt 0
+} | Select-Object -First 1
+if ($rustBin) {
+    $env:Path = $rustBin + ';' + $env:Path
 }
-$cargoTargetDirectory = if ($env:CARGO_TARGET_DIR) {
-    if ([System.IO.Path]::IsPathRooted($env:CARGO_TARGET_DIR)) {
-        [System.IO.Path]::GetFullPath($env:CARGO_TARGET_DIR)
-    } else {
-        [System.IO.Path]::GetFullPath((Join-Path $repositoryRoot $env:CARGO_TARGET_DIR))
-    }
-} else {
-    Join-Path $repositoryRoot 'target'
-}
+$cargoTargetDirectory = Get-PealayerCargoTargetDirectory -RepositoryRoot $repositoryRoot
+$env:CARGO_TARGET_DIR = $cargoTargetDirectory
 $releaseDirectory = Join-Path $cargoTargetDirectory 'release'
 $stagingDirectory = Join-Path $cargoTargetDirectory 'package-windows'
 $sourceDirectory = Split-Path -Parent $repositoryRoot
-$outputDirectory = if ((Split-Path -Leaf $sourceDirectory) -ieq 'source') {
+$outputDirectory = if ($OutputDirectory) {
+    [System.IO.Path]::GetFullPath($OutputDirectory)
+} elseif ((Split-Path -Leaf $sourceDirectory) -ieq 'source') {
     Join-Path (Split-Path -Parent $sourceDirectory) 'bin'
 } else {
     Join-Path $repositoryRoot 'bin'
 }
-$libmpvDirectory = if ($env:LIBMPV_DIR) { $env:LIBMPV_DIR } else { Join-Path $env:ProgramFiles 'MPV' }
 $rustHost = (& rustc -vV | Select-String '^host:' | ForEach-Object { $_.Line.Substring(5).Trim() })
 if (-not $rustHost) { throw 'Could not determine the native Rust host triple.' }
-$importLibraryNames = if ($rustHost -like '*-msvc') { @('mpv.lib') } else { @('libmpv.dll.a', 'libmpv.a') }
-$libmpvImportLibrary = $importLibraryNames |
-    ForEach-Object { Join-Path $libmpvDirectory $_ } |
-    Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
-    Select-Object -First 1
-if (-not $libmpvImportLibrary) {
-    throw "Required libmpv import library for $rustHost is missing. Expected one of: $($importLibraryNames -join ', ') in $libmpvDirectory"
-}
-$libmpvRuntime = @('libmpv-2.dll', 'mpv-2.dll') |
-    ForEach-Object { Join-Path $libmpvDirectory $_ } |
-    Where-Object { Test-Path -LiteralPath $_ -PathType Leaf } |
-    Select-Object -First 1
-if (-not $libmpvRuntime) {
-    throw "Required libmpv runtime is missing. Expected libmpv-2.dll or mpv-2.dll in $libmpvDirectory"
-}
-$env:Path = $libmpvDirectory + ';' + $env:Path
+$libmpv = Resolve-PealayerLibmpv -RepositoryRoot $repositoryRoot -RustHost $rustHost -ExplicitDirectory $LibmpvDirectory
+$libmpvSourceDirectory = $libmpv.SourceDirectory
+$libmpvDirectory = $libmpv.LinkDirectory
+$libmpvImportLibrary = $libmpv.ImportLibrary
+$libmpvRuntime = $libmpv.RuntimeLibrary
+$hostProfile = Save-PealayerWindowsHostProfile -RepositoryRoot $repositoryRoot -Resolution $libmpv -PersistUserEnvironment
+Set-PealayerLibmpvBuildEnvironment -Resolution $libmpv
 $upxCommand = Get-Command upx.exe -ErrorAction SilentlyContinue
 $upxPath = if ($upxCommand) { $upxCommand.Source } else { $null }
 if (-not $upxPath) {
@@ -84,19 +125,34 @@ if (-not $upxPath) {
 }
 
 if (-not $SkipTests) {
-    $env:LIBMPV_DIR = $libmpvDirectory
-    $separator = [char]0x1f
-    $linkFlag = "-Lnative=$libmpvDirectory"
-    if ($env:CARGO_ENCODED_RUSTFLAGS) {
-        $env:CARGO_ENCODED_RUSTFLAGS += $separator + $linkFlag
-    } else {
-        $env:CARGO_ENCODED_RUSTFLAGS = $linkFlag
-    }
-    & cargo test --locked --jobs 1
+    & cargo test --locked --jobs 1 -- --test-threads=1
     if ($LASTEXITCODE -ne 0) { throw "cargo test failed with exit code $LASTEXITCODE" }
 }
 
-& (Join-Path $PSScriptRoot 'run-windows.ps1') -BuildOnly
+$webUiDirectory = Join-Path $repositoryRoot 'web_ui'
+$webUiPackage = Join-Path $webUiDirectory 'package.json'
+if (Test-Path -LiteralPath $webUiPackage -PathType Leaf) {
+    $npm = Get-Command npm.cmd -ErrorAction SilentlyContinue
+    if (-not $npm) { $npm = Get-Command npm -ErrorAction SilentlyContinue }
+    if (-not $npm) { throw 'npm is required to build the Pealayer Web UI.' }
+    Push-Location -LiteralPath $webUiDirectory
+    try {
+        # npm's prebuild/build scripts include regression suites. A user opting
+        # out of tests still needs compilation and PWA artifact integrity, not
+        # a silently executed second test pipeline.
+        $webBuildScript = if ($SkipTests) { 'build:bundle' } else { 'build' }
+        & $npm.Source run $webBuildScript
+        if ($LASTEXITCODE -ne 0) { throw "Web UI build failed with exit code $LASTEXITCODE" }
+    } finally {
+        Pop-Location
+    }
+}
+Assert-PackageSourceStable -RepositoryRoot $repositoryRoot -ExpectedCommit $packageCommit
+$env:PEALAYER_PACKAGE_VERIFIED_SOURCE_CLEAN = 'true'
+
+& (Join-Path $PSScriptRoot 'run-windows.ps1') -BuildOnly -LibmpvDirectory $libmpvSourceDirectory
+& cargo build --locked --release -p pealayer-downloader
+if ($LASTEXITCODE -ne 0) { throw "Standalone downloader build failed with exit code $LASTEXITCODE" }
 
 New-Item -ItemType Directory -Force -Path $stagingDirectory,$outputDirectory | Out-Null
 $effectiveExecutableName = if ($env:APP_EXECUTABLE_NAME) {
@@ -112,8 +168,10 @@ if ($effectiveExecutableName -notmatch '^[A-Za-z0-9_.-]+$' -or $effectiveExecuta
 $effectiveExecutableFile = "$effectiveExecutableName.exe"
 $stagedExecutable = Join-Path $stagingDirectory $effectiveExecutableFile
 $stagedRuntime = Join-Path $stagingDirectory 'libmpv-2.dll'
-Copy-Item -LiteralPath (Join-Path $releaseDirectory 'pealayer.exe') -Destination $stagedExecutable -Force
-Copy-Item -LiteralPath $libmpvRuntime -Destination $stagedRuntime -Force
+$stagedDownloader = Join-Path $stagingDirectory 'pealayer-downloader.exe'
+[void](Copy-PealayerFileLowWrite -Source (Join-Path $releaseDirectory 'pealayer.exe') -Destination $stagedExecutable)
+[void](Copy-PealayerFileLowWrite -Source (Join-Path $releaseDirectory 'pealayer-downloader.exe') -Destination $stagedDownloader)
+Copy-PealayerLibmpvRuntime -RuntimeLibrary $libmpvRuntime -DestinationDirectory $stagingDirectory
 
 $resource = (Get-Item -LiteralPath $stagedExecutable).VersionInfo
 $expectedProductName = if ($env:APP_NAME) {
@@ -125,6 +183,16 @@ $expectedProductName = if ($env:APP_NAME) {
 }
 if ($resource.ProductName -ne $expectedProductName -or $resource.OriginalFilename -ne $effectiveExecutableFile) {
     throw 'Packaged executable is missing the expected Win32 identity resources.'
+}
+& (Join-Path $PSScriptRoot 'verify-windows-quick-action-icons.ps1') -Executable $stagedExecutable
+$downloaderResource = (Get-Item -LiteralPath $stagedDownloader).VersionInfo
+if ($downloaderResource.ProductName -ne 'Pealayer Downloader' -or $downloaderResource.OriginalFilename -ne 'pealayer-downloader.exe') {
+    throw 'Standalone downloader is missing its distinct Win32 identity resources.'
+}
+[void](Invoke-PackageProbe $stagedDownloader '--smoke-test' $stagingDirectory)
+$downloaderIdentity = Invoke-PackageProbe $stagedDownloader '--build-info' $stagingDirectory | ConvertFrom-Json
+if ($downloaderIdentity.commit -ne $packageCommit -or $downloaderIdentity.dirty) {
+    throw 'Standalone downloader identity does not match clean package source.'
 }
 
 $unpackedBytes = (Get-Item -LiteralPath $stagedExecutable).Length
@@ -139,11 +207,17 @@ if (-not $NoUpx) {
 }
 
 $env:Path = $stagingDirectory + ';' + $libmpvDirectory + ';' + $env:Path
-$smoke = Start-Process -FilePath $stagedExecutable -ArgumentList '--smoke-test' -WorkingDirectory $stagingDirectory -Wait -PassThru
-if ($smoke.ExitCode -ne 0) { throw "Packaged Pealayer/libmpv smoke test failed with exit code $($smoke.ExitCode)" }
+[void](Invoke-PackageProbe $stagedExecutable '--smoke-test' $stagingDirectory)
 
-Copy-Item -LiteralPath $stagedExecutable -Destination $outputDirectory -Force
-Copy-Item -LiteralPath $stagedRuntime -Destination $outputDirectory -Force
+$embeddedIdentity = Invoke-PackageProbe $stagedExecutable '--build-info' $stagingDirectory | ConvertFrom-Json
+if ($embeddedIdentity.commit -ne $packageCommit -or $embeddedIdentity.dirty) {
+    throw 'Embedded executable identity does not match clean package source; refusing publication.'
+}
+Assert-PackageSourceStable -RepositoryRoot $repositoryRoot -ExpectedCommit $packageCommit
+
+[void](Copy-PealayerFileLowWrite -Source $stagedExecutable -Destination (Join-Path $outputDirectory $effectiveExecutableFile))
+[void](Copy-PealayerFileLowWrite -Source $stagedDownloader -Destination (Join-Path $outputDirectory 'pealayer-downloader.exe'))
+Copy-PealayerLibmpvRuntime -RuntimeLibrary $stagedRuntime -DestinationDirectory $outputDirectory
 $fontSource = Join-Path $repositoryRoot 'assets\fonts\Vazirmatn-Regular.ttf'
 if (-not (Test-Path -LiteralPath $fontSource -PathType Leaf)) {
     throw "Bundled Persian fallback font is missing: $fontSource"
@@ -151,17 +225,30 @@ if (-not (Test-Path -LiteralPath $fontSource -PathType Leaf)) {
 $fontDirectory = Join-Path $outputDirectory 'assets\fonts'
 New-Item -ItemType Directory -Force -Path $fontDirectory | Out-Null
 $packagedFont = Join-Path $fontDirectory 'Vazirmatn-Regular.ttf'
-Copy-Item -LiteralPath $fontSource -Destination $packagedFont -Force
+[void](Copy-PealayerFileLowWrite -Source $fontSource -Destination $packagedFont)
+[void](Copy-PealayerFileLowWrite -Source (Join-Path $repositoryRoot 'assets\fonts\Inter-LICENSE.txt') -Destination (Join-Path $fontDirectory 'Inter-LICENSE.txt'))
 $webDistribution = Join-Path $repositoryRoot 'web_ui\dist'
 $webUiPackaged = $false
 if (Test-Path -LiteralPath (Join-Path $webDistribution 'index.html')) {
     $packagedWebDistribution = Join-Path $outputDirectory 'web_ui\dist'
+    $resolvedOutputDirectory = [System.IO.Path]::GetFullPath($outputDirectory).TrimEnd('\', '/')
+    $resolvedPackagedWebDistribution = [System.IO.Path]::GetFullPath($packagedWebDistribution)
+    if (-not $resolvedPackagedWebDistribution.StartsWith(
+        $resolvedOutputDirectory + [System.IO.Path]::DirectorySeparatorChar,
+        [System.StringComparison]::OrdinalIgnoreCase
+    )) {
+        throw 'Refusing to replace a Web UI package outside the canonical output directory.'
+    }
+    if (Test-Path -LiteralPath $resolvedPackagedWebDistribution) {
+        Remove-Item -LiteralPath $resolvedPackagedWebDistribution -Recurse -Force
+    }
     New-Item -ItemType Directory -Force -Path $packagedWebDistribution | Out-Null
     Copy-Item -Path (Join-Path $webDistribution '*') -Destination $packagedWebDistribution -Recurse -Force
     $webUiPackaged = $true
 }
+Restore-PackageWebDistribution -RepositoryRoot $repositoryRoot
 
-$artifacts = @($effectiveExecutableFile,'libmpv-2.dll','assets/fonts/Vazirmatn-Regular.ttf') | ForEach-Object {
+$artifacts = @($effectiveExecutableFile,'pealayer-downloader.exe','libmpv-2.dll','mpv-2.dll','assets/fonts/Vazirmatn-Regular.ttf','assets/fonts/Inter-LICENSE.txt') | ForEach-Object {
     $path = Join-Path $outputDirectory $_
     [ordered]@{
         path = $_
@@ -172,10 +259,20 @@ $artifacts = @($effectiveExecutableFile,'libmpv-2.dll','assets/fonts/Vazirmatn-R
 $manifest = [ordered]@{
     format = 'pealayer-windows-package'
     version = $resource.ProductVersion
-    git_commit = (& git -C $repositoryRoot rev-parse HEAD).Trim()
-    git_dirty = [bool](& git -C $repositoryRoot status --porcelain)
+    git_commit = $embeddedIdentity.commit
+    git_dirty = $embeddedIdentity.dirty
     built_at_utc = [DateTime]::UtcNow.ToString('o')
     target = (& rustc -vV | Select-String '^host:' | ForEach-Object { $_.Line.Substring(5).Trim() })
+    build_host = [ordered]@{
+        computer_name = $env:COMPUTERNAME
+        profile = $hostProfile.ProfilePath
+        libmpv_source_directory = $libmpvSourceDirectory
+        libmpv_link_directory = $libmpvDirectory
+        resolution_source = $libmpv.ResolutionSource
+        import_library = Get-PealayerFileIdentity -Path $libmpvImportLibrary
+        import_source = Get-PealayerFileIdentity -Path $libmpv.ImportSource
+        runtime = Get-PealayerFileIdentity -Path $libmpvRuntime
+    }
     identity = [ordered]@{
         format = 'application-brand'
         application_name = $resource.ProductName
@@ -186,8 +283,12 @@ $manifest = [ordered]@{
     }
     validation = [ordered]@{
         tests = if ($SkipTests) { 'skipped' } else { 'passed' }
+        web_regression_tests = if ($SkipTests) { 'skipped' } else { 'passed' }
+        web_bundle_integrity = 'verified'
         windows_resources = 'verified'
+        quick_action_icons = 'verified'
         libmpv_smoke = 'passed'
+        standalone_downloader = 'resource_identity_and_headless_ui_smoke_verified'
         web_ui = if ($webUiPackaged) { 'packaged' } else { 'embedded_fallback' }
         upx = if ($NoUpx) { [ordered]@{ enabled = $false; tested = $false } } else { [ordered]@{ enabled = $true; tested = $true; version = $upxVersion } }
     }

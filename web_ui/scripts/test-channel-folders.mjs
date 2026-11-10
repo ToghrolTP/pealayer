@@ -1,0 +1,18 @@
+import assert from 'node:assert/strict';
+import { channelFolderGroups, channelFolderKind, isRawSeatRelay } from '../src/channelFolders.ts';
+const controls = Array.from({ length: 16 }, (_, id) => ({ key: `pwm.${id}`, kind: 'pwm', control: 'pwm', order: id, hidden: id >= 13, group: id === 0 ? 'Cinema lighting' : '' }));
+const folders = [{ kind: 'pwm', name: 'Cinema lighting', icon: 'lightbulb' }, { kind: 'pwm', name: 'Empty', icon: '' }];
+const groups = channelFolderGroups(controls, folders, 'pwm');
+assert.deepEqual(groups.find((folder) => folder.name === 'Cinema lighting').controls.map((control) => control.key), ['pwm.0']);
+assert.equal(groups.find((folder) => folder.name === '').controls.length, 12);
+assert.equal(groups.find((folder) => folder.name === 'Empty').controls.length, 0);
+assert.equal(channelFolderGroups([controls[0]], folders, 'pwm').find((folder) => !folder.name).controls.length, 0);
+const relays = Array.from({ length: 8 }, (_, index) => ({ key: `relay.${index + 1}`, kind: 'relay', channel: index + 1, control: index < 4 ? 'seat-internal' : 'relay', group: '', hidden: false, order: index }));
+assert.deepEqual(channelFolderGroups(relays, [], 'relay').find((folder) => folder.raw).controls.map((control) => control.key), ['relay.1', 'relay.2', 'relay.3', 'relay.4']);
+assert.equal(channelFolderGroups(relays, [], 'relay').find((folder) => !folder.raw).controls.length, 4);
+assert.equal(isRawSeatRelay({ ...relays[0], control: 'relay' }), false);
+assert.equal(isRawSeatRelay({ ...relays[4], control: 'seat-internal' }), false);
+assert.equal(channelFolderKind('mosfet'), 'pwm');
+assert.equal(channelFolderKind('side'), 'motion');
+assert.equal(channelFolderKind('display'), 'board');
+console.log('Channel folders: authoritative membership, R1–R4 wiring, hidden channels, empty/Ungrouped targets and section scopes passed.');

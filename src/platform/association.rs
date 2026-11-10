@@ -1,17 +1,22 @@
 #[cfg(any(target_os = "windows", target_os = "linux"))]
 use std::path::PathBuf;
 
-pub const SUPPORTED_EXTENSIONS: &[&str] = &["mp4", "mkv", "avi", "webm", "mov", "flv", "mp3", "flac", "wav"];
+pub const SUPPORTED_EXTENSIONS: &[&str] = &[
+    "mp4", "mkv", "avi", "webm", "mov", "flv", "mp3", "flac", "wav",
+];
 
 pub fn register_as_default_player() -> Result<String, String> {
     #[cfg(any(target_os = "windows", target_os = "linux"))]
-    let current_exe = std::env::current_exe()
-        .map_err(|e| format!("Failed getting executable path: {}", e))?;
+    let current_exe =
+        std::env::current_exe().map_err(|e| format!("Failed getting executable path: {}", e))?;
 
     #[cfg(target_os = "windows")]
     {
         register_windows_file_associations(&current_exe)?;
-        return Ok("Successfully registered Pealayer in Windows Registry as default media player.".to_string());
+        return Ok(
+            "Successfully registered Pealayer in Windows Registry as default media player."
+                .to_string(),
+        );
     }
 
     #[cfg(target_os = "linux")]
@@ -33,14 +38,18 @@ fn register_windows_file_associations(exe_path: &PathBuf) -> Result<(), String> 
 
     // Write HKCU\Software\Classes\Pealayer.Media
     let hkcu = winreg::RegKey::predef(winreg::enums::HKEY_CURRENT_USER);
-    let (prog_key, _) = hkcu.create_subkey("Software\\Classes\\Pealayer.Media")
+    let (prog_key, _) = hkcu
+        .create_subkey("Software\\Classes\\Pealayer.Media")
         .map_err(|e| format!("Registry error creating ProgID: {}", e))?;
-    prog_key.set_value("", &"Pealayer Media File")
+    prog_key
+        .set_value("", &"Pealayer Media File")
         .map_err(|e| format!("Registry error setting ProgID description: {}", e))?;
 
-    let (shell_cmd_key, _) = hkcu.create_subkey("Software\\Classes\\Pealayer.Media\\shell\\open\\command")
+    let (shell_cmd_key, _) = hkcu
+        .create_subkey("Software\\Classes\\Pealayer.Media\\shell\\open\\command")
         .map_err(|e| format!("Registry error creating shell command: {}", e))?;
-    shell_cmd_key.set_value("", &cmd)
+    shell_cmd_key
+        .set_value("", &cmd)
         .map_err(|e| format!("Registry error setting command: {}", e))?;
 
     // Associate extensions
@@ -62,7 +71,13 @@ fn register_linux_desktop_association(exe_path: &PathBuf) -> Result<(), String> 
     let apps_dir = home_path.join(".local").join("share").join("applications");
     let _ = std::fs::create_dir_all(&apps_dir);
 
-    let icons_dir = home_path.join(".local").join("share").join("icons").join("hicolor").join("512x512").join("apps");
+    let icons_dir = home_path
+        .join(".local")
+        .join("share")
+        .join("icons")
+        .join("hicolor")
+        .join("512x512")
+        .join("apps");
     let _ = std::fs::create_dir_all(&icons_dir);
     let icon_dest = icons_dir.join("pealayer.png");
     let _ = std::fs::write(&icon_dest, include_bytes!("../../assets/pealayer-icon.png"));
@@ -85,7 +100,13 @@ MimeType=video/mp4;video/x-matroska;video/x-msvideo;video/webm;video/quicktime;v
         .map_err(|e| format!("Failed writing desktop entry: {}", e))?;
 
     let _ = std::process::Command::new("xdg-mime")
-        .args(&["default", "pealayer.desktop", "video/mp4", "video/x-matroska", "video/webm"])
+        .args(&[
+            "default",
+            "pealayer.desktop",
+            "video/mp4",
+            "video/x-matroska",
+            "video/webm",
+        ])
         .status();
 
     Ok(())

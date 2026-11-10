@@ -1,12 +1,34 @@
 use crate::four_d::curve::AnalogTrack;
-use crate::four_d::models::{Effect, EffectInstance};
+use crate::four_d::models::{Effect, EffectInstance, TimelineKeyframe, TimelineTrackState};
 
 /// Represents a point-in-time state of user-editable timeline elements.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Default)]
 pub struct TimelineSnapshot {
     pub instances: Vec<EffectInstance>,
     pub analog_tracks: Vec<AnalogTrack>,
     pub templates: Vec<Effect>,
+    pub keyframes: Vec<TimelineKeyframe>,
+    pub track_states: std::collections::BTreeMap<String, TimelineTrackState>,
+    pub track_muted: std::collections::BTreeSet<u8>,
+    pub track_soloed: std::collections::BTreeSet<u8>,
+    pub track_locked: std::collections::BTreeSet<u8>,
+    pub media_target: Option<String>,
+}
+
+impl From<&crate::four_d::models::Timeline> for TimelineSnapshot {
+    fn from(timeline: &crate::four_d::models::Timeline) -> Self {
+        Self {
+            instances: timeline.instances.clone(),
+            analog_tracks: timeline.analog_tracks.clone(),
+            templates: timeline.templates.clone(),
+            keyframes: timeline.keyframes.clone(),
+            track_states: timeline.track_states.clone(),
+            track_muted: timeline.track_muted.clone(),
+            track_soloed: timeline.track_soloed.clone(),
+            track_locked: timeline.track_locked.clone(),
+            media_target: timeline.media_target.clone(),
+        }
+    }
 }
 
 use std::collections::VecDeque;

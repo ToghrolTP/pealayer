@@ -1,0 +1,102 @@
+# Read-only visual verification: never focuses, moves, launches or clicks a window.
+param(
+    [string]$ProcessName = 'pealayer',
+    [int]$ExpectedProcessId = 0,
+    # Optional enumerated HWND for helper windows; MainWindowHandle can select
+    # winit's event-target window instead of the actual Preferences surface.
+    [long]$WindowHandle = 0,
+    [Parameter(Mandatory = $true)][string]$OutputPath,
+    # Optional window-relative pixel rectangle: x, y, width, height.
+    [int[]]$CropRectangle,
+    # Integer nearest-neighbor enlargement for inspecting native pixel edges.
+    # This changes only screenshot presentation, never application DPI or layout.
+    [ValidateRange(1, 8)][int]$PixelScale = 1,
+    # Read-only best effort when a test window is behind another application.
+    # PrintWindow does not activate it; GPU-backed windows may not support it.
+    [switch]$RenderOccludedWindow
+)
+$ErrorActionPreference = 'Stop'
+Add-Type -AssemblyName System.Drawing
+Add-Type @'
+using System;
+using System.Runtime.InteropServices;
+public static class PealayerReadOnlyCapture {
+    [StructLayout(LayoutKind.Sequential)] public struct Rect { public int Left, Top, Right, Bottom; }
+    [DllImport("user32.dll")] public static extern IntPtr GetForegroundWindow();
+    [DllImport("user32.dll")] public static extern bool GetWindowRect(IntPtr window, out Rect rectangle);
+    [DllImport("user32.dll")] public static extern bool IsIconic(IntPtr window);
+    [DllImport("user32.dll")] public static extern uint GetWindowThreadProcessId(IntPtr window, out uint processId);
+    [DllImport("user32.dll")] public static extern bool SetProcessDPIAware();
+    [DllImport("user32.dll")] public static extern bool PrintWindow(IntPtr window, IntPtr dc, uint flags);
+}
+'@
+[void][PealayerReadOnlyCapture]::SetProcessDPIAware()
+$candidateProcesses = @(Get-Process -Name $ProcessName | Where-Object {
+    ($ExpectedProcessId -eq 0 -or $_.Id -eq $ExpectedProcessId) -and
+    $_.MainWindowHandle -ne 0 -and ($WindowHandle -ne 0 -or $RenderOccludedWindow -or $_.MainWindowHandle -eq [PealayerReadOnlyCapture]::GetForegroundWindow())
+})
+if ($candidateProcesses.Count -eq 0) { throw 'Bring the requested application into view first. This script does not change focus.' }
+if ($candidateProcesses.Count -ne 1) { throw 'Multiple matching windows exist; use a unique process name rather than guessing a capture target.' }
+$windowProcess = $candidateProcesses[0]
+$captureWindow = $windowProcess.MainWindowHandle
+if ($WindowHandle -ne 0) {
+    [uint32]$ownerProcess = 0
+    [void][PealayerReadOnlyCapture]::GetWindowThreadProcessId([IntPtr]$WindowHandle, [ref]$ownerProcess)
+    if ($ExpectedProcessId -eq 0 -or $ownerProcess -ne $ExpectedProcessId) { throw 'Explicit window handle must belong to ExpectedProcessId.' }
+    $captureWindow = [IntPtr]$WindowHandle
+    if (-not $RenderOccludedWindow -and $captureWindow -ne [PealayerReadOnlyCapture]::GetForegroundWindow()) { throw 'Requested window is not foreground.' }
+}
+if ([PealayerReadOnlyCapture]::IsIconic($captureWindow)) { throw 'The window is minimized.' }
+$rectangle = New-Object PealayerReadOnlyCapture+Rect
+if (-not [PealayerReadOnlyCapture]::GetWindowRect($captureWindow, [ref]$rectangle)) { throw 'Cannot read the window rectangle.' }
+$width = $rectangle.Right - $rectangle.Left
+$height = $rectangle.Bottom - $rectangle.Top
+if ($width -le 0 -or $height -le 0) { throw 'Window has no visible extent.' }
+$bitmap = New-Object System.Drawing.Bitmap $width, $height
+$graphics = [System.Drawing.Graphics]::FromImage($bitmap)
+function Save-CaptureBitmap([System.Drawing.Bitmap]$Source) {
+    if ($PixelScale -eq 1) {
+        $Source.Save([IO.Path]::GetFullPath($OutputPath), [System.Drawing.Imaging.ImageFormat]::Png)
+        return
+    }
+    $enlarged = [System.Drawing.Bitmap]::new($Source.Width * $PixelScale, $Source.Height * $PixelScale)
+    $scaledGraphics = [System.Drawing.Graphics]::FromImage($enlarged)
+    try {
+        $scaledGraphics.InterpolationMode = [System.Drawing.Drawing2D.InterpolationMode]::NearestNeighbor
+        $scaledGraphics.PixelOffsetMode = [System.Drawing.Drawing2D.PixelOffsetMode]::Half
+        $scaledGraphics.DrawImage($Source, [System.Drawing.Rectangle]::new(0,0,$enlarged.Width,$enlarged.Height))
+        $enlarged.Save([IO.Path]::GetFullPath($OutputPath), [System.Drawing.Imaging.ImageFormat]::Png)
+    } finally { $scaledGraphics.Dispose(); $enlarged.Dispose() }
+}
+try {
+    if ($RenderOccludedWindow) {
+        $captureDc = $graphics.GetHdc()
+        try {
+            if (-not [PealayerReadOnlyCapture]::PrintWindow($captureWindow, $captureDc, 2)) {
+                throw 'This window does not support read-only PrintWindow rendering.'
+            }
+        } finally { $graphics.ReleaseHdc($captureDc) }
+    } else {
+        $graphics.CopyFromScreen($rectangle.Left, $rectangle.Top, 0, 0, $bitmap.Size)
+    }
+    if ($CropRectangle) {
+        if ($CropRectangle.Count -ne 4 -or $CropRectangle[0] -lt 0 -or $CropRectangle[1] -lt 0 -or
+            $CropRectangle[2] -le 0 -or $CropRectangle[3] -le 0 -or
+            ([long]$CropRectangle[0] + $CropRectangle[2]) -gt $width -or
+            ([long]$CropRectangle[1] + $CropRectangle[3]) -gt $height) {
+            throw 'CropRectangle must be x,y,width,height entirely inside the captured window.'
+        }
+        $crop = [System.Drawing.Rectangle]::new($CropRectangle[0], $CropRectangle[1], $CropRectangle[2], $CropRectangle[3])
+        $croppedBitmap = $bitmap.Clone($crop, $bitmap.PixelFormat)
+        try { Save-CaptureBitmap $croppedBitmap }
+        finally { $croppedBitmap.Dispose() }
+        $width = $crop.Width
+        $height = $crop.Height
+    } else {
+        Save-CaptureBitmap $bitmap
+    }
+    [pscustomobject]@{ ProcessId = $windowProcess.Id; Width = $width * $PixelScale; Height = $height * $PixelScale; PixelScale = $PixelScale; Path = [IO.Path]::GetFullPath($OutputPath) }
+} finally {
+    $graphics.Dispose()
+    $bitmap.Dispose()
+}

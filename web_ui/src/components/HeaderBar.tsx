@@ -1,13 +1,24 @@
 import React from 'react';
-import { Layout, Typography, Space, Tag, Button } from 'antd';
+import { Layout, Typography, Tag, Button, Dropdown, Input, Modal, Switch, Tooltip } from 'antd';
 import {
-  SyncOutlined,
+  ApiOutlined,
+  AppstoreAddOutlined,
+  BellOutlined,
   CheckCircleOutlined,
   DisconnectOutlined,
+  FullscreenOutlined,
+  FolderOpenOutlined,
+  GlobalOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
+  MoreOutlined,
+  ShareAltOutlined,
+  SoundOutlined,
+  ThunderboltOutlined,
+  UpCircleOutlined,
 } from '@ant-design/icons';
 import { tr, UiLocale } from '../i18n';
+import type { WebPlatformController } from '../webPlatform';
 
 const { Header } = Layout;
 const { Title } = Typography;
@@ -18,7 +29,13 @@ interface HeaderBarProps {
   connected: boolean;
   connectionMode: 'ws' | 'http';
   appName?: string;
+  appDescription?: string;
+  appIconPath?: string;
   locale: UiLocale;
+  connectionTarget: string;
+  onConnectionTargetChange: (target: string) => void;
+  platform: WebPlatformController;
+  onBrowseRemote: () => void;
 }
 
 export const HeaderBar: React.FC<HeaderBarProps> = ({
@@ -27,61 +44,182 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
   connected,
   connectionMode,
   appName,
+  appDescription,
+  appIconPath,
   locale,
+  connectionTarget,
+  onConnectionTargetChange,
+  platform,
+  onBrowseRemote,
 }) => {
+  const [connectionOpen, setConnectionOpen] = React.useState(false);
+  const [draftTarget, setDraftTarget] = React.useState(connectionTarget);
+
+  React.useEffect(() => setDraftTarget(connectionTarget), [connectionTarget]);
+
   return (
-    <Header
-      style={{
-        padding: '0 24px',
-        background: '#0a2239',
-        borderBottom: '1px solid rgba(23, 96, 135, 0.4)',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'space-between',
-        position: 'sticky',
-        top: 0,
-        zIndex: 100,
-        height: 64,
-      }}
-    >
-      <Space size="large">
+    <Header className="studio-header">
+      <div className="studio-header__leading">
         <Button
           type="text"
           icon={collapsed ? <MenuUnfoldOutlined /> : <MenuFoldOutlined />}
           onClick={onToggleCollapse}
-          style={{ fontSize: 18, color: '#53a2be' }}
+          className="studio-header__menu-button"
+          aria-label={tr(locale, collapsed ? 'Expand navigation' : 'Collapse navigation')}
         />
-        <Space size="middle" align="center">
-          <img
-            src="/pealayer-icon.svg"
-            alt={appName ? `${appName} ${tr(locale, 'Application logo')}` : tr(locale, 'Application logo')}
-            style={{ width: 28, height: 28, borderRadius: 6, objectFit: 'contain' }}
-          />
-          <Title level={4} style={{ margin: 0, color: '#f8fafc', fontWeight: 700 }}>
-            {appName ? `${appName} — ${tr(locale, 'Control Center')}` : tr(locale, 'Control Center')}
-          </Title>
-        </Space>
-      </Space>
-
-      <div>
-        {connected ? (
-          <Tag
-            icon={connectionMode === 'ws' ? <SyncOutlined spin /> : <CheckCircleOutlined />}
-            color="success"
-            style={{ borderRadius: 12, padding: '4px 12px', fontSize: 13 }}
-          >
-            {connectionMode === 'ws' ? tr(locale, 'WebSocket Live') : tr(locale, 'HTTP Polling')}
-          </Tag>
-        ) : (
-          <Tag
-            icon={<DisconnectOutlined />}
-            color="error"
-            style={{ borderRadius: 12, padding: '4px 12px', fontSize: 13 }}
-          >
-            {tr(locale, 'Offline')}
-          </Tag>
-        )}
+        <div className="studio-brand">
+          <span className="studio-brand__mark">
+            <img
+              src={appIconPath || '/api/runtime/app-icon'}
+              alt={appName ? `${appName} ${tr(locale, 'Application logo')}` : tr(locale, 'Application logo')}
+            />
+          </span>
+          <div className="studio-brand__copy">
+            <Title level={4}>{appName || 'Pealayer'}</Title>
+            <span className="studio-brand__subtitle" title={appDescription}>{appDescription || (connected ? tr(locale, 'Connected workspace') : tr(locale, 'Connecting'))}</span>
+          </div>
+        </div>
       </div>
+
+      <div className="connection-cluster" aria-live="polite">
+        <Tooltip title={tr(locale, 'Browse remote folder')}>
+          <Button
+            type="text"
+            icon={<FolderOpenOutlined />}
+            disabled={!connected}
+            onClick={onBrowseRemote}
+            className="studio-header__button connection-target-button connection-cluster__btn--collapsible"
+            aria-label={tr(locale, 'Browse remote folder')}
+          />
+        </Tooltip>
+        <Tooltip title={tr(locale, 'Connect to another Pealayer')}>
+          <Button
+            type="text"
+            icon={<GlobalOutlined />}
+            className="studio-header__button connection-target-button connection-cluster__btn--collapsible"
+            aria-label={tr(locale, 'Connect to another Pealayer')}
+            onClick={() => setConnectionOpen(true)}
+          />
+        </Tooltip>
+        <Tooltip title={connected ? (connectionMode === 'ws' ? tr(locale, 'Live connection') : tr(locale, 'Polling connection')) : tr(locale, 'Offline')}>
+          <Tag
+            icon={connected ? (connectionMode === 'ws' ? <ApiOutlined /> : <CheckCircleOutlined />) : <DisconnectOutlined />}
+            className={`connection-pill ${connected ? 'connection-pill--online' : 'connection-pill--offline'}`}
+            onClick={() => setConnectionOpen(true)}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                setConnectionOpen(true);
+              }
+            }}
+          >
+            <span className="connection-pill__label">
+              {connected ? (connectionMode === 'ws' ? tr(locale, 'Live') : tr(locale, 'Polling')) : tr(locale, 'Offline')}
+            </span>
+          </Tag>
+        </Tooltip>
+        <Dropdown
+          trigger={['click']}
+          menu={{
+            items: [
+              {
+                key: 'browse-remote',
+                icon: <FolderOpenOutlined />,
+                label: tr(locale, 'Browse remote folder'),
+                disabled: !connected,
+                onClick: onBrowseRemote,
+              },
+              {
+                key: 'connect-target',
+                icon: <GlobalOutlined />,
+                label: tr(locale, 'Connect to another Pealayer'),
+                onClick: () => setConnectionOpen(true),
+              },
+              { type: 'divider' },
+              platform.capabilities.install && !platform.standalone ? {
+                key: 'install', icon: <AppstoreAddOutlined />, label: tr(locale, 'Install app'),
+                onClick: () => void platform.install(),
+              } : null,
+              platform.updateReady ? {
+                key: 'update', icon: <UpCircleOutlined />, label: tr(locale, 'Apply web update'),
+                onClick: platform.applyUpdate,
+              } : null,
+              platform.capabilities.share ? {
+                key: 'share', icon: <ShareAltOutlined />, label: tr(locale, 'Share'),
+                onClick: () => void platform.share(),
+              } : null,
+              platform.capabilities.fullscreen ? {
+                key: 'fullscreen', icon: <FullscreenOutlined />, label: tr(locale, 'Fullscreen'),
+                onClick: () => void platform.toggleFullscreen(),
+              } : null,
+              platform.capabilities.notifications ? {
+                key: 'notifications', icon: <BellOutlined />, label: tr(locale, 'Enable notifications'),
+                onClick: () => void platform.enableNotifications(),
+              } : null,
+              { type: 'divider' },
+              platform.capabilities.vibration ? {
+                key: 'haptics',
+                icon: <ThunderboltOutlined />,
+                label: <span className="web-capability-toggle"><span>{tr(locale, 'Haptic feedback')}</span><Switch size="small" checked={platform.hapticsEnabled} onChange={platform.setHapticsEnabled} /></span>,
+              } : null,
+              platform.capabilities.audio ? {
+                key: 'audio-feedback',
+                icon: <SoundOutlined />,
+                label: <span className="web-capability-toggle"><span>{tr(locale, 'Audio feedback')}</span><Switch size="small" checked={platform.audioFeedbackEnabled} onChange={platform.setAudioFeedbackEnabled} /></span>,
+              } : null,
+              platform.capabilities.wakeLock ? {
+                key: 'wake-lock',
+                icon: <ThunderboltOutlined />,
+                label: <span className="web-capability-toggle"><span>{tr(locale, 'Keep screen awake while playing')}</span><Switch size="small" checked={platform.keepAwakeEnabled} onChange={platform.setKeepAwakeEnabled} /></span>,
+              } : null,
+            ].filter(Boolean) as any,
+          }}
+        >
+          <Tooltip title={tr(locale, 'Web app features')}>
+            <Button
+              type="text"
+              icon={<MoreOutlined />}
+              className="studio-header__button connection-target-button"
+              aria-label={tr(locale, 'Web app features')}
+            />
+          </Tooltip>
+        </Dropdown>
+      </div>
+
+      <Modal
+        title={tr(locale, 'Pealayer connection')}
+        open={connectionOpen}
+        onCancel={() => setConnectionOpen(false)}
+        okText={tr(locale, 'Connect')}
+        onOk={() => {
+          onConnectionTargetChange(draftTarget.trim());
+          setConnectionOpen(false);
+        }}
+        destroyOnClose={false}
+      >
+        <label className="connection-target-field">
+          <span>{tr(locale, 'WebSocket endpoint')}</span>
+          <Input
+            value={draftTarget}
+            onChange={(event) => setDraftTarget(event.target.value)}
+            placeholder="ws://host:port/ws"
+            allowClear
+            onPressEnter={() => {
+              onConnectionTargetChange(draftTarget.trim());
+              setConnectionOpen(false);
+            }}
+          />
+        </label>
+        <button
+          type="button"
+          className="connection-target-local"
+          onClick={() => setDraftTarget('')}
+        >
+          {tr(locale, 'Use this instance')}
+        </button>
+      </Modal>
     </Header>
   );
 };

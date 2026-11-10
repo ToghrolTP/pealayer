@@ -12,8 +12,17 @@ the exact PR artifact:
 
 ```powershell
 pwsh -File scripts/update-screenshots-windows.ps1 `
-  -Executable target/release/pealayer.exe `
+  -Executable "$env:LOCALAPPDATA\Programs\Pealayer\build-cache\cargo-target\release\pealayer.exe" `
   -Theme dark -Locale en,fa
+```
+
+Capture the same Preferences editor in its native-window host by selecting the
+dedicated surface (the default remains the main application window):
+
+```powershell
+pwsh -File scripts/update-screenshots-windows.ps1 `
+  -Executable "$env:LOCALAPPDATA\Programs\Pealayer\build-cache\cargo-target\release\pealayer.exe" `
+  -Surface preferences -Theme dark -Locale en
 ```
 
 For a custom build, pass `-Branding path\to\brand.json` (the shared
@@ -22,8 +31,8 @@ reads `ProductName` from the executable's Win32 version resource.
 
 The script launches isolated English and Persian processes, captures each
 app-owned native window at its initialized dimensions, and terminates only the
-process it created. Each launch uses an isolated settings file and dedicated HTTP,
-WebSocket, and loopback IPC ports, so it never stops, forwards into, or replaces
+process it created. Each launch uses an isolated settings file and dedicated
+unified control port, so it never stops, forwards into, or replaces
 an installed Pealayer instance. The updater tries
 `PrintWindow(PW_RENDERFULLCONTENT)` first, detects the blank frame produced by
 some OpenGL drivers, and then tries the target window's composed device context

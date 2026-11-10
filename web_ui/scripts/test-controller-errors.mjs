@@ -1,0 +1,15 @@
+import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
+import { controllerErrorCaption } from '../src/controllerErrors.ts';
+assert.equal(controllerErrorCaption({kind:'timeout'}),'PCController request timed out');
+assert.equal(controllerErrorCaption({transport_failed:true}),'PCController connection is unavailable');
+assert.equal(controllerErrorCaption({kind:'authority_conflict',message:'timed out (os error 10060)'}),undefined);
+for (const value of [null,undefined,'timed out',[],{transport_failed:'true'}]) assert.equal(controllerErrorCaption(value),undefined);
+const rf=readFileSync(new URL('../src/components/RfManager.tsx',import.meta.url),'utf8');
+assert.match(rf,/message=\{controllerErrorCaption/);
+assert.match(rf,/<details>[\s\S]*\{rf.error\}/,'Original diagnostic must remain under Details, not be discarded');
+const toast=readFileSync(new URL('../src/components/SharedToasts.tsx',import.meta.url),'utf8');
+assert.match(toast,/t.details \|\| t.message/,'Original diagnostic remains available, with summary fallback');
+assert.match(toast,/<Modal open=\{details !== null\}/,'Details remains inspectable after toast expiry');
+assert.match(toast,/navigator.clipboard.writeText\(diagnostic\(t\)\)/,'Copy includes the retained diagnostic');
+console.log('Controller errors: typed-only classification and retained RF/global diagnostics passed.');

@@ -1,0 +1,204 @@
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
+import '../rf-manager.css';
+import { Alert, Button, Card, Checkbox, Collapse, Dropdown, Empty, Form, Input, InputNumber, Modal, Select, Space, Table, Tabs, Tag, Typography } from 'antd';
+import { ApiOutlined, DeleteOutlined, EditOutlined, MoreOutlined, PlusOutlined, ReloadOutlined, SaveOutlined, SendOutlined } from '@ant-design/icons';
+import { actionReady, actionSummary, boardMapValid, controlOptions, editBoardMap, executionLabel, groupRfBindings, human, lastSeen, sameSignal, seenTime, targetOptions as boardTargetOptions } from '../rf-presentation';
+import type { BoardAssignment, RfControl } from '../rf-presentation';
+import { uniqueRfBindingName, rfBindingNameConflicts } from '../rfBindingNames';
+import { tr, type UiLocale } from '../i18n';
+import { rfKey, rfPresent, RfReceptionSession } from '../rf-reception';
+import type { RfLearnPreferences, RfReception, RfSignal } from '../rf-reception';
+import { controllerErrorCaption } from '../controllerErrors';
+import { RfSavedRuleCards } from './RfSavedRuleCards';
+
+type Action = { type: string; app_kind?: string; app_target?: string; app_value?: string; action_id?: string; command?: string; macro?: string; virtual_key?: string; hold_ms?: number; executable?: string; script?: string; detached?: boolean; args?: string[]; event?: string; rf?: Waveform };
+type Waveform = { code: number; bits: number; protocol: number; pulse_us: number; repeats?: number };
+type Binding = { name: string; enabled: boolean; cooldown_ms: number; match: { kind: string; source: string; rf_code: number; rf_bits: number; rf_protocol: number; gesture: string }; actions: Action[] };
+type Entry = Waveform & { id: number; name?: string; code_display: string; action_kind: number; action_value: number; behavior: number; last_seen?: string | null; board_assignment?: BoardAssignment };
+type Application = { id: string; surface: string; values?: { app_actions?: string } };
+type MappingOption = { action: string; targets: string[]; behaviors: string[]; behavior_labels?:Record<string,string> };
+type Catalog = { receptions?: RfReception[]; preferences?: RfLearnPreferences; host_instance_id?:string; connection_generation?:number; connected?: boolean; entries?: Entry[]; entries_sampled?: boolean; board_error?: string; bindings?: Binding[]; learning?: { active: boolean; remaining_ms: number; learned: number }; activity?: { id: number; text: string; time: string; rf_code: number; rf_bits: number; rf_protocol: number }[]; hostname?: string; action_types?: string[]; gestures?: string[]; applications?: Application[]; effects?: { name: string; reference: string }[]; peripherals?: { controls: RfControl[] }; board_mapping_options?: MappingOption[]; keyboard?: {allowed?: string[]} };
+export type RfSnapshot = { catalog?: Catalog; pending?: boolean; error?: string; error_detail?: {kind?: string; resource?: string; retryable?: boolean; retry_after_ms?: number; transport_failed?: boolean}; last_result?: unknown; last_operation?: string };
+type Props = { rf?: RfSnapshot; hardwareConnected?: boolean; locale?: UiLocale; sendCmd: (command: string, payload?: Record<string, unknown>) => void;
+  assignment?: { key: string; name: string; nonce: number } };
+const blank = (): Binding => ({ name: '', enabled: true, cooldown_ms: 250, match: { kind: 'rf.gesture', source: 'rf', rf_code: 0, rf_bits: 24, rf_protocol: 1, gesture: 'down' }, actions: [{ type: 'control', action_id: '' }] });
+const labels: Record<string, string> = { app: 'Application', control: 'Controller hardware control', board: 'Controller command (advanced)', effect: 'Effect', rf: 'RF transmit', 'virtual-key': 'Controller host keyboard', host: 'External program', script: 'Script', emit: 'Event' };
+
+export const RfManager: React.FC<Props> = ({ rf, hardwareConnected, sendCmd, assignment, locale = 'en' }) => {
+  const [open, setOpen] = useState(false);
+  const [tab, setTab] = useState('assignments');
+  const editorRef = useRef<HTMLDivElement>(null);
+  const [assignmentControl, setAssignmentControl] = useState<string>();
+  useEffect(() => {
+    if (!assignment) return;
+    const draft = blank(); draft.name = uniqueRfBindingName(assignment.name, (rf?.catalog?.bindings ?? []).map(binding => binding.name));
+    setDraft(draft); setPreviousName(''); setAssignmentControl(assignment.key);
+    setTab('assignments'); setOpen(true);
+    sendCmd('pealayer.rf', { operation: 'catalog', params: { read_board: true } });
+  }, [assignment?.nonce]);
+  const [draft, setDraft] = useState<Binding>(blank);
+  const [previousName, setPreviousName] = useState('');
+  const [allowKeyboard, setAllowKeyboard] = useState(false);
+  const [manualSignal, setManualSignal] = useState(false);
+  const [boardEditorOpen, setBoardEditorOpen] = useState<string[]>([]);
+  const [compact,setCompact]=useState(()=>window.matchMedia('(max-width: 600px)').matches);
+  useEffect(()=>{const media=window.matchMedia('(max-width: 600px)');const change=()=>setCompact(media.matches);media.addEventListener('change',change);return()=>media.removeEventListener('change',change);},[]);
+  const liveConnected=hardwareConnected===true;
+  const [wave, setWave] = useState<Waveform>({ code: 0, bits: 24, protocol: 1, pulse_us: 0, repeats: 1 });
+  const [map, setMap] = useState<{ id: number; action: string; target?: string; behavior?: string }>({ id: -1, action: '' });
+  const catalog = rf?.catalog ?? {};
+  const receipts=catalog.receptions ?? [];
+  const session=useRef(new RfReceptionSession());
+  const [now,setNow]=useState(Date.now());
+  const [preferences,setPreferences]=useState<RfLearnPreferences>();
+  const [,setSessionEpoch]=useState(0);
+  const sessionContext=useRef<{open:boolean;owner?:string}>({open:false});
+  useLayoutEffect(()=>{const owner=catalog.host_instance_id?`${catalog.host_instance_id}:${catalog.connection_generation}`:undefined;
+    if(open&&(!sessionContext.current.open||sessionContext.current.owner&&owner&&sessionContext.current.owner!==owner))session.current.open(receipts);
+    sessionContext.current={open,owner};setSessionEpoch(epoch=>epoch+1);setNow(Date.now());},[open,catalog.host_instance_id,catalog.connection_generation]);
+  const receptionSignature=receipts.map(r=>`${rfKey(r)}:${r.received_count}:${r.last_seen}`).join('|');
+  useEffect(()=>{setNow(Date.now());},[receptionSignature]);
+  useEffect(()=>{if(!open)return;const expiries=receipts.map(r=>Date.parse(r.last_seen)+250).filter(t=>t>now);if(!expiries.length)return;const timer=setTimeout(()=>setNow(Date.now()),Math.max(1,Math.min(...expiries)-Date.now()));return()=>clearTimeout(timer);},[open,receptionSignature,now]);
+  useEffect(()=>{setPreferences(catalog.preferences);},[catalog.preferences?.timed,catalog.preferences?.timeout_seconds,catalog.preferences?.continuous]);
+  const indicator=(signal:RfSignal)=>{const receipt=receipts.find(r=>rfKey(r)===rfKey(signal));const on=rfPresent(receipt,liveConnected,now);return <Space size={6}><span className={`rf-receive-indicator${on?' is-on':''}`} role="img" aria-label={tr(locale,on?'Receiving':'Not receiving')}/><span className="rf-receive-count" title={tr(locale,'Receptions since this dialog opened')}>×{session.current.count(receipt)}</span></Space>;};
+  const observed=new Map<string,Waveform>();
+  for(const receipt of receipts)if(!(catalog.entries??[]).some(e=>rfKey(e)===rfKey(receipt)))observed.set(rfKey(receipt),{...receipt,pulse_us:receipt.pulse_us??0});
+  for(const binding of catalog.bindings??[]){const s={code:binding.match.rf_code,bits:binding.match.rf_bits,protocol:binding.match.rf_protocol,pulse_us:0};if(!(catalog.entries??[]).some(e=>rfKey(e)===rfKey(s))&&!observed.has(rfKey(s)))observed.set(rfKey(s),s);}
+  const nameConflict = rfBindingNameConflicts(draft.name, previousName, (catalog.bindings ?? []).map(binding => binding.name));
+  const controls = catalog.peripherals?.controls ?? [];
+  const entries = [...(catalog.entries ?? [])].sort((a,b) => seenTime(b)-seenTime(a));
+  const summarize = (action: Action) => actionSummary(action, controls, catalog.effects ?? []);
+  const actionsReady = draft.actions.length>0 && draft.actions.every(action=>actionReady(action,controls,catalog.effects ?? [],catalog.applications ?? [],catalog.keyboard?.allowed ?? []));
+  const editBoard = (entry: Entry) => { setMap(editBoardMap(entry)); setBoardEditorOpen(['map']); };
+  const command = (operation: string, params: Record<string, unknown> = {}) => sendCmd('pealayer.rf', { operation, params });
+  useEffect(() => {
+    if (rf?.last_operation === 'rf-binding.put' && Array.isArray(rf.last_result)) {
+      const saved = (rf.last_result as Binding[]).find(binding => binding.name === draft.name && binding.match.rf_code === draft.match.rf_code && binding.match.rf_bits === draft.match.rf_bits && binding.match.rf_protocol === draft.match.rf_protocol && binding.match.gesture === draft.match.gesture);
+      if (saved) setPreviousName(saved.name);
+    }
+    if (rf?.last_operation === 'rf-binding.remove' && Array.isArray(rf.last_result) && !(rf.last_result as Binding[]).some(binding => binding.name === previousName)) setPreviousName('');
+  }, [rf?.last_result, rf?.last_operation]);
+  const assign = (entry: Entry) => {
+    const binding = blank(); binding.name = entry.name || `RF ${entry.id}`;
+    binding.match = { ...binding.match, rf_code: entry.code, rf_bits: entry.bits, rf_protocol: entry.protocol };
+    const existing = catalog.bindings?.find(item => item.match.rf_code === entry.code && item.match.rf_bits === entry.bits && item.match.rf_protocol === entry.protocol && item.match.gesture === 'down');
+    setDraft(existing ?? binding); setPreviousName(existing?.name ?? ''); setTab('assignments');
+  };
+  const updateAction = (index: number, patch: Partial<Action>) => setDraft(current => ({ ...current, actions: current.actions.map((action, i) => i === index ? { ...action, ...patch } : action) }));
+  const match = (patch: Partial<Binding['match']>) => setDraft(current => ({ ...current, match: { ...current.match, ...patch } }));
+  const mapping = catalog.board_mapping_options?.find(option => option.action === map.action);
+  const targetOptions = [...new Set(catalog.applications?.map(app => app.surface))].map(surface => ({ value: surface, label: `${surface} (all)` })).concat((catalog.applications ?? []).map(app => ({ value: app.id, label: app.id })));
+  const activeBoardAction = catalog.entries?.find(entry => entry.code === draft.match.rf_code && entry.bits === draft.match.rf_bits && entry.protocol === draft.match.rf_protocol && entry.action_kind !== 0);
+  const assignmentGroups = groupRfBindings(catalog.bindings ?? [], controls, assignmentControl);
+  const editBinding = (binding: Binding) => {
+    setAssignmentControl(undefined); setDraft(structuredClone(binding)); setPreviousName(binding.name);
+    editorRef.current?.scrollIntoView({block:'start'});
+  };
+  const setBindingEnabled = (binding: Binding, enabled: boolean) => {
+    if (!liveConnected || rf?.pending) return;
+    command('binding.put', { binding: { ...binding, enabled }, previous_name: binding.name });
+  };
+  const assignmentsTable = (bindings: Binding[]) => compact ? <RfSavedRuleCards
+    rules={bindings.map(binding => ({name:binding.name,enabled:binding.enabled,
+      gestureLabel:human(binding.match.gesture),summaries:binding.actions.map(summarize)}))}
+    disabled={!liveConnected || Boolean(rf?.pending)} locale={locale}
+    onEdit={name => {const binding=bindings.find(binding=>binding.name===name);if(binding)editBinding(binding);}}
+    onEnabled={(name,enabled) => {const binding=bindings.find(binding=>binding.name===name);if(binding)setBindingEnabled(binding,enabled);}}
+  /> : <Table<Binding> size="small" pagination={false} rowKey="name" dataSource={bindings} scroll={{x:520}} columns={[
+    { title: 'Enabled', width: 80, render: (_, binding) => <Checkbox disabled={!liveConnected || rf?.pending} checked={binding.enabled} onChange={e => setBindingEnabled(binding, e.target.checked)} /> },
+    { title: 'Assignment', render: (_,binding) => <Space direction="vertical" size={2}><strong>{human(binding.match.gesture)}</strong>{binding.actions.map((action,i) => <Typography.Text key={i}>{summarize(action)}</Typography.Text>)}<Typography.Text type="secondary">{binding.name}</Typography.Text></Space> },
+    { title: '', width: 80, render: (_, binding) => <Button size="small" icon={<EditOutlined />} onClick={() => editBinding(binding)}>Edit</Button> },
+  ]} />;
+  const entryAssignments=(entry:Entry)=><Space direction="vertical" size={4}><Tag color="blue">On board · {entry.board_assignment?.label ?? 'Not reported'}</Tag>{(catalog.bindings ?? []).filter(binding=>sameSignal(binding.match,entry)).map(binding=><div key={binding.name}><strong>{binding.name} · {human(binding.match.gesture)}{!binding.enabled && ' · disabled'}</strong>{binding.actions.map((action,i)=><div key={i}>{summarize(action)}</div>)}<Typography.Text type="secondary">{executionLabel(binding.actions)}</Typography.Text></div>)}</Space>;
+  const entryButtons=(entry:Entry)=><Space wrap><Button size="small" onClick={()=>editBoard(entry)}>On board…</Button><Button size="small" onClick={()=>assign(entry)}>On controller…</Button><Dropdown menu={{items:[{key:'transmit',label:'Transmit signal',disabled:rf?.pending||!liveConnected},{key:'board',label:'Edit board action'},{key:'unassign',label:'Unassign board action',disabled:rf?.pending||!liveConnected},{key:'remove',label:'Remove learned button',danger:true,disabled:rf?.pending||!liveConnected}],onClick:({key})=>{if(key==='board')editBoard(entry);if(key==='transmit')command('transmit',{code:entry.code,bits:entry.bits,protocol:entry.protocol,pulse_us:entry.pulse_us,repeats:1});if(key==='unassign')command('map',{id:entry.id,action:'none'});if(key==='remove')Modal.confirm({title:'Remove learned RF button?',onOk:()=>command('remove',{id:entry.id})});}}}><Button size="small" icon={<MoreOutlined/>} aria-label="RF button actions"/></Dropdown></Space>;
+  return <>
+    <Card className="surface-card" title={<Space><ApiOutlined />RF controls</Space>} extra={<Button aria-label="Manage RF controls" icon={<EditOutlined />} onClick={() => { setAssignmentControl(undefined); setOpen(true); if(liveConnected) command('catalog', { read_board: true }); }}>Manage</Button>}>
+      <Space wrap><Tag>{catalog.bindings?.length ?? 0} assignments</Tag>{catalog.learning?.active && <Tag color="processing">Learning buttons</Tag>}</Space>
+    </Card>
+    <Modal key={assignment?.nonce ?? 'rf-general'} zIndex={1200} className="rf-manager-modal" open={open} onCancel={() => setOpen(false)} footer={null} width={900} title={<Space><ApiOutlined />RF controls</Space>}>
+      <Space style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 12 }}>
+        <Button disabled={!liveConnected} loading={rf?.pending} icon={<ReloadOutlined />} onClick={() => command('catalog', { read_board: true })}>Refresh</Button>
+      </Space>
+      {!liveConnected && <Alert type="info" showIcon title="Showing last known RF buttons" description="Connect PCController to learn or save. Your current draft stays open." style={{marginBottom:12}} />}
+      {rf?.error && <Alert type="error" showIcon
+        message={controllerErrorCaption(rf.error_detail) ? tr(locale, controllerErrorCaption(rf.error_detail)!) : rf.error}
+        description={<>
+          <div>{rf.error_detail?.transport_failed ? tr(locale, 'Check the connection and current state before retrying')
+            : rf.error_detail?.retryable ? tr(locale, 'You can retry when the controller is ready.') : ''}</div>
+          <details><summary>{tr(locale, 'Details')}</summary><div style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>{rf.error}</div>
+            {rf.error_detail?.kind && <div>Kind: {human(rf.error_detail.kind)}</div>}
+            {rf.error_detail?.resource && <div>Resource: {human(rf.error_detail.resource)}</div>}
+            {rf.error_detail?.retry_after_ms != null && <div>Retry after: {rf.error_detail.retry_after_ms} ms</div>}
+          </details>
+        </>} style={{ marginBottom: 12 }} />}
+      {catalog.board_error && <Alert type="warning" showIcon message={catalog.board_error} style={{ marginBottom: 12 }} />}
+      <Tabs activeKey={tab} onChange={setTab} items={[
+        { key: 'assignments', label: 'Assignments', children: <>
+          <Space wrap style={{ marginBottom: 12 }}>
+            <Button icon={<PlusOutlined />} onClick={() => { setDraft(blank()); setPreviousName(''); }}>New assignment</Button>
+            {catalog.activity?.find(event => event.rf_code > 0) && <Button onClick={() => { const event = catalog.activity!.find(event => event.rf_code > 0)!; match({ rf_code: event.rf_code, rf_bits: event.rf_bits, rf_protocol: event.rf_protocol }); }}>Use last received</Button>}
+          </Space>
+          <div ref={editorRef}><Form layout="vertical" style={{ marginTop: 18 }}>
+            <div className="rf-form-grid">
+              <Form.Item label="Name"><Input aria-label="Assignment name" value={draft.name} maxLength={64} onChange={e => setDraft({ ...draft, name: e.target.value })} /></Form.Item>
+              <Form.Item label="Gesture"><Select aria-label="Gesture" value={draft.match.gesture} options={(catalog.gestures ?? []).map(value => ({ value, label: human(value) }))} onChange={gesture => match({ gesture })} /></Form.Item>
+              <Form.Item label={tr(locale,'RF code')}><Select aria-label="RF code" showSearch optionFilterProp="label" placeholder="Choose an RF code" value={draft.match.rf_code?rfKey({code:draft.match.rf_code,bits:draft.match.rf_bits,protocol:draft.match.rf_protocol}):undefined} options={[...entries,...observed.values()].map(entry=>({value:rfKey(entry),label:('code_display' in entry?String(entry.code_display):undefined)??`0x${entry.code.toString(16).toUpperCase()}`}))} onChange={key=>{const entry=[...entries,...observed.values()].find(entry=>rfKey(entry)===key);if(entry)match({rf_code:entry.code,rf_bits:entry.bits,rf_protocol:entry.protocol});}} /></Form.Item>
+              <Form.Item label="Manual signal"><Checkbox checked={manualSignal} onChange={e=>setManualSignal(e.target.checked)}>Advanced signal entry</Checkbox></Form.Item>
+              {manualSignal && <Form.Item label="RF code"><InputNumber min={1} max={4294967295} value={draft.match.rf_code} onChange={code => match({ rf_code: code ?? 0 })} style={{ width: '100%' }} /></Form.Item>}
+              {manualSignal && <>
+              <Form.Item label="Bits"><InputNumber min={1} max={32} value={draft.match.rf_bits} onChange={bits => match({ rf_bits: bits ?? 24 })} /></Form.Item>
+              <Form.Item label="Protocol"><InputNumber min={1} max={12} value={draft.match.rf_protocol} onChange={protocol => match({ rf_protocol: protocol ?? 1 })} /></Form.Item>
+              </>}
+              <Form.Item label="Cooldown (ms)"><InputNumber min={1} max={3600000} value={draft.cooldown_ms} onChange={cooldown_ms => setDraft({ ...draft, cooldown_ms: cooldown_ms ?? 250 })} /></Form.Item>
+            </div>
+            {draft.actions.map((action, index) => {
+              const apps = catalog.applications?.filter(app => app.id === action.app_target || app.surface === action.app_target) ?? [];
+              const commands = [...new Set(apps.flatMap(app => (app.values?.app_actions ?? '').split(',').filter(Boolean)))];
+              return <Card key={index} size="small" title={`Action ${index + 1}`} extra={<Button size="small" icon={<DeleteOutlined />} aria-label="Remove action" onClick={() => setDraft({ ...draft, actions: draft.actions.filter((_, i) => i !== index) })} />} style={{ marginBottom: 10 }}>
+                <Form.Item label="Action"><Select aria-label="Action type" value={action.type} options={(assignmentControl ? ['control'] : catalog.action_types ?? []).map(value => ({ value, label: labels[value] ?? human(value) }))} onChange={type => setDraft(current=>({...current,actions:current.actions.map((old,i)=>i===index?{type}:old)}))} /></Form.Item>
+                {action.type === 'app' && <div className="rf-form-grid">
+                  <Form.Item label="Application"><Select showSearch value={action.app_target} options={targetOptions} onChange={app_target => updateAction(index, { app_target, app_kind: '', app_value: '' })} /></Form.Item>
+                  <Form.Item label="Command"><Select showSearch optionFilterProp="label" value={action.app_kind} options={commands.map(value => ({ value, label: human(value) }))} onChange={app_kind => updateAction(index, { app_kind, app_value: '' })} /></Form.Item>
+                  {['pealayer.mute.set','pealayer.fullscreen.set'].includes(action.app_kind ?? '') ? <Form.Item label="Value"><Select value={action.app_value} options={[{value:'true',label:'On'},{value:'false',label:'Off'}]} onChange={app_value=>updateAction(index,{app_value})} /></Form.Item> : action.app_kind === 'pealayer.rate.set' ? <Form.Item label="Speed"><Select value={action.app_value} options={['0.5','0.75','1','1.25','1.5','2'].map(value=>({value,label:`${value}×`}))} onChange={app_value=>updateAction(index,{app_value})} /></Form.Item> : ['pealayer.volume.set','pealayer.seek','pealayer.seek_to','pealayer.seek_absolute','pealayer.chapter.set','pealayer.open','pealayer.command','pealayer.workspace.set'].includes(action.app_kind ?? '') && <Form.Item label="Value"><Input value={action.app_value} onChange={e => updateAction(index, { app_value: e.target.value })} placeholder={action.app_kind === 'pealayer.command' ? '{"command":"play"}' : undefined} /></Form.Item>}
+                </div>}
+                {action.type === 'control' && <Form.Item label="Controller hardware control" extra="Runs on PCController. Pealayer can be closed."><Select aria-label="Controller hardware control" showSearch optionFilterProp="label" value={action.action_id} options={controlOptions(assignmentControl ? controls.filter(control => control.key === assignmentControl) : controls)} onChange={action_id => updateAction(index, { action_id })} /></Form.Item>}
+                {(action.type === 'effect' || action.type === 'macro') && <Form.Item label="Effect"><Select showSearch value={action.macro} options={(catalog.effects ?? []).map(effect => ({ value: effect.reference, label: effect.name }))} onChange={macro => updateAction(index, { macro })} /></Form.Item>}
+                {action.type === 'board' && <Form.Item label="Controller command"><Input value={action.command} onChange={e => updateAction(index, { command: e.target.value })} /></Form.Item>}
+                {action.type === 'virtual-key' && <div className="rf-form-grid"><Form.Item label={`Keyboard on ${catalog.hostname || 'controller host'}`}><Select showSearch value={action.virtual_key} options={(catalog.keyboard?.allowed ?? []).map(value=>({value,label:value}))} onChange={virtual_key => updateAction(index, { virtual_key })} /></Form.Item><Form.Item label="Hold (ms)"><InputNumber min={10} max={1000} value={action.hold_ms ?? 50} onChange={hold_ms => updateAction(index, { hold_ms: hold_ms ?? 50 })} /></Form.Item></div>}
+                {(action.type === 'host' || action.type === 'script') && <><Form.Item label="Program"><Input value={action.type === 'host' ? action.executable : action.script} onChange={e => updateAction(index, action.type === 'host' ? { executable: e.target.value } : { script: e.target.value })} /></Form.Item><Form.Item label="Arguments (one per line)"><Input.TextArea rows={2} value={action.args?.join('\n')} onChange={e => updateAction(index, { args: e.target.value.split('\n').filter(Boolean) })} /></Form.Item><Checkbox checked={action.detached} onChange={e => updateAction(index, { detached: e.target.checked })}>Launch independently</Checkbox></>}
+                {action.type === 'emit' && <Form.Item label="Event"><Input value={action.event} onChange={e => updateAction(index, { event: e.target.value })} /></Form.Item>}
+                {action.type === 'rf' && <WaveformFields value={action.rf ?? { code: 0, bits: 24, protocol: 1, pulse_us: 0, repeats: 1 }} onChange={rf => updateAction(index, { rf })} />}
+              </Card>;
+            })}
+            {draft.actions.length < 8 && <Button icon={<PlusOutlined />} onClick={() => setDraft({ ...draft, actions: [...draft.actions, { type: 'control', action_id: '' }] })}>Add action</Button>}
+            {draft.actions.some(action => action.type === 'virtual-key') && <Form.Item style={{ marginTop: 12 }}><Checkbox checked={allowKeyboard} onChange={e => setAllowKeyboard(e.target.checked)}>Allow assigned keyboard keys on {catalog.hostname || 'controller host'}</Checkbox></Form.Item>}
+            {activeBoardAction && <Alert type="warning" showIcon message="This button also has a board action" description={<Button size="small" onClick={() => command('map', { id: activeBoardAction.id, action: 'none' })}>Unassign board action</Button>} style={{ marginTop: 12 }} />}
+            {nameConflict && <Alert type="warning" showIcon message="An RF assignment with this name already exists. Choose another name." />}
+            <Space style={{ marginTop: 16 }}><Button type="primary" icon={<SaveOutlined />} loading={rf?.pending} disabled={nameConflict || !liveConnected || !draft.name.trim() || !draft.match.rf_code || !actionsReady} onClick={() => command('binding.put', { binding: draft, previous_name: previousName, allow_keyboard: allowKeyboard })}>Save assignment</Button>{previousName && <Button danger icon={<DeleteOutlined />} disabled={rf?.pending} onClick={() => command('binding.remove', { name: previousName })}>Remove</Button>}</Space>
+          </Form></div>
+          <Typography.Title level={5}>{tr(locale, assignmentControl ? 'Saved buttons for this channel' : 'Saved RF buttons')}</Typography.Title>
+          {assignmentGroups.length ? <Collapse items={assignmentGroups.map(group => ({key:group.id,
+            label:<Space>{indicator({code:group.bindings[0].match.rf_code,bits:group.bindings[0].match.rf_bits,protocol:group.bindings[0].match.rf_protocol})}{`0x${group.bindings[0].match.rf_code.toString(16).toUpperCase()} · ${group.bindings[0].match.rf_bits} bits · Protocol ${group.bindings[0].match.rf_protocol} · ${group.bindings.length} gesture rules`}</Space>,
+            children:assignmentsTable(group.bindings)}))} /> : <Empty description={tr(locale, 'No saved buttons for this selection')} />}
+        </> },
+        { key: 'remotes', label: 'Remotes', children: <>
+          <Space style={{ marginBottom: 12 }}>{catalog.learning?.active ? <><Tag color="processing">Learning{catalog.learning.remaining_ms > 0 && ` · ${Math.ceil(catalog.learning.remaining_ms / 1000)} s`}</Tag><Button onClick={() => command('learn.cancel')}>Stop learning</Button></> : <Button icon={<PlusOutlined />} disabled={!liveConnected || rf?.pending} onClick={() => command('learn.start')}>Learn buttons</Button>}</Space>
+          {compact ? <div className="rf-learned-cards">{entries.length ? entries.map(entry=><Card key={entry.id} size="small" title={<Space>{indicator(entry)}{entry.name || `RF ${entry.id}`}</Space>}><Typography.Text code>{entry.code_display}</Typography.Text><div className="rf-last-seen">Last seen · {lastSeen(entry)}</div><div>{entryAssignments(entry)}</div><Typography.Paragraph type="secondary">{entry.bits} bits · Protocol {entry.protocol} · {entry.pulse_us} µs</Typography.Paragraph>{entryButtons(entry)}</Card>):<Empty description="No learned RF buttons"/>}</div> : <Table<Entry> className="rf-learned-table" size="small" pagination={false} rowKey="id" dataSource={entries} scroll={{x:760}} locale={{ emptyText: 'No learned RF buttons. Use Refresh to read the board or learn a new button.' }} columns={[
+            { title: 'Button', width:220, render: (_, entry) => <Space direction="vertical" size={0}>{indicator(entry)}<strong>{entry.name || `RF ${entry.id}`}</strong><Typography.Text code>{entry.code_display}</Typography.Text></Space> },
+            { title: 'Signal', render: (_, entry) => `${entry.bits} bits · Protocol ${entry.protocol} · ${entry.pulse_us} µs` },
+            { title: 'Assigned actions', render: (_, entry) => <Space direction="vertical" size={4}><Tag color="blue">On board · {entry.board_assignment?.label ?? 'Not reported'}</Tag>{(catalog.bindings ?? []).filter(binding=>sameSignal(binding.match,entry)).map(binding=><div key={binding.name}><strong>{binding.name} · {human(binding.match.gesture)}{!binding.enabled && ' · disabled'}</strong>{binding.actions.map((action,i)=><div key={i}>{summarize(action)}</div>)}<Typography.Text type="secondary">{executionLabel(binding.actions)}</Typography.Text></div>)}</Space> },
+            { title: 'Last seen', width:170, render: (_,entry)=><Typography.Text type="secondary">{lastSeen(entry)}</Typography.Text> },
+            { title: '', render: (_, entry) => <Space wrap><Button size="small" onClick={() => editBoard(entry)}>On board…</Button><Button size="small" onClick={() => assign(entry)}>On controller…</Button><Dropdown menu={{ items: [{ key: 'transmit', label: 'Transmit signal', disabled:rf?.pending || !liveConnected }, { key: 'board', label: 'Edit board action' }, { key: 'unassign', label: 'Unassign board action',disabled:rf?.pending }, { key: 'remove', label: 'Remove learned button', danger: true,disabled:rf?.pending }], onClick: ({ key }) => { if (key === 'board') editBoard(entry); if(key==='transmit')command('transmit',{code:entry.code,bits:entry.bits,protocol:entry.protocol,pulse_us:entry.pulse_us,repeats:1}); if (key === 'unassign') command('map', { id: entry.id, action: 'none' }); if (key === 'remove') Modal.confirm({ title: 'Remove learned RF button?', onOk: () => command('remove', { id: entry.id }) }); } }}><Button size="small" icon={<MoreOutlined />} aria-label="RF button actions" /></Dropdown></Space> },
+          ]} />}
+          <div className="rf-observed-cards">{[...observed.values()].map(signal=><Card key={rfKey(signal)} size="small" title={<Space>{indicator(signal)}<Typography.Text type="secondary" code>0x{signal.code.toString(16).toUpperCase()}</Typography.Text></Space>} extra={<Space><Button size="small" icon={<PlusOutlined/>} disabled={!liveConnected||rf?.pending||catalog.learning?.active||!receipts.some(r=>rfKey(r)===rfKey(signal))} onClick={()=>command('observed.add',{code:signal.code,bits:signal.bits,protocol:signal.protocol})}>{tr(locale,'Add')}</Button><Button size="small" onClick={()=>{const binding=blank();binding.name=uniqueRfBindingName(`RF ${signal.code}`,(catalog.bindings??[]).map(b=>b.name));binding.match={...binding.match,rf_code:signal.code,rf_bits:signal.bits,rf_protocol:signal.protocol};setDraft(binding);setPreviousName('');setTab('assignments');setManualSignal(true);}}>On controller…</Button></Space>}><Typography.Text type="secondary">{signal.bits} bits · Protocol {signal.protocol}</Typography.Text></Card>)}</div>
+          <Collapse activeKey={boardEditorOpen} onChange={keys=>setBoardEditorOpen(Array.isArray(keys)?keys:[keys])} style={{ marginTop: 16 }} items={[{ key: 'map', label: 'On-board assignment', children: <Form layout="vertical"><Alert type="info" showIcon message="Saved on the board" description="Supported board actions work without the computer. Percent increase/decrease and application actions require PCController; use On controller for those." style={{marginBottom:12}} /><div className="rf-form-grid"><Form.Item label="Learned button"><Select aria-label="Learned button" showSearch optionFilterProp="label" value={map.id>=0 ? map.id : undefined} placeholder="Choose a learned button" options={entries.map(entry=>({value:entry.id,label:`RF ${entry.id} · ${entry.code_display}`}))} onChange={id=>editBoard(entries.find(entry=>entry.id===id)!)} /></Form.Item><Form.Item label="Action"><Select aria-label="Action type" value={map.action || undefined} placeholder="Choose an action" options={catalog.board_mapping_options?.map(option => ({ value: option.action, label: human(option.action) }))} onChange={action => setMap({ id: map.id, action })} /></Form.Item>{Boolean(mapping?.targets.length) && <Form.Item label="Target"><Select value={map.target} options={boardTargetOptions(mapping,controls)} onChange={target => setMap({ ...map, target })} /></Form.Item>}{Boolean(mapping?.behaviors.length) && <Form.Item label="Behavior"><Select value={map.behavior} options={mapping?.behaviors.map(value => ({ value, label: mapping?.behavior_labels?.[value] ?? human(value) }))} onChange={behavior => setMap({ ...map, behavior })} /></Form.Item>}</div><Button disabled={!liveConnected || rf?.pending || !boardMapValid(map,entries,catalog.board_mapping_options ?? [])} icon={<SaveOutlined />} onClick={() => command('map', map)}>Save on board</Button></Form> }]} />
+        </> },
+        { key: 'transmit', label: 'Transmit', children: <Form layout="vertical"><Form.Item label="Use a learned signal"><Select showSearch optionFilterProp="label" placeholder="Choose a learned button" options={entries.map(entry=>({value:entry.id,label:`RF ${entry.id} · ${entry.code_display}`}))} onChange={id=>{const entry=entries.find(entry=>entry.id===id)!;setWave({code:entry.code,bits:entry.bits,protocol:entry.protocol,pulse_us:entry.pulse_us,repeats:1});}} /></Form.Item><WaveformFields value={wave} onChange={setWave} /><Button type="primary" icon={<SendOutlined />} disabled={!liveConnected || !wave.code || rf?.pending} onClick={() => command('transmit', wave)}>Transmit</Button></Form> },
+        { key:'settings',label:tr(locale,'Settings'),children:preferences&&<Form layout="vertical"><Form.Item><Checkbox disabled={rf?.pending} checked={preferences.timed} onChange={e=>setPreferences({...preferences,timed:e.target.checked})}>{tr(locale,'Timed learning')}</Checkbox></Form.Item><Form.Item label={tr(locale,'Timeout')}><InputNumber min={1} max={120} suffix="s" disabled={rf?.pending} value={preferences.timeout_seconds} onChange={n=>setPreferences({...preferences,timeout_seconds:n??60})}/></Form.Item><Form.Item><Checkbox disabled={rf?.pending} checked={preferences.continuous} onChange={e=>setPreferences({...preferences,continuous:e.target.checked})}>{tr(locale,'Continuously learn buttons')}</Checkbox></Form.Item><Button icon={<SaveOutlined/>} disabled={rf?.pending||!liveConnected||JSON.stringify(preferences)===JSON.stringify(catalog.preferences)} onClick={()=>command('preferences.set',preferences)}>{tr(locale,'Save settings')}</Button></Form> },
+        { key: 'activity', label: 'Receive activity', children: catalog.activity?.length ? <Table size="small" pagination={false} rowKey="id" dataSource={catalog.activity} columns={[{ title: 'Received', dataIndex: 'text' }, { title: 'Time', render: (_, event) => new Date(event.time).toLocaleTimeString() }]} /> : <Empty description="No received RF activity" /> },
+      ]} />
+    </Modal>
+  </>;
+};
+
+const WaveformFields: React.FC<{ value: Waveform; onChange: (wave: Waveform) => void }> = ({ value, onChange }) => <div className="rf-form-grid">{([['Code', 'code', 1, 4294967295], ['Bits', 'bits', 1, 32], ['Protocol', 'protocol', 1, 12], ['Pulse (µs, 0 = default)', 'pulse_us', 0, 65535], ['Repeats', 'repeats', 1, 20]] as const).map(([label, field, min, max]) => <Form.Item key={field} label={label}><InputNumber min={min} max={max} value={value[field]} onChange={n => onChange({ ...value, [field]: n ?? min })} style={{ width: '100%' }} /></Form.Item>)}</div>;
