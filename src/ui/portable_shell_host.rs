@@ -451,9 +451,11 @@ impl Host {
         // core's three-cell reserve. The core only tracks explicit newlines.
         let width = usize::from(self.columns).saturating_sub(7);
         let inline = brand.width() + 3 + summary.width() <= width;
-        let brand = bounded_prompt_part(brand, width);
-        let summary = bounded_prompt_part(summary, width);
-        let activity = bounded_prompt_part(activity, width);
+        // The upstream prompt buffer is 256 UTF-8 bytes. Leave room for
+        // styled prefixes, separators and the input marker.
+        let brand = bounded_prompt_part(brand, width, 88);
+        let summary = bounded_prompt_part(summary, width, 88);
+        let activity = bounded_prompt_part(activity, width, 48);
         let mut parts = vec![
             prompt_part(c"╭─ ", 6),
             prompt_part(&brand, 7),
@@ -652,15 +654,15 @@ fn prompt_part(text: &CStr, style: u32) -> PromptPart {
     PromptPart { text: text.as_ptr(), style }
 }
 
-fn bounded_prompt_part(text: &str, width: usize) -> CString {
-    if text.width() <= width {
+fn bounded_prompt_part(text: &str, width: usize, max_bytes: usize) -> CString {
+    if text.width() <= width && text.len() <= max_bytes {
         return CString::new(text).unwrap();
     }
     let mut used = 0;
     let mut clipped = String::new();
     for ch in text.chars() {
         let next = used + ch.width().unwrap_or(0);
-        if next >= width {
+        if next >= width || clipped.len() + ch.len_utf8() + '…'.len_utf8() > max_bytes {
             break;
         }
         clipped.push(ch);
