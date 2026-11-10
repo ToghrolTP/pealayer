@@ -83,8 +83,10 @@ pointer toggles, active-icon ink/geometry through both palettes/themes, RTL and
 fractional scaling, exact dock-tree restoration, per-panel widths and storage,
 current-width drag sizing, invalid drops, menu click/× handling, duplicate-divider
 paint checks, API validation, locks, modal cancellation and existing header chrome.
-Local release packaging, installed native captures and deployment receipt follow
-in the focused sidebar recovery checkpoint; the older receipt below is historical.
+The clean package is installed and native before/after captures are inspected and
+published in the [sidebar recovery receipt](sidebar-panel-recovery.md). Live API
+toggle/width/dock checks pass and the original complete layout is restored. The
+older receipt below is historical; Cafe remains explicitly user-deferred/offline.
 
 ## Verification and delivery
 

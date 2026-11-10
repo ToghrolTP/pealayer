@@ -10,6 +10,13 @@ statements are not the present product state.
 
 ## Publication and workspace tools checkpoint
 
+[Sidebar panel recovery](sidebar-panel-recovery.md) preserves each rail panel's
+location, toggle behavior and assigned size, replaces donor sidebar chrome,
+removes empty menu dividers and fixes disappearing active icons. All 63 distinct
+focused tests pass. The installed canonical build passes live API checks and
+matched native screenshot inspection, with the original layout/playback restored.
+Cafe delivery remains user-deferred/offline; hosted CI is a separate merge gate.
+
 [Remote directory encoding](remote-directory-encoding.md) corrects empty listings
 when query-based folder names and file links use equivalent escaping. All 19
 focused browser tests pass. The canonical local package now renders the user's
