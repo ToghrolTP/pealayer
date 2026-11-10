@@ -1247,7 +1247,14 @@ mod tests {
             let deadline=std::time::Instant::now()+Duration::from_secs(5);
             while !replies.is_empty() && std::time::Instant::now()<deadline {
                 let Ok((mut socket,_))=listener.accept()else{std::thread::sleep(Duration::from_millis(5));continue;};
-                socket.set_read_timeout(Some(Duration::from_secs(1))).unwrap();let mut reader=std::io::BufReader::new(socket.try_clone().unwrap());let mut line=String::new();reader.read_line(&mut line).unwrap();let key=line.split_whitespace().take(2).collect::<Vec<_>>().join(" ");
+                // Accepted Winsock sockets can inherit the listener's
+                // nonblocking mode. Use the read deadline for this request.
+                socket.set_nonblocking(false).unwrap();
+                socket.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+                let mut reader=std::io::BufReader::new(socket.try_clone().unwrap());
+                let mut line=String::new();
+                reader.read_line(&mut line).unwrap();
+                let key=line.split_whitespace().take(2).collect::<Vec<_>>().join(" ");
                 let position=replies.iter().position(|r|r.0==key).unwrap_or_else(||panic!("Unexpected request: {key}"));let (_,status,kind,body)=replies.remove(position);
                 let extra=if kind=="redirect"{format!("Location: {body}\r\n")}else{format!("Content-Type: {kind}\r\n")};
                 write!(socket,"HTTP/1.1 {status} Test\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n",body.len()).unwrap();if !key.starts_with("HEAD ") && kind!="redirect"{socket.write_all(body.as_bytes()).unwrap();}
