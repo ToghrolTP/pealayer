@@ -7,10 +7,14 @@ use crate::four_d::models::{
 };
 
 pub fn demo_media_target() -> Option<PathBuf> {
-    let candidates = [
+    let executable = std::env::current_exe().ok();
+    let installed_asset = executable.as_deref()
+        .and_then(std::path::Path::parent)
+        .map(|directory| directory.join("assets/jellyfish.mp4"));
+    let candidates = installed_asset.into_iter().chain([
         PathBuf::from("test-data/jellyfish.mp4"),
         PathBuf::from("assets/jellyfish.mp4"),
-    ];
+    ]);
     for candidate in candidates {
         if candidate.is_file() {
             return Some(candidate);
@@ -47,18 +51,30 @@ pub fn build_demo_showcase_timeline() -> Timeline {
         duration_policy: CueDurationPolicy::Resizable,
         audio_effect: None,
     };
-    timeline.templates.push(seat_a_pitch);
+    let mut seat_b_pitch = seat_a_pitch.clone();
+    seat_b_pitch.id = Uuid::new_v4();
+    seat_b_pitch.name = "Seat B Pitch Up".into();
+    seat_b_pitch.duration_ms = 800;
+    if let Some(direct) = seat_b_pitch.direct_control.as_mut() {
+        direct.control_key = "seat.b".into();
+        direct.motion = Some(DirectMotionCue {
+            side: 1,
+            direction: DirectMotionDirection::Up,
+        });
+    }
+    let seat_b_pitch_id = seat_b_pitch.id;
+    timeline.templates.extend([seat_a_pitch, seat_b_pitch]);
 
     // 2. Template: Wind Relay Strobe
     let wind_relay_id = Uuid::new_v4();
     let wind_relay = Effect {
         id: wind_relay_id,
-        name: "Wind Strobe Burst".to_string(),
+        name: "Wind Relay Burst".to_string(),
         icon: "fan".to_string(),
         duration_ms: 1500,
-        target: HardwareTarget::Relay(1),
+        target: HardwareTarget::Relay(5),
         actions: vec![AtomicAction {
-            relay_id: 1,
+            relay_id: 5,
             state: true,
             offset_ms: 0,
         }],
@@ -66,7 +82,7 @@ pub fn build_demo_showcase_timeline() -> Timeline {
         controller_strip_effect: None,
         controller_lane: None,
         direct_control: Some(DirectControlCue {
-            control_key: "relay.1".to_string(),
+            control_key: "relay.5".to_string(),
             value_basis_points: 10000,
             behavior: DirectCueBehavior::Hold,
             end_value_basis_points: 0,
@@ -82,6 +98,11 @@ pub fn build_demo_showcase_timeline() -> Timeline {
         id: Uuid::new_v4(),
         effect_id: seat_a_pitch_id,
         start_time_ms: 1000,
+    });
+    timeline.instances.push(EffectInstance {
+        id: Uuid::new_v4(),
+        effect_id: seat_b_pitch_id,
+        start_time_ms: 1300,
     });
     timeline.instances.push(EffectInstance {
         id: Uuid::new_v4(),

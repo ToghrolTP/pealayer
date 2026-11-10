@@ -89,7 +89,7 @@ pub(crate) fn draw_volume_strip(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
 /// The customizable bar owns Mute; keep its slider and percentage independent.
 pub(crate) fn draw_volume_slider(app: &mut PealayerApp, ui: &mut egui::Ui) {
-    if let Some(value) = volume_slider_widgets(ui, app.volume, &app.tr("Volume")) {
+    if let Some(value) = volume_slider_widgets(ui, app.volume, &app.tr("Volume"), app.native_monitor_style == crate::config::NativeMonitorStyle::FilmCraft) {
         app.apply_interop_command(ui.ctx(), crate::platform::interop::InteropCommand::SetVolume { value },
             "Volume control");
     }
@@ -100,15 +100,18 @@ pub(super) fn draw_volume_widgets(ui: &mut egui::Ui, palette: crate::config::Col
     let icon = if muted { crate::ui::icons::SPEAKER_SLASH } else { crate::ui::icons::SPEAKER_HIGH };
     let toggle_mute = ui.add_sized([30.0, 22.0], transport_button(palette, ui, icon,
         if muted { "amber" } else { "muted" })).on_hover_text(mute_tooltip).clicked();
-    (toggle_mute, volume_slider_widgets(ui, volume, volume_label))
+    (toggle_mute, volume_slider_widgets(ui, volume, volume_label, false))
 }
 
-fn volume_slider_widgets(ui: &mut egui::Ui, mut volume: f64, volume_label: &str) -> Option<f64> {
+fn volume_slider_widgets(ui: &mut egui::Ui, mut volume: f64, volume_label: &str, filmcraft: bool) -> Option<f64> {
     let old_width = ui.spacing().slider_width;
     // Reserve a stable percentage column, even when the value has fewer digits.
     ui.spacing_mut().slider_width = (ui.available_width() - 44.0 - 2.0 * ui.spacing().item_spacing.x).max(1.0);
-    let response = ui.add(egui::Slider::new(&mut volume, 0.0..=130.0).show_value(false))
-        .on_hover_text(format!("{volume_label}: {volume:.0}%"));
+    let response = ui.scope(|ui| {
+        if filmcraft { ui.set_opacity(0.0); }
+        ui.add(egui::Slider::new(&mut volume, 0.0..=130.0).show_value(false))
+    }).inner.on_hover_text(format!("{volume_label}: {volume:.0}%"));
+    if filmcraft { super::craft_theme::paint_monitor_volume(ui,&response,(volume/130.0) as f32); }
     ui.spacing_mut().slider_width = old_width;
     let wheel = if response.hovered() {
         ui.input(|input| input.smooth_scroll_delta.y)
@@ -248,6 +251,11 @@ pub(crate) fn paint_seekbar_markers(
     response: &egui::Response,
     app: &PealayerApp,
 ) -> Option<f64> {
+    paint_seekbar_markers_presentation(ui,response,app,false)
+}
+
+pub(crate) fn paint_seekbar_markers_presentation(ui:&egui::Ui,response:&egui::Response,
+    app:&PealayerApp,filmcraft:bool) -> Option<f64> {
     let duration = app.duration;
     if duration <= 0.0 || !duration.is_finite() {
         return None;
@@ -283,18 +291,23 @@ pub(crate) fn paint_seekbar_markers(
             continue;
         }
         let x = x_for(chapter.time_seconds);
-        ui.painter().line_segment(
+        if filmcraft {
+            let marker = egui::Rect::from_center_size(egui::pos2(x,rect.center().y),egui::vec2(6.0,6.0));
+            super::craft_theme::marker_glyph(ui.painter(),marker,2.0,super::craft_theme::MarkerPart::Whole,chapter_color);
+        } else { ui.painter().line_segment(
             [egui::pos2(x, rect.center().y - half_height),
              egui::pos2(x, rect.center().y + half_height)],
             egui::Stroke::new(1.0, chapter_color),
-        );
+        ); }
     }
     for marker in &app.timeline.keyframes {
         let time = marker.time_ms as f64 / 1000.0;
         if time > duration { continue; }
         let x = x_for(time);
         let height = (ui.spacing().slider_rail_height * 0.5 + 3.0).min(rect.height() * 0.5);
-        ui.painter().line_segment([egui::pos2(x,rect.center().y-height),egui::pos2(x,rect.center().y+height)], egui::Stroke::new(1.5,keyframe_color));
+        if filmcraft {
+            super::craft_theme::marker_glyph(ui.painter(),egui::Rect::from_center_size(egui::pos2(x,rect.center().y),egui::vec2(7.0,height*2.0)),3.0,super::craft_theme::MarkerPart::Whole,keyframe_color);
+        } else { ui.painter().line_segment([egui::pos2(x,rect.center().y-height),egui::pos2(x,rect.center().y+height)], egui::Stroke::new(1.5,keyframe_color)); }
     }
     // Hover metadata belongs to the shared preview card, never a second tooltip.
     let operating = response.changed() || response.clicked() || response.drag_stopped();
@@ -707,6 +720,11 @@ pub fn draw_elapsed_editor(
     let editor = crate::ui::dialog::singleline_text_edit(ui, buffer)
         .id(edit_id)
         .font(egui::TextStyle::Monospace)
+        .text_color(if !editing && if app.show_four_d_editor {
+            app.native_monitor_style == crate::config::NativeMonitorStyle::FilmCraft
+        } else { app.native_transport_style == crate::config::NativeMonitorStyle::FilmCraft } {
+            super::palette::color(app.color_palette,ui.visuals().dark_mode,"blue")
+        } else { ui.visuals().text_color() })
         .horizontal_align(egui::Align::Center)
         .vertical_align(egui::Align::Center)
         .margin(egui::Margin::symmetric(4, 2))
@@ -1134,6 +1152,9 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 (current_pos / app.duration).clamp(0.0, 1.0) as f32,
                                 (buffered_until / app.duration).clamp(0.0, 1.0) as f32,
                             );
+                        }
+                        if app.native_transport_style == crate::config::NativeMonitorStyle::FilmCraft {
+                            super::monitor_controls::paint_seek_ticks(ui,&response,app);
                         }
                         if let Some(chapter_time) = paint_seekbar_markers(ui, &response, app) { current_pos = chapter_time; }
                         let show_seek_preview = app.seekbar_hover_thumbnails;

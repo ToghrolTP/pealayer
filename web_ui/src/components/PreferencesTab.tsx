@@ -317,7 +317,8 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
       : current);
   }, [appearance?.theme, appearance?.color_palette, appearance?.accent_color, appearance?.custom_accent_color,
     appearance?.ui_animation_mode, appearance?.ui_control_density, appearance?.ui_font_family, appearance?.monospace_font_family,
-    appearance?.ui_font_name, appearance?.monospace_font_name, appearance?.workspace_ui, appearance?.preferences_grouped_navigation]);
+    appearance?.ui_font_name, appearance?.monospace_font_name, appearance?.workspace_ui,
+    appearance?.native_monitor_style, appearance?.native_timeline_style, appearance?.preferences_grouped_navigation]);
 
   // Installed-font controls are host-owned and conditional on the font choice.
   // Refresh on local changes and remote/native previews without overwriting drafts.

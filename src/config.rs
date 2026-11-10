@@ -919,6 +919,44 @@ pub enum UiFontFamily { #[default] System, Bundled, Vazirmatn, Custom }
 #[serde(rename_all = "snake_case")]
 pub enum WorkspaceUi { #[default] CraftUi, EguiDock }
 
+/// Presentation choices do not replace the workspace or its saved controls.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeMonitorStyle { #[default] Compact, FilmCraft }
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MonitorAspect { #[default] Source, Wide, Classic, Cinema }
+impl MonitorAspect {
+    pub fn ratio(self, source: f64) -> f64 {
+        match self { Self::Source => source, Self::Wide => 16.0/9.0,
+            Self::Classic => 4.0/3.0, Self::Cinema => 2.35 }
+    }
+    pub fn label(self) -> &'static str {
+        match self { Self::Source => "Fit", Self::Wide => "16:9", Self::Classic => "4:3", Self::Cinema => "2.35:1" }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MonitorResolution { #[default] Full, Half, Quarter, Eighth }
+impl MonitorResolution {
+    pub fn divisor(self) -> i32 { match self { Self::Full=>1, Self::Half=>2, Self::Quarter=>4, Self::Eighth=>8 } }
+    pub fn label(self) -> &'static str { match self { Self::Full=>"Full", Self::Half=>"1/2", Self::Quarter=>"1/4", Self::Eighth=>"1/8" } }
+}
+
+/// Preview presentation never overwrites decoder-owned source metadata.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct MonitorPreview {
+    pub aspect: MonitorAspect,
+    pub resolution: MonitorResolution,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeTimelineStyle { #[default] Standard, FilmCraft }
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
 #[serde(rename_all = "snake_case")]
 pub enum ControlBarAction { PlayPause, Stop, Back, Forward, PreviousChapter, NextChapter,
@@ -1138,6 +1176,10 @@ pub struct AppConfig {
     pub ui_font_name: String,
     pub monospace_font_name: String,
     pub workspace_ui: WorkspaceUi,
+    pub native_monitor_style: NativeMonitorStyle,
+    pub native_transport_style: NativeMonitorStyle,
+    pub monitor_preview: MonitorPreview,
+    pub native_timeline_style: NativeTimelineStyle,
     pub craft_show_close_buttons: bool,
     pub craft_show_collapse_buttons: bool,
     pub preferences_grouped_navigation: bool,
@@ -1349,6 +1391,10 @@ impl Default for AppConfig {
             ui_font_name: String::new(),
             monospace_font_name: String::new(),
             workspace_ui: WorkspaceUi::CraftUi,
+            native_monitor_style: NativeMonitorStyle::Compact,
+            native_transport_style: NativeMonitorStyle::Compact,
+            monitor_preview: MonitorPreview::default(),
+            native_timeline_style: NativeTimelineStyle::Standard,
             craft_show_close_buttons: true,
             craft_show_collapse_buttons: false,
             preferences_grouped_navigation: true,
@@ -1880,6 +1926,10 @@ impl AppConfig {
         self.ui_font_name.clone_from(&source.ui_font_name);
         self.monospace_font_name.clone_from(&source.monospace_font_name);
         self.workspace_ui = source.workspace_ui;
+        self.native_monitor_style = source.native_monitor_style;
+        self.native_transport_style = source.native_transport_style;
+        self.monitor_preview = source.monitor_preview;
+        self.native_timeline_style = source.native_timeline_style;
         self.craft_show_close_buttons = source.craft_show_close_buttons;
         self.craft_show_collapse_buttons = source.craft_show_collapse_buttons;
         self.preferences_grouped_navigation = source.preferences_grouped_navigation;
@@ -2554,6 +2604,83 @@ pub(crate) fn replace_file(source: &std::path::Path, destination: &std::path::Pa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn filmcraft_preview_choices_are_independent_persistent_and_validated() {
+        let original=AppConfig::default();
+        let updated=original.apply_patch(&serde_json::json!({
+            "native_transport_style":"film_craft",
+            "monitor_preview":{"aspect":"classic","resolution":"quarter"}
+        })).unwrap();
+        let saved:AppConfig=serde_json::from_value(serde_json::to_value(&updated).unwrap()).unwrap();
+        assert_eq!(saved.native_transport_style,NativeMonitorStyle::FilmCraft);
+        assert_eq!(saved.native_monitor_style,NativeMonitorStyle::Compact);
+        assert_eq!(saved.monitor_preview.aspect,MonitorAspect::Classic);
+        assert_eq!(saved.monitor_preview.resolution,MonitorResolution::Quarter);
+        assert_eq!(saved.control_bars,original.control_bars);
+        assert_eq!(saved.workspace_dock_layout,original.workspace_dock_layout);
+        assert!(original.apply_patch(&serde_json::json!({"monitor_preview":{"resolution":"fake"}})).is_err());
+        assert_eq!(MonitorAspect::Source.ratio(2.39),2.39);
+        assert_eq!(MonitorAspect::Classic.ratio(2.39),4.0/3.0);
+    }
+
+    #[test]
+    fn native_panel_styles_default_to_preserved_designs_and_round_trip_independently() {
+        let defaults: AppConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(defaults.native_monitor_style, NativeMonitorStyle::Compact);
+        assert_eq!(defaults.native_timeline_style, NativeTimelineStyle::Standard);
+        for workspace_ui in [WorkspaceUi::EguiDock, WorkspaceUi::CraftUi] {
+            for (monitor, monitor_wire) in [(NativeMonitorStyle::Compact, "compact"), (NativeMonitorStyle::FilmCraft, "film_craft")] {
+                for (timeline, timeline_wire) in [(NativeTimelineStyle::Standard, "standard"), (NativeTimelineStyle::FilmCraft, "film_craft")] {
+                    let config = AppConfig { workspace_ui, native_monitor_style: monitor, native_timeline_style: timeline, ..Default::default() };
+                    let wire = serde_json::to_value(&config).unwrap();
+                    assert_eq!(wire["native_monitor_style"], monitor_wire);
+                    assert_eq!(wire["native_timeline_style"], timeline_wire);
+                    let restored: AppConfig = serde_json::from_value(wire).unwrap();
+                    assert_eq!(restored, config, "independent panel choices must survive a full config round trip");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn native_panel_style_preview_preserves_workspace_sidebar_and_saved_actions() {
+        use crate::ui::{sidebar_rail::SidebarPane, sidebar_shortcuts::RailAction};
+        for workspace_ui in [WorkspaceUi::EguiDock, WorkspaceUi::CraftUi] {
+            let mut original = AppConfig { workspace_ui, ..Default::default() };
+            original.workspace_session.name = "Retained editing workspace".into();
+            original.workspace_session.dialogs.audio = true;
+            original.workspace_session.dialogs.preferences_tab = 3;
+            original.workspace_session.egui_memory = Some("retained panel geometry and scrolling".into());
+            original.workspace_profiles.insert("editing".into(), original.workspace_session.clone());
+            original.active_workspace_profile = Some("editing".into());
+            original.ui.sidebar_rail.width = 380.0;
+            original.ui.sidebar_rail.open = Some(SidebarPane::HardwareMonitor);
+            original.ui.sidebar_shortcuts.order = vec![RailAction::Timeline, RailAction::EffectsLibrary];
+            original.ui.sidebar_shortcuts.hidden = vec![RailAction::MediaInspector];
+            original.control_bars.monitor.order.swap(0, 4);
+            original.control_bars.monitor.hidden[ControlBarAction::AudioTrack as usize] = false;
+            original.control_bars.monitor.end[ControlBarAction::Mute as usize] = false;
+            original.timeline_toolbar_order = vec![TimelineToolbarAction::PanLeft, TimelineToolbarAction::ZoomOut];
+            original.volume = 37.0;
+
+            let mut preview = original.clone();
+            for (monitor, timeline) in [
+                (NativeMonitorStyle::FilmCraft, NativeTimelineStyle::Standard),
+                (NativeMonitorStyle::Compact, NativeTimelineStyle::FilmCraft),
+                (NativeMonitorStyle::FilmCraft, NativeTimelineStyle::FilmCraft),
+                (NativeMonitorStyle::Compact, NativeTimelineStyle::Standard),
+            ] {
+                // A Preferences appearance event does not own the live workspace.
+                let source = AppConfig { workspace_ui, native_monitor_style: monitor, native_timeline_style: timeline, ..Default::default() };
+                preview.copy_appearance_from(&source);
+                let mut expected = original.clone();
+                expected.native_monitor_style = monitor;
+                expected.native_timeline_style = timeline;
+                assert_eq!(preview, expected, "preview and reverting styles must not reset unrelated user state");
+            }
+        }
+    }
 
     #[test]
     fn effect_working_draft_can_be_set_and_cleared_through_config_api() {

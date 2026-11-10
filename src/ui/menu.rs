@@ -721,23 +721,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     if conn_btn.clicked() {
                         let should_connect = !(app.is_connected || connection_requested);
                         if should_connect {
-                            let endpoint = app.serial_port.trim().to_owned();
-                            if endpoint.is_empty() {
-                                app.connection_notice = Some(
-                                    app.tr("Enter a hardware endpoint before connecting."),
-                                );
-                            } else {
-                                app.serial_port = endpoint.clone();
-                                if let Ok(mut selected) = app.engine_handle.serial_port.lock() {
-                                    *selected = endpoint;
-                                }
-                                app.connection_notice = None;
-                                app.engine_handle.connection_requested.store(
-                                    true,
-                                    std::sync::atomic::Ordering::Relaxed,
-                                );
-                                app.save_config();
-                            }
+                            app.request_hardware_connection();
                         } else {
                             app.engine_handle.connection_requested.store(
                                 false,
@@ -776,17 +760,6 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                             .changed()
                                         {
                                             endpoint_changed = true;
-                                            if crate::four_d::controller::is_demo_endpoint(&endpoint) {
-                                                if app.current_video_path.is_none() {
-                                                    if let Some(media) = crate::four_d::demo_timeline::demo_media_target() {
-                                                        app.load_media_target(&media.to_string_lossy());
-                                                    }
-                                                }
-                                                if app.timeline.instances.is_empty() {
-                                                    app.timeline = crate::four_d::demo_timeline::build_demo_showcase_timeline();
-                                                    app.sync_timeline_engine();
-                                                }
-                                            }
                                         }
                                     }
 

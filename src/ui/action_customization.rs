@@ -144,7 +144,7 @@ pub(crate) fn control(
     frame: bool,
 ) -> Response {
     let response = ui.interact(rect, id, egui::Sense::click_and_drag());
-    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, enabled, label));
     let visuals = ui.style().interact_selectable(&response, selected);
     let tokens = super::craft_theme::current(ui.ctx());
     let btn_style = super::craft_theme::icon_button_style(&tokens, frame);
