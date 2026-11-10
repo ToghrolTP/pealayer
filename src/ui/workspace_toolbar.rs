@@ -282,6 +282,14 @@ mod native {
         editor: bool,
     }
 
+    // Match the rail's 19-point Phosphor glyphs, retaining density and large-font
+    // growth without letting the icon clip an extra-compact hit target.
+    fn icon_font(ui: &egui::Ui, side: f32) -> egui::FontId {
+        let mut font = egui::TextStyle::Button.resolve(ui.style());
+        font.size = font.size.max(19.0).min((side - 4.0).max(1.0));
+        font
+    }
+
     /// One fixed hit rectangle: no resting border or allocation change on hover.
     fn flat_control(
         ui: &mut egui::Ui,
@@ -324,9 +332,11 @@ mod native {
         let color = if usable {
             ink
         } else {
-            ui.visuals().weak_text_color()
+            // Weak text can be nearly as bright as regular icon ink in Studio.
+            // Use explicit disabled opacity, also suppressing active semantics.
+            tokens.icon.gamma_multiply(0.35)
         };
-        let font = egui::TextStyle::Button.resolve(ui.style());
+        let font = icon_font(ui, rect.height());
         let galley = ui.painter().layout_no_wrap(icon.into(), font, color);
         let bounds = if galley.mesh_bounds.is_positive() {
             galley.mesh_bounds
@@ -340,10 +350,14 @@ mod native {
         );
         response
             .widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, usable, active, label));
-        response.on_hover_cursor(if usable {
+        let dragging = response.dragged_by(egui::PointerButton::Primary)
+            && egui::DragAndDrop::has_payload_of_type::<WorkspaceToolbarDrag>(ui.ctx());
+        response.on_hover_cursor(if dragging {
+            egui::CursorIcon::Grabbing
+        } else if usable {
             egui::CursorIcon::PointingHand
         } else {
-            egui::CursorIcon::Default
+            egui::CursorIcon::NotAllowed
         })
     }
 
@@ -374,7 +388,7 @@ mod native {
         let tokens = super::super::craft_theme::current(ui.ctx());
         let galley = painter.layout_no_wrap(
             drag.command.icon().into(),
-            egui::TextStyle::Button.resolve(ui.style()),
+            icon_font(ui, super::super::control_density::height(ui)),
             tokens.icon,
         );
         let rect = egui::Rect::from_center_size(
@@ -749,14 +763,31 @@ mod native {
                 ui,
                 geometry.menu,
                 egui::Id::unique("workspace-toolbar-menu"),
-                icons::DOTS_THREE,
+                "",
                 &app.tr("Toolbar menu"),
                 true,
                 false,
                 ui.visuals().text_color(),
             )
             .on_hover_text(app.tr("Toolbar menu"));
-            if interactive {
+            let dragging = customize
+                && egui::DragAndDrop::payload::<WorkspaceToolbarDrag>(&ctx)
+                    .is_some_and(|drag| !drag.editor);
+            let font = icon_font(ui, geometry.menu.height());
+            if let Some(drag) = super::super::action_customization::menu_hide_target::<
+                WorkspaceToolbarDrag,
+            >(ui, &response, dragging, font)
+            {
+                app.toolbar_state
+                    .preferences
+                    .set_visible(drag.command.id(), false);
+                app.deferred_config_save = true;
+            }
+            if dragging {
+                response
+                    .clone()
+                    .on_hover_text(app.tr("Drop here to hide this control"));
+            } else if interactive {
                 egui::Popup::menu(&response).show(|ui| {
                     ui.set_max_width(260.0);
                     if geometry.search.is_none()
@@ -971,7 +1002,16 @@ mod native {
                                             false,
                                             ui.visuals().weak_text_color(),
                                         )
-                                        .on_hover_cursor(egui::CursorIcon::Grab);
+                                        .on_hover_cursor(if !allowed {
+                                            egui::CursorIcon::NotAllowed
+                                        } else if egui::DragAndDrop::has_payload_of_type::<
+                                            WorkspaceToolbarDrag,
+                                        >(ctx)
+                                        {
+                                            egui::CursorIcon::Grabbing
+                                        } else {
+                                            egui::CursorIcon::Grab
+                                        });
                                         if allowed {
                                             super::super::action_customization::register_drag(
                                                 &grip,
@@ -1184,8 +1224,7 @@ mod native {
         let frame_number = ctx.cumulative_frame_nr();
         ctx.data_mut(|data| data.insert_temp(keyboard_claim_id(), frame_number));
         let tokens = super::super::craft_theme::current(ctx);
-        let width = (ctx.content_rect().width() - 48.0).clamp(120.0, 560.0);
-        let height = (ctx.content_rect().height() - 160.0).clamp(80.0, 360.0);
+        let width = (ctx.content_rect().width() - 48.0).clamp(1.0, 560.0);
         let mut chosen = None;
         let mut close = false;
         let modal = egui::Modal::new(egui::Id::unique("workspace-command-palette"))
@@ -1193,7 +1232,32 @@ mod native {
             .backdrop_color(tokens.modal_backdrop)
             .show(ctx, |ui| {
                 ui.set_width(width);
-                ui.with_layout(
+                let control_height = super::super::control_density::height(ui);
+                let header_height = control_height.max(32.0);
+                let row_height =
+                    control_height.max(ui.text_style_height(&egui::TextStyle::Button) + 8.0);
+                let footer = app.tr("↑ ↓ Navigate · Enter Run · Esc Close");
+                let footer_height = ui
+                    .painter()
+                    .layout(
+                        footer.clone(),
+                        egui::TextStyle::Body.resolve(ui.style()),
+                        ui.visuals().weak_text_color(),
+                        width,
+                    )
+                    .size()
+                    .y;
+                let results_height = (ctx.content_rect().height()
+                    - header_height
+                    - control_height
+                    - footer_height
+                    - 96.0)
+                    .clamp(1.0, 360.0);
+                // Bound the header explicitly. A bare horizontal layout inherits
+                // the modal's remaining height and centers its title in a giant
+                // blank column before the search/results are even allocated.
+                ui.allocate_ui_with_layout(
+                    egui::vec2(width, header_height),
                     if app.rtl {
                         egui::Layout::left_to_right(egui::Align::Center)
                     } else {
@@ -1202,7 +1266,7 @@ mod native {
                     |ui| {
                         close |= super::super::dialog::close_button(ui, &app.tr("Close")).clicked();
                         ui.allocate_ui_with_layout(
-                            egui::vec2(ui.available_width(), 32.0),
+                            egui::vec2(ui.available_width(), header_height),
                             super::super::i18n::layout(app.rtl, egui::Align::Center),
                             |ui| {
                                 ui.label(icons::MAGNIFYING_GLASS);
@@ -1265,7 +1329,11 @@ mod native {
                 }
                 egui::ScrollArea::vertical()
                     .id_salt("workspace-command-results")
-                    .max_height(height)
+                    // Stable results viewport: filtering must not resize/recenter
+                    // the palette. Reserve measured chrome, including large fonts.
+                    .min_scrolled_height(results_height)
+                    .max_height(results_height)
+                    .auto_shrink([false, false])
                     .show(ui, |ui| {
                         if matches.is_empty() {
                             ui.weak(app.tr("No matching commands"));
@@ -1281,16 +1349,18 @@ mod native {
                             let button = egui::Button::new("")
                                 .selected(selected)
                                 .truncate()
-                                .min_size(egui::vec2(
-                                    width,
-                                    super::super::control_density::height(ui),
-                                ));
+                                .min_size(egui::vec2(ui.available_width(), row_height));
                             let button = if app.rtl {
                                 button.right_text(caption)
                             } else {
                                 button.left_text(caption)
                             };
-                            let response = ui.add_enabled(enabled, button);
+                            let response =
+                                ui.add_enabled(enabled, button).on_hover_cursor(if enabled {
+                                    egui::CursorIcon::PointingHand
+                                } else {
+                                    egui::CursorIcon::NotAllowed
+                                });
                             if response.clicked() {
                                 chosen = Some(command);
                             }
@@ -1300,7 +1370,7 @@ mod native {
                         }
                     });
                 ui.separator();
-                ui.weak(app.tr("↑ ↓ Navigate · Enter Run · Esc Close"));
+                ui.weak(footer);
             });
         close |= modal.should_close();
         if close || chosen.is_some() {
@@ -1402,6 +1472,166 @@ mod native {
                         }
                     }
                     output.textures_delta.clear();
+                }
+            }
+        }
+
+        #[test]
+        fn disabled_actions_are_muted_and_use_blocked_cursor_without_hover_brightening() {
+            for dark in [false, true] {
+                let ctx = egui::Context::default();
+                ctx.set_visuals(if dark {
+                    egui::Visuals::dark()
+                } else {
+                    egui::Visuals::light()
+                });
+                let rect =
+                    egui::Rect::from_min_size(egui::pos2(20.0, 20.0), egui::Vec2::splat(28.0));
+                for enabled in [false, true] {
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            events: vec![egui::Event::PointerMoved(rect.center())],
+                            ..Default::default()
+                        },
+                        |ui| {
+                            flat_control(
+                                ui,
+                                rect,
+                                egui::Id::unique("state-test"),
+                                "P",
+                                "Play",
+                                enabled,
+                                true,
+                                egui::Color32::GREEN,
+                            );
+                            assert_eq!(icon_font(ui, 28.0).size, 19.0);
+                            assert_eq!(icon_font(ui, 18.0).size, 14.0);
+                        },
+                    );
+                    // Prime the pointer hit test then inspect the painted frame.
+                    output.textures_delta.clear();
+                    let mut output = ctx.run_ui(
+                        egui::RawInput {
+                            events: vec![egui::Event::PointerMoved(rect.center())],
+                            ..Default::default()
+                        },
+                        |ui| {
+                            flat_control(
+                                ui,
+                                rect,
+                                egui::Id::unique("state-test"),
+                                "P",
+                                "Play",
+                                enabled,
+                                true,
+                                egui::Color32::GREEN,
+                            );
+                        },
+                    );
+                    assert_eq!(
+                        output.platform_output.cursor_icon,
+                        if enabled {
+                            egui::CursorIcon::PointingHand
+                        } else {
+                            egui::CursorIcon::NotAllowed
+                        }
+                    );
+                    if !enabled {
+                        let glyph = output
+                            .shapes
+                            .iter()
+                            .find_map(|shape| match &shape.shape {
+                                egui::Shape::Text(text) if text.galley.text() == "P" => Some(text),
+                                _ => None,
+                            })
+                            .unwrap();
+                        assert_eq!(
+                            glyph.fallback_color,
+                            super::super::super::craft_theme::current(&ctx)
+                                .icon
+                                .gamma_multiply(0.35)
+                        );
+                        assert!(output.shapes.iter().all(|shape| match &shape.shape {
+                            egui::Shape::Rect(paint) if paint.rect == rect.shrink(1.0) =>
+                                paint.fill == egui::Color32::TRANSPARENT,
+                            _ => true,
+                        }));
+                    }
+                    output.textures_delta.clear();
+                }
+            }
+        }
+
+        #[test]
+        fn palette_has_bounded_stable_chrome_and_results_across_viewports_and_fonts() {
+            let _guard = crate::app::tests::lock_app_tests();
+            for size in [
+                egui::vec2(360.0, 320.0),
+                egui::vec2(900.0, 700.0),
+                egui::vec2(1986.0, 1133.0),
+            ] {
+                for font_size in [14.0, 24.0] {
+                    for rtl in [false, true] {
+                        let ctx = egui::Context::default();
+                        for theme in [egui::Theme::Dark, egui::Theme::Light] {
+                            ctx.style_mut_of(theme, |style| {
+                                for font in style.text_styles.values_mut() {
+                                    font.size = font_size;
+                                }
+                            });
+                        }
+                        let mut app = PealayerApp::default();
+                        app.rtl = rtl;
+                        app.toolbar_state.palette_open = true;
+                        let render = |app: &mut PealayerApp| {
+                            let mut output = ctx.run_ui(
+                                egui::RawInput {
+                                    screen_rect: Some(egui::Rect::from_min_size(
+                                        egui::Pos2::ZERO,
+                                        size,
+                                    )),
+                                    ..Default::default()
+                                },
+                                |_| draw_palette(app, &ctx),
+                            );
+                            output.textures_delta.clear();
+                        };
+                        for _ in 0..4 {
+                            render(&mut app);
+                        }
+                        let bounds = ctx
+                            .memory(|memory| {
+                                memory.area_rect(egui::Id::unique("workspace-command-palette"))
+                            })
+                            .unwrap();
+                        assert!(
+                            bounds.width() <= size.x && bounds.height() <= size.y,
+                            "{size:?} {font_size} {rtl}: {bounds:?}"
+                        );
+                        assert!(bounds.height() < 560.0, "unbounded header: {bounds:?}");
+                        let search = ctx
+                            .read_response(egui::Id::unique("workspace-command-search"))
+                            .unwrap()
+                            .rect;
+                        assert!(
+                            search.top() - bounds.top() < 90.0,
+                            "header consumed the modal: {search:?} {bounds:?}"
+                        );
+                        app.toolbar_state.query = "no-matching-command".into();
+                        for _ in 0..4 {
+                            render(&mut app);
+                        }
+                        let filtered = ctx
+                            .memory(|memory| {
+                                memory.area_rect(egui::Id::unique("workspace-command-palette"))
+                            })
+                            .unwrap();
+                        assert!(
+                            bounds.min.distance(filtered.min) < 1.0
+                                && (bounds.size() - filtered.size()).length() < 1.0,
+                            "filtering moved palette {bounds:?} => {filtered:?}"
+                        );
+                    }
                 }
             }
         }
@@ -1631,13 +1861,12 @@ mod tests {
             for _ in 0..3 {
                 toolbar_frame(&ctx, &mut app, vec![]);
             }
-            assert!(
-                ctx.read_response(egui::Id::unique((
+            assert!(ctx
+                .read_response(egui::Id::unique((
                     "workspace-toolbar-editor-grip",
                     String::from("open_media")
                 )))
-                .is_some()
-            );
+                .is_some());
             assert_eq!(app.dock_state, workspace);
             assert_eq!(app.toolbar_state.preferences, original);
             toolbar_frame(
@@ -1710,6 +1939,88 @@ mod tests {
             }
             assert_eq!(app.dock_state, workspace);
             assert!(!app.show_about_dialog);
+            assert!(!app.show_preferences_dialog);
+        }
+    }
+
+    #[cfg(feature = "workspace-toolbar")]
+    #[test]
+    fn toolbar_overflow_becomes_trash_but_only_a_valid_drop_hides_the_action() {
+        let _guard = crate::app::tests::lock_app_tests();
+        for (locked, cancel, leave) in [
+            (false, false, false),
+            (false, true, false),
+            (true, false, false),
+            (false, false, true),
+        ] {
+            let ctx = egui::Context::default();
+            let mut app = crate::app::PealayerApp::default();
+            app.toolbar_state.preferences.enabled = true;
+            app.dock_state.locked = locked;
+            let workspace = app.dock_state.clone();
+            let original = app.toolbar_state.preferences.clone();
+            toolbar_frame(&ctx, &mut app, vec![]);
+            // Save is unavailable with no media but must still be customizable.
+            let source = ctx
+                .read_response(egui::Id::unique((
+                    "workspace-toolbar-action",
+                    "save_timeline",
+                )))
+                .unwrap()
+                .rect
+                .center();
+            let target = ctx
+                .read_response(egui::Id::unique("workspace-toolbar-menu"))
+                .unwrap()
+                .rect
+                .center();
+            toolbar_frame(
+                &ctx,
+                &mut app,
+                vec![
+                    egui::Event::PointerMoved(source),
+                    pointer(source, egui::PointerButton::Primary, true),
+                ],
+            );
+            toolbar_frame(&ctx, &mut app, vec![egui::Event::PointerMoved(target)]);
+            assert_eq!(
+                app.toolbar_state.preferences, original,
+                "hover may not persist"
+            );
+            assert!(!egui::Popup::is_any_open(&ctx), "drag must not open menu");
+            if cancel {
+                toolbar_frame(
+                    &ctx,
+                    &mut app,
+                    vec![key(egui::Key::Escape, egui::Modifiers::NONE)],
+                );
+            }
+            let end = if leave {
+                target - egui::vec2(80.0, 0.0)
+            } else {
+                target
+            };
+            toolbar_frame(
+                &ctx,
+                &mut app,
+                vec![
+                    egui::Event::PointerMoved(end),
+                    pointer(end, egui::PointerButton::Primary, false),
+                ],
+            );
+            if locked || cancel || leave {
+                assert_eq!(app.toolbar_state.preferences, original);
+            } else {
+                assert!(app
+                    .toolbar_state
+                    .preferences
+                    .hidden
+                    .iter()
+                    .any(|id| id == "save_timeline"));
+                assert!(app.deferred_config_save);
+                assert_eq!(app.toolbar_state.preferences.order, original.order);
+            }
+            assert_eq!(app.dock_state, workspace);
             assert!(!app.show_preferences_dialog);
         }
     }
@@ -1842,12 +2153,9 @@ mod tests {
             let workspace = app.dock_state.clone();
             toolbar_frame(&ctx, &mut app, vec![]);
             assert!(!egui::DragAndDrop::has_any_payload(&ctx));
-            assert!(
-                ctx.data(
-                    |data| data.get_temp::<bool>(egui::Id::unique("toolbar-test-frame-claimed"))
-                )
-                .unwrap_or(false)
-            );
+            assert!(ctx
+                .data(|data| data.get_temp::<bool>(egui::Id::unique("toolbar-test-frame-claimed")))
+                .unwrap_or(false));
             toolbar_frame(
                 &ctx,
                 &mut app,
