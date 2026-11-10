@@ -158,7 +158,7 @@ impl DemoCoordinatorSession {
                     &format!("127.0.0.1:{coordinator_port}"),
                     "--no-connect",
                 ])
-                .env("PCCONTROLLER_DATA_DIR", &temp_root.0)
+                .env("PCCONTROLLER_DATA_DIR", temp_root.0.join("data"))
                 .env("PCCONTROLLER_CONFIG", &config_path)
                 .stdout(Stdio::null())
                 .stderr(Stdio::null());
