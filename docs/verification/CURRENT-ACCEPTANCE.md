@@ -8,6 +8,27 @@ This is the current index. Older handoffs and installed-build receipts remain
 historical evidence; their old open-PR, missing-feature or disconnected-runtime
 statements are not the present product state.
 
+## Publication and workspace tools checkpoint
+
+[Workspace tools](workspace-tools.md) records the standard full-featured package,
+local graceful installation, dockable Terminal, dedicated embedded Pealayer shell,
+editable toolbar and actual before/after captures. Both tools remain hidden by
+default; no application flavors were introduced. PortableShell profile discovery
+is merged upstream in #84. PR #273 owns Pealayer integration and its current-head
+CI/merge gate; use GitHub for the live merge state. The separate integration suite
+now passes 14 tests, explicitly covering hidden optional panes and visible Terminal
+round-tripping. Cafe delivery remains user-deferred/offline.
+
+[Native FPS comparison](native-fps-publication.md) publishes the real final tooltip
+crop and original before image for merged #253, superseding its pending-publication
+prose. The private full-window movie capture remains private. Merged #271 also has
+enlarged native header before/after images in its PR description. The full 12-image
+history in #228 remains intact. [About layout](about-dialog-layout.md) now has its
+missing real native capture too. The fresh combined native library suite passes
+1,301 tests, with six opt-in checks ignored. [Publication and merge procedure](github-publication.md)
+requires public-image verification and confirmed merges, not merely local evidence
+or a queued merge. #248 remains explicitly user-held and #227 remains unfinished.
+
 ## Remote folder navigation
 
 [Verified parent actions](remote-parent-navigation.md) replace the inferred Back
@@ -75,7 +96,8 @@ Program Monitor switching, explicit relaunch after Quit, internal fallback,
 rich mode choices and factual executable resolution. The canonical package and
 paused full-application close/recovery checks passed. **Dynamic taskbar artwork
 still fails canonical displayed-pixel acceptance**, including after human focus;
-PR #260 remains draft. See the linked receipt and remaining gate. Cafe is deferred.
+PR #260 is merged through #268; this does not close that displayed-artwork gate.
+See the linked receipt and remaining gate. Cafe is deferred.
 
 [Movable monitor volume](movable-monitor-volume.md) tracks grouped speaker/slider
 customization, hidden-by-default NLE track pickers, final Fullscreen placement

@@ -50,9 +50,30 @@ navigation bounds across interaction states/scales, all four tabs' window bounds
 Escape, and local API routing/validation. Twenty shared dialog tests also pass, covering Close geometry,
 theme tokens, focus and non-destructive modal behavior.
 
-Packaging and actual native capture are waiting for the existing review Preferences
-helper to close normally: its authoring report is `unknown`, so it has not been
-discarded or replaced. The previously staged density package does not include this
-About follow-up. Cafe's configured SSH endpoint refused connection during this pass.
-The PR checkpoint records subsequent activation/capture results. No production or
-hardware acceptance is implied.
+The earlier capture/package wait is superseded by the clean workspace-tools
+package and this actual native review of its inherited About repair. Source
+`f7f2e8be335a226b6e7469e9c301c84fba4c5376` runs in the isolated, disconnected
+review; local `open_about` selected Libraries through the existing API. Read-only
+PrintWindow capture confirmed the complete title surface, fitted navigation caption
+and shared description column. No window input or hardware command was injected.
+
+### Original reported layout
+
+![User-supplied original About layout](../screenshots/about-libraries-native-before.png)
+
+### Current actual native layout
+
+![Aligned native About title, navigation and library columns](../screenshots/about-libraries-native-after.png)
+
+The original is the unmodified user screenshot. The current image is an exact
+`500,320,910,730` crop from a real 1912-by-1331 native window. It was inspected
+before publication; nothing was redrawn or resampled. Branding, palette, library
+versions and viewport differ, so this is a geometry comparison, not a historical
+same-build or same-theme reconstruction. Full-capture SHA-256:
+`0cec2cbbecf4d8704cf45548b5dbf41a71269edbf62ded3475e2e8612d252ec7`.
+Crop SHA-256: `2c9e4ca781bb73f3a12e40ee943517159c957eb3baec3779dc6d17ee9b5acd0d`.
+
+The package's local installation/smoke receipt is in `workspace-tools.md`. The
+fresh combined native library suite passes 1,301 tests, with six opt-in checks
+ignored; that includes the existing About geometry tests. Cafe delivery remains
+explicitly user-deferred/offline; no physical hardware acceptance is implied.

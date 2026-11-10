@@ -729,6 +729,8 @@ pub fn run() -> eframe::Result {
                 dock_state,
                 sidebar_rail_state: loaded_config.ui.sidebar_rail,
                 sidebar_shortcuts: loaded_config.ui.sidebar_shortcuts.clone(),
+                toolbar_state: crate::ui::workspace_toolbar::ToolbarState::with_preferences(loaded_config.ui.toolbar.clone()),
+                terminal_state: crate::ui::terminal::TerminalState::with_preferences(loaded_config.ui.terminal.clone()),
                 rtt_state: Arc::new(Mutex::new(crate::app::RttState {
                     video_texture: None,
                     video_fbo: None,

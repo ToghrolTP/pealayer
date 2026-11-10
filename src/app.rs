@@ -720,6 +720,8 @@ pub struct PealayerApp {
     // Phase 4 & 5 Selection/Override state
     pub(crate) sidebar_rail_state: crate::ui::sidebar_rail::SidebarRailState,
     pub(crate) sidebar_shortcuts: crate::ui::sidebar_shortcuts::RailShortcuts,
+    pub(crate) toolbar_state: crate::ui::workspace_toolbar::ToolbarState,
+    pub(crate) terminal_state: crate::ui::terminal::TerminalState,
     pub(crate) selected_instance_ids: std::collections::HashSet<uuid::Uuid>,
     pub selected_keyframes: std::collections::HashSet<(uuid::Uuid, usize)>,
     pub(crate) selected_timeline_keyframe: Option<uuid::Uuid>,
@@ -1063,6 +1065,8 @@ impl eframe::App for PealayerApp {
         if close_requested && self.is_timeline_dirty() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
             self.pending_timeline_close_action = Some(PendingTimelineCloseAction::CloseApp);
+        } else if close_requested && crate::ui::terminal::intercept_close(self) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
         }
         // Layout resize/move actions can arrive on every pointer frame. Keep
         // one pending save until the gesture ends rather than writing per pixel.
@@ -1113,6 +1117,7 @@ impl eframe::App for PealayerApp {
             self.process_shell_commands(ctx);
         }
         self.process_controller_call_results();
+        crate::ui::terminal::tick(self, ctx);
         self.bootstrap_native_services(ctx);
         self.process_audio_effect_results();
         self.process_asset_imports(ctx);
@@ -2011,7 +2016,15 @@ impl eframe::App for PealayerApp {
         if !is_fullscreen {
             crate::ui::menu::draw(self, ui);
             crate::ui::status_bar::draw(self, ui);
+            if cfg!(feature = "workspace-toolbar") && self.toolbar_state.preferences.enabled {
+                egui::Panel::top("workspace-command-toolbar").show(ui, |ui| {
+                    crate::ui::workspace_toolbar::draw(self, ui);
+                });
+            }
         }
+        crate::ui::terminal::sync_visibility(self);
+        crate::ui::workspace_toolbar::draw_palette(self, &ctx);
+        crate::workspace_tools::publish(self);
 
         // Track user interaction
         if ctx.input(|i| {
@@ -2179,6 +2192,7 @@ impl eframe::App for PealayerApp {
         }
         crate::ui::remote_location::draw(self, ui.ctx());
         self.draw_timeline_close_confirmation(ui.ctx());
+        crate::ui::terminal::draw_exit_confirmation(self, ui.ctx());
     }
 
     fn save(&mut self, _storage: &mut dyn eframe::Storage) {
@@ -2331,6 +2345,12 @@ impl PealayerApp {
             self.current_video_path.is_some(), self.is_paused, self.is_eof, self.is_seekable, next, previous)
     }
     pub(crate) fn process_keyboard_shortcuts(&mut self, ctx: &egui::Context) {
+        if crate::ui::terminal::owns_keyboard(ctx) || crate::ui::workspace_toolbar::owns_keyboard(ctx) {
+            // Do not strand a previously held hardware action or replay global
+            // presses after leaving the editor. Release edges remain vital.
+            self.process_hardware_key_bindings(ctx, false);
+            return;
+        }
         if !self.keyboard_shortcuts_enabled {
             return;
         }
@@ -2771,6 +2791,7 @@ impl PealayerApp {
     }
 
     fn process_hardware_key_bindings(&mut self, ctx: &egui::Context, allow_local: bool) {
+        let terminal_input = crate::ui::terminal::owns_keyboard(ctx) || crate::ui::workspace_toolbar::owns_keyboard(ctx);
         let global_bindings =
             if self.keyboard_shortcuts_enabled && self.global_hardware_hotkeys_enabled {
                 self.hardware_key_bindings.as_slice()
@@ -2783,7 +2804,7 @@ impl PealayerApp {
             // Recording a new chord must never trigger another binding, but a
             // key-up from a previously active hold binding is safety-critical:
             // it still has to send the configured release/stop action.
-            if !event.pressed || !self.hardware_binding_capturing {
+            if !event.pressed || (!self.hardware_binding_capturing && !terminal_input) {
                 self.dispatch_hardware_binding(&event.binding_id, event.pressed);
             }
         }
@@ -2792,8 +2813,10 @@ impl PealayerApp {
             return;
         }
 
-        let events = ctx.input(|input| input.events.clone());
-        let allow_local = allow_local && ctx.input(|input| input.focused);
+        // The terminal consumes Key events for its PTY. The immutable raw
+        // frame still carries release edges for bindings active beforehand.
+        let events = ctx.input(|input| if terminal_input { input.raw.events.clone() } else { input.events.clone() });
+        let allow_local = allow_local && !terminal_input && ctx.input(|input| input.focused);
         if !allow_local || self.hardware_binding_capturing {
             self.hardware_sequence_matcher = Default::default();
         }
@@ -4372,6 +4395,10 @@ impl PealayerApp {
                 if crate::authoring::requested(request_id) {
                     crate::authoring::complete(request_id,self.inspect_authoring(ctx));
                 }
+            },
+            InteropCommand::GetWorkspaceTools => {},
+            InteropCommand::WorkspaceTools { request } => {
+                if let Err(error) = crate::workspace_tools::apply(self, ctx, request, source) { self.show_error = Some(error); }
             },
             InteropCommand::OpenRfManager => { self.rf.open = true; let _ = self.request_rf("catalog", serde_json::json!({"read_board":true})); },
             InteropCommand::RfControl { operation, params } => { if let Err(error) = self.request_rf(&operation, params) { self.rf.error = error; } },
@@ -6170,6 +6197,9 @@ impl PealayerApp {
     }
 
     pub fn open_or_focus_tab(&mut self, tab: crate::ui::layout::PealayerTab) {
+        if !tab.available() { return; }
+        if tab == crate::ui::layout::PealayerTab::Terminal && self.dock_state.locked
+            && !self.dock_state.layout.contains(&tab) { return; }
         self.show_four_d_editor = true;
         if let Ok(pane) = crate::ui::sidebar_rail::SidebarPane::try_from(tab) {
             if self.sidebar_rail_state.open == Some(pane) {
@@ -6180,6 +6210,7 @@ impl PealayerApp {
         if crate::ui::layout::reveal_and_focus_tab(&mut self.dock_state, tab) {
             self.save_dock_layout();
         }
+        if tab == crate::ui::layout::PealayerTab::Terminal { self.sync_terminal_visibility_from_workspace(); }
         self.pending_tab_reveals.retain(|queued| *queued != tab);
         self.pending_tab_reveals.push(tab);
     }
@@ -6248,6 +6279,11 @@ impl PealayerApp {
     }
 
     pub fn toggle_tab(&mut self, tab: crate::ui::layout::PealayerTab) {
+        if !tab.available() { return; }
+        if tab == crate::ui::layout::PealayerTab::Terminal && !self.dock_state.layout.contains(&tab) {
+            self.open_or_focus_tab(tab);
+            return;
+        }
         if let Ok(pane) = crate::ui::sidebar_rail::SidebarPane::try_from(tab) {
             if self.sidebar_rail_state.open == Some(pane) {
                 self.sidebar_rail_state.open = None;
@@ -6268,7 +6304,20 @@ impl PealayerApp {
     }
 
     pub fn save_dock_layout(&mut self) {
+        self.sync_terminal_visibility_from_workspace();
         self.save_config();
+    }
+
+    /// Native panel closes/profile changes own visibility, never terminal sessions.
+    pub(crate) fn sync_terminal_visibility_from_workspace(&mut self) {
+        #[cfg(feature = "workspace-terminal")]
+        {
+            let visible = self.dock_state.layout.contains(&crate::ui::layout::PealayerTab::Terminal);
+            if self.terminal_state.preferences.enabled != visible {
+                self.terminal_state.preferences.enabled = visible;
+                self.deferred_config_save = true;
+            }
+        }
     }
 
     /// Capture every durable part of the current desktop workspace. egui's
@@ -6349,6 +6398,7 @@ impl PealayerApp {
         }
         self.show_four_d_editor = profile.nle;
         self.dock_state = dock_state;
+        self.sync_terminal_visibility_from_workspace();
         self.sidebar_rail_state = rail;
         self.pending_tab_reveals.clear();
         let dialogs = &profile.dialogs;
@@ -7433,6 +7483,7 @@ impl PealayerApp {
             ("rf_operation",self.rf.pending),
             ("audio_import",crate::mpv::sfx::importing()),
             ("asset_import",self.asset_import.busy()),
+            ("terminal_session",self.terminal_state.busy()),
         ] {items.push(Item {domain:domain.into(),state:if busy {State::Busy} else {State::Clean}});}
         Inspection::new(items)
     }
@@ -7552,6 +7603,8 @@ impl PealayerApp {
         cfg.control_bars = self.control_bars;
         cfg.ui.sidebar_rail = self.sidebar_rail_state;
         cfg.ui.sidebar_shortcuts = self.sidebar_shortcuts.clone();
+        cfg.ui.toolbar = self.toolbar_state.preferences.clone();
+        cfg.ui.terminal = self.terminal_state.preferences.clone();
         cfg.window_geometry = self.window_geometry;
         let dock_state = self.dock_state.clone();
         if let Ok(json) = serde_json::to_string(&dock_state) {
@@ -7943,6 +7996,8 @@ impl PealayerApp {
         self.control_bars = config.control_bars;
         self.sidebar_rail_state = config.ui.sidebar_rail;
         self.sidebar_shortcuts = config.ui.sidebar_shortcuts.clone();
+        self.toolbar_state.preferences = config.ui.toolbar.clone();
+        self.terminal_state.preferences = config.ui.terminal.clone();
         self.sidebar_rail_state.width = self.sidebar_rail_state.width.clamp(
             crate::ui::sidebar_rail::SidebarPaneContent::MIN_WIDTH,
             crate::ui::sidebar_rail::SidebarPaneContent::MAX_WIDTH,
@@ -8793,7 +8848,7 @@ impl PealayerApp {
     pub fn request_quit(&mut self, ctx: &egui::Context) {
         if self.is_timeline_dirty() {
             self.pending_timeline_close_action = Some(PendingTimelineCloseAction::CloseApp);
-        } else {
+        } else if !crate::ui::terminal::intercept_close(self) {
             ctx.send_viewport_cmd(egui::ViewportCommand::Close);
         }
     }
@@ -8805,7 +8860,7 @@ impl PealayerApp {
     ) {
         match action {
             PendingTimelineCloseAction::CloseApp => {
-                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                self.request_quit(ctx);
             }
             PendingTimelineCloseAction::SwitchMedia(path) => {
                 self.load_video_file(path);
@@ -10251,6 +10306,8 @@ impl Default for PealayerApp {
             control_bars: crate::config::ControlBarsConfig::default(),
             sidebar_rail_state: crate::ui::sidebar_rail::SidebarRailState::default(),
             sidebar_shortcuts: crate::ui::sidebar_shortcuts::RailShortcuts::default(),
+            toolbar_state: crate::ui::workspace_toolbar::ToolbarState::default(),
+            terminal_state: crate::ui::terminal::TerminalState::default(),
             config_fingerprint: crate::config::AppConfig::fingerprint(
                 &crate::config::AppConfig::get_config_path(),
             )
@@ -10418,6 +10475,36 @@ pub(crate) mod tests {
         assert_eq!(app.sidebar_rail_state, docked.sidebar_rail);
         assert!(app.is_tab_open_in_dock(Tab::HardwareMonitor));
         assert!(!app.is_tab_open_in_sidebar(Tab::MediaInspector));
+    }
+
+    #[test]
+    #[cfg(feature = "workspace-terminal")]
+    fn explicit_workspace_profile_owns_terminal_visibility_until_a_new_show_intent() {
+        let _lock = lock_app_tests();
+        use crate::ui::layout::PealayerTab as Tab;
+        let ctx = egui::Context::default();
+        let mut app = PealayerApp::default();
+        let without_terminal = app.capture_workspace_profile(&ctx);
+        // Ordinary startup honors the enabled preference without starting a session.
+        app.terminal_state.preferences.enabled = true;
+        crate::ui::terminal::sync_visibility(&mut app);
+        assert!(app.is_tab_open_in_dock(Tab::Terminal));
+        assert!(!app.terminal_state.busy());
+        // --workspace restores its captured layout, not a merge with global flags.
+        app.apply_workspace_profile(&ctx, &without_terminal).unwrap();
+        crate::ui::terminal::sync_visibility(&mut app);
+        assert!(!app.is_tab_open_in_dock(Tab::Terminal));
+        assert!(!app.terminal_state.preferences.enabled);
+        assert_eq!(serde_json::to_string(&app.dock_state).unwrap(),
+            without_terminal.dock_layout.as_ref().unwrap().as_str());
+        // A subsequent explicit visibility request wins, preserving every sibling.
+        let siblings: Vec<_> = app.dock_state.layout.panels().into_iter().copied().collect();
+        app.terminal_state.preferences.enabled = true;
+        crate::ui::terminal::sync_visibility(&mut app);
+        assert!(app.is_tab_open_in_dock(Tab::Terminal));
+        assert!(app.terminal_state.preferences.enabled);
+        assert!(siblings.into_iter().all(|tab| app.is_tab_open_in_dock(tab)));
+        assert!(!app.terminal_state.busy());
     }
 
     #[test]
@@ -11007,6 +11094,31 @@ pub(crate) mod tests {
             ctx.memory(|memory| memory.has_focus(crate::ui::layout::timeline_keyboard_focus_id())),
             "Timeline must retain focus after pausing with Space"
         );
+    }
+
+    #[test]
+    fn terminal_input_blocks_new_hardware_presses_but_retains_consumed_release_edges() {
+        let _lock = lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.global_hardware_hotkeys_enabled = false;
+        app.hardware_number_shortcuts_enabled = false;
+        app.hardware_key_bindings = vec![crate::config::HardwareKeyBinding {
+            id:"terminal-hold-fixture".into(),
+            chord:crate::config::KeyChord { key:"KeyR".into(), ..Default::default() },
+            ..Default::default()
+        }];
+        let ctx=egui::Context::default();
+        for pressed in [true,false] {
+            if !pressed { app.active_hardware_bindings.insert("terminal-hold-fixture".into()); }
+            discard_ui_output(ctx.run_ui(egui::RawInput { events:vec![egui::Event::Key {
+                key:egui::Key::R,physical_key:Some(egui::Key::R),pressed,repeat:false,modifiers:egui::Modifiers::NONE,
+            }],..Default::default() },|ui| {
+                ui.ctx().data_mut(|data|data.insert_temp(egui::Id::unique("terminal-keyboard-owner"),true));
+                ui.input_mut(|input|input.events.clear());
+                app.process_keyboard_shortcuts(ui.ctx());
+            }));
+            assert!(app.active_hardware_bindings.is_empty());
+        }
     }
 
     #[test]

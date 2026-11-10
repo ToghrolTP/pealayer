@@ -14102,17 +14102,23 @@ pub enum PealayerTab {
     EffectsLibrary,
     HardwareMonitor,
     Timeline,
+    Terminal,
 }
 
 impl PealayerTab {
-    pub const ALL: [PealayerTab; 6] = [
+    pub const ALL: [PealayerTab; 7] = [
         PealayerTab::ProgramMonitor,
         PealayerTab::MediaInspector,
         PealayerTab::Timeline,
         PealayerTab::EffectControls,
         PealayerTab::EffectsLibrary,
         PealayerTab::HardwareMonitor,
+        PealayerTab::Terminal,
     ];
+
+    pub fn available(self) -> bool {
+        self != Self::Terminal || cfg!(feature = "workspace-terminal")
+    }
 
     pub fn title(self, app: &crate::app::PealayerApp) -> String {
         self.title_for_language(app.language)
@@ -14127,6 +14133,7 @@ impl PealayerTab {
             PealayerTab::EffectControls => "Effect Controls",
             PealayerTab::EffectsLibrary => "Effects Library",
             PealayerTab::HardwareMonitor => "Hardware Monitor",
+            PealayerTab::Terminal => "Terminal",
         };
         crate::ui::i18n::tr(language, key)
     }
@@ -14139,6 +14146,7 @@ impl PealayerTab {
             PealayerTab::EffectControls => crate::ui::icons::SLIDERS_HORIZONTAL,
             PealayerTab::EffectsLibrary => crate::ui::icons::SPARKLE,
             PealayerTab::HardwareMonitor => crate::ui::icons::GAUGE,
+            PealayerTab::Terminal => crate::ui::icons::TERMINAL_WINDOW,
         }
     }
 }
@@ -14151,7 +14159,7 @@ pub fn visible_workspace_tab_count(app: &PealayerApp) -> usize {
 }
 
 pub fn draw_workspace_tab_menu(app: &mut PealayerApp, ui: &mut egui::Ui) {
-    for tab in PealayerTab::ALL {
+    for tab in PealayerTab::ALL.into_iter().filter(|tab| tab.available()) {
         let is_sidebar_open = app.is_tab_open_in_sidebar(tab);
         let is_open = app.is_tab_open(tab);
         let mut visible = is_open;
@@ -14221,7 +14229,7 @@ pub fn decode_workspace(json: &str) -> Result<craft_ui::docking::Workspace<Peala
 fn panel_scroll_axes(tab: &PealayerTab) -> [bool; 2] {
     match tab {
         PealayerTab::ProgramMonitor | PealayerTab::EffectsLibrary
-        | PealayerTab::HardwareMonitor | PealayerTab::MediaInspector => [false, false],
+        | PealayerTab::HardwareMonitor | PealayerTab::MediaInspector | PealayerTab::Terminal => [false, false],
         _ => [true, true],
     }
 }
@@ -14365,6 +14373,17 @@ impl<'a> PealayerTabViewer<'a> {
                     ui.close();
                 }
             }
+            PealayerTab::Terminal => {
+                #[cfg(feature = "workspace-terminal")]
+                if ui.button(format!("{} {}", crate::ui::icons::GEAR, self.app.tr("Terminal preferences"))).clicked() {
+                    self.app.apply_interop_command(ui.ctx(), crate::platform::interop::InteropCommand::NavigatePreferences {
+                        navigation: crate::preferences_contract::PreferencesNavigation {
+                            section: Some("workspace_tools".into()), scroll_y: 0.0,
+                        },
+                    }, "Terminal panel");
+                    ui.close();
+                }
+            }
             _ => {}
         }
         ui.separator();
@@ -14385,6 +14404,13 @@ impl<'a> PealayerTabViewer<'a> {
     }
 
     pub fn draw_tab_body(&mut self, ui: &mut egui::Ui, tab: PealayerTab) {
+        if tab == PealayerTab::Terminal {
+            #[cfg(feature = "workspace-terminal")]
+            crate::ui::terminal::draw_docked(self.app, ui);
+            #[cfg(not(feature = "workspace-terminal"))]
+            ui.centered_and_justified(|ui| { ui.label(self.app.tr("Terminal is not included in this build")); });
+            return;
+        }
         let _timing = crate::performance::span(match tab {
             PealayerTab::ProgramMonitor => crate::performance::Phase::Program,
             PealayerTab::MediaInspector => crate::performance::Phase::Inspector,
@@ -14392,6 +14418,7 @@ impl<'a> PealayerTabViewer<'a> {
             PealayerTab::EffectsLibrary => crate::performance::Phase::Library,
             PealayerTab::HardwareMonitor => crate::performance::Phase::Hardware,
             PealayerTab::Timeline => crate::performance::Phase::Timeline,
+            PealayerTab::Terminal => unreachable!("Terminal owns its bounded body above"),
         });
         let display_language = self.app.language;
         // High density styling for text elements
@@ -14402,6 +14429,7 @@ impl<'a> PealayerTabViewer<'a> {
             .show(ui, |ui| {
               ui.with_layout(crate::ui::i18n::vertical_layout(self.app.rtl), |ui| {
                 match tab {
+                    PealayerTab::Terminal => unreachable!("Terminal owns its bounded body above"),
                     PealayerTab::MediaInspector => {
                         crate::ui::media_inspector::draw(self.app, ui);
                     }
@@ -20539,11 +20567,20 @@ pub fn create_initial_layout() -> craft_ui::docking::Workspace<PealayerTab> {
     };
 
     let mut workspace = Workspace::new(layout);
-    // Hidden MediaInspector default location
+    // Optional panels retain useful initial locations without appearing by default.
     workspace.hidden = vec![
         (PealayerTab::MediaInspector, craft_ui::docking::Location {
             floating: None,
             anchor: Some(PealayerTab::EffectsLibrary),
+            placement: craft_ui::docking::Placement::Tab { before: None },
+            size: None,
+            stack: None,
+            sibling: Vec::new(),
+            group: None,
+        }),
+        (PealayerTab::Terminal, craft_ui::docking::Location {
+            floating: None,
+            anchor: Some(PealayerTab::Timeline),
             placement: craft_ui::docking::Placement::Tab { before: None },
             size: None,
             stack: None,
@@ -20560,8 +20597,17 @@ pub fn reveal_and_focus_tab(
     workspace: &mut craft_ui::docking::Workspace<PealayerTab>,
     tab: PealayerTab,
 ) -> bool {
+    if !tab.available() { return false; }
+    // CraftUI intentionally permits opening panels while locked. Pealayer's
+    // optional terminal has a stricter visibility-intent guard, shared by menu,
+    // Preferences and deferred reveal paths; selecting an existing tab is safe.
+    if tab == PealayerTab::Terminal && workspace.locked && !workspace.layout.contains(&tab) {
+        return false;
+    }
     let before = workspace.layout.clone();
-    let fallback = Some(PealayerTab::ProgramMonitor);
+    let fallback = if tab == PealayerTab::Terminal && workspace.layout.contains(&PealayerTab::Timeline) {
+        Some(PealayerTab::Timeline)
+    } else { Some(PealayerTab::ProgramMonitor) };
     let ok = workspace
         .set_visible(tab, true, fallback, |_| craft_ui::docking::Permissions::default())
         .is_ok();
@@ -21169,6 +21215,48 @@ mod dock_content_tests {
         assert!(workspace.layout.contains(&PealayerTab::HardwareMonitor));
         assert!(workspace.layout.contains(&PealayerTab::EffectsLibrary));
         assert!(!workspace.layout.contains(&PealayerTab::MediaInspector));
+        assert!(!workspace.layout.contains(&PealayerTab::Terminal));
+    }
+
+    #[test]
+    fn terminal_has_a_hidden_timeline_tab_location_and_preserves_other_panels() {
+        use craft_ui::docking::Node;
+        let mut workspace = create_initial_layout();
+        let before = workspace.clone();
+        let changed = reveal_and_focus_tab(&mut workspace, PealayerTab::Terminal);
+        assert_eq!(changed, cfg!(feature = "workspace-terminal"));
+        if !cfg!(feature = "workspace-terminal") {
+            assert_eq!(workspace, before);
+            return;
+        }
+        let Some(Node::Split { first, second, .. }) = &workspace.layout.root else { panic!("original workspace split"); };
+        let Some(Node::Split { first: original_first, .. }) = &before.layout.root else { unreachable!() };
+        assert_eq!(first, original_first, "opening terminal must not rearrange upper panes");
+        let Node::Tabs { panels, active } = second.as_ref() else { panic!("Timeline group must remain tabbed"); };
+        assert_eq!(panels, &[PealayerTab::Timeline, PealayerTab::Terminal]);
+        assert_eq!(panels[*active], PealayerTab::Terminal);
+        workspace.set_visible(PealayerTab::Terminal, false, None, |_| Default::default()).unwrap();
+        assert_eq!(workspace.layout, before.layout);
+        workspace.locked = true;
+        let locked = workspace.clone();
+        assert!(!reveal_and_focus_tab(&mut workspace, PealayerTab::Terminal));
+        assert_eq!(workspace, locked);
+    }
+
+    #[test]
+    #[cfg(feature = "workspace-terminal")]
+    fn locked_workspace_can_activate_an_existing_terminal_without_rearranging_panels() {
+        let mut workspace = create_initial_layout();
+        assert!(reveal_and_focus_tab(&mut workspace, PealayerTab::Terminal));
+        assert!(reveal_and_focus_tab(&mut workspace, PealayerTab::Timeline));
+        workspace.locked = true;
+        let before = workspace.clone();
+        assert!(reveal_and_focus_tab(&mut workspace, PealayerTab::Terminal));
+        assert_eq!(workspace.hidden, before.hidden);
+        assert_eq!(workspace.layout.panels(), before.layout.panels());
+        assert!(workspace.locked);
+        assert!(!reveal_and_focus_tab(&mut workspace, PealayerTab::Terminal));
+        assert!(workspace.validate().is_ok());
     }
 
     #[test]

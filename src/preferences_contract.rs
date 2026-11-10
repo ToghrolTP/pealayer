@@ -375,6 +375,8 @@ pub fn preference_sections() -> Vec<PreferenceSection> {
             icon: "sliders",
         },
         PreferenceSection { id: "sidebar_rail", navigation_group: "Application", label: "Sidebar rail", icon: "sliders" },
+        #[cfg(any(feature = "workspace-toolbar", feature = "workspace-terminal"))]
+        PreferenceSection { id: "workspace_tools", navigation_group: "Application", label: "Workspace tools", icon: "terminal-window" },
     ]
 }
 
@@ -395,6 +397,67 @@ fn designer_color_control(key: &'static str, label: &'static str) -> PreferenceC
     let mut control = PreferenceControl::text(key, "hardware", "Effect designer colors", label, "#RRGGBB");
     control.kind = PreferenceControlKind::Color;
     control
+}
+
+/// Optional surfaces advertise only controls their compiled host can use.
+/// Their serialized values remain in the config even when the feature is omitted.
+fn workspace_tool_controls(config: &crate::config::AppConfig) -> Vec<PreferenceControl> {
+    let mut controls = Vec::new();
+    #[cfg(feature = "workspace-toolbar")]
+    {
+        let mut enabled = PreferenceControl::boolean("ui.toolbar.enabled", "workspace_tools", "Command toolbar", "Show command toolbar");
+        enabled.description = Some("Open the command palette with Ctrl+Shift+P even when the toolbar is hidden.");
+        controls.push(enabled);
+        let mut actions = PreferenceControl::boolean("ui.toolbar.order", "workspace_tools", "Command toolbar", "Toolbar actions");
+        actions.kind = PreferenceControlKind::ActionList;
+        actions.custom_key = Some("ui.toolbar.hidden");
+        actions.options = crate::ui::workspace_toolbar::command_options().into_iter().map(|(id, label, icon)| PreferenceOption {
+            value: serde_json::json!(id), label, icon: Some(icon), color: None, description: None,
+        }).collect();
+        controls.push(actions);
+    }
+    #[cfg(feature = "workspace-terminal")]
+    {
+        let mut enabled = PreferenceControl::boolean("ui.terminal.enabled", "workspace_tools", "Terminal", "Show terminal panel");
+        enabled.description = Some("Showing the panel does not start a shell or connect to a host. Choose Connect in the terminal when ready.");
+        controls.push(enabled);
+        let mut target = PreferenceControl::select("ui.terminal.target", "workspace_tools", "Terminal", "Default session", &[
+            ("pc_controller", "PCController"), ("system_shell", "System shell"), ("portable_shell", "PortableShell"),
+        ]);
+        for (option, (icon, description)) in target.options.iter_mut().zip([
+            ("plug", "Connect to the selected PCController host's interactive terminal."),
+            ("terminal-window", "Run a shell on this Pealayer host, not on a remote playback authority."),
+            ("terminal-window", "Embedded Pealayer command shell. No external executable is needed."),
+        ]) {
+            option.icon = Some(icon);
+            option.description = Some(description.into());
+        }
+        controls.push(target);
+        match config.ui.terminal.target {
+            crate::ui::terminal::TerminalTarget::PcController => {
+                let mut endpoint = PreferenceControl::text("ui.terminal.controller_endpoint", "workspace_tools", "Terminal connection", "PCController endpoint", "Use the selected PCController host");
+                endpoint.description = Some("Optional pccontroller://host:port or tcp://host:port endpoint. Leave blank to use the selected controller.");
+                controls.push(endpoint);
+            }
+            crate::ui::terminal::TerminalTarget::SystemShell => {
+                let mut program = PreferenceControl::text("ui.terminal.shell_program", "workspace_tools", "Terminal connection", "Shell executable", "System default shell");
+                program.kind = PreferenceControlKind::File;
+                #[cfg(windows)] { program.file_extensions = vec!["exe"]; }
+                controls.push(program);
+                let mut arguments = PreferenceControl::text("ui.terminal.shell_arguments", "workspace_tools", "Terminal connection", "Shell arguments", "Optional arguments");
+                arguments.description = Some("Separate arguments with spaces; quote an argument containing spaces. Applies to newly connected sessions.");
+                controls.push(arguments);
+            }
+            crate::ui::terminal::TerminalTarget::PortableShell => {}
+        }
+        controls.extend([
+            PreferenceControl::number("ui.terminal.font_size", "workspace_tools", "Terminal appearance", "Font size", 9.0, 28.0, 0.5),
+            PreferenceControl::number("ui.terminal.scrollback_lines", "workspace_tools", "Terminal appearance", "Scrollback lines", 100.0, 10000.0, 100.0),
+        ]);
+    }
+    // Avoid feature-off warnings without changing or discarding persisted settings.
+    let _ = config;
+    controls
 }
 
 pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceControl> {
@@ -440,7 +503,7 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             let mut control = PreferenceControl::boolean("ui.sidebar_shortcuts.order", "sidebar_rail", "Shortcuts", "Shortcuts");
             control.kind = PreferenceControlKind::ActionList;
             control.custom_key = Some("ui.sidebar_shortcuts.hidden");
-            control.options = crate::ui::sidebar_shortcuts::RailAction::ALL.into_iter().map(|action| PreferenceOption {
+            control.options = crate::ui::sidebar_shortcuts::RailAction::ALL.into_iter().filter(|action| action.included()).map(|action| PreferenceOption {
                 value: serde_json::to_value(action).unwrap(), label: action.label(), color: None,
                 description: None, icon: Some(action.icon()),
             }).collect();
@@ -1307,6 +1370,7 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
         PreferenceControl::boolean("status_bar.dividers", "advanced", "Status bar", "Show dividers"),
         PreferenceControl::boolean("status_bar.semantic_colors", "advanced", "Status bar", "Semantic colors"),
     ];
+    controls.extend(workspace_tool_controls(config));
     for key in ["quick_seek_seconds", "mouse_seek_seconds_per_notch"] {
         if let Some(control) = controls.iter_mut().find(|control| control.key == key) {
             control.logarithmic = true;
@@ -1349,6 +1413,14 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
 
 fn semantic_preference_icon(control: &PreferenceControl) -> &'static str {
     match control.key {
+        "ui.toolbar.enabled" => "sliders-horizontal",
+        "ui.toolbar.order" => "list-checks",
+        "ui.terminal.enabled" | "ui.terminal.target" => "terminal-window",
+        "ui.terminal.controller_endpoint" => "plug",
+        "ui.terminal.shell_program" => "terminal-window",
+        "ui.terminal.shell_arguments" => "keyboard",
+        "ui.terminal.font_size" => "text-t",
+        "ui.terminal.scrollback_lines" => "text-align-left",
         "status_bar.fps_mode" => "gauge",
         "status_bar.media_rate" => "film-strip",
         "theme" => "circle-half",
@@ -1440,6 +1512,84 @@ pub fn set_value_at_path(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn workspace_tools_contract_preserves_defaults_and_respects_compiled_features() {
+        let config = crate::config::AppConfig::default();
+        let contract = super::preferences_contract(&config);
+        assert_eq!(super::value_at_path(&contract.values, "ui.toolbar.enabled"), Some(&serde_json::json!(false)));
+        assert_eq!(super::value_at_path(&contract.values, "ui.terminal.enabled"), Some(&serde_json::json!(false)));
+        assert_eq!(contract.sections.iter().any(|section| section.id == "workspace_tools"),
+            cfg!(any(feature = "workspace-toolbar", feature = "workspace-terminal")));
+        assert_eq!(contract.controls.iter().any(|control| control.key == "ui.toolbar.enabled"), cfg!(feature = "workspace-toolbar"));
+        assert_eq!(contract.controls.iter().any(|control| control.key == "ui.terminal.enabled"), cfg!(feature = "workspace-terminal"));
+        for control in contract.controls.iter().filter(|control| control.section == "workspace_tools") {
+            assert!(super::value_at_path(&contract.values, control.key).is_some(), "{} has no config owner", control.key);
+            assert!(!control.icon.is_empty());
+        }
+    }
+
+    #[cfg(feature = "workspace-toolbar")]
+    #[test]
+    fn workspace_toolbar_action_list_uses_the_live_catalog_and_independent_visibility_key() {
+        let contract = super::preferences_contract(&crate::config::AppConfig::default());
+        let list = contract.controls.iter().find(|control| control.key == "ui.toolbar.order").unwrap();
+        assert!(matches!(list.kind, super::PreferenceControlKind::ActionList));
+        assert_eq!(list.custom_key, Some("ui.toolbar.hidden"));
+        let catalog = crate::ui::workspace_toolbar::command_options();
+        assert_eq!(list.options.len(), catalog.len());
+        for (option, (id, label, icon)) in list.options.iter().zip(catalog) {
+            assert_eq!(option.value, serde_json::json!(id));
+            assert_eq!(option.label, label);
+            assert_eq!(option.icon, Some(icon));
+        }
+    }
+
+    #[cfg(feature = "workspace-terminal")]
+    #[test]
+    fn terminal_preferences_show_the_selected_target_without_erasing_other_targets() {
+        use crate::ui::terminal::TerminalTarget;
+        let mut config = crate::config::AppConfig::default();
+        config.ui.terminal.controller_endpoint = "pccontroller://example.invalid:8787".into();
+        config.ui.terminal.shell_program = "shell-fixture".into();
+        for (target, expected, absent) in [
+            (TerminalTarget::PcController, "ui.terminal.controller_endpoint", "ui.terminal.shell_program"),
+            (TerminalTarget::SystemShell, "ui.terminal.shell_program", "ui.terminal.controller_endpoint"),
+            (TerminalTarget::PortableShell, "ui.terminal.target", "ui.terminal.shell_program"),
+        ] {
+            config.ui.terminal.target = target;
+            let contract = super::preferences_contract(&config);
+            assert!(contract.controls.iter().any(|control| control.key == expected));
+            assert!(!contract.controls.iter().any(|control| control.key == absent));
+            assert!(super::value_at_path(&contract.values, absent).unwrap().as_str().is_some_and(|value| !value.is_empty()));
+            for (key, minimum, maximum) in [
+                ("ui.terminal.font_size", 9.0, 28.0),
+                ("ui.terminal.scrollback_lines", 100.0, 10000.0),
+            ] {
+                let row = contract.controls.iter().find(|control| control.key == key).unwrap();
+                assert_eq!(row.minimum, Some(minimum));
+                assert_eq!(row.maximum, Some(maximum));
+                assert_eq!(row.integer, key == "ui.terminal.scrollback_lines");
+            }
+        }
+    }
+
+    #[test]
+    fn workspace_tool_value_edits_do_not_reset_rail_or_workspace_data() {
+        let mut config = crate::config::AppConfig::default();
+        config.ui.sidebar_shortcuts.order = vec![crate::ui::sidebar_shortcuts::RailAction::Timeline];
+        let original = serde_json::to_value(&config).unwrap();
+        let mut values = original.clone();
+        super::set_value_at_path(&mut values, "ui.toolbar.enabled", serde_json::json!(true)).unwrap();
+        super::set_value_at_path(&mut values, "ui.toolbar.order", serde_json::json!(["preferences", "open_media"])).unwrap();
+        super::set_value_at_path(&mut values, "ui.toolbar.hidden", serde_json::json!(["stop"])).unwrap();
+        super::set_value_at_path(&mut values, "ui.terminal.font_size", serde_json::json!(14.5)).unwrap();
+        let restored: crate::config::AppConfig = serde_json::from_value(values).unwrap();
+        let mut roundtrip = serde_json::to_value(restored).unwrap();
+        roundtrip["ui"]["toolbar"] = original["ui"]["toolbar"].clone();
+        roundtrip["ui"]["terminal"] = original["ui"]["terminal"].clone();
+        assert_eq!(roundtrip, original);
+    }
+
     #[test]
     fn craft_header_visibility_is_shared_persistent_and_live_previewed() {
         let mut config=crate::config::AppConfig::default();

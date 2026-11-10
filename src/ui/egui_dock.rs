@@ -257,6 +257,7 @@ fn decorate_headers(
                 .clicked()
             {
                 app.dock_state = super::layout::create_initial_layout();
+                app.sync_terminal_visibility_from_workspace();
                 app.deferred_config_save = true;
                 ui.close();
             }
@@ -602,6 +603,7 @@ pub fn show(app: &mut PealayerApp, ui: &mut egui::Ui, reveal: Option<Tab>) {
         candidate.layout = after;
         if candidate.validate().is_ok() {
             app.dock_state = candidate;
+            app.sync_terminal_visibility_from_workspace();
             projection.source = app.dock_state.layout.clone();
             app.deferred_config_save = true;
         }
@@ -614,6 +616,36 @@ pub fn show(app: &mut PealayerApp, ui: &mut egui::Ui, reveal: Option<Tab>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(feature = "workspace-terminal")]
+    #[test]
+    fn terminal_uses_native_dock_close_and_preserves_session_owner_and_siblings() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let ctx = egui::Context::default();
+        let mut app = PealayerApp::default();
+        app.dock_state = craft_ui::docking::Workspace::new(Layout {
+            root: Some(Node::Tabs { panels: vec![Tab::Timeline, Tab::Terminal], active: 1 }),
+            floating: Vec::new(),
+        });
+        app.sync_terminal_visibility_from_workspace();
+        for _ in 0..3 { frame(&ctx, &mut app, vec![]); }
+        let close = ctx.data(|data| data.get_temp::<Vec<TabButton>>(tab_buttons_id())).unwrap()
+            .into_iter().find(|button| button.tab == Tab::Terminal).unwrap().close_rect.unwrap().center();
+        let sessions = app.terminal_state.status()["sessions"].clone();
+        assert!(app.terminal_state.preferences.enabled);
+        app.dock_state.locked = true;
+        click(&ctx, &mut app, close, egui::PointerButton::Primary);
+        assert!(app.dock_state.layout.contains(&Tab::Terminal));
+        app.dock_state.locked = false;
+        for _ in 0..2 { frame(&ctx, &mut app, vec![]); }
+        let close = ctx.data(|data| data.get_temp::<Vec<TabButton>>(tab_buttons_id())).unwrap()
+            .into_iter().find(|button| button.tab == Tab::Terminal).unwrap().close_rect.unwrap().center();
+        click(&ctx, &mut app, close, egui::PointerButton::Primary);
+        assert!(!app.dock_state.layout.contains(&Tab::Terminal));
+        assert!(app.dock_state.layout.contains(&Tab::Timeline));
+        assert!(!app.terminal_state.preferences.enabled);
+        assert_eq!(app.terminal_state.status()["sessions"], sessions, "closing pane does not destroy terminal views");
+    }
 
     fn frame(
         ctx: &egui::Context,
@@ -1151,6 +1183,25 @@ mod tests {
         round_trip.layout = after;
         assert!(round_trip.validate().is_ok());
         assert_eq!(round_trip.hidden, workspace.hidden);
+    }
+
+    #[cfg(feature = "workspace-terminal")]
+    #[test]
+    fn terminal_float_redock_and_renderer_roundtrip_preserve_workspace_members() {
+        use craft_ui::docking::{Action, Placement};
+        let mut workspace = super::super::layout::create_initial_layout();
+        super::super::layout::reveal_and_focus_tab(&mut workspace, Tab::Terminal);
+        let original = workspace.layout.clone();
+        workspace.apply_all([Action::Float { panel: Tab::Terminal, rect: [40.0, 50.0, 600.0, 300.0] }], |_| Default::default()).unwrap();
+        let projected = project(&workspace.layout, egui::vec2(1200.0, 800.0));
+        assert_eq!(read_layout(&projected, &workspace.layout), workspace.layout);
+        assert!(workspace.layout.floating.iter().any(|window| window.contains(&Tab::Terminal)));
+        workspace.apply_all([Action::Move { panel: Tab::Terminal, anchor: Tab::Timeline,
+            placement: Placement::Tab { before: None } }], |_| Default::default()).unwrap();
+        assert!(workspace.layout.floating.is_empty());
+        assert_eq!(workspace.layout.panels().len(), original.panels().len());
+        for panel in original.panels() { assert!(workspace.layout.contains(panel)); }
+        assert!(workspace.validate().is_ok());
     }
 
     #[test]

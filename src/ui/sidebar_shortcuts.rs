@@ -23,10 +23,11 @@ pub enum RailAction {
     AudioSettings,
     SubtitleSettings,
     About,
+    Terminal,
 }
 
 impl RailAction {
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::HardwareMonitor,
         Self::MediaInspector,
         Self::EffectControls,
@@ -44,6 +45,7 @@ impl RailAction {
         Self::AudioSettings,
         Self::SubtitleSettings,
         Self::About,
+        Self::Terminal,
     ];
     pub fn tab(self) -> Option<Tab> {
         Some(match self {
@@ -53,11 +55,15 @@ impl RailAction {
             Self::EffectsLibrary => Tab::EffectsLibrary,
             Self::ProgramMonitor => Tab::ProgramMonitor,
             Self::Timeline => Tab::Timeline,
+            Self::Terminal => Tab::Terminal,
             _ => return None,
         })
     }
     pub fn pane(self) -> Option<Pane> {
         self.tab().and_then(|tab| Pane::try_from(tab).ok())
+    }
+    pub fn included(self) -> bool {
+        self != Self::Terminal || cfg!(feature = "workspace-terminal")
     }
     pub fn label(self) -> &'static str {
         match self {
@@ -78,6 +84,7 @@ impl RailAction {
             Self::AudioSettings => "Audio settings",
             Self::SubtitleSettings => "Subtitle settings",
             Self::About => "About",
+            Self::Terminal => "Terminal",
         }
     }
     pub fn icon(self) -> &'static str {
@@ -98,14 +105,15 @@ impl RailAction {
             _ => icons::INFO,
         }
     }
-    fn available(self, app: &mut PealayerApp) -> bool {
+    pub(crate) fn available(self, app: &mut PealayerApp) -> bool {
+        if self == Self::Terminal { return cfg!(feature = "workspace-terminal"); }
         if self == Self::RfManager {
             let caps = app.advertised_hardware();
             return super::hardware_monitor::show_rf(app.is_connected, caps.as_ref());
         }
         true
     }
-    fn activate(self, app: &mut PealayerApp, ctx: &egui::Context) {
+    pub(crate) fn activate(self, app: &mut PealayerApp, ctx: &egui::Context) {
         if !self.available(app) {
             return;
         }
@@ -205,7 +213,7 @@ fn common_menu(app: &mut PealayerApp, ui: &mut egui::Ui) {
     ui.menu_button(
         format!("{}  {}", icons::PLUS, app.tr("Show / hide actions")),
         |ui| {
-            for action in app.sidebar_shortcuts.order() {
+            for action in app.sidebar_shortcuts.order().into_iter().filter(|action| action.included()) {
                 let mut visible = !app.sidebar_shortcuts.hidden.contains(&action);
                 if ui
                     .checkbox(
@@ -386,7 +394,7 @@ pub(super) fn show(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             .sidebar_shortcuts
                             .order()
                             .into_iter()
-                            .filter(|action| !before.hidden.contains(action))
+                            .filter(|action| action.included() && !before.hidden.contains(action))
                         {
                             let (rect, _) = ui.allocate_exact_size(
                                 egui::Vec2::splat(super::craft_theme::RAIL_BUTTON),
@@ -653,6 +661,7 @@ pub(crate) fn commit_drop(app: &mut PealayerApp, ctx: &egui::Context) {
             Permissions::default()
         }) {
         Ok(_) => {
+            app.sync_terminal_visibility_from_workspace();
             if Pane::try_from(drop.tab).ok() == app.sidebar_rail_state.open {
                 app.sidebar_rail_state.open = None;
             }

@@ -21,6 +21,7 @@ import {
   InfoCircleOutlined,
   CheckSquareOutlined,
   ControlOutlined,
+  CodeOutlined,
   EditOutlined,
   ExperimentOutlined,
   PlayCircleOutlined,
@@ -133,11 +134,14 @@ const sectionIcons: Record<string, React.ReactNode> = {
   input: <ControlOutlined />,
   timeline_toolbar: <ControlOutlined />,
   sidebar_rail: <MenuOutlined />,
+  workspace_tools: <CodeOutlined />,
   web: <GlobalOutlined />,
   advanced: <SettingOutlined />,
 };
 
 const controlIcons: Record<string, React.ReactNode> = {
+  'terminal-window': <CodeOutlined />,
+  plug: <LinkOutlined />,
   'monitor-play': <VideoCameraOutlined />,
   'arrow-square-out': <ExpandOutlined />,
   'squares-four': <GatewayOutlined />,
@@ -189,6 +193,8 @@ function PlayerExecutableHint({ executable }: { executable: string }) {
 
 const networkOptionIcon = (icon?: string) => {
   switch (icon) {
+    case 'terminal-window': return <CodeOutlined />;
+    case 'plug': return <LinkOutlined />;
     case 'wifi': return <WifiOutlined />;
     case 'ethernet': return <DesktopOutlined />;
     case 'vpn': return <SafetyCertificateOutlined />;
@@ -249,6 +255,7 @@ export function ChoiceSlider({ options, value, label, locale, disabled, onCommit
 export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, locale, appearance, timelineWheelPreferences, onConfigChange }) => {
   const [contract, setContract] = useState<PreferencesContract | null>(null);
   const [section, setSection] = useState('appearance');
+  const [schemaRevision, setSchemaRevision] = useState(0);
   const detail = useRef<HTMLElement>(null);
   const sectionScroll = useRef<Record<string, number>>({});
   const selectSection = (next: string) => {
@@ -320,10 +327,10 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
     void fetch(`${apiBaseUrl}/api/preferences`, { signal: abort.signal }).then(response => {
       if (!response.ok) throw new Error(`Preferences request failed (${response.status})`);
       return response.json() as Promise<PreferencesContract>;
-    }).then(next => setContract(current => current ? { ...current, controls: next.controls } : current))
+    }).then(next => setContract(current => current ? { ...current, controls: next.controls, groups: next.groups } : current))
       .catch(error => { if (!abort.signal.aborted) setStatus({ kind: 'error', text: String(error) }); });
     return () => abort.abort();
-  }, [apiBaseUrl, appearance?.ui_font_family, appearance?.monospace_font_family]);
+  }, [apiBaseUrl, appearance?.ui_font_family, appearance?.monospace_font_family, schemaRevision]);
 
   useEffect(() => {
     if (!timelineWheelPreferences) return;
@@ -346,7 +353,8 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
   const updatePaths = async (updates: Array<{ key: string; value: any }>) => {
     if (!contract) return;
     const nextValues = updates.reduce(
-      (values, update) => valueWithPath(values, update.key, update.value === '' ? null : update.value),
+      (values, update) => valueWithPath(values, update.key,
+        update.value === '' && !update.key.startsWith('ui.terminal.') ? null : update.value),
       contract.values,
     );
     setContract({ ...contract, values: nextValues });
@@ -367,6 +375,7 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
         throw new Error(body.error || `Save failed (${response.status})`);
       }
       onConfigChange?.(nextValues);
+      if (updates.some(update => update.key === 'ui.terminal.target')) setSchemaRevision(revision => revision + 1);
       setStatus({ kind: 'success', text: tr(locale, 'Preferences saved') });
     } catch (error) {
       setContract(contract);
@@ -396,7 +405,9 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
     );
     if (control.kind === 'file') {
       const executable = control.key === 'external_mpv.executable';
-      const normalize = (text: string) => executable ? text.trim().replace(/^"|"$/g, '') : text.trim();
+      const terminalExecutable = control.key === 'ui.terminal.shell_program';
+      const resetLabel = terminalExecutable ? 'Use default shell' : executable ? 'Use default player' : 'Use default icon';
+      const normalize = (text: string) => executable || terminalExecutable ? text.trim().replace(/^"|"$/g, '') : text.trim();
       return <div className="preference-control" key={control.key}>
         {commonLabel}
         <div className="preference-control__file">
@@ -406,9 +417,9 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
             onPressEnter={(event) => void update(control, normalize(event.currentTarget.value))}
             onBlur={(event) => event.currentTarget.value !== (value ?? '') && void update(control, normalize(event.currentTarget.value))} />
           <Button icon={<FolderOpenOutlined />} onClick={() => setFilePicker(control)}>{tr(locale, 'Browse…')}</Button>
-          <Tooltip title={tr(locale, executable ? 'Use default player' : 'Use default icon')}>
-            <Button icon={<UndoOutlined />} aria-label={tr(locale, executable ? 'Use default player' : 'Use default icon')} disabled={!value}
-              onClick={() => void update(control, executable ? 'mpv' : null)} />
+          <Tooltip title={tr(locale, resetLabel)}>
+            <Button icon={<UndoOutlined />} aria-label={tr(locale, resetLabel)} disabled={!value}
+              onClick={() => void update(control, executable ? 'mpv' : terminalExecutable ? '' : null)} />
           </Tooltip>
         </div>
         {executable && <PlayerExecutableHint executable={String(value ?? '')} />}
@@ -677,8 +688,9 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
         </div>
       )}
       {filePicker && <ServerFilePicker apiBaseUrl={apiBaseUrl} locale={locale}
+        allowAnyFile={filePicker.key.startsWith('ui.terminal.') && !filePicker.file_extensions?.length}
         extensions={filePicker.file_extensions ?? []} initialFile={valueAtPath(contract?.values ?? {}, filePicker.key) ?? undefined}
-        title={tr(locale, 'Choose an image file')} onCancel={() => setFilePicker(null)}
+        title={tr(locale, filePicker.key.startsWith('ui.terminal.') ? 'Choose terminal executable' : filePicker.key === 'external_mpv.executable' ? 'Choose mpv executable' : 'Choose an image file')} onCancel={() => setFilePicker(null)}
         onSelect={(path) => { void update(filePicker, path); setFilePicker(null); }} />}
     </section>
   );

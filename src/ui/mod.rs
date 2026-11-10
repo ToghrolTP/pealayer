@@ -48,6 +48,16 @@ pub mod seek_preview;
 pub mod status_bar;
 pub mod sidebar_rail;
 pub mod sidebar_shortcuts;
+pub mod workspace_toolbar;
+pub mod terminal;
+#[cfg(feature = "workspace-terminal")]
+mod terminal_backend;
+#[cfg(feature = "workspace-terminal")]
+mod portable_shell_host;
+#[cfg(feature = "workspace-terminal")]
+pub mod terminal_profiles;
+#[cfg(feature = "workspace-terminal")]
+mod terminal_screen;
 pub(crate) mod action_customization;
 pub(crate) mod control_bar;
 pub mod subtitles;

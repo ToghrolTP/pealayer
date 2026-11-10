@@ -193,6 +193,8 @@ pub enum InteropCommand {
     GetChapters,
     FrameStep { frames: i32 },
     OpenPreferences,
+    GetWorkspaceTools,
+    WorkspaceTools { #[serde(flatten)] request: crate::workspace_tools::Request },
     NavigatePreferences {
         #[serde(flatten)]
         navigation: crate::preferences_contract::PreferencesNavigation,
@@ -575,12 +577,13 @@ impl InteropCommand {
         // transfer them; owner-stamped browser receipts already belong to the
         // authority and follow normal session forwarding instead.
         matches!(self,Self::ImportAssets{request} if request.owner_id.is_none()) ||
-        matches!(self, Self::QuitLocal | Self::GetProcessStatus | Self::ConnectPeer { .. } | Self::InspectAuthoring { .. } | Self::NavigatePreferences { .. } | Self::OpenAbout { .. }
+        matches!(self, Self::GetWorkspaceTools | Self::WorkspaceTools { .. } | Self::QuitLocal | Self::GetProcessStatus | Self::ConnectPeer { .. } | Self::InspectAuthoring { .. } | Self::NavigatePreferences { .. } | Self::OpenAbout { .. }
             | Self::GetWindow | Self::SetWindow { .. } | Self::Activate | Self::Minimize | Self::Maximize | Self::Restore | Self::SetFullscreen { .. } | Self::ToggleFullscreen)
     }
 
     pub fn query_result(&self) -> Option<Value> {
         match self {
+            Self::GetWorkspaceTools => Some(crate::workspace_tools::snapshot()),
             Self::ResolvePlayerExecutable { executable } => Some(match crate::mpv::external::resolve_executable(executable) {
                 Ok(path) => serde_json::json!({"input":executable,"resolved":path,"error":null}),
                 Err(error) => serde_json::json!({"input":executable,"resolved":null,"error":error}),
@@ -605,6 +608,7 @@ impl InteropCommand {
 
     pub fn validate(&self) -> Result<(), String> {
         match self {
+            Self::WorkspaceTools { request } => request.validate(),
             Self::ResolvePlayerExecutable { executable } if executable.len() > 4096 || executable.contains(['\r', '\n', '\0']) => Err("Invalid player executable".into()),
             Self::SetWindow { placement } => placement.validate(),
             Self::FrameStep { frames } if *frames==0 || frames.unsigned_abs()>120 => Err("Frame step must be a nonzero count within ±120".into()),
@@ -957,6 +961,7 @@ pub fn command_catalog() -> Value {
             "paused_step": "frame_step_count", "playing_step": "quick_seek_seconds" },
         "discovery": "/api/player/commands"
     });
+    catalog["workspace_tools"] = serde_json::json!({ "status":"pealayer.workspace.tools.get", "control":"pealayer.workspace.tools.control", "scope":"local process, never relayed", "actions":["set_visible","palette","terminal"], "terminal_operations":["connect","disconnect","clear","write","resize"], "execution":"connect/write/resize require native local IPC; browser requests are rejected", "privacy":"metadata only; no transcript or history", "accepted":"queued once, not execution acknowledgement" });
     catalog["window"]=serde_json::json!({"get":"pealayer.window.get","set":"pealayer.window.set","scope":"local process, never remote authority","units":"logical_points","position":"outer origin","size":"inner client size","states":["normal","minimized","maximized","fullscreen"],"bounds_without_state":"restore to normal, then place","acknowledgement":"queued; poll observed window state"});
     catalog["native_ipc"]=serde_json::json!({"endpoint":NATIVE_ENDPOINT.get(),"encoding":"UTF-8 JSON or JSON-RPC, newline terminated"});
     #[cfg(windows)]
@@ -1963,6 +1968,10 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         }
         "navigate_preferences" | "pealayer.preferences.navigate" => Some(InteropCommand::NavigatePreferences {
             navigation: serde_json::from_value(request.params.clone()).map_err(|error| error.to_string())?,
+        }),
+        "pealayer.workspace.tools.get" => Some(InteropCommand::GetWorkspaceTools),
+        "pealayer.workspace.tools.control" => Some(InteropCommand::WorkspaceTools {
+            request: serde_json::from_value(request.params.clone()).map_err(|error|error.to_string())?,
         }),
         "pealayer.about.open" => Some(InteropCommand::OpenAbout {
             tab: match request.params.get("tab") {

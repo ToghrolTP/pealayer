@@ -157,6 +157,17 @@ warning widgets are capability-driven and absent while disconnected. Their
 history and per-item context-menu changes are recorded in the audit, not
 fabricated in this idle screenshot.
 
+Publication correction: the first public capability-era PNG mistakenly cropped
+the timeline's empty-state row. The original historical full-window capture was
+preserved, so its actual bottom rectangle `0,910,1222,46` now replaces that crop.
+No UI was reconstructed and no historical program was modified or rerun. All
+twelve gallery images were individually inspected during this correction.
+Original full-capture SHA-256:
+`7f806cf8ee995171e4de86c2f157c7b155a7cc60fa828074bde77ec312f75b3c`;
+corrected public PNG SHA-256:
+`d09a35d41dcb0d8cd21709e4cf3d304caa70e4cff46171fccda2b99c6a0f12e2`.
+Issue #228 and the screenshot-only PR #46 comment point to the corrected image.
+
 These four early applications were freshly built from unmodified tracked source
 and each original Cargo.lock. All used their original 800 × 600 logical default
 window at 150% desktop scale (1222 × 956 physical window, 1222 × 46 public

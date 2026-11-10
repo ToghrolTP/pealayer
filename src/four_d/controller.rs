@@ -1,4 +1,4 @@
-use std::io::{BufRead, BufReader, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::{TcpStream, ToSocketAddrs};
 use std::time::{Duration, Instant};
 
@@ -1548,6 +1548,15 @@ fn same_coordinator_epoch(current: &Value, selected: &Value) -> bool {
     }
 }
 
+fn read_bounded_rpc_line(reader: &mut impl BufRead, limit: u64) -> std::io::Result<String> {
+    let mut line = String::new();
+    reader.take(limit + 1).read_line(&mut line)?;
+    if line.len() as u64 > limit {
+        return Err(std::io::Error::new(std::io::ErrorKind::InvalidData, "PCController JSON-RPC response exceeds 16 MiB"));
+    }
+    Ok(line)
+}
+
 fn read_controller_response(reader: &mut BufReader<TcpStream>, id: u64, deadline: Instant) -> Result<Value, ControllerRpcError> {
     loop {
         let remaining = deadline.checked_duration_since(Instant::now())
@@ -1555,10 +1564,9 @@ fn read_controller_response(reader: &mut BufReader<TcpStream>, id: u64, deadline
             .ok_or_else(ControllerRpcError::deadline)?;
         reader.get_ref().set_read_timeout(Some(remaining))
             .map_err(|error| ControllerRpcError::io("configure PCController read timeout", error))?;
-        let mut line = String::new();
-        let read = reader.read_line(&mut line)
+        let line = read_bounded_rpc_line(reader, 16 * 1024 * 1024)
             .map_err(|error| ControllerRpcError::io("read PCController JSON-RPC response", error))?;
-        if read == 0 {
+        if line.is_empty() {
             return Err(ControllerRpcError::transport("PCController closed the JSON-RPC connection".into()));
         }
         let response: Value = serde_json::from_str(line.trim())
@@ -3251,6 +3259,16 @@ pub fn direct_serial_name(endpoint: &str) -> &str {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn controller_rpc_lines_are_bounded_without_consuming_the_next_response() {
+        let mut reader = std::io::Cursor::new(b"one\ntwo\n");
+        assert_eq!(super::read_bounded_rpc_line(&mut reader, 8).unwrap(), "one\n");
+        assert_eq!(super::read_bounded_rpc_line(&mut reader, 8).unwrap(), "two\n");
+        assert_eq!(super::read_bounded_rpc_line(&mut reader, 8).unwrap(), "");
+        let mut reader = std::io::Cursor::new(b"oversized response without newline");
+        assert_eq!(super::read_bounded_rpc_line(&mut reader, 8).unwrap_err().kind(), std::io::ErrorKind::InvalidData);
+        assert_eq!(reader.position(), 9);
+    }
     #[test]
     fn shared_pwm_policy_and_memory_follow_only_fenced_complete_metadata() {
         use super::*;

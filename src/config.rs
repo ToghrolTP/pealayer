@@ -273,6 +273,8 @@ impl TimelineToolbarPreferences {
 pub struct UiPreferences {
     pub sidebar_rail: crate::ui::sidebar_rail::SidebarRailState,
     pub sidebar_shortcuts: crate::ui::sidebar_shortcuts::RailShortcuts,
+    pub toolbar: crate::ui::workspace_toolbar::ToolbarPreferences,
+    pub terminal: crate::ui::terminal::TerminalPreferences,
 }
 
 #[cfg(test)]
@@ -2183,6 +2185,12 @@ impl AppConfig {
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        self.ui.terminal.validate()?;
+        for list in [&self.ui.toolbar.order, &self.ui.toolbar.hidden] {
+            if list.len() > 128 || list.iter().any(|id| id.is_empty() || id.len() > 128 || id.chars().any(char::is_control)) {
+                return Err("Toolbar command lists must contain at most 128 bounded command identifiers".into());
+            }
+        }
         for (key, value, limit) in [("app_name", &self.app_name, 128), ("app_description", &self.app_description, 512)] {
             if value.as_ref().is_some_and(|text| text.chars().count() > limit || text.chars().any(char::is_control)) {
                 return Err(format!("{key} must be printable text of at most {limit} characters"));

@@ -541,7 +541,7 @@ fn peer_relay_route(target: &str) -> bool {
 
 fn window_read_payload(body:&[u8])->bool {
     std::str::from_utf8(body).ok().and_then(|text|crate::platform::interop::parse_interop_request(text).ok())
-        .is_some_and(|(_,command)|matches!(command,crate::platform::interop::InteropCommand::GetWindow))
+        .is_some_and(|(_,command)|matches!(command,crate::platform::interop::InteropCommand::GetWindow | crate::platform::interop::InteropCommand::GetWorkspaceTools))
 }
 
 fn local_process_payload(body: &[u8]) -> bool {
@@ -549,9 +549,10 @@ fn local_process_payload(body: &[u8]) -> bool {
     // Invalid parameters still belong to this process and must receive its
     // validation error, not be sent to the authority by the gateway.
     if let Some(method) = value.get("method").and_then(serde_json::Value::as_str) {
+        if method.starts_with("pealayer.workspace.tools.") { return true; }
         return crate::update::rpc::is_method(method) || method.starts_with("pealayer.window.") || matches!(method, "get_window" | "set_window" | "activate" | "minimize" | "maximize" | "restore" | "set_fullscreen" | "toggle_fullscreen" | "pealayer.fullscreen.set" | "pealayer.fullscreen.toggle" | "pealayer.process.status" | "pealayer.process.connect" | "pealayer.process.quit" | "pealayer.preferences.navigate" | "navigate_preferences" | "pealayer.about.open");
     }
-    if matches!(value.get("command").and_then(serde_json::Value::as_str), Some("navigate_preferences" | "open_about")) { return true; }
+    if matches!(value.get("command").and_then(serde_json::Value::as_str), Some("navigate_preferences" | "open_about" | "workspace_tools" | "get_workspace_tools")) { return true; }
     serde_json::from_value::<crate::platform::interop::InteropCommand>(value)
         .is_ok_and(|command| command.is_process_local())
 }
@@ -1296,6 +1297,12 @@ fn permission_denied(capability: &str) -> HttpResponse {
 
 fn remote_command_permission(command: &crate::platform::interop::InteropCommand) -> Option<&'static str> {
     use crate::platform::interop::InteropCommand;
+    if let InteropCommand::Launch { request } = command {
+        if let Some(error) = request.commands.iter().find_map(remote_command_permission) { return Some(error); }
+    }
+    if matches!(command, InteropCommand::WorkspaceTools { request } if request.requires_native_sender()) {
+        return Some("Terminal execution and input require native local IPC");
+    }
     if matches!(command, InteropCommand::UpdateBranding { .. } | InteropCommand::GetBranding | InteropCommand::ClearBranding
         | InteropCommand::SetPlayerMode { .. } | InteropCommand::ResolvePlayerExecutable { .. })
         && !crate::platform::interop::get_live_config().web_allow_configuration {
@@ -1982,6 +1989,23 @@ fn mime_for_path(path: &std::path::Path) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn workspace_tools_stay_local_and_web_cannot_execute_a_shell() {
+        use crate::platform::interop::{InteropCommand, parse_interop_request};
+        for params in [serde_json::json!({"action":"terminal","operation":"connect"}),
+            serde_json::json!({"action":"terminal","operation":"write","data":"help"}),
+            serde_json::json!({"action":"terminal","operation":"resize","rows":24,"cols":80})] {
+            let payload=serde_json::json!({"method":"pealayer.workspace.tools.control","params":params}).to_string();
+            assert!(super::local_process_payload(payload.as_bytes()));
+            let (_,command)=parse_interop_request(&payload).unwrap();
+            assert!(command.is_process_local());
+            assert!(super::remote_command_permission(&command).is_some());
+        }
+        assert!(super::local_process_payload(br#"{"method":"pealayer.workspace.tools.control","params":{"invalid":true}}"#));
+        let (_,command)=parse_interop_request(r#"{"method":"pealayer.workspace.tools.get","params":{}}"#).unwrap();
+        assert_eq!(command,InteropCommand::GetWorkspaceTools);
+        assert!(command.query_result().unwrap().is_object());
+    }
     #[test]
     fn control_queries_return_data_and_window_writes_stay_local_across_http_ws_and_tcp() {
         use super::*;

@@ -416,6 +416,7 @@ fn decorate_tabs(
                 Default::default()
             }) {
             Ok(()) => {
+                app.sync_terminal_visibility_from_workspace();
                 app.deferred_config_save = true;
                 ui.ctx().request_repaint();
             }
@@ -496,6 +497,7 @@ pub(crate) fn show(app: &mut crate::app::PealayerApp, ui: &mut egui::Ui, raise: 
             log::warn!("Workspace action rejected: {error:?}");
         }
         if app.dock_state != before {
+            app.sync_terminal_visibility_from_workspace();
             app.deferred_config_save = true;
             ui.ctx().request_repaint();
         }
@@ -520,6 +522,36 @@ mod tests {
         app::PealayerApp,
         ui::layout::{PealayerTab as Tab, PealayerTabViewer},
     };
+
+    #[cfg(feature = "workspace-terminal")]
+    #[test]
+    fn terminal_uses_craft_individual_close_with_modal_and_lock_guards() {
+        let _guard = crate::app::tests::lock_app_tests();
+        for guarded in ["none", "modal", "locked"] {
+            let (ctx, mut app) = fixture(false);
+            app.dock_state = craft_ui::docking::Workspace::new(craft_ui::docking::Layout {
+                root: Some(craft_ui::docking::Node::Tabs { panels: vec![Tab::Timeline, Tab::Terminal], active: 1 }),
+                floating: Vec::new(),
+            });
+            app.sync_terminal_visibility_from_workspace();
+            for _ in 0..3 { frame(&ctx, &mut app, vec![], false); }
+            let close_id = egui::Id::new("workspace_dock_area").with(("close-panel", Tab::Terminal));
+            let point = ctx.read_response(close_id).expect("Terminal shares native individual close target").rect.center();
+            let sessions = app.terminal_state.status()["sessions"].clone();
+            app.dock_state.locked = guarded == "locked";
+            let blocked = guarded == "modal";
+            frame(&ctx, &mut app, vec![egui::Event::PointerMoved(point)], blocked);
+            for pressed in [true, false] {
+                frame(&ctx, &mut app, vec![egui::Event::PointerButton {
+                    pos: point, button: egui::PointerButton::Primary, pressed, modifiers: Default::default(),
+                }], blocked);
+            }
+            assert_eq!(app.dock_state.layout.contains(&Tab::Terminal), guarded != "none");
+            assert_eq!(app.terminal_state.preferences.enabled, guarded != "none");
+            assert!(app.dock_state.layout.contains(&Tab::Timeline));
+            assert_eq!(app.terminal_state.status()["sessions"], sessions);
+        }
+    }
 
     fn frame(
         ctx: &egui::Context,
