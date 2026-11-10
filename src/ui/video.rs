@@ -3,62 +3,583 @@ use crate::mpv::render::GetProcAddress;
 use eframe::egui;
 use std::sync::Arc;
 
+pub static MPV_RENDER_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static MPV_RENDER_SKIPPED_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static LAST_MPV_RENDER_MICROS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static MAX_MPV_RENDER_MICROS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static MPV_RENDER_FAILED_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static MPV_TARGET_RESIZE_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+pub static MPV_UPDATE_FAILED_COUNT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub fn record_mpv_render_duration(dur: std::time::Duration) {
+    let micros = dur.as_micros() as u64;
+    LAST_MPV_RENDER_MICROS.store(micros, std::sync::atomic::Ordering::Relaxed);
+    MAX_MPV_RENDER_MICROS.fetch_max(micros, std::sync::atomic::Ordering::Relaxed);
+    let count = MPV_RENDER_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+    if dur >= std::time::Duration::from_millis(5) {
+        log::warn!(
+            "libmpv render pass blocked the UI thread for {:.2}ms (> 5ms)",
+            dur.as_secs_f64() * 1000.0
+        );
+    }
+    if std::env::var_os("PEALAYER_DEBUG_PERF").is_some() || (count % 120 == 0 && log::log_enabled!(log::Level::Debug)) {
+        let last_ms = micros as f64 / 1000.0;
+        let max_ms = MAX_MPV_RENDER_MICROS.load(std::sync::atomic::Ordering::Relaxed) as f64 / 1000.0;
+        let skipped = MPV_RENDER_SKIPPED_COUNT.load(std::sync::atomic::Ordering::Relaxed);
+        log::debug!(
+            "[PERF] mpv render pass #{count} (bypassed={skipped}): last={last_ms:.2}ms, max={max_ms:.2}ms"
+        );
+    }
+}
+
+const DEFAULT_VIDEO_ASPECT_RATIO: f64 = 16.0 / 9.0;
+
+fn resolved_video_aspect_ratio(aspect_ratio: f64) -> f32 {
+    if aspect_ratio.is_finite() && (0.05..=20.0).contains(&aspect_ratio) {
+        aspect_ratio as f32
+    } else {
+        DEFAULT_VIDEO_ASPECT_RATIO as f32
+    }
+}
+
+fn aspect_matched_inner_size(
+    current_inner_size: egui::Vec2,
+    current_video_size: egui::Vec2,
+    monitor_size: Option<egui::Vec2>,
+    aspect_ratio: f32,
+) -> Option<egui::Vec2> {
+    if !current_inner_size.is_finite()
+        || !current_video_size.is_finite()
+        || !aspect_ratio.is_finite()
+        || current_inner_size.x <= 0.0
+        || current_inner_size.y <= 0.0
+        || current_video_size.x <= 0.0
+        || current_video_size.y <= 0.0
+        || !(0.05..=20.0).contains(&aspect_ratio)
+    {
+        return None;
+    }
+
+    let chrome = (current_inner_size - current_video_size).max(egui::Vec2::ZERO);
+    let mut target = egui::vec2(
+        current_inner_size.x,
+        chrome.y + current_video_size.x / aspect_ratio,
+    );
+
+    // Preserve the current video width whenever practical. Extremely tall or
+    // wide media is fitted to the monitor instead of producing an unreachable
+    // window. eframe performs the final platform work-area clamp as well.
+    if let Some(monitor) = monitor_size.filter(|size| size.x > 0.0 && size.y > 0.0) {
+        let maximum = egui::vec2((monitor.x - 48.0).max(320.0), (monitor.y - 96.0).max(240.0));
+        if target.y > maximum.y {
+            let video_height = (maximum.y - chrome.y).max(1.0);
+            target = egui::vec2(chrome.x + video_height * aspect_ratio, maximum.y);
+        }
+        if target.x > maximum.x {
+            let video_width = (maximum.x - chrome.x).max(1.0);
+            target = egui::vec2(maximum.x, chrome.y + video_width / aspect_ratio);
+        }
+    }
+
+    Some(target.max(egui::vec2(320.0, 240.0)))
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(crate) struct VideoSurfaceGesture {
+    source: u64,
+    pub(crate) button: egui::PointerButton,
+    pub(crate) action: crate::config::PlayerDragAction,
+    pub(crate) start_time: f64,
+    pub(crate) start_rate: f64,
+    pub(crate) was_paused: bool,
+    pub(crate) target_time: f64,
+    pub(crate) started_at: std::time::Instant,
+    pub(crate) dragged: bool,
+}
+
+fn seek_target_from_drag(start_time: f64, drag_delta_x: f32, duration: f64) -> f64 {
+    (start_time + drag_delta_x as f64 / 12.0).clamp(0.0, duration.max(0.0))
+}
+
+fn temporary_fast_forward_rate(start_rate: f64, configured_rate: f64, drag_delta_x: f32) -> f64 {
+    // A press without movement must still fast-forward. Horizontal movement
+    // can then increase the configured temporary rate without changing the
+    // persisted normal playback speed. Never slow an already-faster session.
+    (configured_rate.max(start_rate) + drag_delta_x.abs() as f64 / 160.0).clamp(1.0, 16.0)
+}
+
+fn should_consume_gesture_click(
+    action: crate::config::PlayerDragAction,
+    dragged: bool,
+    held_for: std::time::Duration,
+) -> bool {
+    dragged
+        || (action == crate::config::PlayerDragAction::TemporaryFastForward
+            && held_for >= std::time::Duration::from_millis(180))
+}
+
+fn gesture_action_for_button(
+    app: &PealayerApp,
+    button: egui::PointerButton,
+) -> crate::config::PlayerDragAction {
+    match button {
+        egui::PointerButton::Primary if app.is_paused => app.paused_drag_action,
+        egui::PointerButton::Primary => app.playing_drag_action,
+        egui::PointerButton::Middle => app.middle_hold_action,
+        egui::PointerButton::Secondary => app.right_hold_action,
+        egui::PointerButton::Extra1 | egui::PointerButton::Extra2 => {
+            crate::config::PlayerDragAction::None
+        }
+    }
+}
+
+#[derive(Clone,Copy)]
+struct VideoPress {
+    source: u64,
+    started_at:std::time::Instant,
+    button:egui::PointerButton, origin:egui::Pos2, moved:bool,
+    click:crate::config::PlayerClickAction, drag:crate::config::PlayerDragAction,
+    force_menu:bool, modifier_drag:bool,
+}
+
+fn media_identity(app:&PealayerApp)->u64 {
+    use std::hash::{Hash,Hasher};
+    let mut hash=std::collections::hash_map::DefaultHasher::new();
+    app.current_video_path.hash(&mut hash);hash.finish()
+}
+
+fn video_pointer_policy(app:&PealayerApp,button:egui::PointerButton,modifiers:egui::Modifiers)
+    ->(crate::config::PlayerClickAction,crate::config::PlayerDragAction,bool,bool) {
+    use crate::config::{PlayerClickAction as Click,PlayerDragAction as Drag};
+    if button==egui::PointerButton::Secondary && modifiers.shift && app.mouse_bindings.shift_right_context_menu {
+        return (Click::ContextMenu,Drag::None,true,false);
+    }
+    if button==egui::PointerButton::Primary && (modifiers.ctrl||modifiers.command) {
+        return (Click::None,app.mouse_bindings.ctrl_left_drag,false,true);
+    }
+    if button==egui::PointerButton::Middle && modifiers.alt {
+        return (Click::None,app.mouse_bindings.alt_middle_drag,false,true);
+    }
+    let click=match button {
+        egui::PointerButton::Primary if app.click_player_to_toggle=>Click::PlayPause,
+        egui::PointerButton::Middle=>app.middle_click_action,
+        egui::PointerButton::Secondary=>app.right_click_action,
+        _=>Click::None,
+    };
+    (click,gesture_action_for_button(app,button),false,false)
+}
+
+pub(crate) fn perform_pointer_action(app:&mut PealayerApp,ctx:&egui::Context,action:crate::pointer_bindings::Action) {
+    use crate::{pointer_bindings::Action as A,platform::interop::InteropCommand as C};
+    let command=match action {
+        A::SeekBackward=>C::Seek{seconds:-app.quick_seek_seconds},A::SeekForward=>C::Seek{seconds:app.quick_seek_seconds},
+        A::PreviousChapter=>C::PreviousChapter,A::NextChapter=>C::NextChapter,
+        A::PreviousFile=>C::Previous,A::NextFile=>C::Next,
+        A::FrameBackward=>C::FrameStep{frames:-(app.frame_step_count as i32)},A::FrameForward=>C::FrameStep{frames:app.frame_step_count as i32},
+        A::PlayPause=>C::TogglePause,A::ToggleMute=>C::ToggleMute,A::ToggleFullscreen=>C::ToggleFullscreen,
+        A::BossKey=>{perform_video_surface_click(app,ctx,crate::config::PlayerClickAction::BossKey);return;},
+        _=>return,
+    };
+    if app.current_video_path.is_some(){app.apply_interop_command(ctx,command,"Mouse binding");}
+}
+
+fn begin_video_surface_gesture(
+    app: &mut PealayerApp,
+    button: egui::PointerButton,
+    action: crate::config::PlayerDragAction,
+    started_at:std::time::Instant,
+) {
+    if app.video_surface_gesture.is_some() {
+        return;
+    }
+    let gesture = VideoSurfaceGesture {
+        source:media_identity(app),
+        button,
+        action,
+        start_time: app.playback_time,
+        start_rate: app.playback_rate,
+        was_paused: app.is_paused,
+        target_time: app.playback_time,
+        started_at,
+        dragged: false,
+    };
+    app.video_surface_gesture = Some(gesture);
+
+    if action == crate::config::PlayerDragAction::TemporaryFastForward {
+        if gesture.was_paused {
+            let _ = app.mpv.set_property("pause", false);
+            app.is_paused = false;
+            app.engine_handle
+                .is_playing
+                .store(true, std::sync::atomic::Ordering::Relaxed);
+        }
+        let speed =
+            temporary_fast_forward_rate(gesture.start_rate, app.temporary_fast_forward_speed, 0.0);
+        let _ = app.mpv.set_property("speed", speed);
+        app.playback_rate = speed;
+        app.set_osd(format!("{}: {speed:.1}×", app.tr("Playback speed")));
+    }
+}
+
+fn finish_video_surface_gesture(app: &mut PealayerApp) -> bool {
+    let Some(gesture) = app.video_surface_gesture.take() else {
+        return false;
+    };
+    if gesture.source!=media_identity(app) {
+        if gesture.action==crate::config::PlayerDragAction::TemporaryFastForward {
+            let _=app.mpv.set_property("speed",app.configured_playback_speed);
+            app.playback_rate=app.configured_playback_speed;
+        }
+        return true;
+    }
+    match gesture.action {
+        crate::config::PlayerDragAction::Seek => app.finish_scrub(gesture.target_time),
+        crate::config::PlayerDragAction::TemporaryFastForward => {
+            let _ = app.mpv.set_property("speed", gesture.start_rate);
+            app.playback_rate = gesture.start_rate;
+            if gesture.was_paused {
+                let _ = app.mpv.set_property("pause", true);
+                app.is_paused = true;
+                app.engine_handle
+                    .is_playing
+                    .store(false, std::sync::atomic::Ordering::Relaxed);
+            }
+            app.set_osd(format!(
+                "{}: {:.1}×",
+                app.tr("Playback speed"),
+                gesture.start_rate
+            ));
+        }
+        crate::config::PlayerDragAction::MoveWindow | crate::config::PlayerDragAction::None => {}
+    }
+    should_consume_gesture_click(
+        gesture.action,
+        gesture.dragged,
+        gesture.started_at.elapsed(),
+    )
+}
+
+/// Release a captured hold even when its panel disappeared before mouse-up.
+pub(crate) fn finish_released_gesture(app:&mut PealayerApp,ctx:&egui::Context) {
+    if app.video_surface_gesture.is_some_and(|g|g.source!=media_identity(app)||!ctx.input(|i|i.focused && i.pointer.button_down(g.button))) {
+        finish_video_surface_gesture(app);
+    }
+}
+
+fn perform_video_surface_click(
+    app: &mut PealayerApp,
+    ctx: &egui::Context,
+    action: crate::config::PlayerClickAction,
+) {
+    match action {
+        crate::config::PlayerClickAction::PlayPause => {
+            if app.current_video_path.is_some() {
+                app.toggle_playback();
+            }
+        }
+        crate::config::PlayerClickAction::ToggleMute => {
+            if app.current_video_path.is_some() {
+                app.toggle_audio_muted();
+            }
+        }
+        crate::config::PlayerClickAction::ToggleFullscreen => {
+            if app.current_video_path.is_some() {
+                app.toggle_fullscreen(ctx);
+            }
+        }
+        crate::config::PlayerClickAction::BossKey => {
+            app.apply_interop_command(ctx,crate::platform::interop::InteropCommand::Pause,"Mouse boss key");
+            app.apply_interop_command(ctx,crate::platform::interop::InteropCommand::Minimize,"Mouse boss key");
+        }
+        crate::config::PlayerClickAction::ContextMenu | crate::config::PlayerClickAction::None => {}
+    }
+}
+
+#[derive(Clone, Copy)]
+struct PlaybackSpeedDraft {
+    source: u64,
+    base_rate: f64,
+    position: f32,
+    pass: u64,
+}
+
+fn playback_speed_slider(
+    ui: &mut egui::Ui,
+    label: String,
+    rate: f64,
+    source: u64,
+) -> Option<f64> {
+    use elegance::ResponseCommitExt as _;
+
+    const RATES: [f64; 9] = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0];
+    let slider_position = |rate: f64| rate.log2() as f32;
+    let id = ui.make_persistent_id("playback-speed-draft");
+    let pass = ui.ctx().cumulative_pass_nr();
+    let draft = ui
+        .data(|data| data.get_temp::<PlaybackSpeedDraft>(id))
+        .filter(|draft| {
+            draft.source == source && draft.base_rate == rate && pass.saturating_sub(draft.pass) <= 1
+        });
+    let mut position = draft.map_or_else(|| slider_position(rate), |draft| draft.position);
+    // A logarithmic rail centers normal speed and gives the slow presets
+    // enough room to select independently in a small submenu.
+    let response = ui
+        .push_id(source, |ui| {
+            ui.add(
+                elegance::MetricSlider::new(&mut position, -2.0..=2.0)
+                    .label(label)
+                    .accent(elegance::Accent::Sky)
+                    .desired_width(224.0)
+                    .stops(RATES.map(slider_position))
+                    .headline_fmt(|position| {
+                        super::controls::compact_number(2.0_f64.powf(f64::from(position)))
+                    })
+                    .suffix("×")
+                    .tick_fmt(|position| match position {
+                        -2.0 => "0.25×".into(),
+                        0.0 => "1×".into(),
+                        2.0 => "4×".into(),
+                        _ => String::new(),
+                    }),
+            )
+        })
+        .inner;
+    let cancelled = ui.input(|input| !input.focused || input.key_pressed(egui::Key::Escape));
+    let changed = response.changed() || draft.is_some();
+    let committed = !cancelled && changed && response.committed();
+    ui.data_mut(|data| {
+        if !committed && !cancelled && changed && response.is_pointer_button_down_on() {
+            data.insert_temp(
+                id,
+                PlaybackSpeedDraft { source, base_rate: rate, position, pass },
+            );
+        } else {
+            data.remove::<PlaybackSpeedDraft>(id);
+        }
+    });
+    if !committed {
+        return None;
+    }
+    RATES
+        .into_iter()
+        .min_by(|a, b| {
+            (slider_position(*a) - position).abs().total_cmp(&(slider_position(*b) - position).abs())
+        })
+        .filter(|next| *next != rate)
+}
+
+#[derive(Clone, Default)]
+struct PseudoFrameTextureCache {
+    entry: Option<(f64, egui::TextureHandle)>,
+}
+
+fn fitted_video_rect(rect: egui::Rect, aspect: f32) -> egui::Rect {
+    let size = if rect.width() / rect.height() > aspect {
+        egui::vec2(rect.height() * aspect, rect.height())
+    } else { egui::vec2(rect.width(), rect.width() / aspect) };
+    egui::Rect::from_center_size(rect.center(), size)
+}
+
 pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
-    let video_files_label = app.tr("Video Files");
+    super::simple_controls::publish_video(ui.ctx(),None);
     let video_size = ui.available_size();
     if video_size.x <= 0.0 || video_size.y <= 0.0 {
         return;
     }
 
-    let (rect, response) = ui.allocate_exact_size(video_size, egui::Sense::click_and_drag());
+    let (rect, _) = ui.allocate_exact_size(video_size, egui::Sense::hover());
+    let preview = if app.show_four_d_editor { app.monitor_preview } else { Default::default() };
+    let aspect_ratio = resolved_video_aspect_ratio(preview.aspect.ratio(app.video_aspect_ratio));
+    let dest_rect = fitted_video_rect(rect, aspect_ratio);
+    let gesture_rect = if app.video_click_frame_only && app.current_video_path.is_some() {
+        dest_rect
+    } else { rect };
+    let response = ui.interact(gesture_rect, ui.id().with("video-surface-gestures"), egui::Sense::click_and_drag());
+    let is_fullscreen = app.fullscreen_intent(ui.ctx());
+    let simple_aspect_lock =
+        app.consistent_video_aspect_ratio && !app.show_four_d_editor && !is_fullscreen;
+    let pixels_per_point = ui.ctx().pixels_per_point();
+    let viewport = ui.input(|input| input.viewport().clone());
+    if simple_aspect_lock {
+        if let Some(outer_rect) = viewport.outer_rect {
+            let outer_width = (outer_rect.width() * pixels_per_point).round() as i32;
+            let outer_height = (outer_rect.height() * pixels_per_point).round() as i32;
+            let video_width = (rect.width() * pixels_per_point).round() as i32;
+            let video_height = (rect.height() * pixels_per_point).round() as i32;
+            crate::platform::windows::set_simple_video_aspect_constraint(
+                true,
+                f64::from(aspect_ratio),
+                outer_width.saturating_sub(video_width),
+                outer_height.saturating_sub(video_height),
+            );
+        } else {
+            crate::platform::windows::set_simple_video_aspect_constraint(
+                false,
+                f64::from(aspect_ratio),
+                0,
+                0,
+            );
+        }
+    } else {
+        crate::platform::windows::set_simple_video_aspect_constraint(
+            false,
+            f64::from(aspect_ratio),
+            0,
+            0,
+        );
+    }
 
-    if response.double_clicked_by(egui::PointerButton::Primary)
+    if simple_aspect_lock
+        && app.pending_video_aspect_resize
         && app.current_video_path.is_some()
+        && !viewport.maximized.unwrap_or(false)
+        && !viewport.minimized.unwrap_or(false)
+        && !crate::platform::windows::native_window_operation_active()
+        && let Some(inner_rect) = viewport.inner_rect
+        && let Some(target_size) = aspect_matched_inner_size(
+            inner_rect.size(),
+            rect.size(),
+            viewport.monitor_size,
+            aspect_ratio,
+        )
     {
-        app.toggle_fullscreen(ui.ctx());
-    } else if response.clicked_by(egui::PointerButton::Primary) {
-        if app.current_video_path.is_some() && app.click_player_to_toggle {
-            app.toggle_playback();
-        } else if app.current_video_path.is_none() {
-            if let Some(path) = rfd::FileDialog::new()
-                .add_filter(
-                    &video_files_label,
-                    &["mp4", "mkv", "avi", "webm", "mov", "flv"],
-                )
-                .pick_file()
-            {
-                app.load_video_file(path);
+        // Avoid a redundant OS resize (and its visual layout work) when the
+        // current surface is already within one logical pixel of the target.
+        if (target_size.y - inner_rect.height()).abs() > 1.0
+            || (target_size.x - inner_rect.width()).abs() > 1.0
+        {
+            ui.ctx()
+                .send_viewport_cmd(egui::ViewportCommand::InnerSize(target_size));
+        }
+        app.pending_video_aspect_resize = false;
+    }
+
+    const GESTURE_BUTTONS: [egui::PointerButton; 3] = [
+        egui::PointerButton::Primary,
+        egui::PointerButton::Middle,
+        egui::PointerButton::Secondary,
+    ];
+
+    let source=media_identity(app);
+    if let Some(action)=super::mouse_buttons::take_action_for(ui,gesture_rect,app.mouse_bindings.video,response.id.with(source)) {
+        perform_pointer_action(app,ui.ctx(),action);
+    }
+    let press_id=response.id.with("pointer-press-policy");
+    let mut press=ui.ctx().data_mut(|d|d.get_temp::<VideoPress>(press_id));
+    if press.is_some_and(|p|p.source!=source || !ui.input(|i|i.pointer.button_down(p.button)||i.pointer.button_released(p.button))) {press=None;}
+    let events=ui.input(|i|i.events.clone());
+    for event in events {match event {
+        egui::Event::PointerButton{pos,button,pressed:true,modifiers}
+            if GESTURE_BUTTONS.contains(&button) && response.contains_pointer() && gesture_rect.contains(pos) && (press.is_none()||press.is_some_and(|p|p.button==button))=>{
+                let (click,drag,force_menu,modifier_drag)=video_pointer_policy(app,button,modifiers);
+                press=Some(VideoPress{source,started_at:std::time::Instant::now(),button,origin:pos,moved:false,click,drag,force_menu,modifier_drag});
+            }
+        egui::Event::PointerMoved(pos)=>{if let Some(p)=&mut press {p.moved|=p.origin.distance(pos)>=6.0;}},
+        egui::Event::WindowFocused(false)=>{press=None;},
+        egui::Event::Key{key:egui::Key::Escape,pressed:true,..}=>{press=None;if app.video_surface_gesture.is_some(){finish_video_surface_gesture(app);}},
+        _=>{}
+    }}
+    let press_action=|button|press.filter(|p|p.button==button).map(|p|p.drag).unwrap_or(crate::config::PlayerDragAction::None);
+
+    if app.current_video_path.is_some() && app.video_surface_gesture.is_none() {
+        // A hold activates after 180 ms (or deliberate movement), so an ordinary
+        // click never briefly alters playback speed before opening its menu.
+        for button in GESTURE_BUTTONS {
+            let action = press_action(button);
+            if let Some(p)=press.filter(|p|p.button==button && ui.input(|i|i.pointer.button_down(button)))
+                && action == crate::config::PlayerDragAction::TemporaryFastForward {
+                let threshold=std::time::Duration::from_millis(180);
+                if p.moved || p.started_at.elapsed()>=threshold {
+                    begin_video_surface_gesture(app, button, action,p.started_at);
+                } else {ui.ctx().request_repaint_after(threshold.saturating_sub(p.started_at.elapsed()));}
             }
         }
     }
 
-    if response.dragged() && app.current_video_path.is_some() {
-        let action = if app.is_paused {
-            app.paused_drag_action
-        } else {
-            app.playing_drag_action
-        };
-        match action {
+    if app.video_surface_gesture.is_none() {
+        for button in GESTURE_BUTTONS {
+            if press.is_some_and(|p|p.button==button && p.moved && ui.input(|i|i.pointer.button_down(button))) {
+                let action = press_action(button);
+                let horizontal=press.is_some_and(|p|ui.input(|i|i.pointer.latest_pos().is_some_and(|pos|(pos.x-p.origin.x).abs()>=6.0)));
+                if action != crate::config::PlayerDragAction::None && (action!=crate::config::PlayerDragAction::Seek||horizontal&&app.is_seekable&&app.duration.is_finite()&&app.duration>0.0) && (app.current_video_path.is_some() || action==crate::config::PlayerDragAction::MoveWindow) {
+                    begin_video_surface_gesture(app, button, action,press.unwrap().started_at);
+                    if action == crate::config::PlayerDragAction::Seek {
+                        app.scrub_to(app.playback_time);
+                    }
+                }
+                break;
+            }
+        }
+    }
+
+    if let Some(mut gesture) = app.video_surface_gesture
+        && press.is_some_and(|p|p.button==gesture.button && p.moved)
+    {
+        gesture.dragged = true;
+        app.video_surface_gesture = Some(gesture);
+        match gesture.action {
             crate::config::PlayerDragAction::MoveWindow => {
+                app.is_window_operating = true;
                 ui.ctx().send_viewport_cmd(egui::ViewportCommand::StartDrag);
             }
             crate::config::PlayerDragAction::Seek => {
-                let delta = ui.input(|input| input.pointer.delta().x) as f64 / 12.0;
-                if delta.abs() >= 0.01 {
-                    app.seek_relative(delta);
+                let target = seek_target_from_drag(
+                    gesture.start_time,
+                    press.map_or(0.0,|p|ui.input(|i|i.pointer.latest_pos().map_or(0.0,|pos|pos.x-p.origin.x))),
+                    app.duration,
+                );
+                if (target - gesture.target_time).abs() >= 0.001 {
+                    gesture.target_time = target;
+                    app.video_surface_gesture = Some(gesture);
+                    app.scrub_to(target);
                 }
             }
             crate::config::PlayerDragAction::TemporaryFastForward => {
-                let speed = (1.0 + response.drag_delta().x.abs() as f64 / 160.0).clamp(1.0, 4.0);
+                let speed = temporary_fast_forward_rate(
+                    gesture.start_rate,
+                    app.temporary_fast_forward_speed,
+                    press.map_or(0.0,|p|ui.input(|i|i.pointer.latest_pos().map_or(0.0,|pos|pos.x-p.origin.x))),
+                );
                 let _ = app.mpv.set_property("speed", speed);
+                app.playback_rate = speed;
                 app.set_osd(format!("{}: {speed:.1}×", app.tr("Playback speed")));
             }
             crate::config::PlayerDragAction::None => {}
         }
     }
-    if response.drag_stopped() {
-        let _ = app.mpv.set_property("speed", 1.0_f64);
+
+    let gesture_released = app.video_surface_gesture.is_some_and(|gesture| {
+        response.drag_stopped_by(gesture.button)
+            || !ui.input(|input| input.pointer.button_down(gesture.button))
+    });
+    let suppress_click = if gesture_released {
+        finish_video_surface_gesture(app)
+    } else {
+        app.video_surface_gesture.is_some_and(|gesture| {
+            gesture.action == crate::config::PlayerDragAction::TemporaryFastForward
+        })
+    };
+
+    let released=press.filter(|p|ui.input(|i|i.pointer.button_released(p.button)));
+    let mut pointer_menu=false;
+    if let Some(p)=released {
+        let inside=ui.rect_contains_pointer(gesture_rect);
+        let primary_id=response.id.with("previous-primary-click-eligible");
+        let previous_primary=ui.ctx().data(|d|d.get_temp::<bool>(primary_id)).unwrap_or(false);
+        if p.force_menu && inside {pointer_menu=true;}
+        else if !suppress_click && !p.moved && response.clicked_by(p.button) {
+            if p.button==egui::PointerButton::Primary && !p.modifier_drag && previous_primary && response.double_clicked_by(p.button) && app.current_video_path.is_some() {
+                app.toggle_fullscreen(ui.ctx());
+            } else if p.button==egui::PointerButton::Primary && !p.modifier_drag && app.current_video_path.is_none() {
+                app.open_media_file_dialog(ui.ctx());
+            } else if p.click==crate::config::PlayerClickAction::ContextMenu {pointer_menu=true;}
+            else {perform_video_surface_click(app,ui.ctx(),p.click);}
+        }
+        if p.button==egui::PointerButton::Primary {ui.ctx().data_mut(|d|d.insert_temp(primary_id,!suppress_click&&!p.moved&&!p.modifier_drag));}
+        press=None;
     }
+    if press.is_some_and(|p|!ui.input(|i|i.pointer.button_down(p.button))){press=None;}
+    ui.ctx().data_mut(|d|{if let Some(p)=press {d.insert_temp(press_id,p);}else{d.remove::<VideoPress>(press_id);}});
 
     if response.hovered() {
         let scroll = ui.input(|i| {
@@ -93,129 +614,168 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         }
     }
 
-    response.context_menu(|ui| {
-        if ui
-            .button(format!("{} {}", crate::ui::icons::PLAY, app.tr("Open Video File...")))
-            .clicked()
-        {
-            ui.close();
-            if let Some(path) = rfd::FileDialog::new()
-                .add_filter(
-                    &video_files_label,
-                    &["mp4", "mkv", "avi", "webm", "mov", "flv"],
-                )
-                .pick_file()
-            {
-                app.load_video_file(path);
-            }
-        }
-
-        if ui
-            .button(format!("{} {}", crate::ui::icons::ARROW_SQUARE_OUT, app.tr("Open Location / URL...")))
-            .clicked()
-        {
-            ui.close();
-            app.show_open_url_dialog = true;
-        }
-
-        let has_video = app.current_video_path.is_some();
-        if ui
-            .add_enabled(
-                has_video,
-                egui::Button::new(format!("{} {}", crate::ui::icons::X, app.tr("Close Video"))),
-            )
-            .clicked()
-        {
-            ui.close();
-            app.close_video();
-        }
-
-        ui.separator();
-
-        let play_title = if app.is_playback_finished() {
-            format!("{} {}", crate::ui::icons::ARROW_COUNTER_CLOCKWISE, app.tr("Replay"))
-        } else if app.is_paused {
-            format!("{} {}", crate::ui::icons::PLAY, app.tr("Play"))
+    let middle_context_menu =
+        app.middle_click_action == crate::config::PlayerClickAction::ContextMenu;
+    let right_context_menu =
+        app.right_click_action == crate::config::PlayerClickAction::ContextMenu;
+    if middle_context_menu || right_context_menu || app.mouse_bindings.shift_right_context_menu {
+        let should_open = pointer_menu;
+        let open_command = if should_open {
+            Some(egui::SetOpenCommand::Bool(true))
+        } else if released.is_some() {
+            Some(egui::SetOpenCommand::Bool(false))
         } else {
-            format!("{} {}", crate::ui::icons::STOP_CIRCLE, app.tr("Pause"))
+            None
         };
-        if ui
-            .add_enabled(has_video, egui::Button::new(play_title))
-            .clicked()
-        {
-            ui.close();
-            app.toggle_playback();
-        }
-
-        let is_fullscreen = app.fullscreen_intent(ui.ctx());
-        let fs_title = if is_fullscreen {
-            format!("{} {}", crate::ui::icons::ARROWS_OUT, app.tr("Exit Fullscreen"))
-        } else {
-            format!("{} {}", crate::ui::icons::ARROWS_OUT, app.tr("Fullscreen"))
-        };
-        if ui.button(fs_title).clicked() {
-            ui.close();
-            app.toggle_fullscreen(ui.ctx());
-        }
-
-        let mute_title = if app.is_muted {
-            format!("{} {}", crate::ui::icons::SPEAKER_HIGH, app.tr("Unmute"))
-        } else {
-            format!("{} {}", crate::ui::icons::SPEAKER_SLASH, app.tr("Mute"))
-        };
-        if ui
-            .add_enabled(has_video, egui::Button::new(mute_title))
-            .clicked()
-        {
-            ui.close();
-            let _ = app.mpv.command("cycle", &["mute"]);
-            app.is_muted = !app.is_muted;
-            app.set_osd(if app.is_muted {
-                app.tr("Mute")
-            } else {
-                app.tr("Unmute")
-            });
-        }
-
-        ui.separator();
-
-        ui.menu_button(format!("{} {}", crate::ui::icons::CLOCK_COUNTER_CLOCKWISE, app.tr("Open Recent")), |ui| {
-            if app.recent_media.is_empty() {
-                ui.label(app.tr("No recent media"));
-            } else {
-                for path in app.recent_media.clone() {
-                    let target = path.to_string_lossy();
-                    let label = crate::media::media_target_label(&target);
-                    if ui
-                        .button(app.display_text(&label))
-                        .on_hover_text(crate::media::redact_media_target(&target))
-                        .clicked()
-                    {
-                        ui.close();
-                        app.load_media_target(&target);
-                    }
-                }
-                ui.separator();
-                if ui.button(app.tr("Clear Recent")).clicked() {
+        egui::Popup::menu(&response)
+            .open_memory(open_command)
+            .at_pointer_fixed()
+            .show(|ui| {
+                if ui
+                    .button(format!(
+                        "{} {}",
+                        crate::ui::icons::PLAY,
+                        app.tr("Open Video File...")
+                    ))
+                    .clicked()
+                {
                     ui.close();
-                    app.clear_recent_media();
+                    app.open_media_file_dialog(ui.ctx());
                 }
-            }
-        });
 
-        let pin_title = if app.pin_controls {
-            format!("{} {}", crate::ui::icons::PUSH_PIN_SLASH, app.tr("Unpin Controls"))
-        } else {
-            format!("{} {}", crate::ui::icons::PUSH_PIN, app.tr("Pin Controls"))
-        };
-        if ui.button(pin_title).clicked() {
-            ui.close();
-            app.pin_controls = !app.pin_controls;
-            app.save_config();
-        }
-    });
+                if ui
+                    .button(format!(
+                        "{} {}",
+                        crate::ui::icons::ARROW_SQUARE_OUT,
+                        app.tr("Open Location / URL...")
+                    ))
+                    .clicked()
+                {
+                    ui.close();
+                    app.show_open_url_dialog = true;
+                }
 
-    let is_fullscreen = app.fullscreen_intent(ui.ctx());
+                let has_video = app.current_video_path.is_some();
+                if ui
+                    .add_enabled(
+                        has_video,
+                        egui::Button::new(format!(
+                            "{} {}",
+                            crate::ui::icons::X,
+                            app.tr("Close Video")
+                        )),
+                    )
+                    .clicked()
+                {
+                    ui.close();
+                    app.close_video();
+                }
+
+                ui.separator();
+
+                let play_title = if app.is_playback_finished() {
+                    format!(
+                        "{} {}",
+                        crate::ui::icons::ARROW_COUNTER_CLOCKWISE,
+                        app.tr("Replay")
+                    )
+                } else if app.is_paused {
+                    format!("{} {}", crate::ui::icons::PLAY, app.tr("Play"))
+                } else {
+                    format!("{} {}", crate::ui::icons::STOP_CIRCLE, app.tr("Pause"))
+                };
+                if ui
+                    .add_enabled(has_video, egui::Button::new(play_title))
+                    .clicked()
+                {
+                    ui.close();
+                    app.toggle_playback();
+                }
+
+                ui.add_enabled_ui(has_video, |ui| {
+                    let label = app.tr("Playback speed");
+                    crate::ui::icons::submenu(
+                        ui,
+                        format!("{} {label}", crate::ui::icons::GAUGE),
+                        |ui| {
+                            if let Some(rate) = playback_speed_slider(
+                                ui,
+                                label,
+                                app.configured_playback_speed,
+                                media_identity(app),
+                            ) {
+                                app.apply_interop_command(
+                                    ui.ctx(),
+                                    crate::platform::interop::InteropCommand::SetRate { rate },
+                                    "Playback speed menu",
+                                );
+                            }
+                        },
+                    );
+                });
+
+                let is_fullscreen = app.fullscreen_intent(ui.ctx());
+                let fs_title = if is_fullscreen {
+                    format!(
+                        "{} {}",
+                        crate::ui::icons::ARROWS_OUT,
+                        app.tr("Exit Fullscreen")
+                    )
+                } else {
+                    format!("{} {}", crate::ui::icons::ARROWS_OUT, app.tr("Fullscreen"))
+                };
+                if ui.button(fs_title).clicked() {
+                    ui.close();
+                    app.toggle_fullscreen(ui.ctx());
+                }
+
+                let mute_title = if app.is_muted {
+                    format!("{} {}", crate::ui::icons::SPEAKER_HIGH, app.tr("Unmute"))
+                } else {
+                    format!("{} {}", crate::ui::icons::SPEAKER_SLASH, app.tr("Mute"))
+                };
+                if ui
+                    .add_enabled(has_video, egui::Button::new(mute_title))
+                    .clicked()
+                {
+                    ui.close();
+                    app.toggle_audio_muted();
+                }
+
+                ui.separator();
+
+                crate::ui::icons::submenu(
+                    ui,
+                    format!(
+                        "{} {}",
+                        crate::ui::icons::CLOCK_COUNTER_CLOCKWISE,
+                        app.tr("Open Recent")
+                    ),
+                    |ui| {
+                        super::menu::recent_media_menu(app, ui);
+                    },
+                );
+
+                let pin_title = if app.pin_controls {
+                    format!(
+                        "{} {}",
+                        crate::ui::icons::PUSH_PIN_SLASH,
+                        app.tr("Unpin Controls")
+                    )
+                } else {
+                    format!("{} {}", crate::ui::icons::PUSH_PIN, app.tr("Pin Controls"))
+                };
+                if ui.button(pin_title).clicked() {
+                    ui.close();
+                    app.pin_controls = !app.pin_controls;
+                    app.save_config();
+                }
+                if !app.show_four_d_editor {
+                    ui.menu_button("Simple workspace",|ui|super::simple_controls::menu(app,ui));
+                }
+            });
+    }
+
     let surface_background = if is_fullscreen {
         match app.fullscreen_video_background {
             crate::config::VideoBackground::Black => egui::Color32::BLACK,
@@ -227,41 +787,103 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     };
     ui.painter().rect_filled(rect, 0.0, surface_background);
 
-    // 1. Calculate destination rect maintaining 16:9 aspect ratio
-    let aspect_ratio = 16.0 / 9.0;
-    let rect_w = rect.width();
-    let rect_h = rect.height();
+    // 1. Calculate the destination from libmpv's post-filter display aspect.
+    // The same value drives native WM_SIZING, so the outer window and the
+    // rendered image cannot drift apart during a Simple-workspace resize.
 
-    let dest_rect = if rect_w / rect_h > aspect_ratio {
-        // Height-constrained
-        let new_w = rect_h * aspect_ratio;
-        let x_offset = (rect_w - new_w) / 2.0;
-        egui::Rect::from_min_size(
-            egui::pos2(rect.min.x + x_offset, rect.min.y),
-            egui::vec2(new_w, rect_h),
-        )
-    } else {
-        // Width-constrained
-        let new_h = rect_w / aspect_ratio;
-        let y_offset = (rect_h - new_h) / 2.0;
-        egui::Rect::from_min_size(
-            egui::pos2(rect.min.x, rect.min.y + y_offset),
-            egui::vec2(rect_w, new_h),
-        )
-    };
+    let taskbar_video_rect =
+        (app.windows_video_taskbar_thumbnail && app.current_video_path.is_some()).then(|| {
+            [
+                (dest_rect.left() * pixels_per_point).round() as i32,
+                (dest_rect.top() * pixels_per_point).round() as i32,
+                (dest_rect.right() * pixels_per_point).round() as i32,
+                (dest_rect.bottom() * pixels_per_point).round() as i32,
+            ]
+        });
+    let hwnd = app
+        .window_handle
+        .unwrap_or_else(crate::platform::windows::get_registered_hwnd);
+    if hwnd != 0
+        && let Err(error) =
+            crate::platform::windows::update_video_taskbar_thumbnail(hwnd, taskbar_video_rect)
+    {
+        log::debug!("Could not update taskbar video thumbnail crop: {error}");
+    }
 
     // 2. Calculate DPI-aware physical pixel dimensions
-    let ppi = ui.ctx().pixels_per_point();
-    let (target_phys_w, target_phys_h) = calculate_physical_bounds(dest_rect, ppi);
+    let ppi = pixels_per_point;
+    let (target_phys_w, target_phys_h) = monitor_render_bounds(dest_rect, ppi, preview.resolution);
 
-    // Draw the offscreen texture if registered
+    // Execute the renderer before sampling the shared texture, not one UI paint
+    // later. Filling this slot below keeps both the image and OSD above it.
+    let video_callback_slot = ui.painter().add(egui::Shape::Noop);
+
+    // Draw the offscreen texture if registered, or active pseudo-frame during scrub
     let texture_id_opt = app
         .rtt_state
         .try_lock()
         .ok()
         .and_then(|rtt| rtt.video_texture_id);
 
-    if let Some(texture_id) = texture_id_opt {
+    let pseudo_tex_id = egui::Id::new("active_pseudo_frame_texture");
+    let pseudo_rendered = if app.is_scrubbing || app.pending_scrub_commit.is_some() {
+        if let Some(pseudo_frame) = &app.active_pseudo_frame {
+            if pseudo_frame.rgba.len()
+                == (pseudo_frame.width as usize) * (pseudo_frame.height as usize) * 4
+            {
+                let texture = ui
+                    .ctx()
+                    .data_mut(|d| {
+                        d.get_temp::<PseudoFrameTextureCache>(pseudo_tex_id)
+                            .and_then(|c| c.entry)
+                            .filter(|(pts, _)| (*pts - pseudo_frame.pts).abs() < 0.001)
+                            .map(|(_, handle)| handle)
+                    })
+                    .unwrap_or_else(|| {
+                        let image = egui::ColorImage::from_rgba_unmultiplied(
+                            [pseudo_frame.width as usize, pseudo_frame.height as usize],
+                            &pseudo_frame.rgba,
+                        );
+                        let handle = ui.ctx().load_texture(
+                            "active-pseudo-frame",
+                            image,
+                            egui::TextureOptions::LINEAR,
+                        );
+                        ui.ctx().data_mut(|d| {
+                            d.insert_temp(
+                                pseudo_tex_id,
+                                PseudoFrameTextureCache {
+                                    entry: Some((pseudo_frame.pts, handle.clone())),
+                                },
+                            );
+                        });
+                        handle
+                    });
+
+                ui.painter().image(
+                    texture.id(),
+                    dest_rect,
+                    egui::Rect::from_min_max(egui::pos2(0.0, 0.0), egui::pos2(1.0, 1.0)),
+                    egui::Color32::WHITE,
+                );
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    } else {
+        let _ = ui
+            .ctx()
+            .data_mut(|d| d.remove_temp::<PseudoFrameTextureCache>(pseudo_tex_id));
+        false
+    };
+
+    if !pseudo_rendered && let Some(texture_id) = texture_id_opt {
+        if app.current_video_path.is_some() && app.rtt_state.try_lock().is_ok_and(|rtt|rtt.has_rendered_frame) {
+            super::simple_controls::publish_video(ui.ctx(),Some((texture_id,dest_rect)));
+        }
         ui.painter().image(
             texture_id,
             dest_rect,
@@ -273,7 +895,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     // 2.5 Draw OSD overlay if active
     if let Some((msg, timestamp)) = &app.osd_message {
         let elapsed = timestamp.elapsed().as_secs_f32();
-        let timeout = app.osd_timeout_seconds.max(1.0);
+        let options = app.osd_display_options.as_ref();
+        let timeout = options
+            .and_then(|options| options.timeout_seconds)
+            .unwrap_or(app.osd_timeout_seconds)
+            .max(0.25);
         let fade_start = (timeout - 0.6).max(0.4);
         if elapsed < timeout {
             let alpha = if elapsed < fade_start {
@@ -281,50 +907,91 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             } else {
                 ((timeout - elapsed) / (timeout - fade_start)).clamp(0.0, 1.0)
             };
-            let text_color = egui::Color32::WHITE.linear_multiply(alpha);
-            let bg_color = egui::Color32::from_black_alpha((180.0 * alpha) as u8);
-
-            let center = match app.osd_position {
-                crate::config::OsdPosition::TopLeft => {
-                    dest_rect.left_top() + egui::vec2(24.0, 24.0)
-                }
-                crate::config::OsdPosition::Center => dest_rect.center(),
-            };
-            let font_id = egui::FontId::proportional(22.0);
-            let galley = ui
-                .painter()
-                .layout_no_wrap(msg.clone(), font_id, text_color);
-            let rect = match app.osd_position {
-                crate::config::OsdPosition::TopLeft => egui::Rect::from_min_size(
-                    center,
-                    galley.size() + egui::vec2(24.0, 16.0),
-                ),
-                crate::config::OsdPosition::Center => egui::Rect::from_center_size(
-                    center,
-                    galley.size() + egui::vec2(24.0, 16.0),
-                ),
-            };
-            ui.painter().rect_filled(rect, 8.0, bg_color);
-            ui.painter().galley(
-                rect.min + egui::vec2(12.0, 8.0),
-                galley,
-                egui::Color32::PLACEHOLDER,
+            let text_color = options
+                .and_then(|options| options.text_color.as_deref())
+                .and_then(parse_osd_color)
+                .unwrap_or(egui::Color32::WHITE)
+                .linear_multiply(alpha);
+            let bg_color = options
+                .and_then(|options| options.background_color.as_deref())
+                .and_then(parse_osd_color)
+                .unwrap_or_else(|| egui::Color32::from_black_alpha(180))
+                .linear_multiply(alpha);
+            let font_size = options
+                .and_then(|options| options.font_size)
+                .unwrap_or(22.0)
+                .clamp(8.0, 128.0);
+            let font_id = egui::FontId::proportional(font_size);
+            let icon = requested_osd_icon(options.and_then(|options| options.icon.as_deref()), msg);
+            let osd_text = icon
+                .map(|icon| format!("{icon}  {msg}"))
+                .unwrap_or_else(|| msg.clone());
+            let galley = ui.painter().layout_no_wrap(osd_text, font_id, text_color);
+            let padding = egui::vec2(
+                options
+                    .and_then(|options| options.padding_x)
+                    .unwrap_or(12.0),
+                options.and_then(|options| options.padding_y).unwrap_or(8.0),
             );
+            let box_size = galley.size() + padding * 2.0;
+            let default_anchor = match app.osd_position {
+                crate::config::OsdPosition::TopLeft => crate::platform::interop::OsdAnchor::TopLeft,
+                crate::config::OsdPosition::Center => crate::platform::interop::OsdAnchor::Center,
+            };
+            let anchor = options
+                .and_then(|options| options.position)
+                .unwrap_or(default_anchor);
+            let rect = osd_rect(
+                dest_rect,
+                box_size,
+                anchor,
+                options.and_then(|options| options.x_percent),
+                options.and_then(|options| options.y_percent),
+            );
+            let corner_radius = options
+                .and_then(|options| options.corner_radius)
+                .unwrap_or(8.0);
+            ui.painter().rect_filled(rect, corner_radius, bg_color);
+            ui.painter()
+                .galley(rect.min + padding, galley, egui::Color32::PLACEHOLDER);
 
-            // Request a repaint to animate the fade-out
-            ui.ctx().request_repaint();
+            // Keep a precise expiry without forcing the entire application to
+            // render at 60 Hz while the message is static. During the short
+            // fade, 10 Hz is smooth enough for an overlay and dramatically
+            // reduces idle GPU/CPU work on Windows.
+            let repaint_after = if elapsed < fade_start {
+                std::time::Duration::from_secs_f32((fade_start - elapsed).max(0.01))
+            } else {
+                std::time::Duration::from_millis(100)
+            };
+            ui.ctx().request_repaint_after(repaint_after);
         }
     }
 
     // 3. Schedule PaintCallback to render current frame at exact physical pixel size
     let render_context = app.render_context.clone();
     let rtt_state = app.rtt_state.clone();
+    let repaint = ui.ctx().clone();
     let is_operating = app.is_window_operating;
-
+    #[cfg(target_os = "windows")]
+    let taskbar_media = app
+        .windows_video_taskbar_thumbnail
+        .then(|| {
+            app.current_video_path
+                .as_ref()
+                .map(|path| path.to_string_lossy().into_owned())
+        })
+        .flatten();
     let callback = egui::PaintCallback {
         rect,
         callback: Arc::new(eframe::egui_glow::CallbackFn::new(move |_info, painter| {
-            if is_operating {
+            let _timing = crate::performance::span(crate::performance::Phase::Video);
+            unsafe { crate::performance::observe_renderer(painter.gl()); }
+            // Check the configured native policy at paint time as well as the
+            // egui-sampled drag flag. WM_ENTERSIZEMOVE can arrive after this
+            // frame was assembled; live mode must still present it, while the
+            // compatibility fallback deliberately retains the last frame.
+            if is_operating || !crate::platform::windows::native_window_video_rendering_allowed() {
                 return;
             }
             let gl = painter.gl();
@@ -333,67 +1000,101 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     (rtt.video_fbo, rtt.video_texture, render_context.try_lock())
                 {
                     if let Some(ref rc) = *rc_guard {
+                        let needs_resize = rtt.texture_width != target_phys_w as u32
+                            || rtt.texture_height != target_phys_h as u32;
+                        let update_pending = rc.1.take();
+                        // A board/hover repaint is not a decoder update. Reuse
+                        // the valid texture without entering MPV or querying,
+                        // resetting and restoring GL state on every such frame.
+                        if !update_pending && !needs_resize && rtt.has_rendered_frame
+                            && rtt.consecutive_render_failures == 0 {
+                            #[cfg(target_os = "windows")]
+                            if let Some(media) = taskbar_media.as_deref() {
+                                unsafe { crate::platform::taskbar_preview::capture(gl, hwnd, video_fbo,
+                                    target_phys_w, target_phys_h, media, false); }
+                            }
+                            MPV_RENDER_SKIPPED_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            return;
+                        }
                         unsafe {
-                            use eframe::glow::HasContext;
+                            // Scope also restores bindings on the unchanged-frame
+                            // early return. Never pass egui's blending/clip to mpv.
+                            let gl_state = crate::mpv::render::MpvGlStateGuard::enter(gl);
 
-                            // Query original FBO binding
-                            let raw_fbo =
-                                gl.get_parameter_i32(eframe::glow::FRAMEBUFFER_BINDING) as u32;
-                            let target_fbo = std::num::NonZeroU32::new(raw_fbo)
-                                .map(eframe::glow::NativeFramebuffer);
+                            // Query MPV to see if a new video frame is ready to render
+                            let has_new_frame = match rc.0.update() {
+                                Ok(flags) => (flags & libmpv2::render::mpv_render_update::Frame) != 0,
+                                Err(_) => {
+                                    MPV_UPDATE_FAILED_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                    true
+                                },
+                            };
 
-                            // Query original viewport to restore it later
-                            let mut original_viewport = [0; 4];
-                            gl.get_parameter_i32_slice(
-                                eframe::glow::VIEWPORT,
-                                &mut original_viewport,
-                            );
-
-                            // Dynamic resizing of texture if physical dimensions changed
-                            if rtt.texture_width != target_phys_w as u32
-                                || rtt.texture_height != target_phys_h as u32
-                            {
-                                gl.bind_texture(eframe::glow::TEXTURE_2D, Some(tex));
-                                gl.tex_image_2d(
-                                    eframe::glow::TEXTURE_2D,
-                                    0,
-                                    eframe::glow::RGBA8 as i32,
-                                    target_phys_w,
-                                    target_phys_h,
-                                    0,
-                                    eframe::glow::RGBA,
-                                    eframe::glow::UNSIGNED_BYTE,
-                                    eframe::glow::PixelUnpackData::Slice(None),
-                                );
-                                rtt.texture_width = target_phys_w as u32;
-                                rtt.texture_height = target_phys_h as u32;
+                            // Bypass redundant rendering if no new frame arrived, dimensions are unchanged,
+                            // and the FBO already holds a valid rendered frame.
+                            if !needs_resize && !has_new_frame && rtt.has_rendered_frame
+                                && rtt.consecutive_render_failures == 0 {
+                                #[cfg(target_os = "windows")]
+                                if let Some(media) = taskbar_media.as_deref() {
+                                    crate::platform::taskbar_preview::capture(gl, hwnd, video_fbo,
+                                        target_phys_w, target_phys_h, media, false);
+                                }
+                                MPV_RENDER_SKIPPED_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                return;
                             }
 
-                            // Bind our offscreen FBO
-                            gl.bind_framebuffer(eframe::glow::FRAMEBUFFER, Some(video_fbo));
+                            // Clear/draw in private GPU storage. Only a completed
+                            // frame may replace the currently displayed texture.
+                            // This also keeps the old frame during a failed resize.
+                            let displayed_size = (rtt.texture_width, rtt.texture_height);
+                            let render_start = std::time::Instant::now();
+                            let render_result = (|| {
+                                if rtt.render_target.is_none() {
+                                    rtt.render_target = Some(crate::mpv::render::VideoRenderTarget::create(gl)?);
+                                }
+                                rtt.render_target.as_mut().unwrap().render_and_publish(
+                                    &gl_state, video_fbo, tex, displayed_size, (target_phys_w, target_phys_h),
+                                    |fbo_id| rc.0.render::<GetProcAddress>(fbo_id, target_phys_w, target_phys_h, false)
+                                        .map_err(|error| error.to_string()),
+                                )
+                            })();
+                            record_mpv_render_duration(render_start.elapsed());
+                            if let Err(error) = render_result {
+                                MPV_RENDER_FAILED_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                                if rtt.consecutive_render_failures == 0 {
+                                    log::warn!("Could not render the libmpv video target: {error}");
+                                }
+                                rtt.consecutive_render_failures = rtt.consecutive_render_failures.saturating_add(1);
+                                // Retain the last successfully published frame.
+                                // Keep decoder work pending; permit three bounded
+                                // retry wakeups for paused playback, not a spin.
+                                rc.1.mark();
+                                if rtt.consecutive_render_failures <= 3 {
+                                    repaint.request_repaint_after(std::time::Duration::from_millis(50));
+                                }
+                                return;
+                            }
+                            if needs_resize {
+                                MPV_TARGET_RESIZE_COUNT.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+                            }
+                            rtt.texture_width = target_phys_w as u32;
+                            rtt.texture_height = target_phys_h as u32;
+                            rtt.consecutive_render_failures = 0;
+                            rtt.has_rendered_frame = true;
 
-                            // Set viewport to exact physical framebuffer size
-                            gl.viewport(0, 0, target_phys_w, target_phys_h);
+                            #[cfg(target_os = "windows")]
+                            if let Some(media) = taskbar_media.as_deref() {
+                                crate::platform::taskbar_preview::capture(
+                                    gl,
+                                    hwnd,
+                                    video_fbo,
+                                    target_phys_w,
+                                    target_phys_h,
+                                    media,
+                                    true,
+                                );
+                            }
 
-                            // Render MPV frame at physical pixel size
-                            let fbo_id = video_fbo.0.get() as i32;
-                            let _ = rc.0.render::<GetProcAddress>(
-                                fbo_id,
-                                target_phys_w,
-                                target_phys_h,
-                                false,
-                            );
-
-                            // Restore original FBO binding
-                            gl.bind_framebuffer(eframe::glow::FRAMEBUFFER, target_fbo);
-
-                            // Restore original viewport
-                            gl.viewport(
-                                original_viewport[0],
-                                original_viewport[1],
-                                original_viewport[2],
-                                original_viewport[3],
-                            );
                         }
                     }
                 }
@@ -401,15 +1102,35 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         })),
     };
 
-    ui.painter().add(callback);
+    if !crate::mpv::external::active() || crate::mpv::external::preview() {
+        ui.painter().set(video_callback_slot, callback);
+    } else {
+        let status = crate::mpv::external::status();
+        let (tone, message) = external_mpv_notice(&status);
+        let body = status.error.as_deref().filter(|error| !error.is_empty())
+            .map(|error| crate::ui::i18n::visual_text(app.language, error))
+            .unwrap_or_else(|| app.tr(message));
+        crate::ui::sync_elegance_theme(ui.ctx());
+        let width = (rect.width() - 32.0).clamp(1.0, 420.0);
+        let notice_rect = egui::Rect::from_center_size(rect.center(), egui::vec2(width, 76.0));
+        ui.scope_builder(egui::UiBuilder::new().max_rect(notice_rect)
+            .layout(egui::Layout::top_down(egui::Align::Min)), |ui| {
+            ui.set_clip_rect(rect.intersect(ui.clip_rect()));
+            elegance::Callout::new(tone).icon(crate::ui::icons::MONITOR_PLAY)
+                .title(app.tr("External mpv")).body(body).multiline()
+                .show(ui, |_| {});
+        });
+    }
 
     let is_hovering_file = ui.input(|i| !i.raw.hovered_files.is_empty());
     if is_hovering_file {
         ui.painter()
             .rect_filled(rect, 0.0, egui::Color32::from_black_alpha(180));
         let font_id = egui::FontId::proportional(26.0);
+        let paths=ui.input(|i|i.raw.hovered_files.iter().filter_map(|f|f.path.clone()).collect::<Vec<_>>());
+        let feedback=crate::assets::drop_feedback(&paths,&crate::assets::Destination::Player);
         let galley = ui.painter().layout_no_wrap(
-            format!("{} {}", crate::ui::icons::FILE_VIDEO, app.tr("Drop video file here to play")),
+            format!("{} {}",crate::ui::icons::named_control_icon(&feedback.icon).unwrap_or(crate::ui::icons::FILE_VIDEO),feedback.message),
             font_id,
             egui::Color32::WHITE,
         );
@@ -421,15 +1142,425 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     }
 }
 
+fn parse_osd_color(value: &str) -> Option<egui::Color32> {
+    let hex = value.trim().strip_prefix('#').unwrap_or(value.trim());
+    let expand = |value: u8| value.saturating_mul(17);
+    match hex.len() {
+        3 | 4 => {
+            let mut digits = hex
+                .chars()
+                .map(|character| character.to_digit(16).map(|v| v as u8));
+            let red = expand(digits.next()??);
+            let green = expand(digits.next()??);
+            let blue = expand(digits.next()??);
+            let alpha = digits.next().flatten().map(expand).unwrap_or(255);
+            Some(egui::Color32::from_rgba_unmultiplied(
+                red, green, blue, alpha,
+            ))
+        }
+        6 | 8 => {
+            let byte = |start: usize| u8::from_str_radix(&hex[start..start + 2], 16).ok();
+            Some(egui::Color32::from_rgba_unmultiplied(
+                byte(0)?,
+                byte(2)?,
+                byte(4)?,
+                if hex.len() == 8 { byte(6)? } else { 255 },
+            ))
+        }
+        _ => None,
+    }
+}
+
+fn osd_rect(
+    bounds: egui::Rect,
+    size: egui::Vec2,
+    anchor: crate::platform::interop::OsdAnchor,
+    x_percent: Option<f32>,
+    y_percent: Option<f32>,
+) -> egui::Rect {
+    use crate::platform::interop::OsdAnchor;
+
+    let margin = 24.0;
+    let min_x = bounds.left() + margin;
+    let center_x = bounds.center().x;
+    let max_x = bounds.right() - margin;
+    let min_y = bounds.top() + margin;
+    let center_y = bounds.center().y;
+    let max_y = bounds.bottom() - margin;
+    let (point, horizontal, vertical) = match anchor {
+        OsdAnchor::TopLeft => (egui::pos2(min_x, min_y), -1, -1),
+        OsdAnchor::TopCenter => (egui::pos2(center_x, min_y), 0, -1),
+        OsdAnchor::TopRight => (egui::pos2(max_x, min_y), 1, -1),
+        OsdAnchor::CenterLeft => (egui::pos2(min_x, center_y), -1, 0),
+        OsdAnchor::Center => (egui::pos2(center_x, center_y), 0, 0),
+        OsdAnchor::CenterRight => (egui::pos2(max_x, center_y), 1, 0),
+        OsdAnchor::BottomLeft => (egui::pos2(min_x, max_y), -1, 1),
+        OsdAnchor::BottomCenter => (egui::pos2(center_x, max_y), 0, 1),
+        OsdAnchor::BottomRight => (egui::pos2(max_x, max_y), 1, 1),
+    };
+    let custom = x_percent.is_some() || y_percent.is_some();
+    let point = egui::pos2(
+        x_percent
+            .map(|value| bounds.left() + bounds.width() * value.clamp(0.0, 100.0) / 100.0)
+            .unwrap_or(point.x),
+        y_percent
+            .map(|value| bounds.top() + bounds.height() * value.clamp(0.0, 100.0) / 100.0)
+            .unwrap_or(point.y),
+    );
+    let mut rect = if custom || (horizontal == 0 && vertical == 0) {
+        egui::Rect::from_center_size(point, size)
+    } else {
+        let left = match horizontal {
+            -1 => point.x,
+            1 => point.x - size.x,
+            _ => point.x - size.x / 2.0,
+        };
+        let top = match vertical {
+            -1 => point.y,
+            1 => point.y - size.y,
+            _ => point.y - size.y / 2.0,
+        };
+        egui::Rect::from_min_size(egui::pos2(left, top), size)
+    };
+    let dx = if rect.left() < bounds.left() {
+        bounds.left() - rect.left()
+    } else if rect.right() > bounds.right() {
+        bounds.right() - rect.right()
+    } else {
+        0.0
+    };
+    let dy = if rect.top() < bounds.top() {
+        bounds.top() - rect.top()
+    } else if rect.bottom() > bounds.bottom() {
+        bounds.bottom() - rect.bottom()
+    } else {
+        0.0
+    };
+    rect = rect.translate(egui::vec2(dx, dy));
+    rect
+}
+
+fn requested_osd_icon(name: Option<&str>, message: &str) -> Option<&'static str> {
+    let Some(name) = name.map(str::trim).filter(|name| !name.is_empty()) else {
+        return Some(osd_icon(message));
+    };
+    match name.to_ascii_lowercase().as_str() {
+        "none" | "hidden" => None,
+        "auto" => Some(osd_icon(message)),
+        "info" => Some(crate::ui::icons::INFO),
+        "play" => Some(crate::ui::icons::PLAY),
+        "pause" => Some(crate::ui::icons::PAUSE),
+        "stop" => Some(crate::ui::icons::STOP_CIRCLE),
+        "warning" => Some(crate::ui::icons::WARNING),
+        "volume" | "speaker" => Some(crate::ui::icons::SPEAKER_HIGH),
+        "mute" => Some(crate::ui::icons::SPEAKER_SLASH),
+        "fast_forward" | "fast-forward" => Some(crate::ui::icons::FAST_FORWARD),
+        "rewind" => Some(crate::ui::icons::REWIND),
+        "record" => Some(crate::ui::icons::RECORD),
+        "subtitle" | "subtitles" => Some(crate::ui::icons::SUBTITLES),
+        "video" => Some(crate::ui::icons::FILE_VIDEO),
+        "fullscreen" => Some(crate::ui::icons::ARROWS_OUT),
+        other => crate::ui::icons::named_control_icon(other).or(Some(crate::ui::icons::INFO)),
+    }
+}
+
+fn osd_icon(message: &str) -> &'static str {
+    let message = message.to_ascii_lowercase();
+    if message.contains("pause") {
+        crate::ui::icons::PAUSE
+    } else if message.contains("play") || message.contains("replay") {
+        crate::ui::icons::PLAY
+    } else if message.contains("unmute") {
+        crate::ui::icons::SPEAKER_HIGH
+    } else if message.contains("mute") {
+        crate::ui::icons::SPEAKER_SLASH
+    } else if message.contains("volume") || message.contains("audio") {
+        crate::ui::icons::SPEAKER_HIGH
+    } else if message.contains("frame") {
+        crate::ui::icons::FRAME_CORNERS
+    } else if message.contains("seek") {
+        crate::ui::icons::FAST_FORWARD
+    } else if message.contains("fullscreen") {
+        crate::ui::icons::ARROWS_OUT
+    } else if message.contains("subtitle") {
+        crate::ui::icons::SUBTITLES
+    } else if message.contains("open") || message.contains("load") || message.contains("video") {
+        crate::ui::icons::FILE_VIDEO
+    } else if message.contains("error") || message.contains("failed") {
+        crate::ui::icons::WARNING
+    } else {
+        crate::ui::icons::INFO
+    }
+}
+
 pub fn calculate_physical_bounds(rect: egui::Rect, ppi: f32) -> (i32, i32) {
     let w = (rect.width() * ppi).round() as i32;
     let h = (rect.height() * ppi).round() as i32;
     (w.max(1), h.max(1))
 }
 
+fn monitor_render_bounds(rect: egui::Rect, ppi: f32, resolution: crate::config::MonitorResolution) -> (i32,i32) {
+    let (w,h) = calculate_physical_bounds(rect,ppi);
+    let divisor = resolution.divisor();
+    ((w/divisor).max(1),(h/divisor).max(1))
+}
+
+fn external_mpv_notice(status: &crate::mpv::external::Status) -> (elegance::CalloutTone, &'static str) {
+    if status.error.as_deref().is_some_and(|error| !error.is_empty()) {
+        return (elegance::CalloutTone::Danger, "Connection problem");
+    }
+    if !status.connected {
+        return (elegance::CalloutTone::Warning, "Waiting for external mpv");
+    }
+    let flag = |name| status.properties.get(name).and_then(serde_json::Value::as_bool);
+    let message = if flag("idle-active") == Some(true) {
+        "No media loaded"
+    } else if flag("paused-for-cache") == Some(true) {
+        "Buffering"
+    } else {
+        match flag("pause") {
+            Some(true) => "Paused",
+            Some(false) => "Playing",
+            None => "Connected to external mpv",
+        }
+    };
+    (elegance::CalloutTone::Neutral, message)
+}
+
 #[cfg(test)]
 mod tests {
+    fn pointer_frame(app:&mut PealayerApp,ctx:&egui::Context,time:&mut f64,events:Vec<egui::Event>)->egui::FullOutput {
+        *time+=0.05;
+        let mut output=ctx.run_ui(egui::RawInput{time:Some(*time),events,
+            screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(800.0,600.0))),..Default::default()},|ui|draw(app,ui));
+        output.textures_delta.clear();output
+    }
+    fn mouse(pos:egui::Pos2,button:egui::PointerButton,pressed:bool,modifiers:egui::Modifiers)->egui::Event {
+        egui::Event::PointerButton{pos,button,pressed,modifiers}
+    }
+    fn menu_text(output:&egui::FullOutput)->String {
+        output.shapes.iter().filter_map(|shape|match &shape.shape {egui::Shape::Text(t)=>Some(t.galley.text()),_=>None}).collect::<Vec<_>>().join("\n")
+    }
+    fn mouse_fixture()->PealayerApp {
+        let mut app=PealayerApp::default();app.current_video_path=Some("pointer-fixture.mp4".into());
+        app.consistent_video_aspect_ratio=false;app.video_click_frame_only=true;app.is_paused=true;
+        app.language=crate::config::AppLanguage::English;app
+    }
+
+    #[test]
+    fn playback_speed_slider_previews_then_commits_the_selected_stop() {
+        let ctx = egui::Context::default();
+        let mut time = 0.0;
+        let mut frame = |events, rate, source| {
+            time += 0.05;
+            let mut selection = None;
+            let mut rect = egui::Rect::NOTHING;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    time: Some(time),
+                    events,
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(500.0, 200.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    selection = playback_speed_slider(ui, "Playback speed".into(), rate, source);
+                    rect = ui.min_rect();
+                },
+            );
+            output.textures_delta.clear();
+            (selection, rect, menu_text(&output))
+        };
+        let (selection, rect, text) = frame(vec![], 1.1, 1);
+        assert_eq!(selection, None);
+        for label in ["1.1", "0.25×", "1×", "4×"] {
+            assert!(text.contains(label), "{text}");
+        }
+        assert!(rect.width() > rect.height() * 2.0);
+        let left = egui::pos2(rect.left() + 7.0, rect.center().y);
+        let center = rect.center();
+        let press = |pos| mouse(pos, egui::PointerButton::Primary, true, egui::Modifiers::NONE);
+        let release = |pos| mouse(pos, egui::PointerButton::Primary, false, egui::Modifiers::NONE);
+        assert_eq!(frame(vec![egui::Event::PointerMoved(left), press(left)], 1.1, 1).0, None);
+        assert_eq!(frame(vec![egui::Event::PointerMoved(center)], 1.1, 1).0, None);
+        assert_eq!(frame(vec![release(center)], 1.1, 1).0, Some(1.0));
+        assert_eq!(frame(vec![], 1.0, 1).0, None);
+
+        // The pointer belongs to the media that was present when it pressed.
+        assert_eq!(frame(vec![egui::Event::PointerMoved(left), press(left)], 1.0, 1).0, None);
+        assert_eq!(frame(vec![egui::Event::PointerMoved(center)], 1.0, 2).0, None);
+        assert_eq!(frame(vec![release(center)], 1.0, 2).0, None);
+    }
+    #[test]
+    fn native_pointer_click_drag_and_shift_menu_are_disjoint_and_press_pinned() {
+        let _guard=crate::app::tests::lock_app_tests();
+        let ctx=egui::Context::default();ctx.all_styles_mut(|s|s.animation_time=0.0);
+        let mut app=mouse_fixture();let mut time=0.0;
+        let center=egui::pos2(400.0,300.0);let moved=center+egui::vec2(50.0,12.0);
+        pointer_frame(&mut app,&ctx,&mut time,vec![]);pointer_frame(&mut app,&ctx,&mut time,vec![]);
+        // Ctrl-left is a mode override even without movement: never Play/Pause.
+        pointer_frame(&mut app,&ctx,&mut time,vec![egui::Event::PointerMoved(center),mouse(center,egui::PointerButton::Primary,true,egui::Modifiers::CTRL)]);
+        pointer_frame(&mut app,&ctx,&mut time,vec![mouse(center,egui::PointerButton::Primary,false,egui::Modifiers::NONE)]);
+        assert!(app.is_paused);
+        // Alt-middle does not leak the default fullscreen click on release.
+        pointer_frame(&mut app,&ctx,&mut time,vec![mouse(center,egui::PointerButton::Middle,true,egui::Modifiers::ALT)]);
+        let output=pointer_frame(&mut app,&ctx,&mut time,vec![mouse(center,egui::PointerButton::Middle,false,egui::Modifiers::NONE)]);
+        assert!(!output.viewport_output.values().flat_map(|v|&v.commands).any(|c|matches!(c,egui::ViewportCommand::Fullscreen(_))));
+        // Changing Preferences during a held button cannot change its release action.
+        app.middle_click_action=crate::config::PlayerClickAction::ToggleMute;
+        pointer_frame(&mut app,&ctx,&mut time,vec![mouse(center,egui::PointerButton::Middle,true,egui::Modifiers::NONE)]);
+        app.middle_click_action=crate::config::PlayerClickAction::None;
+        pointer_frame(&mut app,&ctx,&mut time,vec![mouse(center,egui::PointerButton::Middle,false,egui::Modifiers::NONE)]);
+        assert!(app.is_muted);
+        // Right drag suppresses a click even if its drag action is disabled.
+        app.right_hold_action=crate::config::PlayerDragAction::None;
+        pointer_frame(&mut app,&ctx,&mut time,vec![mouse(center,egui::PointerButton::Secondary,true,egui::Modifiers::NONE)]);
+        pointer_frame(&mut app,&ctx,&mut time,vec![egui::Event::PointerMoved(moved)]);
+        let output=pointer_frame(&mut app,&ctx,&mut time,vec![mouse(moved,egui::PointerButton::Secondary,false,egui::Modifiers::NONE)]);
+        assert!(!menu_text(&output).contains("Open Recent"));
+        // Shift-right overrides mute/hold actions and retains its menu intent
+        // after movement and releasing Shift before the physical mouse button.
+        app.is_muted=false;app.right_click_action=crate::config::PlayerClickAction::ToggleMute;
+        app.right_hold_action=crate::config::PlayerDragAction::TemporaryFastForward;
+        pointer_frame(&mut app,&ctx,&mut time,vec![egui::Event::PointerMoved(center),mouse(center,egui::PointerButton::Secondary,true,egui::Modifiers::SHIFT)]);
+        pointer_frame(&mut app,&ctx,&mut time,vec![egui::Event::PointerMoved(moved)]);
+        assert!(app.video_surface_gesture.is_none());
+        pointer_frame(&mut app,&ctx,&mut time,vec![mouse(moved,egui::PointerButton::Secondary,false,egui::Modifiers::NONE)]);
+        let output=pointer_frame(&mut app,&ctx,&mut time,vec![]);
+        assert!(menu_text(&output).contains("Open Recent"),"{}",menu_text(&output));assert!(!app.is_muted);
+    }
+
+    #[test]
+    fn default_middle_click_is_fullscreen_and_extra_buttons_are_real_inputs() {
+        let _guard=crate::app::tests::lock_app_tests();let ctx=egui::Context::default();
+        let mut app=mouse_fixture();let mut time=0.0;let pos=egui::pos2(400.0,300.0);
+        pointer_frame(&mut app,&ctx,&mut time,vec![]);pointer_frame(&mut app,&ctx,&mut time,vec![]);
+        pointer_frame(&mut app,&ctx,&mut time,vec![egui::Event::PointerMoved(pos),mouse(pos,egui::PointerButton::Middle,true,egui::Modifiers::NONE)]);
+        let output=pointer_frame(&mut app,&ctx,&mut time,vec![mouse(pos,egui::PointerButton::Middle,false,egui::Modifiers::NONE)]);
+        assert!(output.viewport_output.values().flat_map(|v|&v.commands).any(|c|matches!(c,egui::ViewportCommand::Fullscreen(true))));
+        app.mouse_bindings.video.back=crate::pointer_bindings::Action::ToggleMute;
+        app.mouse_bindings.video.forward=crate::pointer_bindings::Action::ToggleMute;
+        for button in [egui::PointerButton::Extra1,egui::PointerButton::Extra2] {
+            let previous=app.is_muted;
+            pointer_frame(&mut app,&ctx,&mut time,vec![mouse(pos,button,true,egui::Modifiers::NONE)]);
+            pointer_frame(&mut app,&ctx,&mut time,vec![mouse(pos,button,false,egui::Modifiers::NONE)]);
+            assert_ne!(app.is_muted,previous);
+        }
+    }
+    #[test]
+    fn fast_forward_hold_waits_before_activation_and_releases_when_video_is_hidden() {
+        let _guard=crate::app::tests::lock_app_tests();let ctx=egui::Context::default();let mut app=mouse_fixture();let mut time=0.0;
+        app.right_hold_action=crate::config::PlayerDragAction::TemporaryFastForward;
+        let pos=egui::pos2(400.0,300.0);
+        pointer_frame(&mut app,&ctx,&mut time,vec![]);pointer_frame(&mut app,&ctx,&mut time,vec![]);
+        pointer_frame(&mut app,&ctx,&mut time,vec![egui::Event::PointerMoved(pos),mouse(pos,egui::PointerButton::Secondary,true,egui::Modifiers::NONE)]);
+        assert!(app.video_surface_gesture.is_none());assert!(app.is_paused);
+        std::thread::sleep(std::time::Duration::from_millis(190));
+        pointer_frame(&mut app,&ctx,&mut time,vec![]);
+        assert!(app.video_surface_gesture.is_some());assert!(!app.is_paused);
+        let mut output=ctx.run_ui(egui::RawInput{events:vec![mouse(pos,egui::PointerButton::Secondary,false,egui::Modifiers::NONE)],..Default::default()},|ui|finish_released_gesture(&mut app,ui.ctx()));
+        output.textures_delta.clear();assert!(app.video_surface_gesture.is_none());assert!(app.is_paused);
+        assert_eq!(app.playback_rate,1.0);
+    }
+    #[test]
+    fn a_source_change_revokes_the_old_hold_without_pausing_or_seeking_the_new_media() {
+        let _guard=crate::app::tests::lock_app_tests();let ctx=egui::Context::default();let mut app=mouse_fixture();
+        begin_video_surface_gesture(&mut app,egui::PointerButton::Secondary,crate::config::PlayerDragAction::TemporaryFastForward,std::time::Instant::now());
+        app.current_video_path=Some("different-pointer-fixture.mp4".into());app.is_paused=false;
+        finish_released_gesture(&mut app,&ctx);
+        assert!(app.video_surface_gesture.is_none());assert!(!app.is_paused);
+        assert_eq!(app.playback_rate,app.configured_playback_speed);
+    }
+    #[test]
+    fn picture_only_pointer_actions_ignore_letterbox_and_can_be_expanded() {
+        let _guard=crate::app::tests::lock_app_tests();
+        let ctx=egui::Context::default(); let mut app=PealayerApp::default();
+        app.engine_handle=crate::four_d::engine::memory_only_test_engine();
+        app.current_video_path=Some("pointer-picture-fixture.mp4".into()); app.video_aspect_ratio=16.0/9.0;
+        app.consistent_video_aspect_ratio=false; app.right_click_action=crate::config::PlayerClickAction::ToggleMute;
+        app.right_hold_action=crate::config::PlayerDragAction::None;
+        let mut time=0.0;
+        let mut frame=|app:&mut PealayerApp,events| {
+            time+=0.1;
+            let mut out=ctx.run_ui(egui::RawInput {time:Some(time),events,
+                screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(800.0,700.0))),..Default::default()},|ui|draw(app,ui));
+            out.textures_delta.clear();
+        };
+        let button=|pos,pressed|egui::Event::PointerButton {pos,pressed,button:egui::PointerButton::Secondary,modifiers:egui::Modifiers::NONE};
+        frame(&mut app,vec![]); frame(&mut app,vec![]);
+        for (point,whole,expected) in [(egui::pos2(400.0,30.0),false,false),(egui::pos2(400.0,350.0),false,true),(egui::pos2(400.0,30.0),true,false)] {
+            app.video_click_frame_only=!whole;
+            frame(&mut app,vec![]); // Install changed hit geometry before the next press.
+            frame(&mut app,vec![egui::Event::PointerMoved(point),button(point,true)]);
+            frame(&mut app,vec![button(point,false)]);
+            assert_eq!(app.is_muted,expected,"whole={whole}, point={point:?}");
+        }
+    }
     use super::*;
+
+    #[test]
+    fn filmcraft_preview_resolution_changes_real_render_size_not_display_geometry() {
+        use crate::config::MonitorResolution as R;
+        let rect=egui::Rect::from_min_size(egui::pos2(10.0,20.0),egui::vec2(640.0,360.0));
+        for (resolution,expected) in [(R::Full,(960,540)),(R::Half,(480,270)),(R::Quarter,(240,135)),(R::Eighth,(120,67))] {
+            assert_eq!(monitor_render_bounds(rect,1.5,resolution),expected);
+        }
+        assert_eq!(rect.size(),egui::vec2(640.0,360.0));
+        assert_eq!(monitor_render_bounds(egui::Rect::ZERO,1.0,R::Eighth),(1,1));
+    }
+
+    #[test]
+    fn video_renderer_is_scheduled_before_image_and_osd() {
+        // CPU-only paint-order guard; no player, decoder, GPU or board worker.
+        let source = include_str!("video.rs").split("#[cfg(test)]").next().unwrap();
+        let slot = source.find("let video_callback_slot = ui.painter().add(egui::Shape::Noop)").unwrap();
+        let image = source.find("ui.painter().image(").unwrap();
+        let osd = source.find("// 2.5 Draw OSD overlay").unwrap();
+        assert!(slot < image && image < osd);
+        assert!(source.contains("ui.painter().set(video_callback_slot, callback)"));
+        assert!(!source.contains("ui.painter().add(callback)"));
+    }
+
+    #[test]
+    fn video_early_returns_and_failed_render_keep_guarded_state_and_validity() {
+        let source = include_str!("video.rs").split("#[cfg(test)]").next().unwrap();
+        let boundary = source.find("MpvGlStateGuard::enter(gl)").unwrap();
+        let pending = source.find("let update_pending = rc.1.take()").unwrap();
+        let idle_reuse = source.find("if !update_pending && !needs_resize && rtt.has_rendered_frame").unwrap();
+        let update = source.find("let has_new_frame = match rc.0.update()").unwrap();
+        let reuse = source.find("if !needs_resize && !has_new_frame && rtt.has_rendered_frame").unwrap();
+        let render = source.find(".render_and_publish(").unwrap();
+        let failure = source.find("if let Err(error) = render_result").unwrap();
+        let valid = source.find("rtt.has_rendered_frame = true").unwrap();
+        assert!(boundary < update && update < reuse && reuse < render && render < failure && failure < valid);
+        assert!(pending < idle_reuse && idle_reuse < boundary);
+        assert!(source[idle_reuse..boundary].contains("return;"));
+        assert!(!source[idle_reuse..boundary].contains("gl."));
+        assert!(!source[failure..valid].contains("rtt.has_rendered_frame = false"));
+        assert!(source[failure..valid].contains("rc.1.mark()"));
+        assert!(source[failure..valid].contains("rtt.consecutive_render_failures <= 3"));
+        assert!(source[failure..valid].contains("return;"));
+    }
+
+    #[test]
+    fn external_notice_reports_observed_state_not_assumed_playing() {
+        let mut status = crate::mpv::external::Status::default();
+        assert_eq!(external_mpv_notice(&status).1, "Waiting for external mpv");
+        status.connected = true;
+        assert_eq!(external_mpv_notice(&status).1, "Connected to external mpv");
+        status.properties.insert("pause".into(), true.into());
+        assert_eq!(external_mpv_notice(&status).1, "Paused");
+        status.properties.insert("pause".into(), false.into());
+        assert_eq!(external_mpv_notice(&status).1, "Playing");
+        status.properties.insert("paused-for-cache".into(), true.into());
+        assert_eq!(external_mpv_notice(&status).1, "Buffering");
+        status.properties.insert("idle-active".into(), true.into());
+        assert_eq!(external_mpv_notice(&status).1, "No media loaded");
+        status.error = Some("Pipe disconnected".into());
+        assert_eq!(external_mpv_notice(&status).1, "Connection problem");
+    }
 
     #[test]
     fn test_calculate_physical_bounds() {
@@ -446,5 +1577,94 @@ mod tests {
 
         // 2.0x scaling (200% Retina / 4K DPI)
         assert_eq!(calculate_physical_bounds(rect, 2.0), (1600, 1200));
+    }
+
+    #[test]
+    fn video_aspect_uses_live_value_and_rejects_invalid_input() {
+        assert!((resolved_video_aspect_ratio(2.35) - 2.35).abs() < f32::EPSILON);
+        assert_eq!(
+            resolved_video_aspect_ratio(f64::NAN),
+            DEFAULT_VIDEO_ASPECT_RATIO as f32
+        );
+        assert_eq!(
+            resolved_video_aspect_ratio(0.0),
+            DEFAULT_VIDEO_ASPECT_RATIO as f32
+        );
+    }
+
+    #[test]
+    fn automatic_aspect_resize_preserves_video_width_and_non_video_chrome() {
+        let target = aspect_matched_inner_size(
+            egui::vec2(1_000.0, 700.0),
+            egui::vec2(900.0, 550.0),
+            Some(egui::vec2(1_920.0, 1_080.0)),
+            4.0 / 3.0,
+        )
+        .unwrap();
+        assert_eq!(target.x, 1_000.0);
+        assert!((target.y - 825.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn automatic_aspect_resize_fits_portrait_video_to_monitor() {
+        let target = aspect_matched_inner_size(
+            egui::vec2(1_000.0, 700.0),
+            egui::vec2(900.0, 550.0),
+            Some(egui::vec2(1_920.0, 1_080.0)),
+            9.0 / 16.0,
+        )
+        .unwrap();
+        assert!(target.y <= 984.0);
+        assert!(target.x < 1_000.0);
+    }
+
+    #[test]
+    fn automatic_aspect_resize_rejects_invalid_geometry() {
+        assert!(aspect_matched_inner_size(
+            egui::Vec2::ZERO,
+            egui::vec2(900.0, 550.0),
+            None,
+            16.0 / 9.0,
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn playing_seek_drag_uses_one_cumulative_origin() {
+        assert_eq!(seek_target_from_drag(100.0, 120.0, 500.0), 110.0);
+        assert_eq!(seek_target_from_drag(100.0, -1_800.0, 500.0), 0.0);
+        assert_eq!(seek_target_from_drag(490.0, 240.0, 500.0), 500.0);
+    }
+
+    #[test]
+    fn temporary_fast_forward_starts_without_pointer_motion() {
+        assert_eq!(temporary_fast_forward_rate(1.0, 3.0, 0.0), 3.0);
+        assert_eq!(temporary_fast_forward_rate(1.5, 2.0, 0.0), 2.0);
+        assert_eq!(temporary_fast_forward_rate(3.0, 2.0, 0.0), 3.0);
+        assert_eq!(temporary_fast_forward_rate(1.0, 2.0, 2_240.0), 16.0);
+    }
+
+    #[test]
+    fn fast_forward_hold_does_not_turn_release_into_play_pause_click() {
+        assert!(!should_consume_gesture_click(
+            crate::config::PlayerDragAction::TemporaryFastForward,
+            false,
+            std::time::Duration::from_millis(50),
+        ));
+        assert!(should_consume_gesture_click(
+            crate::config::PlayerDragAction::TemporaryFastForward,
+            false,
+            std::time::Duration::from_millis(250),
+        ));
+        assert!(should_consume_gesture_click(
+            crate::config::PlayerDragAction::TemporaryFastForward,
+            true,
+            std::time::Duration::ZERO,
+        ));
+        assert!(should_consume_gesture_click(
+            crate::config::PlayerDragAction::Seek,
+            true,
+            std::time::Duration::ZERO,
+        ));
     }
 }

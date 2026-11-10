@@ -41,11 +41,12 @@ pub fn browse_directory(dir_path: Option<&str>) -> Result<DirectoryBrowseRespons
     };
 
     let canonical = target.canonicalize().unwrap_or(target.clone());
-    let parent_path = canonical.parent().map(|p| p.to_string_lossy().to_string());
+    let parent_path = canonical.parent().map(super::fs_locations::display_path);
 
     let mut entries = Vec::new();
 
-    if let Ok(read_dir) = fs::read_dir(&canonical) {
+    let read_dir=fs::read_dir(&canonical).map_err(|error|format!("Cannot browse server folder: {error}"))?;
+    {
         for entry_res in read_dir {
             if let Ok(entry) = entry_res {
                 let path = entry.path();
@@ -56,7 +57,11 @@ pub fn browse_directory(dir_path: Option<&str>) -> Result<DirectoryBrowseRespons
                 }
 
                 let is_dir = path.is_dir();
-                let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+                let ext = path
+                    .extension()
+                    .and_then(|e| e.to_str())
+                    .unwrap_or("")
+                    .to_lowercase();
                 let is_media = !is_dir && MEDIA_EXTENSIONS.contains(&ext.as_str());
 
                 let size_bytes = entry.metadata().map(|m| m.len()).unwrap_or(0);
@@ -64,7 +69,7 @@ pub fn browse_directory(dir_path: Option<&str>) -> Result<DirectoryBrowseRespons
 
                 entries.push(FileEntryInfo {
                     name: file_name,
-                    path: path.to_string_lossy().to_string(),
+                    path: super::fs_locations::display_path(&path),
                     is_dir,
                     is_media,
                     size_bytes,
@@ -82,7 +87,7 @@ pub fn browse_directory(dir_path: Option<&str>) -> Result<DirectoryBrowseRespons
     });
 
     Ok(DirectoryBrowseResponse {
-        current_path: canonical.to_string_lossy().to_string(),
+        current_path: super::fs_locations::display_path(&canonical),
         parent_path,
         entries,
     })
@@ -101,8 +106,7 @@ pub fn rename_file(old_path_str: &str, new_name: &str) -> Result<String, String>
         return Err("Target filename already exists".to_string());
     }
 
-    fs::rename(old_path, &new_path)
-        .map_err(|e| format!("Rename failed: {}", e))?;
+    fs::rename(old_path, &new_path).map_err(|e| format!("Rename failed: {}", e))?;
 
     Ok(new_path.to_string_lossy().to_string())
 }

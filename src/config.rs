@@ -1,5 +1,425 @@
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::path::PathBuf;
+use std::sync::mpsc::{Receiver, channel};
+
+pub const DEFAULT_PLAYBACK_POSITION_HISTORY_LIMIT: u32 = 50;
+pub const MAX_PLAYBACK_POSITION_HISTORY_LIMIT: u32 = 500;
+
+/// Presentation only. Power/recall policy belongs to the shared coordinator.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum PwmIndicatorAction {
+    #[default]
+    Toggle,
+    On,
+    Off,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct PwmCardPreferences {
+    pub show_on: bool,
+    pub show_off: bool,
+    pub show_toggle: bool,
+    pub show_step_buttons: bool,
+    pub show_increase: bool,
+    pub show_decrease: bool,
+    pub show_other: bool,
+    pub indicator_action: PwmIndicatorAction,
+}
+
+impl Default for PwmCardPreferences {
+    fn default() -> Self {
+        Self { show_on: true, show_off: true, show_toggle: true, show_step_buttons: false, show_increase: true,
+            show_decrease: true, show_other: true,
+            indicator_action: PwmIndicatorAction::Toggle }
+    }
+}
+
+impl PwmCardPreferences {
+    pub fn shows(&self, verb: &str) -> bool {
+        match verb.to_ascii_lowercase().as_str() {
+            "on" => self.show_on,
+            "off" => self.show_off,
+            "toggle" => self.show_toggle,
+            "increase" => self.show_increase,
+            "decrease" => self.show_decrease,
+            _ => self.show_other,
+        }
+    }
+}
+
+/// Bundled application artwork; custom deployment/state icons take precedence.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AppIconPreset {
+    #[default]
+    Current,
+    Classic,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AlwaysOnTopMode {
+    #[default]
+    Never,
+    Always,
+    WhilePlayingVideo,
+}
+
+impl AlwaysOnTopMode {
+    pub fn is_active(self, video_loaded: bool, paused: bool, ended: bool) -> bool {
+        match self {
+            Self::Never => false,
+            Self::Always => true,
+            Self::WhilePlayingVideo => video_loaded && !paused && !ended,
+        }
+    }
+}
+
+/// Vertical wheel policy. Physical horizontal wheel input always pans X.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TimelineWheelBehavior {
+    Zoom,
+    HorizontalScroll,
+    VerticalScroll,
+    None,
+}
+
+/// Where timeline cue properties open after insertion or double-click.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum TimelineCueEditorPresentation {
+    /// Keep the author in context with a focused, blocking properties dialog.
+    #[default]
+    Dialog,
+    /// Reveal the persistent Effect Controls workspace panel.
+    Panel,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct TimelineWheelPreferences {
+    pub plain: TimelineWheelBehavior,
+    pub ctrl: TimelineWheelBehavior,
+    pub shift: TimelineWheelBehavior,
+    pub alt: TimelineWheelBehavior,
+}
+
+impl TimelineWheelPreferences {
+    pub(crate) fn behavior(self, modifiers: eframe::egui::Modifiers) -> TimelineWheelBehavior {
+        if modifiers.shift { self.shift }
+        else if modifiers.ctrl || modifiers.command { self.ctrl }
+        else if modifiers.alt { self.alt }
+        else { self.plain }
+    }
+}
+
+impl Default for TimelineWheelPreferences {
+    fn default() -> Self {
+        Self { plain: TimelineWheelBehavior::VerticalScroll, ctrl: TimelineWheelBehavior::Zoom,
+            shift: TimelineWheelBehavior::HorizontalScroll, alt: TimelineWheelBehavior::Zoom }
+    }
+}
+
+/// Stable, persisted actions available in the native timeline toolbar.
+///
+/// The overflow button is deliberately not represented here: it is always
+/// available so a user can never hide the only route back to customization.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum TimelineToolbarAction {
+    ZoomIn,
+    ZoomOut,
+    PanLeft,
+    PanRight,
+    BringPlayheadIntoView,
+    FollowPlayhead,
+    AddKeyframe,
+    PreviousCue,
+    NextCue,
+    NudgeCueLeft,
+    NudgeCueRight,
+    SelectAll,
+    ClearSelection,
+    DeleteSelection,
+}
+
+impl TimelineToolbarAction {
+    pub const ALL: [Self; 14] = [
+        Self::ZoomIn,
+        Self::ZoomOut,
+        Self::PanRight,
+        Self::PanLeft,
+        Self::FollowPlayhead,
+        Self::BringPlayheadIntoView,
+        Self::AddKeyframe,
+        Self::PreviousCue,
+        Self::NextCue,
+        Self::NudgeCueLeft,
+        Self::NudgeCueRight,
+        Self::SelectAll,
+        Self::ClearSelection,
+        Self::DeleteSelection,
+    ];
+
+    pub const DEFAULT_VISIBLE: [Self; 6] = [
+        Self::ZoomIn,
+        Self::ZoomOut,
+        Self::PanRight,
+        Self::PanLeft,
+        Self::FollowPlayhead,
+        Self::BringPlayheadIntoView,
+    ];
+}
+
+pub fn default_timeline_toolbar_order() -> Vec<TimelineToolbarAction> {
+    TimelineToolbarAction::ALL.to_vec()
+}
+
+/// Empty means follow the application default; persist only an actual override.
+/// Saving unrelated preferences must not freeze today's default forever.
+pub fn persisted_timeline_toolbar_order(
+    configured: &[TimelineToolbarAction],
+) -> Vec<TimelineToolbarAction> {
+    let normalized = normalize_timeline_toolbar_order(configured);
+    if normalized == default_timeline_toolbar_order() {
+        Vec::new()
+    } else {
+        normalized
+    }
+}
+
+pub fn default_timeline_toolbar_hidden() -> Vec<TimelineToolbarAction> {
+    TimelineToolbarAction::ALL
+        .into_iter()
+        .filter(|action| !TimelineToolbarAction::DEFAULT_VISIBLE.contains(action))
+        .collect()
+}
+
+/// Remove duplicates and append actions introduced by newer builds. This
+/// keeps the alpha configuration self-correcting without version branches.
+pub fn normalize_timeline_toolbar_order(
+    configured: &[TimelineToolbarAction],
+) -> Vec<TimelineToolbarAction> {
+    let mut normalized = Vec::with_capacity(TimelineToolbarAction::ALL.len());
+    for action in configured
+        .iter()
+        .copied()
+        .chain(TimelineToolbarAction::ALL)
+    {
+        if !normalized.contains(&action) {
+            normalized.push(action);
+        }
+    }
+    normalized
+}
+
+/// A narrowly scoped edit: changing a toolbar must never publish a workspace
+/// snapshot (the dock is temporarily borrowed while its panels are drawn).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct TimelineToolbarPreferences {
+    pub visible: bool,
+    pub follow: bool,
+    pub order: Vec<TimelineToolbarAction>,
+    pub hidden: Vec<TimelineToolbarAction>,
+}
+
+impl TimelineToolbarPreferences {
+    pub fn from_config(config: &AppConfig) -> Self {
+        Self {
+            visible: config.timeline_toolbar_visible,
+            follow: config.timeline_follow_playhead,
+            order: persisted_timeline_toolbar_order(&config.timeline_toolbar_order),
+            hidden: TimelineToolbarAction::ALL.into_iter()
+                .filter(|action| config.timeline_toolbar_hidden.contains(action)).collect(),
+        }
+    }
+
+    pub fn apply(&self, config: &mut AppConfig) {
+        config.timeline_toolbar_visible = self.visible;
+        config.timeline_follow_playhead = self.follow;
+        config.timeline_toolbar_order = self.order.clone();
+        config.timeline_toolbar_hidden = self.hidden.clone();
+    }
+
+    pub fn values(&self) -> serde_json::Value {
+        serde_json::json!({
+            "timeline_toolbar_visible": self.visible,
+            "timeline_follow_playhead": self.follow,
+            "timeline_toolbar_order": self.order,
+            "timeline_toolbar_hidden": self.hidden,
+        })
+    }
+
+    pub fn owns_key(key: &str) -> bool {
+        matches!(key, "timeline_toolbar_visible" | "timeline_follow_playhead"
+            | "timeline_toolbar_order" | "timeline_toolbar_hidden")
+    }
+
+    pub fn only_changed(previous: &AppConfig, next: &AppConfig) -> bool {
+        let mut unrelated = next.clone();
+        unrelated.timeline_toolbar_visible = previous.timeline_toolbar_visible;
+        unrelated.timeline_follow_playhead = previous.timeline_follow_playhead;
+        unrelated.timeline_toolbar_order = previous.timeline_toolbar_order.clone();
+        unrelated.timeline_toolbar_hidden = previous.timeline_toolbar_hidden.clone();
+        &unrelated == previous
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Default)]
+#[serde(default)]
+pub struct UiPreferences {
+    pub sidebar_rail: crate::ui::sidebar_rail::SidebarRailState,
+    pub sidebar_shortcuts: crate::ui::sidebar_shortcuts::RailShortcuts,
+    pub toolbar: crate::ui::workspace_toolbar::ToolbarPreferences,
+    pub terminal: crate::ui::terminal::TerminalPreferences,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ControlBackdrop { #[default] Auto, Blur, Solid }
+
+/// Simple playback chrome is independent from the editing workspace.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct SimpleWorkspaceConfig {
+    pub show_menu_bar: bool,
+    pub show_toolbar: bool,
+    pub show_status_bar: bool,
+    /// Fraction of the usable travel, not absolute desktop pixels.
+    pub controls_x: f32,
+    pub controls_y: f32,
+    pub backdrop: ControlBackdrop,
+}
+impl Default for SimpleWorkspaceConfig {
+    fn default() -> Self { Self {show_menu_bar:false,show_toolbar:false,show_status_bar:false,
+        controls_x:0.5,controls_y:1.0,backdrop:ControlBackdrop::Auto} }
+}
+
+#[cfg(test)]
+mod timeline_toolbar_tests {
+    use super::*;
+
+    #[test]
+    fn timeline_navigation_default_order_matches_visual_pairs() {
+        assert_eq!(&default_timeline_toolbar_order()[..6], &[
+            TimelineToolbarAction::ZoomIn,
+            TimelineToolbarAction::ZoomOut,
+            TimelineToolbarAction::PanRight,
+            TimelineToolbarAction::PanLeft,
+            TimelineToolbarAction::FollowPlayhead,
+            TimelineToolbarAction::BringPlayheadIntoView,
+        ]);
+        assert_eq!(&default_timeline_toolbar_order()[..6], &TimelineToolbarAction::DEFAULT_VISIBLE);
+    }
+
+    #[test]
+    fn saving_default_toolbar_does_not_create_a_custom_override() {
+        assert!(AppConfig::default().timeline_toolbar_order.is_empty());
+        assert!(persisted_timeline_toolbar_order(&[]).is_empty());
+        assert!(persisted_timeline_toolbar_order(&default_timeline_toolbar_order()).is_empty());
+        let mut custom = default_timeline_toolbar_order();
+        custom.swap(0, 1);
+        assert_eq!(persisted_timeline_toolbar_order(&custom), custom);
+        assert_eq!(normalize_timeline_toolbar_order(&[]), default_timeline_toolbar_order());
+    }
+
+    #[test]
+    fn timeline_toolbar_order_self_heals_duplicates_and_missing_actions() {
+        let normalized = normalize_timeline_toolbar_order(&[
+            TimelineToolbarAction::PanRight,
+            TimelineToolbarAction::ZoomIn,
+            TimelineToolbarAction::PanRight,
+        ]);
+        assert_eq!(normalized[0], TimelineToolbarAction::PanRight);
+        assert_eq!(normalized[1], TimelineToolbarAction::ZoomIn);
+        assert_eq!(normalized.len(), TimelineToolbarAction::ALL.len());
+        for action in TimelineToolbarAction::ALL {
+            assert_eq!(
+                normalized.iter().filter(|candidate| **candidate == action).count(),
+                1
+            );
+        }
+    }
+
+    #[test]
+    fn advanced_cue_controls_start_hidden_but_navigation_starts_visible() {
+        let hidden = default_timeline_toolbar_hidden();
+        assert!(!hidden.contains(&TimelineToolbarAction::FollowPlayhead));
+        assert!(hidden.contains(&TimelineToolbarAction::AddKeyframe));
+        assert!(hidden.contains(&TimelineToolbarAction::DeleteSelection));
+    }
+
+    #[test]
+    fn toolbar_patch_cannot_carry_workspace_or_media_state() {
+        let original = AppConfig::default();
+        assert!(original.timeline_toolbar_visible);
+        let mut preferences = TimelineToolbarPreferences::from_config(&original);
+        preferences.visible = false;
+        preferences.hidden.push(TimelineToolbarAction::ZoomIn);
+        let values = preferences.values();
+        assert_eq!(values.as_object().unwrap().len(), 4);
+        assert!(values.as_object().unwrap().keys().all(|key| TimelineToolbarPreferences::owns_key(key)));
+        let updated = original.apply_patch(&values).unwrap();
+        assert_eq!(updated.workspace_dock_layout, original.workspace_dock_layout);
+        assert_eq!(updated.workspace_session, original.workspace_session);
+        assert_eq!(updated.last_media_target, original.last_media_target);
+        assert!(TimelineToolbarPreferences::only_changed(&original, &updated));
+        let mut workspace_edit = updated;
+        workspace_edit.workspace_dock_layout = Some("not a toolbar edit".into());
+        assert!(!TimelineToolbarPreferences::only_changed(&original, &workspace_edit));
+    }
+}
+
+/// Per-field adjustment sizes shared by native controls and configuration clients.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct NumericInputSteps {
+    pub normal: f64,
+    pub fine: f64,
+    pub coarse: f64,
+}
+
+impl NumericInputSteps {
+    pub fn for_step(step: f64) -> Self {
+        Self { normal: step, fine: step / 10.0, coarse: step * 10.0 }
+    }
+
+    pub fn is_valid(self) -> bool {
+        [self.normal, self.fine, self.coarse].into_iter()
+            .all(|step| step.is_finite() && (1e-9..=1e12).contains(&step))
+    }
+}
+
+#[cfg(test)]
+mod numeric_input_tests {
+    use super::*;
+
+    #[test]
+    fn numeric_input_steps_roundtrip_and_validate_through_config_contract() {
+        let mut config = AppConfig::default();
+        config.numeric_input_steps.insert("subtitle_delay_seconds".into(), NumericInputSteps { normal: 0.25, fine: 0.005, coarse: 2.0 });
+        assert!(config.validate().is_ok());
+        let reloaded: AppConfig = serde_json::from_value(serde_json::to_value(&config).unwrap()).unwrap();
+        assert_eq!(reloaded.numeric_input_steps, config.numeric_input_steps);
+        assert!(AppConfig::validate_patch_shape(&serde_json::json!({"numeric_input_steps": config.numeric_input_steps})).is_ok());
+        assert!(serde_json::from_str::<AppConfig>("{}").unwrap().numeric_input_steps.is_empty());
+        for invalid in [0.0, -1.0, f64::INFINITY, f64::NAN, 1e13] {
+            config.numeric_input_steps.get_mut("subtitle_delay_seconds").unwrap().fine = invalid;
+            assert!(config.validate().is_err());
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct PlaybackPositionEntry {
+    /// Original playable local path or remote URL. Matching uses a normalized
+    /// identity at runtime, while this value remains suitable for inspection.
+    pub target: String,
+    pub position_seconds: f64,
+    pub updated_at_unix_ms: u64,
+}
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -8,6 +428,38 @@ pub enum AppTheme {
     System,
     Light,
     Dark,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MediaTitleFormat {
+    #[default]
+    FileName,
+    FileStem,
+    Location,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ColorPalette {
+    /// The blue-gray Studio palette, shared by the Web and desktop renderers.
+    Studio,
+    /// Slate surfaces and lilac-to-rose accents inspired by pastel dashboards.
+    Pastel,
+    /// The original neutral desktop palette remains the default.
+    #[default]
+    Native,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AccentColor {
+    #[default]
+    System,
+    PealayerGreen,
+    WindowsBlue,
+    MacosBlue,
+    Custom,
 }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -56,6 +508,18 @@ pub enum PlayerDragAction {
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum PlayerClickAction {
+    PlayPause,
+    ToggleMute,
+    ToggleFullscreen,
+    BossKey,
+    ContextMenu,
+    #[default]
+    None,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum VideoBackground {
     #[default]
     Black,
@@ -63,87 +527,1064 @@ pub enum VideoBackground {
     Theme,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MotionControlMode {
+    Toggle,
+    #[default]
+    Hold,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NonUserControlVisibility {
+    Hidden,
+    #[default]
+    Dimmed,
+    Shown,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(default)]
+pub struct KeyChord {
+    /// Portable physical-key name using the keyboard-types/USB code vocabulary
+    /// (for example `KeyR`, `Digit5`, `F8`, or `Space`).
+    pub key: String,
+    pub control: bool,
+    pub alt: bool,
+    pub shift: bool,
+    pub super_key: bool,
+}
+
+impl Default for KeyChord {
+    fn default() -> Self {
+        Self {
+            key: "KeyA".to_string(),
+            control: false,
+            alt: false,
+            shift: false,
+            super_key: false,
+        }
+    }
+}
+
+impl KeyChord {
+    pub fn native_hotkey_string(&self) -> String {
+        let mut parts = Vec::new();
+        if self.shift {
+            parts.push("shift".to_string());
+        }
+        if self.control {
+            parts.push("control".to_string());
+        }
+        if self.alt {
+            parts.push("alt".to_string());
+        }
+        if self.super_key {
+            parts.push("super".to_string());
+        }
+        parts.push(self.key.clone());
+        parts.join("+")
+    }
+
+    pub fn display_name(&self) -> String {
+        let mut parts = Vec::new();
+        if self.control {
+            parts.push(
+                if cfg!(target_os = "macos") {
+                    "⌃"
+                } else {
+                    "Ctrl"
+                }
+                .to_string(),
+            );
+        }
+        if self.alt {
+            parts.push(
+                if cfg!(target_os = "macos") {
+                    "⌥"
+                } else {
+                    "Alt"
+                }
+                .to_string(),
+            );
+        }
+        if self.shift {
+            parts.push(
+                if cfg!(target_os = "macos") {
+                    "⇧"
+                } else {
+                    "Shift"
+                }
+                .to_string(),
+            );
+        }
+        if self.super_key {
+            parts.push(
+                if cfg!(target_os = "macos") {
+                    "⌘"
+                } else {
+                    "Super"
+                }
+                .to_string(),
+            );
+        }
+        let key = self
+            .key
+            .strip_prefix("Key")
+            .or_else(|| self.key.strip_prefix("Digit"))
+            .unwrap_or(&self.key);
+        parts.push(key.to_string());
+        parts.join(if cfg!(target_os = "macos") { "" } else { "+" })
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type", rename_all = "snake_case")]
+pub enum HardwareKeyBindingAction {
+    Invoke {
+        action_id: String,
+        label: String,
+    },
+    Toggle {
+        on_action_id: String,
+        off_action_id: String,
+    },
+    SetPwm {
+        percent: f64,
+    },
+    Hold {
+        press_action_id: String,
+        release_action_id: String,
+        press_label: String,
+        release_label: String,
+    },
+}
+
+impl Default for HardwareKeyBindingAction {
+    fn default() -> Self {
+        Self::Invoke {
+            action_id: String::new(),
+            label: String::new(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct HardwareKeyBinding {
+    pub id: String,
+    pub channel_key: String,
+    pub chord: KeyChord,
+    pub then: Vec<KeyChord>,
+    pub action: HardwareKeyBindingAction,
+    pub global: bool,
+    pub enabled: bool,
+}
+
+impl Default for HardwareKeyBinding {
+    fn default() -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            channel_key: String::new(),
+            chord: KeyChord::default(),
+            then: Vec::new(),
+            action: HardwareKeyBindingAction::default(),
+            global: false,
+            enabled: true,
+        }
+    }
+}
+
+impl HardwareKeyBinding {
+    pub fn display_shortcut(&self) -> String {
+        std::iter::once(&self.chord).chain(&self.then)
+            .map(KeyChord::display_name).collect::<Vec<_>>().join(" → ")
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StatusBarFpsMode {
+    Media,
+    Ui,
+    #[default]
+    Auto,
+}
+
+impl StatusBarFpsMode {
+    pub fn next(self) -> Self {
+        match self { Self::Media => Self::Ui, Self::Ui => Self::Auto, Self::Auto => Self::Media }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum StatusBarWidget {
+    Fps, Hot, Estop, Connection, StatusRgb, Voltage, Current, Temperature,
+    Warnings, Timeline, Progress, Chart, Message, Workspace,
+}
+
+impl StatusBarWidget {
+    pub const COUNT: usize = 14;
+    pub const ALL: [Self; Self::COUNT] = [Self::Fps, Self::Hot, Self::Estop, Self::Connection, Self::StatusRgb,
+        Self::Voltage, Self::Current, Self::Temperature, Self::Warnings, Self::Timeline,
+        Self::Progress, Self::Chart, Self::Message, Self::Workspace];
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StatusChartMetric { #[default] Voltage, Current, Temperature }
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum StatusConnectionIcon { #[default] Plug, Circle, Controller, None }
+
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(default)]
 pub struct StatusBarConfig {
+    pub connection_icon: StatusConnectionIcon,
+    pub connection_mode: bool,
+    pub chart_paused: bool,
+    pub dividers: bool,
+    pub semantic_colors: bool,
+    pub monospace: [bool; StatusBarWidget::COUNT],
+    pub trailing: [bool; StatusBarWidget::COUNT],
+    /// Optional user-defined bounds in mV, mA and centi-C. No guessed safe ranges.
+    pub metric_limits: [[Option<i32>; 2]; 3],
     pub media_rate: bool,
+    pub fps_mode: StatusBarFpsMode,
     pub hardware: bool,
     pub telemetry: bool,
+    pub status_rgb: bool,
+    pub warnings: bool,
     pub workspace: bool,
+    pub voltage: bool,
+    pub current: bool,
+    pub temperature: bool,
+    pub hot: bool,
+    pub estop: bool,
+    pub timeline: bool,
+    pub message: bool,
+    pub progress: bool,
+    pub chart: bool,
+    pub chart_metric: StatusChartMetric,
+    pub order: [StatusBarWidget; StatusBarWidget::COUNT],
 }
 
 impl Default for StatusBarConfig {
     fn default() -> Self {
         Self {
+            connection_icon: StatusConnectionIcon::Plug, connection_mode: false, chart_paused: false,
+            dividers: true, semantic_colors: false,
+            monospace: [false; StatusBarWidget::COUNT],
+            trailing: [false, false, false, false, false, false, false, false, false, false, false, false, false, true],
+            metric_limits: [[None; 2]; 3],
             media_rate: true,
+            fps_mode: StatusBarFpsMode::Auto,
             hardware: true,
             telemetry: true,
+            status_rgb: true,
+            warnings: true,
             workspace: true,
+            voltage: true, current: true, temperature: true, hot: true, estop: true,
+            timeline: true, message: true, progress: true, chart: false,
+            chart_metric: StatusChartMetric::Voltage, order: StatusBarWidget::ALL,
         }
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+impl StatusBarConfig {
+    pub fn at_end(&self, item: StatusBarWidget) -> bool { self.trailing[item as usize] }
+    pub fn uses_monospace(&self, item: StatusBarWidget) -> bool { self.monospace[item as usize] }
+    pub fn place_at_end(&mut self, item: StatusBarWidget, end: bool) { self.trailing[item as usize] = end; }
+    pub fn ordered(&self) -> Vec<StatusBarWidget> {
+        let mut result = Vec::with_capacity(StatusBarWidget::COUNT);
+        for item in self.order.into_iter().chain(StatusBarWidget::ALL) {
+            if !result.contains(&item) { result.push(item); }
+        }
+        result
+    }
+
+    pub fn visible(&self, item: StatusBarWidget) -> bool {
+        use StatusBarWidget::*;
+        match item {
+            Fps => self.media_rate, Connection => self.hardware, StatusRgb => self.status_rgb,
+            Voltage => self.telemetry && self.voltage, Current => self.telemetry && self.current,
+            Temperature => self.telemetry && self.temperature, Hot => self.hot, Estop => self.estop,
+            Warnings => self.warnings, Timeline => self.timeline, Progress => self.progress,
+            Chart => self.chart, Message => self.message, Workspace => self.workspace,
+        }
+    }
+
+    pub fn set_visible(&mut self, item: StatusBarWidget, visible: bool) {
+        use StatusBarWidget::*;
+        if visible && matches!(item, Voltage | Current | Temperature) { self.telemetry = true; }
+        *match item {
+            Fps => &mut self.media_rate, Connection => &mut self.hardware, StatusRgb => &mut self.status_rgb,
+            Voltage => &mut self.voltage, Current => &mut self.current, Temperature => &mut self.temperature,
+            Hot => &mut self.hot, Estop => &mut self.estop, Warnings => &mut self.warnings, Timeline => &mut self.timeline,
+            Progress => &mut self.progress, Chart => &mut self.chart, Message => &mut self.message,
+            Workspace => &mut self.workspace,
+        } = visible;
+    }
+
+    pub fn reorder(&mut self, moved: StatusBarWidget, target: StatusBarWidget, after: bool) -> bool {
+        if moved == target { return false; }
+        let mut order = self.ordered();
+        order.retain(|item| *item != moved);
+        let index = order.iter().position(|item| *item == target).expect("known widget") + usize::from(after);
+        order.insert(index, moved);
+        let next: [StatusBarWidget; StatusBarWidget::COUNT] = order.try_into().expect("complete widget set");
+        if next == self.order { false } else { self.order = next; true }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+pub struct WindowGeometry {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub maximized: bool,
+}
+
+impl WindowGeometry {
+    pub fn is_valid(self) -> bool {
+        self.x.is_finite()
+            && self.y.is_finite()
+            && self.width.is_finite()
+            && self.height.is_finite()
+            && (420.0..=16_384.0).contains(&self.width)
+            && (300.0..=16_384.0).contains(&self.height)
+    }
+}
+
+/// User-facing workspace state that is meaningful independently of egui's
+/// internal widget memory. Window/dialog positions and scroll offsets live in
+/// the serialized egui memory; these fields restore which surfaces were open
+/// and which tabs were active inside them.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+#[serde(default)]
+pub struct WorkspaceDialogs {
+    pub subtitles: bool,
+    pub audio: bool,
+    pub open_location: bool,
+    pub shortcuts: bool,
+    pub about: bool,
+    pub about_tab: usize,
+    pub preferences: bool,
+    pub preferences_tab: usize,
+    pub board_information: bool,
+    pub board_information_tab: usize,
+    pub channel_manager: bool,
+    pub hardware_control_key: Option<String>,
+    pub hardware_channel_detail_active: bool,
+    pub effects_manager: bool,
+    pub effects_selection: Option<String>,
+    pub workspace_profiles: bool,
+}
+
+/// A complete reusable workspace snapshot. The same structure backs the
+/// automatic last-session restore and user-named profiles.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct WorkspaceProfile {
+    /// Stable machine-facing identity. The map key remains authoritative; this
+    /// human-facing caption can be renamed freely without breaking RPC callers.
+    pub name: String,
+    /// Stable Phosphor icon name shared by the native and web renderers.
+    pub icon: String,
+    /// Explicit user-defined ordering. UI surfaces never sort by caption.
+    pub order: i32,
+    pub nle: bool,
+    pub window_geometry: Option<WindowGeometry>,
+    pub dock_layout: Option<String>,
+    pub sidebar_rail: crate::ui::sidebar_rail::SidebarRailState,
+    pub dialogs: WorkspaceDialogs,
+    /// Serialized egui memory contains movable window rectangles, active dock
+    /// leaves, and every stable ScrollArea offset.
+    pub egui_memory: Option<String>,
+}
+
+impl Default for WorkspaceProfile {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            icon: String::new(),
+            order: 0,
+            nle: true,
+            window_geometry: None,
+            dock_layout: None,
+            sidebar_rail: crate::ui::sidebar_rail::SidebarRailState::default(),
+            dialogs: WorkspaceDialogs::default(),
+            egui_memory: None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UiAnimationMode { #[default] System, Enabled, Disabled }
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UiControlDensity { ExtraCompact, #[default] Compact, Regular, Comfortable, Spacious }
+impl UiControlDensity {
+    pub const ALL: [Self; 5] = [Self::ExtraCompact, Self::Compact, Self::Regular, Self::Comfortable, Self::Spacious];
+
+    pub const fn base_height(self) -> f32 {
+        match self {
+            Self::ExtraCompact => 18.0,
+            Self::Compact => 24.0,
+            Self::Regular => 28.0,
+            Self::Comfortable => 32.0,
+            Self::Spacious => 36.0,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum UiFontFamily { #[default] System, Bundled, Vazirmatn, Custom }
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum WorkspaceUi { #[default] CraftUi, EguiDock }
+
+/// Presentation choices do not replace the workspace or its saved controls.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeMonitorStyle { #[default] Compact, FilmCraft }
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MonitorAspect { #[default] Source, Wide, Classic, Cinema }
+impl MonitorAspect {
+    pub fn ratio(self, source: f64) -> f64 {
+        match self { Self::Source => source, Self::Wide => 16.0/9.0,
+            Self::Classic => 4.0/3.0, Self::Cinema => 2.35 }
+    }
+    pub fn label(self) -> &'static str {
+        match self { Self::Source => "Fit", Self::Wide => "16:9", Self::Classic => "4:3", Self::Cinema => "2.35:1" }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MonitorResolution { #[default] Full, Half, Quarter, Eighth }
+impl MonitorResolution {
+    pub fn divisor(self) -> i32 { match self { Self::Full=>1, Self::Half=>2, Self::Quarter=>4, Self::Eighth=>8 } }
+    pub fn label(self) -> &'static str { match self { Self::Full=>"Full", Self::Half=>"1/2", Self::Quarter=>"1/4", Self::Eighth=>"1/8" } }
+}
+
+/// Preview presentation never overwrites decoder-owned source metadata.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct MonitorPreview {
+    pub aspect: MonitorAspect,
+    pub resolution: MonitorResolution,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum NativeTimelineStyle { #[default] Standard, FilmCraft }
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
+#[serde(rename_all = "snake_case")]
+pub enum ControlBarAction { PlayPause, Stop, Back, Forward, PreviousChapter, NextChapter,
+    VideoTrack, AudioTrack, SubtitleTrack, Fullscreen, Pin, AudioSettings, SubtitleSettings, Mute, Preferences }
+impl ControlBarAction {
+    pub const COUNT: usize = 15;
+    pub const ALL: [Self; Self::COUNT] = [Self::PlayPause,Self::Stop,Self::Back,Self::Forward,
+        Self::PreviousChapter,Self::NextChapter,Self::VideoTrack,Self::AudioTrack,Self::SubtitleTrack,
+        Self::Fullscreen,Self::Pin,Self::AudioSettings,Self::SubtitleSettings,Self::Mute,Self::Preferences];
+}
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ControlBarSurface { Simple, Monitor }
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ControlBarLayout {
+    pub order: [ControlBarAction; ControlBarAction::COUNT],
+    pub hidden: [bool; ControlBarAction::COUNT],
+    pub end: [bool; ControlBarAction::COUNT],
+}
+impl ControlBarLayout {
+    pub fn defaults(surface: ControlBarSurface) -> Self {
+        use ControlBarAction::*;
+        let mut result = Self {order:ControlBarAction::ALL,hidden:[true;ControlBarAction::COUNT],end:[false;ControlBarAction::COUNT]};
+        let visible: &[ControlBarAction] = match surface {
+            ControlBarSurface::Simple => &[Back,PlayPause,Forward,Fullscreen,Pin,AudioSettings,SubtitleSettings,Mute],
+            ControlBarSurface::Monitor => &[PlayPause,Stop,Back,Forward,Mute,Fullscreen],
+        };
+        for action in visible { result.hidden[*action as usize]=false; }
+        for action in [Fullscreen,Pin,VideoTrack,AudioTrack,SubtitleTrack,AudioSettings,SubtitleSettings,Mute,Preferences] { result.end[action as usize]=true; }
+        if surface==ControlBarSurface::Simple {
+            let order:Vec<_>=[Back,PlayPause,Forward].into_iter().chain(ControlBarAction::ALL).fold(Vec::new(),|mut list,a|{if !list.contains(&a){list.push(a)} list});
+            result.order=order.try_into().unwrap();
+        } else {
+            // Volume is grouped with Mute; Fullscreen follows it at the end.
+            let mut order = ControlBarAction::ALL.to_vec();
+            order.retain(|action| *action != Fullscreen);
+            order.push(Fullscreen);
+            result.order = order.try_into().unwrap();
+        }
+        result
+    }
+    pub fn ordered(&self) -> Vec<ControlBarAction> {
+        self.order.into_iter().chain(ControlBarAction::ALL).fold(Vec::new(),|mut order,a|{if !order.contains(&a){order.push(a)} order})
+    }
+    pub fn move_to(&mut self, action:ControlBarAction,target:ControlBarAction,after:bool) -> bool {
+        let mut order=self.ordered();
+        let changed=move_ordered_action(&mut order,action,target,after);
+        let side_changed=self.end[action as usize]!=self.end[target as usize];
+        self.end[action as usize]=self.end[target as usize];
+        self.order=order.try_into().unwrap(); changed||side_changed
+    }
+}
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default)]
+pub struct ControlBarsConfig { pub simple:ControlBarLayout, pub monitor:ControlBarLayout }
+impl Default for ControlBarsConfig { fn default()->Self {Self {
+    simple:ControlBarLayout::defaults(ControlBarSurface::Simple),monitor:ControlBarLayout::defaults(ControlBarSurface::Monitor),
+}} }
+impl ControlBarsConfig {
+    pub fn layout(&self,surface:ControlBarSurface)->ControlBarLayout {match surface {ControlBarSurface::Simple=>self.simple,ControlBarSurface::Monitor=>self.monitor}}
+    pub fn layout_mut(&mut self,surface:ControlBarSurface)->&mut ControlBarLayout {match surface {ControlBarSurface::Simple=>&mut self.simple,ControlBarSurface::Monitor=>&mut self.monitor}}
+}
+pub(crate) fn move_ordered_action<T:Copy+PartialEq>(order:&mut Vec<T>,action:T,target:T,after:bool)->bool {
+    if action==target || !order.contains(&target) || !order.contains(&action) {return false;}
+    let before=order.clone(); order.retain(|candidate|*candidate!=action);
+    let index=order.iter().position(|candidate|*candidate==target).unwrap();
+    order.insert(index+usize::from(after),action); *order!=before
+}
+
+#[cfg(test)]
+mod control_bar_tests {
+    use super::*;
+    #[test]
+    fn layouts_preserve_hidden_identity_and_sides_across_reorder_and_roundtrip() {
+        use ControlBarAction::*;
+        let mut bars=ControlBarsConfig::default();
+        assert_eq!(bars.simple.ordered()[..3], [Back,PlayPause,Forward]);
+        assert!(!bars.monitor.hidden[Stop as usize]);
+        assert!(bars.simple.hidden[Stop as usize]);
+        bars.simple.hidden[Back as usize]=true;
+        assert!(bars.simple.move_to(Back,Mute,true));
+        assert!(bars.simple.end[Back as usize]);
+        assert!(bars.simple.hidden[Back as usize]);
+        assert_eq!(bars.monitor,ControlBarLayout::defaults(ControlBarSurface::Monitor));
+        let restored:ControlBarsConfig=serde_json::from_value(serde_json::to_value(bars).unwrap()).unwrap();
+        assert_eq!(restored,bars);
+        assert_eq!(restored.simple.ordered().len(),ControlBarAction::COUNT);
+        assert!(!bars.simple.move_to(Mute,Mute,true));
+    }
+
+    #[test]
+    fn monitor_defaults_keep_volume_and_fullscreen_without_redundant_pickers() {
+        use ControlBarAction::*;
+        let layout = ControlBarLayout::defaults(ControlBarSurface::Monitor);
+        assert_eq!(layout.ordered().last(), Some(&Fullscreen));
+        assert!(layout.end[Fullscreen as usize] && layout.end[Mute as usize]);
+        for action in [Mute, Fullscreen] { assert!(!layout.hidden[action as usize]); }
+        for action in [VideoTrack, AudioTrack, SubtitleTrack] { assert!(layout.hidden[action as usize]); }
+        // Saved layouts keep their exact indexed flags and order, not a new
+        // schema that discards user customization when adding the widget.
+        let saved: ControlBarLayout = serde_json::from_value(serde_json::to_value(layout).unwrap()).unwrap();
+        assert_eq!(saved, layout);
+    }
+    #[test]
+    fn repeated_order_entries_cannot_lose_other_actions_and_malformed_ids_fail() {
+        let mut layout=ControlBarLayout::defaults(ControlBarSurface::Monitor);
+        layout.order=[ControlBarAction::Mute;ControlBarAction::COUNT];
+        assert_eq!(layout.ordered().len(),ControlBarAction::COUNT);
+        let mut json=serde_json::to_value(ControlBarsConfig::default()).unwrap();
+        json["monitor"]["order"][0]=serde_json::json!("not_an_action");
+        assert!(serde_json::from_value::<ControlBarsConfig>(json.clone()).is_err());
+        json["monitor"]["order"]=serde_json::json!([]);
+        assert!(serde_json::from_value::<ControlBarsConfig>(json).is_err());
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct SeekbarMarkersConfig {
+    pub chapter_color: String,
+    pub active_chapter_color: String,
+    pub keyframe_color: String,
+}
+
+pub fn default_designer_cue_colors() -> std::collections::BTreeMap<String, String> {
+    serde_json::from_str(include_str!("../assets/themes/designer-cue-colors.json")).expect("bundled cue palette")
+}
+
+impl Default for SeekbarMarkersConfig {
+    fn default() -> Self {
+        Self { chapter_color: "#969696".into(), active_chapter_color: "#B0B0B0".into(), keyframe_color: "#EF4444".into() }
+    }
+}
+
+#[cfg(test)]
+mod seekbar_marker_tests {
+    use super::*;
+    #[test]
+    fn designer_palette_validates_roundtrips_and_is_in_the_live_contract() {
+        let mut config = AppConfig::default();
+        assert_eq!(config.effect_designer_cue_colors.len(),10);
+        config.effect_designer_cue_colors.insert("relay".into(), "#F59E0B".into());
+        assert!(config.validate().is_ok());
+        let saved = serde_json::to_value(&config).unwrap();
+        assert_eq!(serde_json::from_value::<AppConfig>(saved).unwrap().effect_designer_cue_colors, config.effect_designer_cue_colors);
+        let controls = crate::preferences_contract::preference_controls(&config);
+        assert_eq!(controls.iter().filter(|c| c.key.starts_with("effect_designer_cue_colors.")).count(),10);
+        let status = crate::platform::interop::PlayerStatusResponse { effect_designer_cue_colors: config.effect_designer_cue_colors.clone(), ..Default::default() };
+        assert_eq!(serde_json::to_value(status).unwrap()["effect_designer_cue_colors"]["relay"],"#F59E0B");
+        config.effect_designer_cue_colors.insert("relay".into(),"bad".into());
+        assert!(config.validate().unwrap_err().contains("effect_designer_cue_colors.relay"));
+    }
+    #[test]
+    fn marker_defaults_validation_and_roundtrip() {
+        let mut config = AppConfig::default();
+        assert_eq!(config.seekbar_markers.chapter_color, "#969696");
+        assert_eq!(config.seekbar_markers.keyframe_color, "#EF4444");
+        config.seekbar_markers.chapter_color = "#F59E0B".into();
+        assert!(config.validate().is_ok());
+        let roundtrip: AppConfig = serde_json::from_str(&serde_json::to_string(&config).unwrap()).unwrap();
+        assert_eq!(roundtrip.seekbar_markers, config.seekbar_markers);
+        config.seekbar_markers.keyframe_color = "invalid".into();
+        assert!(config.validate().unwrap_err().contains("seekbar_markers.keyframe_color"));
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct AppConfig {
+    pub external_mpv: crate::mpv::external::Settings,
     pub volume: f64,
     pub is_muted: bool,
+    /// mpv audio-device name, including its backend prefix; `auto` uses OS default.
+    pub audio_device: String,
+    /// Empty means SFX follows the main player output selection.
+    pub sfx_audio_device: String,
+    pub audio_effects: Vec<crate::mpv::sfx::AudioEffect>,
     pub pin_controls: bool,
+    pub simple_workspace: SimpleWorkspaceConfig,
     pub show_remaining_time: bool,
+    pub open_url_multiline: bool,
+    pub open_url_history_expanded: bool,
+    pub open_url_recent_click_edits: bool,
+    pub open_url_fetch_remote_info: bool,
+    pub open_url_fetch_remote_thumbnail: bool,
+    pub open_url_use_proxy: bool,
+    pub clipboard_url_detection: bool,
+    pub clipboard_link_behavior: crate::remote_location::ClipboardLinkBehavior,
+    pub open_url_auto_proxy: bool,
+    pub remote_folder_auto_next: bool,
+    pub remote_folder_thumbnails: bool,
+    pub remote_folder_view: crate::remote_location::ViewMode,
+    pub open_url_proxy_url: Option<String>,
     pub recent_media: Vec<PathBuf>,
+    pub last_media_target: Option<PathBuf>,
+    pub last_media_paused: bool,
+    pub restore_last_media_on_startup: bool,
+    pub remember_playback_position: bool,
+    pub playback_position_history_limit: u32,
+    pub playback_positions: Vec<PlaybackPositionEntry>,
     pub app_name: Option<String>,
+    pub app_description: Option<String>,
+    pub local_media_title_format: MediaTitleFormat,
+    pub remote_media_title_format: MediaTitleFormat,
     pub app_icon: Option<PathBuf>,
+    pub app_icon_preset: AppIconPreset,
+    pub app_icon_playing: Option<PathBuf>,
+    pub app_icon_paused: Option<PathBuf>,
+    pub app_icon_stopped: Option<PathBuf>,
     pub app_publisher: Option<String>,
     pub app_copyright: Option<String>,
     pub theme: AppTheme,
+    pub color_palette: ColorPalette,
+    pub accent_color: AccentColor,
+    pub custom_accent_color: Option<String>,
+    pub ui_animation_mode: UiAnimationMode,
+    pub ui_control_density: UiControlDensity,
+    pub ui_font_family: UiFontFamily,
+    pub monospace_font_family: UiFontFamily,
+    pub ui_font_name: String,
+    pub monospace_font_name: String,
+    pub workspace_ui: WorkspaceUi,
+    pub native_monitor_style: NativeMonitorStyle,
+    pub native_transport_style: NativeMonitorStyle,
+    pub monitor_preview: MonitorPreview,
+    pub native_timeline_style: NativeTimelineStyle,
+    pub craft_show_close_buttons: bool,
+    pub craft_show_collapse_buttons: bool,
+    pub preferences_grouped_navigation: bool,
     pub language: AppLanguage,
     pub direction: AppDirection,
     pub hardware_endpoint: Option<String>,
     pub auto_connect_hardware: bool,
     pub pause_on_hardware_disconnect: bool,
+    /// Owner consent policy; never overrides PCController's production lock.
+    pub allow_unattended_hardware_takeover: bool,
     pub click_player_to_toggle: bool,
+    pub video_click_frame_only: bool,
+    pub playback_speed: f64,
+    pub temporary_fast_forward_speed: f64,
+    pub subtitle_font_size: f64,
+    pub numeric_input_steps: BTreeMap<String, NumericInputSteps>,
+    /// Prefer compact human units (for example `1s`) in editable time fields.
+    /// When disabled, millisecond-backed fields are always rendered as ms.
+    pub human_readable_time_units: bool,
+    pub subtitle_delay_seconds: f64,
+    pub subtitle_position_percent: f64,
+    pub subtitle_direction: crate::subtitle::SubtitleDirection,
+    pub subtitle_alignment: crate::subtitle::SubtitleAlignment,
+    pub subtitle_text_replacements: Vec<crate::subtitle::SubtitleReplacement>,
+    pub audio_delay_seconds: f64,
     pub show_subseconds: bool,
+    pub seekbar_hover_thumbnails: bool,
+    pub nle_seekbar_hover_thumbnails: bool,
+    pub seekbar_markers: SeekbarMarkersConfig,
+    pub effect_designer_cue_colors: std::collections::BTreeMap<String, String>,
+    pub consistent_video_aspect_ratio: bool,
+    pub always_on_top: AlwaysOnTopMode,
+    pub quick_seek_seconds: f64,
+    pub frame_step_count: u32,
     pub wheel_seek_seconds: f64,
     pub osd_position: OsdPosition,
     pub osd_timeout_seconds: f32,
     pub paused_drag_action: PlayerDragAction,
     pub playing_drag_action: PlayerDragAction,
+    pub middle_click_action: PlayerClickAction,
+    pub mouse_bindings: crate::pointer_bindings::Bindings,
+    pub middle_hold_action: PlayerDragAction,
+    pub right_click_action: PlayerClickAction,
+    pub right_hold_action: PlayerDragAction,
     pub fullscreen_video_background: VideoBackground,
+    pub motion_control_mode: MotionControlMode,
+    pub compact_hardware_controls: bool,
+    pub compact_timeline_tracks: bool,
+    /// Keep cue labels inside their clip bounds and elide long text. Disable
+    /// this to preserve the legacy overflow behavior for users who prefer it.
+    pub timeline_hide_cue_text_overflow: bool,
+    pub timeline_cue_editor_presentation: TimelineCueEditorPresentation,
+    pub timeline_header_wheel_vertical_scroll: bool,
+    pub timeline_plain_wheel_action: TimelineWheelBehavior,
+    pub timeline_ctrl_wheel_action: TimelineWheelBehavior,
+    pub timeline_shift_wheel_action: TimelineWheelBehavior,
+    pub timeline_alt_wheel_action: TimelineWheelBehavior,
+    pub timeline_middle_button_pan: bool,
+    pub timeline_middle_axis_lock_modifiers: bool,
+    pub timeline_animated_navigation: bool,
+    pub timeline_navigation_transition_ms: u32,
+    /// Follow an advancing playhead and ease the viewport forward before it
+    /// reaches the trailing edge.
+    pub timeline_follow_playhead: bool,
+    pub timeline_subtitle_segments: bool,
+    pub timeline_toolbar_visible: bool,
+    pub timeline_toolbar_order: Vec<TimelineToolbarAction>,
+    pub timeline_toolbar_hidden: Vec<TimelineToolbarAction>,
+    pub non_user_control_visibility: NonUserControlVisibility,
+    pub prefix_relay_identifiers: bool,
+    pub live_pwm_updates: bool,
+    pub pwm_card: PwmCardPreferences,
+    pub hardware_actions_on_press: bool,
+    /// Master policy for built-in transport shortcuts and local hardware
+    /// bindings while the Pealayer window has keyboard focus.
+    pub keyboard_shortcuts_enabled: bool,
+    /// Accept OS media-key/session commands, including while in the background.
+    pub media_keys_enabled: bool,
+    pub media_keys_background_enabled: bool,
+    pub application_shortcuts: crate::application_shortcuts::ApplicationShortcuts,
+    /// Allows bindings explicitly marked global to be registered with the OS
+    /// and invoked while another application has focus.
+    pub global_hardware_hotkeys_enabled: bool,
+    pub hardware_number_shortcuts_enabled: bool,
+    pub hardware_key_bindings: Vec<HardwareKeyBinding>,
+    pub show_estop_control: bool,
+    pub confirm_estop_release: bool,
+    /// Hosts the PWA, REST, WebSocket, JSON-RPC, and HTTP IPC surfaces.
+    pub web_enabled: bool,
+    /// One or more literal IP addresses. Wildcards (`0.0.0.0` / `::`) bind
+    /// every interface; concrete values are populated from real NIC discovery.
+    pub web_listen_addresses: Vec<String>,
+    pub web_port: u16,
+    pub binary_udp: crate::server::binary_udp::Config,
+    /// Accept state-changing player, window, OSD, and hardware commands from
+    /// HTTP/WebSocket clients. Read-only status remains available.
+    pub web_allow_control: bool,
+    /// Permit reading or changing the complete application configuration.
+    pub web_allow_configuration: bool,
+    /// Permit browsing, thumbnailing, renaming, or trashing host files.
+    pub web_allow_file_access: bool,
+    /// Permit binary update upload, download, staging, and activation routes.
+    pub web_allow_updates: bool,
+    /// Push live player/hardware state over WebSocket.
+    pub web_sync_state: bool,
+    /// Maximum interval between WebSocket state snapshots.
+    pub web_sync_interval_ms: u32,
+    pub single_instance: bool,
+    pub window_magnetic_snap: bool,
+    pub window_magnetic_snap_distance: u32,
+    pub windows_mica_backdrop: bool,
+    pub windows_dwm_theming: bool,
+    /// Supply the MPV framebuffer as the Windows taskbar preview instead of
+    /// showing the complete application chrome.
+    pub windows_video_taskbar_thumbnail: bool,
+    /// Show native playback actions below the Windows taskbar preview.
+    pub windows_thumbnail_toolbar: bool,
+    /// Publish persistent Windows Jump List tasks for the taskbar and Start
+    /// menu.
+    pub windows_jump_list_quick_actions: bool,
+    pub opengl_vsync: bool,
+    /// Keep libmpv frames repainting while Windows runs its modal title-bar
+    /// move/resize loop. Disable this only as a compatibility fallback for a
+    /// graphics driver that cannot present smoothly during native movement.
+    pub live_video_during_window_move: bool,
+    /// Pace live move/resize repaint requests to the Windows desktop
+    /// compositor instead of the media frame rate. This is ignored on other
+    /// platforms and while live video movement is disabled.
+    pub compositor_paced_window_move: bool,
+    pub native_dialog_windows: bool,
+    pub auto_reload_config: bool,
     pub status_bar: StatusBarConfig,
+    pub control_bars: ControlBarsConfig,
+    #[serde(default)]
+    pub ui: UiPreferences,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window_geometry: Option<WindowGeometry>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub workspace_dock_layout: Option<String>,
+    pub workspace_session: WorkspaceProfile,
+    pub workspace_profiles: BTreeMap<String, WorkspaceProfile>,
+    #[serde(default)]
+    pub workspace_profiles_initialized: bool,
+    #[serde(default)]
+    pub active_workspace_profile: Option<String>,
+    /// One unsynchronised working copy. PCController remains the effect
+    /// catalog owner; this lets authors keep editing while it is offline and
+    /// publish the draft when the coordinator returns.
+    #[serde(default)]
+    pub effect_working_draft: Option<crate::app::ControllerEffectDraft>,
+    /// Last media-scoped cue arrangement. This contains only stable
+    /// PCController references and cached presentation metadata, never the
+    /// controller-owned sequence program.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub effect_cue_session: Option<EffectCueSession>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct EffectCueSession {
+    pub media_target: String,
+    pub timeline: crate::four_d::models::Timeline,
 }
 
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            external_mpv: crate::mpv::external::Settings::default(),
             volume: 100.0,
             is_muted: false,
+            audio_device: "auto".to_string(),
+            sfx_audio_device: String::new(),
+            audio_effects: Vec::new(),
             pin_controls: false,
+            simple_workspace: SimpleWorkspaceConfig::default(),
             show_remaining_time: false,
+            open_url_multiline: true,
+            open_url_history_expanded: true,
+            open_url_recent_click_edits: true,
+            open_url_fetch_remote_info: true,
+            open_url_fetch_remote_thumbnail: true,
+            open_url_use_proxy: true,
+            clipboard_url_detection: true,
+            clipboard_link_behavior: crate::remote_location::ClipboardLinkBehavior::default(),
+            open_url_auto_proxy: true,
+            remote_folder_auto_next: false,
+            remote_folder_thumbnails: true,
+            remote_folder_view: Default::default(),
+            open_url_proxy_url: None,
             recent_media: Vec::new(),
+            last_media_target: None,
+            last_media_paused: false,
+            restore_last_media_on_startup: true,
+            remember_playback_position: true,
+            playback_position_history_limit: DEFAULT_PLAYBACK_POSITION_HISTORY_LIMIT,
+            playback_positions: Vec::new(),
             app_name: None,
+            app_description: None,
+            local_media_title_format: MediaTitleFormat::FileName,
+            remote_media_title_format: MediaTitleFormat::FileName,
             app_icon: None,
+            app_icon_preset: AppIconPreset::Current,
+            app_icon_playing: None,
+            app_icon_paused: None,
+            app_icon_stopped: None,
             app_publisher: None,
             app_copyright: None,
             theme: AppTheme::System,
+            color_palette: ColorPalette::Native,
+            accent_color: AccentColor::System,
+            custom_accent_color: None,
+            ui_animation_mode: UiAnimationMode::System,
+            ui_control_density: UiControlDensity::Compact,
+            ui_font_family: UiFontFamily::System,
+            monospace_font_family: UiFontFamily::System,
+            ui_font_name: String::new(),
+            monospace_font_name: String::new(),
+            workspace_ui: WorkspaceUi::CraftUi,
+            native_monitor_style: NativeMonitorStyle::Compact,
+            native_transport_style: NativeMonitorStyle::Compact,
+            monitor_preview: MonitorPreview::default(),
+            native_timeline_style: NativeTimelineStyle::Standard,
+            craft_show_close_buttons: true,
+            craft_show_collapse_buttons: false,
+            preferences_grouped_navigation: true,
             language: AppLanguage::System,
             direction: AppDirection::Auto,
             hardware_endpoint: None,
             auto_connect_hardware: true,
             pause_on_hardware_disconnect: true,
+            allow_unattended_hardware_takeover: false,
             click_player_to_toggle: true,
+            video_click_frame_only: true,
+            playback_speed: 1.0,
+            temporary_fast_forward_speed: 2.0,
+            subtitle_font_size: 55.0,
+            numeric_input_steps: BTreeMap::new(),
+            human_readable_time_units: true,
+            subtitle_delay_seconds: 0.0,
+            subtitle_position_percent: 100.0,
+            subtitle_direction: crate::subtitle::SubtitleDirection::Auto,
+            subtitle_alignment: crate::subtitle::SubtitleAlignment::Center,
+            subtitle_text_replacements: crate::subtitle::default_text_replacements(),
+            audio_delay_seconds: 0.0,
             show_subseconds: true,
+            seekbar_hover_thumbnails: false,
+            nle_seekbar_hover_thumbnails: false,
+            seekbar_markers: SeekbarMarkersConfig::default(),
+            effect_designer_cue_colors: default_designer_cue_colors(),
+            consistent_video_aspect_ratio: true,
+            always_on_top: AlwaysOnTopMode::Never,
+            quick_seek_seconds: 10.0,
+            frame_step_count: 1,
             wheel_seek_seconds: 5.0,
             osd_position: OsdPosition::TopLeft,
             osd_timeout_seconds: 3.5,
             paused_drag_action: PlayerDragAction::MoveWindow,
             playing_drag_action: PlayerDragAction::TemporaryFastForward,
+            middle_click_action: PlayerClickAction::ToggleFullscreen,
+            mouse_bindings: Default::default(),
+            middle_hold_action: PlayerDragAction::None,
+            right_click_action: PlayerClickAction::ContextMenu,
+            right_hold_action: PlayerDragAction::Seek,
             fullscreen_video_background: VideoBackground::Black,
+            motion_control_mode: MotionControlMode::Hold,
+            compact_hardware_controls: false,
+            compact_timeline_tracks: true,
+            timeline_hide_cue_text_overflow: true,
+            timeline_cue_editor_presentation: TimelineCueEditorPresentation::Dialog,
+            timeline_header_wheel_vertical_scroll: true,
+            timeline_plain_wheel_action: TimelineWheelBehavior::VerticalScroll,
+            timeline_ctrl_wheel_action: TimelineWheelBehavior::Zoom,
+            timeline_shift_wheel_action: TimelineWheelBehavior::HorizontalScroll,
+            timeline_alt_wheel_action: TimelineWheelBehavior::Zoom,
+            timeline_middle_button_pan: true,
+            timeline_middle_axis_lock_modifiers: true,
+            timeline_animated_navigation: true,
+            timeline_navigation_transition_ms: 100,
+            timeline_follow_playhead: false,
+            timeline_subtitle_segments: false,
+            timeline_toolbar_visible: true,
+            timeline_toolbar_order: Vec::new(),
+            timeline_toolbar_hidden: default_timeline_toolbar_hidden(),
+            non_user_control_visibility: NonUserControlVisibility::Dimmed,
+            prefix_relay_identifiers: true,
+            live_pwm_updates: true,
+            pwm_card: PwmCardPreferences::default(),
+            hardware_actions_on_press: true,
+            keyboard_shortcuts_enabled: true,
+            media_keys_enabled: true,
+            media_keys_background_enabled: true,
+            application_shortcuts: crate::application_shortcuts::ApplicationShortcuts::default(),
+            global_hardware_hotkeys_enabled: true,
+            hardware_number_shortcuts_enabled: true,
+            hardware_key_bindings: Vec::new(),
+            show_estop_control: true,
+            confirm_estop_release: true,
+            web_enabled: true,
+            web_listen_addresses: vec!["127.0.0.1".to_string()],
+            web_port: 8080,
+            binary_udp: Default::default(),
+            web_allow_control: true,
+            web_allow_configuration: true,
+            web_allow_file_access: true,
+            web_allow_updates: true,
+            web_sync_state: true,
+            web_sync_interval_ms: 100,
+            single_instance: true,
+            // Match RayanLamp's proven opt-in policy and 16-DIP acquisition
+            // distance. Ctrl remains a live, per-message bypass.
+            window_magnetic_snap: false,
+            window_magnetic_snap_distance: 16,
+            windows_mica_backdrop: false,
+            windows_dwm_theming: true,
+            windows_video_taskbar_thumbnail: true,
+            windows_thumbnail_toolbar: true,
+            windows_jump_list_quick_actions: true,
+            // Enable V-Sync by default to lock frame presentation to the monitor refresh rate
+            // and eliminate tearing or runaway swap loops.
+            opengl_vsync: true,
+            // Winit delivers WM_PAINT while the Windows move/resize modal loop
+            // is active. Keep the decoder frame callback driving those paints;
+            // only redundant property wakeups are suppressed during the drag.
+            live_video_during_window_move: true,
+            // A dedicated DWM-paced wakeup keeps 24/25/30 Hz media from
+            // fighting Windows' monitor-rate title-bar movement loop.
+            compositor_paced_window_move: true,
+            // Preferences is an owned native tool window on Windows. Keep the
+            // embedded implementation as a runtime fallback when process or
+            // window creation is unavailable.
+            native_dialog_windows: true,
+            auto_reload_config: true,
             status_bar: StatusBarConfig::default(),
+            control_bars: ControlBarsConfig::default(),
+            ui: UiPreferences::default(),
+            window_geometry: None,
             workspace_dock_layout: None,
+            workspace_session: WorkspaceProfile::default(),
+            workspace_profiles: default_workspace_profiles(),
+            workspace_profiles_initialized: true,
+            active_workspace_profile: Some("nle".to_string()),
+            effect_working_draft: None,
+            effect_cue_session: None,
         }
     }
+}
+
+pub fn default_workspace_profiles() -> BTreeMap<String, WorkspaceProfile> {
+    BTreeMap::from([
+        (
+            "simple".to_string(),
+            WorkspaceProfile {
+                name: "Simple".to_string(),
+                icon: "monitor".to_string(),
+                order: 0,
+                nle: false,
+                ..Default::default()
+            },
+        ),
+        (
+            "nle".to_string(),
+            WorkspaceProfile {
+                name: "NLE".to_string(),
+                icon: "timeline".to_string(),
+                order: 1,
+                nle: true,
+                ..Default::default()
+            },
+        ),
+    ])
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -161,9 +1602,13 @@ pub fn detect_executable_dir() -> PathBuf {
 }
 
 pub fn detect_storage_mode(exe_dir: &std::path::Path) -> StorageMode {
-    if std::env::var("PEALAYER_PORTABLE")
-        .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
-        .unwrap_or(false)
+    storage_mode_with_setting(exe_dir, std::env::var("PEALAYER_PORTABLE").ok().as_deref())
+}
+
+// Pass the setting explicitly so tests never mutate the process environment
+// underneath libmpv/native threads or other storage/configuration tests.
+fn storage_mode_with_setting(exe_dir: &std::path::Path, portable: Option<&str>) -> StorageMode {
+    if portable.is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
         || exe_dir.join("portable.flag").exists()
         || exe_dir.join("pealayer.json").exists()
         || exe_dir.join("portable.dat").exists()
@@ -193,12 +1638,112 @@ pub fn resolve_system_config_path() -> PathBuf {
         }
     }
 
+    #[cfg(target_os = "macos")]
+    {
+        if let Ok(home) = std::env::var("HOME") {
+            return PathBuf::from(home)
+                .join("Library")
+                .join("Application Support")
+                .join("Pealayer")
+                .join("config.json");
+        }
+    }
+
     if let Ok(xdg) = std::env::var("XDG_CONFIG_HOME") {
         return PathBuf::from(xdg).join("pealayer").join("config.json");
     }
 
     let home = std::env::var("HOME").unwrap_or_else(|_| ".".to_string());
-    PathBuf::from(home).join(".config").join("pealayer").join("config.json")
+    PathBuf::from(home)
+        .join(".config")
+        .join("pealayer")
+        .join("config.json")
+}
+
+/// A compact, privacy-preserving location for UI surfaces. Configuration
+/// remains addressable without exposing a full user-profile path in the app.
+pub fn display_config_path(path: &std::path::Path) -> String {
+    let roots = [
+        ("APPDATA", "%APPDATA%"),
+        ("XDG_CONFIG_HOME", "$XDG_CONFIG_HOME"),
+        ("HOME", "~"),
+    ];
+    for (variable, label) in roots {
+        if let Some(root) = std::env::var_os(variable).map(PathBuf::from)
+            && let Ok(relative) = path.strip_prefix(root)
+        {
+            return format!("{label}{}{}", std::path::MAIN_SEPARATOR, relative.display());
+        }
+    }
+    if let Ok(executable) = std::env::current_exe()
+        && let Some(directory) = executable.parent()
+        && let Ok(relative) = path.strip_prefix(directory)
+    {
+        return format!(".{}{}", std::path::MAIN_SEPARATOR, relative.display());
+    }
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "config.json".to_string())
+}
+
+/// Native filesystem notifications for the authoritative JSON configuration.
+/// The parent directory is watched so atomic file replacement remains visible.
+pub struct ConfigFileWatcher {
+    _watcher: notify::RecommendedWatcher,
+    events: Receiver<notify::Result<notify::Event>>,
+}
+
+impl ConfigFileWatcher {
+    pub fn new(
+        path: &std::path::Path,
+        wake_ui: impl Fn() + Send + 'static,
+    ) -> Result<Self, String> {
+        use notify::Watcher;
+
+        let parent = path
+            .parent()
+            .ok_or_else(|| format!("configuration path has no parent: {}", path.display()))?;
+        std::fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "create configuration directory {}: {error}",
+                parent.display()
+            )
+        })?;
+        let (sender, events) = channel();
+        let mut watcher =
+            notify::recommended_watcher(move |event: notify::Result<notify::Event>| {
+                let _ = sender.send(event);
+                wake_ui();
+            })
+            .map_err(|error| format!("create configuration file watcher: {error}"))?;
+        watcher
+            .watch(parent, notify::RecursiveMode::NonRecursive)
+            .map_err(|error| {
+                format!(
+                    "watch configuration directory {}: {error}",
+                    parent.display()
+                )
+            })?;
+        Ok(Self {
+            _watcher: watcher,
+            events,
+        })
+    }
+
+    pub fn take_changed(&self) -> Result<bool, String> {
+        let mut changed = false;
+        let mut last_error = None;
+        while let Ok(event) = self.events.try_recv() {
+            match event {
+                Ok(event) if !matches!(event.kind, notify::EventKind::Access(_)) => changed = true,
+                Ok(_) => {}
+                Err(error) => last_error = Some(error.to_string()),
+            }
+        }
+        last_error.map_or(Ok(changed), |error| {
+            Err(format!("configuration file watcher: {error}"))
+        })
+    }
 }
 
 fn parse_language_tag(value: &str) -> Option<AppLanguage> {
@@ -226,10 +1771,10 @@ fn system_language() -> AppLanguage {
 
     #[cfg(target_os = "windows")]
     {
-        use winreg::enums::HKEY_CURRENT_USER;
         use winreg::RegKey;
-        if let Ok(international) = RegKey::predef(HKEY_CURRENT_USER)
-            .open_subkey(r"Control Panel\International")
+        use winreg::enums::HKEY_CURRENT_USER;
+        if let Ok(international) =
+            RegKey::predef(HKEY_CURRENT_USER).open_subkey(r"Control Panel\International")
         {
             if let Ok(locale_name) = international.get_value::<String, _>("LocaleName") {
                 if let Some(language) = parse_language_tag(&locale_name) {
@@ -281,9 +1826,8 @@ pub fn resolve_rtl(preference: AppDirection, language: AppLanguage) -> bool {
 }
 
 pub fn resolved_app_name(config: &AppConfig) -> String {
-    std::env::var("APP_NAME")
-        .ok()
-        .or_else(|| config.app_name.clone())
+    crate::branding::runtime_value("app_name", config.app_name.clone())
+        .or_else(|| std::env::var("APP_NAME").ok())
         .or_else(|| application_brand_string("applicationName"))
         .map(|name| name.trim().to_string())
         .filter(|name| !name.is_empty())
@@ -291,15 +1835,23 @@ pub fn resolved_app_name(config: &AppConfig) -> String {
 }
 
 pub fn resolved_app_icon(config: &AppConfig) -> Option<PathBuf> {
-    std::env::var_os("APP_ICON")
-        .map(PathBuf::from)
-        .or_else(|| config.app_icon.clone())
+    crate::branding::runtime_value("app_icon", config.app_icon.clone())
+        .or_else(|| std::env::var_os("APP_ICON").map(PathBuf::from))
         .or_else(application_brand_app_icon)
+        .filter(|path| !path.as_os_str().is_empty())
+}
+
+pub fn resolved_app_description(config: &AppConfig) -> String {
+    crate::branding::runtime_value("app_description", config.app_description.clone())
+        .or_else(|| std::env::var("APP_DESCRIPTION").ok())
+        .or_else(|| application_brand_string("description"))
+        .unwrap_or_default().trim().to_owned()
 }
 
 fn application_brand() -> Option<(PathBuf, serde_json::Value)> {
     let path = std::env::var_os("APPLICATION_BRAND").map(PathBuf::from)?;
-    let value: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&path).ok()?).ok()?;
+    let value: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(&path).ok()?).ok()?;
     if value
         .get("format")
         .and_then(serde_json::Value::as_str)
@@ -321,7 +1873,11 @@ fn application_brand_string(name: &str) -> Option<String> {
 fn application_brand_app_icon() -> Option<PathBuf> {
     let (path, value) = application_brand()?;
     let relative = value.get("windowsIcons")?.get("APP")?.as_str()?;
-    Some(path.parent().unwrap_or_else(|| std::path::Path::new(".")).join(relative))
+    Some(
+        path.parent()
+            .unwrap_or_else(|| std::path::Path::new("."))
+            .join(relative),
+    )
 }
 
 fn resolved_optional_branding(env_name: &str, configured: Option<&str>) -> Option<String> {
@@ -366,11 +1922,137 @@ pub fn runtime_port(env_name: &str, default: u16) -> u16 {
 
 /// The single TCP port used by Pealayer's HTTP, WebSocket, and local IPC APIs.
 pub fn control_port() -> u16 {
-    runtime_port("PEALAYER_PORT", 8080)
+    if let Some(client)=crate::peer::client(){return client.local_port}
+    // Clock RPC headers and status rendering call this frequently. Once the
+    // application is initialized, read the scalar live value, not its file.
+    let port = crate::platform::interop::live_control_port()
+        .unwrap_or_else(|| AppConfig::load().web_port);
+    runtime_port("PEALAYER_PORT", port)
+}
+
+pub fn resolved_web_enabled(config: &AppConfig) -> bool {
+    std::env::var("PEALAYER_WEB_ENABLED")
+        .ok()
+        .and_then(|value| match value.trim().to_ascii_lowercase().as_str() {
+            "1" | "true" | "yes" | "on" => Some(true),
+            "0" | "false" | "no" | "off" => Some(false),
+            _ => None,
+        })
+        .unwrap_or(config.web_enabled)
+}
+
+pub fn resolved_web_bind_addresses(config: &AppConfig) -> Result<Vec<std::net::IpAddr>, String> {
+    let values = std::env::var("PEALAYER_WEB_BIND")
+        .ok()
+        .map(|value| {
+            value
+                .split([',', ';'])
+                .map(str::trim)
+                .filter(|value| !value.is_empty())
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .filter(|values| !values.is_empty())
+        .unwrap_or_else(|| config.web_listen_addresses.clone());
+    crate::network::parse_bind_addresses(&values)
 }
 
 impl AppConfig {
+    /// Reconcile shared appearance without discarding unrelated editor state.
+    pub(crate) fn copy_appearance_from(&mut self, source: &Self) {
+        self.theme = source.theme;
+        self.color_palette = source.color_palette;
+        self.accent_color = source.accent_color;
+        self.custom_accent_color = source.custom_accent_color.clone();
+        self.ui_animation_mode = source.ui_animation_mode;
+        self.ui_control_density = source.ui_control_density;
+        self.ui_font_family = source.ui_font_family;
+        self.monospace_font_family = source.monospace_font_family;
+        self.ui_font_name.clone_from(&source.ui_font_name);
+        self.monospace_font_name.clone_from(&source.monospace_font_name);
+        self.workspace_ui = source.workspace_ui;
+        self.native_monitor_style = source.native_monitor_style;
+        self.native_transport_style = source.native_transport_style;
+        self.monitor_preview = source.monitor_preview;
+        self.native_timeline_style = source.native_timeline_style;
+        self.craft_show_close_buttons = source.craft_show_close_buttons;
+        self.craft_show_collapse_buttons = source.craft_show_collapse_buttons;
+        self.preferences_grouped_navigation = source.preferences_grouped_navigation;
+        self.app_icon_preset = source.app_icon_preset;
+    }
+
+    pub(crate) fn normalize_playback_positions(&mut self) {
+        self.playback_position_history_limit = self
+            .playback_position_history_limit
+            .clamp(1, MAX_PLAYBACK_POSITION_HISTORY_LIMIT);
+        self.playback_positions
+            .truncate(self.playback_position_history_limit as usize);
+    }
+
+    fn normalize_workspace_profiles(&mut self) {
+        self.normalize_playback_positions();
+        if !self.workspace_profiles_initialized {
+            for (id, profile) in default_workspace_profiles() {
+                self.workspace_profiles.entry(id).or_insert(profile);
+            }
+            self.workspace_profiles_initialized = true;
+        }
+
+        let mut next_order = self
+            .workspace_profiles
+            .values()
+            .map(|profile| profile.order)
+            .max()
+            .unwrap_or(-1)
+            + 1;
+        for (id, profile) in &mut self.workspace_profiles {
+            if profile.name.trim().is_empty() {
+                profile.name = id.clone();
+            }
+            if profile.icon.trim().is_empty() {
+                profile.icon = if profile.nle { "timeline" } else { "monitor" }.to_string();
+            }
+            if profile.order < 0 {
+                profile.order = next_order;
+                next_order += 1;
+            }
+        }
+        let mut ordered_ids = self.workspace_profiles.keys().cloned().collect::<Vec<_>>();
+        ordered_ids.sort_by(|left_id, right_id| {
+            let left = &self.workspace_profiles[left_id];
+            let right = &self.workspace_profiles[right_id];
+            let default_rank = |id: &str| match id {
+                "simple" => 0,
+                "nle" => 1,
+                _ => 2,
+            };
+            left.order
+                .cmp(&right.order)
+                .then_with(|| default_rank(left_id).cmp(&default_rank(right_id)))
+                .then_with(|| left_id.cmp(right_id))
+        });
+        for (order, id) in ordered_ids.into_iter().enumerate() {
+            if let Some(profile) = self.workspace_profiles.get_mut(&id) {
+                profile.order = order as i32;
+            }
+        }
+        if self
+            .active_workspace_profile
+            .as_ref()
+            .is_none_or(|id| !self.workspace_profiles.contains_key(id))
+        {
+            self.active_workspace_profile = self
+                .workspace_profiles
+                .iter()
+                .filter(|(_, profile)| profile.nle == self.workspace_session.nle)
+                .min_by_key(|(_, profile)| profile.order)
+                .map(|(id, _)| id.clone())
+                .or_else(|| self.workspace_profiles.keys().next().cloned());
+        }
+    }
+
     pub fn get_config_path() -> PathBuf {
+        if let Some(client)=crate::peer::client(){return client.snapshot().map(|value|PathBuf::from(value.session.config_path)).unwrap_or_default();}
         if let Some(path) = std::env::var_os("PEALAYER_CONFIG_FILE") {
             return PathBuf::from(path);
         }
@@ -382,107 +2064,81 @@ impl AppConfig {
     }
 
     pub fn load_with_mode(mode: StorageMode, exe_dir: &std::path::Path) -> Self {
+        if let Some(client)=crate::peer::client(){return client.config();}
         match mode {
             StorageMode::Portable => {
                 let path = resolve_portable_config_path(exe_dir);
-                if path.exists() {
-                    if let Ok(data) = std::fs::read_to_string(&path) {
-                        if let Ok(cfg) = serde_json::from_str::<AppConfig>(&data) {
-                            return cfg;
-                        }
-                    }
+                if let Ok(cfg) = Self::load_from_path(&path) {
+                    return cfg;
                 }
                 Self::default()
             }
             StorageMode::System | StorageMode::Auto => {
-                // Read system configuration file (contains full structured state including workspace_dock_layout)
-                #[allow(unused_mut)]
-                let mut config = {
-                    let path = resolve_system_config_path();
-                    if path.exists() {
-                        if let Ok(data) = std::fs::read_to_string(&path) {
-                            serde_json::from_str::<AppConfig>(&data).ok()
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
+                // The complete JSON document is authoritative and watchable on
+                // every OS. Windows Registry values remain a native mirror and
+                // a migration fallback, never a reason to discard newer fields.
+                let path = resolve_system_config_path();
+                if let Ok(cfg) = Self::load_from_path(&path) {
+                    return cfg;
                 }
-                .unwrap_or_else(|| {
-                    // Transparent Migration from legacy recent.json if present
-                    let legacy_path = PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| ".".to_string()))
-                        .join(".config")
-                        .join("pealayer")
-                        .join("recent.json");
 
-                    let mut cfg = Self::default();
-                    if legacy_path.exists() {
-                        if let Ok(data) = std::fs::read_to_string(&legacy_path) {
-                            if let Ok(list) = serde_json::from_str::<Vec<PathBuf>>(&data) {
-                                cfg.recent_media = list;
-                            }
-                        }
-                    }
-                    cfg
-                });
-
-                // On Windows, overlay settings from Registry if present
                 #[cfg(target_os = "windows")]
                 {
-                    if let Ok(Some(reg_cfg)) = crate::platform::registry::load_settings_from_registry() {
-                        config.volume = reg_cfg.volume;
-                        config.is_muted = reg_cfg.is_muted;
-                        config.pin_controls = reg_cfg.pin_controls;
-                        config.show_remaining_time = reg_cfg.show_remaining_time;
-                        config.recent_media = reg_cfg.recent_media;
+                    if let Ok(Some(mut reg_cfg)) =
+                        crate::platform::registry::load_settings_from_registry()
+                    {
+                        reg_cfg.normalize_workspace_profiles();
+                        if reg_cfg.validate().is_ok() {
+                            return reg_cfg;
+                        }
                     }
                 }
 
-                config
+                Self::default()
             }
         }
     }
 
-    pub fn save_with_mode(&self, mode: StorageMode, exe_dir: &std::path::Path) {
+    pub fn save_with_mode(
+        &self,
+        mode: StorageMode,
+        exe_dir: &std::path::Path,
+    ) -> Result<(), String> {
+        self.validate()?;
+        if let Some(client)=crate::peer::client(){return client.save_config(self);}
         match mode {
             StorageMode::Portable => {
                 let path = resolve_portable_config_path(exe_dir);
-                if let Some(parent) = path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                if let Ok(json) = serde_json::to_string_pretty(self) {
-                    let _ = std::fs::write(path, json);
-                }
+                self.save_to_path(&path)?;
             }
             StorageMode::System | StorageMode::Auto => {
-                // On Windows, save to Registry
-                #[cfg(target_os = "windows")]
-                {
-                    let _ = crate::platform::registry::save_settings_to_registry(self);
+                // Keep the full JSON file as the cross-platform, externally
+                // watchable source. The Windows Registry mirrors the same
+                // complete document for native tooling and migration.
+                let path = resolve_system_config_path();
+                self.save_to_path(&path)?;
+                if let Err(error) = crate::platform::windows::configure_config_directory(
+                    &path,
+                    self,
+                ) {
+                    log::warn!("Could not apply native configuration-folder metadata: {error}");
                 }
 
-                // Save to system config file (as shadow backup / cross-platform standard)
-                let path = resolve_system_config_path();
-                if let Some(parent) = path.parent() {
-                    let _ = std::fs::create_dir_all(parent);
-                }
-                if let Ok(json) = serde_json::to_string_pretty(self) {
-                    let _ = std::fs::write(path, json);
+                #[cfg(target_os = "windows")]
+                {
+                    crate::platform::registry::save_settings_to_registry(self)?;
                 }
             }
         }
+        Ok(())
     }
 
     pub fn load() -> Self {
+        if let Some(client) = crate::peer::client() { return client.config(); }
         if let Some(path) = std::env::var_os("PEALAYER_CONFIG_FILE") {
             let path = PathBuf::from(path);
-            if path.exists() {
-                if let Ok(data) = std::fs::read_to_string(&path) {
-                    if let Ok(cfg) = serde_json::from_str::<AppConfig>(&data) {
-                        return cfg;
-                    }
-                }
+            if let Ok(cfg) = Self::load_from_path(&path) {
+                return cfg;
             }
             return Self::default();
         }
@@ -491,26 +2147,640 @@ impl AppConfig {
         Self::load_with_mode(mode, &exe_dir)
     }
 
-    pub fn save(&self) {
+    pub fn save(&self) -> Result<(), String> {
+        self.validate()?;
+        if let Some(client) = crate::peer::client() { return client.save_config(self); }
         if let Some(path) = std::env::var_os("PEALAYER_CONFIG_FILE") {
             let path = PathBuf::from(path);
-            if let Some(parent) = path.parent() {
-                let _ = std::fs::create_dir_all(parent);
+            self.save_to_path(&path)?;
+            if let Err(error) = crate::platform::windows::configure_config_directory(
+                &path,
+                self,
+            ) {
+                log::warn!("Could not apply native configuration-folder metadata: {error}");
             }
-            if let Ok(json) = serde_json::to_string_pretty(self) {
-                let _ = std::fs::write(path, json);
-            }
-            return;
+            return Ok(());
         }
         let exe_dir = detect_executable_dir();
         let mode = detect_storage_mode(&exe_dir);
-        self.save_with_mode(mode, &exe_dir);
+        self.save_with_mode(mode, &exe_dir)
     }
+
+    pub fn load_from_path(path: &std::path::Path) -> Result<Self, String> {
+        if let Some(client)=crate::peer::client(){
+            let mut url=client.url("/api/fs/file")?;url.query_pairs_mut().append_pair("path",&path.to_string_lossy());
+            let mut config=client.http.get(url).send().and_then(|response|response.error_for_status()).and_then(|response|response.json::<Self>()).map_err(|error|error.to_string())?;
+            config.normalize_workspace_profiles();config.validate()?;return Ok(config);
+        }
+        let data = std::fs::read_to_string(path)
+            .map_err(|error| format!("read configuration {}: {error}", path.display()))?;
+        let mut config = serde_json::from_str::<Self>(&data)
+            .map_err(|error| format!("parse configuration {}: {error}", path.display()))?;
+        config.normalize_workspace_profiles();
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn save_to_path(&self, path: &std::path::Path) -> Result<(), String> {
+        if crate::peer::active(){return Err("Use the server configuration Export action; local client files are read-only".into());}
+        self.validate()?;
+        let parent = path
+            .parent()
+            .ok_or_else(|| format!("configuration path has no parent: {}", path.display()))?;
+        std::fs::create_dir_all(parent).map_err(|error| {
+            format!(
+                "create configuration directory {}: {error}",
+                parent.display()
+            )
+        })?;
+        let json = serde_json::to_vec_pretty(self)
+            .map_err(|error| format!("serialize configuration: {error}"))?;
+        let sequence = CONFIG_TEMP_SEQUENCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let file_name = path
+            .file_name()
+            .and_then(std::ffi::OsStr::to_str)
+            .unwrap_or("config.json");
+        let temporary = parent.join(format!(
+            ".{file_name}.{}.{}.tmp",
+            std::process::id(),
+            sequence
+        ));
+        let write_result = (|| {
+            use std::io::Write;
+            let mut file = std::fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&temporary)
+                .map_err(|error| {
+                    format!(
+                        "create temporary configuration {}: {error}",
+                        temporary.display()
+                    )
+                })?;
+            file.write_all(&json)
+                .and_then(|_| file.write_all(b"\n"))
+                .and_then(|_| file.sync_all())
+                .map_err(|error| {
+                    format!(
+                        "write temporary configuration {}: {error}",
+                        temporary.display()
+                    )
+                })?;
+            replace_file(&temporary, path)
+        })();
+        if write_result.is_err() {
+            let _ = std::fs::remove_file(&temporary);
+        }
+        write_result
+    }
+
+    pub fn fingerprint(path: &std::path::Path) -> Result<u64, String> {
+        use std::hash::{Hash, Hasher};
+        let bytes = if let Some(client)=crate::peer::client(){serde_json::to_vec(&client.config()).map_err(|error|error.to_string())?}else{std::fs::read(path)
+            .map_err(|error| format!("read configuration {}: {error}", path.display()))?
+        };
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        bytes.hash(&mut hasher);
+        Ok(hasher.finish())
+    }
+
+    pub fn apply_patch(&self, patch: &serde_json::Value) -> Result<Self, String> {
+        let patch = patch
+            .as_object()
+            .ok_or_else(|| "configuration update must be a JSON object".to_string())?;
+        let mut value = serde_json::to_value(self)
+            .map_err(|error| format!("serialize current configuration: {error}"))?;
+        let target = value
+            .as_object_mut()
+            .ok_or_else(|| "current configuration is not an object".to_string())?;
+        for (key, replacement) in patch {
+            if !target.contains_key(key) {
+                return Err(format!("unknown configuration setting: {key}"));
+            }
+            target.insert(key.clone(), replacement.clone());
+        }
+        let mut updated = serde_json::from_value::<Self>(value)
+            .map_err(|error| format!("invalid configuration update: {error}"))?;
+        updated.normalize_workspace_profiles();
+        updated.validate()?;
+        Ok(updated)
+    }
+
+    pub fn validate_patch_shape(patch: &serde_json::Value) -> Result<(), String> {
+        let patch = patch
+            .as_object()
+            .ok_or_else(|| "configuration update must be a JSON object".to_string())?;
+        let known =
+            serde_json::to_value(Self::default()).expect("default configuration serializes");
+        let known = known
+            .as_object()
+            .expect("default configuration is an object");
+        if let Some(key) = patch.keys().find(|key| !known.contains_key(*key)) {
+            return Err(format!("unknown configuration setting: {key}"));
+        }
+        Ok(())
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
+        self.mouse_bindings.validate()?;
+        if [self.simple_workspace.controls_x,self.simple_workspace.controls_y].iter().any(|v| !v.is_finite() || !(0.0..=1.0).contains(v)) {
+            return Err("Simple control position must be between 0 and 1".into());
+        }
+        self.ui.terminal.validate()?;
+        for list in [&self.ui.toolbar.order, &self.ui.toolbar.hidden] {
+            if list.len() > 128 || list.iter().any(|id| id.is_empty() || id.len() > 128 || id.chars().any(char::is_control)) {
+                return Err("Toolbar command lists must contain at most 128 bounded command identifiers".into());
+            }
+        }
+        for (key, value, limit) in [("app_name", &self.app_name, 128), ("app_description", &self.app_description, 512)] {
+            if value.as_ref().is_some_and(|text| text.chars().count() > limit || text.chars().any(char::is_control)) {
+                return Err(format!("{key} must be printable text of at most {limit} characters"));
+            }
+        }
+        self.external_mpv.validate()?;
+        if self.audio_effects.len() > 256 { return Err("At most 256 audio effects may be saved".into()); }
+        let mut audio_ids = std::collections::HashSet::new();
+        for effect in &self.audio_effects {
+            effect.validate()?;
+            if effect.duration_ms == 0 || effect.duration_ms > 86_400_000 { return Err("SFX duration must be finite, positive and at most 24 hours".into()); }
+            if !audio_ids.insert(effect.id) { return Err("Duplicate audio effect ID".into()); }
+        }
+        for key in default_designer_cue_colors().keys() {
+            if self.effect_designer_cue_colors.get(key).and_then(|value| parse_rgb_hex(value)).is_none() {
+                return Err(format!("effect_designer_cue_colors.{key} must be an RGB hex color"));
+            }
+        }
+        for (key, value) in [("chapter_color", &self.seekbar_markers.chapter_color),
+            ("active_chapter_color", &self.seekbar_markers.active_chapter_color),
+            ("keyframe_color", &self.seekbar_markers.keyframe_color)] {
+            if parse_rgb_hex(value).is_none() { return Err(format!("seekbar_markers.{key} must be an RGB hex color")); }
+        }
+        for (key, device) in [
+            ("audio_device", &self.audio_device),
+            ("sfx_audio_device", &self.sfx_audio_device),
+        ] {
+            if device.len() > 256 || device.chars().any(char::is_control) {
+                return Err(format!("{key} must be a valid audio device identifier"));
+            }
+        }
+        if !self.volume.is_finite() || !(0.0..=130.0).contains(&self.volume) {
+            return Err("volume must be between 0 and 130".to_string());
+        }
+        if self.monospace_font_family == UiFontFamily::Vazirmatn { return Err("Vazirmatn is not a monospace font".into()); }
+        for name in [&self.ui_font_name, &self.monospace_font_name] {
+            if name.len() > 256 || name.chars().any(char::is_control) { return Err("Font family names must be plain text of at most 256 bytes".into()); }
+        }
+        if self.status_bar.metric_limits.iter().any(|range| matches!(range, [Some(low), Some(high)] if low > high)) {
+            return Err("Status widget minimum must not exceed maximum".into());
+        }
+        if !self.playback_speed.is_finite() || !(0.25..=4.0).contains(&self.playback_speed) {
+            return Err("playback_speed must be between 0.25 and 4".to_string());
+        }
+        if !self.temporary_fast_forward_speed.is_finite()
+            || !(1.0..=16.0).contains(&self.temporary_fast_forward_speed)
+        {
+            return Err("temporary_fast_forward_speed must be between 1 and 16".to_string());
+        }
+        if self.numeric_input_steps.len() > 256 || self.numeric_input_steps.iter().any(|(key, steps)|
+            key.is_empty() || key.len() > 128 || !steps.is_valid()) {
+            return Err("numeric_input_steps must contain valid, positive finite adjustment sizes".to_string());
+        }
+        if !self.subtitle_font_size.is_finite()
+            || !(10.0..=100.0).contains(&self.subtitle_font_size)
+        {
+            return Err("subtitle_font_size must be between 10 and 100".to_string());
+        }
+        if !self.subtitle_delay_seconds.is_finite()
+            || !(-600.0..=600.0).contains(&self.subtitle_delay_seconds)
+        {
+            return Err("subtitle_delay_seconds must be between -600 and 600".to_string());
+        }
+        if !self.subtitle_position_percent.is_finite()
+            || !(0.0..=100.0).contains(&self.subtitle_position_percent)
+        {
+            return Err("subtitle_position_percent must be between 0 and 100".to_string());
+        }
+        if !self.audio_delay_seconds.is_finite()
+            || !(-600.0..=600.0).contains(&self.audio_delay_seconds)
+        {
+            return Err("audio_delay_seconds must be between -600 and 600".to_string());
+        }
+        if !self.wheel_seek_seconds.is_finite() || !(0.1..=60.0).contains(&self.wheel_seek_seconds)
+        {
+            return Err("wheel_seek_seconds must be between 0.1 and 60".to_string());
+        }
+        if !self.quick_seek_seconds.is_finite() || !(0.1..=600.0).contains(&self.quick_seek_seconds)
+        {
+            return Err("quick_seek_seconds must be between 0.1 and 600".to_string());
+        }
+        if !(1..=120).contains(&self.frame_step_count) {
+            return Err("frame_step_count must be between 1 and 120".to_string());
+        }
+        if !(50..=2_000).contains(&self.timeline_navigation_transition_ms) {
+            return Err(
+                "timeline_navigation_transition_ms must be between 50 and 2000".to_string(),
+            );
+        }
+        if !(1..=128).contains(&self.window_magnetic_snap_distance) {
+            return Err("window_magnetic_snap_distance must be between 1 and 128".to_string());
+        }
+        if self.web_port == 0 {
+            return Err("web_port must be between 1 and 65535".to_string());
+        }
+        self.binary_udp.validate()?;
+        crate::network::parse_bind_addresses(&self.web_listen_addresses)?;
+        if !(16..=5_000).contains(&self.web_sync_interval_ms) {
+            return Err("web_sync_interval_ms must be between 16 and 5000".to_string());
+        }
+        if self.subtitle_text_replacements.len() > 128 {
+            return Err("subtitle_text_replacements contains more than 128 entries".to_string());
+        }
+        let mut subtitle_sources = std::collections::BTreeSet::new();
+        for replacement in &self.subtitle_text_replacements {
+            if replacement.from.chars().count() > 64 || replacement.to.chars().count() > 256 {
+                return Err(
+                    "subtitle_text_replacements contains an invalid source or replacement"
+                        .to_string(),
+                );
+            }
+            if !replacement.from.is_empty() && !subtitle_sources.insert(replacement.from.as_str()) {
+                return Err(format!(
+                    "subtitle_text_replacements contains duplicate source {:?}",
+                    replacement.from
+                ));
+            }
+        }
+        if !self.osd_timeout_seconds.is_finite()
+            || !(1.0..=60.0).contains(&self.osd_timeout_seconds)
+        {
+            return Err("osd_timeout_seconds must be between 1 and 60".to_string());
+        }
+        if self.accent_color == AccentColor::Custom
+            && self
+                .custom_accent_color
+                .as_deref()
+                .and_then(parse_rgb_hex)
+                .is_none()
+        {
+            return Err("custom_accent_color must be a color such as #0078d4".to_string());
+        }
+        if self
+            .hardware_endpoint
+            .as_deref()
+            .is_some_and(|value| value.len() > 1024)
+        {
+            return Err("hardware_endpoint is too long".to_string());
+        }
+        if let Some(proxy) = self
+            .open_url_proxy_url
+            .as_deref()
+            .map(str::trim)
+            .filter(|value| !value.is_empty())
+        {
+            let parsed = url::Url::parse(proxy)
+                .map_err(|_| "open_url_proxy_url must be a complete URL".to_string())?;
+            if !matches!(parsed.scheme(), "http" | "https") || parsed.host_str().is_none() {
+                return Err(
+                    "open_url_proxy_url must use HTTP or HTTPS and include a host".to_string(),
+                );
+            }
+        }
+        if self.recent_media.len() > 100 {
+            return Err("recent_media contains too many entries".to_string());
+        }
+        if self
+            .last_media_target
+            .as_ref()
+            .is_some_and(|target| target.to_string_lossy().len() > 8_192)
+        {
+            return Err("last_media_target is too long".to_string());
+        }
+        if let Some(session) = &self.effect_cue_session {
+            if session.media_target.trim().is_empty() || session.media_target.len() > 8_192 {
+                return Err("effect_cue_session has an invalid media target".to_string());
+            }
+            if session.timeline.instances.len() > 10_000
+                || session.timeline.templates.len() > 10_000
+            {
+                return Err("effect_cue_session contains too many cues".to_string());
+            }
+            if session.timeline.instances.iter().any(|instance| {
+                !session.timeline.templates.iter().any(|template| {
+                    template.id == instance.effect_id
+                        && template.actions.is_empty()
+                        && (template.controller_macro.is_some()
+                            || template.controller_strip_effect.is_some())
+                })
+            }) {
+                return Err(
+                    "effect_cue_session must contain only PCController-owned references"
+                        .to_string(),
+                );
+            }
+        }
+        if !(1..=MAX_PLAYBACK_POSITION_HISTORY_LIMIT)
+            .contains(&self.playback_position_history_limit)
+        {
+            return Err(format!(
+                "playback_position_history_limit must be between 1 and {MAX_PLAYBACK_POSITION_HISTORY_LIMIT}"
+            ));
+        }
+        if self.playback_positions.len() > self.playback_position_history_limit as usize {
+            return Err("playback_positions exceeds playback_position_history_limit".to_string());
+        }
+        for entry in &self.playback_positions {
+            if entry.target.trim().is_empty() || entry.target.len() > 8_192 {
+                return Err("playback_positions contains an invalid target".to_string());
+            }
+            if !entry.position_seconds.is_finite() || entry.position_seconds < 0.0 {
+                return Err("playback_positions contains an invalid position".to_string());
+            }
+        }
+        if self
+            .window_geometry
+            .is_some_and(|geometry| !geometry.is_valid())
+        {
+            return Err("window_geometry contains invalid coordinates or dimensions".to_string());
+        }
+        if self.workspace_profiles.len() > 64 {
+            return Err("workspace_profiles contains more than 64 profiles".to_string());
+        }
+        for (id, profile) in &self.workspace_profiles {
+            let valid_id = !id.is_empty()
+                && id.len() <= 64
+                && id.chars().all(|character| {
+                    character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+                });
+            if !valid_id {
+                return Err(format!("workspace profile ID is invalid: {id}"));
+            }
+            let name = profile.name.trim();
+            if name.is_empty() || name.chars().count() > 64 {
+                return Err(format!("workspace profile name is invalid: {id}"));
+            }
+            let icon = profile.icon.trim();
+            if icon.is_empty()
+                || icon.len() > 64
+                || !icon.chars().all(|character| {
+                    character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+                })
+            {
+                return Err(format!("workspace profile icon is invalid: {id}"));
+            }
+        }
+        self.application_shortcuts.validate()?;
+        if self.hardware_key_bindings.len() > 512 {
+            return Err("hardware_key_bindings contains more than 512 bindings".to_string());
+        }
+        let mut binding_ids = std::collections::BTreeSet::new();
+        for binding in &self.hardware_key_bindings {
+            if binding.then.len() > 3 {
+                return Err("Hardware shortcuts support at most four steps".into());
+            }
+            if !binding.then.is_empty() && (binding.global || matches!(binding.action, HardwareKeyBindingAction::Hold { .. })) {
+                return Err("Multi-step hardware shortcuts are app-local and cannot hold outputs".into());
+            }
+            for chord in &binding.then {
+                chord.native_hotkey_string().parse::<global_hotkey::hotkey::HotKey>()
+                    .map_err(|error| format!("hardware binding {}: {error}", binding.id))?;
+            }
+            if binding.id.trim().is_empty() || !binding_ids.insert(binding.id.as_str()) {
+                return Err("hardware_key_bindings contains an empty or duplicate ID".to_string());
+            }
+            if binding.channel_key.trim().is_empty() || binding.channel_key.len() > 256 {
+                return Err(format!(
+                    "hardware binding {} has an invalid channel key",
+                    binding.id
+                ));
+            }
+            binding
+                .chord
+                .native_hotkey_string()
+                .parse::<global_hotkey::hotkey::HotKey>()
+                .map_err(|error| format!("hardware binding {}: {error}", binding.id))?;
+            match &binding.action {
+                HardwareKeyBindingAction::Invoke { action_id, .. } => {
+                    if action_id.trim().is_empty() {
+                        return Err(format!("hardware binding {} has no action", binding.id));
+                    }
+                }
+                HardwareKeyBindingAction::Toggle {
+                    on_action_id,
+                    off_action_id,
+                } => {
+                    if on_action_id.trim().is_empty() || off_action_id.trim().is_empty() {
+                        return Err(format!(
+                            "hardware binding {} has an invalid toggle",
+                            binding.id
+                        ));
+                    }
+                }
+                HardwareKeyBindingAction::SetPwm { percent } => {
+                    if !percent.is_finite() || !(0.0..=100.0).contains(percent) {
+                        return Err(format!(
+                            "hardware binding {} PWM percentage must be between 0 and 100",
+                            binding.id
+                        ));
+                    }
+                }
+                HardwareKeyBindingAction::Hold {
+                    press_action_id,
+                    release_action_id,
+                    ..
+                } => {
+                    if press_action_id.trim().is_empty() || release_action_id.trim().is_empty() {
+                        return Err(format!(
+                            "hardware binding {} has an invalid hold pair",
+                            binding.id
+                        ));
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+}
+
+pub fn parse_rgb_hex(value: &str) -> Option<[u8; 3]> {
+    let value = value.trim().strip_prefix('#').unwrap_or(value.trim());
+    (value.len() == 6).then_some(())?;
+    Some([
+        u8::from_str_radix(&value[0..2], 16).ok()?,
+        u8::from_str_radix(&value[2..4], 16).ok()?,
+        u8::from_str_radix(&value[4..6], 16).ok()?,
+    ])
+}
+
+static CONFIG_TEMP_SEQUENCE: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+#[cfg(target_os = "windows")]
+pub(crate) fn replace_file(source: &std::path::Path, destination: &std::path::Path) -> Result<(), String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::Storage::FileSystem::{
+        MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+    };
+    use windows::core::PCWSTR;
+    let destination_display = destination.display().to_string();
+    let source = source
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect::<Vec<_>>();
+    let destination = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect::<Vec<_>>();
+    unsafe {
+        MoveFileExW(
+            PCWSTR(source.as_ptr()),
+            PCWSTR(destination.as_ptr()),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    }
+    .map_err(|error| format!("replace configuration {destination_display}: {error}"))
+}
+
+#[cfg(not(target_os = "windows"))]
+pub(crate) fn replace_file(source: &std::path::Path, destination: &std::path::Path) -> Result<(), String> {
+    std::fs::rename(source, destination)
+        .map_err(|error| format!("replace configuration {}: {error}", destination.display()))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn filmcraft_preview_choices_are_independent_persistent_and_validated() {
+        let original=AppConfig::default();
+        let updated=original.apply_patch(&serde_json::json!({
+            "native_transport_style":"film_craft",
+            "monitor_preview":{"aspect":"classic","resolution":"quarter"}
+        })).unwrap();
+        let saved:AppConfig=serde_json::from_value(serde_json::to_value(&updated).unwrap()).unwrap();
+        assert_eq!(saved.native_transport_style,NativeMonitorStyle::FilmCraft);
+        assert_eq!(saved.native_monitor_style,NativeMonitorStyle::Compact);
+        assert_eq!(saved.monitor_preview.aspect,MonitorAspect::Classic);
+        assert_eq!(saved.monitor_preview.resolution,MonitorResolution::Quarter);
+        assert_eq!(saved.control_bars,original.control_bars);
+        assert_eq!(saved.workspace_dock_layout,original.workspace_dock_layout);
+        assert!(original.apply_patch(&serde_json::json!({"monitor_preview":{"resolution":"fake"}})).is_err());
+        assert_eq!(MonitorAspect::Source.ratio(2.39),2.39);
+        assert_eq!(MonitorAspect::Classic.ratio(2.39),4.0/3.0);
+    }
+
+    #[test]
+    fn native_panel_styles_default_to_preserved_designs_and_round_trip_independently() {
+        let defaults: AppConfig = serde_json::from_str("{}").unwrap();
+        assert_eq!(defaults.native_monitor_style, NativeMonitorStyle::Compact);
+        assert_eq!(defaults.native_timeline_style, NativeTimelineStyle::Standard);
+        for workspace_ui in [WorkspaceUi::EguiDock, WorkspaceUi::CraftUi] {
+            for (monitor, monitor_wire) in [(NativeMonitorStyle::Compact, "compact"), (NativeMonitorStyle::FilmCraft, "film_craft")] {
+                for (timeline, timeline_wire) in [(NativeTimelineStyle::Standard, "standard"), (NativeTimelineStyle::FilmCraft, "film_craft")] {
+                    let config = AppConfig { workspace_ui, native_monitor_style: monitor, native_timeline_style: timeline, ..Default::default() };
+                    let wire = serde_json::to_value(&config).unwrap();
+                    assert_eq!(wire["native_monitor_style"], monitor_wire);
+                    assert_eq!(wire["native_timeline_style"], timeline_wire);
+                    let restored: AppConfig = serde_json::from_value(wire).unwrap();
+                    assert_eq!(restored, config, "independent panel choices must survive a full config round trip");
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn native_panel_style_preview_preserves_workspace_sidebar_and_saved_actions() {
+        use crate::ui::{sidebar_rail::SidebarPane, sidebar_shortcuts::RailAction};
+        for workspace_ui in [WorkspaceUi::EguiDock, WorkspaceUi::CraftUi] {
+            let mut original = AppConfig { workspace_ui, ..Default::default() };
+            original.workspace_session.name = "Retained editing workspace".into();
+            original.workspace_session.dialogs.audio = true;
+            original.workspace_session.dialogs.preferences_tab = 3;
+            original.workspace_session.egui_memory = Some("retained panel geometry and scrolling".into());
+            original.workspace_profiles.insert("editing".into(), original.workspace_session.clone());
+            original.active_workspace_profile = Some("editing".into());
+            original.ui.sidebar_rail.width = 380.0;
+            original.ui.sidebar_rail.open = Some(SidebarPane::HardwareMonitor);
+            original.ui.sidebar_shortcuts.order = vec![RailAction::Timeline, RailAction::EffectsLibrary];
+            original.ui.sidebar_shortcuts.hidden = vec![RailAction::MediaInspector];
+            original.control_bars.monitor.order.swap(0, 4);
+            original.control_bars.monitor.hidden[ControlBarAction::AudioTrack as usize] = false;
+            original.control_bars.monitor.end[ControlBarAction::Mute as usize] = false;
+            original.timeline_toolbar_order = vec![TimelineToolbarAction::PanLeft, TimelineToolbarAction::ZoomOut];
+            original.volume = 37.0;
+
+            let mut preview = original.clone();
+            for (monitor, timeline) in [
+                (NativeMonitorStyle::FilmCraft, NativeTimelineStyle::Standard),
+                (NativeMonitorStyle::Compact, NativeTimelineStyle::FilmCraft),
+                (NativeMonitorStyle::FilmCraft, NativeTimelineStyle::FilmCraft),
+                (NativeMonitorStyle::Compact, NativeTimelineStyle::Standard),
+            ] {
+                // A Preferences appearance event does not own the live workspace.
+                let source = AppConfig { workspace_ui, native_monitor_style: monitor, native_timeline_style: timeline, ..Default::default() };
+                preview.copy_appearance_from(&source);
+                let mut expected = original.clone();
+                expected.native_monitor_style = monitor;
+                expected.native_timeline_style = timeline;
+                assert_eq!(preview, expected, "preview and reverting styles must not reset unrelated user state");
+            }
+        }
+    }
+
+    #[test]
+    fn effect_working_draft_can_be_set_and_cleared_through_config_api() {
+        let config = AppConfig::default();
+        let patch = serde_json::json!({"effect_working_draft": crate::app::ControllerEffectDraft::default()});
+        assert!(AppConfig::validate_patch_shape(&patch).is_ok());
+        let edited = config.apply_patch(&patch).unwrap();
+        assert!(edited.effect_working_draft.is_some());
+        let clear = serde_json::json!({"effect_working_draft": null});
+        assert!(AppConfig::validate_patch_shape(&clear).is_ok());
+        assert!(edited.apply_patch(&clear).unwrap().effect_working_draft.is_none());
+        assert!(config.apply_patch(&clear).unwrap().effect_working_draft.is_none());
+    }
+
+    #[test]
+    fn displayed_config_path_does_not_expose_an_absolute_profile_path() {
+        let path = if let Some(appdata) = std::env::var_os("APPDATA") {
+            PathBuf::from(appdata).join("pealayer").join("config.json")
+        } else {
+            PathBuf::from(std::env::var_os("HOME").unwrap_or_else(|| "/home/test".into()))
+                .join(".config")
+                .join("pealayer")
+                .join("config.json")
+        };
+        let displayed = display_config_path(&path);
+        assert!(!std::path::Path::new(&displayed).is_absolute());
+        assert!(displayed.ends_with("config.json"));
+    }
+
+    #[test]
+    fn config_watcher_observes_external_file_changes() {
+        let directory =
+            std::env::temp_dir().join(format!("pealayer_watch_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let path = directory.join("config.json");
+        std::fs::write(&path, b"{}\n").unwrap();
+        let watcher = ConfigFileWatcher::new(&path, || {}).unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(60));
+        std::fs::write(&path, b"{\"volume\":75}\n").unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        let mut changed = false;
+        while std::time::Instant::now() < deadline && !changed {
+            changed = watcher.take_changed().unwrap();
+            if !changed {
+                std::thread::sleep(std::time::Duration::from_millis(20));
+            }
+        }
+        assert!(
+            changed,
+            "native configuration watcher did not report the write"
+        );
+        drop(watcher);
+        let _ = std::fs::remove_dir_all(&directory);
+    }
 
     #[test]
     fn test_default_config_values() {
@@ -520,13 +2790,114 @@ mod tests {
         assert!(!cfg.pin_controls);
         assert!(!cfg.show_remaining_time);
         assert!(cfg.recent_media.is_empty());
+        assert!(cfg.last_media_target.is_none());
+        assert!(!cfg.last_media_paused);
+        assert!(cfg.restore_last_media_on_startup);
+        assert!(cfg.remember_playback_position);
+        assert_eq!(
+            cfg.playback_position_history_limit,
+            DEFAULT_PLAYBACK_POSITION_HISTORY_LIMIT
+        );
+        assert!(cfg.playback_positions.is_empty());
         assert!(cfg.app_name.is_none());
         assert!(cfg.app_icon.is_none());
+        assert!(cfg.app_icon_playing.is_none());
+        assert!(cfg.app_icon_paused.is_none());
+        assert!(cfg.app_icon_stopped.is_none());
         assert!(cfg.app_publisher.is_none());
         assert!(cfg.app_copyright.is_none());
         assert_eq!(cfg.theme, AppTheme::System);
         assert_eq!(cfg.language, AppLanguage::System);
         assert_eq!(cfg.direction, AppDirection::Auto);
+        assert!(cfg.open_url_multiline);
+        assert!(cfg.open_url_history_expanded);
+        assert!(cfg.open_url_recent_click_edits);
+        assert!(cfg.open_url_fetch_remote_info);
+        assert!(cfg.open_url_fetch_remote_thumbnail);
+        assert!(cfg.open_url_use_proxy);
+        assert!(cfg.open_url_proxy_url.is_none());
+        assert_eq!(cfg.playback_speed, 1.0);
+        assert_eq!(cfg.temporary_fast_forward_speed, 2.0);
+        assert!(!cfg.seekbar_hover_thumbnails);
+        assert!(!cfg.nle_seekbar_hover_thumbnails);
+        assert!(cfg.consistent_video_aspect_ratio);
+        assert!(cfg.native_dialog_windows);
+        assert!(cfg.auto_reload_config);
+        assert_eq!(cfg.active_workspace_profile.as_deref(), Some("nle"));
+        assert_eq!(cfg.workspace_profiles["simple"].name, "Simple");
+        assert_eq!(cfg.workspace_profiles["nle"].name, "NLE");
+    }
+
+    #[test]
+    fn system_theme_is_default_and_persists_as_a_preference_not_a_resolved_scheme() {
+        let config: AppConfig = serde_json::from_str("{}").expect("missing fields use defaults");
+        assert_eq!(config.theme, AppTheme::System);
+        let json = serde_json::to_value(&config).unwrap();
+        assert_eq!(json["theme"], "system");
+        assert_eq!(
+            serde_json::from_value::<AppConfig>(json).unwrap().theme,
+            AppTheme::System
+        );
+    }
+
+    #[test]
+    fn playback_speeds_reject_non_finite_and_out_of_range_values() {
+        let mut config = AppConfig::default();
+        config.playback_speed = 0.0;
+        assert!(config.validate().unwrap_err().contains("playback_speed"));
+
+        config.playback_speed = 1.0;
+        config.temporary_fast_forward_speed = f64::NAN;
+        assert!(
+            config
+                .validate()
+                .unwrap_err()
+                .contains("temporary_fast_forward_speed")
+        );
+    }
+
+    #[test]
+    fn old_workspace_storage_is_seeded_once_but_user_deletions_stay_deleted() {
+        let mut migrated: AppConfig = serde_json::from_str(
+            r#"{"workspace_profiles":{},"workspace_profiles_initialized":false}"#,
+        )
+        .unwrap();
+        assert!(!migrated.workspace_profiles_initialized);
+        migrated.normalize_workspace_profiles();
+        assert!(migrated.workspace_profiles_initialized);
+        assert_eq!(
+            migrated
+                .workspace_profiles
+                .keys()
+                .cloned()
+                .collect::<Vec<_>>(),
+            vec!["nle".to_string(), "simple".to_string()]
+        );
+
+        migrated.workspace_profiles.remove("simple");
+        let json = serde_json::to_string(&migrated).unwrap();
+        let mut reloaded: AppConfig = serde_json::from_str(&json).unwrap();
+        reloaded.normalize_workspace_profiles();
+        assert!(!reloaded.workspace_profiles.contains_key("simple"));
+        assert!(reloaded.workspace_profiles.contains_key("nle"));
+    }
+
+    #[test]
+    fn playback_position_history_is_trimmed_to_the_configured_limit() {
+        let mut config = AppConfig::default();
+        config.playback_position_history_limit = 2;
+        config.playback_positions = (0..4)
+            .map(|index| PlaybackPositionEntry {
+                target: format!("/media/{index}.mp4"),
+                position_seconds: f64::from(index),
+                updated_at_unix_ms: index as u64,
+            })
+            .collect();
+
+        config.normalize_playback_positions();
+
+        assert_eq!(config.playback_positions.len(), 2);
+        assert!(config.validate().is_ok());
     }
 
     #[test]
@@ -534,15 +2905,137 @@ mod tests {
         let mut cfg = AppConfig::default();
         cfg.volume = 85.0;
         cfg.pin_controls = true;
+        cfg.open_url_multiline = false;
+        cfg.open_url_history_expanded = false;
+        cfg.open_url_recent_click_edits = false;
+        cfg.open_url_fetch_remote_info = false;
+        cfg.open_url_fetch_remote_thumbnail = false;
+        cfg.open_url_use_proxy = false;
+        cfg.open_url_proxy_url = Some("http://127.0.0.1:8080".to_string());
+        cfg.seekbar_hover_thumbnails = true;
+        cfg.nle_seekbar_hover_thumbnails = true;
+        cfg.consistent_video_aspect_ratio = false;
+        cfg.native_dialog_windows = true;
         cfg.recent_media.push(PathBuf::from("/test/file.mp4"));
+        cfg.last_media_target = Some(PathBuf::from("/test/file.mp4"));
+        cfg.last_media_paused = true;
+        let effect = crate::four_d::models::Effect::controller_macro(
+            "Relay 8 - one second".to_string(),
+            String::new(),
+            1_000,
+            8,
+            "host".to_string(),
+        );
+        let mut cue_timeline = crate::four_d::models::Timeline::default();
+        cue_timeline
+            .instances
+            .push(crate::four_d::models::EffectInstance::new(
+                effect.id, 10_000,
+            ));
+        cue_timeline.templates.push(effect);
+        cfg.effect_cue_session = Some(EffectCueSession {
+            media_target: "/test/file.mp4".to_string(),
+            timeline: cue_timeline,
+        });
+        cfg.workspace_session = WorkspaceProfile {
+            name: String::new(),
+            icon: String::new(),
+            order: 0,
+            nle: false,
+            window_geometry: Some(WindowGeometry {
+                x: 20.0,
+                y: 30.0,
+                width: 960.0,
+                height: 640.0,
+                maximized: false,
+            }),
+            dock_layout: Some("{\"surface\":\"hardware\"}".to_string()),
+            sidebar_rail: crate::ui::sidebar_rail::SidebarRailState::default(),
+            dialogs: WorkspaceDialogs {
+                board_information: true,
+                board_information_tab: 2,
+                channel_manager: true,
+                hardware_control_key: Some("relay.5".to_string()),
+                hardware_channel_detail_active: true,
+                ..Default::default()
+            },
+            egui_memory: None,
+        };
+        cfg.workspace_profiles.insert(
+            "hardware-review".to_string(),
+            WorkspaceProfile {
+                name: "Hardware review".to_string(),
+                icon: "hardware".to_string(),
+                order: 2,
+                ..cfg.workspace_session.clone()
+            },
+        );
+        cfg.active_workspace_profile = Some("hardware-review".to_string());
 
         let json = serde_json::to_string(&cfg).unwrap();
         let loaded: AppConfig = serde_json::from_str(&json).unwrap();
 
         assert_eq!(loaded.volume, 85.0);
         assert!(loaded.pin_controls);
+        assert!(!loaded.open_url_multiline);
+        assert!(!loaded.open_url_history_expanded);
+        assert!(!loaded.open_url_recent_click_edits);
+        assert!(!loaded.open_url_fetch_remote_info);
+        assert!(!loaded.open_url_fetch_remote_thumbnail);
+        assert!(!loaded.open_url_use_proxy);
+        assert_eq!(
+            loaded.open_url_proxy_url.as_deref(),
+            Some("http://127.0.0.1:8080")
+        );
+        assert!(loaded.seekbar_hover_thumbnails);
+        assert!(loaded.nle_seekbar_hover_thumbnails);
+        assert!(!loaded.consistent_video_aspect_ratio);
         assert_eq!(loaded.recent_media.len(), 1);
         assert_eq!(loaded.recent_media[0], PathBuf::from("/test/file.mp4"));
+        assert_eq!(
+            loaded.last_media_target,
+            Some(PathBuf::from("/test/file.mp4"))
+        );
+        assert!(loaded.last_media_paused);
+        let effect_session = loaded.effect_cue_session.as_ref().unwrap();
+        assert_eq!(effect_session.media_target, "/test/file.mp4");
+        assert_eq!(effect_session.timeline.instances[0].start_time_ms, 10_000);
+        assert_eq!(
+            effect_session.timeline.templates[0]
+                .controller_macro
+                .as_ref()
+                .unwrap()
+                .id,
+            8
+        );
+        assert!(loaded.native_dialog_windows);
+        assert!(!loaded.workspace_session.nle);
+        assert_eq!(
+            loaded.workspace_session.window_geometry.unwrap().width,
+            960.0
+        );
+        assert!(loaded.workspace_session.dialogs.board_information);
+        assert_eq!(loaded.workspace_session.dialogs.board_information_tab, 2);
+        assert!(loaded.workspace_session.dialogs.channel_manager);
+        assert_eq!(
+            loaded
+                .workspace_session
+                .dialogs
+                .hardware_control_key
+                .as_deref(),
+            Some("relay.5")
+        );
+        assert!(
+            loaded
+                .workspace_session
+                .dialogs
+                .hardware_channel_detail_active
+        );
+        assert!(loaded.workspace_profiles.contains_key("hardware-review"));
+        assert_eq!(
+            loaded.active_workspace_profile.as_deref(),
+            Some("hardware-review")
+        );
     }
 
     #[test]
@@ -562,10 +3055,11 @@ mod tests {
 
     #[test]
     fn test_detect_storage_mode_system_default() {
-        let temp_dir = std::env::temp_dir().join(format!("pealayer_test_sys_{}", uuid::Uuid::new_v4()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("pealayer_test_sys_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&temp_dir).unwrap();
 
-        let mode = detect_storage_mode(&temp_dir);
+        let mode = storage_mode_with_setting(&temp_dir, None);
         assert_eq!(mode, StorageMode::System);
 
         let sys_path = resolve_system_config_path();
@@ -576,7 +3070,8 @@ mod tests {
 
     #[test]
     fn test_detect_storage_mode_pealayer_json() {
-        let temp_dir = std::env::temp_dir().join(format!("pealayer_test_json_{}", uuid::Uuid::new_v4()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("pealayer_test_json_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&temp_dir).unwrap();
         std::fs::write(temp_dir.join("pealayer.json"), "{}").unwrap();
 
@@ -588,7 +3083,8 @@ mod tests {
 
     #[test]
     fn test_detect_storage_mode_portable_dat() {
-        let temp_dir = std::env::temp_dir().join(format!("pealayer_test_dat_{}", uuid::Uuid::new_v4()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("pealayer_test_dat_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&temp_dir).unwrap();
         std::fs::write(temp_dir.join("portable.dat"), "").unwrap();
 
@@ -600,20 +3096,14 @@ mod tests {
 
     #[test]
     fn test_detect_storage_mode_env_var() {
-        let temp_dir = std::env::temp_dir().join(format!("pealayer_test_env_{}", uuid::Uuid::new_v4()));
-        std::fs::create_dir_all(&temp_dir).unwrap();
-
-        unsafe {
-            std::env::set_var("PEALAYER_PORTABLE", "1");
+        let temp_dir =
+            std::env::temp_dir().join(format!("pealayer_test_env_{}", uuid::Uuid::new_v4()));
+        for setting in ["1", "true", "TRUE", "TrUe"] {
+            assert_eq!(storage_mode_with_setting(&temp_dir, Some(setting)), StorageMode::Portable);
         }
-        let mode = detect_storage_mode(&temp_dir);
-        assert_eq!(mode, StorageMode::Portable);
-
-        unsafe {
-            std::env::remove_var("PEALAYER_PORTABLE");
+        for setting in [None, Some("0"), Some("false"), Some("invalid")] {
+            assert_eq!(storage_mode_with_setting(&temp_dir, setting), StorageMode::System);
         }
-
-        let _ = std::fs::remove_dir_all(&temp_dir);
     }
 
     #[test]
@@ -623,8 +3113,51 @@ mod tests {
     }
 
     #[test]
+    fn accent_presets_and_custom_color_are_validated() {
+        assert_eq!(parse_rgb_hex("#38d27a"), Some([56, 210, 122]));
+        assert_eq!(parse_rgb_hex("0078D4"), Some([0, 120, 212]));
+        assert_eq!(parse_rgb_hex("not-a-color"), None);
+
+        let mut config = AppConfig {
+            accent_color: AccentColor::Custom,
+            custom_accent_color: Some("#0a84ff".to_string()),
+            ..AppConfig::default()
+        };
+        assert!(config.validate().is_ok());
+        config.custom_accent_color = Some("blue".to_string());
+        assert!(config.validate().is_err());
+    }
+
+    #[test]
+    fn control_density_is_persisted_and_reconciled_with_shared_appearance() {
+        for density in UiControlDensity::ALL {
+            let source = AppConfig { ui_control_density: density, ..Default::default() };
+            let restored: AppConfig = serde_json::from_value(serde_json::to_value(&source).unwrap()).unwrap();
+            assert_eq!(restored.ui_control_density, density);
+            let mut target = AppConfig::default();
+            target.copy_appearance_from(&restored);
+            assert_eq!(target.ui_control_density, density);
+        }
+        let source = AppConfig { ui_control_density: UiControlDensity::Comfortable,
+            ui_font_family: UiFontFamily::Vazirmatn, monospace_font_family: UiFontFamily::System, ..Default::default() };
+        let values = serde_json::to_value(&source).unwrap();
+        assert_eq!(values["ui_control_density"], "comfortable");
+        let restored: AppConfig = serde_json::from_value(values).unwrap();
+        assert_eq!(restored.ui_control_density, UiControlDensity::Comfortable);
+        assert_eq!(restored.ui_font_family, UiFontFamily::Vazirmatn);
+        assert_eq!(restored.monospace_font_family, UiFontFamily::System);
+        let mut target = AppConfig::default();
+        target.copy_appearance_from(&source);
+        assert_eq!(target.ui_control_density, UiControlDensity::Comfortable);
+        assert_eq!(target.ui_font_family, UiFontFamily::Vazirmatn);
+        assert_eq!(target.monospace_font_family, UiFontFamily::System);
+        assert_eq!(AppConfig::default().ui_control_density, UiControlDensity::Compact);
+    }
+
+    #[test]
     fn test_portable_save_and_load_roundtrip() {
-        let temp_dir = std::env::temp_dir().join(format!("pealayer_port_test_{}", uuid::Uuid::new_v4()));
+        let temp_dir =
+            std::env::temp_dir().join(format!("pealayer_port_test_{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(&temp_dir).unwrap();
 
         let mut cfg = AppConfig::default();
@@ -634,7 +3167,8 @@ mod tests {
         cfg.show_remaining_time = true;
         cfg.recent_media.push(PathBuf::from("/media/video.mp4"));
 
-        cfg.save_with_mode(StorageMode::Portable, &temp_dir);
+        cfg.save_with_mode(StorageMode::Portable, &temp_dir)
+            .unwrap();
 
         let portable_file = temp_dir.join("pealayer.json");
         assert!(portable_file.exists());
@@ -647,6 +3181,206 @@ mod tests {
         assert_eq!(loaded.recent_media, vec![PathBuf::from("/media/video.mp4")]);
 
         let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn config_patch_rejects_unknown_keys_and_persists_complete_settings() {
+        let temp_dir =
+            std::env::temp_dir().join(format!("pealayer_config_patch_{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&temp_dir).unwrap();
+        let original = AppConfig::default();
+        let updated = original
+            .apply_patch(&serde_json::json!({
+                "theme": "dark",
+                "hardware_endpoint": "pccontroller://cafe-pc:8787",
+                "pause_on_hardware_disconnect": false,
+                "motion_control_mode": "hold",
+                "compact_hardware_controls": true,
+                "non_user_control_visibility": "hidden",
+                "prefix_relay_identifiers": false,
+                "show_estop_control": false,
+                "confirm_estop_release": false,
+                "status_bar": {
+                    "media_rate": false,
+                    "hardware": true,
+                    "telemetry": false,
+                    "status_rgb": true,
+                    "warnings": true,
+                    "workspace": false
+                }
+            }))
+            .unwrap();
+        assert_eq!(updated.theme, AppTheme::Dark);
+        assert_eq!(
+            updated.hardware_endpoint.as_deref(),
+            Some("pccontroller://cafe-pc:8787")
+        );
+        assert!(!updated.pause_on_hardware_disconnect);
+        assert_eq!(updated.motion_control_mode, MotionControlMode::Hold);
+        assert!(updated.compact_hardware_controls);
+        assert_eq!(
+            updated.non_user_control_visibility,
+            NonUserControlVisibility::Hidden
+        );
+        assert!(!updated.prefix_relay_identifiers);
+        assert!(!updated.show_estop_control);
+        assert!(!updated.confirm_estop_release);
+        assert!(!updated.status_bar.media_rate);
+        assert!(!updated.status_bar.workspace);
+        assert!(
+            updated
+                .apply_patch(&serde_json::json!({"hardawre_endpoint": "typo"}))
+                .unwrap_err()
+                .contains("unknown configuration setting")
+        );
+
+        updated
+            .save_with_mode(StorageMode::Portable, &temp_dir)
+            .unwrap();
+        let restored = AppConfig::load_with_mode(StorageMode::Portable, &temp_dir);
+        assert_eq!(restored, updated);
+        let leftovers = std::fs::read_dir(&temp_dir)
+            .unwrap()
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_name().to_string_lossy().ends_with(".tmp"))
+            .count();
+        assert_eq!(leftovers, 0);
+        let _ = std::fs::remove_dir_all(&temp_dir);
+    }
+
+    #[test]
+    fn emergency_stop_ui_is_visible_and_release_is_guarded_by_default() {
+        let config = AppConfig::default();
+        assert!(config.show_estop_control);
+        assert!(config.confirm_estop_release);
+    }
+
+    #[test]
+    fn web_server_preferences_are_persisted_and_validated() {
+        let updated = AppConfig::default()
+            .apply_patch(&serde_json::json!({
+                "web_enabled": true,
+                "web_listen_addresses": ["0.0.0.0"],
+                "web_port": 8181,
+                "web_allow_control": false,
+                "web_allow_configuration": true,
+                "web_allow_file_access": false,
+                "web_allow_updates": false,
+                "web_sync_state": true,
+                "web_sync_interval_ms": 250
+            }))
+            .unwrap();
+        assert_eq!(updated.web_listen_addresses, ["0.0.0.0"]);
+        assert_eq!(updated.web_port, 8181);
+        assert!(!updated.web_allow_control);
+        assert!(!updated.web_allow_file_access);
+        assert!(!updated.web_allow_updates);
+        assert_eq!(updated.web_sync_interval_ms, 250);
+
+        let invalid_address = AppConfig {
+            web_listen_addresses: vec!["not-an-address".to_string()],
+            ..AppConfig::default()
+        };
+        assert!(invalid_address.validate().is_err());
+        let invalid_interval = AppConfig {
+            web_sync_interval_ms: 15,
+            ..AppConfig::default()
+        };
+        assert!(invalid_interval.validate().is_err());
+    }
+
+    #[test]
+    fn window_magnetic_snap_defaults_and_distance_are_validated() {
+        let defaults = AppConfig::default();
+        assert!(!defaults.window_magnetic_snap);
+        assert_eq!(defaults.window_magnetic_snap_distance, 16);
+        assert!(defaults.validate().is_ok());
+
+        for valid in [1, 16, 128] {
+            let config = AppConfig {
+                window_magnetic_snap_distance: valid,
+                ..AppConfig::default()
+            };
+            assert!(config.validate().is_ok(), "distance {valid}");
+        }
+        for invalid in [0, 129] {
+            let config = AppConfig {
+                window_magnetic_snap_distance: invalid,
+                ..AppConfig::default()
+            };
+            assert!(config.validate().is_err(), "distance {invalid}");
+        }
+    }
+
+    #[test]
+    fn motion_controls_default_to_push_behavior() {
+        assert_eq!(MotionControlMode::default(), MotionControlMode::Hold);
+        assert_eq!(
+            AppConfig::default().motion_control_mode,
+            MotionControlMode::Hold
+        );
+    }
+
+    #[test]
+    fn non_user_control_visibility_round_trips_as_one_policy() {
+        let config = AppConfig {
+            non_user_control_visibility: NonUserControlVisibility::Shown,
+            ..AppConfig::default()
+        };
+        let serialized = serde_json::to_value(config).unwrap();
+        assert_eq!(
+            serialized.get("non_user_control_visibility"),
+            Some(&serde_json::json!("shown"))
+        );
+        let restored: AppConfig = serde_json::from_value(serialized).unwrap();
+        assert_eq!(
+            restored.non_user_control_visibility,
+            NonUserControlVisibility::Shown
+        );
+    }
+
+    #[test]
+    fn hardware_key_bindings_round_trip_and_reject_unsafe_values() {
+        let binding = HardwareKeyBinding {
+            id: "seat-a-hold".to_string(),
+            channel_key: "seat.a".to_string(),
+            chord: KeyChord {
+                key: "KeyU".to_string(),
+                control: true,
+                ..Default::default()
+            },
+            action: HardwareKeyBindingAction::Hold {
+                press_action_id: "seat.a.up".to_string(),
+                release_action_id: "seat.a.stop".to_string(),
+                press_label: "Up".to_string(),
+                release_label: "Stop".to_string(),
+            },
+            global: true,
+            enabled: true,
+            then: Vec::new(),
+        };
+        let config = AppConfig {
+            hardware_key_bindings: vec![binding.clone()],
+            ..Default::default()
+        };
+        assert!(config.validate().is_ok());
+        let restored: AppConfig = serde_json::from_value(serde_json::to_value(&config).unwrap())
+            .expect("binding configuration round trip");
+        assert_eq!(restored.hardware_key_bindings, vec![binding]);
+
+        let mut invalid = config;
+        invalid.hardware_key_bindings.push(HardwareKeyBinding {
+            id: "bad-level".to_string(),
+            channel_key: "pwm.0".to_string(),
+            action: HardwareKeyBindingAction::SetPwm { percent: 101.0 },
+            ..Default::default()
+        });
+        assert!(
+            invalid
+                .validate()
+                .unwrap_err()
+                .contains("between 0 and 100")
+        );
     }
 
     #[test]
@@ -666,7 +3400,10 @@ mod tests {
         if std::env::var_os("APP_PUBLISHER").is_none()
             && std::env::var_os("APP_COPYRIGHT").is_none()
         {
-            assert_eq!(resolved_app_publisher(&cfg).as_deref(), Some("Example Studio"));
+            assert_eq!(
+                resolved_app_publisher(&cfg).as_deref(),
+                Some("Example Studio")
+            );
             assert_eq!(resolved_app_copyright(&cfg), None);
         }
     }
@@ -681,10 +3418,29 @@ mod tests {
 
         let json = serde_json::to_string(&AppLanguage::Persian).unwrap();
         assert_eq!(json, "\"fa\"");
-        assert_eq!(serde_json::from_str::<AppLanguage>("\"en\"").unwrap(), AppLanguage::English);
+        assert_eq!(
+            serde_json::from_str::<AppLanguage>("\"en\"").unwrap(),
+            AppLanguage::English
+        );
         assert!(resolve_rtl(AppDirection::Auto, AppLanguage::Persian));
         assert!(!resolve_rtl(AppDirection::Auto, AppLanguage::English));
         assert!(resolve_rtl(AppDirection::Rtl, AppLanguage::English));
         assert!(!resolve_rtl(AppDirection::Ltr, AppLanguage::Persian));
+    }
+
+    #[test]
+    fn config_serializes_and_deserializes_sidebar_rail_state() {
+        let mut config = AppConfig::default();
+        assert!(config.ui.sidebar_rail.enabled);
+        config.ui.sidebar_rail.width = 380.0;
+        config.ui.sidebar_rail.open = Some(crate::ui::sidebar_rail::SidebarPane::HardwareMonitor);
+
+        let json = serde_json::to_string(&config).expect("serialize");
+        let restored: AppConfig = serde_json::from_str(&json).expect("deserialize");
+        assert_eq!(restored.ui.sidebar_rail.width, 380.0);
+        assert_eq!(
+            restored.ui.sidebar_rail.open,
+            Some(crate::ui::sidebar_rail::SidebarPane::HardwareMonitor)
+        );
     }
 }

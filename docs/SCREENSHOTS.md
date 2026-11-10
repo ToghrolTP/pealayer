@@ -12,8 +12,17 @@ the exact PR artifact:
 
 ```powershell
 pwsh -File scripts/update-screenshots-windows.ps1 `
-  -Executable target/release/pealayer.exe `
+  -Executable "$env:LOCALAPPDATA\Programs\Pealayer\build-cache\cargo-target\release\pealayer.exe" `
   -Theme dark -Locale en,fa
+```
+
+Capture the same Preferences editor in its native-window host by selecting the
+dedicated surface (the default remains the main application window):
+
+```powershell
+pwsh -File scripts/update-screenshots-windows.ps1 `
+  -Executable "$env:LOCALAPPDATA\Programs\Pealayer\build-cache\cargo-target\release\pealayer.exe" `
+  -Surface preferences -Theme dark -Locale en
 ```
 
 For a custom build, pass `-Branding path\to\brand.json` (the shared

@@ -1,6 +1,7 @@
-use pealayer::mpv::seek::{SeekBackend, SeekController, SeekMode};
+use pealayer::mpv::frame_cache::{CachedFrame, FrameCache};
+use pealayer::mpv::seek::{PendingSeek, ScrubResult, SeekBackend, SeekController, SeekMode};
 use pealayer::ui::controls::resolve_display_time;
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, RwLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -11,11 +12,15 @@ struct MockSeekBackend {
 }
 
 impl SeekBackend for MockSeekBackend {
-    fn execute_seek(&self, target_time: f64, mode: SeekMode) {
+    fn execute_seek(&self, request: PendingSeek) -> bool {
         if let Some(delay) = self.delay {
             thread::sleep(delay);
         }
-        self.seeks.lock().unwrap().push((target_time, mode));
+        self.seeks
+            .lock()
+            .unwrap()
+            .push((request.target_time, request.mode));
+        true
     }
 }
 
@@ -50,7 +55,7 @@ fn test_seek_controller_scrub_and_commit() {
     thread::sleep(Duration::from_millis(50));
 
     // Request commit
-    controller.request_commit(15.0);
+    let commit_id = controller.request_commit(15.0).request_id;
     thread::sleep(Duration::from_millis(50));
 
     let executed = seeks.lock().unwrap().clone();
@@ -60,6 +65,10 @@ fn test_seek_controller_scrub_and_commit() {
     let last = executed.last().unwrap();
     assert_eq!(last.0, 15.0);
     assert_eq!(last.1, SeekMode::Commit);
+    let completed = controller.take_completed();
+    assert!(completed.iter().any(|seek| {
+        seek.request_id == commit_id && seek.target_time == 15.0 && seek.mode == SeekMode::Commit
+    }));
 }
 
 #[test]
@@ -91,6 +100,10 @@ fn test_seek_controller_coalesces_rapid_scrub_requests() {
     );
     // The final executed seek must be the latest target (10.0)
     assert_eq!(executed.last().unwrap().0, 10.0);
+
+    let completed = controller.take_completed();
+    assert_eq!(completed.last().unwrap().target_time, 10.0);
+    assert!(completed.len() < 10);
 }
 
 #[test]
@@ -118,4 +131,52 @@ fn test_display_time_isolation_during_scrub() {
     seek_pos = None;
     playback_time = 30.0;
     assert_eq!(resolve_display_time(seek_pos, playback_time), 30.0);
+}
+
+#[test]
+fn test_exact_cache_preview_still_moves_decoder_and_rejects_nearby_frames() {
+    let backend = MockSeekBackend::default();
+    let seeks = backend.seeks.clone();
+    let cache = Arc::new(RwLock::new(FrameCache::new(10 * 1024 * 1024)));
+
+    // Prepopulate cache with frame at 5.0s
+    let frame = CachedFrame::new(5.0, 320, 180, vec![42u8; 320 * 180 * 4]);
+    cache.write().unwrap().insert(frame, 5.0);
+
+    let controller = SeekController::with_cache(backend, cache);
+
+    // Only the exact target can be displayed without a release-frame change.
+    let result = controller.request_scrub(5.0);
+    match result {
+        ScrubResult::Cached(hit) => {
+            assert_eq!(hit.pts, 5.0);
+        }
+        ScrubResult::Dispatched(_) => panic!("Expected cache hit, got dispatched seek"),
+    }
+
+    wait_for_seek_target(&seeks, 5.0);
+
+    assert!(
+        matches!(controller.request_scrub(5.01), ScrubResult::Dispatched(_)),
+        "A nearby cached PTS must not masquerade as the requested frame"
+    );
+    wait_for_seek_target(&seeks, 5.01);
+
+    // Scrub to uncached frame
+    let miss_result = controller.request_scrub(12.0);
+    match miss_result {
+        ScrubResult::Dispatched(_) => {}
+        ScrubResult::Cached(_) => panic!("Expected cache miss, got cache hit"),
+    }
+
+    wait_for_seek_target(&seeks, 12.0);
+}
+
+#[test]
+fn test_seek_controller_drops_cleanly_without_deadlock() {
+    for _ in 0..100 {
+        let backend = MockSeekBackend::default();
+        let controller = SeekController::new(backend);
+        drop(controller);
+    }
 }

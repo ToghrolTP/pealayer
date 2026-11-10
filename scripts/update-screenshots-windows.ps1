@@ -5,10 +5,26 @@ param(
     [string]$OutputDirectory,
     [string]$AppName,
     [string]$Branding,
+    [string]$HardwareEndpoint,
+    [string]$WorkspaceDockLayout,
     [ValidateSet('dark', 'light')]
     [string]$Theme = 'dark',
     [ValidateSet('en', 'fa')]
     [string[]]$Locale = @('en', 'fa'),
+    [ValidateSet('main', 'preferences')]
+    [string]$Surface = 'main',
+    [ValidateRange(0, 5)]
+    [int]$PreferencesTab = 0,
+    [string]$PreferenceIcon,
+    [int]$WindowWidth = 0,
+    [int]$WindowHeight = 0,
+    [int]$ScrollNotches = 0,
+    [ValidateRange(0.0, 1.0)]
+    [double]$ScrollXRatio = 0.15,
+    [ValidateRange(0.0, 1.0)]
+    [double]$ScrollYRatio = 0.5,
+    [string[]]$ClickClientPoint = @(),
+    [string[]]$RightClickClientPoint = @(),
     [ValidateRange(1, 30)]
     [int]$StartupTimeoutSeconds = 15
 )
@@ -25,11 +41,23 @@ $resolvedExecutable = (Resolve-Path -LiteralPath $Executable).Path
 $artifactProductName = (Get-Item -LiteralPath $resolvedExecutable).VersionInfo.ProductName
 $effectiveAppName = if ($AppName) { $AppName.Trim() } elseif ($artifactProductName) { $artifactProductName } else { 'Application' }
 $resolvedBranding = if ($Branding) { (Resolve-Path -LiteralPath $Branding -ErrorAction Stop).Path } else { $null }
+$resolvedPreferenceIcon = if ($PreferenceIcon) { (Resolve-Path -LiteralPath $PreferenceIcon -ErrorAction Stop).Path } else { $null }
+if ($resolvedPreferenceIcon -and -not (Test-Path -LiteralPath $resolvedPreferenceIcon -PathType Leaf)) {
+    throw 'PreferenceIcon must name an existing image file.'
+}
 if (-not $OutputDirectory) {
     $OutputDirectory = Join-Path $repositoryRoot 'docs\screenshots'
 }
 New-Item -ItemType Directory -Path $OutputDirectory -Force | Out-Null
 $resolvedOutput = (Resolve-Path -LiteralPath $OutputDirectory).Path
+$effectiveWindowWidth = if ($WindowWidth -gt 0) { $WindowWidth } elseif ($Surface -eq 'main') { 1920 } else { 1000 }
+$effectiveWindowHeight = if ($WindowHeight -gt 0) { $WindowHeight } elseif ($Surface -eq 'main') { 1080 } else { 900 }
+if ($effectiveWindowWidth -lt 800 -or $effectiveWindowWidth -gt 3840) {
+    throw 'WindowWidth must be between 800 and 3840 pixels.'
+}
+if ($effectiveWindowHeight -lt 600 -or $effectiveWindowHeight -gt 2160) {
+    throw 'WindowHeight must be between 600 and 2160 pixels.'
+}
 
 Add-Type -AssemblyName System.Drawing
 Add-Type @'
@@ -60,6 +88,15 @@ public static class PealayerScreenshotNative {
     public static extern bool ClientToScreen(IntPtr hwnd, ref Point point);
 
     [DllImport("user32.dll")]
+    public static extern bool GetCursorPos(out Point point);
+
+    [DllImport("user32.dll")]
+    public static extern bool SetCursorPos(int x, int y);
+
+    [DllImport("user32.dll")]
+    public static extern void mouse_event(uint flags, uint dx, uint dy, uint data, UIntPtr extraInfo);
+
+    [DllImport("user32.dll")]
     public static extern bool LogicalToPhysicalPointForPerMonitorDPI(IntPtr hwnd, ref Point point);
 
     [DllImport("user32.dll")]
@@ -86,6 +123,9 @@ public static class PealayerScreenshotNative {
 
     [DllImport("user32.dll")]
     public static extern bool BringWindowToTop(IntPtr hwnd);
+
+    [DllImport("user32.dll")]
+    public static extern IntPtr SendMessage(IntPtr hwnd, uint message, IntPtr wParam, IntPtr lParam);
 
     [DllImport("user32.dll")]
     public static extern uint GetWindowThreadProcessId(IntPtr hwnd, out uint processId);
@@ -127,6 +167,60 @@ public static class PealayerScreenshotNative {
             return true;
         }, IntPtr.Zero);
         return best;
+    }
+
+    public static void SendMouseWheel(IntPtr hwnd, int clientX, int clientY, int notches) {
+        Point original;
+        GetCursorPos(out original);
+        Point point = new Point { X = clientX, Y = clientY };
+        if (!ClientToScreen(hwnd, ref point)) {
+            throw new InvalidOperationException("ClientToScreen failed for mouse-wheel capture setup.");
+        }
+        long packedPoint = ((long)(point.Y & 0xffff) << 16) | (uint)(point.X & 0xffff);
+        int direction = Math.Sign(notches);
+        // egui routes wheel events using its current hovered position. Sending
+        // WM_MOUSEWHEEL alone does not update that position after a fresh launch.
+        SetForegroundWindow(hwnd);
+        SetCursorPos(point.X, point.Y);
+        System.Threading.Thread.Sleep(100);
+        try {
+            for (int index = 0; index < Math.Abs(notches); index++) {
+                int delta = direction * 120;
+                long packedDelta = (long)(delta & 0xffff) << 16;
+                SendMessage(hwnd, 0x020A, new IntPtr(packedDelta), new IntPtr(packedPoint));
+            }
+            System.Threading.Thread.Sleep(200);
+        } finally {
+            SetCursorPos(original.X, original.Y);
+        }
+    }
+
+    public static void SendMouseClick(IntPtr hwnd, int clientX, int clientY) {
+        Point original;
+        GetCursorPos(out original);
+        Point point = new Point { X = clientX, Y = clientY };
+        if (!ClientToScreen(hwnd, ref point)) {
+            throw new InvalidOperationException("ClientToScreen failed for click capture setup.");
+        }
+        SetForegroundWindow(hwnd);
+        SetCursorPos(point.X, point.Y);
+        mouse_event(0x0002, 0, 0, 0, UIntPtr.Zero);
+        mouse_event(0x0004, 0, 0, 0, UIntPtr.Zero);
+        SetCursorPos(original.X, original.Y);
+    }
+
+    public static void SendMouseRightClick(IntPtr hwnd, int clientX, int clientY) {
+        Point original;
+        GetCursorPos(out original);
+        Point point = new Point { X = clientX, Y = clientY };
+        if (!ClientToScreen(hwnd, ref point)) {
+            throw new InvalidOperationException("ClientToScreen failed for right-click capture setup.");
+        }
+        SetForegroundWindow(hwnd);
+        SetCursorPos(point.X, point.Y);
+        mouse_event(0x0008, 0, 0, 0, UIntPtr.Zero);
+        mouse_event(0x0010, 0, 0, 0, UIntPtr.Zero);
+        SetCursorPos(original.X, original.Y);
     }
 }
 '@
@@ -270,8 +364,24 @@ for ($localeIndex = 0; $localeIndex -lt $Locale.Count; $localeIndex++) {
     $start.EnvironmentVariables['APP_THEME'] = $Theme
     $start.EnvironmentVariables['APP_NAME'] = $effectiveAppName
     $start.EnvironmentVariables['PEALAYER_INSTANCE_ID'] = "screenshot-$captureSession-$language"
-    $start.EnvironmentVariables['PEALAYER_CONFIG_FILE'] = Join-Path $captureProfile "$language-settings.json"
+    $captureConfig = Join-Path $captureProfile "$language-settings.json"
+    if ($HardwareEndpoint -or $WorkspaceDockLayout -or $resolvedPreferenceIcon) {
+        $captureSettings = @{}
+        if ($HardwareEndpoint) { $captureSettings.hardware_endpoint = $HardwareEndpoint.Trim() }
+        if ($WorkspaceDockLayout) { $captureSettings.workspace_dock_layout = $WorkspaceDockLayout }
+        if ($resolvedPreferenceIcon) { $captureSettings.app_icon = $resolvedPreferenceIcon }
+        $captureSettings |
+            ConvertTo-Json |
+            Set-Content -LiteralPath $captureConfig -Encoding utf8
+    }
+    $start.EnvironmentVariables['PEALAYER_CONFIG_FILE'] = $captureConfig
     $start.EnvironmentVariables['PEALAYER_PORT'] = (28080 + ($localeIndex * 10)).ToString()
+    if ($Surface -eq 'preferences') {
+        $start.ArgumentList.Add('--preferences-helper')
+        $start.ArgumentList.Add('0')
+        $start.ArgumentList.Add('--preferences-tab')
+        $start.ArgumentList.Add($PreferencesTab.ToString())
+    }
     if ($resolvedBranding) {
         $start.EnvironmentVariables['APPLICATION_BRAND'] = $resolvedBranding
     }
@@ -280,7 +390,58 @@ for ($localeIndex = 0; $localeIndex -lt $Locale.Count; $localeIndex++) {
     try {
         [void]$process.WaitForInputIdle(5000)
         $handle = Wait-MainWindow $process $StartupTimeoutSeconds
-        $fileName = "pealayer-$language-$Theme.png"
+        $showWindow = 0x0040
+        if (-not [PealayerScreenshotNative]::SetWindowPos(
+                $handle,
+                [IntPtr]::Zero,
+                24,
+                24,
+                $effectiveWindowWidth,
+                $effectiveWindowHeight,
+                $showWindow
+            )) {
+            throw "Could not resize Pealayer to ${effectiveWindowWidth}x${effectiveWindowHeight}."
+        }
+        Start-Sleep -Milliseconds 500
+        foreach ($point in $ClickClientPoint) {
+            if ($point -notmatch '^\s*(\d+)\s*,\s*(\d+)\s*$') {
+                throw "ClickClientPoint must use the x,y format; received '$point'."
+            }
+            [PealayerScreenshotNative]::SendMouseClick(
+                $handle,
+                [int]$Matches[1],
+                [int]$Matches[2]
+            )
+            Start-Sleep -Milliseconds 250
+        }
+        foreach ($point in $RightClickClientPoint) {
+            if ($point -notmatch '^\s*(\d+)\s*,\s*(\d+)\s*$') {
+                throw "RightClickClientPoint must use the x,y format; received '$point'."
+            }
+            [PealayerScreenshotNative]::SendMouseRightClick(
+                $handle,
+                [int]$Matches[1],
+                [int]$Matches[2]
+            )
+            Start-Sleep -Milliseconds 250
+        }
+        if ($ScrollNotches -ne 0) {
+            $clientRect = New-Object PealayerScreenshotNative+Rect
+            if (-not [PealayerScreenshotNative]::GetClientRect($handle, [ref]$clientRect)) {
+                throw 'Could not read the Pealayer client bounds before scrolling.'
+            }
+            $clientWidth = $clientRect.Right - $clientRect.Left
+            $clientHeight = $clientRect.Bottom - $clientRect.Top
+            [PealayerScreenshotNative]::SendMouseWheel(
+                $handle,
+                [Math]::Round($clientWidth * $ScrollXRatio),
+                [Math]::Round($clientHeight * $ScrollYRatio),
+                $ScrollNotches
+            )
+            Start-Sleep -Milliseconds 500
+        }
+        $surfaceSuffix = if ($Surface -eq 'main') { '' } else { "-$Surface" }
+        $fileName = "pealayer$surfaceSuffix-$language-$Theme.png"
         $path = Join-Path $resolvedOutput $fileName
         $capture = Save-WindowScreenshot $handle $process.Id $path
         $captures += [ordered]@{
@@ -321,6 +482,14 @@ $manifest = [ordered]@{
     executable = Split-Path -Leaf $resolvedExecutable
     executable_sha256 = $executableHash
     application_name = $effectiveAppName
+    surface = $Surface
+    preferences_tab = if ($Surface -eq 'preferences') { $PreferencesTab } else { $null }
+    configured_icon = [bool]$resolvedPreferenceIcon
+    requested_window_size = "${effectiveWindowWidth}x${effectiveWindowHeight}"
+    scroll_notches = $ScrollNotches
+    click_client_points = @($ClickClientPoint)
+    right_click_client_points = @($RightClickClientPoint)
+    hardware_endpoint = if ($HardwareEndpoint) { $HardwareEndpoint.Trim() } else { $null }
     isolated_profile = $true
     capture_method = 'per-capture'
     captures = $captures

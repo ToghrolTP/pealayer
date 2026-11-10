@@ -1,4 +1,25 @@
-use pealayer::four_d::protocol::{Command, ProtocolError, cobs_decode, cobs_encode, crc8, parse_frame};
+use pealayer::four_d::protocol::{
+    Command, ProtocolError, cobs_decode, cobs_encode, crc8, parse_frame,
+};
+
+#[test]
+fn native_namespace_rejects_pakar_and_unknown_markers_before_dispatch() {
+    use pealayer::four_d::protocol::{encode_pccontroller_frame, decode_pccontroller_frame, crc8_atm};
+    let current = encode_pccontroller_frame(0x11, 7, &[1, 0, 0]);
+    let canonical = cobs_decode(&current[..current.len()-1]).unwrap();
+    for discriminator in 0..=255_u8 {
+        if discriminator == 1 { continue; }
+        let mut foreign = canonical.clone();
+        foreign[1] = discriminator;
+        let last = foreign.len()-1;
+        foreign[last] = crc8_atm(&foreign[..last]);
+        let encoded = cobs_encode(&foreign);
+        assert_eq!(decode_pccontroller_frame(&encoded), Err(ProtocolError::WrongProtocol));
+    }
+    assert_eq!(decode_pccontroller_frame(&current), Ok((0x11, 7, vec![1, 0, 0])));
+    let future = encode_pccontroller_frame(0xfc, 7, &[]);
+    assert_eq!(decode_pccontroller_frame(&future), Ok((0xfc, 7, vec![])));
+}
 
 #[test]
 fn test_crc8_known_vector() {
@@ -70,9 +91,18 @@ fn test_command_roundtrip_all_variants() {
     let commands = vec![
         Command::Ping,
         Command::RelaySet { id: 1, state: true },
-        Command::RelaySet { id: 2, state: false },
-        Command::PwmSet { channel: 0, value: 0 },
-        Command::PwmSet { channel: 255, value: 255 },
+        Command::RelaySet {
+            id: 2,
+            state: false,
+        },
+        Command::PwmSet {
+            channel: 0,
+            value: 0,
+        },
+        Command::PwmSet {
+            channel: 255,
+            value: 255,
+        },
         Command::AllOff,
     ];
     for cmd in commands {
@@ -83,7 +113,8 @@ fn test_command_roundtrip_all_variants() {
         // Test without trailing 0x00 delimiter
         if frame.last() == Some(&0x00) {
             let without_delim = &frame[..frame.len() - 1];
-            let parsed_no_delim = parse_frame(without_delim).expect("Failed to parse frame without trailing zero");
+            let parsed_no_delim =
+                parse_frame(without_delim).expect("Failed to parse frame without trailing zero");
             assert_eq!(cmd, parsed_no_delim);
         }
     }
@@ -114,7 +145,10 @@ fn test_corrupt_crc_rejected() {
 fn test_corrupt_cobs_rejected() {
     // Malformed block offset that exceeds slice length
     let invalid_offset = vec![0x05, 0x01, 0x02, 0x00];
-    assert_eq!(parse_frame(&invalid_offset), Err(ProtocolError::InvalidCobs));
+    assert_eq!(
+        parse_frame(&invalid_offset),
+        Err(ProtocolError::InvalidCobs)
+    );
 
     // Zero byte inside COBS body
     let zero_inside = vec![0x03, 0x00, 0x01, 0x00];

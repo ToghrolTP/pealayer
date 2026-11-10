@@ -1,0 +1,12 @@
+{
+  "motion": "#427DA8",
+  "relay": "#B77939",
+  "pwm": "#598A59",
+  "beep": "#9872A8",
+  "rgb": "#A75C83",
+  "addressable": "#4C9690",
+  "rf": "#8272B1",
+  "display": "#477F92",
+  "menu": "#797C9A",
+  "opcode": "#797979"
+}

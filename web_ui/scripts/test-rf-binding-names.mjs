@@ -1,0 +1,17 @@
+import assert from 'node:assert/strict';
+import { uniqueRfBindingName, rfBindingNameConflicts } from '../src/rfBindingNames.ts';
+const names=[];
+for(let i=0;i<4;i++)names.push(uniqueRfBindingName('Light',names));
+assert.deepEqual(names,['Light','Light 2','Light 3','Light 4']);
+assert.equal(uniqueRfBindingName('Light',['LIGHT','light 2']),'Light 3');
+assert.equal(rfBindingNameConflicts(' light ','',names),true);
+assert.equal(rfBindingNameConflicts('light','Light',names),false);
+assert.equal(rfBindingNameConflicts('Light 2','Light',names),true);
+const long='چراغ'.repeat(40);
+const first=uniqueRfBindingName(long,[]);
+const second=uniqueRfBindingName(long,[first]);
+assert.ok(new TextEncoder().encode(first).length<=64);
+assert.ok(new TextEncoder().encode(second).length<=64);
+assert.notEqual(first,second);
+assert.ok(!first.includes('\uFFFD') && !second.includes('\uFFFD'));
+console.log('RF binding names: four independent assignments, case-insensitive conflicts, explicit edits and UTF-8 bounds passed.');

@@ -288,7 +288,11 @@ fn test_fragmented_byte_by_byte_stream() {
     // Feed all bytes except the last delimiter byte
     for &byte in &frame[..frame.len() - 1] {
         decoder.feed(&[byte]);
-        assert_eq!(decoder.next_command(), None, "Should not emit command before delimiter");
+        assert_eq!(
+            decoder.next_command(),
+            None,
+            "Should not emit command before delimiter"
+        );
     }
 
     // Feed the trailing 0x00 delimiter

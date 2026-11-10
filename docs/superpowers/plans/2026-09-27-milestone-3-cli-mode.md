@@ -6,17 +6,21 @@ REST API, JSON-RPC API, and WebSocket service.
 ## Final contract
 
 - `pealayer [OPTIONS] [FILE_OR_URL]` opens local or remote media.
-- `--fullscreen`/`-f` and `--volume`/`-v` set startup presentation state.
-- `--remote COMMAND` sends a command to the running instance.
-- A second launch forwards its media target with
-  `POST http://127.0.0.1:${PEALAYER_PORT:-8080}/api/ipc` and exits after the
-  running instance acknowledges it.
+- Essential playback, seek, volume, mute, speed, workspace, and window-management
+  switches are translated to the same typed command model as the APIs.
+- `--command COMMAND` queues a text or JSON command; `--remote COMMAND` sends one
+  directly to the running instance and exits.
+- Single-instance mode is persisted in Preferences and enabled by default.
+- A second launch forwards its target and ordered command list through a Windows
+  named pipe or Unix-domain socket. Loopback `POST /api/ipc` is the bounded
+  compatibility fallback, and the process exits only after acknowledgement.
 - If no instance answers within the bounded connection timeout, the process
   starts the GUI and loads the requested target itself.
 
-`PEALAYER_PORT` is the only TCP port setting. The client constructs a normal
-HTTP request with an exact `Content-Length`, accepts only a successful HTTP
-response, and preserves JSON command and JSON-RPC envelopes in the request body.
+`PEALAYER_PORT` remains the network automation port setting. Native IPC is
+scoped to the current Windows session/application identity or the configured
+Unix socket path. Every transport validates the same command ranges, while
+`GET /api/player/commands` exposes the current living command catalog.
 
 Coverage lives in `src/cli.rs`, `tests/cli_forwarding_test.rs`, and
 `tests/interop_tcp_test.rs`.
