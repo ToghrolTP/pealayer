@@ -1696,6 +1696,9 @@ mod tests {
             app.engine_handle = crate::four_d::engine::memory_only_test_engine();
             app.rtl = rtl;
             app.show_four_d_editor = true;
+            // This test switches into Simple and back through the bar itself.
+            // Simple normally hides it; explicitly enable this optional surface.
+            app.simple_workspace.show_status_bar = true;
             for widget in Widget::ALL { app.status_bar.set_visible(widget, widget == Widget::Workspace); }
             app.status_bar.dividers = dividers;
             let mut author = app.capture_workspace_profile(&ctx);

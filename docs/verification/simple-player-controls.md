@@ -64,12 +64,26 @@ The normal configuration API accepts and persists:
 
 ## Verification gates
 
-57 focused tests pass: actual pointer dragging without media changes, canvas and
+58 focused tests pass: actual pointer dragging without media changes, canvas and
 status reservation, normalized placement, intermediate/instant motion, valid GPU
 meshes, workspace-specific visibility, source byte identity, existing controls,
-customizable transport, workspace toolbar and workspace-tool contracts.
+customizable transport, workspace toolbar and workspace-tool contracts. The
+workspace-selector pointer test explicitly enables Simple's optional status bar
+before switching into that workspace and back. Its previous implicit assumption
+that the bar was always visible failed in hosted Linux/Windows tests; the
+corrected test passes locally without changing the requested hidden default.
+
+The clean native release and standalone downloader compiled from
+`dac58859f9df058a3da0c4f314872b8c903b6a6f`. Packaging then stopped with Windows
+access denied while replacing the shared staging executable. That is not a
+completed package or deployment. Only this pass's generated Web output was
+restored/removed afterward; authored source and running applications were kept.
 
 Packaging, installed runtime identity, current-instance preference readback and
-actual native/GPU captures are separate acceptance gates. The pending Terminal
-Review package is preserved separately; other reviews/historical instances must
-not be overwritten. Cafe remains explicitly user-deferred/offline.
+actual native/GPU captures remain separate acceptance gates. Simple defaults have
+not yet been applied to the older regular runtime: it lacks this configuration
+contract. Terminal Review is preserved separately and its final package identity
+was verified over HTTP after the user launched it, but the runner cannot access
+its native pipe and its occluded window does not support PrintWindow capture.
+Other reviews/historical instances must not be overwritten. Cafe remains
+explicitly user-deferred/offline.
