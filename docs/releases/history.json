@@ -1,0 +1,2573 @@
+{
+  "format": "pealayer-release-history-v1",
+  "repository": "ToghrolTP/pealayer",
+  "backfilledOn": "2026-11-10",
+  "imageCommit": "1e171e8bbd66348d00f9742704c5b78b006f6faf",
+  "currentPinnedSource": "0cde16fd5d59e6068d43f81e55b0c2e0f35aca7e",
+  "releases": [
+    {
+      "tag": "v0.1.0",
+      "sha": "d798109c0387ce70ea283a12593216583247b15e",
+      "title": "First public cross-platform packages",
+      "date": "2026-09-24T20:43:42+03:30",
+      "previousSha": null,
+      "commitCount": 119,
+      "prs": [
+        {
+          "number": 1,
+          "title": "Add multi-platform GitHub CI/CD with dynamic Windows libmpv resolution, Dependabot updates, and release automation",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/1",
+          "mergeCommit": "5d07f110ee2a2361982170ecc59f60f4d578ace2"
+        }
+      ],
+      "previousTag": null,
+      "prerelease": false,
+      "notes": "docs/releases/v0.1.0.md",
+      "summary": "The first public packages brought together the June player, docked 4D timeline, July remote controls and September binary hardware/curve-authoring work, then added the cross-platform build foundation.",
+      "issues": [
+        2,
+        3,
+        40,
+        63
+      ],
+      "packages": [
+        {
+          "file": "Pealayer-linux-x86_64-v0.1.0-d798109.tar.gz",
+          "size": 10304846,
+          "sha256": "9641087c683d7006422f1b5980593dff8a7a125b73e2823295c11715fe072996",
+          "sourceSha": "d798109c0387ce70ea283a12593216583247b15e"
+        },
+        {
+          "file": "Pealayer-windows-x86_64-v0.1.0-d798109.zip",
+          "size": 59335283,
+          "sha256": "01b1b2ae243c0f163e7097f2983b50bae21773673d4bb33620df3c6c78e4ae43",
+          "sourceSha": "d798109c0387ce70ea283a12593216583247b15e"
+        }
+      ],
+      "runs": [],
+      "screenshots": [
+        {
+          "path": "docs/screenshots/status-bar-hardware-origin.png",
+          "caption": "Genuine rebuilt June dock status bar. Historical Memory/System Ready text is placeholder content; no connected board is shown.",
+          "evidence": "docs/verification/status-bar-evolution.md",
+          "sourceSha": "3bc0e0872739b736ab942bfe9ae216004cc04462",
+          "sha256": "8962d612f3d243907f098bf49cceeb5f12ce65a89cb7edb9588884af03611434",
+          "immutableUrl": "https://raw.githubusercontent.com/ToghrolTP/pealayer/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/status-bar-hardware-origin.png",
+          "provenanceUrl": "https://github.com/ToghrolTP/pealayer/blob/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/verification/status-bar-evolution.md"
+        }
+      ]
+    },
+    {
+      "tag": "v0.2.0",
+      "sha": "d1c4956f8b592cae6f1cd2de065cc3b684da3df3",
+      "title": "Native shell and semantic hardware authoring",
+      "date": "2026-09-30T10:36:33+03:30",
+      "previousSha": "d798109c0387ce70ea283a12593216583247b15e",
+      "commitCount": 110,
+      "prs": [
+        {
+          "number": 23,
+          "title": "build(deps): bump the npm-dependencies group in /web_ui with 9 updates",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/23",
+          "mergeCommit": "299b0054d1907fff31975c2906af93da968af852"
+        },
+        {
+          "number": 24,
+          "title": "build(deps): bump the cargo-dependencies group across 1 directory with 3 updates",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/24",
+          "mergeCommit": "99cd4f99695aeeb2c051fa8809b22f8fac6b9b8f"
+        },
+        {
+          "number": 25,
+          "title": "Windows production packaging and PCController integration",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/25",
+          "mergeCommit": "5d9230ab805092464cdcbce1518e3b2dcf8e3c9a"
+        },
+        {
+          "number": 35,
+          "title": "Enforce branded Windows GUI ownership",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/35",
+          "mergeCommit": "d3392a83e765860b8640a92dafdce0eae72a7719"
+        },
+        {
+          "number": 36,
+          "title": "Make hardware and player UI contextual, live, and consistent",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/36",
+          "mergeCommit": "ba202e3b77280a3255d55bae9d258929f637239a"
+        },
+        {
+          "number": 37,
+          "title": "Restore NLE after remote fullscreen and advertise actions",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/37",
+          "mergeCommit": "6ca1d204fffb891b38fc19dccce3daec7843bbf5"
+        },
+        {
+          "number": 38,
+          "title": "Allow custom hardware endpoints and compact subtitle settings",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/38",
+          "mergeCommit": "d9064f650fc79dfa067d096510d04d9bbdade2e5"
+        },
+        {
+          "number": 39,
+          "title": "Preserve recovered local Pealayer work without regressions",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/39",
+          "mergeCommit": "a72ffe3dabcc4444542ced1b917ac43a4e9f65c0"
+        },
+        {
+          "number": 41,
+          "title": "Add video-synchronized PCController macro clips",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/41",
+          "mergeCommit": "111f6616f7da2e25d45a920f16826baa65702781"
+        },
+        {
+          "number": 42,
+          "title": "Add profile-driven semantic hardware controls",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/42",
+          "mergeCommit": "e7323d4b4ed1a11ab5143e1e2706c98ee432d096"
+        },
+        {
+          "number": 43,
+          "title": "Add PCController hardware effect authoring",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/43",
+          "mergeCommit": "386225ea5275e0cf0323c11d8a5f28f4766cc149"
+        }
+      ],
+      "previousTag": "v0.1.0",
+      "prerelease": false,
+      "notes": "docs/releases/v0.2.0.md",
+      "summary": "Native Windows shell integration, persistent portable/system settings and semantic PCController authoring, with the first packages for both macOS architectures.",
+      "issues": [
+        2,
+        26,
+        29,
+        30,
+        34,
+        40,
+        51,
+        60,
+        61,
+        62
+      ],
+      "packages": [
+        {
+          "file": "Pealayer-linux-x86_64-v0.2.0-d1c4956.tar.gz",
+          "size": 11639664,
+          "sha256": "9227757e6bdc52a9d451c539d90bbd99f523ddb31aeb4775694e3519a91c45d2",
+          "sourceSha": "d1c4956f8b592cae6f1cd2de065cc3b684da3df3"
+        },
+        {
+          "file": "Pealayer-macos-aarch64-v0.2.0-d1c4956.zip",
+          "size": 11575475,
+          "sha256": "2a095dce7ae02015dd88fb94bb84bc99e00f39b6f1e284cb20993b297c67604b",
+          "sourceSha": "d1c4956f8b592cae6f1cd2de065cc3b684da3df3"
+        },
+        {
+          "file": "Pealayer-macos-x86_64-v0.2.0-d1c4956.zip",
+          "size": 11923913,
+          "sha256": "ba0dadfc7d337b61b1d1f80dc28e7179652a0610b93bfe9693a6d9afed2324c3",
+          "sourceSha": "d1c4956f8b592cae6f1cd2de065cc3b684da3df3"
+        },
+        {
+          "file": "Pealayer-windows-x86_64-v0.2.0-d1c4956.zip",
+          "size": 54193883,
+          "sha256": "7a4727d0ea8c0cfdd57cbf5a8ccce6b7d5103f7b8079dd7f286d20efaad3a90f",
+          "sourceSha": "d1c4956f8b592cae6f1cd2de065cc3b684da3df3"
+        }
+      ],
+      "runs": [],
+      "screenshots": [
+        {
+          "path": "docs/screenshots/pealayer-en-dark.png",
+          "caption": "Accepted native English candidate from September 28, an ancestor of this tag; not an exact d1c4956 package capture.",
+          "evidence": "docs/screenshots/manifest.json",
+          "sourceSha": "0bd2db074667b0688a941bb015dc42b0391327ce",
+          "sha256": "453c4d74bbf59aba3f6dfb9a30552e6790d46eccde7f42a4bbd9c458f9094c6f",
+          "immutableUrl": "https://raw.githubusercontent.com/ToghrolTP/pealayer/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/pealayer-en-dark.png",
+          "provenanceUrl": "https://github.com/ToghrolTP/pealayer/blob/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/manifest.json"
+        },
+        {
+          "path": "docs/screenshots/pealayer-fa-dark.png",
+          "caption": "Matching native Persian/RTL candidate; the same manifest records executable and image hashes.",
+          "evidence": "docs/screenshots/manifest.json",
+          "sourceSha": "0bd2db074667b0688a941bb015dc42b0391327ce",
+          "sha256": "b122c62f986ed61b69c2e232fa163e073d9d30ef2d70e97ae9a368a76958d60e",
+          "immutableUrl": "https://raw.githubusercontent.com/ToghrolTP/pealayer/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/pealayer-fa-dark.png",
+          "provenanceUrl": "https://github.com/ToghrolTP/pealayer/blob/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/manifest.json"
+        }
+      ]
+    },
+    {
+      "tag": "v0.3.0-alpha.1",
+      "sha": "14087de3f103c2e7a0394c0f5c205eb78b42d5f9",
+      "title": "Capability workspace and unified control port",
+      "date": "2026-10-01T13:12:41+03:30",
+      "previousSha": "d1c4956f8b592cae6f1cd2de065cc3b684da3df3",
+      "commitCount": 39,
+      "prs": [
+        {
+          "number": 45,
+          "title": "Build a professional capability-driven hardware workspace",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/45",
+          "mergeCommit": "7293ba4a2018c48b814dd7ea3a7637f0d5f8a002"
+        },
+        {
+          "number": 47,
+          "title": "feat(ui): industrial-standard workspace panel restoration and layout persistence",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/47",
+          "mergeCommit": "65f61125990b13aea2e96095c4ed7c6cafd9da06"
+        },
+        {
+          "number": 48,
+          "title": "ci: bring PCController-grade workflow presentation",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/48",
+          "mergeCommit": "89d55b4384c361360910ce8aea1ac2d810cfae84"
+        },
+        {
+          "number": 49,
+          "title": "feat: play live and buffered remote media",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/49",
+          "mergeCommit": "adfbddd84903f4436102986a511d73836f3346a0"
+        },
+        {
+          "number": 50,
+          "title": "feat: unify HTTP, WebSocket, and IPC on one port",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/50",
+          "mergeCommit": "6e74d0bc62e63b90aaea0930d2e3e5d592ae8c2f"
+        },
+        {
+          "number": 52,
+          "title": "build(deps-dev): bump vite from 8.3.0 to 8.3.1 in /web_ui in the npm-dependencies group",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/52",
+          "mergeCommit": "fe385f7330e788cfbea16cbb772fd8464504cd1a"
+        },
+        {
+          "number": 53,
+          "title": "build(deps): bump the cargo-dependencies group with 3 updates",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/53",
+          "mergeCommit": "14087de3f103c2e7a0394c0f5c205eb78b42d5f9"
+        },
+        {
+          "number": 54,
+          "title": "build(deps): bump the actions group with 4 updates",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/54",
+          "mergeCommit": "c33057c0b4d05d88be423f0f5f48ce962230ca62"
+        }
+      ],
+      "previousTag": "v0.2.0",
+      "prerelease": true,
+      "notes": "docs/releases/v0.3.0-alpha.1.md",
+      "summary": "A capability-led hardware workspace, saved dock layouts, live/remote media and a single control port replace the earlier fragmented workflow.",
+      "issues": [
+        29,
+        30,
+        40,
+        44,
+        51,
+        60,
+        61,
+        62,
+        63
+      ],
+      "packages": [
+        {
+          "file": "Pealayer-linux-x86_64-v0.3.0-alpha.1-14087de.tar.gz",
+          "size": 11854454,
+          "sha256": "ad0c78fc2dfb80915fbbc54a2cc733158cdd2c7ea65044fcc3e93d7ea7e25b85",
+          "sourceSha": "14087de3f103c2e7a0394c0f5c205eb78b42d5f9",
+          "platform": "linux-x86_64",
+          "workflowRunId": 36844489774,
+          "artifactId": 11153051798
+        },
+        {
+          "file": "Pealayer-windows-x86_64-v0.3.0-alpha.1-14087de.zip",
+          "size": 55719277,
+          "sha256": "c4de54026b8482f62a701471716fea84f76ce4427914c51866f9fa4f56a6bcae",
+          "sourceSha": "14087de3f103c2e7a0394c0f5c205eb78b42d5f9",
+          "platform": "windows-x86_64",
+          "workflowRunId": 36844489774,
+          "artifactId": 11152934374
+        },
+        {
+          "file": "Pealayer-macos-x86_64-v0.3.0-alpha.1-14087de.zip",
+          "size": 12365910,
+          "sha256": "47623b7b489bcd2df1a1d09db5bc2b493aa07194f35886c78ac707d97beb5847",
+          "sourceSha": "14087de3f103c2e7a0394c0f5c205eb78b42d5f9",
+          "platform": "macos-x86_64",
+          "workflowRunId": 36844489774,
+          "artifactId": 11152798386
+        }
+      ],
+      "runs": [
+        {
+          "id": 36844489774,
+          "url": "https://github.com/ToghrolTP/pealayer/actions/runs/36844489774",
+          "conclusion": "cancelled",
+          "jobs": [
+            {
+              "name": "🛡️ Repository health · Web UI",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🐧 Linux · x86-64",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🪟 Windows · x86-64",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🍎 macOS · Intel",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🍎 macOS · Apple silicon",
+              "conclusion": "cancelled",
+              "failedSteps": []
+            },
+            {
+              "name": "🚦 Pealayer · Complete",
+              "conclusion": "failure",
+              "failedSteps": [
+                "📋 Publish consolidated CI/CD summary"
+              ]
+            },
+            {
+              "name": "✨ Release · Attested packages",
+              "conclusion": "skipped",
+              "failedSteps": []
+            }
+          ]
+        }
+      ],
+      "screenshots": [
+        {
+          "path": "docs/screenshots/releases/v0.3.0-alpha.1/native-workspace.jpg",
+          "caption": "Actual native workspace in the exact recovered CI package, captured during this backfill with an isolated disconnected profile. No media/telemetry is fabricated.",
+          "evidence": "docs/screenshots/releases/v0.3.0-alpha.1/manifest.json",
+          "sourceSha": "14087de3f103c2e7a0394c0f5c205eb78b42d5f9",
+          "sha256": "fd1bd78fae9bb39b91ef49e54d10df0c8365cd399f12e9cd56ffeced10890591",
+          "immutableUrl": "https://raw.githubusercontent.com/ToghrolTP/pealayer/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/releases/v0.3.0-alpha.1/native-workspace.jpg",
+          "provenanceUrl": "https://github.com/ToghrolTP/pealayer/blob/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/releases/v0.3.0-alpha.1/manifest.json"
+        }
+      ]
+    },
+    {
+      "tag": "v0.4.0-alpha.1",
+      "sha": "db328d153e19c1713b98c02f6adefdf3d92717f3",
+      "title": "Web Studio and live effects recording",
+      "date": "2026-10-08T20:05:32+03:30",
+      "previousSha": "14087de3f103c2e7a0394c0f5c205eb78b42d5f9",
+      "commitCount": 455,
+      "prs": [
+        {
+          "number": 46,
+          "title": "Polish the live hardware workspace layout",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/46",
+          "mergeCommit": "710f7dc474af99e00e817b5c90ff864155a4b01a"
+        },
+        {
+          "number": 55,
+          "title": "Build the production Pealayer Web Studio suite",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/55",
+          "mergeCommit": "8ebf7fa910f1c243334f890f663778d6220a2741"
+        },
+        {
+          "number": 58,
+          "title": "Fix live effect recording and controller playback",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/58",
+          "mergeCommit": "7c28540823522c55ed50dec2bdbca3f90082db28"
+        },
+        {
+          "number": 67,
+          "title": "Effects: solid red recording and editable group icons",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/67",
+          "mergeCommit": "d51d8eb2714fac0fdd7e5a5d673f813613b87367"
+        },
+        {
+          "number": 68,
+          "title": "Effects: drag cards between parent groups",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/68",
+          "mergeCommit": "19604b927e91a2746d74858d9cea6118492a28f6"
+        },
+        {
+          "number": 69,
+          "title": "Clear recovered hardware clock transport errors",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/69",
+          "mergeCommit": "0b79d4f2fad833f04865752ef113c12b068857c5"
+        },
+        {
+          "number": 70,
+          "title": "feat: add playback-aware application icon packs",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/70",
+          "mergeCommit": "e1a872f6619ba562674ecab7499aedad0469d0f8"
+        },
+        {
+          "number": 71,
+          "title": "fix: patch UPX executables safely",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/71",
+          "mergeCommit": "5870af0c556c3465f8c5a6dedb58673781c2d859"
+        },
+        {
+          "number": 72,
+          "title": "Timeline playhead follow and configurable ruler toolbar",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/72",
+          "mergeCommit": "06e996a27e1980e7bde994b8f11dfb9d55eb2a09"
+        },
+        {
+          "number": 73,
+          "title": "Fix timeline cue marquee selection with CAD-style direction modes",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/73",
+          "mergeCommit": "0affe6b4c4dd60e05eab7ca123f1d0e0b0b29fc9"
+        },
+        {
+          "number": 75,
+          "title": "feat: add intrinsic cue grips and configurable label overflow",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/75",
+          "mergeCommit": "0101a7e0dd79da925c2585e58742240ad3042a93"
+        },
+        {
+          "number": 76,
+          "title": "feat: respect PCController PWM transfer curves",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/76",
+          "mergeCommit": "616d1ad2a1b344b405394c8a13c03df4683aefb8"
+        },
+        {
+          "number": 78,
+          "title": "Avoid per-frame playback icon configuration clones",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/78",
+          "mergeCommit": "4ee0d7a3f6e98c075a81d03611c76c5e506c715e"
+        },
+        {
+          "number": 81,
+          "title": "Stop self-renewing Windows taskbar preview repaint loop",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/81",
+          "mergeCommit": "d66b0dc215047ba747276b3e3e7a017554dd20af"
+        },
+        {
+          "number": 82,
+          "title": "perf: slow peer session polling while paused",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/82",
+          "mergeCommit": "f3b613837eb513d3b4027e498e5adbff344fced6"
+        },
+        {
+          "number": 83,
+          "title": "build(deps-dev): bump vite from 8.3.1 to 8.3.2 in /web_ui in the npm-dependencies group",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/83",
+          "mergeCommit": "db328d153e19c1713b98c02f6adefdf3d92717f3"
+        },
+        {
+          "number": 85,
+          "title": "fix(timeline): restore closed effect controls on cue reveal and center icon picker tiles",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/85",
+          "mergeCommit": "a90d9db24d64b1fb7b8afc01858769a03434756c"
+        }
+      ],
+      "previousTag": "v0.3.0-alpha.1",
+      "prerelease": true,
+      "notes": "docs/releases/v0.4.0-alpha.1.md",
+      "summary": "The integrated hardware workspace and Web Studio add live effect recording, controller-owned catalogs, palettes, remote authority and richer timeline interaction.",
+      "issues": [
+        40,
+        59,
+        61,
+        62,
+        63,
+        80
+      ],
+      "packages": [
+        {
+          "file": "Pealayer-windows-x86_64-v0.4.0-alpha.1-db328d1.zip",
+          "size": 60674906,
+          "sha256": "ac5b0047b14fd43215d9ad081213a1dd1e443a61fc503d20e5bce61667b0dd01",
+          "sourceSha": "db328d153e19c1713b98c02f6adefdf3d92717f3",
+          "platform": "windows-x86_64",
+          "workflowRunId": 37810002589,
+          "artifactId": 11567645298
+        },
+        {
+          "file": "Pealayer-macos-x86_64-v0.4.0-alpha.1-db328d1.zip",
+          "size": 19235586,
+          "sha256": "029bfa287644f76812e3a83c6462550fd65b5cf9a76886f6879fc730dfdecea4",
+          "sourceSha": "db328d153e19c1713b98c02f6adefdf3d92717f3",
+          "platform": "macos-x86_64",
+          "workflowRunId": 37810002589,
+          "artifactId": 11567366087
+        },
+        {
+          "file": "Pealayer-linux-x86_64-v0.4.0-alpha.1-db328d1.tar.gz",
+          "size": 18615404,
+          "sha256": "fa501883e39cb4d24eaac041255dd2d2d62b3d38bb1e4706c4289a9dd3c2017e",
+          "sourceSha": "db328d153e19c1713b98c02f6adefdf3d92717f3",
+          "platform": "linux-x86_64",
+          "workflowRunId": 37810002589,
+          "artifactId": 11565574850
+        }
+      ],
+      "runs": [
+        {
+          "id": 37810002589,
+          "url": "https://github.com/ToghrolTP/pealayer/actions/runs/37810002589",
+          "conclusion": "cancelled",
+          "jobs": [
+            {
+              "name": "🛡️ Repository health · Web UI",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🍎 macOS · Apple silicon",
+              "conclusion": "cancelled",
+              "failedSteps": []
+            },
+            {
+              "name": "🪟 Windows · x86-64",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🍎 macOS · Intel",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🐧 Linux · x86-64",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🚦 Pealayer · Complete",
+              "conclusion": "failure",
+              "failedSteps": [
+                "📋 Publish consolidated CI/CD summary"
+              ]
+            },
+            {
+              "name": "✨ Release · Attested packages",
+              "conclusion": "skipped",
+              "failedSteps": []
+            }
+          ]
+        }
+      ],
+      "screenshots": [
+        {
+          "path": "docs/screenshots/effect-cards/after-dark.jpg",
+          "caption": "Actual Web effects cards with neutral metadata badges and separate duration. Native geometry tests are documented separately; this is a Web capture.",
+          "evidence": "docs/screenshots/effect-cards/README.md",
+          "sourceSha": "162f00648e52b893bbcf645bc2e2639dd1b34981",
+          "sha256": "d12716647243eec41277f6470217295df4cc5108f262fac9f3863898d50d3019",
+          "immutableUrl": "https://raw.githubusercontent.com/ToghrolTP/pealayer/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/effect-cards/after-dark.jpg",
+          "provenanceUrl": "https://github.com/ToghrolTP/pealayer/blob/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/effect-cards/README.md"
+        },
+        {
+          "path": "docs/screenshots/effects-library/groups-after.jpg",
+          "caption": "Actual Web group controls and shared palette from the #46 integration.",
+          "evidence": "docs/screenshots/effects-library/README.md",
+          "sourceSha": "62aac623f27d69258e76231c39bd6ea513c0da80",
+          "sha256": "220173489961c5f3972d08e0b5cbffa45720b53fc546a0f13a451a2a391d3944",
+          "immutableUrl": "https://raw.githubusercontent.com/ToghrolTP/pealayer/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/effects-library/groups-after.jpg",
+          "provenanceUrl": "https://github.com/ToghrolTP/pealayer/blob/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/effects-library/README.md"
+        },
+        {
+          "path": "docs/screenshots/effects-recording/native-recorder-final/pealayer-en-dark.png",
+          "caption": "Archived native recording workflow; the linked manifest identifies its source and executable.",
+          "evidence": "docs/screenshots/effects-recording/native-recorder-final/manifest.json",
+          "sourceSha": "502e12a843fe328bcf1222f633d133b4b2372f67",
+          "sha256": "5099bbc0aa350f46226998237f80c0d75f7eb79b0716759d15272f28b92586ac",
+          "immutableUrl": "https://raw.githubusercontent.com/ToghrolTP/pealayer/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/effects-recording/native-recorder-final/pealayer-en-dark.png",
+          "provenanceUrl": "https://github.com/ToghrolTP/pealayer/blob/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/effects-recording/native-recorder-final/manifest.json"
+        }
+      ]
+    },
+    {
+      "tag": "v0.5.0-alpha.1",
+      "sha": "ad4b466fbe40e4556edf4bd9594d3f4eb468329c",
+      "title": "Audio, external mpv and authoring workspace",
+      "date": "2026-10-10T22:52:59+03:30",
+      "previousSha": "db328d153e19c1713b98c02f6adefdf3d92717f3",
+      "commitCount": 212,
+      "prs": [
+        {
+          "number": 77,
+          "title": "Timeline track state feedback and direct cue creation",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/77",
+          "mergeCommit": "3ee32a53156757b49dfaaa19365fcd0a2c9a8eb2"
+        },
+        {
+          "number": 79,
+          "title": "Fix task-specific Windows Jump List icons",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/79",
+          "mergeCommit": "f275578da33292946d151788194c1be7974512ae"
+        },
+        {
+          "number": 84,
+          "title": "build(deps): bump the cargo-dependencies group across 1 directory with 3 updates",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/84",
+          "mergeCommit": "169184fcc052e60447146bbc9cbfaff2a750ccde"
+        },
+        {
+          "number": 86,
+          "title": "feat(timeline): implement frame-accurate scrubbing with decoded frame cache",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/86",
+          "mergeCommit": "ef970b113bbe4c5f3c5d7c00c8e511f47e21a1bc"
+        },
+        {
+          "number": 87,
+          "title": "Consolidate Preferences refinement and shell/timeline recovery",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/87",
+          "mergeCommit": "225267855df68dca4104f5ac4066e4be02ab11e7"
+        },
+        {
+          "number": 89,
+          "title": "fix(timeline): immediate toolbar edits, drag customization and stable navigation",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/89",
+          "mergeCommit": "774f28090620ec8a29c0f30885cdc76952aa9ea8"
+        },
+        {
+          "number": 90,
+          "title": "Fix explicit FPS source and responsive hardware status",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/90",
+          "mergeCommit": "c7ccf7490c25cf10a189def9705256d4f1dc2067"
+        },
+        {
+          "number": 91,
+          "title": "Distinguish persistent hardware markers from timed holds and PWM ramps",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/91",
+          "mergeCommit": "a6859ee9ff1b82b03b3ce5a0756c8321cfde9a21"
+        },
+        {
+          "number": 92,
+          "title": "feat(timeline): step one frame per scroll tick on timeline ruler",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/92",
+          "mergeCommit": "f8d8300d1fcf810b38e0d3ea72a8a3686561b11c"
+        },
+        {
+          "number": 93,
+          "title": "Fix seekbar release frames, chapter navigation and shared marker colors",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/93",
+          "mergeCommit": "a431a9da85ceda9076779a0a6c3a7e56c4028030"
+        },
+        {
+          "number": 94,
+          "title": "Fix channel feedback, shared cue properties and track state",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/94",
+          "mergeCommit": "49ffd6c56c595101855e654d5aaf6ec74db19463"
+        },
+        {
+          "number": 95,
+          "title": "fix: synchronize semantic transport controls across native and Web",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/95",
+          "mergeCommit": "19357ebecc70594797fe3242fc916a5d412c97fe"
+        },
+        {
+          "number": 96,
+          "title": "Fix NLE volume visibility and responsive transport",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/96",
+          "mergeCommit": "6f565d22d94bbdbd56f162a9161fb84289635304"
+        },
+        {
+          "number": 97,
+          "title": "Make elapsed time an immutable segmented editor with safe seek commits",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/97",
+          "mergeCommit": "c349c510bf3b095750bca31f4f0253bf36d3f16a"
+        },
+        {
+          "number": 98,
+          "title": "Refresh buzzer melodies on events and selector opening through authority",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/98",
+          "mergeCommit": "5d0784b8bbca95afca241a2b5f7667618ec80028"
+        },
+        {
+          "number": 99,
+          "title": "Fix live application branding across tray, dialogs and Web",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/99",
+          "mergeCommit": "2858c2b8785d2832df8fb89a120c5d5ab305c19b"
+        },
+        {
+          "number": 100,
+          "title": "Refine shared Effect Controls inspector and cue dialog",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/100",
+          "mergeCommit": "b193fe37aac925975a1f2a9e66e0f9c7ab6d8d89"
+        },
+        {
+          "number": 101,
+          "title": "Fix live runtime branding integration test",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/101",
+          "mergeCommit": "00d276b23c8a9a7dad90671dca9910aa611ff60b"
+        },
+        {
+          "number": 102,
+          "title": "Fix shared mobile Web button icon centering",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/102",
+          "mergeCommit": "ed6907595d7a372f1a63dfa28cdc7cc7d7f853ca"
+        },
+        {
+          "number": 103,
+          "title": "Improve playback and timeline rendering smoothness",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/103",
+          "mergeCommit": "5e070f571062d84b32162ffc5c41e3bf79181c98"
+        },
+        {
+          "number": 104,
+          "title": "Add SFX audio effects and independent output routing",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/104",
+          "mergeCommit": "79a6a90372c4155db67379c4a39790f966255505"
+        },
+        {
+          "number": 105,
+          "title": "Inspect copied links and stabilize remote-location browsing",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/105",
+          "mergeCommit": "a3c12004187352fdfd95448f7fb82d80e36d6d22"
+        },
+        {
+          "number": 106,
+          "title": "External mpv: event-driven duplex playback, remote controls and muted dual preview",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/106",
+          "mergeCommit": "ac9c617cbb5e21b960877bd31d9db5da4f575d49"
+        },
+        {
+          "number": 107,
+          "title": "Complete remaining UI smoothness optimizations",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/107",
+          "mergeCommit": "df8f30cd1c4b1d18cf8c834c6d909448f633a373"
+        },
+        {
+          "number": 108,
+          "title": "Palette-safe Elegance widgets with live host theme and compact sections",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/108",
+          "mergeCommit": "4415e003edcb66a1b7727819d0a592342a43b436"
+        },
+        {
+          "number": 109,
+          "title": "Curated releases, grouped changelog and current acceptance",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/109",
+          "mergeCommit": "c6a36f5832b9cfedae580c3b8bc89f1fa2ec82b6"
+        },
+        {
+          "number": 111,
+          "title": "Shared download center and standalone utility",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/111",
+          "mergeCommit": "49c6326c7f0567b5c1ac5826daf10642ba70a530"
+        },
+        {
+          "number": 112,
+          "title": "Preserve guarded cue timing and startup acceptance",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/112",
+          "mergeCommit": "4742c7a8d87799d837f7c1219d7e2e75a510a7c5"
+        },
+        {
+          "number": 113,
+          "title": "Preserve clean provenance during Windows packaging",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/113",
+          "mergeCommit": "f4173227b3f9c7a33abbf9224de947786c10e7ec"
+        },
+        {
+          "number": 115,
+          "title": "Resize strip active windows without stretching finite recordings",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/115",
+          "mergeCommit": "005d6596e1c10b7251e652232e01f1763a1784a9"
+        },
+        {
+          "number": 117,
+          "title": "refactor(ui): consolidate panel controls into workspace menu",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/117",
+          "mergeCommit": "c0b38b554ceead9a9f7e056e94af1da0a9782fbc"
+        },
+        {
+          "number": 118,
+          "title": "fix(i18n): use native HarfRust text shaping for Persian",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/118",
+          "mergeCommit": "78563ff7501e13cb8e40a60dd181f69f127c550d"
+        },
+        {
+          "number": 119,
+          "title": "Author semantic seat cues and configurable cue editing",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/119",
+          "mergeCommit": "b44b5b2744b8b65742568aad00b90b3eb52da39a"
+        },
+        {
+          "number": 120,
+          "title": "test(windows): retain shared libmpv client for process",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/120",
+          "mergeCommit": "a54933aa7d0c05a058045dc9cd21b1b7fbc7378e"
+        },
+        {
+          "number": 121,
+          "title": "fix(build): bound Windows storage writes",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/121",
+          "mergeCommit": "ad9022d5a58960bfdbaa5054776e4565e517c2a4"
+        },
+        {
+          "number": 122,
+          "title": "Verify copied links before opening remote dialogs",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/122",
+          "mergeCommit": "8d9bc1d86988987354e373a049ef953f9cf3034d"
+        },
+        {
+          "number": 123,
+          "title": "Assert authoritative state in copied-link acceptance",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/123",
+          "mergeCommit": "cf8e9af736f88fadac3fe45e75dc6e89852ebfe4"
+        },
+        {
+          "number": 124,
+          "title": "Make NLE transport contextual and responsive",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/124",
+          "mergeCommit": "cc74787fb7ed4d96a493c2fd4ab7f8be0a5fe09a"
+        },
+        {
+          "number": 125,
+          "title": "Fix timeline toolbar outlines and drag removal feedback",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/125",
+          "mergeCommit": "ea512decbcdbbcd7675b1f0c798c120216556f49"
+        },
+        {
+          "number": 126,
+          "title": "Add Show in timeline to Effect Controls",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/126",
+          "mergeCommit": "0bec7a848d746368e308b1d0841863481a8c4f5b"
+        },
+        {
+          "number": 127,
+          "title": "Fix Hardware Monitor hidden-channel menu alignment",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/127",
+          "mergeCommit": "9953020340ad111def99eb2c582d90ae4647b4a0"
+        },
+        {
+          "number": 128,
+          "title": "Manage hardware channel folders with context menus and drops",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/128",
+          "mergeCommit": "239ab6b68f1c522100aece5d4fe9ee7ff62ad87b"
+        },
+        {
+          "number": 129,
+          "title": "Fix Effects Library spacing and hover actions",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/129",
+          "mergeCommit": "ac1841e67107718c90d17eb0c46993b57f1b4e23"
+        },
+        {
+          "number": 130,
+          "title": "Fix native dropdown navigation and color picker alignment",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/130",
+          "mergeCommit": "28de6bafbb67aa6f6fa32f3550a8d4d82f04a78d"
+        },
+        {
+          "number": 131,
+          "title": "Record Erfan board-connected authoring readiness",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/131",
+          "mergeCommit": "ad4b466fbe40e4556edf4bd9594d3f4eb468329c"
+        }
+      ],
+      "previousTag": "v0.4.0-alpha.1",
+      "prerelease": true,
+      "notes": "docs/releases/v0.5.0-alpha.1.md",
+      "summary": "The versioned home of the previously date-named October 10 comparison: sound effects, independent audio outputs, external mpv, better source browsing and a much fuller authoring workspace.",
+      "issues": [
+        40,
+        63,
+        64,
+        65,
+        66,
+        80,
+        88,
+        110,
+        114
+      ],
+      "packages": [
+        {
+          "file": "Pealayer-windows-x86_64-v0.5.0-alpha.1-ad4b466.zip",
+          "size": 73918657,
+          "sha256": "da4071817211a64a69b0ae2f5696be2de6da14fcf705290a8962ced18cdb50c4",
+          "sourceSha": "ad4b466fbe40e4556edf4bd9594d3f4eb468329c",
+          "platform": "windows-x86_64",
+          "workflowRunId": 38079579921,
+          "artifactId": 11680880197
+        },
+        {
+          "file": "Pealayer-macos-aarch64-v0.5.0-alpha.1-ad4b466.zip",
+          "size": 26387972,
+          "sha256": "792d04f49e174129fe4674bbc0f705dfb526f7de2a49fb354aeff7cefb875f57",
+          "sourceSha": "ad4b466fbe40e4556edf4bd9594d3f4eb468329c",
+          "platform": "macos-aarch64",
+          "workflowRunId": 38079579921,
+          "artifactId": 11680067371
+        },
+        {
+          "file": "Pealayer-linux-x86_64-v0.5.0-alpha.1-ad4b466.tar.gz",
+          "size": 30071622,
+          "sha256": "99decfcc1e45e9367426c20553456a6a9be3ac199b9ab01539d026487f56a8fd",
+          "sourceSha": "ad4b466fbe40e4556edf4bd9594d3f4eb468329c",
+          "platform": "linux-x86_64",
+          "workflowRunId": 38079579921,
+          "artifactId": 11680001938
+        },
+        {
+          "file": "Pealayer-macos-x86_64-v0.5.0-alpha.1-ad4b466.zip",
+          "size": 27713763,
+          "sha256": "3fac494ed608f398dd802b4612a56830ceb5aace29e14c6c35ce835583ba3ed3",
+          "sourceSha": "ad4b466fbe40e4556edf4bd9594d3f4eb468329c",
+          "platform": "macos-x86_64",
+          "workflowRunId": 42305499535,
+          "artifactId": 13547488608
+        }
+      ],
+      "runs": [
+        {
+          "id": 38079579921,
+          "url": "https://github.com/ToghrolTP/pealayer/actions/runs/38079579921",
+          "conclusion": "cancelled",
+          "jobs": [
+            {
+              "name": "🛡️ Repository health · Web UI",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🪟 Windows · x86-64",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🍎 macOS · Apple silicon",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🍎 macOS · Intel",
+              "conclusion": "cancelled",
+              "failedSteps": []
+            },
+            {
+              "name": "🐧 Linux · x86-64",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🚦 Pealayer · Complete",
+              "conclusion": "failure",
+              "failedSteps": [
+                "📋 Publish consolidated CI/CD summary"
+              ]
+            },
+            {
+              "name": "✨ Release · Attested packages",
+              "conclusion": "skipped",
+              "failedSteps": []
+            }
+          ]
+        },
+        {
+          "id": 42305499535,
+          "url": "https://github.com/ToghrolTP/pealayer/actions/runs/42305499535",
+          "conclusion": "cancelled",
+          "jobs": [
+            {
+              "name": "🛡️ Repository health · Web UI",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🐧 Linux · x86-64",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🍎 macOS · Intel",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🍎 macOS · Apple silicon",
+              "conclusion": "cancelled",
+              "failedSteps": []
+            },
+            {
+              "name": "🪟 Windows · x86-64",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🚦 Pealayer · Complete",
+              "conclusion": "failure",
+              "failedSteps": [
+                "📋 Publish consolidated CI/CD summary"
+              ]
+            },
+            {
+              "name": "✨ Release · Attested packages",
+              "conclusion": "skipped",
+              "failedSteps": []
+            }
+          ]
+        }
+      ],
+      "screenshots": [
+        {
+          "path": "docs/screenshots/ui-history-october10-full.png",
+          "caption": "Actual native v0.5.0-alpha.1 source rebuilt with its original lockfile. The existing filename is retained for provenance; this comparison is now identified by version.",
+          "evidence": "docs/verification/october10-ui-comparison.md",
+          "sourceSha": "ad4b466fbe40e4556edf4bd9594d3f4eb468329c",
+          "sha256": "8efa1372dec41ce0ebcbf3094c7a90fd813b851b179ed30f51c58d6439bfe611",
+          "immutableUrl": "https://raw.githubusercontent.com/ToghrolTP/pealayer/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/ui-history-october10-full.png",
+          "provenanceUrl": "https://github.com/ToghrolTP/pealayer/blob/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/verification/october10-ui-comparison.md"
+        },
+        {
+          "path": "docs/screenshots/ui-history-october10-preferences.png",
+          "caption": "Matching native Preferences capture from the same source and isolated disconnected comparison profile.",
+          "evidence": "docs/verification/october10-ui-comparison.md",
+          "sourceSha": "ad4b466fbe40e4556edf4bd9594d3f4eb468329c",
+          "sha256": "6b6e0778af5778bf26a45bc2fde01f7a7ed7d3652f167ccc47a444605cffcc50",
+          "immutableUrl": "https://raw.githubusercontent.com/ToghrolTP/pealayer/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/ui-history-october10-preferences.png",
+          "provenanceUrl": "https://github.com/ToghrolTP/pealayer/blob/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/verification/october10-ui-comparison.md"
+        }
+      ]
+    },
+    {
+      "tag": "v0.6.0-alpha.1",
+      "sha": "00687b16a70217963794bc2d867160f3fbcd5e65",
+      "title": "Effects Designer and customizable live status",
+      "date": "2026-10-12T21:21:51+03:30",
+      "previousSha": "ad4b466fbe40e4556edf4bd9594d3f4eb468329c",
+      "commitCount": 128,
+      "prs": [
+        {
+          "number": 132,
+          "title": "Prevent configuration I/O and busy loops from starving hardware clocks",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/132",
+          "mergeCommit": "b855b13e8b3e2e2673df63656e6c081f70dfb0a2"
+        },
+        {
+          "number": 133,
+          "title": "Keep routine metadata off the hardware playback clock stream",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/133",
+          "mergeCommit": "ea2df166f287346f853f7417884927eaa42849f1"
+        },
+        {
+          "number": 134,
+          "title": "Document application-owned live screenshot verification",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/134",
+          "mergeCommit": "09b0404187b2df223a64b85d73e10e028e1f714b"
+        },
+        {
+          "number": 135,
+          "title": "Bound CPU use for optional Piper agent narration",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/135",
+          "mergeCommit": "257bce876b1639891b7c70aa7c75283235b62dc6"
+        },
+        {
+          "number": 136,
+          "title": "Expose live hardware timing diagnostics",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/136",
+          "mergeCommit": "2f15ea687c8b2fd923376114c129f486cd7e30e6"
+        },
+        {
+          "number": 137,
+          "title": "Expose coordinator clock corrections and worker delays",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/137",
+          "mergeCommit": "316d6681f66fb66636943b7cd5e3df382c10b9bb"
+        },
+        {
+          "number": 138,
+          "title": "Clarify timing diagnostic counter scopes",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/138",
+          "mergeCommit": "8ac7097cc48d13bef57ad3bd32db7d5a3eac5e26"
+        },
+        {
+          "number": 139,
+          "title": "Reduce routine compiler writes and safely prune retired debug output",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/139",
+          "mergeCommit": "9b72fac169238636faa1a7c5f92fb006b383e800"
+        },
+        {
+          "number": 140,
+          "title": "Document successful bounded cue ACK test and remaining physical gates",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/140",
+          "mergeCommit": "1676ee8662d21dcfd5c7308a15cd27e809a484c3"
+        },
+        {
+          "number": 142,
+          "title": "Effects Designer: cue gestures, whole-effect repeat and selective capture",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/142",
+          "mergeCommit": "cb16a16d95e648f7c0af24b993261ef5ac3b787e"
+        },
+        {
+          "number": 143,
+          "title": "Record current Erfan authoring delivery and live readiness gates",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/143",
+          "mergeCommit": "3265bf80b6f7543831e096a05b04c3b58b770584"
+        },
+        {
+          "number": 144,
+          "title": "fix(mpv): synchronize SeekController shutdown to prevent condvar deadlock",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/144",
+          "mergeCommit": "0d5cad235c5ebcc37725e494846421b88926c2af"
+        },
+        {
+          "number": 145,
+          "title": "Honor renamed seat titles across authoring surfaces",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/145",
+          "mergeCommit": "8337a722b0c93bd393b49d4c9ca3b5ea64ae9c32"
+        },
+        {
+          "number": 146,
+          "title": "Restore step loops with source-bound designer ghosts",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/146",
+          "mergeCommit": "ba6c84a1ffbfbc6f00133566ba6a46fe377ab273"
+        },
+        {
+          "number": 147,
+          "title": "Unify designer presentation and lane authoring interactions",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/147",
+          "mergeCommit": "abe4f6273870008bbe64d4e00bda00d551a83bbe"
+        },
+        {
+          "number": 148,
+          "title": "Polish responsive cue properties and guarded dismissal",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/148",
+          "mergeCommit": "3953ad5da3ba1a9e2d6283fad0b99d453c75a1b9"
+        },
+        {
+          "number": 149,
+          "title": "Reorderable status widgets, live progress and HOT alerts",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/149",
+          "mergeCommit": "2b4e55e08003206c6bad00735913303839161af8"
+        },
+        {
+          "number": 150,
+          "title": "Fix status widget jitter and trailing workspace regression",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/150",
+          "mergeCommit": "3097716abe50862410249d41fcfe7eefda329378"
+        },
+        {
+          "number": 151,
+          "title": "Fix Program Monitor's persistent scroll overflow",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/151",
+          "mergeCommit": "358c23283e1167cd29d2e2f021ed3ca3f3c3089c"
+        },
+        {
+          "number": 152,
+          "title": "Add safe dismissal to all publishing-authority prompts",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/152",
+          "mergeCommit": "dfab6f3194deb66a5ffef10c95a71363a89e6a53"
+        },
+        {
+          "number": 153,
+          "title": "Fix square modal close controls and prevent text-metric drift",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/153",
+          "mergeCommit": "0898e94eaffc1852e354dbafeec8aabf44d7b7a9"
+        },
+        {
+          "number": 154,
+          "title": "Restore live RGB updates in native peer status bars",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/154",
+          "mergeCommit": "2336237c78831e43f902f15f27037c4c173b8753"
+        },
+        {
+          "number": 155,
+          "title": "Add contextual PCController board actions to the Windows tray",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/155",
+          "mergeCommit": "c3425e3938cfdc44902e752f7c54f2c9f75a50d7"
+        },
+        {
+          "number": 156,
+          "title": "Fix stuck hardware preparation and explicit playback recovery",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/156",
+          "mergeCommit": "62773b1319ce6347538fbd2c74dacb5a8796b50f"
+        },
+        {
+          "number": 157,
+          "title": "Fix seat caption alignment independent of trailing actions",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/157",
+          "mergeCommit": "0019a80ad67fff408a42f8ad8e6b8dd64ebdf222"
+        },
+        {
+          "number": 158,
+          "title": "test: isolate PealayerApp::default fixtures and eliminate libmpv worker thread leaks",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/158",
+          "mergeCommit": "916d8af5e8b4fdcb8e548425fa70dd58aa6aa9b5"
+        },
+        {
+          "number": 159,
+          "title": "Keep Effects Library rename height and text alignment stable",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/159",
+          "mergeCommit": "a54149ce16d9e8abd11f0d6015f52b3af938d648"
+        },
+        {
+          "number": 160,
+          "title": "Unify input/dropdown density and contextual buzzer controls",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/160",
+          "mergeCommit": "187012115146c15b1f72cb54bd8284289f485617"
+        },
+        {
+          "number": 161,
+          "title": "Fix native icons and Effect timeline navigation",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/161",
+          "mergeCommit": "fe7361d50537520b6865d0b16ef774fbe269c3b4"
+        },
+        {
+          "number": 162,
+          "title": "Group Effects Designer navigation by folder",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/162",
+          "mergeCommit": "e4c00c06591878174d2454abd2d2f2c45663fce1"
+        },
+        {
+          "number": 163,
+          "title": "Keep empty cue icon square beside its caption",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/163",
+          "mergeCommit": "af6523f8ecc29942c1b972fd64fe29e36847fd38"
+        },
+        {
+          "number": 164,
+          "title": "Unify workspace switching in the status bar",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/164",
+          "mergeCommit": "ed2dd4800635565380d7f613d9ea7d80fd738148"
+        },
+        {
+          "number": 165,
+          "title": "Make Hardware tray actions contextual",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/165",
+          "mergeCommit": "22abbc2ec051ffc47d548a91747e374a5ed175aa"
+        },
+        {
+          "number": 166,
+          "title": "Refine status widgets with compact styling and two-sided layout",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/166",
+          "mergeCommit": "e6a531f869a10125047b75ec597c2e38c9c9e680"
+        },
+        {
+          "number": 167,
+          "title": "Customize control-bar action menus, ordering and visibility",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/167",
+          "mergeCommit": "d7a1c408e78ed451ef098ae14b2dad0d57e4b7a3"
+        },
+        {
+          "number": 168,
+          "title": "Add background media-control preference",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/168",
+          "mergeCommit": "290f85f352668e556bb535ae6eb38ba5e1a7c13b"
+        },
+        {
+          "number": 169,
+          "title": "Restore one cursor-following seek preview across workspaces",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/169",
+          "mergeCommit": "392e6432e317e3a96ca757b59f8bc0ae2c3c0d44"
+        },
+        {
+          "number": 170,
+          "title": "Stabilize Web UI rendering, Wayland canvas, clipboard focus, and responsive header",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/170",
+          "mergeCommit": "c9f9618c7cd99beb3ab95a7d1c79a2fba831a844"
+        },
+        {
+          "number": 171,
+          "title": "Recognize programming latch instead of a hardware disconnect",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/171",
+          "mergeCommit": "dac74d15980f229f6b5bea6384b78f2abce53e2c"
+        },
+        {
+          "number": 172,
+          "title": "Align Effects Library heading with card and Search edges",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/172",
+          "mergeCommit": "b277e3ae7e9bfedd97a15d2c8ee07867c3966958"
+        },
+        {
+          "number": 173,
+          "title": "Complete Windows OS media session and shared Web projection",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/173",
+          "mergeCommit": "00687b16a70217963794bc2d867160f3fbcd5e65"
+        }
+      ],
+      "previousTag": "v0.5.0-alpha.1",
+      "prerelease": true,
+      "notes": "docs/releases/v0.6.0-alpha.1.md",
+      "summary": "Effects Designer gains repeat-aware gestures and capture selection, while status widgets, contextual tray/media controls and hardware preparation become more capable.",
+      "issues": [
+        61,
+        62,
+        63,
+        80,
+        114,
+        116,
+        141,
+        228
+      ],
+      "packages": [
+        {
+          "file": "Pealayer-macos-x86_64-v0.6.0-alpha.1-00687b1.zip",
+          "size": 28895111,
+          "sha256": "560ca179015c1b63da229dff10fa783a767fcf19a922d2a64cebc56200fdbd54",
+          "sourceSha": "00687b16a70217963794bc2d867160f3fbcd5e65",
+          "platform": "macos-x86_64",
+          "workflowRunId": 38287048328,
+          "artifactId": 11763823180
+        },
+        {
+          "file": "Pealayer-linux-x86_64-v0.6.0-alpha.1-00687b1.tar.gz",
+          "size": 31315698,
+          "sha256": "1b0461415bdaad0308c921583744629dffd4d86a3703ecf67d3730fd21a64276",
+          "sourceSha": "00687b16a70217963794bc2d867160f3fbcd5e65",
+          "platform": "linux-x86_64",
+          "workflowRunId": 38287048328,
+          "artifactId": 11763463392
+        }
+      ],
+      "runs": [
+        {
+          "id": 38287048328,
+          "url": "https://github.com/ToghrolTP/pealayer/actions/runs/38287048328",
+          "conclusion": "failure",
+          "jobs": [
+            {
+              "name": "🛡️ Repository health · Web UI",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🪟 Windows · x86-64",
+              "conclusion": "failure",
+              "failedSteps": [
+                "🧪 Run Rust tests · Windows GNU"
+              ]
+            },
+            {
+              "name": "🍎 macOS · Intel",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🐧 Linux · x86-64",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🍎 macOS · Apple silicon",
+              "conclusion": "failure",
+              "failedSteps": [
+                "⬇️ Download verified web application"
+              ]
+            },
+            {
+              "name": "🚦 Pealayer · Complete",
+              "conclusion": "failure",
+              "failedSteps": [
+                "📋 Publish consolidated CI/CD summary"
+              ]
+            },
+            {
+              "name": "✨ Release · Attested packages",
+              "conclusion": "skipped",
+              "failedSteps": []
+            }
+          ]
+        }
+      ],
+      "screenshots": [
+        {
+          "path": "docs/screenshots/status-bar-fixed-slots.png",
+          "caption": "Genuine rebuilt status widget milestone from #150, with real idle screen FPS and the workspace restored to the trailing edge.",
+          "evidence": "docs/verification/status-bar-evolution.md",
+          "sourceSha": "3fb294e63cfd9d9d059d9260d4b4f053123ab3f7",
+          "sha256": "c095535e17f0ded07c319d67135d35a77439bc91dc1a4448731713bdd92da7a3",
+          "immutableUrl": "https://raw.githubusercontent.com/ToghrolTP/pealayer/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/status-bar-fixed-slots.png",
+          "provenanceUrl": "https://github.com/ToghrolTP/pealayer/blob/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/verification/status-bar-evolution.md"
+        },
+        {
+          "path": "docs/screenshots/status-bar-compact.png",
+          "caption": "Genuine #166 compact status layout, including its historical fixed-width caption limit and short dividers.",
+          "evidence": "docs/verification/status-bar-history-audit.md",
+          "sourceSha": "48fd59ce65022b039d28570288ff967bf52bca8e",
+          "sha256": "2833e003584bccffa9685091d84a138cfb0ec3938534547aaa91da9a3e330726",
+          "immutableUrl": "https://raw.githubusercontent.com/ToghrolTP/pealayer/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/status-bar-compact.png",
+          "provenanceUrl": "https://github.com/ToghrolTP/pealayer/blob/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/verification/status-bar-history-audit.md"
+        }
+      ]
+    },
+    {
+      "tag": "v0.7.0-alpha.1",
+      "sha": "81ec22eacdccdc018889a8e2a6a71581c1e008fd",
+      "title": "RF learning, PWM controls and Wayland recovery",
+      "date": "2026-10-15T18:13:47+03:30",
+      "previousSha": "00687b16a70217963794bc2d867160f3fbcd5e65",
+      "commitCount": 113,
+      "prs": [
+        {
+          "number": 174,
+          "title": "Make headless native firmware ready for hardware-free authoring",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/174",
+          "mergeCommit": "a1641d9de9c05c6616034a52be81507bd7a33eba"
+        },
+        {
+          "number": 175,
+          "title": "Expose Windows drives and server folder locations in Web browsing",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/175",
+          "mergeCommit": "8cc4b9e8a348dc29b6a3b01b95adb7f9c6072d18"
+        },
+        {
+          "number": 176,
+          "title": "Restore short controller deadlines after preparation failures",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/176",
+          "mergeCommit": "02a08430902031e13cb504bff1334de1c8e37b77"
+        },
+        {
+          "number": 177,
+          "title": "Reconcile issue80 acceptance with fresh runtime and CPU evidence",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/177",
+          "mergeCommit": "91dcad8cf83974bfd674685243e899669b24e64e"
+        },
+        {
+          "number": 178,
+          "title": "Keep controller live values authoritative in hardware views",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/178",
+          "mergeCommit": "e5ecc6673e9191a8a1a2a29b402759f22e9feb48"
+        },
+        {
+          "number": 179,
+          "title": "Preserve relay clicks and refine hardware/status controls",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/179",
+          "mergeCommit": "0b5d4f8d91375a41e7d2a50becda4bf1a58a075a"
+        },
+        {
+          "number": 180,
+          "title": "Avoid redundant paused-video work during live hardware updates",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/180",
+          "mergeCommit": "237740be1dc81926bbd4f55e82bfcebeaa2bceae"
+        },
+        {
+          "number": 182,
+          "title": "RF controls: show assigned actions, last seen and execution location",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/182",
+          "mergeCommit": "0934ea8cec827ce062a378392765750e984741bb"
+        },
+        {
+          "number": 186,
+          "title": "Send native PWM only from operator edits, not telemetry feedback",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/186",
+          "mergeCommit": "cd0f131b69d837a5c9c6824ea2c20fa58ccbfc2f"
+        },
+        {
+          "number": 188,
+          "title": "🎛️ MOSFET cards: inline steps, configurable actions and RF assignment",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/188",
+          "mergeCommit": "616683113383c37b581d354daaf767b76594aacf"
+        },
+        {
+          "number": 189,
+          "title": "Isolate native PWM editor drafts between channels",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/189",
+          "mergeCommit": "2c3dab33069183e332284c3b4265d39502eb5480"
+        },
+        {
+          "number": 190,
+          "title": "🎚️ Shared MOSFET On policy and confirmed brightness recall",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/190",
+          "mergeCommit": "9a0b038be2b8b1b24c4980a7e68e032f722c931b"
+        },
+        {
+          "number": 191,
+          "title": "📡 RF editor first · grouped channel buttons and confirmed recall",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/191",
+          "mergeCommit": "1c6a72fdf861f8eaa80e0a69a485867d3b358332"
+        },
+        {
+          "number": 192,
+          "title": "🛡️ Prevent context-menu clicks from changing MOSFET output",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/192",
+          "mergeCommit": "6878a767f753ef9937c054f205a9faa9fe275991"
+        },
+        {
+          "number": 193,
+          "title": "🧭 Typed controller timeouts · concise RF and connection notices",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/193",
+          "mergeCommit": "3574787556b6ea1d61035caa1303d9c6fdff7736"
+        },
+        {
+          "number": 194,
+          "title": "feat: live RF code indicators, counters and shared settings",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/194",
+          "mergeCommit": "d99e5ee54bd769b8f367e87bc691aed838f1b44c"
+        },
+        {
+          "number": 195,
+          "title": "💡 Coherent PWM indicators · confirmed On/Off and honest unknown state",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/195",
+          "mergeCommit": "b79455ffe3867da71a1e906286bbafcfd79b6dc5"
+        },
+        {
+          "number": 196,
+          "title": "Show PCController host and board updates in the status bar",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/196",
+          "mergeCommit": "d467ee4a6e81696d697f8c309e8049136ad2a314"
+        },
+        {
+          "number": 197,
+          "title": "Fix compact RF saved-rule layout with shared guarded callbacks",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/197",
+          "mergeCommit": "96fc6c2459d540eddf5d94502f3552853cb81264"
+        },
+        {
+          "number": 198,
+          "title": "docs: record live compact RF assignment verification",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/198",
+          "mergeCommit": "e00d42fbebf5a64ce3966afddce8907cf7eef3b6"
+        },
+        {
+          "number": 199,
+          "title": "Keep the header controller chevron clear of Disconnect",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/199",
+          "mergeCommit": "93eee668557a70e0833ef2c76a9659c4455b026d"
+        },
+        {
+          "number": 200,
+          "title": "Align native RF dialogs with shared learning and assignment behavior",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/200",
+          "mergeCommit": "9debad1aa74f54b2f24232c9032f350d6cd72bab"
+        },
+        {
+          "number": 201,
+          "title": "Inspect native authoring drafts before runtime replacement",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/201",
+          "mergeCommit": "5a6961ce6a477a4726b7baf8a84d12fde1cdf6ad"
+        },
+        {
+          "number": 202,
+          "title": "build(deps-dev): bump the npm-dependencies group in /web_ui with 2 updates",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/202",
+          "mergeCommit": "cb889c82763bf725384ad20b4f16845a05f2814f"
+        },
+        {
+          "number": 203,
+          "title": "build(deps): bump the cargo-dependencies group with 6 updates",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/203",
+          "mergeCommit": "6ef5e7aed67df5efdfcbe2aa9fbedf3d5cc6f5f9"
+        },
+        {
+          "number": 204,
+          "title": "build(deps): bump the actions group with 5 updates",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/204",
+          "mergeCommit": "3e53ab040aa09f5d9f9e7ff6c96f814498726c7e"
+        },
+        {
+          "number": 206,
+          "title": "fix(wayland): prevent EGL swap deadlock and compositor ANR on focus switch",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/206",
+          "mergeCommit": "6ceff7e29c4754a09901183c2927143da0189d81"
+        }
+      ],
+      "previousTag": "v0.6.0-alpha.1",
+      "prerelease": true,
+      "notes": "docs/releases/v0.7.0-alpha.1.md",
+      "summary": "RF learning/assignment and MOSFET controls become more usable and truthful; hardware-free development improves and Wayland focus/occlusion stops blocking the application.",
+      "issues": [
+        61,
+        62,
+        63,
+        80,
+        114,
+        141,
+        181,
+        185,
+        187,
+        205
+      ],
+      "packages": [
+        {
+          "file": "Pealayer-macos-aarch64-v0.7.0-alpha.1-81ec22e.zip",
+          "size": 28645092,
+          "sha256": "9c1aafad53bcfaed552710f073e5badab29cd68d621c8c83fb5b37298bfeda7e",
+          "sourceSha": "81ec22eacdccdc018889a8e2a6a71581c1e008fd",
+          "platform": "macos-aarch64",
+          "workflowRunId": 38754011357,
+          "artifactId": 11983752257
+        },
+        {
+          "file": "Pealayer-macos-x86_64-v0.7.0-alpha.1-81ec22e.zip",
+          "size": 30027718,
+          "sha256": "6173a09872289db5d7e28085fa35a6d31b75b9ce746d972aa4b41b5fa1ad2127",
+          "sourceSha": "81ec22eacdccdc018889a8e2a6a71581c1e008fd",
+          "platform": "macos-x86_64",
+          "workflowRunId": 38754011357,
+          "artifactId": 11983738864
+        },
+        {
+          "file": "Pealayer-windows-x86_64-v0.7.0-alpha.1-81ec22e.zip",
+          "size": 75307614,
+          "sha256": "cd90c79939f699ebd03c21214d016a53631956d5cbe1080ea0a93e7210cf19f0",
+          "sourceSha": "81ec22eacdccdc018889a8e2a6a71581c1e008fd",
+          "platform": "windows-x86_64",
+          "workflowRunId": 38754011357,
+          "artifactId": 11983588222
+        },
+        {
+          "file": "Pealayer-linux-x86_64-v0.7.0-alpha.1-81ec22e.tar.gz",
+          "size": 32392144,
+          "sha256": "5acbeb52c0148f5f660dbf7fa4687bd9a4ee98472a3eb215bf2fb7fd0f1ff397",
+          "sourceSha": "81ec22eacdccdc018889a8e2a6a71581c1e008fd",
+          "platform": "linux-x86_64",
+          "workflowRunId": 38754011357,
+          "artifactId": 11982948773
+        }
+      ],
+      "runs": [
+        {
+          "id": 38754011357,
+          "url": "https://github.com/ToghrolTP/pealayer/actions/runs/38754011357",
+          "conclusion": "success",
+          "jobs": [
+            {
+              "name": "🛡️ Repository health · Web UI",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🪟 Windows · x86-64",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🍎 macOS · Apple silicon",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🍎 macOS · Intel",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🐧 Linux · x86-64",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🚦 Pealayer · Complete",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "✨ Release · Attested packages",
+              "conclusion": "skipped",
+              "failedSteps": []
+            }
+          ]
+        }
+      ],
+      "screenshots": [
+        {
+          "path": "docs/screenshots/releases/v0.7.0-alpha.1/native-workspace.jpg",
+          "caption": "Actual native workspace in the exact recovered CI package, captured during this backfill with an isolated disconnected profile. No media/telemetry is fabricated.",
+          "evidence": "docs/screenshots/releases/v0.7.0-alpha.1/manifest.json",
+          "sourceSha": "81ec22eacdccdc018889a8e2a6a71581c1e008fd",
+          "sha256": "27b5fdd8deab082c960bcaeea3511a69ed6e0d829b6bd37a76991b6df0cd8262",
+          "immutableUrl": "https://raw.githubusercontent.com/ToghrolTP/pealayer/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/releases/v0.7.0-alpha.1/native-workspace.jpg",
+          "provenanceUrl": "https://github.com/ToghrolTP/pealayer/blob/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/releases/v0.7.0-alpha.1/manifest.json"
+        }
+      ]
+    },
+    {
+      "tag": "v0.8.0-alpha.1",
+      "sha": "08626cf9dcee83dca110ba53075da0eb5e8dbf50",
+      "title": "Virtual Board Demo and canonical opcodes",
+      "date": "2026-10-30T19:17:03+03:30",
+      "previousSha": "81ec22eacdccdc018889a8e2a6a71581c1e008fd",
+      "commitCount": 53,
+      "prs": [
+        {
+          "number": 207,
+          "title": "feat(demo): add Virtual Board Demo mode for hardware-free simulation",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/207",
+          "mergeCommit": "5f272cb2012687383f1fad0dd8723d280466877a"
+        },
+        {
+          "number": 208,
+          "title": "feat: actionable toasts and inspectable error details",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/208",
+          "mergeCommit": "25b0ccdeaa57448ef20f69098474255bbfa62a08"
+        },
+        {
+          "number": 209,
+          "title": "build(deps): bump the npm-dependencies group in /web_ui with 3 updates",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/209",
+          "mergeCommit": "f480d4ac35f36db889e313e6903ed718f6d0e2c1"
+        },
+        {
+          "number": 211,
+          "title": "build(deps): bump the actions group with 2 updates",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/211",
+          "mergeCommit": "0117092ce56b8b87ad4a21b764072b860b3784c8"
+        },
+        {
+          "number": 213,
+          "title": "build(deps): bump the cargo-dependencies group across 1 directory with 12 updates",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/213",
+          "mergeCommit": "db25608aff24a8640039c98558b78ff4f89202cc"
+        },
+        {
+          "number": 214,
+          "title": "build(deps): bump the npm-dependencies group in /web_ui with 2 updates",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/214",
+          "mergeCommit": "2b706eb385ccaaeedf3c36d1da99a71f54e68af4"
+        },
+        {
+          "number": 215,
+          "title": "build(deps): bump the actions group with 3 updates",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/215",
+          "mergeCommit": "b672fd818a6151be90dff72378933063d3314d41"
+        },
+        {
+          "number": 220,
+          "title": "fix(effects): open Manage on library card double-click",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/220",
+          "mergeCommit": "159e5b82d0b1808755d561c9b3ecae0b1d1a331d"
+        },
+        {
+          "number": 221,
+          "title": "build(deps): bump antd from 6.6.7 to 6.6.8 in /web_ui in the npm-dependencies group",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/221",
+          "mergeCommit": "58aceb0b3b44e69265e53bb5eacde575f9e38975"
+        },
+        {
+          "number": 222,
+          "title": "build(deps): bump the cargo-dependencies group with 3 updates",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/222",
+          "mergeCommit": "08626cf9dcee83dca110ba53075da0eb5e8dbf50"
+        },
+        {
+          "number": 223,
+          "title": "fix: use canonical opcodes and reject foreign controller frames",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/223",
+          "mergeCommit": "db3d96732ca1794d3bd8496ae663e1b33f87e052"
+        }
+      ],
+      "previousTag": "v0.7.0-alpha.1",
+      "prerelease": true,
+      "notes": "docs/releases/v0.8.0-alpha.1.md",
+      "summary": "A selectable Virtual Board Demo makes the 4D workflow explorable without physical hardware, alongside actionable errors and canonical controller opcode admission.",
+      "issues": [
+        40,
+        44,
+        63,
+        64,
+        65,
+        66,
+        80,
+        219,
+        226
+      ],
+      "packages": [
+        {
+          "file": "Pealayer-macos-x86_64-v0.8.0-alpha.1-08626cf.zip",
+          "size": 30146174,
+          "sha256": "b96042d536d9c8e17777b5f87401d1147196bc955aa888289bfa398a82a520cd",
+          "sourceSha": "08626cf9dcee83dca110ba53075da0eb5e8dbf50",
+          "platform": "macos-x86_64",
+          "workflowRunId": 41083888737,
+          "artifactId": 12994726699
+        },
+        {
+          "file": "Pealayer-windows-x86_64-v0.8.0-alpha.1-08626cf.zip",
+          "size": 75455817,
+          "sha256": "4f4a3d1c0a24cb01ccca0e9ac34e193a72d91f66db8aa77742094b19cd5758e5",
+          "sourceSha": "08626cf9dcee83dca110ba53075da0eb5e8dbf50",
+          "platform": "windows-x86_64",
+          "workflowRunId": 41083888737,
+          "artifactId": 12994406760
+        },
+        {
+          "file": "Pealayer-linux-x86_64-v0.8.0-alpha.1-08626cf.tar.gz",
+          "size": 32622871,
+          "sha256": "1fe003d641f3b67acc1fd339a84e1964aa7c99643fc20f22d04e707eec45256f",
+          "sourceSha": "08626cf9dcee83dca110ba53075da0eb5e8dbf50",
+          "platform": "linux-x86_64",
+          "workflowRunId": 41083888737,
+          "artifactId": 12993761842
+        },
+        {
+          "file": "Pealayer-macos-aarch64-v0.8.0-alpha.1-08626cf.zip",
+          "size": 28766762,
+          "sha256": "aad7176a498eaa8bbe06e5254d1069d7faf228d4793286acc20d1988c1678da4",
+          "sourceSha": "08626cf9dcee83dca110ba53075da0eb5e8dbf50",
+          "platform": "macos-aarch64",
+          "workflowRunId": 41083888737,
+          "artifactId": 12993103376
+        }
+      ],
+      "runs": [
+        {
+          "id": 41083888737,
+          "url": "https://github.com/ToghrolTP/pealayer/actions/runs/41083888737",
+          "conclusion": "success",
+          "jobs": [
+            {
+              "name": "🛡️ Repository health · Web UI",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🍎 macOS · Apple silicon",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🪟 Windows · x86-64",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🐧 Linux · x86-64",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🍎 macOS · Intel",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🚦 Pealayer · Complete",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "✨ Release · Attested packages",
+              "conclusion": "skipped",
+              "failedSteps": []
+            }
+          ]
+        }
+      ],
+      "screenshots": [
+        {
+          "path": "docs/screenshots/releases/v0.8.0-alpha.1/demo-selector.jpg",
+          "caption": "Actual native demo selector in the exact recovered package. The menu is open only; no demo or hardware connection was started.",
+          "evidence": "docs/screenshots/releases/v0.8.0-alpha.1/manifest.json",
+          "sourceSha": "08626cf9dcee83dca110ba53075da0eb5e8dbf50",
+          "sha256": "417df269d7c12d60977883cad522318bcce6e485cf451bca172c7b11113de182",
+          "immutableUrl": "https://raw.githubusercontent.com/ToghrolTP/pealayer/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/releases/v0.8.0-alpha.1/demo-selector.jpg",
+          "provenanceUrl": "https://github.com/ToghrolTP/pealayer/blob/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/releases/v0.8.0-alpha.1/manifest.json"
+        },
+        {
+          "path": "docs/screenshots/releases/v0.8.0-alpha.1/native-workspace.jpg",
+          "caption": "Actual native workspace in the exact recovered CI package, captured during this backfill with an isolated disconnected profile. No media/telemetry is fabricated.",
+          "evidence": "docs/screenshots/releases/v0.8.0-alpha.1/manifest.json",
+          "sourceSha": "08626cf9dcee83dca110ba53075da0eb5e8dbf50",
+          "sha256": "f4bfb169e2431a587af1a877ff7189b51f804e25d93d68dd21dbe084cef7bd5d",
+          "immutableUrl": "https://raw.githubusercontent.com/ToghrolTP/pealayer/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/releases/v0.8.0-alpha.1/native-workspace.jpg",
+          "provenanceUrl": "https://github.com/ToghrolTP/pealayer/blob/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/releases/v0.8.0-alpha.1/manifest.json"
+        }
+      ]
+    },
+    {
+      "tag": "v0.9.0-alpha.1",
+      "sha": "0ae407f3c4576798cf408e6851d69116100b4391",
+      "title": "Persistent cues and CraftUI workspaces",
+      "date": "2026-11-05T18:11:58+03:30",
+      "previousSha": "08626cf9dcee83dca110ba53075da0eb5e8dbf50",
+      "commitCount": 120,
+      "prs": [
+        {
+          "number": 216,
+          "title": "Complete palette-aware docking and property rails",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/216",
+          "mergeCommit": "aeb0a2f9b3bef0555668959cc1fc47469a1a492c"
+        },
+        {
+          "number": 217,
+          "title": "fix: retain fresh film clock timing for synchronized effects",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/217",
+          "mergeCommit": "41ef0ae2cecab4481cabe27b909422cc147bf7d0"
+        },
+        {
+          "number": 218,
+          "title": "feat: design and preview strip effects in the hardware workspace",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/218",
+          "mergeCommit": "dbc98bedaab5aa11004ba55d229398bf08b1527f"
+        },
+        {
+          "number": 224,
+          "title": "feat(timeline): persist authored cues, templates, and track states",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/224",
+          "mergeCommit": "cf11e45978aa1de423ff143f0082d26153332c34"
+        },
+        {
+          "number": 225,
+          "title": "Unify workspace settings, hardware authoring and native UI presentation",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/225",
+          "mergeCommit": "cf793bb5b5a6bc1637b1abda9997ffe0c875e3fb"
+        },
+        {
+          "number": 230,
+          "title": "build(deps): bump the cargo-dependencies group across 1 directory with 7 updates",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/230",
+          "mergeCommit": "39656639a4c73cda1e35062bd92c13b20879c0b8"
+        },
+        {
+          "number": 231,
+          "title": "Restore egui Dock chevrons, palette and header menus",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/231",
+          "mergeCommit": "0ae407f3c4576798cf408e6851d69116100b4391"
+        }
+      ],
+      "previousTag": "v0.8.0-alpha.1",
+      "prerelease": true,
+      "notes": "docs/releases/v0.9.0-alpha.1.md",
+      "summary": "Persistent authored cues and guarded playback clocks meet palette-aware CraftUI docking, property rails, native typography and a restored egui Dock alternative.",
+      "issues": [
+        34,
+        40,
+        63,
+        64,
+        65,
+        66,
+        80,
+        219,
+        226,
+        228,
+        243
+      ],
+      "packages": [
+        {
+          "file": "Pealayer-macos-aarch64-v0.9.0-alpha.1-0ae407f.zip",
+          "size": 30297628,
+          "sha256": "fd63739af549f84cd108fd8f52d0e905fcddc5b2f31d5cbdcdf76a6c7e12f3de",
+          "sourceSha": "0ae407f3c4576798cf408e6851d69116100b4391",
+          "platform": "macos-aarch64",
+          "workflowRunId": 42047533752,
+          "artifactId": 13427470706
+        },
+        {
+          "file": "Pealayer-macos-x86_64-v0.9.0-alpha.1-0ae407f.zip",
+          "size": 31833635,
+          "sha256": "7b50d4a635963fb960a8ba40e71c75d468cc708f783f98f0b38517fecbaba22a",
+          "sourceSha": "0ae407f3c4576798cf408e6851d69116100b4391",
+          "platform": "macos-x86_64",
+          "workflowRunId": 42047533752,
+          "artifactId": 13427107767
+        },
+        {
+          "file": "Pealayer-windows-x86_64-v0.9.0-alpha.1-0ae407f.zip",
+          "size": 76770399,
+          "sha256": "bc0ddd6000443cbdb550fef644e7907a03860443145683fdf3bdbbf07bbbba8f",
+          "sourceSha": "0ae407f3c4576798cf408e6851d69116100b4391",
+          "platform": "windows-x86_64",
+          "workflowRunId": 42047533752,
+          "artifactId": 13426750397
+        },
+        {
+          "file": "Pealayer-linux-x86_64-v0.9.0-alpha.1-0ae407f.tar.gz",
+          "size": 34382073,
+          "sha256": "d700e6aa5bcc53d11a0ef95a562d760c1aee2f9a7c2b2da84d8b346747e4f0d1",
+          "sourceSha": "0ae407f3c4576798cf408e6851d69116100b4391",
+          "platform": "linux-x86_64",
+          "workflowRunId": 42047533752,
+          "artifactId": 13426201329
+        }
+      ],
+      "runs": [
+        {
+          "id": 42047533752,
+          "url": "https://github.com/ToghrolTP/pealayer/actions/runs/42047533752",
+          "conclusion": "success",
+          "jobs": [
+            {
+              "name": "🛡️ Repository health · Web UI",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🍎 macOS · Apple silicon",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🪟 Windows · x86-64",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🐧 Linux · x86-64",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🍎 macOS · Intel",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🚦 Pealayer · Complete",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "✨ Release · Attested packages",
+              "conclusion": "skipped",
+              "failedSteps": []
+            }
+          ]
+        }
+      ],
+      "screenshots": [
+        {
+          "path": "docs/verification/screenshots/craft-nle-dark.png",
+          "caption": "Actual native dark CraftUI workspace from the #216 integration, without private media or board data; an ancestor capture, not an exact final-tag executable.",
+          "evidence": "docs/verification/pr-reconciliation.md",
+          "sourceSha": "b4cafb73709ec2b4ebeef4a52bc63ba67c67327d",
+          "sha256": "41431ba329606d92d29804aab6ce8f577bb076e589c854d55924899e52655903",
+          "immutableUrl": "https://raw.githubusercontent.com/ToghrolTP/pealayer/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/verification/screenshots/craft-nle-dark.png",
+          "provenanceUrl": "https://github.com/ToghrolTP/pealayer/blob/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/verification/pr-reconciliation.md"
+        },
+        {
+          "path": "docs/verification/screenshots/craft-nle-light.png",
+          "caption": "Actual native light workspace with Media Inspector rail from the same source.",
+          "evidence": "docs/verification/pr-reconciliation.md",
+          "sourceSha": "b4cafb73709ec2b4ebeef4a52bc63ba67c67327d",
+          "sha256": "2d39267442ad95c522dd97ebf7524a9d7e9116832a2675d5b15a95ba2bbc7194",
+          "immutableUrl": "https://raw.githubusercontent.com/ToghrolTP/pealayer/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/verification/screenshots/craft-nle-light.png",
+          "provenanceUrl": "https://github.com/ToghrolTP/pealayer/blob/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/verification/pr-reconciliation.md"
+        },
+        {
+          "path": "docs/screenshots/status-bar-divider-fixed.png",
+          "caption": "Actual native status/divider repair included in this milestone; full source and executable provenance is linked.",
+          "evidence": "docs/verification/status-bar-evolution.md",
+          "sourceSha": "60389d3fbd3e10162492459bb7501fcf1b7e3922",
+          "sha256": "838664a31cee5a6a27269b323bbd2f3f74b2ebfdafacd92cec35f018f2f6f00d",
+          "immutableUrl": "https://raw.githubusercontent.com/ToghrolTP/pealayer/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/status-bar-divider-fixed.png",
+          "provenanceUrl": "https://github.com/ToghrolTP/pealayer/blob/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/verification/status-bar-evolution.md"
+        }
+      ]
+    },
+    {
+      "tag": "v0.10.0-alpha.1",
+      "sha": "0651d4059f5b0ecf0f242225d7ef448c86dea119",
+      "title": "Playback recovery and native media sessions",
+      "date": "2026-11-09T23:36:41+03:30",
+      "previousSha": "0ae407f3c4576798cf408e6851d69116100b4391",
+      "commitCount": 99,
+      "prs": [
+        {
+          "number": 232,
+          "title": "Show and edit repeat projections in the effects designer",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/232",
+          "mergeCommit": "df64104e1be54be9c8776a61732fed9ea560d1e6"
+        },
+        {
+          "number": 233,
+          "title": "Add shared external asset drops and reviewed timeline imports",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/233",
+          "mergeCommit": "d5d06c0776c0adfbf680cc7c1bfd7b46dd788495"
+        },
+        {
+          "number": 234,
+          "title": "Restore the Hardware Monitor disconnected state and contextual RF controls",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/234",
+          "mergeCommit": "997ba6178d35c63b8c45b065e161e61f263b8c7b"
+        },
+        {
+          "number": 235,
+          "title": "Finish repeat projection cancellation and interaction coverage",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/235",
+          "mergeCommit": "ab465157715d04fb23860dcad84dc2e3c4428c11"
+        },
+        {
+          "number": 236,
+          "title": "Restore compact aligned egui Dock chrome without changing CraftUI",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/236",
+          "mergeCommit": "20afa121307a2f1c42db7cb54be3a9e56ba277f5"
+        },
+        {
+          "number": 237,
+          "title": "Polish updater console progress and result reporting",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/237",
+          "mergeCommit": "e0b956dd605ba69f6da9ab704fc07615f9515b3a"
+        },
+        {
+          "number": 238,
+          "title": "Simplify hardware connection messages with on-demand info hints",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/238",
+          "mergeCommit": "7c6d0c3eed279f72e695a7a6b4e5931349e23ff8"
+        },
+        {
+          "number": 239,
+          "title": "Fix window restoration, live taskbar branding and Task View previews",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/239",
+          "mergeCommit": "54da94521d21c2a8f107f95a9f9c049d09439768"
+        },
+        {
+          "number": 241,
+          "title": "Integrate mutual Pealayer and PCController software updates",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/241",
+          "mergeCommit": "e72bfb1e80b0700d485380fc30fe2bd6539070eb"
+        },
+        {
+          "number": 242,
+          "title": "Add Copy to the Duration context menu",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/242",
+          "mergeCommit": "050fd1c61990982ba272efb494aab28f3406f8be"
+        },
+        {
+          "number": 244,
+          "title": "Preserve the October 10 egui Dock UI comparison",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/244",
+          "mergeCommit": "d1a6a30b50e6447e0b42b6c7da4f1d612d8575ee"
+        },
+        {
+          "number": 245,
+          "title": "Complete window placement and cross-transport media control",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/245",
+          "mergeCommit": "4d9952a06da8bc0a654fdf3623a3734647c5414c"
+        },
+        {
+          "number": 246,
+          "title": "Improve native Preferences wheel responsiveness",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/246",
+          "mergeCommit": "bb9522c57f22846b4c9c91d0c45a93af07d8a975"
+        },
+        {
+          "number": 247,
+          "title": "Preserve the last good video frame when rendering fails",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/247",
+          "mergeCommit": "a27036a07d4f81bbcc7ce0e82ec3745128d78881"
+        },
+        {
+          "number": 249,
+          "title": "Add contextual Windows drops, authoring clipboard and taskbar attention",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/249",
+          "mergeCommit": "00b7cde132dd4d83348025825b39bc7d4c6ad4e2"
+        },
+        {
+          "number": 250,
+          "title": "Hide unavailable remote parent folders and fix navigation rows",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/250",
+          "mergeCommit": "1d5d85952143dba9e55e014b17921e55e21da9a7"
+        },
+        {
+          "number": 251,
+          "title": "Use the selected palette for expanded dropdowns",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/251",
+          "mergeCommit": "edabbd07b95a7585582bea32538a29601afa6e4c"
+        },
+        {
+          "number": 252,
+          "title": "Keep timeline panning cursors out of sticky headers and controls",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/252",
+          "mergeCommit": "391db10d80b0645eeba9e65427eed11c0beb521f"
+        },
+        {
+          "number": 253,
+          "title": "Polish native frame-rate details and matching Web hover card",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/253",
+          "mergeCommit": "a47b1063238c9dce67ec8667be489131ccd8bf09"
+        },
+        {
+          "number": 254,
+          "title": "Fix native Dock header seams and restore CraftUI header actions",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/254",
+          "mergeCommit": "816ec6eed7366a2868633d0057de54bfcb4b2f5b"
+        },
+        {
+          "number": 255,
+          "title": "Open the exact Timeline Toolbar preferences page",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/255",
+          "mergeCommit": "1d2ccb793e62805ebb8b24c687e7be9dd5fed48f"
+        },
+        {
+          "number": 256,
+          "title": "Customize sidebar shortcuts and drag panels into the workspace",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/256",
+          "mergeCommit": "f9f16af9b904ab8513eabeb2110bad67c9b290a1"
+        },
+        {
+          "number": 257,
+          "title": "Balance NLE transport rows and repair the three-dot control menu",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/257",
+          "mergeCommit": "aebd314c743bb417513ac4a0ab15a9ce9b922300"
+        },
+        {
+          "number": 258,
+          "title": "Keep paused video stable and correct timeline activity and reveal controls",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/258",
+          "mergeCommit": "3a661d33ed6a8f955574fbbbf9241f7191ad9a86"
+        },
+        {
+          "number": 259,
+          "title": "Make Program Monitor volume movable and focus its default controls",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/259",
+          "mergeCommit": "cce030cfec620f2c1610878bc6580b54ea710ada"
+        },
+        {
+          "number": 260,
+          "title": "Recover external player lifecycle and add contextual player switching",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/260",
+          "mergeCommit": "bccf966cf80ff2a95fe998e1cc2812cfe5e64f42"
+        },
+        {
+          "number": 261,
+          "title": "Restore individual CraftUI pane close buttons and configurable collapse controls",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/261",
+          "mergeCommit": "fe1e9cffb21a0c4385e5735b7100fa7911828f0f"
+        },
+        {
+          "number": 262,
+          "title": "Fix Workspace switching and complete dialog title backgrounds",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/262",
+          "mergeCommit": "08af8f203f0bb39b0767949d63f95d9ff27ee59e"
+        },
+        {
+          "number": 263,
+          "title": "Fade the disabled reveal-playhead action without delaying input guards",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/263",
+          "mergeCommit": "981df4442544d987ef0a2597b0e5eba84f3932ef"
+        },
+        {
+          "number": 264,
+          "title": "Theme Studio media strips and keep timeline names visible while panning",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/264",
+          "mergeCommit": "387deee7aefb71638744cd55de9b24faf09374b7"
+        },
+        {
+          "number": 265,
+          "title": "Align hardware connection messages and separate the recovery instruction",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/265",
+          "mergeCommit": "593000670fb5f9cf6cc0a5c5c98ebd5763f391e4"
+        },
+        {
+          "number": 266,
+          "title": "Polish the native icon picker search and view switch",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/266",
+          "mergeCommit": "89f54bc2d9fcbe60e928d36e2b026219cb5b2280"
+        },
+        {
+          "number": 267,
+          "title": "Display shortcut fields as themed keyboard keycaps",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/267",
+          "mergeCommit": "06880500156aef6efe6da0904995363530596eaa"
+        },
+        {
+          "number": 268,
+          "title": "Consolidate native, timeline and media fixes with accurate OS media sessions",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/268",
+          "mergeCommit": "0651d4059f5b0ecf0f242225d7ef448c86dea119"
+        },
+        {
+          "number": 270,
+          "title": "Route minus and plus zoom to the active editor",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/270",
+          "mergeCommit": "dc1af2d9badafd0350fa73efc1ac7ab0f9ab292f"
+        }
+      ],
+      "previousTag": "v0.9.0-alpha.1",
+      "prerelease": true,
+      "notes": "docs/releases/v0.10.0-alpha.1.md",
+      "summary": "The accumulated native/timeline/media integration strengthens frame publication, external-player recovery, workspace controls, safe imports and factual OS now-playing state.",
+      "issues": [
+        30,
+        34,
+        63,
+        64,
+        65,
+        66,
+        80,
+        114,
+        141,
+        226,
+        228,
+        240,
+        243,
+        269
+      ],
+      "packages": [
+        {
+          "file": "Pealayer-macos-aarch64-v0.10.0-alpha.1-0651d40.zip",
+          "size": 31113268,
+          "sha256": "011f75976322282c8914bfcd5f654455348256bd7d4ecaf521d6fe7e9d76a899",
+          "sourceSha": "0651d4059f5b0ecf0f242225d7ef448c86dea119",
+          "platform": "macos-aarch64",
+          "workflowRunId": 42689797034,
+          "artifactId": 13708453973
+        },
+        {
+          "file": "Pealayer-linux-x86_64-v0.10.0-alpha.1-0651d40.tar.gz",
+          "size": 34982261,
+          "sha256": "fa018d20ac7c0bb436e686ee2da4c54536f1644c1928407ac5dd4835cce35724",
+          "sourceSha": "0651d4059f5b0ecf0f242225d7ef448c86dea119",
+          "platform": "linux-x86_64",
+          "workflowRunId": 42689797034,
+          "artifactId": 13707811382
+        }
+      ],
+      "runs": [
+        {
+          "id": 42689797034,
+          "url": "https://github.com/ToghrolTP/pealayer/actions/runs/42689797034",
+          "conclusion": "failure",
+          "jobs": [
+            {
+              "name": "🛡️ Repository health · Web UI",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🍎 macOS · Apple silicon",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🪟 Windows · x86-64",
+              "conclusion": "failure",
+              "failedSteps": [
+                "🧪 Run Rust tests · Windows GNU"
+              ]
+            },
+            {
+              "name": "🍎 macOS · Intel",
+              "conclusion": "cancelled",
+              "failedSteps": []
+            },
+            {
+              "name": "🐧 Linux · x86-64",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🚦 Pealayer · Complete",
+              "conclusion": "failure",
+              "failedSteps": [
+                "📋 Publish consolidated CI/CD summary"
+              ]
+            },
+            {
+              "name": "✨ Release · Attested packages",
+              "conclusion": "skipped",
+              "failedSteps": []
+            }
+          ]
+        }
+      ],
+      "screenshots": [
+        {
+          "path": "docs/screenshots/native-dock-header-after.png",
+          "caption": "Actual native Dock header repair included by the consolidation; see the linked receipt for its code build and crop provenance.",
+          "evidence": "docs/verification/egui-dock-restoration.md",
+          "sourceIdentityKind": "capture-publication-commit; executable source is in linked receipt",
+          "sourceSha": "816ec6eed7366a2868633d0057de54bfcb4b2f5b",
+          "sha256": "c8a05791217fdf1fcc06acaa7720ebd530135e422497e0df4cb005b64d197654",
+          "immutableUrl": "https://raw.githubusercontent.com/ToghrolTP/pealayer/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/native-dock-header-after.png",
+          "provenanceUrl": "https://github.com/ToghrolTP/pealayer/blob/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/verification/egui-dock-restoration.md"
+        },
+        {
+          "path": "docs/screenshots/monitor-volume-desktop.png",
+          "caption": "Actual native Program Monitor volume/transport at the recorded desktop width; no connected-board state is invented.",
+          "evidence": "docs/verification/movable-monitor-volume.md",
+          "sourceIdentityKind": "capture-publication-commit; executable source is in linked receipt",
+          "sourceSha": "cce030cfec620f2c1610878bc6580b54ea710ada",
+          "sha256": "2c2691119bd183f8c8168666aa21f6c57a0c26a25083d726a9bc9b2d19323274",
+          "immutableUrl": "https://raw.githubusercontent.com/ToghrolTP/pealayer/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/monitor-volume-desktop.png",
+          "provenanceUrl": "https://github.com/ToghrolTP/pealayer/blob/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/verification/movable-monitor-volume.md"
+        },
+        {
+          "path": "docs/screenshots/studio-media-strips-after.png",
+          "caption": "Actual native palette-owned Studio strips and visible-span captions from the included feature work.",
+          "evidence": "docs/verification/studio-media-strips.md",
+          "sourceIdentityKind": "capture-publication-commit; executable source is in linked receipt",
+          "sourceSha": "387deee7aefb71638744cd55de9b24faf09374b7",
+          "sha256": "2548a39d6524a693dc01092e23d1d1b140a37c16d1eda8baee50bfe6d0ee14d7",
+          "immutableUrl": "https://raw.githubusercontent.com/ToghrolTP/pealayer/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/studio-media-strips-after.png",
+          "provenanceUrl": "https://github.com/ToghrolTP/pealayer/blob/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/verification/studio-media-strips.md"
+        },
+        {
+          "path": "docs/screenshots/shortcut-keycaps-after.png",
+          "caption": "Actual native shortcut keycaps; linked receipt distinguishes source checks from remaining human acceptance.",
+          "evidence": "docs/verification/shortcut-keycaps.md",
+          "sourceIdentityKind": "capture-publication-commit; executable source is in linked receipt",
+          "sourceSha": "06880500156aef6efe6da0904995363530596eaa",
+          "sha256": "d9a179458a103a0300c80ac9c5f80434e43361941525658278b4947f2078efac",
+          "immutableUrl": "https://raw.githubusercontent.com/ToghrolTP/pealayer/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/shortcut-keycaps-after.png",
+          "provenanceUrl": "https://github.com/ToghrolTP/pealayer/blob/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/verification/shortcut-keycaps.md"
+        }
+      ]
+    },
+    {
+      "tag": "v0.11.0-alpha.1",
+      "sha": "0cde16fd5d59e6068d43f81e55b0c2e0f35aca7e",
+      "title": "Command tools, remote folders and sidebar recovery",
+      "date": "2026-11-10T04:52:26+03:30",
+      "previousSha": "0651d4059f5b0ecf0f242225d7ef448c86dea119",
+      "commitCount": 22,
+      "prs": [
+        {
+          "number": 271,
+          "title": "Center CraftUI panel icons, captions and close controls",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/271",
+          "mergeCommit": "238b376d2266cc95a1fef56888ed8ee10f157ecc"
+        },
+        {
+          "number": 273,
+          "title": "Add optional command toolbar, palette and native terminal",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/273",
+          "mergeCommit": "e688c9aea821f454dc6a02a2def41372d75e357c"
+        },
+        {
+          "number": 274,
+          "title": "Keep large native FPS values visible and balance status typography",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/274",
+          "mergeCommit": "ade3fdb55af9ada13f4e6b478bfc45d32be52351"
+        },
+        {
+          "number": 275,
+          "title": "Fix empty remote directory listings with encoded folder names",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/275",
+          "mergeCommit": "d51cac95709449e10dfe1f2aac508221d42a7247"
+        },
+        {
+          "number": 276,
+          "title": "Restore sidebar panel toggling, saved sizes and native chrome",
+          "url": "https://github.com/ToghrolTP/pealayer/pull/276",
+          "mergeCommit": "0cde16fd5d59e6068d43f81e55b0c2e0f35aca7e"
+        }
+      ],
+      "previousTag": "v0.10.0-alpha.1",
+      "prerelease": true,
+      "notes": "docs/releases/v0.11.0-alpha.1.md",
+      "summary": "The standard package gains optional command tools and a real dockable Terminal, while native FPS sizing, remote folder encoding and remembered sidebar placement are repaired.",
+      "issues": [
+        34,
+        44,
+        63,
+        64,
+        65,
+        66,
+        80,
+        114,
+        141,
+        226,
+        228,
+        269,
+        272
+      ],
+      "packages": [
+        {
+          "file": "Pealayer-macos-x86_64-v0.11.0-alpha.1-0cde16f.zip",
+          "size": 33123321,
+          "sha256": "25e871f6dab22877e625e6cae33f644310bf099ec06c79dc687e97465bcdbbe3",
+          "sourceSha": "0cde16fd5d59e6068d43f81e55b0c2e0f35aca7e",
+          "platform": "macos-x86_64",
+          "workflowRunId": 42735332267,
+          "artifactId": 13728327210
+        },
+        {
+          "file": "Pealayer-linux-x86_64-v0.11.0-alpha.1-0cde16f.tar.gz",
+          "size": 35376809,
+          "sha256": "5359c4d6fbe6e454a7684b1bda036d5641ad5c561fc750ff445c18122f16a212",
+          "sourceSha": "0cde16fd5d59e6068d43f81e55b0c2e0f35aca7e",
+          "platform": "linux-x86_64",
+          "workflowRunId": 42735332267,
+          "artifactId": 13727836070
+        },
+        {
+          "file": "Pealayer-macos-aarch64-v0.11.0-alpha.1-0cde16f.zip",
+          "size": 31533039,
+          "sha256": "394c0ba2f899c5f3cc5c17f1150326d3e42918310b0f5f30cfd7abebe9ed684a",
+          "sourceSha": "0cde16fd5d59e6068d43f81e55b0c2e0f35aca7e",
+          "platform": "macos-aarch64",
+          "workflowRunId": 42735332267,
+          "artifactId": 13727807974
+        },
+        {
+          "file": "Pealayer-windows-x86_64-v0.11.0-alpha.1-0cde16f.zip",
+          "size": 77643887,
+          "sha256": "ec4108a84ce3a3fc15a97ba55601adfaf8a02dd43fd132feb4fca102468a2072",
+          "sourceSha": "0cde16fd5d59e6068d43f81e55b0c2e0f35aca7e",
+          "platform": "windows-x86_64",
+          "workflowRunId": 42735332267,
+          "artifactId": 13727103123
+        }
+      ],
+      "runs": [
+        {
+          "id": 42735332267,
+          "url": "https://github.com/ToghrolTP/pealayer/actions/runs/42735332267",
+          "conclusion": "success",
+          "jobs": [
+            {
+              "name": "🛡️ Repository health · Web UI",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🍎 macOS · Intel",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🍎 macOS · Apple silicon",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🪟 Windows · x86-64",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🐧 Linux · x86-64",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "🚦 Pealayer · Complete",
+              "conclusion": "success",
+              "failedSteps": []
+            },
+            {
+              "name": "✨ Release · Attested packages",
+              "conclusion": "skipped",
+              "failedSteps": []
+            }
+          ]
+        }
+      ],
+      "screenshots": [
+        {
+          "path": "docs/screenshots/workspace-tools-after.png",
+          "caption": "Actual native grouped toolbar and embedded docked shell from the included workspace-tools build. The tools are temporarily visible for review and remain hidden by default.",
+          "evidence": "docs/verification/workspace-tools.md",
+          "sourceSha": "28cbfb4399cb4c112bd249a64dd5ffe96e596379",
+          "sha256": "a043f054b03c7cabe97f45e885e5bb80638b48ed7ce6cd3814b468de2321574c",
+          "immutableUrl": "https://raw.githubusercontent.com/ToghrolTP/pealayer/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/workspace-tools-after.png",
+          "provenanceUrl": "https://github.com/ToghrolTP/pealayer/blob/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/verification/workspace-tools.md"
+        },
+        {
+          "path": "docs/screenshots/workspace-tools-editor.png",
+          "caption": "Actual native toolbar editor from the same included build; excludes the later #277 palette/toolbar completion.",
+          "evidence": "docs/verification/workspace-tools.md",
+          "sourceSha": "28cbfb4399cb4c112bd249a64dd5ffe96e596379",
+          "sha256": "4a35c9b7b4665f26f5ae65f27bc11df21dee281ce7cd3e02e84fd40951cb4c9f",
+          "immutableUrl": "https://raw.githubusercontent.com/ToghrolTP/pealayer/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/workspace-tools-editor.png",
+          "provenanceUrl": "https://github.com/ToghrolTP/pealayer/blob/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/verification/workspace-tools.md"
+        },
+        {
+          "path": "docs/screenshots/remote-encoding-after.png",
+          "caption": "Matched synthetic native remote-folder result after the encoding repair; no private production URL is published.",
+          "evidence": "docs/verification/remote-directory-encoding.md",
+          "sourceSha": "37c6f6b470945629a8719161ef23da56b3cc9e49",
+          "sha256": "7c751b000ee55155762ac4ab50a76c053b1fcf829118de4230d5e5a784e72ffc",
+          "immutableUrl": "https://raw.githubusercontent.com/ToghrolTP/pealayer/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/remote-encoding-after.png",
+          "provenanceUrl": "https://github.com/ToghrolTP/pealayer/blob/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/verification/remote-directory-encoding.md"
+        },
+        {
+          "path": "docs/screenshots/sidebar-panel-after.png",
+          "caption": "Actual native sidebar panel recovery included in this exact source ancestry.",
+          "evidence": "docs/verification/sidebar-panel-recovery.md",
+          "sourceSha": "62593e840b45cddf76b5535f18fd1383e39a0ac8",
+          "sha256": "429c39340ebae94674d5058740779eeff42b1e011f5279ca73abe63aeb4b50ef",
+          "immutableUrl": "https://raw.githubusercontent.com/ToghrolTP/pealayer/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/screenshots/sidebar-panel-after.png",
+          "provenanceUrl": "https://github.com/ToghrolTP/pealayer/blob/1e171e8bbd66348d00f9742704c5b78b006f6faf/docs/verification/sidebar-panel-recovery.md"
+        }
+      ]
+    }
+  ]
+}
