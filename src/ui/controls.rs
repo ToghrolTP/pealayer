@@ -1744,23 +1744,25 @@ mod tests {
 
     #[test]
     fn volume_percentage_accepts_direct_typed_input() {
-        let ctx=egui::Context::default(); let mut volume=50.0; let mut time=0.0;
-        let mut frame=|events| {
-            time+=0.1;
-            let mut output=ctx.run_ui(egui::RawInput {time:Some(time),events,..Default::default()},|ui| {
-                ui.horizontal(|ui| {ui.set_width(160.0); if let Some(value)=volume_slider_widgets(ui,volume,"Volume") {volume=value;}});
-            }); output.textures_delta.clear(); output
-        };
-        frame(vec![]); let output=frame(vec![]);
-        let point=output.shapes.iter().find_map(|shape|match &shape.shape {
-            egui::Shape::Text(text) if text.galley.text().contains("50")=>Some(text.pos+text.galley.rect.center().to_vec2()),_=>None,
-        }).expect("volume percentage");
-        let button=|pressed|egui::Event::PointerButton {pos:point,pressed,button:egui::PointerButton::Primary,modifiers:egui::Modifiers::NONE};
-        frame(vec![egui::Event::PointerMoved(point),button(true)]); frame(vec![button(false)]);
-        frame(vec![]);
-        frame(vec![egui::Event::Text("75".into())]);
-        frame(vec![egui::Event::Key {key:egui::Key::Enter,physical_key:None,pressed:true,repeat:false,modifiers:egui::Modifiers::NONE}]);
-        drop(frame); assert_eq!(volume,75.0,"clicking the value must permit direct typing");
+        for filmcraft in [false, true] {
+            let ctx=egui::Context::default(); let mut volume=50.0; let mut time=0.0;
+            let mut frame=|events| {
+                time+=0.1;
+                let mut output=ctx.run_ui(egui::RawInput {time:Some(time),events,..Default::default()},|ui| {
+                    ui.horizontal(|ui| {ui.set_width(160.0); if let Some(value)=volume_slider_widgets(ui,volume,"Volume",filmcraft) {volume=value;}});
+                }); output.textures_delta.clear(); output
+            };
+            frame(vec![]); let output=frame(vec![]);
+            let point=output.shapes.iter().find_map(|shape|match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text().contains("50")=>Some(text.pos+text.galley.rect.center().to_vec2()),_=>None,
+            }).expect("volume percentage");
+            let button=|pressed|egui::Event::PointerButton {pos:point,pressed,button:egui::PointerButton::Primary,modifiers:egui::Modifiers::NONE};
+            frame(vec![egui::Event::PointerMoved(point),button(true)]); frame(vec![button(false)]);
+            frame(vec![]);
+            frame(vec![egui::Event::Text("75".into())]);
+            frame(vec![egui::Event::Key {key:egui::Key::Enter,physical_key:None,pressed:true,repeat:false,modifiers:egui::Modifiers::NONE}]);
+            drop(frame); assert_eq!(volume,75.0,"clicking the value must permit direct typing");
+        }
     }
 
     #[test]
