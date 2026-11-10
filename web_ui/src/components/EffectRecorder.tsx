@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { hardwareOutputsAvailable } from '../hardwareAvailability';
 import { DeleteOutlined, LoadingOutlined, StopOutlined } from '@ant-design/icons';
-import { Button, Checkbox, Modal, Popconfirm, Select, Space, Tooltip } from 'antd';
+import { Alert, Button, Checkbox, Modal, Popconfirm, Select, Space, Tooltip } from 'antd';
 import type { PlayerState } from './RemoteControlTab';
 import { tr, UiLocale } from '../i18n';
 
@@ -75,6 +75,9 @@ export const EffectRecorder: React.FC<EffectRecorderProps> = ({ state, sendCmd, 
         sendCmd('controller_effect.record.start', { name: effect.name, category: effect.category, color: effect.color, mode, capture_selection: selection, effect });
       }}>{tr(locale, 'Record')}</Button>
     </Tooltip>}
+    {recording?.active && recording.device_retained && recording.overwritten > 0 &&
+      <Alert type="warning" showIcon
+        title={tr(locale, 'The board’s recording buffer filled up. Earlier actions may be missing.')} />}
     {recording?.last_error && <span role="alert">{recording.last_error}</span>}
   </Space>;
 };

@@ -3293,6 +3293,7 @@ pub(crate) fn draw_effect_capture_controls(app: &mut PealayerApp, ui: &mut egui:
         if !active { ui.weak(format!("{} · {}", app.effect_library_draft.steps.len(), crate::duration::format_effect_duration_for_language(app.language, sequence_duration_ms(&app.effect_library_draft.steps)))); }
         if !recording.last_error.is_empty() { ui.colored_label(ui.visuals().error_fg_color, &recording.last_error); }
     });
+    draw_recording_retention_warning(ui, &recording);
     if old_capture_mode != app.hardware_effect_authoring.capture_mode {
         let authoring = &mut app.hardware_effect_authoring;
         authoring.capture_selection.opcodes.retain(|opcode| authoring.capture_capabilities.opcodes.iter()
@@ -3326,6 +3327,18 @@ pub(crate) fn draw_effect_capture_controls(app: &mut PealayerApp, ui: &mut egui:
         else if discard { app.discard_hardware_effect_recording() }
         else { Ok(()) };
     if let Err(error) = result { app.set_osd(error); }
+}
+
+fn draw_recording_retention_warning(
+    ui: &mut egui::Ui,
+    recording: &crate::four_d::controller::HardwareEffectRecording,
+) {
+    if recording.active && recording.device_retained && recording.overwritten > 0 {
+        let warning = designer_tr(ui, "The board’s recording buffer filled up. Earlier actions may be missing.");
+        let warning = egui::RichText::new(format!("{} {warning}", crate::ui::icons::WARNING))
+            .color(ui.visuals().warn_fg_color);
+        ui.add(egui::Label::new(warning).wrap());
+    }
 }
 
 fn draw_capture_selection(app: &mut PealayerApp, ui: &mut egui::Ui) {
@@ -4130,6 +4143,35 @@ mod tests {
                     }
                 }
             }
+        }
+    }
+
+    #[test]
+    fn recording_warning_only_paints_for_active_board_buffer_overflow() {
+        use crate::four_d::controller::HardwareEffectRecording;
+
+        for (active, device_retained, overwritten, expected) in [
+            (true, true, 1, true),
+            (true, true, 0, false),
+            (true, false, 1, false),
+            (false, true, 1, false),
+        ] {
+            let ctx = egui::Context::default();
+            crate::ui::i18n::configure_ui_fonts(&ctx, false);
+            let recording = HardwareEffectRecording {
+                active,
+                device_retained,
+                overwritten,
+                ..Default::default()
+            };
+            let output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                draw_recording_retention_warning(ui, &recording);
+            });
+            let painted = output.shapes.iter().any(|shape| matches!(
+                &shape.shape,
+                egui::epaint::Shape::Text(text) if text.galley.text().contains("Earlier actions may be missing.")
+            ));
+            assert_eq!(painted, expected);
         }
     }
 
