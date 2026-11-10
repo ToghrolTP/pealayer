@@ -13,9 +13,15 @@ pub(crate) fn layout(
     // Measure the shaped section, not the font's raw glyph advance. CoreText
     // system faces can shape a different advance (including variation metrics),
     // which otherwise left a fractional drift despite equal raw-width padding.
-    let advances: [f32;10] = std::array::from_fn(|digit| ui.fonts_mut(|fonts|
-        fonts.layout_no_wrap(char::from(b'0'+digit as u8).to_string(),font.clone(),color).size().x));
-    let digit_width = advances.iter().copied().fold(0.0_f32,f32::max);
+    let advances: [f32;10] = std::array::from_fn(|digit| ui.fonts_mut(|fonts| {
+        let shaped=fonts.layout_no_wrap(char::from(b'0'+digit as u8).to_string(),font.clone(),color);
+        shaped.rows.first().and_then(|row|row.glyphs.first()).map_or(0.0,|glyph|glyph.advance_width)
+    }));
+    let scale=ui.ctx().pixels_per_point();
+    // A cell ends on the physical grid. Measuring a rounded Galley width, or
+    // repeatedly accumulating fractional cell ends, can move the following word
+    // across a rounding boundary on CoreText and at fractional Windows scales.
+    let digit_width = (advances.iter().copied().fold(0.0_f32,f32::max)*scale).ceil()/scale;
     let mut job = egui::text::LayoutJob::default();
     let format = egui::TextFormat {
         font_id: font.clone(),
