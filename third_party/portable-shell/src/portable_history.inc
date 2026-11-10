@@ -4,7 +4,12 @@ static void history_dialog_draw(ps_session *s) {
     if(s->history_selected<s->history_top)s->history_top=s->history_selected;
     if(s->history_selected>=s->history_top+slots)s->history_top=s->history_selected-slots+1;
     ansi(s,"\033[H\033[J\033[?25l");
-    at(s,1,2);field(s,"Command history",w);
+    at(s,1,2);
+    if(s->notice[0]&&w>PS_LITERAL_LENGTH("Command history")+3){
+        field(s,"Command history",PS_LITERAL_LENGTH("Command history"));
+        out(s,(s->io.flags&PS_UNICODE)?" · ":" - ");
+        field(s,s->notice,w-PS_LITERAL_LENGTH("Command history")-3);
+    }else field(s,"Command history",w);
     view_rule(s,2,1,w,0);
     for(i=0;i<slots;++i){
         unsigned index=s->history_top+i;char number[16];unsigned n;

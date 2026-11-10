@@ -1,6 +1,6 @@
 /* Shared, fixed-storage help presentation. No host API or allocator. */
 static unsigned flow_width(ps_session *s) {
-    return s->io.columns >= 20 ? min(s->io.columns,240)-1 : 79;
+    return s->io.columns > 1 ? min(s->io.columns,240)-1 : 79;
 }
 static unsigned flow_cells(ps_session *s,const char *text) { return text?cells(text,length(text),s->io.flags):0; }
 /* Preserve UTF-8 sequences, explicit newlines and hanging indentation.
@@ -21,7 +21,9 @@ static void flow_text(ps_session *s,const char *text,unsigned column,unsigned in
         while(text<end){
             unsigned n,c=rune(text,&n),w=(s->io.flags&PS_UNICODE)?width(c):1; const char *next=text+n;
             if(column+w>available){ps_newline(s);spaces(s,indent);column=indent;}
-            raw(s,text,(unsigned)(next-text));column+=w;text=next;
+            if(c==0xfffd||(!(s->io.flags&PS_UNICODE)&&c>126))out(s,"?");
+            else raw(s,text,(unsigned)(next-text));
+            column+=w;text=next;
         }
     }
     ps_newline(s);

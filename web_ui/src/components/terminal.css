@@ -1,0 +1,21 @@
+.terminal-pair{max-width:640px;margin:48px auto;padding:28px;border:1px solid var(--line);border-radius:14px;background:var(--surface-1)}
+.terminal-pair>.anticon{font-size:32px;color:var(--accent,#8479df)}
+.host-terminal{display:flex;flex-direction:column;gap:12px;min-height:420px;height:calc(100vh - 190px);padding:12px}
+.terminal-session-bar{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+.terminal-session{display:flex;align-items:center;border:1px solid transparent;border-radius:7px;background:rgba(128,128,128,.07);animation:terminal-enter .15s ease-out}
+.terminal-session.is-active{background:color-mix(in srgb,var(--accent,#8479df) 12%,transparent);border-color:var(--accent,#8479df);box-shadow:inset 0 -2px var(--accent,#8479df)}
+.terminal-session>button{display:flex;align-items:center;gap:8px;padding:8px 10px;border:0;background:none;color:inherit;cursor:pointer}
+.terminal-actions{margin-inline-start:auto}
+.terminal-grid{position:relative;flex:1;min-height:250px;overflow:auto;padding:12px;border-radius:9px;border:1px solid var(--line);background:var(--canvas);color:var(--text);font-family:var(--mono-font,'Cascadia Mono',monospace);line-height:1.5;outline-offset:2px;white-space:pre}
+.terminal-grid:focus-visible{outline:1px solid var(--accent,#8479df)}
+.terminal-line{height:1.5em}.terminal-caret{position:absolute;height:1.5em;width:2px;background:var(--accent,#b7aaff);pointer-events:none;opacity:.8}
+.terminal-grid{font-variant-ligatures:none;font-feature-settings:'liga' 0,'calt' 0}
+.terminal-cell-probe{position:absolute;visibility:hidden;pointer-events:none;width:1ch}
+.terminal-caret.block{width:1ch;background:transparent;border:1px solid var(--accent,#b7aaff)}
+.terminal-caret.underline{width:1ch;height:2px;transform:translateY(1.35em)}
+.terminal-grid:focus .terminal-caret.blink{animation:terminal-blink 1.2s steps(2,start) infinite}
+.terminal-empty{padding:36px;text-align:center;font-family:inherit;white-space:normal;color:#97a0af}
+.host-terminal footer{display:flex;gap:8px;align-items:center;font-size:12px;opacity:.65}.host-terminal footer span{margin-inline-start:auto}
+@keyframes terminal-blink{to{visibility:hidden}}@keyframes terminal-enter{from{opacity:0;transform:translateY(3px)}to{opacity:1;transform:none}}
+@media(prefers-reduced-motion:reduce){.terminal-session,.terminal-grid:focus .terminal-caret.blink{animation:none}}
+@media(max-width:600px){.host-terminal{padding:4px;height:calc(100vh - 150px)}.terminal-actions{margin-inline-start:0}.terminal-pair{margin:16px}}

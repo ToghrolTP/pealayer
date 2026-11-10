@@ -21,6 +21,8 @@
 
 ## Verification and deployment
 
+- Terminal screens, profiles and sessions have one host owner. Keep them out of general status/WS snapshots. Remote input requires the separate native-issued, expiring/revocable grant; Web/config requests cannot enable their own execution policy, including after queueing or preference preview. System shells default off locally and separately off remotely. Preserve `NativeLocal` as non-deserializable transport provenance, original launch receipt validation, bounded/cancelled queues, and no command replay after lost acknowledgments. Reuse the same paired Terminal API for native remote and Web views; no browser-owned shell or client-path substitution. Keep the inline settings CAS/readback and bracketed-paste tests. See `docs/verification/terminal-host-experience.md`.
+
 - Tests that exercise persistence must receive an isolated `PEALAYER_CONFIG_FILE` from the parent process before startup; never point fixtures at the user's OS configuration or Registry mirror. Pure catalog/model reconciliation must not save configuration or publish engine commands. Do not mutate process environment underneath libmpv/native threads to retrofit isolation.
 - Every feature/fix pass includes a host-compatible Cafe-PC deployment and live verification, or an explicit deployment blocker. Do not call a local build delivered to Cafe-PC.
 - Preserve and coordinate unpushed or separate host work before replacement. Package against the host's actual libmpv runtime and validate the manifest and runtime smoke test.

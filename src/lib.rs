@@ -32,3 +32,4 @@ pub mod startup;
 pub mod ui;
 pub mod update;
 pub mod workspace_tools;
+pub mod terminal_access;

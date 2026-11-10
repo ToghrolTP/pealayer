@@ -4,6 +4,7 @@ import {
   AppstoreOutlined,
   BulbOutlined,
   ControlOutlined,
+  CodeOutlined,
   DashboardOutlined,
   DownloadOutlined,
   FolderOpenOutlined,
@@ -43,8 +44,9 @@ const PreferencesTab = React.lazy(() => import('./components/PreferencesTab').th
 const EffectsTab = React.lazy(() => import('./components/EffectsTab').then((module) => ({ default: module.EffectsTab })));
 const HardwareTab = React.lazy(() => import('./components/HardwareTab').then((module) => ({ default: module.HardwareTab })));
 const DownloadsTab = React.lazy(() => import('./components/DownloadsTab').then((module) => ({ default: module.DownloadsTab })));
+const TerminalTab = React.lazy(() => import('./components/TerminalTab').then(module => ({ default: module.TerminalTab })));
 
-const SURFACE_IDS = ['player', 'timeline', 'effects', 'hardware', 'library', 'downloads', 'about', 'preferences'] as const;
+const SURFACE_IDS = ['player', 'timeline', 'effects', 'hardware', 'library', 'downloads', 'terminal', 'about', 'preferences'] as const;
 type SurfaceId = typeof SURFACE_IDS[number];
 
 const STORAGE = {
@@ -245,7 +247,7 @@ const App: React.FC = () => {
     document.documentElement.dir = runtime.direction;
     const surfaceNames: Record<SurfaceId, string> = {
       player: 'Player', timeline: 'Timeline', effects: 'Effects Library', hardware: 'Hardware Monitor',
-      library: 'Media Library', downloads: 'Downloads', about: 'About and system', preferences: 'Preferences',
+      library: 'Media Library', downloads: 'Downloads', terminal: 'Terminal', about: 'About and system', preferences: 'Preferences',
     };
     document.title = `${tr(runtime.locale, surfaceNames[activeTab])} — ${runtime.appName}`;
     let description = document.querySelector<HTMLMetaElement>('meta[name="description"]');
@@ -646,6 +648,7 @@ const App: React.FC = () => {
       label: tr(runtime?.locale || 'en', 'About and system'),
     },
     { key: 'downloads', icon: <DownloadOutlined style={{ fontSize: 18 }} />, label: 'Downloads' },
+    ...(appConfig?.ui?.terminal?.enabled || appConfig?.ui?.terminal?.allow_remote ? [{ key: 'terminal', icon: <CodeOutlined style={{ fontSize: 18 }} />, label: 'Terminal' }] : []),
     {
       key: 'preferences',
       icon: <SettingOutlined style={{ fontSize: 18 }} />,
@@ -809,6 +812,7 @@ const App: React.FC = () => {
             )}
             {activeTab === 'effects' && <EffectsTab state={state} sendCmd={sendCmd} locale={runtime?.locale || 'en'} apiBaseUrl={apiBaseUrl} importedEffect={importedEffect} onImported={() => setImportedEffect(null)} />}
             {activeTab === 'downloads' && <DownloadsTab apiBaseUrl={apiBaseUrl} sendCmd={sendCmd} />}
+            {activeTab === 'terminal' && <TerminalTab apiBaseUrl={apiBaseUrl} />}
             {activeTab === 'hardware' && <HardwareTab state={state} sendCmd={sendCmd} locale={runtime?.locale || 'en'} onPreferences={() => setActiveTab('preferences')} />}
             {activeTab === 'about' && (
               <PlayerInfoTab state={state} connectionMode={connectionMode} runtime={runtime} locale={runtime?.locale || 'en'} apiBaseUrl={apiBaseUrl} websocketUrl={resolveWebSocketUrl()} platform={platform} />
