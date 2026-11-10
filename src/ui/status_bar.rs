@@ -305,14 +305,14 @@ fn status_font(ui: &egui::Ui, monospace: bool, strong: bool) -> egui::FontId {
     let mut font = if monospace {
         egui::FontId::monospace(12.0)
     } else {
-        egui::FontId::proportional(12.0)
+        egui::FontId::new(12.0, super::fonts::status_family(ui))
     };
     if strong {
         let family = egui::FontFamily::Name(
             if monospace {
                 "pealayer-status-mono-strong"
             } else {
-                "pealayer-status-strong"
+                "pealayer-status-caption-strong"
             }
             .into(),
         );
@@ -356,7 +356,7 @@ fn fps_slot_width(app: &PealayerApp, ui: &egui::Ui) -> f32 {
     // Larger factual values may grow the slot, never disappear under its clip.
     let reference = format!("{digit}{digit}{digit}.{digit}{digit} fps");
     let measure = |text: String| {
-        let galley = ui.painter().layout_no_wrap(text, font.clone(), ui.visuals().text_color());
+        let galley = super::numeric_text::layout(ui, &text, font.clone(), ui.visuals().text_color());
         let ink = galley.mesh_bounds;
         galley.size().x + if ink.is_finite() {
             (-ink.left()).max(0.0) + (ink.right() - galley.size().x).max(0.0)
@@ -395,9 +395,13 @@ fn text_widget(
 ) -> egui::Response {
     let font = status_font(ui, monospace, strong);
     let (rect, response) = ui.allocate_exact_size(egui::vec2(width, ITEM_HEIGHT), egui::Sense::click_and_drag());
-    let galley = egui::WidgetText::from(egui::RichText::new(text).font(font).color(color)
+    let mut galley = egui::WidgetText::from(egui::RichText::new(text).font(font.clone()).color(color)
         .variations([("wght", if strong { 600.0 } else { 400.0 })]))
         .into_galley(ui, Some(egui::TextWrapMode::Truncate), (width - 6.0).max(1.0), egui::TextStyle::Small);
+    if !strong && !monospace && text.chars().any(|ch| ch.is_ascii_digit()) {
+        let numeric = super::numeric_text::layout(ui, text, font, color);
+        if numeric.size().x <= (width - 6.0).max(1.0) { galley = numeric; }
+    }
     paint_centered_galley(ui, rect, galley, color, align);
     response.on_hover_text(text)
 }
@@ -526,9 +530,9 @@ fn fps_details(ui: &mut egui::Ui, app: &PealayerApp, fps: &crate::app::FpsDispla
     }
     let values: Vec<_> = rows.iter().map(|row| row.2.filter(|value| value.is_finite() && *value > 0.0)
         .map(|value| format!("{value:.2}")).unwrap_or_else(|| "—".into())).collect();
-    let body = egui::TextStyle::Body.resolve(ui.style());
-    let mono = egui::TextStyle::Monospace.resolve(ui.style());
-    let measure = |text: &str, font: egui::FontId| ui.painter().layout_no_wrap(text.into(), font, ui.visuals().text_color()).size().x;
+    let body = egui::FontId::new(egui::TextStyle::Body.resolve(ui.style()).size, super::fonts::status_family(ui));
+    let mono = body.clone();
+    let measure = |text: &str, font: egui::FontId| super::numeric_text::layout(ui,text,font,ui.visuals().text_color()).size().x;
     // Reserve a numeric lane independently of today's digit count. Larger real
     // measurements can still grow rather than clip; ordinary updates cannot
     // resize every row (including when a rate is temporarily unavailable).
@@ -544,7 +548,7 @@ fn fps_details(ui: &mut egui::Ui, app: &PealayerApp, fps: &crate::app::FpsDispla
     let max_width = (ui.ctx().content_rect().width() - 40.0).max(200.0);
     let label_width = (rows.iter().map(|row| measure(&row.1, body.clone())).fold(0.0_f32, f32::max) + 6.0)
         .min((max_width - value_width - unit_width - 70.0).max(40.0));
-    let row_height = ui.text_style_height(&egui::TextStyle::Body).max(ui.text_style_height(&egui::TextStyle::Monospace));
+    let row_height = ui.text_style_height(&egui::TextStyle::Body);
     let muted = ui.visuals().weak_text_color();
     let width = label_width + value_width + unit_width + 70.0;
     // Separators consume the available width. Bound the content itself, not just
@@ -575,7 +579,7 @@ fn fps_details(ui: &mut egui::Ui, app: &PealayerApp, fps: &crate::app::FpsDispla
             let cells = [
                 (18.0, ui.painter().layout_no_wrap((*icon).into(), body.clone(), if *active {accent} else {muted}), if *active {accent} else {muted}, egui::Align::Center),
                 (label_width, label_galley, muted, if app.rtl {egui::Align::Max} else {egui::Align::Min}),
-                (value_width, ui.painter().layout_no_wrap(values[index].clone(), mono.clone(), ink), ink, egui::Align::Max),
+                (value_width, super::numeric_text::layout(ui, &values[index], mono.clone(), ink), ink, egui::Align::Max),
                 (unit_width, ui.painter().layout_no_wrap((*unit).into(), egui::TextStyle::Small.resolve(ui.style()), muted), muted, egui::Align::Min),
                 (12.0, ui.painter().layout_no_wrap(if *active {icons::CHECK.into()} else {String::new()}, body.clone(), accent), accent, egui::Align::Center),
             ];
@@ -646,9 +650,11 @@ fn render_widget(
             } else {
                 egui::Rect::from_min_max(rect.min + egui::vec2(FPS_ICON_SPACE, 0.0), rect.max)
             };
-            let galley = ui.painter().layout_no_wrap(fps.formatted.clone(),
-                fps_font(ui, app.status_bar.uses_monospace(item)), color);
-            paint_centered_galley(ui, number_rect, galley, color, egui::Align::Max);
+            let font = fps_font(ui, app.status_bar.uses_monospace(item));
+            let numeric_center = super::numeric_text::center_y(ui, font.clone());
+            let galley = super::numeric_text::layout(ui, &fps.formatted, font, color);
+            let pos = egui::pos2(number_rect.right()-3.0-galley.size().x, number_rect.center().y-numeric_center);
+            ui.painter().with_clip_rect(number_rect).galley(pos, galley, color);
             return Some((
                 response.on_hover_ui(|ui| fps_details(ui, app, &fps, true)),
                 text,
@@ -813,9 +819,10 @@ fn render_widget(
             job.wrap.break_anywhere = true;
             let galley = ui.fonts_mut(|fonts|fonts.layout_job(job));
             ui.painter().with_clip_rect(label_rect).galley(egui::pos2(label_rect.left(),label_rect.center().y-galley.size().y/2.0),galley,foreground);
-            ui.painter().with_clip_rect(rect).text(rect.right_center()-egui::vec2(3.0,0.0),egui::Align2::RIGHT_CENTER,
-                operation.fraction.map(|value|format!("{:.0}%",value*100.0)).unwrap_or_else(||"…".into()),
-                egui::FontId::monospace(11.0),foreground);
+            let value = operation.fraction.map(|value|format!("{:.0}%",value*100.0)).unwrap_or_else(||"…".into());
+            let galley = super::numeric_text::layout(ui, &value,
+                egui::FontId::new(11.0, super::fonts::status_family(ui)), foreground);
+            paint_centered_galley(ui,rect,galley,foreground,egui::Align::Max);
             let tooltip = progress
                 .iter()
                 .map(|operation| {
@@ -1276,6 +1283,10 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
         // another point and paints a second line just outside the frame outline.
         .show_separator_line(false)
         .show_inside(ui, |ui| {
+        let family = super::fonts::status_family(ui);
+        for font in ui.style_mut().text_styles.values_mut() {
+            if font.family == egui::FontFamily::Proportional { font.family = family.clone(); }
+        }
         ui.spacing_mut().item_spacing.x=3.0;
         ui.with_layout(crate::ui::i18n::layout(app.rtl,egui::Align::Center), |ui| {
             let all_items: Vec<_> = [false, true].into_iter()
@@ -1340,7 +1351,20 @@ mod tests {
                                 || (widget==Widget::Connection && text.galley.text().contains("Hardware:")) => Some(text),_=>None
                         }).expect("status caption");
                         let ink=text.galley.mesh_bounds.translate(text.pos.to_vec2());
-                        assert!((ink.center().y-rect.center().y).abs()<0.05,"{family:?} {scale} {widget:?}: {ink:?} {rect:?}");
+                        if widget == Widget::Connection {
+                            assert!((ink.center().y-rect.center().y).abs()<0.05,"{family:?} {scale} {widget:?}: {ink:?} {rect:?}");
+                        } else {
+                            let icon = output.shapes.iter().find_map(|shape| match &shape.shape {
+                                egui::Shape::Text(icon) if icon.galley.text() == crate::ui::icons::FILE_VIDEO => Some(icon), _ => None,
+                            }).expect("painted FPS icon");
+                            let icon_center = icon.pos.y + icon.galley.mesh_bounds.center().y;
+                            let mut numeric_center = 0.0;
+                            let font = text.galley.job.sections[0].format.font_id.clone();
+                            let mut check=context.run_ui(Default::default(),|ui|numeric_center=super::super::numeric_text::center_y(ui,font.clone()));
+                            check.textures_delta.clear();
+                            assert!((icon_center - text.pos.y - numeric_center).abs() < 0.05,
+                                "icon and numeric center differ");
+                        }
                         assert!(ink.top()>=rect.top() && ink.bottom()<=rect.bottom(),"glyphs clipped vertically");
                         if widget==Widget::Connection && width>=1000.0 {
                             assert!(!text.galley.elided,"space available but hardware caption elided");
@@ -1579,13 +1603,14 @@ mod tests {
             let mono=index==1;
             let rect=context.data(|d|d.get_temp::<egui::Rect>(egui::Id::new(("metric-center",mono)))).unwrap();
             assert!((text.pos.y+text.galley.mesh_bounds.center().y-rect.center().y).abs()<0.01);
-            assert_eq!(text.galley.job.sections[0].format.font_id.family,if mono {egui::FontFamily::Monospace}else{egui::FontFamily::Proportional});
+            assert_eq!(text.galley.job.sections[0].format.font_id.family,if mono {egui::FontFamily::Monospace}else{egui::FontFamily::Name("pealayer-status".into())});
         }
     }
 
     #[test]
     fn widget_side_and_typeface_survive_persistence_and_do_not_change_other_widgets() {
         let mut config=crate::config::StatusBarConfig::default();
+        config.monospace[Widget::Current as usize]=true;
         config.place_at_end(Widget::Voltage,true); config.monospace[Widget::Voltage as usize]=false;
         config.set_visible(Widget::Voltage,false); config.set_visible(Widget::Voltage,true);
         let restored:crate::config::StatusBarConfig=serde_json::from_value(serde_json::to_value(config).unwrap()).unwrap();
@@ -1912,8 +1937,12 @@ mod tests {
                     "FPS clipped: value={value}, {family:?}, mono={mono}, rtl={rtl}, scale={scale}: ink={ink:?}, clip={:?}", shape.clip_rect);
                 assert!(text.galley.job.sections[0].format.font_id.size <= 11.0,
                     "FPS must be smaller than the 12-point status captions");
-                assert!((ink.center().y - bounds.center().y).abs() < 0.05,
-                    "FPS lost its visible vertical center");
+                let reference = text.galley.job.sections[0].format.font_id.clone();
+                let mut center = 0.0;
+                let mut check = ctx.run_ui(Default::default(), |ui| { center=super::super::numeric_text::center_y(ui,reference.clone()); });
+                check.textures_delta.clear();
+                assert!((text.pos.y + center - bounds.center().y).abs() < 0.05,
+                    "FPS lost its stable numeric center");
                 if value < 1000.0 {
                     if let Some(width) = normal_width { assert_eq!(bounds.width(), width, "ordinary FPS changes moved adjacent widgets"); }
                     normal_width = Some(bounds.width());
@@ -1935,14 +1964,24 @@ mod tests {
         for (mode,paused) in [(StatusBarFpsMode::Ui,false),(StatusBarFpsMode::Media,true),(StatusBarFpsMode::Auto,true),(StatusBarFpsMode::Auto,false)] {
             app.status_bar.fps_mode=mode; app.is_paused=paused;
             let mut expected=None;
+            let mut numeric_center=0.0;
             let mut output=context.run_ui(Default::default(),|ui| {
                 expected=Some(fps_font(ui,app.status_bar.uses_monospace(Widget::Fps)));
+                numeric_center=super::super::numeric_text::center_y(ui,expected.clone().unwrap());
                 render_widget(&app,ui,Widget::Fps,None,&TelemetryLog::default(),&[],100.0);
             });
             let actual=output.shapes.iter().find_map(|s| match &s.shape {
                 egui::Shape::Text(t) if t.galley.text().ends_with("fps") => Some(t.galley.job.sections[0].format.font_id.clone()),_=>None
             }).unwrap();
             assert_eq!(Some(actual),expected,"wrong FPS weight for {mode:?}, paused={paused}");
+            let caption=output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text().ends_with("fps") => Some(text), _=>None,
+            }).unwrap();
+            let icon=output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if [crate::ui::icons::GAUGE,crate::ui::icons::FILE_VIDEO].contains(&text.galley.text()) => Some(text), _=>None,
+            }).unwrap();
+            assert!((icon.pos.y+icon.galley.mesh_bounds.center().y-caption.pos.y-numeric_center).abs()<0.05,
+                "icon and numeric center diverged for {mode:?}");
             output.textures_delta.clear();
         }
     }

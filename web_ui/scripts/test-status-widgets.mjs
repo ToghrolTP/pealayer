@@ -16,7 +16,7 @@ assert.equal(displayedWidgets(['workspace', 'temperature', 'fps']).at(-1), 'work
 assert.equal(reorderWidgets([...WIDGETS], 'workspace', 'fps', false)[0], 'workspace');
 assert.equal(DEFAULT_VISIBILITY.trailing[WIDGETS.indexOf('workspace')], true);
 assert.equal(DEFAULT_VISIBILITY.trailing[WIDGETS.indexOf('voltage')], false);
-assert.equal(DEFAULT_VISIBILITY.monospace[WIDGETS.indexOf('current')], true);
+assert.ok(DEFAULT_VISIBILITY.monospace.every((value) => value === false));
 assert.deepEqual(DEFAULT_VISIBILITY.metric_limits, [[null,null],[null,null],[null,null]]);
 assert.equal(DEFAULT_VISIBILITY.fps_mode, 'auto');
 assert.deepEqual(['media', 'ui', 'auto'].map(nextFpsMode), ['ui', 'auto', 'media']);

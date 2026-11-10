@@ -8,6 +8,6 @@
 .frame-rate-details__label { display: flex; align-items: center; gap: 8px; min-inline-size: 0; color: var(--muted); }
 .frame-rate-details__label > .anticon { flex: 0 0 14px; }
 .frame-rate-details__row.is-active .frame-rate-details__label > .anticon { color: var(--accent); }
-.frame-rate-details__value { direction: ltr; text-align: right; font-family: var(--font-mono); font-variant-numeric: tabular-nums; font-weight: 400; }
+.frame-rate-details__value { direction: ltr; text-align: right; font-family: var(--status-font, var(--ui-font, system-ui)); font-variant-numeric: tabular-nums; font-weight: 400; }
 .frame-rate-details__unit { color: var(--muted); font-size: 11px; }
 .frame-rate-details footer { display: flex; align-items: center; gap: 8px; color: var(--muted); font-size: 11px; }

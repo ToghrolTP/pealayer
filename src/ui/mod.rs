@@ -25,6 +25,7 @@ pub(crate) mod hardware_monitor;
 pub(crate) mod pwm_policy;
 pub mod i18n;
 pub(crate) mod fonts;
+pub(crate) mod numeric_text;
 pub(crate) mod egui_dock;
 pub(crate) mod panel_chrome;
 pub(crate) mod player_mode;

@@ -293,18 +293,14 @@ pub fn draw(
     let captions: Vec<_> = captions
         .into_iter()
         .map(|(text, time)| {
+            if time {
+                return super::numeric_text::layout(ui, &text, egui::FontId::proportional(11.0),
+                    ui.visuals().strong_text_color());
+            }
             ui.painter().layout(
                 text,
-                if time {
-                    egui::FontId::monospace(11.0)
-                } else {
-                    egui::FontId::proportional(12.0)
-                },
-                if time {
-                    ui.visuals().strong_text_color()
-                } else {
-                    ui.visuals().text_color()
-                },
+                egui::FontId::proportional(12.0),
+                ui.visuals().text_color(),
                 width,
             )
         })

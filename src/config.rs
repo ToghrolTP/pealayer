@@ -744,7 +744,7 @@ impl Default for StatusBarConfig {
         Self {
             connection_icon: StatusConnectionIcon::Plug, connection_mode: false, chart_paused: false,
             dividers: true, semantic_colors: false,
-            monospace: [true, false, false, false, false, true, true, true, false, false, false, false, false, false],
+            monospace: [false; StatusBarWidget::COUNT],
             trailing: [false, false, false, false, false, false, false, false, false, false, false, false, false, true],
             metric_limits: [[None; 2]; 3],
             media_rate: true,
