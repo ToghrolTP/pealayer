@@ -68,6 +68,7 @@ mod terminal_screen;
 mod terminal_parser;
 pub(crate) mod action_customization;
 pub(crate) mod control_bar;
+pub(crate) mod simple_controls;
 pub mod subtitles;
 pub mod toasts;
 pub mod video;

@@ -618,7 +618,7 @@ mod native {
                 .clicked()
             {
                 app.toolbar_state.preferences = ToolbarPreferences {
-                    enabled: true,
+                    enabled: app.toolbar_state.preferences.enabled,
                     ..Default::default()
                 };
                 app.deferred_config_save = true;
@@ -629,8 +629,9 @@ mod native {
             .button(format!("{}  {}", icons::EYE_SLASH, app.tr("Hide toolbar")))
             .clicked()
         {
-            app.toolbar_state.preferences.enabled = false;
-            app.deferred_config_save = true;
+            if app.show_four_d_editor { app.toolbar_state.preferences.enabled = false; }
+            else { app.simple_workspace.show_toolbar = false;app.request_simple_workspace_save(ui.ctx()); }
+            if app.show_four_d_editor {app.deferred_config_save = true;}
             ui.close();
         }
     }
@@ -665,7 +666,7 @@ mod native {
     }
 
     pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
-        if !app.toolbar_state.preferences.enabled {
+        if !crate::ui::simple_controls::toolbar_visible(app) {
             return;
         }
         let ctx = ui.ctx().clone();

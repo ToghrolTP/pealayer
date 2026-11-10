@@ -230,6 +230,7 @@ struct PseudoFrameTextureCache {
 }
 
 pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    super::simple_controls::publish_video(ui.ctx(),None);
     let video_size = ui.available_size();
     if video_size.x <= 0.0 || video_size.y <= 0.0 {
         return;
@@ -614,6 +615,9 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     app.pin_controls = !app.pin_controls;
                     app.save_config();
                 }
+                if !app.show_four_d_editor {
+                    ui.menu_button("Simple workspace",|ui|super::simple_controls::menu(app,ui));
+                }
             });
     }
 
@@ -742,6 +746,9 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     };
 
     if !pseudo_rendered && let Some(texture_id) = texture_id_opt {
+        if app.current_video_path.is_some() && app.rtt_state.try_lock().is_ok_and(|rtt|rtt.has_rendered_frame) {
+            super::simple_controls::publish_video(ui.ctx(),Some((texture_id,dest_rect)));
+        }
         ui.painter().image(
             texture_id,
             dest_rect,

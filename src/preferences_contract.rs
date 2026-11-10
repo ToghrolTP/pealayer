@@ -512,6 +512,12 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
         control
     };
     let mut controls = vec![
+        PreferenceControl::boolean("simple_workspace.show_menu_bar", "playback", "Simple workspace", "Show menu bar in Simple workspace"),
+        PreferenceControl::boolean("simple_workspace.show_toolbar", "playback", "Simple workspace", "Show command toolbar in Simple workspace"),
+        PreferenceControl::boolean("simple_workspace.show_status_bar", "playback", "Simple workspace", "Show status bar in Simple workspace"),
+        PreferenceControl::select("simple_workspace.backdrop", "playback", "Simple workspace", "Control bar background", &[("auto","Automatic GPU blur"),("blur","GPU blur"),("solid","Solid background")]),
+        PreferenceControl::number("simple_workspace.controls_x", "playback", "Simple workspace", "Control bar horizontal position", 0.0, 1.0, 0.01),
+        PreferenceControl::number("simple_workspace.controls_y", "playback", "Simple workspace", "Control bar vertical position", 0.0, 1.0, 0.01),
         PreferenceControl::boolean("ui.sidebar_rail.enabled", "sidebar_rail", "Sidebar rail", "Show sidebar rail"),
         PreferenceControl::number("ui.sidebar_rail.width", "sidebar_rail", "Sidebar rail", "Sidebar pane width", 240.0, 600.0, 10.0),
         {

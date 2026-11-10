@@ -514,10 +514,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     );
                     #[cfg(feature = "workspace-toolbar")]
                     {
-                        let mut enabled = app.toolbar_state.preferences.enabled;
+                        let mut enabled = super::simple_controls::toolbar_visible(app);
                         if ui.checkbox(&mut enabled, format!("{}  {}", crate::ui::icons::COMMAND, app.tr("Command toolbar"))).changed() {
-                            app.toolbar_state.preferences.enabled = enabled;
-                            app.deferred_config_save = true;
+                            super::simple_controls::set_toolbar_visible(app,enabled);
+                            if app.show_four_d_editor {app.deferred_config_save = true;}
+                            else {app.request_simple_workspace_save(ui.ctx());}
                         }
                         if ui.button(format!("{}  {}  Ctrl+Shift+P", crate::ui::icons::MAGNIFYING_GLASS, app.tr("Command palette"))).clicked() {
                             app.toolbar_state.palette_open = true;

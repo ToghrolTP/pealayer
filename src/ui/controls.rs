@@ -1,7 +1,6 @@
 use crate::app::PealayerApp;
 use eframe::egui;
 
-const CONTROL_FADE_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// Transport intent is independent of the user's accent. All interaction
 /// states keep the same stroke width, so hover/focus cannot shift the glyph.
@@ -1023,21 +1022,29 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
     let controls_label = app.tr("Controls");
     let time_since_activity = app.last_mouse_activity.elapsed().as_secs_f32();
-    let alpha = if app.pin_controls {
-        1.0
-    } else {
-        (3.0 - time_since_activity).clamp(0.0, 1.0)
-    };
+    let alpha = super::simple_controls::alpha(&ctx,time_since_activity,app.pin_controls,app.editing_elapsed_time);
 
     if alpha > 0.0 {
-        let window_width = ui.available_width() - 20.0;
+        let bounds=ui.max_rect().intersect(ctx.content_rect());
+        let window_width = (bounds.width()-32.0).clamp(1.0,1280.0);
+        let size_id=egui::Id::unique("simple-controls-measured-size");
+        let measured=ctx.data(|data|data.get_temp::<egui::Vec2>(size_id)).unwrap_or(egui::vec2(window_width,super::control_density::height(ui)+16.0));
+        let size=egui::vec2(window_width,measured.y);
+        let desired=super::simple_controls::position(bounds,size,[app.simple_workspace.controls_x,app.simple_workspace.controls_y]);
+        let fill=ui.visuals().window_fill;
         let mut controls_frame = egui::Frame::window(ui.style()).multiply_with_opacity(alpha);
-        controls_frame.inner_margin.right = 0;
+        controls_frame.inner_margin.left = 20;
+        controls_frame.fill=egui::Color32::TRANSPARENT;
+        let content_width=(window_width-controls_frame.total_margin().sum().x).max(1.0);
 
-        egui::Window::new(controls_label)
-            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -20.0))
-            .min_width(window_width)
-            .default_width(window_width)
+        let window=egui::Window::new(controls_label)
+            .id(egui::Id::unique("simple-transport-overlay"))
+            .current_pos(desired)
+            .constrain_to(bounds)
+            .min_width(content_width)
+            .max_width(content_width)
+            .default_width(content_width)
+            .movable(true)
             .title_bar(false)
             .resizable(false)
             .collapsible(false)
@@ -1045,7 +1052,12 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             .frame(controls_frame)
             .show(&ctx, |ui| {
                 ui.set_opacity(alpha);
-                multiply_style_opacity(ui.style_mut(), alpha);
+                let backdrop_slot=ui.painter().with_clip_rect(ctx.content_rect()).add(egui::Shape::Noop);
+                let grip_rect=egui::Rect::from_min_size(ui.min_rect().min+egui::vec2(-16.0,0.0),egui::vec2(12.0,super::control_density::height(ui)));
+                let grip=ui.interact(grip_rect,egui::Id::unique("simple-controls-grip"),egui::Sense::hover())
+                    .on_hover_cursor(egui::CursorIcon::Grab).on_hover_text(app.tr("Drag to move controls. Right-click for workspace options."));
+                ui.painter().text(grip_rect.center(),egui::Align2::CENTER_CENTER,super::icons::DOTS_SIX_VERTICAL,egui::FontId::proportional(14.0),ui.visuals().weak_text_color());
+                grip.context_menu(|ui|super::simple_controls::menu(app,ui));
                 let has_video = app.current_video_path.is_some();
                 let timeline_state = app.media_timeline_state();
                 let can_seek = matches!(
@@ -1215,14 +1227,19 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     app.show_remaining_time = !app.show_remaining_time;
                     app.save_config();
                 }
+                backdrop_slot
             });
-
-        if time_since_activity < 3.0 && !app.pin_controls {
-            // The old 16 ms loop repainted the entire application at 60 Hz
-            // whenever controls were visible, even while media was paused.
-            // Ten fade samples per second remain visually smooth while keeping
-            // the idle renderer reactive rather than continuously busy.
-            ctx.request_repaint_after(CONTROL_FADE_REPAINT_INTERVAL);
+        if let Some(window)=window {
+            ctx.data_mut(|data|data.insert_temp(size_id,window.response.rect.size()));
+            if let Some(slot)=window.inner {
+                let painter=ctx.layer_painter(window.response.layer_id);
+                painter.set(slot,egui::Shape::Vec(super::simple_controls::backdrop_shapes(&ctx,window.response.rect.shrink(1.0),fill,alpha,app.simple_workspace.backdrop)));
+            }
+            if window.response.dragged() || window.response.drag_stopped() {
+                let p=super::simple_controls::normalized(bounds,window.response.rect.size(),window.response.rect.min);
+                app.simple_workspace.controls_x=p[0];app.simple_workspace.controls_y=p[1];
+                if window.response.drag_stopped(){app.request_simple_workspace_save(&ctx);}
+            }
         }
     }
 }

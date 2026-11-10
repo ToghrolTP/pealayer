@@ -714,6 +714,7 @@ pub fn run() -> eframe::Result {
                 frame_rate_tracker: crate::app::FrameRateTracker::default(),
                 display_refresh_rate: 60.0,
                 pin_controls: loaded_config.pin_controls,
+                simple_workspace: loaded_config.simple_workspace,
                 show_error: None,
                 show_four_d_editor: loaded_config.workspace_session.nle,
 
@@ -926,6 +927,7 @@ pub fn run() -> eframe::Result {
                 pending_timeline_toolbar_save: None,
                 pending_status_bar_save: None,
                 pending_control_bar_save: None,
+                pending_simple_workspace_save: None,
                 workspace_rendering: false,
                 deferred_config_save: false,
                 non_user_control_visibility: loaded_config.non_user_control_visibility,

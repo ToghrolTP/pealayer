@@ -277,6 +277,27 @@ pub struct UiPreferences {
     pub terminal: crate::ui::terminal::TerminalPreferences,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ControlBackdrop { #[default] Auto, Blur, Solid }
+
+/// Simple playback chrome is independent from the editing workspace.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct SimpleWorkspaceConfig {
+    pub show_menu_bar: bool,
+    pub show_toolbar: bool,
+    pub show_status_bar: bool,
+    /// Fraction of the usable travel, not absolute desktop pixels.
+    pub controls_x: f32,
+    pub controls_y: f32,
+    pub backdrop: ControlBackdrop,
+}
+impl Default for SimpleWorkspaceConfig {
+    fn default() -> Self { Self {show_menu_bar:false,show_toolbar:false,show_status_bar:false,
+        controls_x:0.5,controls_y:1.0,backdrop:ControlBackdrop::Auto} }
+}
+
 #[cfg(test)]
 mod timeline_toolbar_tests {
     use super::*;
@@ -1097,6 +1118,7 @@ pub struct AppConfig {
     pub sfx_audio_device: String,
     pub audio_effects: Vec<crate::mpv::sfx::AudioEffect>,
     pub pin_controls: bool,
+    pub simple_workspace: SimpleWorkspaceConfig,
     pub show_remaining_time: bool,
     pub open_url_multiline: bool,
     pub open_url_history_expanded: bool,
@@ -1307,6 +1329,7 @@ impl Default for AppConfig {
             sfx_audio_device: String::new(),
             audio_effects: Vec::new(),
             pin_controls: false,
+            simple_workspace: SimpleWorkspaceConfig::default(),
             show_remaining_time: false,
             open_url_multiline: true,
             open_url_history_expanded: true,
@@ -2185,6 +2208,9 @@ impl AppConfig {
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        if [self.simple_workspace.controls_x,self.simple_workspace.controls_y].iter().any(|v| !v.is_finite() || !(0.0..=1.0).contains(v)) {
+            return Err("Simple control position must be between 0 and 1".into());
+        }
         self.ui.terminal.validate()?;
         for list in [&self.ui.toolbar.order, &self.ui.toolbar.hidden] {
             if list.len() > 128 || list.iter().any(|id| id.is_empty() || id.len() > 128 || id.chars().any(char::is_control)) {

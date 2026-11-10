@@ -1260,6 +1260,7 @@ pub(crate) fn status_bar_panel_frame(tokens: &crate::ui::craft_theme::Tokens) ->
 }
 
 pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    if !app.show_four_d_editor && !app.simple_workspace.show_status_bar { return; }
     let _timing = crate::performance::span(crate::performance::Phase::Status);
     if ui.input(|i| i.viewport().fullscreen.unwrap_or(false)) { return; }
     let tokens = crate::ui::craft_theme::current(ui.ctx());

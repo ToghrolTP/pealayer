@@ -61,6 +61,15 @@ pub fn is_remote_media_target(target: &str) -> bool {
     })
 }
 
+/// Explicit clipboard action: keep the original URL bytes, not a proxy/cache
+/// path or redacted diagnostics. Local paths are made absolute without IO.
+pub fn source_location(path:&std::path::Path)->Result<String,String> {
+    let target=path.to_str().ok_or("Media location is not valid text")?;
+    if target.is_empty(){return Err("No media is loaded".into());}
+    if media_scheme(target).is_some() {Ok(target.to_owned())}
+    else {std::path::absolute(path).map(|path|path.to_string_lossy().into_owned()).map_err(|error|error.to_string())}
+}
+
 pub fn is_live_media_target(target: &str) -> bool {
     media_scheme(target).is_some_and(|scheme| {
         LIVE_SCHEMES
@@ -291,5 +300,13 @@ mod tests {
             .as_deref(),
             Some("https://example.invalid/movie.mp4")
         );
+    }
+    #[test]
+    fn clipboard_location_preserves_url_bytes_and_resolves_local_paths() {
+        let url="https://example.invalid/a%2Fb%20c.mkv?token=example&x=a+b";
+        assert_eq!(source_location(std::path::Path::new(url)).unwrap(),url);
+        let local=source_location(std::path::Path::new("movie with spaces.mkv")).unwrap();
+        assert!(std::path::Path::new(&local).is_absolute());
+        assert!(local.ends_with("movie with spaces.mkv"));
     }
 }

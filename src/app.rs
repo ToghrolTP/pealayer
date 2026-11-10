@@ -20,6 +20,7 @@ pub(crate) struct PendingBarSave<T> {
 }
 type PendingStatusBarSave=PendingBarSave<crate::config::StatusBarConfig>;
 type PendingControlBarSave=PendingBarSave<crate::config::ControlBarsConfig>;
+type PendingSimpleWorkspaceSave=PendingBarSave<crate::config::SimpleWorkspaceConfig>;
 
 /// Same narrow compare-and-set/coalescing path for both user-owned bars.
 /// It never snapshots dock/workspace state while a panel borrows that state.
@@ -668,6 +669,7 @@ pub struct PealayerApp {
     pub frame_rate_tracker: FrameRateTracker,
     pub display_refresh_rate: f64,
     pub(crate) pin_controls: bool,
+    pub(crate) simple_workspace: crate::config::SimpleWorkspaceConfig,
 
     pub show_error: Option<String>,
 
@@ -882,6 +884,7 @@ pub struct PealayerApp {
     pub(crate) pending_timeline_toolbar_save: Option<PendingTimelineToolbarSave>,
     pub(crate) pending_status_bar_save: Option<PendingStatusBarSave>,
     pub(crate) pending_control_bar_save: Option<PendingControlBarSave>,
+    pub(crate) pending_simple_workspace_save: Option<PendingSimpleWorkspaceSave>,
     pub(crate) workspace_rendering: bool,
     pub(crate) deferred_config_save: bool,
     pub(crate) non_user_control_visibility: crate::config::NonUserControlVisibility,
@@ -1061,6 +1064,7 @@ impl eframe::App for PealayerApp {
         self.flush_timeline_toolbar_save(ctx);
         self.flush_status_bar_save(ctx);
         self.flush_control_bar_save(ctx);
+        self.flush_simple_workspace_save(ctx);
         let close_requested = ctx.input(|i| i.viewport().close_requested());
         if close_requested && self.is_timeline_dirty() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -2014,9 +2018,11 @@ impl eframe::App for PealayerApp {
         crate::ui::sync_native_window_appearance(ui.ctx(), self.color_palette);
 
         if !is_fullscreen {
-            crate::ui::menu::draw(self, ui);
+            if self.show_four_d_editor || self.simple_workspace.show_menu_bar {
+                crate::ui::menu::draw(self, ui);
+            }
             crate::ui::status_bar::draw(self, ui);
-            if cfg!(feature = "workspace-toolbar") && self.toolbar_state.preferences.enabled {
+            if cfg!(feature = "workspace-toolbar") && crate::ui::simple_controls::toolbar_visible(self) {
                 egui::Panel::top("workspace-command-toolbar").show(ui, |ui| {
                     crate::ui::workspace_toolbar::draw(self, ui);
                 });
@@ -4614,6 +4620,13 @@ impl PealayerApp {
             InteropCommand::OpenMediaInformation => {
                 self.open_or_focus_tab(crate::ui::layout::PealayerTab::MediaInspector);
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            }
+            InteropCommand::CopyMediaLocation => {
+                match self.current_video_path.as_deref().ok_or_else(||"No media is loaded".to_string())
+                    .and_then(crate::media::source_location) {
+                    Ok(location)=>{ctx.copy_text(location);self.set_osd(self.tr("Media location copied"));},
+                    Err(error)=>{self.set_osd(error);}
+                }
             }
             InteropCommand::OpenMediaFolder => {
                 let result = self
@@ -7554,6 +7567,7 @@ impl PealayerApp {
         cfg.volume = self.volume;
         cfg.is_muted = self.is_muted;
         cfg.pin_controls = self.pin_controls;
+        cfg.simple_workspace = self.simple_workspace;
         cfg.show_remaining_time = self.show_remaining_time;
         cfg.open_url_multiline = self.open_url_multiline;
         cfg.open_url_history_expanded = self.open_url_history_expanded;
@@ -7776,6 +7790,25 @@ impl PealayerApp {
         else {self.pending_control_bar_save=Some(PendingBarSave {desired:self.control_bars,flight:None});}
         ctx.request_repaint();
     }
+    pub(crate) fn request_simple_workspace_save(&mut self,ctx:&egui::Context) {
+        if let Some(pending)=&mut self.pending_simple_workspace_save {pending.desired=self.simple_workspace;}
+        else {self.pending_simple_workspace_save=Some(PendingBarSave{desired:self.simple_workspace,flight:None});}
+        ctx.request_repaint();
+    }
+    fn flush_simple_workspace_save(&mut self,ctx:&egui::Context) {
+        if self.show_preferences_dialog || self.preference_preview_original.is_some() {return;}
+        let Some(mut pending)=self.pending_simple_workspace_save.take() else {return};
+        match poll_bar_save(&mut pending,"simple_workspace",|c|c.simple_workspace,|c,v|c.simple_workspace=v) {
+            Ok(true)=>{self.config_status="Simple workspace saved".into();
+                self.config_fingerprint=crate::config::AppConfig::fingerprint(&crate::config::AppConfig::get_config_path()).ok();},
+            Ok(false)=>{self.pending_simple_workspace_save=Some(pending);ctx.request_repaint_after(std::time::Duration::from_millis(100));},
+            Err(error)=>{
+                self.simple_workspace=crate::peer::client().and_then(|c|c.snapshot()).map(|s|s.session.config.simple_workspace)
+                    .unwrap_or_else(||crate::platform::interop::get_live_config().simple_workspace);
+                self.config_status=error;
+            }
+        }
+    }
     fn flush_control_bar_save(&mut self,ctx:&egui::Context) {
         if self.show_preferences_dialog || self.preference_preview_original.is_some() {return;}
         let Some(mut pending)=self.pending_control_bar_save.take() else {return};
@@ -7919,6 +7952,7 @@ impl PealayerApp {
         self.volume = config.volume;
         self.is_muted = config.is_muted;
         self.pin_controls = config.pin_controls;
+        self.simple_workspace = config.simple_workspace;
         self.show_remaining_time = config.show_remaining_time;
         self.open_url_multiline = config.open_url_multiline;
         self.open_url_history_expanded = config.open_url_history_expanded;
@@ -8222,7 +8256,7 @@ impl PealayerApp {
                         if owner.is_some() && value.get("values").and_then(serde_json::Value::as_object)
                             .is_some_and(|values|!values.is_empty()&&values.keys().all(|key|
                                 crate::config::TimelineToolbarPreferences::owns_key(key)
-                                || matches!(key.as_str(),"control_bars"|"status_bar"))) {
+                                || matches!(key.as_str(),"control_bars"|"status_bar"|"simple_workspace"))) {
                             return Err("Finish the Preferences preview before customizing toolbars".into());
                         }
                         crate::peer::validate_config_expectations(&crate::platform::interop::get_live_config(), value.get("expected"))?;
@@ -8233,7 +8267,7 @@ impl PealayerApp {
                         if value.get("values").and_then(serde_json::Value::as_object)
                             .is_some_and(|values| !values.is_empty() && values.keys().all(|key|
                                 crate::config::TimelineToolbarPreferences::owns_key(key)
-                                || matches!(key.as_str(), "control_bars" | "status_bar")))
+                                || matches!(key.as_str(), "control_bars" | "status_bar" | "simple_workspace")))
                         {
                             let values=value["values"].as_object().unwrap();
                             if values.keys().any(|key|crate::config::TimelineToolbarPreferences::owns_key(key)) {
@@ -8241,6 +8275,7 @@ impl PealayerApp {
                             }
                             if values.contains_key("control_bars") {self.control_bars = config.control_bars;}
                             if values.contains_key("status_bar") {self.status_bar = config.status_bar;}
+                            if values.contains_key("simple_workspace") {self.simple_workspace = config.simple_workspace;}
                             crate::platform::interop::set_live_config(config);
                             self.config_fingerprint = crate::config::AppConfig::fingerprint(
                                 &crate::config::AppConfig::get_config_path()).ok();
@@ -8307,9 +8342,11 @@ impl PealayerApp {
             }
             if let Some(pending) = &self.pending_status_bar_save { config.status_bar = pending.desired; }
             if let Some(pending) = &self.pending_control_bar_save { config.control_bars = pending.desired; }
+            if let Some(pending) = &self.pending_simple_workspace_save { config.simple_workspace = pending.desired; }
             let workspace_changed=state.config.as_ref().is_none_or(|old|old.active_workspace_profile!=config.active_workspace_profile || old.workspace_session.nle!=config.workspace_session.nle || old.workspace_dock_layout!=config.workspace_dock_layout);
             let bar_preferences_only = state.config.as_ref().is_some_and(|old| {
                 let mut comparison = old.clone(); comparison.status_bar = config.status_bar;
+                comparison.simple_workspace = config.simple_workspace;
                 comparison.control_bars=config.control_bars;
                 crate::config::TimelineToolbarPreferences::from_config(&config).apply(&mut comparison);
                 comparison == config
@@ -8317,6 +8354,7 @@ impl PealayerApp {
             if bar_preferences_only {
                 self.apply_timeline_toolbar_preferences(&crate::config::TimelineToolbarPreferences::from_config(&config));
                 self.status_bar = config.status_bar;
+                self.simple_workspace = config.simple_workspace;
                 self.control_bars=config.control_bars;
                 crate::platform::interop::set_live_config(snapshot.session.config.clone());
             } else if let Err(error)=crate::peer::mirror(||self.apply_runtime_config(ctx,config.clone())){self.config_status=error;}
@@ -8525,7 +8563,10 @@ impl PealayerApp {
         }
         let updated = self.runtime_config_snapshot().apply_patch(values)?;
         updated.save()?;
-        self.apply_runtime_config(ctx, updated.clone())?;
+        if values.as_object().is_some_and(|values|!values.is_empty() && values.keys().all(|key|key=="simple_workspace")) {
+            self.simple_workspace=updated.simple_workspace;
+            crate::platform::interop::set_live_config(updated.clone());
+        } else { self.apply_runtime_config(ctx, updated.clone())?; }
         if [
             "theme",
             "color_palette",
@@ -10136,6 +10177,7 @@ impl Default for PealayerApp {
             frame_rate_tracker: FrameRateTracker::default(),
             display_refresh_rate: 60.0,
             pin_controls: false,
+            simple_workspace: crate::config::SimpleWorkspaceConfig::default(),
             show_error: None,
             show_sub_settings: false,
             sub_visibility: true,
@@ -10340,6 +10382,7 @@ impl Default for PealayerApp {
             pending_timeline_toolbar_save: None,
             pending_status_bar_save: None,
             pending_control_bar_save: None,
+            pending_simple_workspace_save: None,
             workspace_rendering: false,
             deferred_config_save: false,
             non_user_control_visibility: crate::config::NonUserControlVisibility::Dimmed,

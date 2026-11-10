@@ -207,6 +207,7 @@ pub enum InteropCommand {
         tab: crate::ui::about::AboutTab,
     },
     OpenMediaInformation,
+    CopyMediaLocation,
     OpenMediaFolder,
     EditConfiguration,
     OpenBoardInformation {
@@ -581,7 +582,7 @@ impl InteropCommand {
         // authority and follow normal session forwarding instead.
         matches!(self,Self::ImportAssets{request} if request.owner_id.is_none()) ||
         matches!(self, Self::GetWorkspaceTools | Self::WorkspaceTools { .. } | Self::QuitLocal | Self::GetProcessStatus | Self::ConnectPeer { .. } | Self::InspectAuthoring { .. } | Self::NavigatePreferences { .. } | Self::OpenAbout { .. }
-            | Self::GetWindow | Self::SetWindow { .. } | Self::Activate | Self::Minimize | Self::Maximize | Self::Restore | Self::SetFullscreen { .. } | Self::ToggleFullscreen)
+            | Self::GetWindow | Self::SetWindow { .. } | Self::Activate | Self::Minimize | Self::Maximize | Self::Restore | Self::SetFullscreen { .. } | Self::ToggleFullscreen | Self::CopyMediaLocation)
     }
 
     pub fn query_result(&self) -> Option<Value> {
@@ -940,7 +941,7 @@ pub fn command_catalog() -> Value {
             "chapter_previous", "chapter_next", "set_chapter",
             "seek", "seek_to", "seek_abs", "scrub_to", "finish_scrub", "set_volume", "set_mute", "toggle_mute",
             "set_rate", "set_fullscreen", "toggle_fullscreen", "activate", "minimize",
-            "maximize", "restore", "open_preferences", "navigate_preferences", "open_media_information", "open_media_folder", "edit_configuration", "open_board_information", "show_message", "show_osd", "hide_osd", "set_workspace",
+            "maximize", "restore", "open_preferences", "navigate_preferences", "open_media_information", "copy_media_location", "open_media_folder", "edit_configuration", "open_board_information", "show_message", "show_osd", "hide_osd", "set_workspace",
             "create_workspace_profile", "update_workspace_profile", "delete_workspace_profile",
             "open_about",
             "move_workspace_profile", "timeline.track.update", "timeline.track.manage", "update_config",
@@ -1089,6 +1090,7 @@ pub fn parse_text_command(input: &str) -> Result<InteropCommand, String> {
         "restore" => InteropCommand::Restore,
         "preferences" | "open_preferences" | "open-preferences" => InteropCommand::OpenPreferences,
         "media_information" | "open_media_information" => InteropCommand::OpenMediaInformation,
+        "copy_media_location" => InteropCommand::CopyMediaLocation,
         "media_folder" | "open_media_folder" => InteropCommand::OpenMediaFolder,
         "edit_configuration" | "edit_config" => InteropCommand::EditConfiguration,
         "message" | "show_message" | "show-message" => InteropCommand::ShowMessage {
@@ -1987,6 +1989,7 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         "media_information" | "open_media_information" | "pealayer.media.information" => {
             Some(InteropCommand::OpenMediaInformation)
         }
+        "copy_media_location" | "pealayer.media.copy_location" => Some(InteropCommand::CopyMediaLocation),
         "media_folder" | "open_media_folder" | "pealayer.media.folder" => {
             Some(InteropCommand::OpenMediaFolder)
         }
