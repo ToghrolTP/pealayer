@@ -184,9 +184,12 @@ fn resolve_output(
             let output = relays
                 .first()
                 .ok_or_else(|| Error::at(Code::UnsupportedControl, key))?;
+            // PCController exposes the transport control and output role
+            // separately. Only the advertised user role grants scene recall.
             if control.kind != "relay"
-                || output.control != "relay-user"
-                || control.control != "relay-user"
+                || output.control != "relay"
+                || control.control != "relay"
+                || output.role != "user-output"
             {
                 return Err(Error::at(Code::ReservedRelay, key));
             }
@@ -419,7 +422,7 @@ mod tests {
                 key: "relay.5".into(),
                 name: "Door".into(),
                 role: "user-output".into(),
-                control: "relay-user".into(),
+                control: "relay".into(),
             }],
             pwm_channels: vec![HardwareOutput {
                 id: 0,
@@ -548,7 +551,7 @@ mod tests {
                     key: key.clone(),
                     name: String::new(),
                     role: "user-output".into(),
-                    control: "relay-user".into(),
+                    control: "relay".into(),
                 });
                 scene
                     .channels
@@ -571,7 +574,7 @@ mod tests {
         cap.controls.push(HardwareControl {
             key: "relay.5".into(),
             kind: "relay".into(),
-            control: "relay-user".into(),
+            control: "relay".into(),
             locked: true,
             ..Default::default()
         });
@@ -597,7 +600,15 @@ mod tests {
                 .code,
             Code::ReservedRelay
         );
-        cap.relays[0].control = "relay-user".into();
+        cap.relays[0].control = "relay".into();
+        cap.relays[0].role = "firmware-output".into();
+        assert_eq!(
+            preflight(&scene, &selected, &cap, Some("curve-a"))
+                .unwrap_err()
+                .code,
+            Code::ReservedRelay
+        );
+        cap.relays[0].role = "user-output".into();
         cap.relays.push(cap.relays[0].clone());
         assert_eq!(
             preflight(&scene, &selected, &cap, Some("curve-a"))
@@ -854,7 +865,7 @@ mod tests {
         cap.controls.push(HardwareControl {
             key: "relay.5".into(),
             kind: "relay".into(),
-            control: "relay-user".into(),
+            control: "relay".into(),
             locked: true,
             ..Default::default()
         });
