@@ -49,7 +49,9 @@ $profile=@{
     last_media_target=$null; theme=$Theme; color_palette=$Palette
     accent_color='custom'; custom_accent_color='#6362c7'; language=$Locale
     workspace_ui=$WorkspaceUi; ui_control_density=$Density; osd_timeout_seconds=1
-    window_geometry=@{x=60;y=60;width=$Widths[0];height=$Height;maximized=$false}
+    # Final placement must cause a fresh GPU presentation before PrintWindow.
+    # Some drivers otherwise retain the initial paused frame in an occluded window.
+    window_geometry=@{x=60;y=60;width=($Widths[0]+32);height=$Height;maximized=$false}
 }
 $profile | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $configPath -Encoding utf8
 $mediaPath=$null
@@ -168,6 +170,7 @@ try {
         timeline_style= $(if ($Baseline) {'pre-change'} else {$TimelineStyle})
         theme=$Theme; palette=$Palette; accent='#6362c7'; density=$Density; locale=$Locale
         media= $(if ($SyntheticMedia) {'Generated 12-second 24-fps test pattern and silent audio'} else {'None'})
+        capture_preflight='Different startup width, then explicit final placement; inspect the nonzero video frame as well as API readback'
         hardware_connected=$false; acceptance='Captured only; human inspection and interaction evidence remain separate'
         captures=$captures.ToArray()
     }

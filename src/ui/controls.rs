@@ -723,7 +723,7 @@ pub fn draw_elapsed_editor(
         .text_color(if !editing && if app.show_four_d_editor {
             app.native_monitor_style == crate::config::NativeMonitorStyle::FilmCraft
         } else { app.native_transport_style == crate::config::NativeMonitorStyle::FilmCraft } {
-            super::craft_theme::current(ui.ctx()).timecode
+            super::palette::color(app.color_palette,ui.visuals().dark_mode,"blue")
         } else { ui.visuals().text_color() })
         .horizontal_align(egui::Align::Center)
         .vertical_align(egui::Align::Center)
