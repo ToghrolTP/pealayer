@@ -6,6 +6,9 @@ retroactively attributed to an older download.
 
 ## Next milestone · unreleased
 
+- The video context menu offers a horizontal playback-speed slider with
+  nine presets and normal speed at the center.
+
 ### 🎬 Subtitle timeline
 
 - Optionally show timed subtitle cues as separate segments, with the gaps

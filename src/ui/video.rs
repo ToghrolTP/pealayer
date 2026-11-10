@@ -295,6 +295,79 @@ fn perform_video_surface_click(
     }
 }
 
+#[derive(Clone, Copy)]
+struct PlaybackSpeedDraft {
+    source: u64,
+    base_rate: f64,
+    position: f32,
+    pass: u64,
+}
+
+fn playback_speed_slider(
+    ui: &mut egui::Ui,
+    label: String,
+    rate: f64,
+    source: u64,
+) -> Option<f64> {
+    use elegance::ResponseCommitExt as _;
+
+    const RATES: [f64; 9] = [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0];
+    let slider_position = |rate: f64| rate.log2() as f32;
+    let id = ui.make_persistent_id("playback-speed-draft");
+    let pass = ui.ctx().cumulative_pass_nr();
+    let draft = ui
+        .data(|data| data.get_temp::<PlaybackSpeedDraft>(id))
+        .filter(|draft| {
+            draft.source == source && draft.base_rate == rate && pass.saturating_sub(draft.pass) <= 1
+        });
+    let mut position = draft.map_or_else(|| slider_position(rate), |draft| draft.position);
+    // A logarithmic rail centers normal speed and gives the slow presets
+    // enough room to select independently in a small submenu.
+    let response = ui
+        .push_id(source, |ui| {
+            ui.add(
+                elegance::MetricSlider::new(&mut position, -2.0..=2.0)
+                    .label(label)
+                    .accent(elegance::Accent::Sky)
+                    .desired_width(224.0)
+                    .stops(RATES.map(slider_position))
+                    .headline_fmt(|position| {
+                        super::controls::compact_number(2.0_f64.powf(f64::from(position)))
+                    })
+                    .suffix("×")
+                    .tick_fmt(|position| match position {
+                        -2.0 => "0.25×".into(),
+                        0.0 => "1×".into(),
+                        2.0 => "4×".into(),
+                        _ => String::new(),
+                    }),
+            )
+        })
+        .inner;
+    let cancelled = ui.input(|input| !input.focused || input.key_pressed(egui::Key::Escape));
+    let changed = response.changed() || draft.is_some();
+    let committed = !cancelled && changed && response.committed();
+    ui.data_mut(|data| {
+        if !committed && !cancelled && changed && response.is_pointer_button_down_on() {
+            data.insert_temp(
+                id,
+                PlaybackSpeedDraft { source, base_rate: rate, position, pass },
+            );
+        } else {
+            data.remove::<PlaybackSpeedDraft>(id);
+        }
+    });
+    if !committed {
+        return None;
+    }
+    RATES
+        .into_iter()
+        .min_by(|a, b| {
+            (slider_position(*a) - position).abs().total_cmp(&(slider_position(*b) - position).abs())
+        })
+        .filter(|next| *next != rate)
+}
+
 #[derive(Clone, Default)]
 struct PseudoFrameTextureCache {
     entry: Option<(f64, egui::TextureHandle)>,
@@ -618,27 +691,27 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     app.toggle_playback();
                 }
 
-                crate::ui::icons::submenu(
-                    ui,
-                    format!("{} {}", crate::ui::icons::GAUGE, app.tr("Playback speed")),
-                    |ui| {
-                        for speed in [0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0] {
-                            let selected = (app.configured_playback_speed - speed).abs() < 0.001;
-                            let label = if selected {
-                                format!("{} {speed}×", crate::ui::icons::CHECK)
-                            } else {
-                                format!("   {speed}×")
-                            };
-                            if ui
-                                .add_enabled(has_video, egui::Button::new(label))
-                                .clicked()
-                            {
-                                ui.close();
-                                app.set_playback_speed(speed, true);
+                ui.add_enabled_ui(has_video, |ui| {
+                    let label = app.tr("Playback speed");
+                    crate::ui::icons::submenu(
+                        ui,
+                        format!("{} {label}", crate::ui::icons::GAUGE),
+                        |ui| {
+                            if let Some(rate) = playback_speed_slider(
+                                ui,
+                                label,
+                                app.configured_playback_speed,
+                                media_identity(app),
+                            ) {
+                                app.apply_interop_command(
+                                    ui.ctx(),
+                                    crate::platform::interop::InteropCommand::SetRate { rate },
+                                    "Playback speed menu",
+                                );
                             }
-                        }
-                    },
-                );
+                        },
+                    );
+                });
 
                 let is_fullscreen = app.fullscreen_intent(ui.ctx());
                 let fs_title = if is_fullscreen {
@@ -1265,6 +1338,53 @@ mod tests {
         let mut app=PealayerApp::default();app.current_video_path=Some("pointer-fixture.mp4".into());
         app.consistent_video_aspect_ratio=false;app.video_click_frame_only=true;app.is_paused=true;
         app.language=crate::config::AppLanguage::English;app
+    }
+
+    #[test]
+    fn playback_speed_slider_previews_then_commits_the_selected_stop() {
+        let ctx = egui::Context::default();
+        let mut time = 0.0;
+        let mut frame = |events, rate, source| {
+            time += 0.05;
+            let mut selection = None;
+            let mut rect = egui::Rect::NOTHING;
+            let mut output = ctx.run_ui(
+                egui::RawInput {
+                    time: Some(time),
+                    events,
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(500.0, 200.0),
+                    )),
+                    ..Default::default()
+                },
+                |ui| {
+                    selection = playback_speed_slider(ui, "Playback speed".into(), rate, source);
+                    rect = ui.min_rect();
+                },
+            );
+            output.textures_delta.clear();
+            (selection, rect, menu_text(&output))
+        };
+        let (selection, rect, text) = frame(vec![], 1.1, 1);
+        assert_eq!(selection, None);
+        for label in ["1.1", "0.25×", "1×", "4×"] {
+            assert!(text.contains(label), "{text}");
+        }
+        assert!(rect.width() > rect.height() * 2.0);
+        let left = egui::pos2(rect.left() + 7.0, rect.center().y);
+        let center = rect.center();
+        let press = |pos| mouse(pos, egui::PointerButton::Primary, true, egui::Modifiers::NONE);
+        let release = |pos| mouse(pos, egui::PointerButton::Primary, false, egui::Modifiers::NONE);
+        assert_eq!(frame(vec![egui::Event::PointerMoved(left), press(left)], 1.1, 1).0, None);
+        assert_eq!(frame(vec![egui::Event::PointerMoved(center)], 1.1, 1).0, None);
+        assert_eq!(frame(vec![release(center)], 1.1, 1).0, Some(1.0));
+        assert_eq!(frame(vec![], 1.0, 1).0, None);
+
+        // The pointer belongs to the media that was present when it pressed.
+        assert_eq!(frame(vec![egui::Event::PointerMoved(left), press(left)], 1.0, 1).0, None);
+        assert_eq!(frame(vec![egui::Event::PointerMoved(center)], 1.0, 2).0, None);
+        assert_eq!(frame(vec![release(center)], 1.0, 2).0, None);
     }
     #[test]
     fn native_pointer_click_drag_and_shift_menu_are_disjoint_and_press_pinned() {
