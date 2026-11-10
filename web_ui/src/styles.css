@@ -1046,12 +1046,12 @@ html[data-motion="disabled"] *, html[data-motion="disabled"] *::before, html[dat
   background: linear-gradient(130deg, var(--surface-1) 64%, var(--chrome-end));
   border-color: var(--line-strong);
 }
-:root[data-palette="pastel"] .remote-player .ant-btn-default:not(:disabled):hover {
+:root[data-palette="pastel"] .remote-player .ant-btn-default:not(.transport-action, :disabled):hover {
   background: var(--surface-3);
   border-color: var(--hover-line);
   color: var(--text);
 }
-:root[data-palette="pastel"] .remote-player .ant-btn-default:not(:disabled):active {
+:root[data-palette="pastel"] .remote-player .ant-btn-default:not(.transport-action, :disabled):active {
   background: color-mix(in srgb, var(--accent) 22%, var(--surface-2));
   border-color: var(--accent);
   color: var(--text);
