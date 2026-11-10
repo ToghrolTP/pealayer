@@ -73,6 +73,40 @@ The icon/numeric comparison now covers both Media and Screen/Auto modes. Numeric
 layout tests check equal digit widths, proportional W/i and preserved copy text.
 Existing terminal font selection and explicit mono persistence remain covered.
 
-Installed identity, inspected native before/after captures and final focused-test
-counts follow in the delivery receipt. Cafe-PC is user-deferred/offline; no Cafe
-deployment or physical platform acceptance is implied by source or local tests.
+**59 focused native tests passed:** 29 status, one numeric layout, four font
+selection, six seek preview and 19 RF. One opt-in real decoder check was ignored.
+Seven Web appearance tests and focused status/preview/RF scripts also passed.
+The package passed TypeScript, Web/PWA integrity, native smoke and Win32 resources;
+the complete regression matrix was not rerun.
+
+## Inspected native comparison
+
+Actual canonical app, Studio dark, 150% Windows scale and unchanged window
+geometry. Both crops are window-relative (12,1700,650,50), enlarged 4× with
+nearest neighbor. FPS values differ naturally; no telemetry was invented.
+
+![Before: numeric body above its icon](../screenshots/status-tabular-before.png)
+![After: shared numeric and icon center, Inter status text](../screenshots/status-tabular-after.png)
+
+`scripts/measure-numeric-ink-windows.ps1` independently measures neutral visible
+ink, not galley/line-height metadata. For these crops, use PixelScale 4,
+IconRectangle `20,32,140,130`, DigitsRectangle `280,32,150,130`, threshold 140.
+Before centers are 25.875 versus 23.875 capture pixels (2-pixel discrepancy);
+after both are 25.875. This is evidence for these actual native captures, not a
+claim of physical zero-pixel error on every untested OS/font/display.
+
+## Installed receipt
+
+- Clean runtime source `e2c9e06e87ff8cdba22666485357a2fef010a29d`.
+- Packaged and installed executable SHA-256 independently match:
+  `552bf04fde6db1231604bb650172059ee12bd2942dcb4bf8a3a5856e4323efe4`.
+- Graceful peer updater completed and the restarted app acknowledged the build.
+  Fresh native authoring state was clean before replacement. Paused media
+  position, volume, mute and normal window geometry were preserved.
+- Current status monospace flags were deliberately disabled through the config
+  API, sending the complete fresh status object so unrelated preferences survive.
+  Explicit per-widget opt-in remains available. Global mono/UI font choices were
+  not changed. The external package contains the OFL notice; the executable-only
+  peer update exposes the embedded notice in About.
+- Old review and historical instances remain untouched. Hosted CI/merge and
+  user-deferred/offline Cafe delivery remain separate gates.
