@@ -7436,7 +7436,7 @@ impl PealayerApp {
             self.load_media_target(&media.to_string_lossy());
             self.pause();
         }
-        if self.current_video_path.is_some() && self.timeline == Timeline::default() {
+        if self.current_video_path.is_some() && self.timeline == crate::four_d::models::Timeline::default() {
             self.timeline = crate::four_d::demo_timeline::build_demo_showcase_timeline();
             self.sync_timeline_engine();
         }
