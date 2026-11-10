@@ -43,6 +43,8 @@ pub enum Input {
     Command(String),
     Resize { rows: u16, cols: u16 },
     Response { text: String, error: bool },
+    Settings { values: Vec<(String,String)>, open: bool },
+    Branding(String),
 }
 
 #[derive(Debug)]
@@ -394,6 +396,8 @@ fn validate_input(kind: Kind, input: &Input) -> Result<(), String> {
         }
         Input::Resize { rows, cols } if kind == Kind::Shell => validate_size(*rows, *cols),
         Input::Response { text, .. } if kind == Kind::Embedded && text.len() <= 8192 => Ok(()),
+        Input::Settings { values, .. } if kind == Kind::Embedded && values.len() <= 64 && values.iter().all(|(k,v)|k.len()<96 && v.len()<192 && !k.contains('\0') && !v.contains('\0')) => Ok(()),
+        Input::Branding(name) if kind==Kind::Embedded && name.len()<=1024 && !name.contains('\0')=>Ok(()),
         _ => Err("This input is not supported by the selected terminal session".into()),
     }
 }
@@ -503,6 +507,7 @@ fn run_embedded(rows: u16, cols: u16, output: &Events) -> Result<(), String> {
         label: "Pealayer · embedded PortableShell".into(),
     });
     let mut escape_deadline = None;
+    let mut notice_deadline:Option<std::time::Instant> = None;
     loop {
         if !output.shared.active(output.generation) {
             break;
@@ -526,7 +531,7 @@ fn run_embedded(rows: u16, cols: u16, output: &Events) -> Result<(), String> {
             .lock()
             .unwrap_or_else(|error| error.into_inner());
         while !state.cancelled && !state.finished && state.inputs.is_empty() {
-            if let Some(deadline) = escape_deadline {
+            if let Some(deadline) = [escape_deadline,notice_deadline].into_iter().flatten().min() {
                 let now = std::time::Instant::now();
                 if now >= deadline {
                     break;
@@ -555,12 +560,24 @@ fn run_embedded(rows: u16, cols: u16, output: &Events) -> Result<(), String> {
             Some(Input::Bytes(bytes)) => {
                 host.feed(&bytes);
                 escape_deadline =
-                    Some(std::time::Instant::now() + std::time::Duration::from_millis(70));
+                    Some(std::time::Instant::now() + std::time::Duration::from_millis(110));
             }
             Some(Input::Resize { rows, cols }) => host.resize(rows, cols),
-            Some(Input::Response { text, error }) => host.response(&text, error),
+            Some(Input::Branding(name)) => host.branding(&name),
+            Some(Input::Response { text, error }) => {
+                host.response(&text,error);
+                if host.table_active() && !error {notice_deadline=Some(std::time::Instant::now()+std::time::Duration::from_secs(3));}
+                escape_deadline=Some(std::time::Instant::now()+std::time::Duration::from_millis(110));
+            },
+            Some(Input::Settings { values, open }) => {
+                host.settings(&values,open);host.tick(now);
+                // The core coalesces table paint for 100 ms. One bounded settle
+                // tick is needed even if no further input arrives.
+                escape_deadline=Some(std::time::Instant::now()+std::time::Duration::from_millis(110));
+            },
             Some(Input::Command(_)) => unreachable!("input validated at session boundary"),
             None => {
+                if notice_deadline.is_some_and(|deadline|std::time::Instant::now()>=deadline) {host.clear_notice();notice_deadline=None;}
                 host.tick(now);
                 escape_deadline = None;
             }
@@ -828,7 +845,7 @@ fn run_shell(
                     .resize = Some((rows, cols));
                 output.shared.wake.notify_all();
             }
-            Input::Command(_) | Input::Response { .. } => {
+            Input::Command(_) | Input::Response { .. } | Input::Settings { .. } | Input::Branding(_) => {
                 unreachable!("input validated at session boundary")
             }
         }

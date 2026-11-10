@@ -2181,6 +2181,7 @@ fn section_icon(section: &str) -> &'static str {
         "timeline_toolbar" => crate::ui::icons::SLIDERS_HORIZONTAL,
         "sidebar_rail" => crate::ui::icons::TABS,
         "workspace_tools" => crate::ui::icons::TERMINAL_WINDOW,
+        "terminal" => crate::ui::icons::TERMINAL_WINDOW,
         "web" => crate::ui::icons::GLOBE,
         _ => crate::ui::icons::GEAR,
     }
@@ -2224,6 +2225,7 @@ fn section_heading(section: &str) -> &'static str {
         "timeline_toolbar" => "Timeline toolbar",
         "sidebar_rail" => "Sidebar rail",
         "workspace_tools" => "Workspace tools",
+        "terminal" => "Terminal",
         "web" => "Web UI and network APIs",
         _ => "Configuration",
     }

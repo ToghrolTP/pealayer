@@ -11,11 +11,13 @@ fn build_embedded_terminal() {
     println!("cargo:rerun-if-changed={root}/include");
     println!("cargo:rerun-if-changed={root}/src");
     println!("cargo:rerun-if-changed={root}/host/terminal_profiles.c");
+    println!("cargo:rerun-if-changed=src/ui/portable_shell_editor.c");
     // The freestanding byte core, not the desktop workbench, OS shell or CRT
     // replacements. The Rust host owns allocation, lifetime and dispatch.
     cc::Build::new()
         .include(format!("{root}/include"))
         .file(format!("{root}/src/portable_shell.c"))
+        .file("src/ui/portable_shell_editor.c")
         .define("PS_WORKBENCH", "0")
         .std("c99")
         .flag_if_supported("-fno-builtin")

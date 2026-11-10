@@ -51,6 +51,9 @@ pub mod sidebar_rail;
 pub mod sidebar_shortcuts;
 pub mod workspace_toolbar;
 pub mod terminal;
+pub mod terminal_settings;
+#[cfg(feature="workspace-terminal")]
+pub mod terminal_remote;
 #[cfg(feature = "workspace-terminal")]
 mod terminal_backend;
 #[cfg(feature = "workspace-terminal")]

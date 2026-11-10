@@ -903,6 +903,21 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
     if let Some(capability) = denied_web_capability(&request.method, path, &web) {
         return permission_denied(capability);
     }
+    if matches!(path,"/api/terminal/control"|"/api/terminal/events") {
+        let token=media_stream::header(&request.headers,"authorization").and_then(|v|v.strip_prefix("Bearer ")).unwrap_or("");
+        let result=crate::terminal_access::authorize(token).and_then(|key| {
+            match (request.method.as_str(),path) {
+                ("GET","/api/terminal/events")=>{
+                    let after=query_value(&request.target,"after").and_then(|n|n.parse().ok()).unwrap_or(0);
+                    crate::terminal_access::changes(key,after)
+                }
+                ("POST","/api/terminal/control")=>serde_json::from_slice::<crate::terminal_access::Operation>(&request.body)
+                    .map_err(|e|e.to_string()).and_then(|op|crate::terminal_access::request(op,Some(key),&state.egui_ctx)),
+                _=>Err("Unsupported terminal operation".into()),
+            }
+        });
+        return match result {Ok(value)=>HttpResponse::json(200,"OK",value.to_string()),Err(error)=>HttpResponse::json(403,"Forbidden",serde_json::json!({"error":error}).to_string())};
+    }
     if path.starts_with("/api/assets/upload") && query_value(&request.target,"owner_id").is_some_and(|id|id != crate::peer::instance_id()) {
         return HttpResponse::json(409,"Conflict",serde_json::json!({"error":"Asset session owner changed; retry the transfer"}).to_string());
     }
@@ -958,6 +973,7 @@ fn route_http(request: HttpRequest, state: &ControlState) -> HttpResponse {
         ("POST", "/api/peer/hardware") => peer_result(serde_json::from_slice(&request.body).map_err(|error|error.to_string()).and_then(crate::peer::hardware_command).map(|_|serde_json::json!({"accepted":true}))),
         ("POST", "/api/peer/config" | "/api/peer/timeline")=>peer_result(serde_json::from_slice::<serde_json::Value>(&request.body).map_err(|error|error.to_string()).and_then(|mut value|{
             if path=="/api/peer/config" {
+                if let Some(values)=value.get("values") && !crate::terminal_access::remote_policy_patch_allowed(values) {return Err("Terminal security policy can only be changed by the native owner".into());}
                 let consumer=media_stream::header(&request.headers,"x-pealayer-client").unwrap_or("");
                 let object=value.as_object_mut().ok_or("Configuration request must be an object")?;
                 object.insert("_consumer".into(),serde_json::Value::String(consumer.to_string()));
@@ -1297,6 +1313,12 @@ fn permission_denied(capability: &str) -> HttpResponse {
 
 fn remote_command_permission(command: &crate::platform::interop::InteropCommand) -> Option<&'static str> {
     use crate::platform::interop::InteropCommand;
+    if matches!(command,InteropCommand::PreviewConfig {..}|InteropCommand::CommitPreviewConfig {..}|InteropCommand::CancelPreviewConfig) {
+        return Some("Native Preferences previews require native local IPC");
+    }
+    if let InteropCommand::UpdateConfig {values}=command && !crate::terminal_access::remote_policy_patch_allowed(values) {
+        return Some("Terminal security policy can only be changed by the native owner");
+    }
     if let InteropCommand::Launch { request } = command {
         if let Some(error) = request.commands.iter().find_map(remote_command_permission) { return Some(error); }
     }
@@ -1544,6 +1566,7 @@ fn config_update_response(body: &[u8], state: &ControlState) -> HttpResponse {
         .map_err(|error| format!("invalid configuration JSON: {error}"))
         .and_then(|values| {
             crate::config::AppConfig::validate_patch_shape(&values)?;
+            if !crate::terminal_access::remote_policy_patch_allowed(&values) {return Err("Terminal security policy can only be changed by the native owner".into());}
             crate::platform::interop::get_live_config().apply_patch(&values)?;
             Ok(values)
         });
@@ -1989,6 +2012,18 @@ fn mime_for_path(path: &std::path::Path) -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn terminal_security_requires_native_provenance_and_denies_forged_wrappers() {
+        use crate::platform::interop::InteropCommand;
+        let _guard=crate::app::tests::lock_app_tests();
+        let current=crate::platform::interop::get_live_config();
+        let mut config=current.clone();config.ui.terminal.allow_remote=!current.ui.terminal.allow_remote;
+        let values=serde_json::json!({"ui":config.ui});
+        assert!(remote_command_permission(&InteropCommand::UpdateConfig {values}).is_some());
+        assert!(remote_command_permission(&InteropCommand::PreviewConfig {config:Box::new(config)}).is_some());
+        assert!(serde_json::from_str::<InteropCommand>(r#"{"command":"native_local","command":{"command":"play"}}"#).is_err());
+        assert!(crate::terminal_access::authorize("0000000000000000000000000000000000000000000000000000000000000000").is_err());
+    }
     #[test]
     fn workspace_tools_stay_local_and_web_cannot_execute_a_shell() {
         use crate::platform::interop::{InteropCommand, parse_interop_request};
