@@ -92,16 +92,11 @@ pub(super) fn paint_gradient(
     if radius == 0 {
         // egui's thin-rectangle path drops textures. Keep both color stops
         // on the vertices so a one-point accent line retains its gradient.
-        let mut mesh = egui::Mesh::default();
-        let start = start.gamma_multiply(opacity);
-        let end = end.gamma_multiply(opacity);
-        mesh.colored_vertex(rect.left_top(), start);
-        mesh.colored_vertex(rect.right_top(), end);
-        mesh.colored_vertex(rect.right_bottom(), end);
-        mesh.colored_vertex(rect.left_bottom(), start);
-        mesh.add_triangle(0, 1, 2);
-        mesh.add_triangle(0, 2, 3);
-        painter.add(mesh);
+        painter.add(horizontal_gradient(
+            rect,
+            start.gamma_multiply(opacity),
+            end.gamma_multiply(opacity),
+        ));
         return;
     }
     let ctx = painter.ctx();
@@ -120,6 +115,25 @@ pub(super) fn paint_gradient(
     painter.add(egui::epaint::RectShape::filled(
         rect, radius, egui::Color32::WHITE.gamma_multiply(opacity),
     ).with_texture(texture.id(), uv));
+}
+
+/// Untextured chrome gradient, suitable for a reserved background paint slot.
+pub(super) fn horizontal_gradient(
+    rect: egui::Rect,
+    start: egui::Color32,
+    end: egui::Color32,
+) -> egui::Shape {
+    if !rect.is_positive() {
+        return egui::Shape::Noop;
+    }
+    let mut mesh = egui::Mesh::default();
+    mesh.colored_vertex(rect.left_top(), start);
+    mesh.colored_vertex(rect.right_top(), end);
+    mesh.colored_vertex(rect.right_bottom(), end);
+    mesh.colored_vertex(rect.left_bottom(), start);
+    mesh.add_triangle(0, 1, 2);
+    mesh.add_triangle(0, 2, 3);
+    egui::Shape::mesh(mesh)
 }
 
 #[cfg(test)]
@@ -184,7 +198,12 @@ mod tests {
                 let control = super::color(palette, dark, "surface-2");
                 assert_eq!(style.visuals.widgets.open.bg_fill, surface);
                 assert_eq!(style.visuals.widgets.open.weak_bg_fill, control);
-                assert_eq!(style.visuals.widgets.open.bg_stroke.color, super::color(palette, dark, "line-strong"));
+                let open_edge = if palette == ColorPalette::Pastel {
+                    "hover-line"
+                } else {
+                    "line-strong"
+                };
+                assert_eq!(style.visuals.widgets.open.bg_stroke.color, super::color(palette, dark, open_edge));
                 assert_eq!(style.visuals.widgets.open.fg_stroke.color, super::color(palette, dark, "text"));
                 // Keep the real popup open across live palette switches.
                 let (trigger, _) = frame(&ctx, surface);
