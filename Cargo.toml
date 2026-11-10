@@ -14,10 +14,11 @@ resolver = "3"
 [features]
 default = ["workspace-toolbar", "workspace-terminal"]
 workspace-toolbar = []
-workspace-terminal = ["dep:vt100", "dep:vte", "dep:portable-pty"]
+workspace-terminal = ["dep:vt100", "dep:vte", "dep:portable-pty", "dep:unicode-width"]
 
 [dependencies]
 vt100 = { version = "0.15.2", optional = true }
+unicode-width = { version = "0.1.14", optional = true }
 vte = { version = "0.11.1", optional = true }
 portable-pty = { version = "0.9.0", optional = true }
 pealayer-downloads = { path = "crates/download-core", features = ["ui"] }

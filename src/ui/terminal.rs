@@ -368,7 +368,9 @@ pub fn control(
                     .ok_or("Terminal is not connected")?
                     .send(super::terminal_backend::Input::Resize { rows, cols })?;
                 view.size = (rows, cols);
-                view.parser.set_size(rows, cols);
+                if view.target != TerminalTarget::PortableShell {
+                    view.parser.set_size(rows, cols);
+                }
             }
         }
         Ok(())
@@ -527,6 +529,11 @@ impl View {
                 }
                 Event::Catalog(catalog) => self.catalog = catalog,
                 Event::Output(bytes) => self.output(&bytes),
+                Event::GridSize { rows, cols } => {
+                    self.parser.set_size(rows, cols);
+                    self.screen.clear_selection();
+                    self.output_revision = self.output_revision.wrapping_add(1);
+                }
                 Event::Error(error) => self.error = Some(error),
                 Event::Application(action) => {
                     if self.phase != "closing" {
@@ -1377,6 +1384,7 @@ fn panel_contents(
                         || state.preferences.allow_system_shell),
                 state.preferences.font_size,
                 &state.preferences,
+                view.target == TerminalTarget::PortableShell && view.session.is_some(),
             )
         })
         .inner;
@@ -1387,13 +1395,15 @@ fn panel_contents(
     if output.preferences {
         *open_preferences = true;
     }
-    if size != view.size {
-        view.size = size;
-        if !line_mode && view.phase == "ready" {
-            view.send(super::terminal_backend::Input::Resize {
-                rows: size.0,
-                cols: size.1,
-            });
+    if size != view.size && view.phase != "opening" {
+        // Keep the launch size until the first resize can actually reach the
+        // backend. Recording the new size during startup suppresses that
+        // resize and leaves the producer wider than the visible grid.
+        if line_mode || view.phase != "ready" || view.send(super::terminal_backend::Input::Resize {
+            rows: size.0,
+            cols: size.1,
+        }) {
+            view.size = size;
         }
     }
     if !line_mode {
@@ -1530,6 +1540,7 @@ pub fn tick(app: &mut crate::app::PealayerApp, ctx: &egui::Context) {
             volume: live.volume,
             muted: live.muted,
             controller: live.controller_connected,
+            update: crate::update::manager().status(),
         };
         let prompt = shell_status.summary();
         for view in &mut app.terminal_state.views {

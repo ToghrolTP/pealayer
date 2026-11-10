@@ -18,6 +18,14 @@ pub struct ScreenViewState {
     last_mouse: Option<(usize, bool)>,
 }
 
+impl ScreenViewState {
+    pub(super) fn clear_selection(&mut self) {
+        self.selection = None;
+        self.selection_anchor = None;
+        self.last_mouse = None;
+    }
+}
+
 pub struct ScreenOutput {
     pub rows: u16,
     pub cols: u16,
@@ -327,6 +335,7 @@ pub fn show(
         interactive,
         font_size,
         &super::terminal::TerminalPreferences::default(),
+        false,
     )
 }
 
@@ -338,6 +347,7 @@ pub fn show_with_preferences(
     interactive: bool,
     font_size: f32,
     preferences: &super::terminal::TerminalPreferences,
+    defer_resize: bool,
 ) -> ScreenOutput {
     show_impl(
         ui,
@@ -348,6 +358,7 @@ pub fn show_with_preferences(
         font_size,
         preferences,
         true,
+        defer_resize,
     )
 }
 pub fn show_shared(
@@ -367,6 +378,7 @@ pub fn show_shared(
         preferences.font_size,
         preferences,
         false,
+        false,
     )
 }
 fn show_impl(
@@ -377,7 +389,8 @@ fn show_impl(
     interactive: bool,
     font_size: f32,
     preferences: &super::terminal::TerminalPreferences,
-    resize: bool,
+    measure_viewport: bool,
+    defer_resize: bool,
 ) -> ScreenOutput {
     let mut font = egui::TextStyle::Monospace.resolve(ui.style());
     if font_size.is_finite() {
@@ -390,15 +403,16 @@ fn show_impl(
         )
     });
     let available = ui.available_size().max(egui::vec2(1.0, 1.0));
-    let (rows, cols) = if resize {
+    let requested = if measure_viewport {
         dimensions(available, cell)
     } else {
         parser.screen().size()
     };
-    if parser.screen().size() != (rows, cols) {
-        parser.set_size(rows, cols);
-        state.selection = None;
+    if !defer_resize && parser.screen().size() != requested {
+        parser.set_size(requested.0, requested.1);
+        state.clear_selection();
     }
+    let (rows, cols) = parser.screen().size();
     let (rect, _) = ui.allocate_exact_size(available, egui::Sense::hover());
     let response = ui
         .interact(rect, id, egui::Sense::click_and_drag())
@@ -920,8 +934,8 @@ fn show_impl(
         egui::WidgetInfo::labeled(egui::Role::TextInput, interactive, accessible.clone())
     });
     ScreenOutput {
-        rows,
-        cols,
+        rows: requested.0,
+        cols: requested.1,
         input: input_bytes,
         focused,
         clicked,

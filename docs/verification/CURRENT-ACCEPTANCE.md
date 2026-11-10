@@ -27,14 +27,12 @@ suite and focused Web checks pass; package/runtime/physical-input acceptance is
 still pending. The completion helper requires the new committed, frozen source;
 its no-discard guard must not be bypassed.
 
-[Shared Terminal and Pealayer Shell](terminal-host-experience.md) adds the real
-Preferences catalog, readable labels and choices, prompt-safe structured reports,
-live status and decoder-confirmed command results. Native/Web integration checks
-and actual checkpoint captures are recorded there. The user launched the final
-package; HTTP confirms its exact identity and the user-run maintained native/HTTP
-acceptance script passes. Final real-browser/capture gates remain; PR #281 stays
-draft rather than treating intermediate screenshots as final evidence. Other running
-instances and user-deferred Cafe deployment remain unchanged.
+[Shared Terminal and Pealayer Shell](terminal-host-experience.md) includes live
+updater phases, prompt-safe structured status, the typed Preferences table, and
+native/Web views of the same paired host sessions. The graceful updater
+restarted the isolated review with the matching embedded Web bundle. Final
+native and Web captures and the runtime receipt are recorded in PR #281.
+The regular installation was closed and the Cafe API tunnel was unreachable.
 
 [Playback interaction follow-up](player-input-follow-up.md) fixes FPS-unit
 centering, direct volume input, elapsed clipping/shortened groups, picture-only
