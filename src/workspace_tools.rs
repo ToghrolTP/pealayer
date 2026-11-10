@@ -6,6 +6,11 @@ use std::sync::{Mutex, OnceLock};
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "action", rename_all = "snake_case")]
 pub enum Request {
+    Panel {
+        panel: crate::ui::layout::PealayerTab,
+        #[serde(flatten)]
+        operation: PanelOperation,
+    },
     SetVisible {
         #[serde(default)]
         toolbar: Option<bool>,
@@ -24,6 +29,16 @@ pub enum Request {
         #[serde(flatten)]
         operation: TerminalOperation,
     },
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(tag = "operation", rename_all = "snake_case")]
+pub enum PanelOperation {
+    Toggle,
+    Sidebar,
+    Dock { #[serde(default)] anchor: Option<crate::ui::layout::PealayerTab>, #[serde(default)] zone: Option<craft_ui::docking::Zone> },
+    SidebarWidth { width: f32 },
+    SidebarMenu,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -51,6 +66,8 @@ impl Request {
     }
     pub fn validate(&self) -> Result<(), String> {
         match self {
+            Self::Panel { operation: PanelOperation::SidebarWidth { width }, .. }
+                if !width.is_finite() || !(240.0..=600.0).contains(width) => Err("Sidebar width must be between 240 and 600 points".into()),
             Self::Terminal {
                 operation: TerminalOperation::Write { data },
             } if data.is_empty() || data.len() > 16 * 1024 || data.contains('\0') => {
@@ -79,7 +96,11 @@ pub fn publish(app: &crate::app::PealayerApp) {
             "visible":app.toolbar_state.preferences.enabled,
             "palette_open":app.toolbar_state.palette_open,
             "editor_open":app.toolbar_state.editor_open},
-        "terminal":app.terminal_state.status()});
+        "terminal":app.terminal_state.status(),
+        "panels": crate::ui::layout::PealayerTab::ALL.iter().map(|panel| json!({"panel":panel,
+            "in_dock":app.is_tab_open_in_dock(*panel),"in_sidebar":app.is_tab_open_in_sidebar(*panel),
+            "location":app.dock_state.layout.location(panel).ok().or_else(||app.dock_state.hidden.iter().find(|(p,_)|p==panel).map(|(_,l)|l.clone()))})).collect::<Vec<_>>(),
+        "sidebar": app.sidebar_rail_state});
     let mut state = shared().lock().unwrap_or_else(|e| e.into_inner());
     if *state != value {
         *state = value;
@@ -98,6 +119,33 @@ pub fn apply(
         );
     }
     match request {
+        Request::Panel { panel, operation } => {
+            if !panel.available() { return Err("Panel is unavailable in this build".into()); }
+            if app.dock_state.locked && !matches!(operation, PanelOperation::SidebarMenu) { return Err("Unlock the workspace before changing a panel".into()); }
+            match operation {
+                PanelOperation::Toggle => app.toggle_rail_panel(ctx, panel)?,
+                PanelOperation::Sidebar => {
+                    let pane = crate::ui::sidebar_rail::SidebarPane::try_from(panel).map_err(|_|"This panel does not support the sidebar")?;
+                    app.open_sidebar_pane(pane)?;
+                }
+                PanelOperation::Dock { anchor, zone } => {
+                    crate::ui::sidebar_shortcuts::dock_panel(app, panel, anchor,
+                        craft_ui::docking::Placement::Split(zone.unwrap_or(craft_ui::docking::Zone::Center)))
+                        .map_err(|error|format!("Cannot dock panel: {error:?}"))?;
+                    app.pending_tab_reveals.push(panel);
+                    app.sync_terminal_visibility_from_workspace();
+                }
+                PanelOperation::SidebarWidth { width } => {
+                    if !app.is_tab_open_in_sidebar(panel) { return Err("Open this panel in the sidebar before resizing it".into()); }
+                    app.sidebar_rail_state.apply_pane_request(craft_ui::panes::PaneRequest::Resize(panel.try_into().unwrap(), width));
+                }
+                PanelOperation::SidebarMenu => {
+                    if !app.is_tab_open_in_sidebar(panel) { return Err("Open this panel in the sidebar before opening its header menu".into()); }
+                    ctx.data_mut(|data| data.insert_temp(eframe::egui::Id::unique("sidebar-menu-request"), panel));
+                }
+            }
+            app.deferred_config_save = true;
+        }
         Request::SetVisible {
             toolbar,
             terminal,
@@ -155,6 +203,29 @@ pub fn apply(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn sidebar_panel_api_round_trips_toggles_and_rejects_invalid_resize_without_changes() {
+        use crate::ui::layout::PealayerTab;
+        let _guard=crate::app::tests::lock_app_tests();
+        let ctx=eframe::egui::Context::default(); let mut app=crate::app::PealayerApp::default();
+        let request=Request::Panel {panel:PealayerTab::EffectsLibrary,operation:PanelOperation::Toggle};
+        assert_eq!(serde_json::from_value::<Request>(serde_json::to_value(&request).unwrap()).unwrap(),request);
+        let layout=app.dock_state.layout.clone();
+        for _ in 0..2 {apply(&mut app,&ctx,request.clone(),"HTTP").unwrap();}
+        assert_eq!(app.dock_state.layout,layout);
+        apply(&mut app,&ctx,Request::Panel {panel:PealayerTab::EffectsLibrary,operation:PanelOperation::Sidebar},"HTTP").unwrap();
+        apply(&mut app,&ctx,Request::Panel {panel:PealayerTab::EffectsLibrary,operation:PanelOperation::SidebarWidth {width:420.0}},"HTTP").unwrap();
+        assert_eq!(snapshot()["sidebar"]["width"],420.0);
+        let before=app.sidebar_rail_state;
+        for width in [f32::NAN,10.0,700.0] {
+            assert!(apply(&mut app,&ctx,Request::Panel {panel:PealayerTab::EffectsLibrary,operation:PanelOperation::SidebarWidth {width}},"HTTP").is_err());
+            assert_eq!(app.sidebar_rail_state,before);
+        }
+        app.dock_state.locked=true;
+        assert!(apply(&mut app,&ctx,request,"HTTP").is_err());
+        assert_eq!(app.sidebar_rail_state,before);
+        apply(&mut app,&ctx,Request::Panel {panel:PealayerTab::EffectsLibrary,operation:PanelOperation::SidebarMenu},"HTTP").unwrap();
+    }
     #[cfg(feature = "workspace-terminal")]
     #[test]
     fn locked_terminal_visibility_api_fails_without_partial_toolbar_mutation() {

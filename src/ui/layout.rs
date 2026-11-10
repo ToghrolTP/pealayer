@@ -14294,7 +14294,15 @@ impl<'a> PealayerTabViewer<'a> {
     pub fn draw_context_menu(&mut self, ui: &mut egui::Ui, tab: PealayerTab) {
         let title = tab.title(self.app);
         ui.label(egui::RichText::new(title).strong());
-        ui.separator();
+        let in_sidebar = self.app.is_tab_open_in_sidebar(tab);
+        if in_sidebar || matches!(tab, PealayerTab::ProgramMonitor | PealayerTab::Timeline | PealayerTab::HardwareMonitor | PealayerTab::MediaInspector | PealayerTab::Terminal) {
+            ui.separator();
+        }
+        if in_sidebar && ui.add_enabled(!self.app.dock_state.locked,
+            egui::Button::new(format!("{}  {}", crate::ui::icons::GRID_FOUR, self.app.tr("Dock to Workspace")))).clicked() {
+            self.app.open_or_focus_tab(tab);
+            ui.close();
+        }
         match tab {
             PealayerTab::ProgramMonitor => {
                 crate::ui::player_mode::menu(self.app, ui);
