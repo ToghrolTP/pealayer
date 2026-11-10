@@ -100,6 +100,7 @@ tests also compiled against this draft, but do not validate project semantics.
 
 No scene load is permission to actuate hardware. User files, private review
 profiles and generated Web build output are not part of this checkpoint.
+
 ## Reconciliation evidence
 
 - The isolated Windows build passed 27 distinct focused native tests, including
@@ -114,5 +115,14 @@ profiles and generated Web build output are not part of this checkpoint.
   dialog fits both widths and keeps its footer reachable. A synthetic authority
   replacement returned a conflict and the browser surfaced it at both widths.
   Synthetic project data exercises the visual and browser request path only.
-  Native rendering, live decoder restoration, controller output, and deployment
-  still need acceptance.
+- [Native editor capture](../screenshots/pr227/project-metadata-native-discovery.png)
+  shows the real Project metadata modal after opening media with two valid
+  synthetic project associations. It uses the same disconnected isolated build
+  as the earlier reconciliation, with capture provenance alongside the image.
+- [Native and external decoder fixture](project-persistence-decoder-fixture.json)
+  verifies same-path restoration at exactly 3.640 seconds and a live HTTP
+  409 for a stale authority. A corrupt media file restored the earlier paused
+  frame and left the prior project and timeline intact in both decoder modes.
+  Rollback completed in about one second internally and one and a half seconds
+  through managed external mpv. Reordered/stale event fault injection, portable
+  controller dependencies, scene output and production deployment remain open.
