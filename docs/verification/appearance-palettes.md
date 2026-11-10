@@ -1,12 +1,23 @@
 # Appearance palettes and live synchronization
 
-Verified application code: `019d32828427ad2e02882e400b5e48e960856364`, on draft PR [#46](https://github.com/ToghrolTP/pealayer/pull/46). This evidence-only documentation does not change executable sources.
-
 ## Choose a palette
 
 In desktop or Web **Preferences → Appearance → Interface → Color palette**, choose **Neutral (default)** for the original gray palette, **Studio** for blue-gray surfaces, or **Pastel** for slate and lavender surfaces with lilac-to-rose gradients. Theme mode and accent remain independent settings.
 
-Pastel uses the same shared dark and light palette catalog in desktop and Web. The desktop preview, menu accent, and media timeline strips use rounded gradient fills. Web uses the same gradient stops for its header and palette preview. Cyan, mint, and rose distinguish the native voltage, current, and temperature plots. The verification below records the original Studio and Neutral rollout.
+## Pastel previews
+
+Dark slate surfaces, light lavender panels, and lilac-to-rose accents come from a shared palette catalog. The native timeline uses separate gradients for video, audio, and subtitles. Voltage, current, and temperature charts use cyan, mint, and rose in both clients.
+
+| Theme | Desktop | Web |
+| --- | --- | --- |
+| Dark | [Native NLE](appearance-palettes/pastel-native-dark.png) | [Web player](appearance-palettes/pastel-web-dark.png) |
+| Light | [Native NLE](appearance-palettes/pastel-native-light.png) | [Web player](appearance-palettes/pastel-web-light.png) |
+
+The captures use an isolated instance with the same paused sample video in both themes. Live preview switched both clients between light and dark. Returning to Studio removed the Pastel gradient from the Web header, and canceling the native preview restored the saved dark appearance.
+
+## Original Studio and Neutral rollout
+
+This section records the verification for [PR #46](https://github.com/ToghrolTP/pealayer/pull/46) at `019d32828427ad2e02882e400b5e48e960856364`.
 
 The local instance was left on Neutral, with its existing System theme and System accent. Changing factory defaults does not overwrite an explicitly saved Studio preference on another installation.
 
@@ -35,4 +46,4 @@ The local instance was left on Neutral, with its existing System theme and Syste
 - Selected Neutral in Web Preferences: `/api/player/status`, `/api/config`, and the persisted JSON all reported `color_palette: native`.
 - Previewed light Studio / green: the already-open Web Preferences controls and page changed without a reload. Host status and browser DOM agreed on light mode, accent `#38d27a`, surface `#f8fafc`, and text `#17202b`. Canceled this preview; final Neutral dark resolved colors are surface `#202020` and text `#eeeeee`.
 
-Native screenshot verification remains blocked: Windows.Graphics.Capture failed twice with `IGraphicsCaptureItemInterop.CreateForMonitor ... 0x8007041D`. The screenshots above are real browser captures, not native egui proof. No physical hardware was actuated, no remote deployment is claimed, and PR #46 remains unmerged.
+Native screenshot verification for that rollout was blocked: Windows.Graphics.Capture failed twice with `IGraphicsCaptureItemInterop.CreateForMonitor ... 0x8007041D`. The screenshots above are real browser captures, not native egui proof. No physical hardware was actuated, no remote deployment is claimed, and PR #46 remains unmerged.
