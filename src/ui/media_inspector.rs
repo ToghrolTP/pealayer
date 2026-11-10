@@ -306,8 +306,9 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let refresh_label = app.tr("Refresh from libmpv");
     let copy_label = app.tr("Copy all");
     let search_hint = app.tr("Search properties");
+    let remote=app.current_video_path.as_deref().and_then(std::path::Path::to_str).is_some_and(crate::media::is_remote_media_target);
 
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.heading(app.tr("Media Inspector"));
         ui.add_space(4.0);
         if ui
@@ -321,6 +322,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             .clicked()
         {
             app.refresh_media_tracks();
+        }
+        if ui.add_enabled(has_media,egui::Button::new(format!("{}  {}",crate::ui::icons::COPY,app.tr(if remote {"Copy link"} else {"Copy location"}))))
+            .on_hover_text(app.tr("Copy the media source location to the clipboard" )).clicked() {
+            let ctx=ui.ctx().clone();
+            app.apply_interop_command(&ctx,crate::platform::interop::InteropCommand::CopyMediaLocation,"Media Inspector");
         }
     });
     if !has_media {

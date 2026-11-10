@@ -154,7 +154,7 @@ export const PlayerInfoTab: React.FC<PlayerInfoTabProps> = ({ state, connectionM
         <Descriptions bordered column={{ xs: 1, sm: 1, md: 2 }} size="middle">
           <Descriptions.Item label={tr(locale, 'Active Video Path')}>
             <Text className="info-surface__path">
-              {state.current_video === undefined ? tr(locale, 'Initializing…') : state.current_video || tr(locale, 'None')}
+              {state.current_video === undefined ? tr(locale, 'Initializing…') : state.media_location_display || state.current_video || tr(locale, 'None')}
             </Text>
           </Descriptions.Item>
           <Descriptions.Item label={tr(locale, 'Playback Status')}>

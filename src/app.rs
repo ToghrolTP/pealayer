@@ -20,6 +20,7 @@ pub(crate) struct PendingBarSave<T> {
 }
 type PendingStatusBarSave=PendingBarSave<crate::config::StatusBarConfig>;
 type PendingControlBarSave=PendingBarSave<crate::config::ControlBarsConfig>;
+type PendingSimpleWorkspaceSave=PendingBarSave<crate::config::SimpleWorkspaceConfig>;
 
 /// Same narrow compare-and-set/coalescing path for both user-owned bars.
 /// It never snapshots dock/workspace state while a panel borrows that state.
@@ -615,6 +616,8 @@ pub struct PealayerApp {
     pub(crate) native_service_policy: NativeServicePolicy,
     pub(crate) web_only: bool,
     pub(crate) app_name: String,
+    pub(crate) local_media_title_format: crate::config::MediaTitleFormat,
+    pub(crate) remote_media_title_format: crate::config::MediaTitleFormat,
     pub(crate) app_publisher: Option<String>,
     pub(crate) app_copyright: Option<String>,
     pub(crate) last_window_title: String,
@@ -659,6 +662,7 @@ pub struct PealayerApp {
     pub(crate) configured_playback_speed: f64,
     pub(crate) temporary_fast_forward_speed: f64,
     pub(crate) video_surface_gesture: Option<crate::ui::video::VideoSurfaceGesture>,
+    pub(crate) mouse_bindings: crate::pointer_bindings::Bindings,
 
     pub seek_pos: Option<f64>,
     pub(crate) seek_controller: crate::mpv::seek::SeekController,
@@ -673,6 +677,7 @@ pub struct PealayerApp {
     pub frame_rate_tracker: FrameRateTracker,
     pub display_refresh_rate: f64,
     pub(crate) pin_controls: bool,
+    pub(crate) simple_workspace: crate::config::SimpleWorkspaceConfig,
 
     pub show_error: Option<String>,
 
@@ -846,6 +851,7 @@ pub struct PealayerApp {
     pub(crate) pause_on_hardware_disconnect: bool,
     pub(crate) auto_connect_hardware: bool,
     pub(crate) click_player_to_toggle: bool,
+    pub(crate) video_click_frame_only: bool,
     pub(crate) show_subseconds: bool,
     pub(crate) human_readable_time_units: bool,
     pub(crate) seekbar_hover_thumbnails: bool,
@@ -881,12 +887,15 @@ pub struct PealayerApp {
     pub(crate) timeline_animated_navigation: bool,
     pub(crate) timeline_navigation_transition_ms: u32,
     pub(crate) timeline_follow_playhead: bool,
+    pub(crate) timeline_subtitle_segments: bool,
+    pub(crate) subtitle_timing: crate::subtitle_timing::Index,
     pub(crate) timeline_toolbar_visible: bool,
     pub(crate) timeline_toolbar_order: Vec<crate::config::TimelineToolbarAction>,
     pub(crate) timeline_toolbar_hidden: Vec<crate::config::TimelineToolbarAction>,
     pub(crate) pending_timeline_toolbar_save: Option<PendingTimelineToolbarSave>,
     pub(crate) pending_status_bar_save: Option<PendingStatusBarSave>,
     pub(crate) pending_control_bar_save: Option<PendingControlBarSave>,
+    pub(crate) pending_simple_workspace_save: Option<PendingSimpleWorkspaceSave>,
     pub(crate) workspace_rendering: bool,
     pub(crate) deferred_config_save: bool,
     pub(crate) non_user_control_visibility: crate::config::NonUserControlVisibility,
@@ -1066,6 +1075,7 @@ impl eframe::App for PealayerApp {
         self.flush_timeline_toolbar_save(ctx);
         self.flush_status_bar_save(ctx);
         self.flush_control_bar_save(ctx);
+        self.flush_simple_workspace_save(ctx);
         let close_requested = ctx.input(|i| i.viewport().close_requested());
         if close_requested && self.is_timeline_dirty() {
             ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
@@ -1235,6 +1245,16 @@ impl eframe::App for PealayerApp {
         if crate::peer::active(){crate::peer::mirror(||self.process_events());}else{self.process_events();}
         if crate::peer::active(){self.poll_peer_session(ctx);}
         self.poll_project_discovery(ctx);
+        let subtitle_source = self.current_video_path.as_deref().filter(|_| {
+            self.media_metadata_loaded && self.duration.is_finite() && self.duration > 0.0
+        });
+        self.subtitle_timing.update(
+            ctx,
+            self.timeline_subtitle_segments,
+            crate::peer::active(),
+            subtitle_source,
+            &self.media_tracks,
+        );
         self.sync_window_level(ctx);
         self.tick_virtual_board_kinematics(ctx);
 
@@ -1387,6 +1407,8 @@ impl eframe::App for PealayerApp {
             self.current_video_path.as_deref(),
             self.is_connected,
             connection_requested,
+            self.local_media_title_format,
+            self.remote_media_title_format,
         );
         if self.last_window_title != window_title {
             ctx.send_viewport_cmd(egui::ViewportCommand::Title(window_title.clone()));
@@ -1454,7 +1476,7 @@ impl eframe::App for PealayerApp {
         let appearance_changed =
             crate::platform::interop::get_live_appearance().as_ref() != Some(&appearance);
         let messages = crate::messaging::snapshot();
-        crate::remote_location::sync_options(web_config.remote_folder_auto_next, web_config.remote_folder_thumbnails);
+        crate::remote_location::sync_options(web_config.remote_folder_auto_next, web_config.remote_folder_thumbnails, web_config.remote_folder_view);
         let remote_changed = crate::platform::interop::get_live_remote_revision() != crate::remote_location::revision();
         let messages_changed = crate::platform::interop::get_live_message_snapshot() != messages;
         if messages_changed {
@@ -1608,6 +1630,9 @@ impl eframe::App for PealayerApp {
                     .as_ref()
                     .map(|p| crate::media::redact_media_target(&p.to_string_lossy())),
                 media_session: self.media_session_metadata(),
+                mouse_bindings: self.mouse_bindings.clone(),
+                media_display_name: self.current_video_path.as_ref().map(|p| crate::media::media_target_label(&p.to_string_lossy())),
+                media_location_display: self.current_video_path.as_ref().map(|p| crate::media::media_location_display(&p.to_string_lossy())),
                 media_session_capabilities: self.media_session_capabilities(),
                 quick_seek_seconds: self.quick_seek_seconds,
                 media_tracks: self
@@ -1895,6 +1920,7 @@ impl eframe::App for PealayerApp {
             }
         }
         self.frame_rate_tracker.record_frame(std::time::Instant::now());
+        crate::ui::mouse_buttons::install(ui.ctx(),&self.mouse_bindings);
         // A held seat direction captures the pointer until the physical button
         // is released. This remains active even if a repaint moves the cursor
         // outside the original button or the panel is hidden mid-gesture.
@@ -2020,9 +2046,11 @@ impl eframe::App for PealayerApp {
         crate::ui::sync_native_window_appearance(ui.ctx(), self.color_palette);
 
         if !is_fullscreen {
-            crate::ui::menu::draw(self, ui);
+            if self.show_four_d_editor || self.simple_workspace.show_menu_bar {
+                crate::ui::menu::draw(self, ui);
+            }
             crate::ui::status_bar::draw(self, ui);
-            if cfg!(feature = "workspace-toolbar") && self.toolbar_state.preferences.enabled {
+            if cfg!(feature = "workspace-toolbar") && crate::ui::simple_controls::toolbar_visible(self) {
                 egui::Panel::top("workspace-command-toolbar").show(ui, |ui| {
                     crate::ui::workspace_toolbar::draw(self, ui);
                 });
@@ -2200,6 +2228,7 @@ impl eframe::App for PealayerApp {
         crate::ui::remote_location::draw(self, ui.ctx());
         self.draw_timeline_close_confirmation(ui.ctx());
         crate::ui::terminal::draw_exit_confirmation(self, ui.ctx());
+        crate::ui::video::finish_released_gesture(self,ui.ctx());
     }
 
     fn save(&mut self, _storage: &mut dyn eframe::Storage) {
@@ -4558,9 +4587,12 @@ impl PealayerApp {
                     else { crate::remote_location::request(&target, use_proxy, false, ctx) };
                 if let Err(error) = result { self.set_osd(error); }
             },
-            InteropCommand::SelectRemote { target, play } => { if let Err(error) = crate::remote_location::select(&target, play) { self.set_osd(error); } },
-            InteropCommand::SortRemote { by, descending } => crate::remote_location::sort(by, descending),
-            InteropCommand::CloseRemoteBrowser => crate::remote_location::close(),
+            InteropCommand::SelectRemote { target, play } => { if let Err(error) = crate::remote_location::select(&target, play) { self.set_osd(error); } ctx.request_repaint(); },
+            InteropCommand::InspectRemote { target } => { if let Err(error) = crate::remote_location::inspect(target.as_deref()) { self.set_osd(error); } ctx.request_repaint(); },
+            InteropCommand::RetryRemoteThumbnail { target } => { if let Err(error) = crate::remote_location::retry_thumbnail(&target) { self.set_osd(error); } ctx.request_repaint(); },
+            InteropCommand::SortRemote { by, descending } => { crate::remote_location::sort(by, descending); ctx.request_repaint(); },
+            InteropCommand::CloseRemoteBrowser => { crate::remote_location::close(); ctx.request_repaint(); },
+            InteropCommand::RemoteHistory {direction,parent} => {if let Err(error)=crate::remote_location::navigate_history(direction,parent,ctx){self.set_osd(error);}},
             InteropCommand::SetFullscreen { enabled } => self.set_fullscreen(ctx, enabled),
             InteropCommand::ToggleFullscreen => self.toggle_fullscreen(ctx),
             InteropCommand::Activate => {
@@ -4628,6 +4660,17 @@ impl PealayerApp {
             InteropCommand::OpenMediaInformation => {
                 self.open_or_focus_tab(crate::ui::layout::PealayerTab::MediaInspector);
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            }
+            InteropCommand::OpenDownloadCenter => {
+                crate::downloads::open(ctx);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            }
+            InteropCommand::CopyMediaLocation => {
+                match self.current_video_path.as_deref().ok_or_else(||"No media is loaded".to_string())
+                    .and_then(crate::media::source_location) {
+                    Ok(location)=>{ctx.copy_text(location);self.set_osd(self.tr("Media location copied"));},
+                    Err(error)=>{self.set_osd(error);}
+                }
             }
             InteropCommand::OpenMediaFolder => {
                 let result = self
@@ -5788,6 +5831,7 @@ impl PealayerApp {
                 }
                 Some(Ok(Event::StartFile)) => {
                     self.note_project_media_start();
+                    self.subtitle_timing.invalidate();
                     if !self.engine_handle.media_clock_owned.load(std::sync::atomic::Ordering::Acquire)
                         && let Ok(mut sample) = self.engine_handle.media_playback.lock() {
                         sample.position_ms = 0;
@@ -7364,6 +7408,17 @@ impl PealayerApp {
     }
 
     pub fn load_dropped_files(&mut self, ctx: &egui::Context, paths: Vec<std::path::PathBuf>) {
+        let (links, paths): (Vec<_>, Vec<_>) = paths.into_iter().partition(|path|
+            path.to_str().is_some_and(crate::media::is_remote_media_target));
+        for link in links {
+            let target = link.to_str().expect("validated URL text");
+            // Use Open's existing authority, proxy, external-player and draft
+            // protection path, not a second URL loader or client filesystem.
+            self.apply_interop_command(ctx,crate::platform::interop::InteropCommand::Open {
+                target: target.to_owned(),
+            },"Browser link drop");
+        }
+        if paths.is_empty() { return; }
         let destination=crate::assets::native_destination(ctx);
         if let Err(error)=self.import_assets(crate::assets::ImportRequest {paths:paths.iter().map(|p|p.to_string_lossy().into_owned()).collect(),destination,owner_id:None},ctx) {self.show_error=Some(error);}
     }
@@ -7417,8 +7472,8 @@ impl PealayerApp {
             self.cache_buffering_percent = None;
             self.add_recent_media(path);
             self.set_media_file_info(crate::media_info::MediaFileInfo::default());
-            let safe_target = crate::media::redact_media_target(trimmed);
-            self.set_osd(format!("Loading URL: {safe_target}"));
+            let name = crate::media::media_target_label(trimmed);
+            self.set_osd(format!("Loading: {name}"));
         }
     }
 
@@ -7633,6 +7688,7 @@ impl PealayerApp {
         cfg.volume = self.volume;
         cfg.is_muted = self.is_muted;
         cfg.pin_controls = self.pin_controls;
+        cfg.simple_workspace = self.simple_workspace;
         cfg.show_remaining_time = self.show_remaining_time;
         cfg.open_url_multiline = self.open_url_multiline;
         cfg.open_url_history_expanded = self.open_url_history_expanded;
@@ -7653,6 +7709,8 @@ impl PealayerApp {
         cfg.direction = self.direction_preference;
         cfg.theme = self.theme_preference;
         cfg.color_palette = self.color_palette;
+        cfg.local_media_title_format = self.local_media_title_format;
+        cfg.remote_media_title_format = self.remote_media_title_format;
         cfg.native_monitor_style = self.native_monitor_style;
         cfg.native_transport_style = self.native_transport_style;
         cfg.monitor_preview = self.monitor_preview;
@@ -7662,6 +7720,7 @@ impl PealayerApp {
         cfg.auto_connect_hardware = self.auto_connect_hardware;
         cfg.pause_on_hardware_disconnect = self.pause_on_hardware_disconnect;
         cfg.click_player_to_toggle = self.click_player_to_toggle;
+        cfg.video_click_frame_only = self.video_click_frame_only;
         cfg.playback_speed = self.configured_playback_speed;
         cfg.temporary_fast_forward_speed = self.temporary_fast_forward_speed;
         cfg.subtitle_font_size = self.sub_font_size;
@@ -7688,6 +7747,7 @@ impl PealayerApp {
         cfg.paused_drag_action = self.paused_drag_action;
         cfg.playing_drag_action = self.playing_drag_action;
         cfg.middle_click_action = self.middle_click_action;
+        cfg.mouse_bindings = self.mouse_bindings.clone();
         cfg.middle_hold_action = self.middle_hold_action;
         cfg.right_click_action = self.right_click_action;
         cfg.right_hold_action = self.right_hold_action;
@@ -7707,6 +7767,7 @@ impl PealayerApp {
         cfg.timeline_animated_navigation = self.timeline_animated_navigation;
         cfg.timeline_navigation_transition_ms = self.timeline_navigation_transition_ms;
         cfg.timeline_follow_playhead = self.timeline_follow_playhead;
+        cfg.timeline_subtitle_segments = self.timeline_subtitle_segments;
         cfg.timeline_toolbar_visible = self.timeline_toolbar_visible;
         cfg.timeline_toolbar_order =
             crate::config::persisted_timeline_toolbar_order(&self.timeline_toolbar_order);
@@ -7859,6 +7920,25 @@ impl PealayerApp {
         else {self.pending_control_bar_save=Some(PendingBarSave {desired:self.control_bars,flight:None});}
         ctx.request_repaint();
     }
+    pub(crate) fn request_simple_workspace_save(&mut self,ctx:&egui::Context) {
+        if let Some(pending)=&mut self.pending_simple_workspace_save {pending.desired=self.simple_workspace;}
+        else {self.pending_simple_workspace_save=Some(PendingBarSave{desired:self.simple_workspace,flight:None});}
+        ctx.request_repaint();
+    }
+    fn flush_simple_workspace_save(&mut self,ctx:&egui::Context) {
+        if self.show_preferences_dialog || self.preference_preview_original.is_some() {return;}
+        let Some(mut pending)=self.pending_simple_workspace_save.take() else {return};
+        match poll_bar_save(&mut pending,"simple_workspace",|c|c.simple_workspace,|c,v|c.simple_workspace=v) {
+            Ok(true)=>{self.config_status="Simple workspace saved".into();
+                self.config_fingerprint=crate::config::AppConfig::fingerprint(&crate::config::AppConfig::get_config_path()).ok();},
+            Ok(false)=>{self.pending_simple_workspace_save=Some(pending);ctx.request_repaint_after(std::time::Duration::from_millis(100));},
+            Err(error)=>{
+                self.simple_workspace=crate::peer::client().and_then(|c|c.snapshot()).map(|s|s.session.config.simple_workspace)
+                    .unwrap_or_else(||crate::platform::interop::get_live_config().simple_workspace);
+                self.config_status=error;
+            }
+        }
+    }
     fn flush_control_bar_save(&mut self,ctx:&egui::Context) {
         if self.show_preferences_dialog || self.preference_preview_original.is_some() {return;}
         let Some(mut pending)=self.pending_control_bar_save.take() else {return};
@@ -8002,6 +8082,7 @@ impl PealayerApp {
         self.volume = config.volume;
         self.is_muted = config.is_muted;
         self.pin_controls = config.pin_controls;
+        self.simple_workspace = config.simple_workspace;
         self.show_remaining_time = config.show_remaining_time;
         self.open_url_multiline = config.open_url_multiline;
         self.open_url_history_expanded = config.open_url_history_expanded;
@@ -8023,6 +8104,8 @@ impl PealayerApp {
         self.rtl = crate::config::resolve_rtl(self.direction_preference, self.language);
         self.theme_preference = crate::config::resolved_theme(&config);
         self.color_palette = config.color_palette;
+        self.local_media_title_format = config.local_media_title_format;
+        self.remote_media_title_format = config.remote_media_title_format;
         self.native_monitor_style = config.native_monitor_style;
         self.native_transport_style = config.native_transport_style;
         self.monitor_preview = config.monitor_preview;
@@ -8031,6 +8114,7 @@ impl PealayerApp {
         self.auto_connect_hardware = config.auto_connect_hardware;
         self.pause_on_hardware_disconnect = config.pause_on_hardware_disconnect;
         self.click_player_to_toggle = config.click_player_to_toggle;
+        self.video_click_frame_only = config.video_click_frame_only;
         self.configured_playback_speed = config.playback_speed;
         self.temporary_fast_forward_speed = config.temporary_fast_forward_speed;
         if self.video_surface_gesture.is_none() {
@@ -8071,6 +8155,7 @@ impl PealayerApp {
         self.paused_drag_action = config.paused_drag_action;
         self.playing_drag_action = config.playing_drag_action;
         self.middle_click_action = config.middle_click_action;
+        self.mouse_bindings = config.mouse_bindings.clone();
         self.middle_hold_action = config.middle_hold_action;
         self.right_click_action = config.right_click_action;
         self.right_hold_action = config.right_hold_action;
@@ -8090,6 +8175,7 @@ impl PealayerApp {
         self.timeline_animated_navigation = config.timeline_animated_navigation;
         self.timeline_navigation_transition_ms = config.timeline_navigation_transition_ms;
         self.timeline_follow_playhead = config.timeline_follow_playhead;
+        self.timeline_subtitle_segments = config.timeline_subtitle_segments;
         self.timeline_toolbar_visible = config.timeline_toolbar_visible;
         self.timeline_toolbar_order =
             crate::config::normalize_timeline_toolbar_order(&config.timeline_toolbar_order);
@@ -8310,7 +8396,7 @@ impl PealayerApp {
                         if owner.is_some() && value.get("values").and_then(serde_json::Value::as_object)
                             .is_some_and(|values|!values.is_empty()&&values.keys().all(|key|
                                 crate::config::TimelineToolbarPreferences::owns_key(key)
-                                || matches!(key.as_str(),"control_bars"|"status_bar"))) {
+                                || matches!(key.as_str(),"control_bars"|"status_bar"|"simple_workspace"))) {
                             return Err("Finish the Preferences preview before customizing toolbars".into());
                         }
                         crate::peer::validate_config_expectations(&crate::platform::interop::get_live_config(), value.get("expected"))?;
@@ -8321,7 +8407,7 @@ impl PealayerApp {
                         if value.get("values").and_then(serde_json::Value::as_object)
                             .is_some_and(|values| !values.is_empty() && values.keys().all(|key|
                                 crate::config::TimelineToolbarPreferences::owns_key(key)
-                                || matches!(key.as_str(), "control_bars" | "status_bar")))
+                                || matches!(key.as_str(), "control_bars" | "status_bar" | "simple_workspace")))
                         {
                             let values=value["values"].as_object().unwrap();
                             if values.keys().any(|key|crate::config::TimelineToolbarPreferences::owns_key(key)) {
@@ -8329,6 +8415,7 @@ impl PealayerApp {
                             }
                             if values.contains_key("control_bars") {self.control_bars = config.control_bars;}
                             if values.contains_key("status_bar") {self.status_bar = config.status_bar;}
+                            if values.contains_key("simple_workspace") {self.simple_workspace = config.simple_workspace;}
                             crate::platform::interop::set_live_config(config);
                             self.config_fingerprint = crate::config::AppConfig::fingerprint(
                                 &crate::config::AppConfig::get_config_path()).ok();
@@ -8395,9 +8482,12 @@ impl PealayerApp {
             }
             if let Some(pending) = &self.pending_status_bar_save { config.status_bar = pending.desired; }
             if let Some(pending) = &self.pending_control_bar_save { config.control_bars = pending.desired; }
+            if let Some(pending) = &self.pending_simple_workspace_save { config.simple_workspace = pending.desired; }
             let workspace_changed=state.config.as_ref().is_none_or(|old|old.active_workspace_profile!=config.active_workspace_profile || old.workspace_session.nle!=config.workspace_session.nle || old.workspace_dock_layout!=config.workspace_dock_layout);
             let bar_preferences_only = state.config.as_ref().is_some_and(|old| {
                 let mut comparison = old.clone(); comparison.status_bar = config.status_bar;
+                comparison.simple_workspace = config.simple_workspace;
+                comparison.timeline_subtitle_segments = config.timeline_subtitle_segments;
                 comparison.control_bars=config.control_bars;
                 crate::config::TimelineToolbarPreferences::from_config(&config).apply(&mut comparison);
                 comparison == config
@@ -8405,6 +8495,8 @@ impl PealayerApp {
             if bar_preferences_only {
                 self.apply_timeline_toolbar_preferences(&crate::config::TimelineToolbarPreferences::from_config(&config));
                 self.status_bar = config.status_bar;
+                self.simple_workspace = config.simple_workspace;
+                self.timeline_subtitle_segments = config.timeline_subtitle_segments;
                 self.control_bars=config.control_bars;
                 crate::platform::interop::set_live_config(snapshot.session.config.clone());
             } else if let Err(error)=crate::peer::mirror(||self.apply_runtime_config(ctx,config.clone())){self.config_status=error;}
@@ -8611,9 +8703,26 @@ impl PealayerApp {
         if ctx.data_mut(|data|data.get_temp::<String>(crate::peer::preference_owner_id())).is_some() {
             return Err("Preferences is being previewed by a peer; finish that edit first".into());
         }
+        let subtitle_display_only = values.as_object().is_some_and(|values| {
+            values.len() == 1 && values.contains_key("timeline_subtitle_segments")
+        });
+        if subtitle_display_only
+            && (self.show_preferences_dialog
+                || self.preference_preview_original.is_some()
+                || self.native_preferences.as_ref().is_some_and(|helper| !helper.confirmed_exited()))
+        {
+            return Err("Change subtitle cue segments in the open Preferences window".into());
+        }
         let updated = self.runtime_config_snapshot().apply_patch(values)?;
         updated.save()?;
-        self.apply_runtime_config(ctx, updated.clone())?;
+        if values.as_object().is_some_and(|values|!values.is_empty() && values.keys().all(|key|key=="simple_workspace")) {
+            self.simple_workspace=updated.simple_workspace;
+            crate::platform::interop::set_live_config(updated.clone());
+        } else if subtitle_display_only {
+            self.timeline_subtitle_segments = updated.timeline_subtitle_segments;
+            crate::platform::interop::set_live_config(updated.clone());
+            ctx.request_repaint();
+        } else { self.apply_runtime_config(ctx, updated.clone())?; }
         if [
             "theme",
             "color_palette",
@@ -10162,6 +10271,8 @@ impl Default for PealayerApp {
             native_service_policy: NativeServicePolicy::ModelOnly,
             web_only: false,
             app_name: crate::config::resolved_app_name(&crate::config::AppConfig::default()),
+            local_media_title_format: Default::default(),
+            remote_media_title_format: Default::default(),
             app_publisher: crate::config::resolved_app_publisher(
                 &crate::config::AppConfig::default(),
             ),
@@ -10213,6 +10324,7 @@ impl Default for PealayerApp {
             configured_playback_speed: 1.0,
             temporary_fast_forward_speed: 2.0,
             video_surface_gesture: None,
+            mouse_bindings: Default::default(),
             seek_pos: None,
             seek_controller: crate::mpv::seek::SeekController::with_cache(
                 crate::mpv::seek::MpvSeekBackend::new(mpv, Arc::clone(&native_seek_client)),
@@ -10229,6 +10341,7 @@ impl Default for PealayerApp {
             frame_rate_tracker: FrameRateTracker::default(),
             display_refresh_rate: 60.0,
             pin_controls: false,
+            simple_workspace: crate::config::SimpleWorkspaceConfig::default(),
             show_error: None,
             show_sub_settings: false,
             sub_visibility: true,
@@ -10392,6 +10505,7 @@ impl Default for PealayerApp {
             pause_on_hardware_disconnect: true,
             auto_connect_hardware: true,
             click_player_to_toggle: true,
+            video_click_frame_only: true,
             show_subseconds: true,
             human_readable_time_units: true,
             seekbar_hover_thumbnails: false,
@@ -10406,10 +10520,10 @@ impl Default for PealayerApp {
             osd_timeout_seconds: 3.5,
             paused_drag_action: crate::config::PlayerDragAction::MoveWindow,
             playing_drag_action: crate::config::PlayerDragAction::TemporaryFastForward,
-            middle_click_action: crate::config::PlayerClickAction::None,
+            middle_click_action: crate::config::PlayerClickAction::ToggleFullscreen,
             middle_hold_action: crate::config::PlayerDragAction::None,
             right_click_action: crate::config::PlayerClickAction::ContextMenu,
-            right_hold_action: crate::config::PlayerDragAction::None,
+            right_hold_action: crate::config::PlayerDragAction::Seek,
             fullscreen_video_background: crate::config::VideoBackground::Black,
             motion_control_mode: crate::config::MotionControlMode::Hold,
             held_motion_action: None,
@@ -10427,12 +10541,15 @@ impl Default for PealayerApp {
             timeline_animated_navigation: true,
             timeline_navigation_transition_ms: 100,
             timeline_follow_playhead: false,
+            timeline_subtitle_segments: false,
+            subtitle_timing: Default::default(),
             timeline_toolbar_visible: true,
             timeline_toolbar_order: crate::config::default_timeline_toolbar_order(),
             timeline_toolbar_hidden: crate::config::default_timeline_toolbar_hidden(),
             pending_timeline_toolbar_save: None,
             pending_status_bar_save: None,
             pending_control_bar_save: None,
+            pending_simple_workspace_save: None,
             workspace_rendering: false,
             deferred_config_save: false,
             non_user_control_visibility: crate::config::NonUserControlVisibility::Dimmed,
@@ -10499,10 +10616,13 @@ pub fn contextual_window_title(
     media_path: Option<&std::path::Path>,
     connected: bool,
     connection_requested: bool,
+    local_format: crate::config::MediaTitleFormat,
+    remote_format: crate::config::MediaTitleFormat,
 ) -> String {
     if let Some(media_path) = media_path {
         let target = media_path.to_string_lossy();
-        let media_name = crate::media::media_target_label(&target);
+        let format = if crate::media::is_remote_media_target(&target) { remote_format } else { local_format };
+        let media_name = crate::media::media_title(&target, format);
         return format!("{media_name} — {app_name}");
     }
     if connected {
@@ -11955,16 +12075,19 @@ pub(crate) mod tests {
     }
     #[test]
     fn window_title_reflects_media_and_connection_context() {
+        use crate::config::MediaTitleFormat::{FileName, FileStem, Location};
+        assert_eq!(contextual_window_title("Studio", Some(std::path::Path::new("https://example.invalid/My%20movie.mp4")),false,false,Location,FileStem),"My movie — Studio");
+        assert_eq!(contextual_window_title("Studio", Some(std::path::Path::new("C:/media/My movie.mp4")),false,false,Location,FileName),"C:/media/My movie.mp4 — Studio");
         assert_eq!(
-            contextual_window_title("Studio", None, false, false),
+            contextual_window_title("Studio", None, false, false, Default::default(), Default::default()),
             "Studio"
         );
         assert_eq!(
-            contextual_window_title("Studio", None, false, true),
+            contextual_window_title("Studio", None, false, true, Default::default(), Default::default()),
             "Studio — Connecting…"
         );
         assert_eq!(
-            contextual_window_title("Studio", None, true, true),
+            contextual_window_title("Studio", None, true, true, Default::default(), Default::default()),
             "Studio — Hardware connected"
         );
         assert_eq!(
@@ -11973,6 +12096,7 @@ pub(crate) mod tests {
                 Some(std::path::Path::new("C:/media/demo.mp4")),
                 true,
                 true,
+                Default::default(), Default::default(),
             ),
             "demo.mp4 — Studio"
         );
@@ -11984,8 +12108,9 @@ pub(crate) mod tests {
                 )),
                 false,
                 false,
+                Default::default(), Default::default(),
             ),
-            "rtsp://***@camera.invalid/live — Studio"
+            "live — Studio"
         );
     }
 

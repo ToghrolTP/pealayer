@@ -156,7 +156,8 @@ pub fn configure_config_directory(
 
 static WINDOW_HWND: AtomicIsize = AtomicIsize::new(0);
 static WINDOW_DARK_THEME: AtomicBool = AtomicBool::new(true);
-static WINDOW_STUDIO_PALETTE: AtomicBool = AtomicBool::new(false);
+static WINDOW_COLOR_PALETTE: AtomicU32 =
+    AtomicU32::new(crate::config::ColorPalette::Native as u32);
 static WINDOW_DWM_THEMING: AtomicBool = AtomicBool::new(true);
 static WINDOW_MICA_BACKDROP: AtomicBool = AtomicBool::new(false);
 static WINDOW_MOVE_RESIZE_ACTIVE: AtomicBool = AtomicBool::new(false);
@@ -174,6 +175,8 @@ static WINDOW_MAGNETIC_SNAP_DISTANCE: AtomicI32 = AtomicI32::new(16);
 static WINDOW_MAGNETIC_DRAG: Mutex<MagneticDragSession> = Mutex::new(MagneticDragSession::new());
 static SHELL_SUBCLASS_HWND: AtomicIsize = AtomicIsize::new(0);
 static SHELL_COMMAND_MESSAGES: AtomicU64 = AtomicU64::new(0);
+static SHELL_MEDIA_KEY_MESSAGES: AtomicU64 = AtomicU64::new(0);
+static SHELL_MEDIA_APPCOMMAND_MESSAGES: AtomicU64 = AtomicU64::new(0);
 static SHELL_COMMANDS_QUEUED: AtomicU64 = AtomicU64::new(0);
 static SHELL_COMMANDS: Mutex<VecDeque<ShellCommand>> = Mutex::new(VecDeque::new());
 static SHELL_BOARD_MENU: Mutex<Option<super::tray_board::BoardTrayMenu>> = Mutex::new(None);
@@ -1242,8 +1245,8 @@ pub fn set_window_owner(_hwnd_raw: isize, _owner_raw: isize) -> Result<(), Strin
 
 pub fn set_window_appearance(dark: bool, palette: crate::config::ColorPalette) {
     let theme_changed = WINDOW_DARK_THEME.swap(dark, Ordering::SeqCst) != dark;
-    let studio = palette == crate::config::ColorPalette::Studio;
-    let palette_changed = WINDOW_STUDIO_PALETTE.swap(studio, Ordering::SeqCst) != studio;
+    let palette = palette as u32;
+    let palette_changed = WINDOW_COLOR_PALETTE.swap(palette, Ordering::SeqCst) != palette;
     let hwnd = get_registered_hwnd();
     if hwnd != 0 && (theme_changed || palette_changed) {
         apply_windows_window_decorations(hwnd);
@@ -1259,31 +1262,9 @@ pub fn configure_window_composition(dwm_theming: bool, mica_backdrop: bool) {
     }
 }
 
-/// Return the user's current desktop accent color when the platform exposes
-/// one. Windows supplies this through DWM; other platforms fall back to their
-/// standard native accent in the UI layer.
-#[cfg(target_os = "windows")]
-pub fn system_accent_color() -> Option<[u8; 3]> {
-    use windows::Win32::Graphics::Dwm::DwmGetColorizationColor;
-    use windows::core::BOOL;
-
-    let mut argb = 0_u32;
-    let mut opaque = BOOL::default();
-    unsafe { DwmGetColorizationColor(&mut argb, &mut opaque) }
-        .ok()
-        .map(|_| {
-            [
-                ((argb >> 16) & 0xff) as u8,
-                ((argb >> 8) & 0xff) as u8,
-                (argb & 0xff) as u8,
-            ]
-        })
-}
-
-#[cfg(not(target_os = "windows"))]
-pub fn system_accent_color() -> Option<[u8; 3]> {
-    None
-}
+#[path = "../../shared/system_accent.rs"]
+mod system_accent;
+pub use system_accent::system_accent_color;
 
 #[cfg(any(target_os = "windows", test))]
 fn decoration_colors(dark: bool, palette: crate::config::ColorPalette) -> (u32, u32) {
@@ -1302,10 +1283,10 @@ pub fn apply_windows_window_decorations(hwnd_raw: isize) {
         WINDOW_DARK_THEME.load(Ordering::SeqCst),
         WINDOW_DWM_THEMING.load(Ordering::SeqCst),
         WINDOW_MICA_BACKDROP.load(Ordering::SeqCst),
-        if WINDOW_STUDIO_PALETTE.load(Ordering::SeqCst) {
-            crate::config::ColorPalette::Studio
-        } else {
-            crate::config::ColorPalette::Native
+        match WINDOW_COLOR_PALETTE.load(Ordering::SeqCst) {
+            value if value == crate::config::ColorPalette::Studio as u32 => crate::config::ColorPalette::Studio,
+            value if value == crate::config::ColorPalette::Pastel as u32 => crate::config::ColorPalette::Pastel,
+            _ => crate::config::ColorPalette::Native,
         },
     );
 }
@@ -2144,6 +2125,12 @@ fn shell_command_for_appcommand(appcommand: u32, enabled: bool, has_media: bool)
     })
 }
 
+fn foreground_media_key(key: u32, enabled: bool, has_media: bool, foreground: bool) -> Option<u32> {
+    if !foreground { return None; }
+    let command = match key { 0xB0 => 11, 0xB1 => 12, 0xB2 => 13, 0xB3 => 14, _ => return None };
+    shell_command_for_appcommand(command, enabled, has_media)
+}
+
 pub fn tray_menu_label(cmd: u32, active: bool) -> &'static str {
     match cmd {
         TRAY_CMD_PLAYPAUSE => {
@@ -2182,6 +2169,19 @@ unsafe extern "system" fn shell_window_proc(
     };
 
     observe_native_window_message(message);
+    // Handle physical VK_MEDIA keys in the focused window before DefWindowProc
+    // promotes them to WM_APPCOMMAND / Shell-selected background SMTC routing.
+    // This is HWND-local, not a second global keyboard hook or media listener.
+    if matches!(message, 0x0100 | 0x0101) // WM_KEYDOWN / WM_KEYUP
+        && let Some(command) = foreground_media_key(wparam.0 as u32,
+            SHELL_MEDIA_KEYS_ENABLED.load(Ordering::Relaxed),
+            SHELL_HAS_MEDIA.load(Ordering::Relaxed), is_application_foreground()) {
+        if message == 0x0100 && (lparam.0 as usize & (1 << 30)) == 0 {
+            SHELL_MEDIA_KEY_MESSAGES.fetch_add(1, Ordering::Relaxed);
+            queue_shell_selection(ShellCommand {id:command,board_target:None,media_key:true});
+        }
+        return LRESULT(0); // Consume release/repeat too: do not toggle twice.
+    }
     if message==0x004a {
         if let Some(result)=unsafe{crate::platform::copydata::receive(hwnd,wparam,lparam)} {return result;}
     }
@@ -2292,6 +2292,7 @@ unsafe extern "system" fn shell_window_proc(
             return LRESULT(0);
         }
     } else if message == WM_APPCOMMAND {
+        SHELL_MEDIA_APPCOMMAND_MESSAGES.fetch_add(1, Ordering::Relaxed);
         // GET_APPCOMMAND_LPARAM: high word with device bits masked out.
         let appcommand = ((lparam.0 as usize >> 16) & 0x07ff) as u32;
         if let Some(command) = shell_command_for_appcommand(
@@ -2403,6 +2404,8 @@ pub fn shell_command_diagnostics() -> serde_json::Value {
         "hook_hwnd": SHELL_SUBCLASS_HWND.load(Ordering::Acquire),
         "registered_hwnd": get_registered_hwnd(),
         "thumbnail_click_messages": SHELL_COMMAND_MESSAGES.load(Ordering::Relaxed),
+        "foreground_media_key_messages": SHELL_MEDIA_KEY_MESSAGES.load(Ordering::Relaxed),
+        "media_appcommand_messages": SHELL_MEDIA_APPCOMMAND_MESSAGES.load(Ordering::Relaxed),
         "commands_queued": SHELL_COMMANDS_QUEUED.load(Ordering::Relaxed),
         "queue_depth": SHELL_COMMANDS.lock().map(|queue| queue.len()).unwrap_or_default(),
         "board_menu": SHELL_BOARD_MENU.lock().ok().and_then(|menu| menu.as_ref().map(|menu|
@@ -3128,6 +3131,14 @@ mod tests {
             (0x00fcfaf8, 0x002b2017)
         );
         assert_eq!(
+            decoration_colors(true, ColorPalette::Pastel),
+            (0x00301b15, 0x00fff5f4)
+        );
+        assert_eq!(
+            decoration_colors(false, ColorPalette::Pastel),
+            (0x00fcf1f1, 0x00422726)
+        );
+        assert_eq!(
             decoration_colors(true, ColorPalette::Native),
             (0x00202020, 0x00eeeeee)
         );
@@ -3213,6 +3224,14 @@ mod tests {
         assert_eq!(shell_command_for_appcommand(14, false, true), None);
         assert_eq!(shell_command_for_appcommand(14, true, false), None);
         assert_eq!(shell_command_for_appcommand(999, true, true), None);
+        for (key, command) in [(0xB0,MEDIA_KEY_CMD_NEXT),(0xB1,MEDIA_KEY_CMD_PREVIOUS),
+            (0xB2,MEDIA_KEY_CMD_STOP),(0xB3,THUMB_BUTTON_PLAYPAUSE)] {
+            assert_eq!(foreground_media_key(key,true,true,true),Some(command));
+            assert_eq!(foreground_media_key(key,true,true,false),None);
+            assert_eq!(foreground_media_key(key,false,true,true),None);
+            assert_eq!(foreground_media_key(key,true,false,true),None);
+        }
+        for key in [0x41,0xAD,0xAE,0xAF] { assert_eq!(foreground_media_key(key,true,true,true),None,"OS volume/ordinary keys stay OS-owned"); }
     }
 
     #[test]

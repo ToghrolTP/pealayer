@@ -293,21 +293,28 @@ const App: React.FC = () => {
   const palette = palettes[paletteName][resolvedTheme];
   const mediaGestures: MediaGesturePreferences = {
     clickPlayerToToggle: appConfig?.click_player_to_toggle ?? true,
+    videoClickFrameOnly: appConfig?.video_click_frame_only ?? true,
     pausedDragAction: appConfig?.paused_drag_action ?? 'move_window',
     playingDragAction: appConfig?.playing_drag_action ?? 'temporary_fast_forward',
-    middleClickAction: appConfig?.middle_click_action ?? 'none',
+    middleClickAction: appConfig?.middle_click_action ?? 'toggle_fullscreen',
     middleHoldAction: appConfig?.middle_hold_action ?? 'none',
     rightClickAction: appConfig?.right_click_action ?? 'context_menu',
-    rightHoldAction: appConfig?.right_hold_action ?? 'none',
+    rightHoldAction: appConfig?.right_hold_action ?? 'seek',
+    mouseBindings: appConfig?.mouse_bindings ?? state.mouse_bindings,
+    frameStepCount: Number(appConfig?.frame_step_count ?? 1),
     temporaryFastForwardSpeed: Number(appConfig?.temporary_fast_forward_speed ?? 2),
     playbackSpeed: Number(appConfig?.playback_speed ?? state.playback_rate ?? 1),
   };
 
   useLayoutEffect(() => {
     document.documentElement.dataset.palette = paletteName;
+    const style = document.documentElement.style;
     for (const [role, value] of Object.entries(palette)) {
-      document.documentElement.style.setProperty(`--${role}`, value);
+      style.setProperty(`--${role}`, value);
     }
+    return () => {
+      for (const role of Object.keys(palette)) style.removeProperty(`--${role}`);
+    };
   }, [paletteName, palette]);
 
   useEffect(() => {
@@ -700,7 +707,7 @@ const App: React.FC = () => {
     >
       <SharedToasts snapshot={state.messages} connected={connected} locale={runtime?.locale || 'en'} dismiss={id => sendCmd('pealayer.toast.dismiss', { id })} invoke={(id, created_at_ms, action_id) => sendCmd('pealayer.toast.invoke', { id, created_at_ms, action_id })} />
       <PublishingAuthority state={state} sendCmd={sendCmd} locale={runtime?.locale ?? 'en'} />
-      <RemoteLocationDialog state={state.remote_browser} connected={connected} base={apiBaseUrl} sendCmd={sendCmd} autoInspect={appConfig?.open_url_fetch_remote_info !== false} />
+      <RemoteLocationDialog state={state.remote_browser} connected={connected} base={apiBaseUrl} sendCmd={sendCmd} autoInspect={appConfig?.open_url_fetch_remote_info !== false} mouseBindings={state.mouse_bindings} />
       {projectsOpen && <ProjectDialog base={apiBaseUrl} locale={runtime?.locale || 'en'} onClose={() => setProjectsOpen(false)} />}
       <Layout className="app-shell">
         <HeaderBar

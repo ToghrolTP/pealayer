@@ -1121,7 +1121,7 @@ fn draw_location_and_remote_details(
             ui.horizontal(|ui| {
                 ui.spinner();
                 ui.add(
-                    egui::Label::new(format!("{}  {url}", app.tr("Fetching details"))).truncate(),
+                    egui::Label::new(format!("{}  {}", app.tr("Fetching details"), crate::media::media_location_display(url))).truncate(),
                 );
             });
         }
@@ -1335,14 +1335,13 @@ fn draw_recent_location(
                     );
                 }
                 let label_width = (ui.available_width() - actions_width).max(80.0);
-                // `truncate()` already supplies the full text on hover. Adding an
-                // explicit hover tooltip here would render the same tooltip twice.
+                let caption = crate::media::media_target_label(target);
                 let label_response = ui.add_sized(
                     [label_width, 26.0],
-                    egui::Label::new(target)
+                    egui::Label::new(format!("{}  {caption}", crate::ui::icons::GLOBE))
                         .truncate()
                         .sense(egui::Sense::click()),
-                );
+                ).on_hover_text(crate::media::media_location_display(target));
                 if label_response.clicked() {
                     action = Some(if default_click_edits {
                         RecentLocationAction::Edit
@@ -1467,7 +1466,7 @@ fn metadata_row(
     value: &str,
 ) {
     ui.label(egui::RichText::new(format!("{icon}  {label}")).strong());
-    copyable_metadata_value(ui, language, value, egui::RichText::new(value));
+    copyable_metadata_value(ui, language, value, egui::RichText::new(crate::media::media_location_display(value)));
     ui.end_row();
 }
 
@@ -1614,7 +1613,7 @@ pub fn validate_media_url(input: &str) -> Result<ValidatedMediaUrl, String> {
     let file_name = parsed
         .path_segments()
         .and_then(|segments| segments.filter(|segment| !segment.is_empty()).next_back())
-        .map(str::to_owned);
+        .map(crate::media::decode_media_name);
     let warning = (!parsed.username().is_empty() || parsed.password().is_some()).then(|| {
         "This URL contains embedded credentials. They will be passed to the media engine."
             .to_string()
@@ -1689,7 +1688,7 @@ fn probe_remote_media(
                 .url()
                 .path_segments()
                 .and_then(|segments| segments.filter(|segment| !segment.is_empty()).next_back())
-                .map(str::to_owned)
+                .map(crate::media::decode_media_name)
         });
     let status = response.status();
     let content_type = header_string(headers, CONTENT_TYPE);
@@ -1888,6 +1887,9 @@ mod tests {
 
     #[test]
     fn extracts_remote_filename_and_formats_lengths() {
+        let source = "https://example.invalid/Film%20%26amp%3B%20Friends.mp4?token=private";
+        let validated = validate_media_url(source).unwrap();
+        assert_eq!(validated.file_name.as_deref(),Some("Film & Friends.mp4"));
         assert_eq!(
             content_disposition_filename("attachment; filename=\"movie.mp4\""),
             Some("movie.mp4".to_string())

@@ -1856,12 +1856,24 @@ fn palette_label(ui: &egui::Ui, caption: &str) -> egui::text::LayoutJob {
 }
 
 fn paint_palette_preview(ui: &egui::Ui, row: egui::Rect, name: &str) {
-    let palette = if name == "studio" { crate::config::ColorPalette::Studio } else { crate::config::ColorPalette::Native };
+    use crate::config::ColorPalette;
+    let palette = match name {
+        "studio" => ColorPalette::Studio,
+        "pastel" => ColorPalette::Pastel,
+        _ => ColorPalette::Native,
+    };
     let color = |role| crate::ui::palette::color(palette, ui.visuals().dark_mode, role);
     let rect = egui::Rect::from_center_size(egui::pos2(row.left() + 34.0, row.center().y), egui::vec2(54.0, (row.height() - 6.0).clamp(10.0, 22.0)));
     ui.painter().rect(rect, 3.0, color("canvas"), egui::Stroke::new(1.0, color("line-strong")), egui::StrokeKind::Inside);
     let panel = egui::Rect::from_min_max(rect.min + egui::vec2(14.0, 3.0), rect.max - egui::vec2(3.0, 3.0));
-    ui.painter().rect_filled(panel, 2.0, color("surface-2"));
+    if palette == ColorPalette::Pastel {
+        let tint = |role| color("surface-2").lerp_to_gamma(color(role), 0.38);
+        crate::ui::palette::paint_gradient(
+            ui.painter(), panel, 2, tint("gradient-start"), tint("gradient-end"), 1.0,
+        );
+    } else {
+        ui.painter().rect_filled(panel, 2.0, color("surface-2"));
+    }
     ui.painter().hline(panel.left() + 4.0..=panel.right() - 4.0, panel.center().y, egui::Stroke::new(1.5, color("text")));
 }
 
@@ -2652,7 +2664,7 @@ mod tests {
         };
         assert!(matches!(*command,
             crate::platform::interop::InteropCommand::PreviewConfig { config } if config.color_palette == crate::config::ColorPalette::Studio));
-        assert!(helper.finish_preview(false));
+        assert!(helper.finish_preview(false), "{}", helper.draft.status);
         assert!(matches!(receiver.recv_timeout(std::time::Duration::from_secs(1)).unwrap(),
             crate::platform::interop::InteropCommand::CancelPreviewConfig));
     }

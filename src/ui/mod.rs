@@ -2,6 +2,7 @@ pub mod about;
 pub mod audio;
 pub mod board_info;
 pub mod controls;
+pub(crate) mod mouse_buttons;
 pub mod control_density;
 mod monitor_controls;
 pub mod color_picker;
@@ -69,6 +70,7 @@ mod terminal_screen;
 mod terminal_parser;
 pub(crate) mod action_customization;
 pub(crate) mod control_bar;
+pub(crate) mod simple_controls;
 pub mod subtitles;
 pub mod toasts;
 pub mod video;
@@ -260,6 +262,19 @@ pub fn configure_native_visuals(ctx: &eframe::egui::Context, config: &crate::con
     light.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, tokens_light.field_border);
     light.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, tokens_light.field_border);
     light.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, tokens_light.separator);
+
+    if config.color_palette == crate::config::ColorPalette::Pastel {
+        for visuals in [&mut dark, &mut light] {
+            let edge = Stroke::new(
+                1.0,
+                palette::color(config.color_palette, visuals.dark_mode, "hover-line"),
+            );
+            visuals.widgets.hovered.bg_stroke = edge;
+            visuals.widgets.open.bg_stroke = edge;
+            visuals.widgets.active.bg_stroke = Stroke::new(1.0, accent);
+            visuals.widgets.active.weak_bg_fill = visuals.widgets.active.bg_fill;
+        }
+    }
 
     ctx.set_visuals_of(Theme::Dark, dark);
     ctx.set_visuals_of(Theme::Light, light);

@@ -65,19 +65,7 @@ pub fn session_metadata(
     };
     SessionMetadata {
         track_id: Some(format!("/org/mpris/MediaPlayer2/track/{}", session_digest(target.as_bytes()))),
-        title: tag(&["title"]).or_else(|| {
-            let label = if crate::media::is_remote_media_target(target) {
-                url::Url::parse(target).ok().map(|url| {
-                    url.path_segments()
-                        .and_then(|mut parts| parts.rfind(|part| !part.is_empty()))
-                        .map(str::to_owned)
-                        .unwrap_or_else(|| url.host_str().unwrap_or("Media").to_owned())
-                })
-            } else {
-                Some(crate::media::media_target_label(target))
-            };
-            label
-        }),
+        title: tag(&["title"]).or_else(|| Some(crate::media::media_target_label(target))),
         artist: tag(&["artist", "album_artist", "albumartist"]),
         album: tag(&["album"]),
         video,

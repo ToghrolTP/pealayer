@@ -19,15 +19,15 @@ use windows::{
                 STGMEDIUM, STGMEDIUM_0, TYMED_HGLOBAL,
             },
             DataExchange::RegisterClipboardFormatW,
-            Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalUnlock},
+            Memory::{GMEM_MOVEABLE, GlobalAlloc, GlobalLock, GlobalSize, GlobalUnlock},
             Ole::{
-                DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_NONE, IDropTarget, IDropTarget_Impl,
+                DROPEFFECT, DROPEFFECT_COPY, DROPEFFECT_LINK, DROPEFFECT_NONE, IDropTarget, IDropTarget_Impl,
                 RegisterDragDrop, ReleaseStgMedium, RevokeDragDrop,
             },
             SystemServices::MODIFIERKEYS_FLAGS,
         },
         UI::Shell::{
-            CLSID_DragDropHelper, DROPDESCRIPTION, DROPIMAGE_COPY, DragQueryFileW, HDROP,
+            CLSID_DragDropHelper, DROPDESCRIPTION, DROPIMAGE_COPY, DROPIMAGE_LINK, DragQueryFileW, HDROP,
             IDropTargetHelper,
         },
     },
@@ -73,9 +73,9 @@ impl Target {
         let allowed = !blocked
             && !paths.is_empty()
             && !effect.is_null()
-            && unsafe { (*effect).0 & DROPEFFECT_COPY.0 != 0 };
+            && unsafe { (*effect).0 & (DROPEFFECT_COPY.0 | DROPEFFECT_LINK.0) != 0 };
         let value = if allowed {
-            DROPEFFECT_COPY
+            if unsafe { (*effect).0 & DROPEFFECT_COPY.0 != 0 } { DROPEFFECT_COPY } else { DROPEFFECT_LINK }
         } else {
             DROPEFFECT_NONE
         };
@@ -93,7 +93,7 @@ impl Target {
                 &paths,
                 &crate::assets::native_destination_at(&self.ctx, point),
             );
-            let _ = description(data, &feedback.message);
+            let _ = description(data, &feedback.message, value == DROPEFFECT_LINK);
         }
         self.ctx.request_repaint();
         value
@@ -109,7 +109,7 @@ impl IDropTarget_Impl for Target_Impl {
     ) -> Result<()> {
         *self.paths.borrow_mut() = data
             .as_ref()
-            .and_then(|d| read_files(d).ok())
+            .and_then(|d| read_files(d).or_else(|_| read_browser_link(d)).ok())
             .unwrap_or_default();
         *self.data.borrow_mut() = data.cloned();
         let value = self.feedback(pt, effect);
@@ -157,7 +157,7 @@ impl IDropTarget_Impl for Target_Impl {
         effect: *mut DROPEFFECT,
     ) -> Result<()> {
         let value = self.feedback(pt, effect);
-        if value == DROPEFFECT_COPY
+        if value != DROPEFFECT_NONE
             && let Ok(mut pending) = PENDING.lock()
         {
             pending.dropped = self.paths.borrow().clone();
@@ -175,6 +175,51 @@ impl IDropTarget_Impl for Target_Impl {
         Ok(())
     }
 }
+fn read_browser_link(data: &IDataObject) -> Result<Vec<PathBuf>> {
+    // Browser links are OLE URL/text data, not CF_HDROP files. Do not read the
+    // system clipboard, follow HTML, execute a scheme, or fabricate a .url file.
+    let formats = unsafe { [
+        (RegisterClipboardFormatW(windows::core::w!("UniformResourceLocatorW")) as u16, true),
+        (13, true), // CF_UNICODETEXT
+        (RegisterClipboardFormatW(windows::core::w!("UniformResourceLocator")) as u16, false),
+        (1, false), // CF_TEXT (ASCII / UTF-8 URLs)
+    ] };
+    for (cf_format, wide) in formats {
+        let format = FORMATETC { cfFormat: cf_format, dwAspect: DVASPECT_CONTENT.0, lindex: -1,
+            tymed: TYMED_HGLOBAL.0 as u32, ..Default::default() };
+        unsafe {
+            let Ok(mut medium) = data.GetData(&format) else { continue };
+            if medium.tymed != TYMED_HGLOBAL.0 as u32 { ReleaseStgMedium(&mut medium); continue; }
+            let result = (|| {
+                let handle = medium.u.hGlobal;
+                let size = GlobalSize(handle);
+                if size == 0 || size > 131072 || (wide && size % 2 != 0) { return None; }
+                let ptr = GlobalLock(handle);
+                if ptr.is_null() { return None; }
+                let text = if wide {
+                    let bytes = std::slice::from_raw_parts(ptr.cast::<u16>(), size / 2);
+                    bytes.iter().position(|v| *v == 0).and_then(|end| String::from_utf16(&bytes[..end]).ok())
+                } else {
+                    let bytes = std::slice::from_raw_parts(ptr.cast::<u8>(), size);
+                    bytes.iter().position(|v| *v == 0).and_then(|end| String::from_utf8(bytes[..end].to_vec()).ok())
+                };
+                let _ = GlobalUnlock(handle);
+                let text = text?;
+                let text = text.trim();
+                if text.is_empty() || text.len() > 32768 || text.chars().any(char::is_control) { return None; }
+                let url = url::Url::parse(text).ok()?;
+                if url.scheme() == "file" { return url.to_file_path().ok().map(|path|vec![path]); }
+                if !crate::media::is_remote_media_target(text) { return None; }
+                if url.host_str().is_none() { return None; }
+                Some(vec![PathBuf::from(text)])
+            })();
+            ReleaseStgMedium(&mut medium);
+            if let Some(paths) = result { return Ok(paths); }
+        }
+    }
+    Err(windows::core::Error::from_hresult(windows::Win32::Foundation::E_INVALIDARG))
+}
+
 fn read_files(data: &IDataObject) -> Result<Vec<PathBuf>> {
     use std::os::windows::ffi::OsStringExt;
     let format = FORMATETC {
@@ -213,7 +258,7 @@ fn read_files(data: &IDataObject) -> Result<Vec<PathBuf>> {
         result
     }
 }
-fn description(data: &IDataObject, message: &str) -> Result<()> {
+fn description(data: &IDataObject, message: &str, link: bool) -> Result<()> {
     unsafe {
         let memory = GlobalAlloc(GMEM_MOVEABLE, std::mem::size_of::<DROPDESCRIPTION>())?;
         let ptr = GlobalLock(memory);
@@ -234,7 +279,7 @@ fn description(data: &IDataObject, message: &str) -> Result<()> {
         // Packed Shell ABI: write the complete value, not references to fields.
         ptr.cast::<DROPDESCRIPTION>()
             .write_unaligned(DROPDESCRIPTION {
-                r#type: DROPIMAGE_COPY,
+                r#type: if link { DROPIMAGE_LINK } else { DROPIMAGE_COPY },
                 szMessage: text,
                 szInsert: [0; 260],
             });
@@ -337,6 +382,38 @@ pub fn input(raw: &mut egui::RawInput) {
 mod tests {
     use super::*;
     #[test]
+    fn browser_url_formats_accept_link_only_drag_and_preserve_bytes_once() {
+        use windows::Win32::{System::Ole::{OleInitialize,OleUninitialize},UI::Shell::SHCreateDataObject};
+        let _guard=crate::app::tests::lock_app_tests();
+        unsafe {
+            OleInitialize(None).unwrap();
+            struct Ole; impl Drop for Ole {fn drop(&mut self){unsafe{OleUninitialize();}}}
+            let _ole=Ole;
+            for cf_format in [RegisterClipboardFormatW(windows::core::w!("UniformResourceLocatorW")) as u16,13] {
+                for url in ["https://example.invalid/media/a%2Bb.mp4?x=1+2&y=%25","javascript:alert(1)","https://example.invalid/\nextra","file:///C:/media/movie.mp4"] {
+                    let data:IDataObject=SHCreateDataObject(None,None,None::<&IDataObject>).unwrap();
+                    let text=url.encode_utf16().chain([0]).collect::<Vec<_>>();
+                    let memory=GlobalAlloc(GMEM_MOVEABLE,text.len()*2).unwrap(); let ptr=GlobalLock(memory);
+                    std::ptr::copy_nonoverlapping(text.as_ptr(),ptr.cast::<u16>(),text.len()); let _=GlobalUnlock(memory);
+                    let format=FORMATETC {cfFormat:cf_format,dwAspect:DVASPECT_CONTENT.0,lindex:-1,tymed:TYMED_HGLOBAL.0 as u32,..Default::default()};
+                    let medium=STGMEDIUM {tymed:TYMED_HGLOBAL.0 as u32,u:STGMEDIUM_0 {hGlobal:memory},pUnkForRelease:std::mem::ManuallyDrop::new(None)};
+                    data.SetData(&format,&medium,true).unwrap();
+                    if url.starts_with("file:") { assert_eq!(read_browser_link(&data).unwrap(),[PathBuf::from("C:\\media\\movie.mp4")]); continue; }
+                    if !url.starts_with("https:") || url.contains('\n') {assert!(read_browser_link(&data).is_err());continue;}
+                    assert_eq!(read_browser_link(&data).unwrap(),[PathBuf::from(url)]);
+                    let target:IDropTarget=Target {hwnd:0,ctx:egui::Context::default(),helper:None,data:RefCell::new(None),paths:RefCell::new(Vec::new())}.into();
+                    let point=POINTL {x:20,y:30}; let mut effect=DROPEFFECT_LINK;
+                    target.DragEnter(&data,MODIFIERKEYS_FLAGS(0),point,&mut effect).unwrap(); assert_eq!(effect,DROPEFFECT_LINK);
+                    effect=DROPEFFECT_LINK; target.Drop(&data,MODIFIERKEYS_FLAGS(0),point,&mut effect).unwrap(); target.DragLeave().unwrap();
+                    OWNER.store(-1,Ordering::Release); let mut raw=egui::RawInput::default(); input(&mut raw);
+                    assert_eq!(raw.dropped_files.len(),1); assert_eq!(raw.dropped_files[0].path(),std::path::Path::new(url));
+                    let mut again=egui::RawInput::default(); input(&mut again); assert!(again.dropped_files.is_empty());
+                    OWNER.store(0,Ordering::Release);
+                }
+            }
+        }
+    }
+    #[test]
     fn shell_data_object_reports_action_and_delivers_each_file_once() {
         use windows::Win32::{
             System::Ole::{OleInitialize, OleUninitialize},
@@ -385,7 +462,7 @@ mod tests {
             };
             data.SetData(&format, &medium, true).unwrap();
             assert_eq!(read_files(&data).unwrap(), [PathBuf::from(path)]);
-            description(&data, "Play فیلم.mkv").unwrap();
+            description(&data, "Play فیلم.mkv", false).unwrap();
             let format = FORMATETC {
                 cfFormat: RegisterClipboardFormatW(windows::core::w!("DropDescription")) as u16,
                 ..format

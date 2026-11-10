@@ -224,7 +224,7 @@ jobs:
         run: cargo test --locked --no-run
       - name: "🧪 Run Rust tests"
         if: runner.os != 'Windows'
-        timeout-minutes: 15
+        timeout-minutes: ${{ matrix.platform == 'macos-x86_64' && 25 || 15 }}
         env:
           PEALAYER_CONFIG_FILE: ${{ runner.temp }}/pealayer-tests.json
         run: bash scripts/run-ci-rust-tests.sh

@@ -13,11 +13,16 @@ import {
 import { Dropdown } from 'antd';
 import { tr, type UiLocale } from '../i18n';
 import type { PlayerState } from './RemoteControlTab';
+import { insideMediaPicture } from '../mediaPicture';
+import { extraMouseAction, videoMousePolicy, videoReleaseIntent } from '../mouseBindings';
+import type { MouseAction, MouseBindings } from '../mouseBindings';
+import { useSeekbar } from './seekbar';
 
-export type MediaClickAction = 'play_pause' | 'toggle_mute' | 'toggle_fullscreen' | 'context_menu' | 'none';
+export type MediaClickAction = 'play_pause' | 'toggle_mute' | 'toggle_fullscreen' | 'boss_key' | 'context_menu' | 'none';
 export type MediaDragAction = 'move_window' | 'seek' | 'temporary_fast_forward' | 'none';
 export interface MediaGesturePreferences {
   clickPlayerToToggle: boolean;
+  videoClickFrameOnly: boolean;
   pausedDragAction: MediaDragAction;
   playingDragAction: MediaDragAction;
   middleClickAction: MediaClickAction;
@@ -26,6 +31,8 @@ export interface MediaGesturePreferences {
   rightHoldAction: MediaDragAction;
   temporaryFastForwardSpeed: number;
   playbackSpeed: number;
+  mouseBindings?: MouseBindings;
+  frameStepCount: number;
 }
 
 interface MediaSurfaceProps {
@@ -39,9 +46,18 @@ interface MediaSurfaceProps {
 }
 
 interface PointerGesture {
+  target: string;
+  startTime: number;
+  targetTime: number;
+  seekStarted: boolean;
   pointerId: number;
   button: number;
   startX: number;
+  startY: number;
+  moved: boolean;
+  clickAction: MediaClickAction;
+  extraAction: MouseAction;
+  forceMenu: boolean;
   lastX: number;
   pendingX: number;
   lastSentAt: number;
@@ -120,12 +136,28 @@ export const MediaSurface: React.FC<MediaSurfaceProps> = ({ state, apiBaseUrl, e
   const pointerGesture = useRef<PointerGesture | null>(null);
   const [fallback, setFallback] = useState(false);
   const target = state.current_video ?? '';
+  const targetRef=useRef(target);targetRef.current=target;
+  const seek=useSeekbar(state,sendCmd);
+  const seekRef=useRef(seek); seekRef.current=seek;
   const playable = useMemo(() => isDirectPlayable(target, state.media_tracks), [target, state.media_tracks]);
   const useFallback = fallback || !playable;
   const [fallbackStamp, setFallbackStamp] = useState(() => Math.max(0, Math.round(state.playback_time ?? 0)));
   const lastFallbackRef = useRef(0);
   const [gestureActive, setGestureActive] = useState(false);
+  const [contextMenuOpen, setContextMenuOpen] = useState(false);
+  const [contextPoint, setContextPoint] = useState({x:0,y:0});
   const source = useMemo(() => target ? mediaSource(target, apiBaseUrl) : '', [target, apiBaseUrl]);
+  const insidePicture = useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+    const hit=document.elementFromPoint(event.clientX,event.clientY);
+    if(hit && !event.currentTarget.contains(hit)) return false;
+    if (!gestures.videoClickFrameOnly) return true;
+    const element = event.currentTarget.querySelector('video, img') as HTMLVideoElement | HTMLImageElement | null;
+    if (!element) return false;
+    const width = element instanceof HTMLVideoElement ? element.videoWidth : element.naturalWidth;
+    const height = element instanceof HTMLVideoElement ? element.videoHeight : element.naturalHeight;
+    if (!(width > 0 && height > 0)) return false;
+    return insideMediaPicture(event.clientX, event.clientY, element.getBoundingClientRect(), width, height);
+  }, [gestures.videoClickFrameOnly]);
 
   useEffect(() => {
     if (!useFallback) return;
@@ -150,51 +182,83 @@ export const MediaSurface: React.FC<MediaSurfaceProps> = ({ state, apiBaseUrl, e
     if (action === 'play_pause') void sendCmd('toggle_pause');
     else if (action === 'toggle_mute') void sendCmd('toggle_mute');
     else if (action === 'toggle_fullscreen') void sendCmd('toggle_fullscreen');
+    else if (action === 'boss_key') void sendCmd('pause').then(() => sendCmd('minimize'));
   }, [sendCmd, target]);
 
+  const invokeExtraAction = useCallback((action: MouseAction) => {
+    if (action === 'seek_backward' || action === 'seek_forward') void sendCmd('seek', {seconds:(action === 'seek_backward' ? -1 : 1) * (state.quick_seek_seconds ?? 10)});
+    else if (action === 'previous_chapter' || action === 'next_chapter') void sendCmd(action);
+    else if (action === 'previous_file' || action === 'next_file') void sendCmd(action === 'previous_file' ? 'previous' : 'next');
+    else if (action === 'frame_backward' || action === 'frame_forward') void sendCmd('frame_step', {frames:(action === 'frame_backward' ? -1 : 1) * gestures.frameStepCount});
+    else if (['play_pause','toggle_mute','toggle_fullscreen','boss_key'].includes(action)) invokeClickAction(action as MediaClickAction);
+  }, [sendCmd,state.quick_seek_seconds,gestures.frameStepCount,invokeClickAction]);
+
   const flushSeek = useCallback((gesture: PointerGesture) => {
-    if (gesture.pendingX === 0 || !state.seekable || !state.duration) return;
-    const seconds = gesture.pendingX / Math.max(1, gesture.width) * state.duration;
+    if (gesture.target!==target || gesture.pendingX === 0 || !state.seekable || !state.duration) return;
+    const seconds = Math.max(0,Math.min(state.duration,gesture.startTime+(gesture.lastX-gesture.startX)/12));
     gesture.pendingX = 0;
-    if (Math.abs(seconds) >= .001) void sendCmd('seek', { seconds });
-  }, [sendCmd, state.duration, state.seekable]);
+    gesture.targetTime=seconds;gesture.seekStarted=true;
+    seek.change(seconds/state.duration*100);
+  }, [seek.change,target,state.duration,state.seekable]);
 
   const activateDrag = useCallback((gesture: PointerGesture) => {
+    if(gesture.target!==targetRef.current) return;
     if (gesture.dragging || gesture.dragAction === 'none') return;
+    if (gesture.dragAction === 'seek' && (!state.seekable || !state.duration)) return;
     gesture.dragging = true;
     setGestureActive(true);
     if (gesture.dragAction === 'temporary_fast_forward') {
       gesture.fastForwarding = true;
       void sendCmd('set_rate', { rate: Math.max(.05, gestures.temporaryFastForwardSpeed) });
     }
-  }, [gestures.temporaryFastForwardSpeed, sendCmd]);
+  }, [gestures.temporaryFastForwardSpeed,sendCmd,state.seekable,state.duration]);
 
   const finishPointer = useCallback((event: React.PointerEvent<HTMLDivElement>, cancelled = false) => {
     const gesture = pointerGesture.current;
-    if (!gesture || gesture.pointerId !== event.pointerId) return;
+    if (!gesture || gesture.pointerId !== event.pointerId || !cancelled && gesture.button !== event.button) return;
+    pointerGesture.current = null;
     if (gesture.timer !== null) window.clearTimeout(gesture.timer);
-    if (gesture.dragging && gesture.dragAction === 'seek') flushSeek(gesture);
+    const sameSource=gesture.target===target;
+    if (!cancelled && sameSource && gesture.dragging && gesture.dragAction === 'seek') flushSeek(gesture);
+    if (sameSource && gesture.seekStarted) seek.commitSeconds(gesture.targetTime);
     if (gesture.fastForwarding) void sendCmd('set_rate', { rate: Math.max(.05, gestures.playbackSpeed) });
-    if (!cancelled && !gesture.dragging) {
-      if (gesture.button === 0 && gestures.clickPlayerToToggle) invokeClickAction('play_pause');
-      else if (gesture.button === 1) invokeClickAction(gestures.middleClickAction);
-      else if (gesture.button === 2) invokeClickAction(gestures.rightClickAction);
+    const intent=videoReleaseIntent(gesture,cancelled,insidePicture(event),sameSource);
+    if (intent!=='none') {
+      if (intent==='menu') {
+        const box = event.currentTarget.getBoundingClientRect();
+        setContextPoint({x:event.clientX - box.left,y:event.clientY - box.top}); setContextMenuOpen(true);
+      } else {
+        if (gesture.button === 3 || gesture.button === 4) invokeExtraAction(gesture.extraAction);
+        else invokeClickAction(gesture.clickAction);
+      }
     }
     if (event.currentTarget.hasPointerCapture(event.pointerId)) event.currentTarget.releasePointerCapture(event.pointerId);
     pointerGesture.current = null;
     setGestureActive(false);
-  }, [flushSeek, gestures.clickPlayerToToggle, gestures.middleClickAction, gestures.playbackSpeed, gestures.rightClickAction, invokeClickAction, sendCmd]);
+  }, [flushSeek,seek.commitSeconds,target,gestures.playbackSpeed,invokeClickAction,invokeExtraAction,insidePicture,sendCmd]);
 
   const pointerHandlers = target ? {
     onPointerDown: (event: React.PointerEvent<HTMLDivElement>) => {
-      if (pointerGesture.current || ![0, 1, 2].includes(event.button)) return;
-      const dragAction = event.button === 0
+      if (!insidePicture(event)) return;
+      if (pointerGesture.current || ![0, 1, 2, 3, 4].includes(event.button)) return;
+      const baseDrag = event.button === 0
         ? (state.playing ? gestures.playingDragAction : gestures.pausedDragAction)
-        : event.button === 1 ? gestures.middleHoldAction : gestures.rightHoldAction;
+        : event.button === 1 ? gestures.middleHoldAction : event.button === 2 ? gestures.rightHoldAction : 'none';
+      const baseClick = event.button === 0 ? gestures.clickPlayerToToggle ? 'play_pause' : 'none'
+        : event.button === 1 ? gestures.middleClickAction : event.button === 2 ? gestures.rightClickAction : 'none';
+      const policy = videoMousePolicy(event.button,event,gestures.mouseBindings,baseClick,baseDrag);
+      const dragAction = policy.drag as MediaDragAction;
+      setContextMenuOpen(false);
       const gesture: PointerGesture = {
+        target,startTime:state.playback_time??0,targetTime:state.playback_time??0,seekStarted:false,
         pointerId: event.pointerId,
         button: event.button,
         startX: event.clientX,
+        startY: event.clientY,
+        moved: false,
+        clickAction: policy.click as MediaClickAction,
+        extraAction: extraMouseAction(gestures.mouseBindings?.video,event.button,event),
+        forceMenu: policy.forceMenu,
         lastX: event.clientX,
         pendingX: 0,
         lastSentAt: performance.now(),
@@ -210,15 +274,17 @@ export const MediaSurface: React.FC<MediaSurfaceProps> = ({ state, apiBaseUrl, e
       if (dragAction === 'temporary_fast_forward') {
         gesture.timer = window.setTimeout(() => activateDrag(gesture), 180);
       }
-      if (event.button === 1) event.preventDefault();
+      if (event.button !== 0 || event.ctrlKey || event.metaKey) event.preventDefault();
     },
     onPointerMove: (event: React.PointerEvent<HTMLDivElement>) => {
       const gesture = pointerGesture.current;
       if (!gesture || gesture.pointerId !== event.pointerId) return;
+      if(gesture.target!==target){finishPointer(event,true);return;}
+      gesture.moved ||= Math.hypot(event.clientX - gesture.startX,event.clientY - gesture.startY) >= 6;
       const delta = event.clientX - gesture.lastX;
       gesture.lastX = event.clientX;
       gesture.pendingX += delta;
-      if (!gesture.dragging && Math.abs(event.clientX - gesture.startX) >= 5) activateDrag(gesture);
+      if (!gesture.dragging && gesture.moved) activateDrag(gesture);
       if (gesture.dragging && gesture.dragAction === 'seek' && performance.now() - gesture.lastSentAt >= 34) {
         gesture.lastSentAt = performance.now();
         flushSeek(gesture);
@@ -227,8 +293,15 @@ export const MediaSurface: React.FC<MediaSurfaceProps> = ({ state, apiBaseUrl, e
     },
     onPointerUp: (event: React.PointerEvent<HTMLDivElement>) => finishPointer(event),
     onPointerCancel: (event: React.PointerEvent<HTMLDivElement>) => finishPointer(event, true),
+    onLostPointerCapture: (event: React.PointerEvent<HTMLDivElement>) => { if (pointerGesture.current?.pointerId === event.pointerId) finishPointer(event, true); },
+    onAuxClick: (event: React.MouseEvent<HTMLDivElement>) => event.preventDefault(),
     onContextMenu: (event: React.MouseEvent<HTMLDivElement>) => {
-      if (gestures.rightClickAction !== 'context_menu') event.preventDefault();
+      event.preventDefault();
+      // Keyboard Context Menu / Shift+F10 has no secondary-button gesture.
+      if (event.button === 0 && !pointerGesture.current) {
+        const box = event.currentTarget.getBoundingClientRect();
+        setContextPoint({x:box.width/2,y:box.height/2}); setContextMenuOpen(true);
+      }
     },
   } : {};
 
@@ -241,6 +314,7 @@ export const MediaSurface: React.FC<MediaSurfaceProps> = ({ state, apiBaseUrl, e
       { key: 'information', icon: <InfoCircleOutlined />, label: tr(locale, 'Media information') },
     ],
     onClick: ({ key }: { key: string }) => {
+      setContextMenuOpen(false);
       if (key === 'play_pause') invokeClickAction('play_pause');
       else if (key === 'mute') invokeClickAction('toggle_mute');
       else if (key === 'fullscreen') invokeClickAction('toggle_fullscreen');
@@ -250,13 +324,29 @@ export const MediaSurface: React.FC<MediaSurfaceProps> = ({ state, apiBaseUrl, e
 
   useEffect(() => setFallback(false), [source]);
 
-  useEffect(() => () => {
-    const gesture = pointerGesture.current;
-    if (!gesture) return;
-    if (gesture.timer !== null) window.clearTimeout(gesture.timer);
-    if (gesture.fastForwarding) void sendCmd('set_rate', { rate: Math.max(.05, gestures.playbackSpeed) });
-    pointerGesture.current = null;
-  }, [gestures.playbackSpeed, sendCmd]);
+  useEffect(() => {
+    const cancel = () => {
+      const gesture = pointerGesture.current;
+      pointerGesture.current = null;
+      if (!gesture) return;
+      if (gesture.timer !== null) window.clearTimeout(gesture.timer);
+      if (gesture.fastForwarding) void sendCmd('set_rate', { rate: Math.max(.05, gestures.playbackSpeed) });
+      setGestureActive(false);
+    };
+    const escape = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      const gesture = pointerGesture.current;
+      if (gesture?.target === target && gesture.seekStarted) seekRef.current.commitSeconds(gesture.targetTime);
+      cancel();
+    };
+    // useSeekbar commits its last preview on blur; this only cancels the hold.
+    window.addEventListener('blur', cancel);
+    window.addEventListener('keydown', escape);
+    return () => {
+      window.removeEventListener('blur', cancel); window.removeEventListener('keydown', escape);
+      cancel();
+    };
+  }, [gestures.playbackSpeed, sendCmd,target]);
 
   useEffect(() => {
     const video = videoRef.current;
@@ -303,5 +393,6 @@ export const MediaSurface: React.FC<MediaSurfaceProps> = ({ state, apiBaseUrl, e
     <OsdOverlay state={state} />
   </div>;
 
-  return <Dropdown trigger={['contextMenu']} menu={contextMenu}>{surface}</Dropdown>;
+  return <Dropdown trigger={[]} open={contextMenuOpen} onOpenChange={setContextMenuOpen}
+    align={{points:['tl','tl'],offset:[contextPoint.x,contextPoint.y]}} menu={contextMenu}>{surface}</Dropdown>;
 };

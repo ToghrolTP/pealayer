@@ -4,6 +4,30 @@ use eframe::egui;
 
 const HEADER_ENDPOINT_WIDTH: f32 = 154.0;
 
+pub(super) fn recent_media_menu(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    if app.recent_media.is_empty() {
+        ui.label(app.tr("No recent media"));
+        return;
+    }
+    for path in app.recent_media.clone() {
+        let target = path.to_string_lossy();
+        let icon = if crate::media::is_remote_media_target(&target) {
+            crate::ui::icons::GLOBE
+        } else { crate::ui::icons::FILE_VIDEO };
+        let label = app.display_text(&crate::media::media_target_label(&target));
+        if ui.button(format!("{icon}  {label}"))
+            .on_hover_text(crate::media::media_location_display(&target)).clicked() {
+            ui.close();
+            app.load_media_target(&target);
+        }
+    }
+    ui.separator();
+    if ui.button(app.tr("Clear Recent")).clicked() {
+        ui.close();
+        app.clear_recent_media();
+    }
+}
+
 fn header_endpoint_combo<R>(ui: &mut egui::Ui, selected_text: String,
     body: impl FnOnce(&mut egui::Ui) -> R) -> egui::InnerResponse<egui::InnerResponse<Option<R>>> {
     ui.allocate_ui_with_layout(egui::vec2(HEADER_ENDPOINT_WIDTH, crate::ui::control_density::height(ui)),
@@ -202,7 +226,14 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let language = app.language;
     let rtl = app.rtl;
 
-    egui::Panel::top("menu_bar").show_inside(ui, |ui| {
+    let pastel = app.color_palette == crate::config::ColorPalette::Pastel;
+    let menu = egui::Panel::top("menu_bar").show_inside(ui, |ui| {
+        // Reserve paint order before laying out buttons and hit targets.
+        let background = pastel.then(|| {
+            let painter = ui.painter().clone();
+            let slot = painter.add(egui::Shape::Noop);
+            (painter, slot)
+        });
         egui::MenuBar::new().ui(ui, |ui| {
             ui.with_layout(crate::ui::i18n::layout(rtl, egui::Align::Center), |ui| {
                 top_menu_button(ui, app.tr("File"), |ui| {
@@ -226,27 +257,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     }
 
                     crate::ui::icons::submenu(ui, app.tr("Open Recent"), |ui| {
-                        if app.recent_media.is_empty() {
-                            ui.label(app.tr("No recent media"));
-                        } else {
-                            for path in app.recent_media.clone() {
-                                let target = path.to_string_lossy();
-                                let label = crate::media::media_target_label(&target);
-                                if ui
-                                    .button(app.display_text(&label))
-                                    .on_hover_text(crate::media::redact_media_target(&target))
-                                    .clicked()
-                                {
-                                    ui.close();
-                                    app.load_media_target(&target);
-                                }
-                            }
-                            ui.separator();
-                            if ui.button(app.tr("Clear Recent")).clicked() {
-                                ui.close();
-                                app.clear_recent_media();
-                            }
-                        }
+                        recent_media_menu(app, ui);
                     });
 
                     let has_video = app.current_video_path.is_some();
@@ -517,10 +528,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     );
                     #[cfg(feature = "workspace-toolbar")]
                     {
-                        let mut enabled = app.toolbar_state.preferences.enabled;
+                        let mut enabled = super::simple_controls::toolbar_visible(app);
                         if ui.checkbox(&mut enabled, format!("{}  {}", crate::ui::icons::COMMAND, app.tr("Command toolbar"))).changed() {
-                            app.toolbar_state.preferences.enabled = enabled;
-                            app.deferred_config_save = true;
+                            super::simple_controls::set_toolbar_visible(app,enabled);
+                            if app.show_four_d_editor {app.deferred_config_save = true;}
+                            else {app.request_simple_workspace_save(ui.ctx());}
                         }
                         if ui.button(format!("{}  {}  Ctrl+Shift+P", crate::ui::icons::MAGNIFYING_GLASS, app.tr("Command palette"))).clicked() {
                             app.toolbar_state.palette_open = true;
@@ -824,14 +836,30 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     };
                     ui.add(
                         egui::Label::new(egui::RichText::new(status_lbl).size(10.0).weak())
-                            .truncate(),
+                            .truncate().sense(egui::Sense::click()),
                     )
-                    .on_hover_text(&app.serial_port);
+                    .on_hover_text(&app.serial_port)
+                    .context_menu(|ui| super::status_bar::hardware_context_menu(app, ui));
                     }
                 });
             });
         });
+        background
     });
+    if let Some((painter, slot)) = menu.inner {
+        let rect = menu.response.rect;
+        let stripe = egui::Rect::from_min_max(
+            egui::pos2(rect.left(), rect.bottom() - 1.0),
+            rect.max,
+        );
+        let color = |role| crate::ui::palette::color(app.color_palette, ui.visuals().dark_mode, role);
+        painter.set(slot, crate::ui::palette::horizontal_gradient(
+            rect, color("chrome-start"), color("chrome-end"),
+        ));
+        crate::ui::palette::paint_gradient(
+            ui.painter(), stripe, 0, color("gradient-start"), color("gradient-end"), 1.0,
+        );
+    }
 }
 
 pub fn format_track_label(id: i64, lang: Option<&str>, title: Option<&str>) -> String {
@@ -849,7 +877,59 @@ pub fn format_track_label(id: i64, lang: Option<&str>, title: Option<&str>) -> S
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn recent_menu_paints_decoded_filenames_and_globe_without_mutating_sources() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let mut app = crate::app::PealayerApp::default();
+        app.recent_media = vec!["https://user:secret@example.invalid/My%20movie%20%26amp%3B%20you.mkv?token=private".into(), r"C:\media\Local%20film.mkv".into()];
+        let original = app.recent_media.clone();
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| super::recent_media_menu(&mut app,ui));
+        let text = output.shapes.iter().filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(t) => Some(t.galley.text()), _ => None,
+        }).collect::<Vec<_>>().join("\n");
+        assert!(text.contains("My movie & you.mkv"));
+        assert!(text.contains(crate::ui::icons::GLOBE));
+        assert!(text.contains("Local%20film.mkv"));
+        assert!(!text.contains("secret") && !text.contains("token=private"));
+        assert_eq!(app.recent_media,original);
+        output.textures_delta.clear();
+    }
     use super::*;
+
+    #[test]
+    fn upper_hardware_label_context_menu_opens_preferences() {
+        let _guard=crate::app::tests::lock_app_tests();
+        let ctx=egui::Context::default(); let mut app=PealayerApp::default();
+        app.engine_handle=crate::four_d::engine::memory_only_test_engine();
+        let mut time=0.0;
+        let mut frame=|app:&mut PealayerApp,events| {
+            time+=0.1;
+            let mut output=ctx.run_ui(egui::RawInput {time:Some(time),events,
+                screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(1800.0,800.0))),..Default::default()},|ui|draw(app,ui));
+            output.textures_delta.clear(); output
+        };
+        fn point(output:&egui::FullOutput,label:&str)->egui::Pos2 {
+            output.shapes.iter().find_map(|shape|match &shape.shape {
+                egui::Shape::Text(t) if t.galley.text().contains(label)=>Some(t.pos+t.galley.rect.center().to_vec2()),_=>None,
+            }).expect("hardware header/menu caption")
+        }
+        frame(&mut app,vec![]); let output=frame(&mut app,vec![]);
+        let header=point(&output,"Hardware Disconnected");
+        let button=|pos,button,pressed|egui::Event::PointerButton {pos,button,pressed,modifiers:egui::Modifiers::NONE};
+        frame(&mut app,vec![egui::Event::PointerMoved(header),button(header,egui::PointerButton::Secondary,true)]);
+        frame(&mut app,vec![button(header,egui::PointerButton::Secondary,false)]);
+        let output=frame(&mut app,vec![]); let row=point(&output,"Hardware preferences");
+        frame(&mut app,vec![egui::Event::PointerMoved(row),button(row,egui::PointerButton::Primary,true)]);
+        frame(&mut app,vec![button(row,egui::PointerButton::Primary,false)]);
+        assert!(app.show_preferences_dialog,"menu selection must actually open Preferences");
+        drop(frame);
+        app.native_dialog_windows=false;
+        let mut output=ctx.run_ui(Default::default(),|ui|crate::ui::preferences::draw(&mut app,ui));
+        output.textures_delta.clear();
+        let hardware=crate::preferences_contract::preference_sections().iter().position(|section|section.id=="hardware").unwrap();
+        assert_eq!(app.preferences_tab,hardware,"rendered Preferences must consume the exact Hardware navigation");
+    }
 
     #[test]
     fn workspace_popup_does_not_contain_hardware_rf_controls() {

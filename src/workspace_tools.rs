@@ -93,7 +93,7 @@ pub fn snapshot() -> Value {
 pub fn publish(app: &crate::app::PealayerApp) {
     let value = json!({"initialized":true,
         "toolbar":{"available":cfg!(feature="workspace-toolbar"),
-            "visible":app.toolbar_state.preferences.enabled,
+            "visible":crate::ui::simple_controls::toolbar_visible(app),
             "palette_open":app.toolbar_state.palette_open,
             "editor_open":app.toolbar_state.editor_open},
         "terminal":app.terminal_state.status(),
@@ -170,13 +170,14 @@ pub fn apply(
                 return Err("Terminal is not included in this build".into());
             }
             if let Some(value) = toolbar {
-                app.toolbar_state.preferences.enabled = value;
+                crate::ui::simple_controls::set_toolbar_visible(app,value);
             }
             if let Some(value) = terminal {
                 app.terminal_state.preferences.enabled = value;
             }
             if persist {
-                app.deferred_config_save = true;
+                if !app.show_four_d_editor && toolbar.is_some() && terminal.is_none() {app.request_simple_workspace_save(ctx);}
+                else {app.deferred_config_save = true;}
             }
         }
         Request::Palette { open } => {

@@ -105,6 +105,7 @@ fn dispatch(method: &str, params: serde_json::Value) -> Result<serde_json::Value
 
 pub fn open(ctx: &eframe::egui::Context) {
     ctx.data_mut(|d| d.insert_temp(eframe::egui::Id::new("download-center-open"), true));
+    ctx.request_repaint();
 }
 
 pub fn draw(app: &mut crate::app::PealayerApp, ui: &mut eframe::egui::Ui) {
@@ -116,12 +117,14 @@ pub fn draw(app: &mut crate::app::PealayerApp, ui: &mut eframe::egui::Ui) {
     }
     let mut play = None;
     eframe::egui::Window::new(format!(
-        "{} Downloads",
+        "{} Download Center",
         egui_phosphor::regular::DOWNLOAD_SIMPLE
     ))
     .id(eframe::egui::Id::new("download-center"))
     .open(&mut open)
-    .default_size([720.0, 540.0])
+    .default_size([740.0, 560.0])
+    .min_width(320.0)
+    .frame(crate::ui::dialog::opaque_window_frame_from_context(ui.ctx()))
     .show(ui.ctx(), |ui| {
         if crate::peer::active() {
             ui.label("Manage the authority’s downloads from its Web Downloads panel.");
@@ -134,7 +137,7 @@ pub fn draw(app: &mut crate::app::PealayerApp, ui: &mut eframe::egui::Ui) {
                     }
                 }
                 Err(error) => {
-                    ui.colored_label(eframe::egui::Color32::LIGHT_RED, error);
+                    ui.colored_label(ui.visuals().error_fg_color, error);
                 }
             }
         }

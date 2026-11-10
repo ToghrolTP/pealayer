@@ -44,11 +44,20 @@ pub enum SortBy {
     Date,
     Size,
 }
+#[derive(Clone, Copy, Debug, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ViewMode {
+    #[default]
+    List,
+    Grid,
+}
 #[derive(Clone, Debug, Default, Serialize, Deserialize, PartialEq)]
 pub struct BrowserState {
     pub request_id: u64,
     pub previous_file: Option<String>,
     pub next_file: Option<String>,
+    pub history_back_url: Option<String>,
+    pub history_forward_url: Option<String>,
     pub revision: u64,
     pub visible: bool,
     pub loading: bool,
@@ -56,6 +65,8 @@ pub struct BrowserState {
     pub use_proxy: bool,
     pub auto_next: bool,
     pub thumbnails: bool,
+    pub view_mode: ViewMode,
+    pub inspected: Option<RemoteEntry>,
     pub sort: SortBy,
     pub descending: bool,
     pub selected: Option<String>,
@@ -92,6 +103,8 @@ pub struct Playback {
 }
 #[derive(Default)]
 struct Browser {
+    history: Vec<(String,bool)>,
+    history_index: Option<usize>,
     current: Option<String>,
     state: BrowserState,
     generation: u64,
@@ -789,7 +802,7 @@ pub fn prefetch(target: &str, use_proxy: bool, ctx: &eframe::egui::Context) -> R
 }
 
 #[derive(Clone, Copy)]
-enum RequestMode { Browse, Background, Clipboard(ClipboardLinkBehavior) }
+enum RequestMode { Browse, History(usize), Background, Clipboard(ClipboardLinkBehavior) }
 impl RequestMode {
     fn hidden_verification(self) -> bool {
         matches!(self, Self::Clipboard(ClipboardLinkBehavior::VerifyBeforeDialog))
@@ -806,6 +819,8 @@ fn prepare_state(browser: &mut Browser, target: &str, use_proxy: bool, mode: Req
     browser.state.use_proxy = use_proxy;
     browser.state.auto_next = config.remote_folder_auto_next;
     browser.state.thumbnails = config.remote_folder_thumbnails;
+    browser.state.view_mode = config.remote_folder_view;
+    browser.state.inspected = None;
     browser.state.loading = mode.verifies() && !target.is_empty();
     browser.state.error = None;
     browser.state.route_errors.clear();
@@ -836,6 +851,20 @@ fn finish_request(
     match result {
         Ok((use_proxy, mut listing)) => {
             browser.state.use_proxy = use_proxy;
+            if listing.file.is_none() && !matches!(mode,RequestMode::Background) {
+                if let RequestMode::History(index)=mode {
+                    if let Some(entry)=browser.history.get_mut(index) {
+                        *entry=(listing.url.clone(),use_proxy);browser.history_index=Some(index);
+                    }
+                } else if browser.history_index.and_then(|i|browser.history.get(i)).is_none_or(|(url,_)|url!=&listing.url) {
+                    browser.history.truncate(browser.history_index.map_or(0,|i|i+1));
+                    browser.history.push((listing.url.clone(),use_proxy));
+                    if browser.history.len()>64 {browser.history.remove(0);}
+                    browser.history_index=Some(browser.history.len()-1);
+                }
+                browser.state.history_back_url=browser.history_index.and_then(|i|i.checked_sub(1)).and_then(|i|browser.history.get(i)).map(|(url,_)|url.clone());
+                browser.state.history_forward_url=browser.history_index.and_then(|i|browser.history.get(i+1)).map(|(url,_)|url.clone());
+            }
             sort_entries(&mut listing.entries, browser.state.sort, browser.state.descending);
             browser.state.selected = listing.file.as_ref().map(|file| file.url.clone());
             if matches!(mode, RequestMode::Background) && listing.file.is_some() || play_files && listing.file.is_some() {
@@ -876,6 +905,9 @@ fn request_inner(
     let mut browser = browser()
         .lock()
         .map_err(|_| "Remote browser unavailable".to_string())?;
+    if let RequestMode::History(index)=mode {
+        if browser.history.get(index).is_none_or(|(url,_)|url!=target) {return Err("Remote history changed; try again".into());}
+    }
     let background = matches!(mode, RequestMode::Background);
     let manual = use_proxy.or_else(|| if browser.state.visible && !background { browser.proxy_override } else { None });
     let automatic = manual.is_none() && config.open_url_auto_proxy;
@@ -924,8 +956,28 @@ pub fn close() {
         b.state.loading = false;
         b.pending_play = None;
         b.proxy_override = None;
+        b.state.inspected = None;
         b.state.revision += 1;
     }
+}
+
+/// Authority-owned, bounded directory history. Re-fetch before moving the cursor;
+/// failures keep the previous verified listing and history position intact.
+pub fn navigate_history(direction:i32,parent_only:bool,ctx:&eframe::egui::Context)->Result<(),String> {
+    if !matches!(direction,-1|1) || parent_only && direction!= -1 {return Err("Remote history direction must be -1 or 1".into());}
+    if let Some(client)=crate::peer::client(){return client.queue("/api/player/command",serde_json::json!({"command":"remote_history","direction":direction,"parent":parent_only}));}
+    let (target,proxy,mode)={
+        let browser=browser().lock().map_err(|_|"Remote browser unavailable")?;
+        if browser.state.loading{return Err("Remote browser is still loading".into());}
+        let index=if parent_only {None}else{browser.history_index.and_then(|i|if direction<0{i.checked_sub(1)}else{i.checked_add(1)})};
+        if let Some((index,(url,proxy)))=index.and_then(|i|browser.history.get(i).map(|entry|(i,entry))) {
+            (url.clone(),*proxy,RequestMode::History(index))
+        } else if direction<0 {
+            let parent=browser.state.listing.as_ref().and_then(|l|l.parent_url.clone()).ok_or("No verified parent folder is available")?;
+            (parent,browser.state.use_proxy,RequestMode::Browse)
+        }else{return Err("No forward folder is available".into());}
+    };
+    request_inner(&target,Some(proxy),false,mode,ctx)
 }
 pub fn take_playback() -> Option<Playback> {
     if crate::peer::active(){return None;}
@@ -999,15 +1051,55 @@ pub fn step(current: &str, direction: i32, automatic: bool) -> Option<Playback> 
         use_proxy: b.playlist_proxy,
     })
 }
-pub fn sync_options(auto_next: bool, thumbnails: bool) {
+pub fn sync_options(auto_next: bool, thumbnails: bool, view_mode: ViewMode) {
     if crate::peer::active(){return;}
     if let Ok(mut b) = browser().lock() {
-        if b.state.auto_next != auto_next || b.state.thumbnails != thumbnails {
+        if b.state.auto_next != auto_next || b.state.thumbnails != thumbnails || b.state.view_mode != view_mode {
             b.state.auto_next = auto_next;
             b.state.thumbnails = thumbnails;
+            b.state.view_mode = view_mode;
             b.state.revision += 1;
         }
     }
+}
+
+fn inspect_entry(listing: Option<&RemoteListing>, target: &str) -> Result<RemoteEntry, String> {
+    listing.and_then(|listing| listing.entries.iter().chain(listing.file.iter())
+        .find(|entry| entry.url == target)).cloned()
+        .ok_or_else(|| "This item is no longer in the verified remote listing.".into())
+}
+
+/// Inspect only advertised metadata. Opening Properties never plays, changes
+/// selection, probes an arbitrary URL, or treats a client path as a host path.
+pub fn inspect(target: Option<&str>) -> Result<(), String> {
+    if let Some(client) = crate::peer::client() {
+        return client.queue("/api/player/command", serde_json::json!({"command":"inspect_remote","target":target}));
+    }
+    let mut browser = browser().lock().map_err(|_| "Remote browser unavailable")?;
+    let entry = target.map(|target| inspect_entry(browser.state.listing.as_ref(), target)).transpose()?;
+    browser.state.inspected = entry;
+    browser.state.revision += 1;
+    Ok(())
+}
+
+pub fn retry_thumbnail(target: &str) -> Result<(), String> {
+    if let Some(client) = crate::peer::client() {
+        return client.queue("/api/player/command", serde_json::json!({"command":"retry_remote_thumbnail","target":target}));
+    }
+    let mut browser = browser().lock().map_err(|_| "Remote browser unavailable")?;
+    retry_thumbnail_state(&mut browser.state, target)
+}
+
+fn retry_thumbnail_state(state: &mut BrowserState, target: &str) -> Result<(), String> {
+    let entry = inspect_entry(state.listing.as_ref(), target)?;
+    if !entry.playable { return Err("This item does not support media thumbnails.".into()); }
+    // Never clear an in-flight worker or spawn a duplicate. A failed preview is
+    // retried by the existing bounded queue on the next visible request.
+    if state.thumbnail_status.get(target).is_some_and(|status| status.starts_with("error:")) {
+        state.thumbnail_status.remove(target);
+        state.revision += 1;
+    }
+    Ok(())
 }
 pub fn playback_proxy_for(target: &str) -> Option<bool> {
     let target = normalize(target).ok()?.to_string();
@@ -1062,7 +1154,9 @@ pub fn thumbnail(
     b.state
         .thumbnail_status
         .insert(target.clone(), "loading".into());
+    b.state.revision += 1;
     drop(b);
+    ctx.request_repaint();
     std::thread::spawn(move || {
         let result = if let Some(client)=crate::peer::client(){client.folder_thumbnail(&target)}else{
             crate::server::thumbnails::get_or_generate_remote_thumbnail(&target,use_proxy,config.open_url_proxy_url.as_deref()).map(|file|file.path)
@@ -1095,6 +1189,57 @@ pub fn thumbnail(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn preview_retry_is_verified_and_cannot_duplicate_a_loading_worker() {
+        let entry=RemoteEntry{name:"Movie.mkv".into(),url:"https://files.invalid/Movie.mkv".into(),is_dir:false,playable:true,size_bytes:None,modified:None};
+        let mut listing=test_listing();listing.entries.push(entry.clone());
+        let mut state=BrowserState{listing:Some(listing),revision:7,..Default::default()};
+        state.thumbnail_status.insert(entry.url.clone(),"loading".into());
+        retry_thumbnail_state(&mut state,&entry.url).unwrap();assert_eq!(state.revision,7);assert_eq!(state.thumbnail_status[&entry.url],"loading");
+        let before=state.clone();assert!(retry_thumbnail_state(&mut state,"https://other.invalid/movie.mkv").is_err());assert_eq!(state,before);
+        state.thumbnail_status.insert(entry.url.clone(),"error:Timed out".into());
+        retry_thumbnail_state(&mut state,&entry.url).unwrap();assert!(!state.thumbnail_status.contains_key(&entry.url));assert_eq!(state.revision,8);
+    }
+    #[test]
+    fn properties_use_only_verified_metadata_and_do_not_change_selection_or_playback() {
+        let mut listing=test_listing();
+        listing.entries.push(RemoteEntry{name:"Movie.mkv".into(),url:"https://files.invalid/Movie.mkv".into(),is_dir:false,playable:true,size_bytes:Some(2048),modified:None});
+        let entry=&listing.entries[0];
+        assert_eq!(inspect_entry(Some(&listing),&entry.url).unwrap(),*entry);
+        assert!(inspect_entry(Some(&listing),"https://other.invalid/private").is_err());
+        assert!(inspect_entry(None,&entry.url).is_err());
+        let mut direct=listing.clone();direct.file=Some(entry.clone());direct.entries.clear();
+        assert_eq!(inspect_entry(Some(&direct),&entry.url).unwrap(),*entry);
+        let state=BrowserState{inspected:Some(entry.clone()),view_mode:ViewMode::Grid,..Default::default()};
+        let restored:BrowserState=serde_json::from_value(serde_json::to_value(&state).unwrap()).unwrap();
+        assert_eq!(restored,state);assert!(restored.selected.is_none());
+        let mut browser=Browser::default();browser.state=state;
+        prepare_state(&mut browser,"https://index.invalid/",false,RequestMode::Browse,&crate::config::AppConfig::default());
+        assert!(browser.state.inspected.is_none());
+    }
+    #[test]
+    fn directory_history_commits_only_verified_success_and_branches_without_losing_the_current_listing() {
+        let cfg=crate::config::AppConfig::default();let mut b=Browser::default();b.generation=1;
+        let listing=|name:&str|{let mut l=test_listing();l.url=format!("https://files.invalid/{name}/");l.requested_url=l.url.clone();l};
+        for name in ["a","b","c"] {let l=listing(name);let url=l.url.clone();assert!(finish_request(&mut b,1,0,&url,RequestMode::Browse,false,&cfg,Ok((false,l))));}
+        assert_eq!(b.state.history_back_url.as_deref(),Some("https://files.invalid/b/"));
+        assert!(b.state.history_forward_url.is_none());
+        let prior=b.state.listing.clone();
+        assert!(finish_request(&mut b,1,0,"https://files.invalid/b/",RequestMode::History(1),false,&cfg,Err(RouteProbeError::Failed(vec![]))));
+        assert_eq!(b.history_index,Some(2));assert_eq!(b.state.listing,prior);
+        assert!(finish_request(&mut b,1,0,"https://files.invalid/b/",RequestMode::History(1),false,&cfg,Ok((true,listing("b")))));
+        assert_eq!(b.history_index,Some(1));assert_eq!(b.state.history_forward_url.as_deref(),Some("https://files.invalid/c/"));
+        assert!(finish_request(&mut b,1,0,"https://files.invalid/d/",RequestMode::Browse,false,&cfg,Ok((false,listing("d")))));
+        assert_eq!(b.history.len(),3);assert_eq!(b.history_index,Some(2));assert!(b.state.history_forward_url.is_none());
+        assert_eq!(b.history[1].1,true);
+        let history=b.history.clone();
+        assert!(!finish_request(&mut b,0,0,"https://files.invalid/stale/",RequestMode::History(0),false,&cfg,Ok((false,listing("stale")))));
+        assert_eq!(b.history,history);
+        assert!(finish_request(&mut b,1,0,"https://files.invalid/preload/",RequestMode::Background,false,&cfg,Ok((false,listing("preload")))));
+        assert_eq!(b.history,history);
+        for i in 0..70 {let l=listing(&format!("dir{i}"));let url=l.url.clone();finish_request(&mut b,1,0,&url,RequestMode::Browse,false,&cfg,Ok((false,l)));}
+        assert_eq!(b.history.len(),64);assert_eq!(b.history_index,Some(63));
+    }
     fn http_fixture(mut replies:Vec<(&'static str,u16,&'static str,&'static str)>)->(String,std::thread::JoinHandle<()>) {
         use std::io::{BufRead,Write};
         let listener=std::net::TcpListener::bind("127.0.0.1:0").unwrap();let url=format!("http://{}",listener.local_addr().unwrap());listener.set_nonblocking(true).unwrap();
@@ -1102,7 +1247,14 @@ mod tests {
             let deadline=std::time::Instant::now()+Duration::from_secs(5);
             while !replies.is_empty() && std::time::Instant::now()<deadline {
                 let Ok((mut socket,_))=listener.accept()else{std::thread::sleep(Duration::from_millis(5));continue;};
-                socket.set_read_timeout(Some(Duration::from_secs(1))).unwrap();let mut reader=std::io::BufReader::new(socket.try_clone().unwrap());let mut line=String::new();reader.read_line(&mut line).unwrap();let key=line.split_whitespace().take(2).collect::<Vec<_>>().join(" ");
+                // Accepted Winsock sockets can inherit the listener's
+                // nonblocking mode. Use the read deadline for this request.
+                socket.set_nonblocking(false).unwrap();
+                socket.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
+                let mut reader=std::io::BufReader::new(socket.try_clone().unwrap());
+                let mut line=String::new();
+                reader.read_line(&mut line).unwrap();
+                let key=line.split_whitespace().take(2).collect::<Vec<_>>().join(" ");
                 let position=replies.iter().position(|r|r.0==key).unwrap_or_else(||panic!("Unexpected request: {key}"));let (_,status,kind,body)=replies.remove(position);
                 let extra=if kind=="redirect"{format!("Location: {body}\r\n")}else{format!("Content-Type: {kind}\r\n")};
                 write!(socket,"HTTP/1.1 {status} Test\r\n{extra}Content-Length: {}\r\nConnection: close\r\n\r\n",body.len()).unwrap();if !key.starts_with("HEAD ") && kind!="redirect"{socket.write_all(body.as_bytes()).unwrap();}

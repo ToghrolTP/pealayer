@@ -195,6 +195,8 @@ intentional, not a separate browser-owned shell or a host resize.
   Native/downloader smoke, PWA integrity and Windows resource checks pass.
   The maintained Windows acceptance suite subsequently passed against this
   package both in the launching user's context and in a new isolated review.
+  The user-run suite was required because the runner could not open that
+  original review process's native pipe.
   The final captures below come from the newer build.
 - CodeQL's two browser test findings were fixed by passing data as CDP
   arguments. Both threads were resolved, and all hosted platform and private

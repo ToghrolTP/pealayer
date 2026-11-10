@@ -24,41 +24,12 @@ pub enum Mode {
     Remote,
 }
 
+#[path = "../../shared/executable.rs"]
+mod executable;
+
 /// Resolve exactly the binary we launch, without invoking a shell or accepting arguments.
 pub fn resolve_executable(input: &str) -> Result<std::path::PathBuf, String> {
-    let input = input.trim().trim_matches('"');
-    if input.is_empty() || input.len() > 4096 || input.contains(['\n', '\r', '\0']) {
-        return Err("Enter an executable name or full path, without arguments".into());
-    }
-    let path = std::path::Path::new(input);
-    let explicit = path.is_absolute() || path.components().count() > 1;
-    let roots: Vec<_> = if explicit { vec![std::path::PathBuf::new()] }
-        else { std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default()).collect() };
-    for root in roots {
-        let candidate = root.join(path);
-        #[cfg(windows)]
-        let candidates = if candidate.extension().is_none() {
-            // mpv.com is a console wrapper; always launch the actual GUI executable.
-            vec![candidate.with_extension("exe"), candidate.with_extension("com")]
-        } else { vec![candidate] };
-        #[cfg(not(windows))]
-        let candidates = vec![candidate];
-        for candidate in candidates {
-            if !candidate.is_file() { continue; }
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                if candidate.metadata().map(|meta| meta.permissions().mode() & 0o111 == 0).unwrap_or(true) { continue; }
-            }
-            return candidate.canonicalize().map(|path| {
-                #[cfg(windows)]
-                { std::path::PathBuf::from(path.to_string_lossy().trim_start_matches(r"\\?\")) }
-                #[cfg(not(windows))]
-                { path }
-            }).map_err(|error| error.to_string());
-        }
-    }
-    Err("Executable not found. Choose its full path or add its directory to PATH".into())
+    executable::resolve(input, [])
 }
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]

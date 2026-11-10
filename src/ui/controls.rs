@@ -1,7 +1,6 @@
 use crate::app::PealayerApp;
 use eframe::egui;
 
-const CONTROL_FADE_REPAINT_INTERVAL: std::time::Duration = std::time::Duration::from_millis(100);
 
 /// Transport intent is independent of the user's accent. All interaction
 /// states keep the same stroke width, so hover/focus cannot shift the glyph.
@@ -120,9 +119,11 @@ fn volume_slider_widgets(ui: &mut egui::Ui, mut volume: f64, volume_label: &str,
         volume = (volume + f64::from(wheel.signum()) * 2.0).clamp(0.0, 130.0);
         ui.input_mut(|input| input.smooth_scroll_delta.y = 0.0);
     }
-    ui.add_sized([44.0, 22.0], egui::Label::new(timecode_text(format!("{:.0}%", volume))))
-        .on_hover_text(volume_label);
-    (response.changed() || wheel != 0.0).then_some(volume)
+    let value = ui.add_sized([44.0, super::control_density::height(ui)],
+        egui::DragValue::new(&mut volume).range(0.0..=130.0).speed(1.0)
+            .max_decimals(0).suffix("%").update_while_editing(false))
+        .on_hover_text(format!("{volume_label} · Click to type a percentage"));
+    (response.changed() || value.changed() || wheel != 0.0).then_some(volume)
 }
 
 pub fn timecode_text(value: impl Into<String>) -> egui::RichText {
@@ -328,12 +329,38 @@ pub(crate) fn compact_number(value: f64) -> String {
 /// Preserve the mode crossfade while the shared control owns input and dragging.
 pub(crate) fn paint_transport_nudge(app:&PealayerApp, ui:&egui::Ui, rect:egui::Rect, id:egui::Id, direction:i32, enabled:bool) {
     let alpha=super::motion::hover_alpha(ui,id.with("paused-mode"),app.is_paused);
-    let seek=format!("{} {}",if direction<0{super::icons::REWIND}else{super::icons::FAST_FORWARD},compact_number(app.quick_seek_seconds));
-    let frames=format!("{} {}",if direction<0{super::icons::SKIP_BACK}else{super::icons::SKIP_FORWARD},app.frame_step_count);
     let color=if enabled{ui.visuals().text_color()}else{ui.visuals().weak_text_color()};
     let font=egui::TextStyle::Button.resolve(ui.style());
-    ui.painter().text(rect.center()-egui::vec2(0.0,4.0*alpha),egui::Align2::CENTER_CENTER,seek,font.clone(),color.gamma_multiply(1.0-alpha));
-    ui.painter().text(rect.center()+egui::vec2(0.0,4.0*(1.0-alpha)),egui::Align2::CENTER_CENTER,frames,font,color.gamma_multiply(alpha));
+    paint_nudge_caption(ui,rect.center()-egui::vec2(0.0,4.0*alpha),direction,false,&compact_number(app.quick_seek_seconds),font.clone(),color.gamma_multiply(1.0-alpha));
+    paint_nudge_caption(ui,rect.center()+egui::vec2(0.0,4.0*(1.0-alpha)),direction,true,&app.frame_step_count.to_string(),font,color.gamma_multiply(alpha));
+}
+
+/// Physical left/right geometry is deliberate: playback direction must not
+/// depend on font fallback, a mixed text run or the application's RTL layout.
+fn nudge_triangles(center: egui::Pos2, direction: i32, frame: bool) -> Vec<Vec<egui::Pos2>> {
+    let sign = if direction < 0 { -1.0 } else { 1.0 };
+    let offsets: &[f32] = if frame { &[-1.5] } else { &[-3.5, 3.5] };
+    offsets.iter().map(|offset| {
+        [egui::vec2(offset - 3.0, -5.0), egui::vec2(offset + 3.0, 0.0), egui::vec2(offset - 3.0, 5.0)]
+            .into_iter().map(|p| center + egui::vec2(p.x * sign, p.y)).collect()
+    }).collect()
+}
+
+fn paint_nudge_caption(ui: &egui::Ui, center: egui::Pos2, direction: i32, frame: bool,
+    text: &str, font: egui::FontId, color: egui::Color32) {
+    if color.a() == 0 { return; }
+    let galley = ui.painter().layout_no_wrap(text.to_owned(), font, color);
+    let gap = if text.is_empty() { 0.0 } else { 4.0 };
+    let left = center.x - (14.0 + gap + galley.size().x) / 2.0;
+    let icon_center = egui::pos2(left + 7.0, center.y);
+    for triangle in nudge_triangles(icon_center, direction, frame) {
+        ui.painter().add(egui::Shape::convex_polygon(triangle, color, egui::Stroke::NONE));
+    }
+    if frame {
+        let x = icon_center.x + if direction < 0 { -5.0 } else { 5.0 };
+        ui.painter().line_segment([egui::pos2(x,center.y-5.0),egui::pos2(x,center.y+5.0)],egui::Stroke::new(1.6,color));
+    }
+    ui.painter().galley(egui::pos2(left + 14.0 + gap, center.y - galley.size().y / 2.0),galley,color);
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -383,26 +410,16 @@ pub fn draw_contextual_transport_nudge(
     );
     let backwards = direction < 0;
     let quick_text = compact_number(app.quick_seek_seconds);
-    let seek_icon = if backwards {
-        crate::ui::icons::REWIND
-    } else {
-        crate::ui::icons::FAST_FORWARD
-    };
-    let frame_icon = if backwards {
-        crate::ui::icons::SKIP_BACK
-    } else {
-        crate::ui::icons::SKIP_FORWARD
-    };
     let width = transport_nudge_width(density);
     let (seek_caption, frame_caption, font_size) = match density {
         TransportNudgeDensity::Compact => (
-            format!("{seek_icon} {quick_text}"),
-            frame_icon.to_string(),
+            quick_text.clone(),
+            String::new(),
             11.5,
         ),
         TransportNudgeDensity::Labeled => (
-            format!("{seek_icon} {quick_text} {}", app.tr("sec")),
-            format!("{frame_icon} {}", app.frame_step_count),
+            format!("{quick_text} {}", app.tr("sec")),
+            app.frame_step_count.to_string(),
             11.0,
         ),
     };
@@ -420,17 +437,15 @@ pub fn draw_contextual_transport_nudge(
         let font = egui::FontId::proportional(font_size);
         let text_color = visuals.text_color();
         let travel = 4.0;
-        ui.painter().text(
+        paint_nudge_caption(ui,
             rect.center() - egui::vec2(0.0, travel * paused_t),
-            egui::Align2::CENTER_CENTER,
-            seek_caption,
+            direction, false, &seek_caption,
             font.clone(),
             text_color.gamma_multiply(1.0 - paused_t),
         );
-        ui.painter().text(
+        paint_nudge_caption(ui,
             rect.center() + egui::vec2(0.0, travel * (1.0 - paused_t)),
-            egui::Align2::CENTER_CENTER,
-            frame_caption,
+            direction, true, &frame_caption,
             font,
             text_color.gamma_multiply(paused_t),
         );
@@ -635,8 +650,9 @@ pub fn draw_elapsed_editor(
     enabled: bool,
 ) -> egui::Response {
     let elapsed = resolve_display_time(app.seek_pos, app.playback_time);
-    let rendered = format_player_time(elapsed, true, app.show_subseconds);
-    let desired_width = 104.0;
+    let rendered = format_elapsed_display_time(elapsed, app.duration, app.show_subseconds);
+    let size = elapsed_editor_size(ui);
+    let desired_width = size.x;
     let edit_id = ui.make_persistent_id(id_source);
     let owner_key = egui::Id::new("elapsed-editor-owner");
     if app.editing_elapsed_time && app.elapsed_edit_focus_requested && enabled {
@@ -728,6 +744,7 @@ pub fn draw_elapsed_editor(
         .horizontal_align(egui::Align::Center)
         .vertical_align(egui::Align::Center)
         .margin(egui::Margin::symmetric(4, 2))
+        .min_size(egui::Vec2::ZERO)
         .interactive(editing)
         .frame(if editing {
             egui::Frame::new()
@@ -742,7 +759,7 @@ pub fn draw_elapsed_editor(
     // before painting can overwrite the mouse-down cursor on the release frame.
     let layout = egui::Layout::centered_and_justified(ui.layout().main_dir());
     let output = ui.add_enabled_ui(enabled, |ui| {
-        ui.allocate_ui_with_layout(egui::vec2(desired_width, 22.0), layout,
+        ui.allocate_ui_with_layout(egui::vec2(desired_width, size.y), layout,
             |ui| editor.show(ui)).inner
     }).inner;
     let pointer_group = ui.input(|input| input.pointer.interact_pos()).map(|position| {
@@ -750,7 +767,11 @@ pub fn draw_elapsed_editor(
         // not galley_pos itself. Use that same origin for glyph hit testing.
         let cursor = output.galley.cursor_from_pos(position - output.galley_pos
             + egui::vec2(output.galley.rect.left(), 0.0));
-        timecode_group_at_cursor(output.galley.text(), cursor.index.0)
+        let prefix = if editing { 0 } else {
+            usize::from(app.duration < 3600.0 && elapsed < 3600.0)
+                + usize::from(app.duration < 60.0 && elapsed < 60.0)
+        };
+        timecode_group_at_cursor(output.galley.text(), cursor.index.0) + prefix
     });
     let mut response = output.response.response;
 
@@ -1041,21 +1062,29 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let ctx = ui.ctx().clone();
     let controls_label = app.tr("Controls");
     let time_since_activity = app.last_mouse_activity.elapsed().as_secs_f32();
-    let alpha = if app.pin_controls {
-        1.0
-    } else {
-        (3.0 - time_since_activity).clamp(0.0, 1.0)
-    };
+    let alpha = super::simple_controls::alpha(&ctx,time_since_activity,app.pin_controls,app.editing_elapsed_time);
 
     if alpha > 0.0 {
-        let window_width = ui.available_width() - 20.0;
+        let bounds=ui.max_rect().intersect(ctx.content_rect());
+        let window_width = (bounds.width()-32.0).clamp(1.0,1280.0);
+        let size_id=egui::Id::unique("simple-controls-measured-size");
+        let measured=ctx.data(|data|data.get_temp::<egui::Vec2>(size_id)).unwrap_or(egui::vec2(window_width,super::control_density::height(ui)+16.0));
+        let size=egui::vec2(window_width,measured.y);
+        let desired=super::simple_controls::position(bounds,size,[app.simple_workspace.controls_x,app.simple_workspace.controls_y]);
+        let fill=ui.visuals().window_fill;
         let mut controls_frame = egui::Frame::window(ui.style()).multiply_with_opacity(alpha);
-        controls_frame.inner_margin.right = 0;
+        controls_frame.inner_margin.left = 20;
+        controls_frame.fill=egui::Color32::TRANSPARENT;
+        let content_width=(window_width-controls_frame.total_margin().sum().x).max(1.0);
 
-        egui::Window::new(controls_label)
-            .anchor(egui::Align2::CENTER_BOTTOM, egui::vec2(0.0, -20.0))
-            .min_width(window_width)
-            .default_width(window_width)
+        let window=egui::Window::new(controls_label)
+            .id(egui::Id::unique("simple-transport-overlay"))
+            .current_pos(desired)
+            .constrain_to(bounds)
+            .min_width(content_width)
+            .max_width(content_width)
+            .default_width(content_width)
+            .movable(true)
             .title_bar(false)
             .resizable(false)
             .collapsible(false)
@@ -1063,7 +1092,12 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             .frame(controls_frame)
             .show(&ctx, |ui| {
                 ui.set_opacity(alpha);
-                multiply_style_opacity(ui.style_mut(), alpha);
+                let backdrop_slot=ui.painter().with_clip_rect(ctx.content_rect()).add(egui::Shape::Noop);
+                let grip_rect=egui::Rect::from_min_size(ui.min_rect().min+egui::vec2(-16.0,0.0),egui::vec2(12.0,super::control_density::height(ui)));
+                let grip=ui.interact(grip_rect,egui::Id::unique("simple-controls-grip"),egui::Sense::hover())
+                    .on_hover_cursor(egui::CursorIcon::Grab).on_hover_text(app.tr("Drag to move controls. Right-click for workspace options."));
+                ui.painter().text(grip_rect.center(),egui::Align2::CENTER_CENTER,super::icons::DOTS_SIX_VERTICAL,egui::FontId::proportional(14.0),ui.visuals().weak_text_color());
+                grip.context_menu(|ui|super::simple_controls::menu(app,ui));
                 let has_video = app.current_video_path.is_some();
                 let timeline_state = app.media_timeline_state();
                 let can_seek = matches!(
@@ -1216,6 +1250,10 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     );
                                 }
                             }
+                            let exact = ui.add(egui::DragValue::new(&mut volume).range(0.0..=130.0)
+                                .max_decimals(0).suffix("%").update_while_editing(false))
+                                .on_hover_text(app.tr("Click to type a volume percentage"));
+                            if exact.changed() { volume_update = Some(volume); }
                         });
 
                         let total_response = draw_duration_label(
@@ -1227,23 +1265,25 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 drop(app_cell);
 
                 if let Some(new_volume) = volume_update {
-                    let _ = app.mpv.set_property("volume", new_volume);
-                    app.volume = new_volume;
-                    app.set_osd(format!("{}: {:.0}%", app.tr("Volume"), new_volume));
-                    app.save_config();
+                    app.apply_interop_command(&ctx,crate::platform::interop::InteropCommand::SetVolume {value:new_volume},"Simple volume control");
                 }
                 if toggle_total_mode {
                     app.show_remaining_time = !app.show_remaining_time;
                     app.save_config();
                 }
+                backdrop_slot
             });
-
-        if time_since_activity < 3.0 && !app.pin_controls {
-            // The old 16 ms loop repainted the entire application at 60 Hz
-            // whenever controls were visible, even while media was paused.
-            // Ten fade samples per second remain visually smooth while keeping
-            // the idle renderer reactive rather than continuously busy.
-            ctx.request_repaint_after(CONTROL_FADE_REPAINT_INTERVAL);
+        if let Some(window)=window {
+            ctx.data_mut(|data|data.insert_temp(size_id,window.response.rect.size()));
+            if let Some(slot)=window.inner {
+                let painter=ctx.layer_painter(window.response.layer_id);
+                painter.set(slot,egui::Shape::Vec(super::simple_controls::backdrop_shapes(&ctx,window.response.rect.shrink(1.0),fill,alpha,app.simple_workspace.backdrop)));
+            }
+            if window.response.dragged() || window.response.drag_stopped() {
+                let p=super::simple_controls::normalized(bounds,window.response.rect.size(),window.response.rect.min);
+                app.simple_workspace.controls_x=p[0];app.simple_workspace.controls_y=p[1];
+                if window.response.drag_stopped(){app.request_simple_workspace_save(&ctx);}
+            }
         }
     }
 }
@@ -1293,6 +1333,22 @@ pub fn multiply_style_opacity(style: &mut egui::Style, alpha: f32) {
 
 pub fn resolve_display_time(seek_pos: Option<f64>, playback_time: f64) -> f64 {
     seek_pos.unwrap_or(playback_time)
+}
+
+pub(super) fn elapsed_editor_size(ui: &egui::Ui) -> egui::Vec2 {
+    let font = egui::TextStyle::Monospace.resolve(ui.style());
+    let sample = ui.painter().layout_no_wrap("00:00:00.000".into(), font.clone(), ui.visuals().text_color());
+    let height = ui.fonts_mut(|fonts| fonts.row_height(&font));
+    egui::vec2((sample.size().x + 12.0).max(104.0),
+        (height + 6.0).max(super::control_density::height(ui)))
+}
+
+fn format_elapsed_display_time(seconds: f64, duration: f64, subseconds: bool) -> String {
+    let hours = seconds.abs() >= 3600.0 || duration >= 3600.0;
+    let text = format_player_time(seconds, hours, subseconds);
+    if !hours && seconds.abs() < 60.0 && duration < 60.0 {
+        text.strip_prefix("00:").unwrap_or(&text).to_owned()
+    } else { text }
 }
 
 pub fn format_player_time(time: f64, include_hours: bool, show_subseconds: bool) -> String {
@@ -1359,6 +1415,46 @@ pub fn parse_timecode(value: &str) -> Option<f64> {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn nudge_caption_paints_directional_vectors_without_icon_font_dependency() {
+        for rtl in [false, true] { for scale in [1.0, 1.25, 2.0] { for frame in [false, true] {
+            let ctx = egui::Context::default();
+            ctx.set_pixels_per_point(scale);
+            let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+                ui.with_layout(if rtl { egui::Layout::right_to_left(egui::Align::Center) }
+                    else { egui::Layout::left_to_right(egui::Align::Center) }, |ui| {
+                    for (x, direction) in [(40.0,-1),(100.0,1)] {
+                        super::paint_nudge_caption(ui,egui::pos2(x,30.0),direction,frame,"5",egui::FontId::proportional(12.0),egui::Color32::WHITE);
+                    }
+                });
+            });
+            let paths: Vec<_> = output.shapes.iter().filter_map(|shape| match &shape.shape {
+                egui::Shape::Path(path) if path.closed && path.points.len()==3 => Some(path), _=>None,
+            }).collect();
+            assert_eq!(paths.len(), if frame {2} else {4});
+            let half=paths.len()/2;
+            for path in &paths[..half] { assert!(path.points[1].x < path.points[0].x); }
+            for path in &paths[half..] { assert!(path.points[1].x > path.points[0].x); }
+            output.textures_delta.clear();
+        } } }
+    }
+    #[test]
+    fn nudge_glyphs_have_opposite_physical_directions_in_both_modes() {
+        for frame in [false, true] {
+            let left = super::nudge_triangles(egui::Pos2::ZERO, -1, frame);
+            let right = super::nudge_triangles(egui::Pos2::ZERO, 1, frame);
+            assert_eq!(right.len(), if frame { 1 } else { 2 });
+            assert_ne!(left, right);
+            for (left, right) in left.iter().zip(&right) {
+                assert!(left[1].x < left[0].x);
+                assert!(right[1].x > right[0].x);
+                for (left, right) in left.iter().zip(right) {
+                    assert_eq!(left.x, -right.x);
+                    assert_eq!(left.y, right.y);
+                }
+            }
+        }
+    }
     use super::*;
 
     #[test]
@@ -1611,6 +1707,65 @@ mod tests {
     }
 
     #[test]
+    fn elapsed_display_omits_only_unneeded_leading_groups() {
+        assert_eq!(format_elapsed_display_time(3.125,40.0,true),"03.125");
+        assert_eq!(format_elapsed_display_time(3.0,40.0,false),"03");
+        assert_eq!(format_elapsed_display_time(3.0,120.0,false),"00:03");
+        assert_eq!(format_elapsed_display_time(63.0,120.0,false),"01:03");
+        assert_eq!(format_elapsed_display_time(3.0,4000.0,false),"00:00:03");
+        assert_eq!(format_elapsed_edit_time(3.125),"00:00:03.125","edit mask remains complete");
+    }
+
+    #[test]
+    fn elapsed_ink_fits_its_row_in_display_and_edit_modes_at_large_fonts() {
+        let _guard = crate::app::tests::lock_app_tests();
+        for scale in [1.0,1.25,1.5,2.0] { for size in [14.0,20.0,28.0] { for editing in [false,true] {
+            let ctx = egui::Context::default(); ctx.set_pixels_per_point(scale);
+            ctx.style_mut_of(ctx.theme(),|style| {style.text_styles.insert(egui::TextStyle::Monospace,egui::FontId::monospace(size));});
+            let mut app = PealayerApp::default(); app.duration = 120.0; app.playback_time = 63.125;
+            if editing { begin_elapsed_edit(&mut app); }
+            for _ in 0..2 {
+                let mut output = ctx.run_ui(Default::default(),|ui| {
+                    let size = elapsed_editor_size(ui);
+                    let (rect,_) = ui.allocate_exact_size(size,egui::Sense::hover());
+                    let mut child = ui.new_child(egui::UiBuilder::new().max_rect(rect));
+                    child.set_clip_rect(rect);
+                    let response=draw_elapsed_editor(&mut app,&mut child,"elapsed-fit-fixture",true);
+                    assert!(rect.expand(0.1).contains_rect(response.rect),"editor grew outside measured row: {rect:?} {:?}",response.rect);
+                });
+                for shape in &output.shapes { if let egui::Shape::Text(text)=&shape.shape {
+                    let ink=text.galley.mesh_bounds.translate(text.pos.to_vec2());
+                    assert!(shape.clip_rect.expand(0.1).contains_rect(ink),"elapsed ink clipped: scale={scale}, size={size}, editing={editing}: {ink:?} clip={:?}",shape.clip_rect);
+                }}
+                output.textures_delta.clear();
+            }
+        }}}
+    }
+
+    #[test]
+    fn volume_percentage_accepts_direct_typed_input() {
+        for filmcraft in [false, true] {
+            let ctx=egui::Context::default(); let mut volume=50.0; let mut time=0.0;
+            let mut frame=|events| {
+                time+=0.1;
+                let mut output=ctx.run_ui(egui::RawInput {time:Some(time),events,..Default::default()},|ui| {
+                    ui.horizontal(|ui| {ui.set_width(160.0); if let Some(value)=volume_slider_widgets(ui,volume,"Volume",filmcraft) {volume=value;}});
+                }); output.textures_delta.clear(); output
+            };
+            frame(vec![]); let output=frame(vec![]);
+            let point=output.shapes.iter().find_map(|shape|match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text().contains("50")=>Some(text.pos+text.galley.rect.center().to_vec2()),_=>None,
+            }).expect("volume percentage");
+            let button=|pressed|egui::Event::PointerButton {pos:point,pressed,button:egui::PointerButton::Primary,modifiers:egui::Modifiers::NONE};
+            frame(vec![egui::Event::PointerMoved(point),button(true)]); frame(vec![button(false)]);
+            frame(vec![]);
+            frame(vec![egui::Event::Text("75".into())]);
+            frame(vec![egui::Event::Key {key:egui::Key::Enter,physical_key:None,pressed:true,repeat:false,modifiers:egui::Modifiers::NONE}]);
+            drop(frame); assert_eq!(volume,75.0,"clicking the value must permit direct typing");
+        }
+    }
+
+    #[test]
     fn elapsed_pointer_selects_clicked_group_in_display_and_edit_modes() {
         let _guard = crate::app::tests::lock_app_tests();
         fn frame(ctx: &egui::Context, app: &mut PealayerApp, events: Vec<egui::Event>) -> egui::FullOutput {
@@ -1652,18 +1807,19 @@ mod tests {
         }
         for scale in [1.0, 1.5, 2.0] {
             for subseconds in [false, true] {
-                for initial_group in 0..(if subseconds { 4 } else { 3 }) {
+                for (playback,duration,prefix) in [(3723.456,4000.0,0),(63.456,120.0,1),(3.456,40.0,2)] {
+                for initial_group in 0..(if subseconds { 4 } else { 3 })-prefix {
                     let ctx = egui::Context::default();
                     ctx.set_pixels_per_point(scale);
                     let mut app = PealayerApp::default();
-                    app.playback_time = 3723.456;
+                    app.playback_time = playback; app.duration=duration;
                     app.show_subseconds = subseconds;
                     frame(&ctx, &mut app, vec![]);
                     let output = frame(&ctx, &mut app, vec![]);
-                    let shown = format_player_time(app.playback_time, true, subseconds);
+                    let shown = format_elapsed_display_time(app.playback_time,app.duration,subseconds);
                     click(&ctx, &mut app, point(&output, &shown, initial_group));
                     assert!(app.editing_elapsed_time);
-                    assert_eq!(app.elapsed_time_group, initial_group, "display click at scale {scale}");
+                    assert_eq!(app.elapsed_time_group, initial_group+prefix, "display click at scale {scale}");
                     for group in [3, 1, 2, 0] {
                         let output = frame(&ctx, &mut app, vec![]);
                         let value = app.elapsed_time_input.clone();
@@ -1672,6 +1828,7 @@ mod tests {
                         assert_eq!(app.elapsed_time_input, app.elapsed_time_original);
                         assert!(app.seek_pos.is_none(), "selection must never seek");
                     }
+                }
                 }
             }
         }

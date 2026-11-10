@@ -277,6 +277,27 @@ pub struct UiPreferences {
     pub terminal: crate::ui::terminal::TerminalPreferences,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum ControlBackdrop { #[default] Auto, Blur, Solid }
+
+/// Simple playback chrome is independent from the editing workspace.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq)]
+#[serde(default)]
+pub struct SimpleWorkspaceConfig {
+    pub show_menu_bar: bool,
+    pub show_toolbar: bool,
+    pub show_status_bar: bool,
+    /// Fraction of the usable travel, not absolute desktop pixels.
+    pub controls_x: f32,
+    pub controls_y: f32,
+    pub backdrop: ControlBackdrop,
+}
+impl Default for SimpleWorkspaceConfig {
+    fn default() -> Self { Self {show_menu_bar:false,show_toolbar:false,show_status_bar:false,
+        controls_x:0.5,controls_y:1.0,backdrop:ControlBackdrop::Auto} }
+}
+
 #[cfg(test)]
 mod timeline_toolbar_tests {
     use super::*;
@@ -411,9 +432,20 @@ pub enum AppTheme {
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum MediaTitleFormat {
+    #[default]
+    FileName,
+    FileStem,
+    Location,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum ColorPalette {
     /// The blue-gray Studio palette, shared by the Web and desktop renderers.
     Studio,
+    /// Slate surfaces and lilac-to-rose accents inspired by pastel dashboards.
+    Pastel,
     /// The original neutral desktop palette remains the default.
     #[default]
     Native,
@@ -480,6 +512,7 @@ pub enum PlayerClickAction {
     PlayPause,
     ToggleMute,
     ToggleFullscreen,
+    BossKey,
     ContextMenu,
     #[default]
     None,
@@ -1136,6 +1169,7 @@ pub struct AppConfig {
     pub sfx_audio_device: String,
     pub audio_effects: Vec<crate::mpv::sfx::AudioEffect>,
     pub pin_controls: bool,
+    pub simple_workspace: SimpleWorkspaceConfig,
     pub show_remaining_time: bool,
     pub open_url_multiline: bool,
     pub open_url_history_expanded: bool,
@@ -1148,6 +1182,7 @@ pub struct AppConfig {
     pub open_url_auto_proxy: bool,
     pub remote_folder_auto_next: bool,
     pub remote_folder_thumbnails: bool,
+    pub remote_folder_view: crate::remote_location::ViewMode,
     pub open_url_proxy_url: Option<String>,
     pub recent_media: Vec<PathBuf>,
     pub last_media_target: Option<PathBuf>,
@@ -1158,6 +1193,8 @@ pub struct AppConfig {
     pub playback_positions: Vec<PlaybackPositionEntry>,
     pub app_name: Option<String>,
     pub app_description: Option<String>,
+    pub local_media_title_format: MediaTitleFormat,
+    pub remote_media_title_format: MediaTitleFormat,
     pub app_icon: Option<PathBuf>,
     pub app_icon_preset: AppIconPreset,
     pub app_icon_playing: Option<PathBuf>,
@@ -1191,6 +1228,7 @@ pub struct AppConfig {
     /// Owner consent policy; never overrides PCController's production lock.
     pub allow_unattended_hardware_takeover: bool,
     pub click_player_to_toggle: bool,
+    pub video_click_frame_only: bool,
     pub playback_speed: f64,
     pub temporary_fast_forward_speed: f64,
     pub subtitle_font_size: f64,
@@ -1219,6 +1257,7 @@ pub struct AppConfig {
     pub paused_drag_action: PlayerDragAction,
     pub playing_drag_action: PlayerDragAction,
     pub middle_click_action: PlayerClickAction,
+    pub mouse_bindings: crate::pointer_bindings::Bindings,
     pub middle_hold_action: PlayerDragAction,
     pub right_click_action: PlayerClickAction,
     pub right_hold_action: PlayerDragAction,
@@ -1242,6 +1281,7 @@ pub struct AppConfig {
     /// Follow an advancing playhead and ease the viewport forward before it
     /// reaches the trailing edge.
     pub timeline_follow_playhead: bool,
+    pub timeline_subtitle_segments: bool,
     pub timeline_toolbar_visible: bool,
     pub timeline_toolbar_order: Vec<TimelineToolbarAction>,
     pub timeline_toolbar_hidden: Vec<TimelineToolbarAction>,
@@ -1351,6 +1391,7 @@ impl Default for AppConfig {
             sfx_audio_device: String::new(),
             audio_effects: Vec::new(),
             pin_controls: false,
+            simple_workspace: SimpleWorkspaceConfig::default(),
             show_remaining_time: false,
             open_url_multiline: true,
             open_url_history_expanded: true,
@@ -1363,6 +1404,7 @@ impl Default for AppConfig {
             open_url_auto_proxy: true,
             remote_folder_auto_next: false,
             remote_folder_thumbnails: true,
+            remote_folder_view: Default::default(),
             open_url_proxy_url: None,
             recent_media: Vec::new(),
             last_media_target: None,
@@ -1373,6 +1415,8 @@ impl Default for AppConfig {
             playback_positions: Vec::new(),
             app_name: None,
             app_description: None,
+            local_media_title_format: MediaTitleFormat::FileName,
+            remote_media_title_format: MediaTitleFormat::FileName,
             app_icon: None,
             app_icon_preset: AppIconPreset::Current,
             app_icon_playing: None,
@@ -1405,6 +1449,7 @@ impl Default for AppConfig {
             pause_on_hardware_disconnect: true,
             allow_unattended_hardware_takeover: false,
             click_player_to_toggle: true,
+            video_click_frame_only: true,
             playback_speed: 1.0,
             temporary_fast_forward_speed: 2.0,
             subtitle_font_size: 55.0,
@@ -1430,10 +1475,11 @@ impl Default for AppConfig {
             osd_timeout_seconds: 3.5,
             paused_drag_action: PlayerDragAction::MoveWindow,
             playing_drag_action: PlayerDragAction::TemporaryFastForward,
-            middle_click_action: PlayerClickAction::None,
+            middle_click_action: PlayerClickAction::ToggleFullscreen,
+            mouse_bindings: Default::default(),
             middle_hold_action: PlayerDragAction::None,
             right_click_action: PlayerClickAction::ContextMenu,
-            right_hold_action: PlayerDragAction::None,
+            right_hold_action: PlayerDragAction::Seek,
             fullscreen_video_background: VideoBackground::Black,
             motion_control_mode: MotionControlMode::Hold,
             compact_hardware_controls: false,
@@ -1450,6 +1496,7 @@ impl Default for AppConfig {
             timeline_animated_navigation: true,
             timeline_navigation_transition_ms: 100,
             timeline_follow_playhead: false,
+            timeline_subtitle_segments: false,
             timeline_toolbar_visible: true,
             timeline_toolbar_order: Vec::new(),
             timeline_toolbar_hidden: default_timeline_toolbar_hidden(),
@@ -2239,6 +2286,10 @@ impl AppConfig {
     pub fn validate(&self) -> Result<(), String> {
         if self.project_discovery.folders.len()>32768 || self.project_discovery.associations.len()>1000 {
             return Err("Project discovery exceeds folder or remembered association limits".into());
+        }
+        self.mouse_bindings.validate()?;
+        if [self.simple_workspace.controls_x,self.simple_workspace.controls_y].iter().any(|v| !v.is_finite() || !(0.0..=1.0).contains(v)) {
+            return Err("Simple control position must be between 0 and 1".into());
         }
         self.ui.terminal.validate()?;
         for list in [&self.ui.toolbar.order, &self.ui.toolbar.hidden] {

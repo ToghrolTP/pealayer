@@ -1,8 +1,31 @@
 //! Constrained media-tool command construction; no shell or caller-provided switches.
 use std::{
-    path::Path,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
 };
+
+#[path = "../../../shared/executable.rs"]
+mod executable;
+
+fn bundled_roots() -> impl Iterator<Item = PathBuf> {
+    std::env::current_exe().ok().into_iter().flat_map(|path| {
+        path.parent()
+            .map(|parent| {
+                [
+                    parent.join("tools"),
+                    parent.join("../tools"),
+                    parent.to_path_buf(),
+                ]
+            })
+            .into_iter()
+            .flatten()
+    })
+}
+
+/// Resolve the installed or bundled aria2 executable without launching it.
+pub fn resolve_aria2(input: &str) -> Result<PathBuf, String> {
+    executable::resolve(input, bundled_roots())
+}
 
 fn command(program: &str) -> Command {
     let mut cmd = Command::new(program);
@@ -135,13 +158,7 @@ pub fn find(name: &str) -> Option<std::path::PathBuf> {
     } else {
         name.into()
     };
-    let executable = std::env::current_exe().ok()?;
-    let parent = executable.parent()?;
-    for directory in [
-        parent.join("tools"),
-        parent.join("../tools"),
-        parent.to_path_buf(),
-    ] {
+    for directory in bundled_roots() {
         let path = directory.join(&filename);
         if path.is_file() {
             return Some(path);

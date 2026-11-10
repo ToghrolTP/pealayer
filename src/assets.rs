@@ -1265,6 +1265,11 @@ pub struct DropFeedback {pub icon:String,pub message:String}
 pub fn drop_feedback(paths:&[PathBuf],destination:&Destination)->DropFeedback {
     if paths.len()!=1 {return DropFeedback{icon:"files".into(),message:format!("Import {} assets",paths.len())};}
     let path=&paths[0];
+    if path.to_str().is_some_and(crate::media::is_remote_media_target) {
+        // URL drops use Open location (play a file / browse a directory), not
+        // filesystem/SFX import. Never expose signed URL queries in the hint.
+        return DropFeedback { icon:"folder-open".into(), message:"Open link".into() };
+    }
     let name=path.file_name().unwrap_or_default().to_string_lossy().chars().filter(|c|!c.is_control()).take(120).collect::<String>();
     let (icon,action)=match (destination,file_kind(path)) {
         (Destination::AudioSource{..},FileKind::Audio)=>("speaker-high","Use audio source"),
@@ -1281,6 +1286,8 @@ pub fn drop_feedback(paths:&[PathBuf],destination:&Destination)->DropFeedback {
 mod tests {
     use super::*;
     #[test] fn drop_feedback_matches_import_action_and_does_not_expose_parent_paths(){
+        let link=drop_feedback(&[PathBuf::from("https://example.invalid/sound.mp3?token=private")],&Destination::Library);
+        assert_eq!(link.message,"Open link");
         for (path,action,icon) in [("C:/private/movie.mkv","Play movie.mkv","play"),("C:/private/sub.srt","Load subtitle sub.srt","subtitles"),("C:/private/tone.wav","Play tone.wav","play"),("C:/private/effect.json","Review asset effect.json","folder-open")] {
             let feedback=drop_feedback(&[path.into()],&Destination::Player);assert_eq!(feedback.message,action);assert_eq!(feedback.icon,icon);
         }

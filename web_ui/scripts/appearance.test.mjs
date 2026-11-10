@@ -36,10 +36,12 @@ test('native workspace and font previews share one appearance contract', () => {
   assert.match(uiFontCss('custom', 'A"B'), /^"A\\"B",/);
 });
 
-test('Neutral is the default; Studio remains an explicit palette', () => {
+test('Neutral is the default; Studio and Pastel are selectable', () => {
   assert.equal(paletteName(null), 'native');
   assert.equal(paletteName({}), 'native');
   assert.equal(paletteName({ color_palette: 'studio' }), 'studio');
+  assert.equal(paletteName({ color_palette: 'pastel' }), 'pastel');
+  assert.equal(paletteName({ color_palette: 'invalid' }), 'native');
 });
 
 test('native panel styles preview independently without replacing saved workspace or controls', () => {
@@ -84,11 +86,12 @@ test('System theme and accent follow the host, with offline fallbacks', () => {
 });
 
 test('live native theme events switch connected clients without changing the System preference', () => {
-  const config = { theme: 'system', color_palette: 'native', accent_color: 'system' };
+  const config = { theme: 'system', color_palette: 'pastel', accent_color: 'system' };
   for (const scheme of ['light', 'dark', 'light']) {
     const event = { ...config, resolved_theme: scheme, resolved_accent: '#6362c7' };
     const synced = mergeAppearance(config, event);
     assert.equal(synced.theme, 'system');
+    assert.equal(paletteName(synced), 'pastel');
     assert.equal(resolvedAppearanceTheme(synced.theme, scheme !== 'light', event), scheme);
     assert.equal(resolvedAppearanceTheme('light', false, event), 'light');
     assert.equal(resolvedAppearanceTheme('dark', true, event), 'dark');
