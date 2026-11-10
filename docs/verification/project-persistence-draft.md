@@ -1,7 +1,7 @@
 # Project persistence: preserved implementation draft
 
 Owner: [issue #226](https://github.com/ToghrolTP/pealayer/issues/226).
-Branch: `feat/project-scene-persistence`, stacked on the UI work in PR #225.
+Branch: `feat/project-scene-persistence`, originally stacked on the UI work in PR #225.
 This is not a production-ready feature or deployment candidate.
 
 ## Merge audit repairs (5 November 2026)
@@ -49,6 +49,23 @@ the user's requested Open and any existing metadata draft. Native consumers can
 export captured components locally without treating a component export as a
 saved parent project. Web authority changes invalidate apply confirmation and
 block mutation from a draft captured on the previous authority.
+
+## Current reconciliation
+
+The branch retains the complete shared authoring-document model from PR #233,
+including portable linked audio and validation. Both histories are preserved.
+
+For a seekable source, project restoration now waits for the requested exact
+seek to settle in the active, paused decoder before committing timeline and
+workspace. Native restoration requires a post-request start event and matching
+media identity. External restoration requires a fresh loaded revision. A
+rejected, superseded, or timed-out seek retains existing authoring data.
+
+Native and Web editors record the responding Pealayer instance when reading or
+capturing a document. Remote mutations carry that owner to the receiving API,
+which rejects a stale owner even if the host address remained the same. Review
+the same-path decoder ordering, rollback, and authority changes in live isolated
+fixtures before accepting the draft.
 
 ## Preserved work
 

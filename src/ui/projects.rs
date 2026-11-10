@@ -15,12 +15,20 @@ struct Editor {
     reply:Arc<Mutex<Option<Result<serde_json::Value,String>>>>,
 }
 fn id()->egui::Id {egui::Id::new("project-metadata-editor")}
+fn local_authority() -> Option<uuid::Uuid> {
+    (!crate::peer::active()).then(|| crate::peer::instance_id().parse().ok()).flatten()
+}
+fn reject_changed_authority(editor: &mut Editor) {
+    editor.error = Some("Document authority changed. Read or capture from the new authority before applying changes.".into());
+    editor.confirm_outputs = false;
+}
+
 pub(crate) fn dirty(ctx:&egui::Context)->bool {ctx.data_mut(|d|d.get_temp::<Editor>(id())).is_some_and(|e|included(&e.document,e.include)!=e.baseline)}
 pub(crate) fn busy(ctx:&egui::Context)->bool {ctx.data_mut(|d|d.get_temp::<Editor>(id())).is_some_and(|e|e.busy)}
 pub(crate) fn open(app:&PealayerApp,ctx:&egui::Context) {
     if ctx.data_mut(|d|d.get_temp::<Editor>(id())).is_some() {return;}
     let document=Document::Project(app.capture_project(ctx));
-    let state=Editor {baseline:document.clone(),document,path:app.project.path.as_ref().map(|p|p.to_string_lossy().into_owned()).unwrap_or_default(),include:Components::default(),error:None,notice:None,candidates:vec![],discard:false,confirm_outputs:false,busy:false,selected:Default::default(),authority:None,scene_report:None,next_scene_poll:std::time::Instant::now(),reply:Arc::new(Mutex::new(None))};
+    let state=Editor {baseline:document.clone(),document,path:app.project.path.as_ref().map(|p|p.to_string_lossy().into_owned()).unwrap_or_default(),include:Components::default(),error:None,notice:None,candidates:vec![],discard:false,confirm_outputs:false,busy:false,selected:Default::default(),authority:local_authority(),scene_report:None,next_scene_poll:std::time::Instant::now(),reply:Arc::new(Mutex::new(None))};
     let mut state=state;
     state.scene_report=app.project.scene_operation.as_ref().map(|op|serde_json::json!(op.report()));
     ctx.data_mut(|d|d.insert_temp(id(),state));
@@ -33,7 +41,7 @@ pub(crate) fn open_candidates(ctx:&egui::Context,candidates:Vec<PathBuf>,error:O
         return;
     }
     let document=Document::Project(Project::default());
-    ctx.data_mut(|d|d.insert_temp(id(),Editor {baseline:document.clone(),document,path:candidates.first().map(|p|p.to_string_lossy().into_owned()).unwrap_or_default(),include:Components::default(),error,notice:None,candidates,discard:false,confirm_outputs:false,busy:false,selected:Default::default(),authority:None,scene_report:None,next_scene_poll:std::time::Instant::now(),reply:Arc::new(Mutex::new(None))}));
+    ctx.data_mut(|d|d.insert_temp(id(),Editor {baseline:document.clone(),document,path:candidates.first().map(|p|p.to_string_lossy().into_owned()).unwrap_or_default(),include:Components::default(),error,notice:None,candidates,discard:false,confirm_outputs:false,busy:false,selected:Default::default(),authority:local_authority(),scene_report:None,next_scene_poll:std::time::Instant::now(),reply:Arc::new(Mutex::new(None))}));
 }
 fn queue_remote(ctx:&egui::Context,request:Request) {
     let Some(client)=crate::peer::client().cloned() else {return};
@@ -41,8 +49,7 @@ fn queue_remote(ctx:&egui::Context,request:Request) {
     let endpoint = if request.mutates_authority() {
         let observed = client.snapshot().and_then(|state| uuid::Uuid::parse_str(&state.session.instance_id).ok());
         let Some(owner) = editor.authority.filter(|owner| Some(*owner) == observed) else {
-            editor.error = Some("Document authority changed. Read or capture from the new authority before applying changes.".into());
-            editor.confirm_outputs = false;
+            reject_changed_authority(&mut editor);
             ctx.data_mut(|data| data.insert_temp(id(), editor));
             return;
         };
@@ -193,7 +200,15 @@ pub(crate) fn draw(app:&mut PealayerApp,root:&mut egui::Ui) {
     ctx.data_mut(|d|d.insert_temp(id(),editor.clone()));
     if let Some(request)=request {
         if crate::peer::active(){queue_remote(&ctx,request);}
-        else {let result=app.document_request(&ctx,request);accept(&mut editor,result);ctx.data_mut(|d|d.insert_temp(id(),editor));}
+        else {
+            if request.mutates_authority() && editor.authority != local_authority() {
+                reject_changed_authority(&mut editor);
+            } else {
+                let result = app.document_request(&ctx,request);
+                accept(&mut editor,result);
+            }
+            ctx.data_mut(|d|d.insert_temp(id(),editor));
+        }
     }
 }
 fn export(ui:&egui::Ui,document:Document,reply:Arc<Mutex<Option<Result<serde_json::Value,String>>>>)->bool {
