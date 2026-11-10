@@ -95,6 +95,7 @@ impl UpdateStatus {
             "completed" => "Build acknowledgement received",
             "current" => "Build already current",
             "failed" => "Update failed",
+            "aborted" => "Update canceled",
             _ => "Update status",
         }
     }

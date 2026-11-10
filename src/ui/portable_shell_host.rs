@@ -4,6 +4,7 @@
 use std::alloc::{Layout, alloc_zeroed, dealloc};
 use std::ffi::{CStr, CString, c_char, c_int, c_uint, c_void};
 use std::ptr::NonNull;
+use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
 
 const OUTPUT_LIMIT: usize = 256 * 1024;
 const ACTION_LIMIT: usize = 64;
@@ -257,7 +258,8 @@ pub struct Host {
     editor: NonNull<u8>,
     editor_layout: Layout,
     branding: CString,
-    prompt_status: CString,
+    prompt_status: String,
+    columns: u16,
     catalog: Vec<OwnedSetting>,
 }
 
@@ -314,7 +316,8 @@ impl Host {
             editor,
             editor_layout,
             branding: CString::new("Pealayer Shell").unwrap(),
-            prompt_status: CString::new("■ Idle").unwrap(),
+            prompt_status: "■ Idle".into(),
+            columns: config.columns as u16,
             catalog: Vec::new(),
         };
         for (name, usage) in COMMANDS {
@@ -370,12 +373,23 @@ impl Host {
     }
 
     pub fn resize(&mut self, rows: u16, columns: u16) {
+        let columns = columns.clamp(8, 240);
+        let previous = self.columns;
+        // Prepare shorter prompt lines before the core repaints a smaller grid.
+        if columns < previous {
+            self.columns = columns;
+            self.update_prompt();
+        }
         unsafe {
             ps_resize(
                 self.session.as_ptr(),
-                u32::from(columns.clamp(8, 240)),
+                u32::from(columns),
                 u32::from(rows.clamp(4, 80)),
             );
+        }
+        if columns > previous {
+            self.columns = columns;
+            self.update_prompt();
         }
     }
 
@@ -421,10 +435,8 @@ impl Host {
         self.update_prompt();
     }
     pub fn prompt_status(&mut self, text: &str) {
-        let text: String = text.chars().filter(|c| !c.is_control()).take(200).collect();
-        let Ok(text) = CString::new(text) else {
-            return;
-        };
+        let text: String = text.chars()
+            .filter(|c| !c.is_control() || *c == '\n').take(200).collect();
         if text == self.prompt_status {
             return;
         }
@@ -432,32 +444,26 @@ impl Host {
         self.update_prompt();
     }
     fn update_prompt(&mut self) {
-        let parts = [
-            PromptPart {
-                text: c"╭─ ".as_ptr(),
-                style: 6,
-            },
-            PromptPart {
-                text: self.branding.as_ptr(),
-                style: 7,
-            },
-            PromptPart {
-                text: c" · ".as_ptr(),
-                style: 6,
-            },
-            PromptPart {
-                text: self.prompt_status.as_ptr(),
-                style: 0,
-            },
-            PromptPart {
-                text: c"\n╰─".as_ptr(),
-                style: 6,
-            },
-            PromptPart {
-                text: c"❯ ".as_ptr(),
-                style: 9,
-            },
+        let (summary, activity) = self.prompt_status.split_once('\n')
+            .unwrap_or((&self.prompt_status, ""));
+        let brand = self.branding.to_str().unwrap_or("Pealayer Shell");
+        // Keep each physical row below both the renderer's wrap margin and the
+        // core's three-cell reserve. The core only tracks explicit newlines.
+        let width = usize::from(self.columns).saturating_sub(7);
+        let inline = brand.width() + 3 + summary.width() <= width;
+        let brand = bounded_prompt_part(brand, width);
+        let summary = bounded_prompt_part(summary, width);
+        let activity = bounded_prompt_part(activity, width);
+        let mut parts = vec![
+            prompt_part(c"╭─ ", 6),
+            prompt_part(&brand, 7),
+            prompt_part(if inline { c" · " } else { c"\n├─ " }, 6),
+            prompt_part(&summary, 0),
         ];
+        if !activity.to_bytes().is_empty() {
+            parts.extend([prompt_part(c"\n├─ ", 6), prompt_part(&activity, 3)]);
+        }
+        parts.extend([prompt_part(c"\n╰─", 6), prompt_part(c"❯ ", 9)]);
         unsafe {
             ps_set_application_title(self.session.as_ptr(), self.branding.as_ptr());
             ps_set_prompt_parts(self.session.as_ptr(), parts.as_ptr(), parts.len() as u32);
@@ -640,6 +646,28 @@ impl Host {
             }
         }
     }
+}
+
+fn prompt_part(text: &CStr, style: u32) -> PromptPart {
+    PromptPart { text: text.as_ptr(), style }
+}
+
+fn bounded_prompt_part(text: &str, width: usize) -> CString {
+    if text.width() <= width {
+        return CString::new(text).unwrap();
+    }
+    let mut used = 0;
+    let mut clipped = String::new();
+    for ch in text.chars() {
+        let next = used + ch.width().unwrap_or(0);
+        if next >= width {
+            break;
+        }
+        clipped.push(ch);
+        used = next;
+    }
+    clipped.push('…');
+    CString::new(clipped).unwrap()
 }
 
 impl Drop for Host {
@@ -1143,6 +1171,29 @@ mod tests {
         host.prompt_status("Ⅱ Paused 00:01:01 / 01:00:00 · ⊘ Muted (57%) · ○ Hardware");
         host.feed(b"ume 25\r");
         assert_eq!(host.take_actions(), [Action::Volume(25.0)]);
+    }
+
+    #[test]
+    fn narrow_live_prompt_shows_update_without_duplicate_lines_or_losing_input() {
+        let mut host = Host::new(21, 63).unwrap();
+        let mut parser = vt100::Parser::new(21, 63, 100);
+        host.branding("Pealayer Terminal Review");
+        host.feed(b"sta");
+        parser.process(&host.take_output());
+        let summary = "■ Idle · ♪ 100% · ○ Hardware";
+        host.prompt_status(&format!("{summary}\n↻ Uploading package 0%"));
+        parser.process(&host.take_output());
+        let active = parser.screen().contents();
+        assert_eq!(active.matches("╭─").count(), 1, "{active}");
+        assert!(active.contains("↻ Uploading package 0%"), "{active}");
+        assert!(active.contains("╰─❯ sta"), "{active}");
+        host.prompt_status(summary);
+        parser.process(&host.take_output());
+        let settled = parser.screen().contents();
+        assert_eq!(settled.matches("╭─").count(), 1, "{settled}");
+        assert!(!settled.contains("Uploading package"), "{settled}");
+        host.feed(b"tus\r");
+        assert_eq!(host.take_actions(), [Action::Status]);
     }
 
     #[test]

@@ -45,7 +45,7 @@ impl Status {
             if self.controller { "●" } else { "○" }
         );
         if self.update.active() {
-            summary.push_str(" · ↻ ");
+            summary.push_str("\n↻ ");
             summary.push_str(&self.update_line());
         }
         summary
