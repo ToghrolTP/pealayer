@@ -60,7 +60,7 @@ import {
   ArrowDownOutlined,
 } from '@ant-design/icons';
 import { tr } from '../i18n';
-import { mergeAppearance, resolvedAppearanceTheme } from '../appearance';
+import { mergeAppearance, paletteName, resolvedAppearanceTheme } from '../appearance';
 import palettes from '../../../assets/themes/palettes.json';
 import { NumericValueControl } from './NumericValueControl';
 import { ServerFilePicker } from './ServerFilePicker';
@@ -529,10 +529,13 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
     if (control.kind === 'select') {
       const scheme = resolvedAppearanceTheme(contract?.values.theme ?? 'system', window.matchMedia('(prefers-color-scheme: light)').matches, appearance);
       const paletteLabel = (value: unknown, label: string) => {
-        const colors = palettes[value === 'studio' ? 'studio' : 'native'][scheme];
+        const colors = palettes[paletteName({ color_palette: value })][scheme];
+        const panel = 'gradient-start' in colors
+          ? `linear-gradient(110deg, color-mix(in srgb, ${colors['gradient-start']} 38%, ${colors['surface-2']}), color-mix(in srgb, ${colors['gradient-end']} 38%, ${colors['surface-2']}))`
+          : colors['surface-2'];
         return <span className="preference-palette-option"><span aria-hidden="true" className="preference-palette-preview"
           style={{ background: colors.canvas, borderColor: colors['line-strong'], color: colors.text }}>
-          <span style={{ background: colors['surface-2'] }}><i /></span>
+          <span style={{ background: panel }}><i /></span>
         </span><span>{label}</span></span>;
       };
       return (

@@ -9,8 +9,6 @@ Versioned history replaces the former single unreleased list. [Read the chronolo
 - Full projects/scenes: [#226](https://github.com/ToghrolTP/pealayer/issues/226), draft [#227](https://github.com/ToghrolTP/pealayer/pull/227).
 - Optional FilmCraft monitor and timeline styling, with the Compact and Standard options retained ([#248](https://github.com/ToghrolTP/pealayer/pull/248)).
 
-### 🎚️ Playback controls
-
 ### ⬇️ Download Center
 
 - Browse a searchable queue with clear transfer states, speed history, and
@@ -18,6 +16,8 @@ Versioned history replaces the former single unreleased list. [Read the chronolo
   accent, and control density.
 - Find aria2 by executable name or path and inspect the resolved location
   before connecting to its local RPC service.
+
+### 🎚️ Playback controls
 
 - The video context menu offers a horizontal playback-speed slider with
   nine presets and normal speed at the center.

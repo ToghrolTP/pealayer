@@ -44,7 +44,12 @@ pub fn apply(visuals: &mut egui::Visuals, palette: &str) {
     let text = rgb("text");
     let muted = rgb("muted");
     let border = Stroke::new(1.0, rgb("line"));
-    let hover_border = Stroke::new(1.0, rgb("line-strong"));
+    let hover_role = if colors(palette, dark).contains_key("hover-line") {
+        "hover-line"
+    } else {
+        "line-strong"
+    };
+    let hover_border = Stroke::new(1.0, rgb(hover_role));
     visuals.warn_fg_color = rgb("amber");
     visuals.error_fg_color = rgb("red");
     visuals.panel_fill = panel;

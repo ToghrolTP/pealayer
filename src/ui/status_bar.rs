@@ -219,7 +219,18 @@ impl TelemetryLog {
             self.samples.len()
         )
     }
-    fn paint(&self, ui: &mut egui::Ui, rect: egui::Rect, metric: StatusChartMetric) {
+    fn paint(&self, ui: &mut egui::Ui, rect: egui::Rect, metric: StatusChartMetric,
+             palette: crate::config::ColorPalette) {
+        let line_color = if palette == crate::config::ColorPalette::Pastel {
+            let role = match metric {
+                StatusChartMetric::Voltage => "blue",
+                StatusChartMetric::Current => "green",
+                StatusChartMetric::Temperature => "red",
+            };
+            crate::ui::palette::color(palette, ui.visuals().dark_mode, role)
+        } else {
+            ui.visuals().selection.bg_fill
+        };
         let index = Self::index(metric);
         let values: Vec<_> = self
             .samples
@@ -257,7 +268,7 @@ impl TelemetryLog {
             if let (Some(start), Some(end)) = (previous, point) {
                 ui.painter().line_segment(
                     [start, end],
-                    egui::Stroke::new(1.5, ui.visuals().selection.bg_fill),
+                    egui::Stroke::new(1.5, line_color),
                 );
             }
             previous = point;
@@ -850,6 +861,7 @@ fn render_widget(
                 ui,
                 rect.shrink2(egui::vec2(3.0, 3.0)),
                 app.status_bar.chart_metric,
+                app.color_palette,
             );
             let label = app.tr("Telemetry log chart");
             let response = response.on_hover_ui(|ui| {
@@ -857,7 +869,7 @@ fn render_widget(
                 ui.weak(log.summary(app.status_bar.chart_metric));
                 let (rect, _) =
                     ui.allocate_exact_size(egui::vec2(260.0, 90.0), egui::Sense::hover());
-                log.paint(ui, rect, app.status_bar.chart_metric);
+                log.paint(ui, rect, app.status_bar.chart_metric, app.color_palette);
             });
             return Some((response, label));
         }

@@ -17,10 +17,10 @@ pub fn install(ctx: &egui::Context) {
         })
         .unwrap_or(Value::Null);
     let get = |key: &str| profile[key].as_str().unwrap_or_default();
-    let name = if get("color_palette") == "studio" {
-        "studio"
-    } else {
-        "native"
+    let name = match get("color_palette") {
+        "studio" => "studio",
+        "pastel" => "pastel",
+        _ => "native",
     };
     let theme_override = std::env::var("APP_THEME").unwrap_or_default();
     let theme = match theme_override.trim().to_ascii_lowercase().as_str() {
