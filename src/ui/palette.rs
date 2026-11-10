@@ -1,5 +1,6 @@
 //! Shared palette data is also imported by the Web UI; neither renderer owns
 //! a separate copy of the named themes.
+use eframe::egui;
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 

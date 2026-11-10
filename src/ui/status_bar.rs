@@ -855,6 +855,7 @@ fn render_widget(
                 ui,
                 rect.shrink2(egui::vec2(3.0, 3.0)),
                 app.status_bar.chart_metric,
+                app.color_palette,
             );
             let label = app.tr("Telemetry log chart");
             let response = response.on_hover_ui(|ui| {

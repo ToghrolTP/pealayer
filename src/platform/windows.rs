@@ -3129,6 +3129,14 @@ mod tests {
             (0x00fcfaf8, 0x002b2017)
         );
         assert_eq!(
+            decoration_colors(true, ColorPalette::Pastel),
+            (0x00472e24, 0x00fff5f4)
+        );
+        assert_eq!(
+            decoration_colors(false, ColorPalette::Pastel),
+            (0x00fcf1f2, 0x00422726)
+        );
+        assert_eq!(
             decoration_colors(true, ColorPalette::Native),
             (0x00202020, 0x00eeeeee)
         );
