@@ -1408,8 +1408,8 @@ mod tests {
                         assert_eq!(code, Some(0));
                         exited = true;
                     }
-                    Event::Catalog(_) | Event::Application(_) => {
-                        panic!("OS shell must not dispatch application or controller commands")
+                    Event::Catalog(_) | Event::Application(_) | Event::GridSize { .. } => {
+                        panic!("OS shell must not emit embedded terminal or controller events")
                     }
                 }
             }
