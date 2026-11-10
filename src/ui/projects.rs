@@ -5,8 +5,8 @@ use std::{path::PathBuf,sync::{Arc,Mutex}};
 
 #[derive(Clone)]
 struct Editor {
-    document:Document, baseline:Document, path:String, include:Components,
-    error:Option<String>, notice:Option<String>, candidates:Vec<PathBuf>,
+    document:Document, baseline:Document, alternate_parts:Project, path:String, include:Components,
+    error:Option<String>, notice:Option<String>, program_warning:Option<String>, candidates:Vec<PathBuf>,
     discard:bool, confirm_outputs:bool, busy:bool,
     selected:std::collections::BTreeSet<String>,
     authority: Option<uuid::Uuid>,
@@ -28,7 +28,7 @@ pub(crate) fn busy(ctx:&egui::Context)->bool {ctx.data_mut(|d|d.get_temp::<Edito
 pub(crate) fn open(app:&PealayerApp,ctx:&egui::Context) {
     if ctx.data_mut(|d|d.get_temp::<Editor>(id())).is_some() {return;}
     let document=Document::Project(app.capture_project(ctx));
-    let state=Editor {baseline:document.clone(),document,path:app.project.path.as_ref().map(|p|p.to_string_lossy().into_owned()).unwrap_or_default(),include:Components::default(),error:None,notice:None,candidates:vec![],discard:false,confirm_outputs:false,busy:false,selected:Default::default(),authority:local_authority(),scene_report:None,next_scene_poll:std::time::Instant::now(),reply:Arc::new(Mutex::new(None))};
+    let state=Editor {baseline:document.clone(),document,alternate_parts:Project::default(),path:app.project.path.as_ref().map(|p|p.to_string_lossy().into_owned()).unwrap_or_default(),include:Components::default(),error:None,notice:None,program_warning:None,candidates:vec![],discard:false,confirm_outputs:false,busy:false,selected:Default::default(),authority:local_authority(),scene_report:None,next_scene_poll:std::time::Instant::now(),reply:Arc::new(Mutex::new(None))};
     let mut state=state;
     state.scene_report=app.project.scene_operation.as_ref().map(|op|serde_json::json!(op.report()));
     ctx.data_mut(|d|d.insert_temp(id(),state));
@@ -41,7 +41,7 @@ pub(crate) fn open_candidates(ctx:&egui::Context,candidates:Vec<PathBuf>,error:O
         return;
     }
     let document=Document::Project(Project::default());
-    ctx.data_mut(|d|d.insert_temp(id(),Editor {baseline:document.clone(),document,path:candidates.first().map(|p|p.to_string_lossy().into_owned()).unwrap_or_default(),include:Components::default(),error,notice:None,candidates,discard:false,confirm_outputs:false,busy:false,selected:Default::default(),authority:local_authority(),scene_report:None,next_scene_poll:std::time::Instant::now(),reply:Arc::new(Mutex::new(None))}));
+    ctx.data_mut(|d|d.insert_temp(id(),Editor {baseline:document.clone(),document,alternate_parts:Project::default(),path:candidates.first().map(|p|p.to_string_lossy().into_owned()).unwrap_or_default(),include:Components::default(),error,notice:None,program_warning:None,candidates,discard:false,confirm_outputs:false,busy:false,selected:Default::default(),authority:local_authority(),scene_report:None,next_scene_poll:std::time::Instant::now(),reply:Arc::new(Mutex::new(None))}));
 }
 fn queue_remote(ctx:&egui::Context,request:Request) {
     let Some(client)=crate::peer::client().cloned() else {return};
@@ -65,11 +65,14 @@ fn accept(editor:&mut Editor,result:Result<serde_json::Value,String>) {
     editor.busy=false;
     match result {
         Ok(value)=>{
-            if let Some(document)=value.get("document") {match serde_json::from_value::<Document>(document.clone()) {
+            if let Some(document)=value.get("document") {editor.program_warning=None;editor.alternate_parts=Project::default();match serde_json::from_value::<Document>(document.clone()) {
                 Ok(document)=>{if let Err(error)=document.validate(){editor.error=Some(error);return;}editor.authority=value["owner_id"].as_str().and_then(|owner|uuid::Uuid::parse_str(owner).ok());editor.confirm_outputs=false;editor.selected.clear();editor.baseline=document.clone();editor.document=document;editor.include=Components::default();},Err(e)=>{editor.error=Some(e.to_string());return;}
             }}
             if let Some(report)=value.get("scene_operation") {editor.scene_report=(!report.is_null()).then(||report.clone());editor.next_scene_poll=std::time::Instant::now()+std::time::Duration::from_millis(500);editor.confirm_outputs=false;}
             if let Some(path)=value.get("path").and_then(|p|p.as_str()) {editor.path=path.into();}
+            if let Some(warning) = value.get("program_warning") {
+                editor.program_warning = warning.as_str().map(str::to_owned);
+            }
             editor.notice=Some(if value.get("exported")==Some(&true.into()) {"Component exported locally; project edits remain unsaved."} else if value.get("saved")==Some(&true.into()) {editor.baseline=included(&editor.document,editor.include);"Saved"} else if value.get("media_pending")==Some(&true.into()) {"Loading media; timeline and workspace commit after decoder confirmation."} else if value.get("loaded")==Some(&true.into()) {"Loaded paused. Scene outputs have not been applied."} else if value.get("queued")==Some(&true.into()) {"Hardware commands queued; monitor controller acknowledgements."} else {"Ready"}.into());editor.error=None;
         },Err(error)=>editor.error=Some(error),
     }
@@ -89,12 +92,26 @@ fn path_field(ui:&mut egui::Ui,label:&str,path:&mut String,key:&str,save:bool) {
         }
     });
 }
-fn component<T:Clone>(ui:&mut egui::Ui,label:&str,key:&str,part:&mut Option<Part<T>>,include:&mut bool,load:&mut bool) {
+fn switch_component_source<T>(part: &mut Option<Part<T>>, alternate: &mut Option<Part<T>>, linked: bool) {
+    let previous = std::mem::replace(part, alternate.take());
+    *alternate = previous;
+    if linked && part.is_none() {
+        *part = Some(Part::File { path: String::new() });
+    }
+}
+
+fn component<T>(
+    ui: &mut egui::Ui, label: &str, key: &str,
+    part: &mut Option<Part<T>>, alternate: &mut Option<Part<T>>,
+    include: &mut bool, load: &mut bool,
+) {
     ui.horizontal(|ui|{
         ui.checkbox(include,label); ui.add_enabled_ui(*include,|ui|{ui.checkbox(load,"Load");});
         if part.is_none() {ui.weak("Not captured");}
         let mut linked=matches!(part,Some(Part::File {..}));
-        if ui.checkbox(&mut linked,"Separate file").changed() {if linked {*part=Some(Part::File {path:String::new()});} else {*include=false;*part=None;}}
+        if ui.checkbox(&mut linked, "Separate file").changed() {
+            switch_component_source(part, alternate, linked);
+        }
     });
     if let Some(Part::File {path})=part {path_field(ui,"Component file",path,key,false);}
 }
@@ -135,10 +152,10 @@ pub(crate) fn draw(app:&mut PealayerApp,root:&mut egui::Ui) {
                         ui.label("Title");ui.add(crate::ui::dialog::singleline_text_edit(ui,&mut project.title).desired_width(f32::INFINITY));
                         ui.label("Notes");ui.add(egui::TextEdit::multiline(&mut project.notes).desired_rows(2).desired_width(f32::INFINITY));
                         ui.label("Save / load components");
-                        component(ui,"Scene","project-scene",&mut project.scene,&mut editor.include.scene,&mut project.load.scene);
-                        component(ui,"Timeline","project-timeline",&mut project.timeline,&mut editor.include.timeline,&mut project.load.timeline);
-                        component(ui,"Media","project-media-info",&mut project.media,&mut editor.include.media,&mut project.load.media);
-                        component(ui,"Workspace","project-workspace",&mut project.workspace,&mut editor.include.workspace,&mut project.load.workspace);
+                        component(ui,"Scene","project-scene",&mut project.scene,&mut editor.alternate_parts.scene,&mut editor.include.scene,&mut project.load.scene);
+                        component(ui,"Timeline","project-timeline",&mut project.timeline,&mut editor.alternate_parts.timeline,&mut editor.include.timeline,&mut project.load.timeline);
+                        component(ui,"Media","project-media-info",&mut project.media,&mut editor.alternate_parts.media,&mut editor.include.media,&mut project.load.media);
+                        component(ui,"Workspace","project-workspace",&mut project.workspace,&mut editor.alternate_parts.workspace,&mut editor.include.workspace,&mut project.load.workspace);
                         if let Some(Part::Embedded {value:media})=&mut project.media {media_editor(ui,media);}
                         if let Some(Part::Embedded {value:scene})=&mut project.scene {scene_editor(ui,scene,&mut editor.selected);}
                         ui.horizontal_wrapped(|ui|{
@@ -157,6 +174,7 @@ pub(crate) fn draw(app:&mut PealayerApp,root:&mut egui::Ui) {
             });
             if let Some(error)=&editor.error {ui.colored_label(ui.visuals().error_fg_color,error);}
             if let Some(notice)=&editor.notice {ui.label(notice);}
+            if let Some(warning) = &editor.program_warning { ui.colored_label(ui.visuals().warn_fg_color, warning); }
             if let Some(report)=&editor.scene_report {
                 ui.label(format!("Scene: {}",report["status"].as_str().unwrap_or("unknown")));
                 if let Some(outputs)=report["outputs"].as_array() {for output in outputs {ui.label(format!("{} · {}",output["output"]["target"].as_str().unwrap_or("?"),output["status"].as_str().unwrap_or("unknown")));}}
@@ -204,8 +222,14 @@ pub(crate) fn draw(app:&mut PealayerApp,root:&mut egui::Ui) {
             if request.mutates_authority() && editor.authority != local_authority() {
                 reject_changed_authority(&mut editor);
             } else {
-                let result = app.document_request(&ctx,request);
-                accept(&mut editor,result);
+                let reply = editor.reply.clone();
+                editor.busy = true;
+                app.dispatch_document_request(&ctx, request, Some(Box::new(move |result| {
+                    if let Ok(mut slot) = reply.lock() {
+                        *slot = Some(result);
+                    }
+                })), None);
+                ctx.request_repaint();
             }
             ctx.data_mut(|d|d.insert_temp(id(),editor));
         }
@@ -254,6 +278,20 @@ fn scene_editor(ui:&mut egui::Ui,scene:&mut Scene,selected:&mut std::collections
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn switching_component_sources_preserves_both_drafts() {
+        let original = Media { target: "movie.mkv".into(), ..Media::default() };
+        let mut part = Some(Part::embedded(original.clone()));
+        let mut alternate = None;
+        switch_component_source(&mut part, &mut alternate, true);
+        assert_eq!(part, Some(Part::File { path: String::new() }));
+        part = Some(Part::File { path: "movie.pealayer-media.json".into() });
+        switch_component_source(&mut part, &mut alternate, false);
+        assert_eq!(part, Some(Part::embedded(original)));
+        switch_component_source(&mut part, &mut alternate, true);
+        assert_eq!(part, Some(Part::File { path: "movie.pealayer-media.json".into() }));
+    }
+
     #[test]
     fn discovering_candidates_preserves_the_open_draft_and_pending_reply() {
         let ctx=egui::Context::default();

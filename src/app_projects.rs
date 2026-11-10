@@ -30,8 +30,56 @@ impl ExternalLoadFence {
     }
 }
 
+pub(crate) type DocumentReply = Box<dyn FnOnce(Result<Value, String>) + Send>;
+
+struct DocumentWork {
+    prepared: std::sync::mpsc::Receiver<Result<PreparedDocument, String>>,
+    reply: Option<DocumentReply>,
+    restoring: bool,
+    superseded: bool,
+    deadline: Option<std::time::Instant>,
+}
+
+enum PreparedDocument {
+    Read { path: String, document: Document },
+    Write { path: PathBuf, document: Document },
+    Restore { path: PathBuf, project: Project, is_project: bool, discard: bool },
+}
+
+fn prepare_file_request(request: Request) -> Result<PreparedDocument, String> {
+    match request {
+        Request::Read { path } => Ok(PreparedDocument::Read { document: Document::read(Path::new(&path))?, path }),
+        Request::Write { path, document } => {
+            let path = PathBuf::from(path);
+            document.write(&path)?;
+            Ok(PreparedDocument::Write { path, document })
+        }
+        Request::Load { path, components, discard_unsaved } => {
+            let path = PathBuf::from(path);
+            prepare_restore(Document::read(&path)?, path, components, discard_unsaved)
+        }
+        Request::Stage { document, base_path, components, discard_unsaved } =>
+            prepare_restore(document, PathBuf::from(base_path), components, discard_unsaved),
+        _ => unreachable!("live operations do not use the document file worker"),
+    }
+}
+
+fn prepare_restore(document: Document, path: PathBuf, components: Option<Components>, discard: bool) -> Result<PreparedDocument, String> {
+    let is_project = matches!(&document, Document::Project(_));
+    let project = match document {
+        Document::Project(value) => value,
+        Document::Scene(value) => Project { scene: Some(Part::embedded(value)), ..Project::default() },
+        Document::Timeline(value) => Project { timeline: Some(Part::embedded(value)), ..Project::default() },
+        Document::Media(value) => Project { media: Some(Part::embedded(value)), ..Project::default() },
+        Document::Workspace(value) => Project { workspace: Some(Part::embedded(value)), ..Project::default() },
+    };
+    let project = resolve(&project, &path, components.unwrap_or(project.load))?;
+    Ok(PreparedDocument::Restore { path, project, is_project, discard })
+}
+
 #[derive(Default)]
 pub(crate) struct ProjectSession {
+    document_work: Option<DocumentWork>,
     pub path:Option<PathBuf>,
     pub title:String,
     pub notes:String,
@@ -117,14 +165,113 @@ impl PealayerApp {
         self.current_video_path.as_ref().map(|path|Media {target:path.to_string_lossy().into_owned(),position_ms:milliseconds(self.playback_time),duration_ms:milliseconds(self.duration),paused:self.is_paused,
             speed:self.mpv.get_property::<f64>("speed").unwrap_or(1.0),video_track:track(&self.mpv,"vid"),audio_track:track(&self.mpv,"aid"),subtitle_track:track(&self.mpv,"sid"),information:self.media_file_info.clone()})
     }
-    pub(crate) fn document_request(&mut self,ctx:&egui::Context,request:Request)->Result<Value,String> {
-        if crate::peer::active() { return Err("Document operations belong to the connected Pealayer authority".into()); }
-        let mut result = self.handle_document_request(ctx, request)?;
-        result["owner_id"] = Value::String(crate::peer::instance_id().into());
-        Ok(result)
+    pub(crate) fn dispatch_document_request(
+        &mut self,
+        ctx: &egui::Context,
+        request: Request,
+        reply: Option<DocumentReply>,
+        deadline: Option<std::time::Instant>,
+    ) {
+        if crate::peer::active() {
+            self.reply_to_document(reply, Err("Document operations belong to the connected Pealayer authority".into()));
+            return;
+        }
+        if self.project.document_work.is_some() && matches!(&request, Request::ApplyScene { .. }) {
+            self.reply_to_document(reply, Err("Wait for the current document file operation to finish".into()));
+            return;
+        }
+        match request {
+            request @ (Request::Read { .. } | Request::Write { .. } | Request::Load { .. } | Request::Stage { .. }) => {
+                if self.project.document_work.is_some() {
+                    self.reply_to_document(reply, Err("Wait for the current document file operation to finish".into()));
+                    return;
+                }
+                let restoring = matches!(&request, Request::Load { .. } | Request::Stage { .. });
+                let (sender, prepared) = std::sync::mpsc::channel();
+                let context = ctx.clone();
+                let work = std::thread::Builder::new().name("project-document".into()).spawn(move || {
+                    let result = prepare_file_request(request);
+                    let _ = sender.send(result);
+                    context.request_repaint();
+                });
+                match work {
+                    Ok(_) => self.project.document_work = Some(DocumentWork { prepared, reply, restoring, superseded: false, deadline }),
+                    Err(error) => self.reply_to_document(reply, Err(format!("Could not start document file operation: {error}"))),
+                }
+            }
+            request => {
+                let result = self.handle_live_document_request(ctx, request);
+                self.reply_to_document(reply, result);
+            }
+        }
     }
 
-    fn handle_document_request(&mut self, ctx: &egui::Context, request: Request) -> Result<Value, String> {
+    fn reply_to_document(&mut self, reply: Option<DocumentReply>, result: Result<Value, String>) {
+        let result = result.map(|mut value| {
+            value["owner_id"] = Value::String(crate::peer::instance_id().into());
+            value
+        });
+        if let Some(reply) = reply {
+            reply(result);
+        } else if let Err(error) = result {
+            self.show_error = Some(error);
+        }
+    }
+
+    pub(crate) fn document_io_busy(&self) -> bool {
+        self.project.document_work.is_some()
+    }
+
+    fn poll_document_work(&mut self, ctx: &egui::Context) {
+        use std::sync::mpsc::TryRecvError;
+        let Some(work) = &self.project.document_work else { return; };
+        let prepared = match work.prepared.try_recv() {
+            Ok(result) => result,
+            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Disconnected) => Err("Document file operation stopped before completion".into()),
+        };
+        let work = self.project.document_work.take().expect("document worker was present");
+        let result = if work.superseded {
+            Err("A newer media action replaced the pending document restore".into())
+        } else if work.restoring && work.deadline.is_some_and(|deadline| deadline <= std::time::Instant::now()) {
+            Err("Request expired before the document could be restored".into())
+        } else if crate::peer::active() {
+            Err("Document authority changed before the result could be applied".into())
+        } else {
+            prepared.and_then(|prepared| match prepared {
+                PreparedDocument::Read { path, document } => Ok(json!({"document": document, "path": path})),
+                PreparedDocument::Write { path, document } => {
+                    self.finish_document_write(&path, &document);
+                    Ok(json!({"saved": true, "path": path}))
+                }
+                PreparedDocument::Restore { path, project, is_project, discard } =>
+                    self.stage_resolved_project(ctx, project, &path, is_project, discard),
+            })
+        };
+        self.reply_to_document(work.reply, result);
+    }
+
+    fn finish_document_write(&mut self, path: &Path, document: &Document) {
+        let timeline = match document {
+            Document::Project(project) => {
+                self.project.path = Some(path.to_owned());
+                self.project.title.clone_from(&project.title);
+                self.project.notes.clone_from(&project.notes);
+                self.remember_project(path, project);
+                match &project.timeline {
+                    Some(Part::Embedded { value }) => Some(value),
+                    _ => None,
+                }
+            }
+            Document::Timeline(timeline) => Some(timeline),
+            _ => None,
+        };
+        if timeline.is_some_and(|saved| saved.timeline == self.capture_timeline_document().timeline) {
+            self.timeline_saved_baseline = Some(self.snapshot_timeline());
+        }
+    }
+
+    fn handle_live_document_request(&mut self, ctx: &egui::Context, request: Request) -> Result<Value, String> {
         match request {
             Request::Validate {document}=>{document.validate()?;Ok(json!({"document":document}))},
             Request::Snapshot=>Ok(json!({"document":Document::Project(self.capture_project(ctx)),"path":self.project.path,"staged_scene":self.project.scene,"scene_operation":self.scene_report()})),
@@ -133,26 +280,6 @@ impl PealayerApp {
                 let scene=Scene::capture(&cap);scene.validate()?;
                 Ok(json!({"document":Document::Scene(scene)}))
             },
-            Request::Read {path}=>Ok(json!({"document":Document::read(Path::new(&path))?,"path":path})),
-            Request::Write {path,document}=>{
-                document.write(Path::new(&path))?;
-                if let Document::Project(project)=&document {
-                    self.project.path=Some(PathBuf::from(&path));self.project.title=project.title.clone();self.project.notes=project.notes.clone();
-                    // Only mark the timeline saved if the written embedded data is identical.
-                    if let Some(Part::Embedded {value})=&project.timeline {
-                        if value.timeline==self.capture_timeline_document().timeline {self.timeline_saved_baseline=Some(self.snapshot_timeline());}
-                    }
-                    self.remember_project(Path::new(&path),project);
-                } else if let Document::Timeline(t)=&document {
-                    if t.timeline==self.capture_timeline_document().timeline {self.timeline_saved_baseline=Some(self.snapshot_timeline());}
-                }
-                Ok(json!({"saved":true,"path":path}))
-            },
-            Request::Load {path,components,discard_unsaved}=>{
-                let document=Document::read(Path::new(&path))?;
-                self.stage_document(ctx,document,Path::new(&path),components,discard_unsaved)
-            },
-            Request::Stage {document,base_path,components,discard_unsaved}=>self.stage_document(ctx,document,Path::new(&base_path),components,discard_unsaved),
             Request::ApplyScene {scene,selected,confirm}=>{
                 if !confirm {return Err("Explicit confirmation is required to apply scene outputs".into());}
                 self.apply_scene(&scene,&selected)?;
@@ -165,23 +292,31 @@ impl PealayerApp {
                 operation.cancel(std::time::Instant::now());
                 Ok(json!({"scene_operation":self.scene_report()}))
             },
+            _ => unreachable!("file operations are prepared by the document worker"),
         }
     }
-    fn stage_document(&mut self,ctx:&egui::Context,document:Document,path:&Path,components:Option<Components>,discard:bool)->Result<Value,String> {
+
+    fn stage_document(&mut self, ctx: &egui::Context, document: Document, path: &Path, components: Option<Components>, discard: bool) -> Result<Value, String> {
+        let PreparedDocument::Restore { path, project, is_project, discard } =
+            prepare_restore(document, path.to_owned(), components, discard)? else { unreachable!() };
+        self.stage_resolved_project(ctx, project, &path, is_project, discard)
+    }
+
+    fn stage_resolved_project(&mut self,ctx:&egui::Context,loaded:Project,path:&Path,is_project:bool,discard:bool)->Result<Value,String> {
         if self.project_restore_busy() {return Err("Wait for the pending project media load or cancel it by opening another file".into());}
-        document.validate()?;
-        let is_project=matches!(&document,Document::Project(_));
-        let project=match document {
-            Document::Project(p)=>p,
-            Document::Scene(value)=>Project {scene:Some(Part::embedded(value)),..Project::default()},
-            Document::Timeline(value)=>Project {timeline:Some(Part::embedded(value)),..Project::default()},
-            Document::Media(value)=>Project {media:Some(Part::embedded(value)),..Project::default()},
-            Document::Workspace(value)=>Project {workspace:Some(Part::embedded(value)),..Project::default()},
-        };
-        let loaded=resolve(&project,path,components.unwrap_or(project.load))?;
+        if self.scene_operation_busy() {return Err("Finish the pending scene output operation before loading a document".into());}
+        if loaded.media.is_some() {
+            // Drain older decoder events before pausing or arming the new
+            // transaction. An ordinary load can still deliver a same-path event.
+            self.process_events();
+            if self.current_video_path.is_some() && !self.media_metadata_loaded && !crate::mpv::external::active() {
+                return Err("Wait for the current media load before restoring a project".into());
+            }
+        }
+        let program_warning = self.project_program_warning(&loaded);
         if loaded.timeline.is_some() || loaded.workspace.is_some() || loaded.media.is_some() {
             let inspection=self.inspect_authoring(ctx);
-            if inspection.items.iter().any(|i|i.state==crate::authoring::State::Busy) {return Err("Finish pending recording or hardware operations before loading a document".into());}
+            if inspection.items.iter().any(|i|i.domain != "project_operation" && i.state==crate::authoring::State::Busy) {return Err("Finish pending recording or hardware operations before loading a document".into());}
             if !discard && inspection.items.iter().any(|i|matches!(i.state,crate::authoring::State::Dirty|crate::authoring::State::Unknown)) {
                 return Err("Unsaved or unconfirmed editors exist. Save them, or explicitly confirm replacing the session".into());
             }
@@ -193,15 +328,6 @@ impl PealayerApp {
             self.engine_handle.is_playing.store(false,std::sync::atomic::Ordering::Release);
         }
         if let Some(Part::Embedded {value:media})=&loaded.media {
-            // Drain older decoder events before arming the new transaction.
-            // An unresolved ordinary load can still deliver a same-path boundary.
-            self.process_events();
-            if self.current_video_path.is_some()
-                && !self.media_metadata_loaded
-                && !crate::mpv::external::active()
-            {
-                return Err("Wait for the current media load before restoring a project".into());
-            }
             let previous_media=self.capture_project_media();
             let external_revision=ExternalLoadFence::active();
             // Supply start with loadfile, before decode. FileLoaded reasserts the
@@ -219,7 +345,7 @@ impl PealayerApp {
             self.playback_time=media.position_ms as f64/1000.0;self.duration=0.0;self.is_seekable=false;self.is_eof=false;
             self.media_file_info=crate::media_info::MediaFileInfo::default();
             self.project.pending_commit=Some((loaded,path.to_path_buf(),is_project,ctx.clone()));
-            return Ok(json!({"loaded":false,"media_pending":true,"scene_applied":false,"playback":"paused"}));
+            return Ok(pending_project_result(program_warning));
         }
         if let Some(Part::Embedded { value: timeline }) = &loaded.timeline
             && self.is_seekable
@@ -227,12 +353,20 @@ impl PealayerApp {
             self.queue_project_seek(timeline.view.position_ms)?;
             self.project.pending_commit = Some((loaded, path.to_path_buf(), is_project, ctx.clone()));
             self.project.pending_started = Some(std::time::Instant::now());
-            return Ok(json!({"loaded":false,"media_pending":true,"scene_applied":false,"playback":"paused"}));
+            return Ok(pending_project_result(program_warning));
         }
         self.commit_project(ctx,loaded,path,is_project)?;
-        Ok(json!({"loaded":true,"scene_applied":false,"playback":"paused","media_pending":false}))
+        Ok(json!({"loaded":true,"scene_applied":false,"playback":"paused","media_pending":false,"program_warning":program_warning}))
     }
+    fn project_program_warning(&self, project: &Project) -> Option<String> {
+        let Some(Part::Embedded { value: timeline }) = &project.timeline else { return None; };
+        let capabilities = self.advertised_hardware_shared();
+        let catalog = capabilities.as_deref().filter(|cap| self.is_connected && cap.board_connected);
+        missing_controller_programs(&timeline.timeline, catalog)
+    }
+
     fn commit_project(&mut self,ctx:&egui::Context,loaded:Project,path:&Path,is_project:bool)->Result<(),String> {
+        let program_warning = self.project_program_warning(&loaded);
         let metadata=loaded.clone();
         if let Some(Part::Embedded {value:workspace})=&loaded.workspace {self.apply_workspace_profile(ctx,workspace)?;}
         if let Some(Part::Embedded {value:timeline})=loaded.timeline {
@@ -255,6 +389,7 @@ impl PealayerApp {
             self.project.path=(!path.as_os_str().is_empty()).then(||path.to_path_buf());self.project.title=metadata.title.clone();self.project.notes=metadata.notes.clone();
             if !path.as_os_str().is_empty() {self.remember_project(path,&metadata);}
         }
+        if let Some(warning) = program_warning { self.set_osd(warning); }
         ctx.request_repaint();
         Ok(())
     }
@@ -391,6 +526,9 @@ impl PealayerApp {
     }
 
     pub(crate) fn cancel_project_media_load(&mut self) {
+        if let Some(work) = self.project.document_work.as_mut().filter(|work| work.restoring) {
+            work.superseded = true;
+        }
         if let Some(seek) = self.project.pending_seek.take()
             && self.pending_exact_seek_id() == Some(seek.request_id)
         {
@@ -433,6 +571,7 @@ impl PealayerApp {
         self.project.pending_discovery=Some((target.into(),candidates));true
     }
     pub(crate) fn poll_project_discovery(&mut self,ctx:&egui::Context) {
+        self.poll_document_work(ctx);
         self.poll_scene_operation();
         if self.scene_operation_busy() {ctx.request_repaint_after(std::time::Duration::from_millis(100));}
         if self.project.pending_external_revision.is_some() {self.finish_project_media_load();}
@@ -510,12 +649,90 @@ impl PealayerApp {
         self.poll_scene_operation();
     }
 }
+fn pending_project_result(program_warning: Option<String>) -> Value {
+    json!({"loaded":false,"media_pending":true,"scene_applied":false,"playback":"paused","program_warning":program_warning})
+}
+
+fn missing_controller_programs(
+    timeline: &crate::four_d::models::Timeline,
+    catalog: Option<&crate::four_d::controller::HardwareCapabilities>,
+) -> Option<String> {
+    use crate::four_d::models::{ControllerEffectLane, controller_effect_timeline_track_key};
+    use std::collections::BTreeSet;
+
+    let placed: BTreeSet<_> = timeline.instances.iter().map(|cue| cue.effect_id).collect();
+    let mut sequences = BTreeSet::new();
+    let mut lighting = BTreeSet::new();
+    for effect in timeline.templates.iter().filter(|effect| placed.contains(&effect.id)) {
+        let lane = effect.controller_lane.unwrap_or(ControllerEffectLane::Sequence);
+        if let Some(sequence) = &effect.controller_macro
+            && timeline.track_state(&controller_effect_timeline_track_key(lane)).linked
+        {
+            sequences.insert(sequence.id);
+        }
+        if let Some(strip) = &effect.controller_strip_effect
+            && timeline.track_state(&controller_effect_timeline_track_key(ControllerEffectLane::Lighting)).linked
+        {
+            lighting.insert(strip.id.as_str());
+        }
+    }
+    if sequences.is_empty() && lighting.is_empty() {
+        return None;
+    }
+    let Some(catalog) = catalog else {
+        return Some("Connect to PCController to verify this timeline’s sequence and lighting programs before playback.".into());
+    };
+    let known_sequences: BTreeSet<_> = catalog.macros.iter().map(|item| item.id).collect();
+    let known_lighting: BTreeSet<_> = catalog.strip_effects.iter().map(|item| item.id.as_str()).collect();
+    let missing_sequences = sequences.difference(&known_sequences);
+    let missing_lighting = lighting.difference(&known_lighting);
+    let missing: Vec<_> = missing_sequences.map(|id| format!("sequence {id}"))
+        .chain(missing_lighting.map(|id| format!("lighting effect {id}"))).collect();
+    if missing.is_empty() {
+        return None;
+    }
+    let shown = missing.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
+    let more = if missing.len() > 5 { format!(" and {} more", missing.len() - 5) } else { String::new() };
+    Some(format!("Unavailable on this PCController: {shown}{more}. Check these cue references before playback."))
+}
+
 fn milliseconds(value:f64)->u64 {if value.is_finite() { (value.max(0.0)*1000.0).round().min(MAX_TIME_MS as f64) as u64 } else {0}}
 fn track(mpv:&crate::mpv::player::Player,key:&str)->String {mpv.get_property::<String>(key).ok().filter(|s|matches!(s.as_str(),"auto"|"no")||s.parse::<u32>().is_ok()).unwrap_or_else(||"auto".into())}
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn controller_dependencies_follow_placed_linked_cues_and_live_catalog() {
+        use crate::four_d::{controller::{HardwareCapabilities, HardwareStripEffect}, models::{Effect, EffectInstance, Timeline}};
+
+        let strip = Effect::controller_strip_effect("Cinema lights".into(), 1000, "cinema-lights".into());
+        let mut timeline = Timeline::default();
+        timeline.templates.push(strip.clone());
+        assert_eq!(missing_controller_programs(&timeline, None), None);
+
+        timeline.instances.push(EffectInstance::new(strip.id, 3000));
+        assert!(missing_controller_programs(&timeline, None).unwrap().contains("Connect to PCController"));
+        let mut catalog = HardwareCapabilities::default();
+        assert!(missing_controller_programs(&timeline, Some(&catalog)).unwrap().contains("cinema-lights"));
+        catalog.strip_effects.push(HardwareStripEffect { id: "cinema-lights".into(), ..Default::default() });
+        assert_eq!(missing_controller_programs(&timeline, Some(&catalog)), None);
+    }
+
+    #[test]
+    fn file_preparation_fails_before_an_invalid_restore_can_reach_the_session() {
+        let request = Request::Stage {
+            document: Document::Project(Project {
+                media: Some(Part::File { path: "missing.media.json".into() }),
+                ..Project::default()
+            }),
+            base_path: std::env::temp_dir().join(uuid::Uuid::new_v4().to_string()).join("project.json").to_string_lossy().into_owned(),
+            components: None,
+            discard_unsaved: false,
+        };
+        assert!(prepare_file_request(request).is_err());
+    }
 
     #[test]
     fn restore_fence_requires_the_requested_decoder_seek_and_paused_media() {

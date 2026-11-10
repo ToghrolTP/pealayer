@@ -28,9 +28,11 @@ export function ProjectDialog({ base, locale, onClose }: { base: string; locale:
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
   const [notice, setNotice] = useState('');
+  const [programWarning, setProgramWarning] = useState('');
   const [picker, setPicker] = useState<{ title: string; extensions: string[]; select: (path: string) => void } | null>(null);
   const [closeConfirm, setCloseConfirm] = useState(false);
   const importInput = useRef<HTMLInputElement>(null);
+  const alternateParts = useRef<Partial<Record<Key, unknown>>>({});
   const selected = () => {
     const result = structuredClone(document);
     if (result?.kind === 'pealayer-project') keys.forEach(key => { if (!include[key]) result.data[key] = null; });
@@ -47,16 +49,18 @@ export function ProjectDialog({ base, locale, onClose }: { base: string; locale:
       return null;
     }
     setBusy(true); setError(''); setNotice('');
+    if (operation !== 'scene_status') setProgramWarning('');
     try {
       const query = writesAuthority ? `?${new URLSearchParams({ owner_id: documentOwner })}` : '';
       const response = await fetch(`${base}/api/peer/documents${query}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(value) });
       const result = await response.json();
       if (currentBase.current !== base) return null;
       if (!response.ok || result.error) throw new Error(result.error || `Document request failed (${response.status})`);
-      if (result.document) { setDocumentBase(base); setDocumentOwner(typeof result.owner_id === 'string' ? result.owner_id : ''); setConfirmOutputs(false); setSelectedOutputs([]); setDocument(result.document); setBaseline(JSON.stringify(result.document)); setInclude(all); }
+      if (result.document) { alternateParts.current = {}; setDocumentBase(base); setDocumentOwner(typeof result.owner_id === 'string' ? result.owner_id : ''); setConfirmOutputs(false); setSelectedOutputs([]); setDocument(result.document); setBaseline(JSON.stringify(result.document)); setInclude(all); }
       if ('scene_operation' in result) { setSceneReport(result.scene_operation); setConfirmOutputs(false); }
       if (typeof result.path === 'string') setPath(result.path);
       if (result.saved) { setBaseline(JSON.stringify(selected())); setNotice('Saved on the Pealayer authority.'); }
+      if (typeof result.program_warning === 'string') setProgramWarning(result.program_warning);
       if (result.loaded) setNotice('Loaded paused. Scene values are staged, not applied.');
       if (result.media_pending) setNotice('Loading media; timeline and workspace commit after decoder confirmation.');
       if (result.queued) setNotice('Commands queued; check Hardware Monitor for acknowledgements.');
@@ -79,6 +83,16 @@ export function ProjectDialog({ base, locale, onClose }: { base: string; locale:
   const project = document?.kind === 'pealayer-project' ? document.data : null;
   const part = (key: Key) => project?.[key]?.source === 'embedded' ? project[key].value : document?.kind === `pealayer-${key}` ? document.data : null;
   const scene = part('scene'), media = part('media');
+  const switchSource = (key: Key, source: 'embedded' | 'file') => {
+    const alternate = alternateParts.current[key];
+    if (source === 'embedded' && !alternate) {
+      setError('Capture the current session to embed this component.');
+      return;
+    }
+    alternateParts.current[key] = project?.[key];
+    setError('');
+    edit(d => { d.data[key] = alternate ?? { source: 'file', path: '' }; });
+  };
   const editPart = (key: Key, apply: (value: any) => void) => edit(d => apply(d.kind === 'pealayer-project' ? d.data[key].value : d.data));
   const download = (value: Document, filename: string) => {
     const url = URL.createObjectURL(new Blob([JSON.stringify(value, null, 2) + '\n'], { type: 'application/json' }));
@@ -124,7 +138,7 @@ export function ProjectDialog({ base, locale, onClose }: { base: string; locale:
               <Checkbox checked={include[key]} onChange={e => setInclude({ ...include, [key]: e.target.checked })}>{componentLabels[key]}</Checkbox>
               <Checkbox checked={project.load[key]} disabled={!include[key]} onChange={e => edit(d => { d.data.load[key] = e.target.checked; })}>Load</Checkbox>
               <Select aria-label={`${key} source`} value={project[key]?.source ?? 'absent'} options={[{ value: 'embedded', label: 'Embedded' }, { value: 'file', label: 'Separate file' }, { value: 'absent', label: 'Not captured', disabled: true }]}
-                onChange={source => { if (source === 'file') edit(d => { d.data[key] = { source: 'file', path: '' }; }); else setError('Capture the current session to embed this component.'); }} />
+                onChange={source => switchSource(key, source)} />
               {project[key]?.source === 'embedded' && <Button size="small" icon={<DownloadOutlined />} onClick={() => download({ kind: `pealayer-${key}`, data: project[key].value }, `${key}.json`)}>Export</Button>}
             </Flex>
             {project[key]?.source === 'file' && <Flex gap={8}><Input value={project[key].path} placeholder="Relative to project file" onChange={e => edit(d => { d.data[key].path = e.target.value; })} />
@@ -161,7 +175,8 @@ export function ProjectDialog({ base, locale, onClose }: { base: string; locale:
         {sceneReport.outputs.map((item: any) => <div key={item.output.target}>{item.output.target} · {item.status}</div>)}
         {applying && <Button disabled={busy} onClick={() => void request({ operation: 'cancel_scene', operation_id: sceneReport.id })}>Cancel after current output</Button>}
       </div>}
-      {error && <Alert type="error" showIcon title={error} />}{notice && <Alert type="success" showIcon title={notice} />}
+      {error && <Alert type="error" showIcon title={error} />}{notice && <Alert type="success" showIcon title={notice} /> }
+      {programWarning && <Alert type="warning" showIcon title={programWarning} />}
     </Modal>
     <Modal open={closeConfirm} title="Unsaved document changes" onCancel={() => setCloseConfirm(false)} onOk={onClose} okText="Discard and close" okButtonProps={{ danger: true }}><Typography.Paragraph>Save or download to keep your changes.</Typography.Paragraph></Modal>
     {picker && <ServerFilePicker apiBaseUrl={base} locale={locale} title={picker.title} extensions={picker.extensions} initialFile={path} onCancel={() => setPicker(null)} onSelect={value => { picker.select(value); setPicker(null); }} />}

@@ -1,8 +1,8 @@
-# Project persistence: preserved implementation draft
+# Project, timeline and scene persistence
 
 Owner: [issue #226](https://github.com/ToghrolTP/pealayer/issues/226).
 Branch: `feat/project-scene-persistence`, originally stacked on the UI work in PR #225.
-This is not a production-ready feature or deployment candidate.
+The implementation and verification history are recorded here. Physical output and production deployment have separate acceptance gates.
 
 ## Merge audit repairs (5 November 2026)
 
@@ -75,31 +75,41 @@ native and Web metadata editors; and a shared `pealayer.documents` RPC/peer path
 Initial native checking and Web TypeScript checking passed. Focused Preferences
 tests also compiled against this draft, but do not validate project semantics.
 
-## Required next work before acceptance
+## Project operations
 
-- Transactional restoration: validate all components before mutating media or
-  workspace, handle rollback and stale FileLoaded events, and retain the normal
-  media/history/cache lifecycle. Test exact millisecond position and pause state.
-- Scene capture/apply: verify the coordinated output contract end-to-end, including
-  partial failure, cancellation and the PWM recall revision boundary. Raw motion
-  and firmware-owned channels remain data-only; safe general-purpose selections
-  are explicit, never a command to apply every captured value.
-- Preserve selected track/filter/order and all workspace/dialog-owned geometry
-  and scroll state. Reconcile the older raw timeline save/load actions with the
-  one current document contract rather than exposing conflicting formats.
-- Offline portability: resolve SFX references and controller program dependencies;
-  report missing dependencies before playback without inventing definitions.
-- Discovery: verify native/Web ambiguity flows and requested-media restoration in
-  live decoder sessions, including missing linked files and stale decoder events.
-- Editors: exercise the repaired dirty-draft/import/export/partial-selection flows
-  at responsive widths and confirm their actual authority ownership.
-- Move disk operations off the UI thread where necessary; propagate write and
-  association errors rather than silently ignoring them.
-- Round-trip/malformed/safety/permission tests, actual native/Web screenshots at
-  responsive widths, authority/consumer checks and host-compatible deployment.
+Projects, scenes and timelines use the same bounded JSON documents in the native
+editor, Web UI and IPC/RPC. A project can link or embed its components. Switching
+between the two sources in the editor retains both the embedded draft and the
+linked path. Selected local SFX paths resolve from the owning timeline file.
+Controller sequences and lighting programs retain their IDs and stay owned by
+PCController. The load response and editors warn when those placed, linked cues
+reference programs missing from the connected catalog, or when the catalog
+cannot be checked offline.
 
-No scene load is permission to actuate hardware. User files, private review
-profiles and generated Web build output are not part of this checkpoint.
+Explicit document read, write and load preflight run on a bounded single worker.
+The session commits through the authority on the UI thread. Newer Open or Close
+actions supersede a pending restore. A remote restore whose dispatcher deadline
+expires cannot commit later. A document save marks a timeline clean only when
+its contents still match the bytes saved.
+
+Workspace documents keep the layout, visible panels, supported dialog state,
+main-window geometry and persisted egui view positions. Native Preferences can
+run in a separate process; its helper window position and scroll are outside the
+main window's egui snapshot.
+
+## Remaining runtime acceptance
+
+- Exercise dropped/reordered decoder events and authority disconnects under
+  live transport faults. Exact ordinary restoration and corrupt-file rollback
+  are already exercised with both decoder modes.
+- Confirm physical relay/PWM output, transport interruption and the PWM recall
+  revision boundary. A revision change halts the remaining scene actions and
+  reports the result before another explicit operation can proceed.
+- Verify the production package on the intended host when deployment resumes.
+
+Loading a scene never applies output values. Applying explicitly selected
+general-purpose outputs requires confirmation, an active controller, and
+matching acknowledgements. Motion and firmware-owned values remain data-only.
 
 ## Reconciliation evidence
 

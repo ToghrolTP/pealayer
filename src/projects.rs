@@ -428,6 +428,9 @@ impl Media {
     }
 }
 pub fn validate_workspace(workspace: &crate::config::WorkspaceProfile) -> Result<(), String> {
+    if workspace.window_geometry.is_some_and(|geometry| !geometry.is_valid()) {
+        return Err("Invalid workspace window geometry".into());
+    }
     if let Some(layout) = &workspace.dock_layout {
         let mut dock = crate::ui::layout::decode_workspace(layout)?;
         if let Some(pane) = workspace
@@ -773,6 +776,39 @@ mod tests {
         std::fs::create_dir(&path).unwrap();
         path
     }
+    #[test]
+    fn workspace_document_retains_independent_view_scroll_offsets() {
+        use eframe::egui::{Context, Id, scroll_area::State, vec2};
+
+        let before = Context::default();
+        let views = [
+            (Id::unique("project-appearance-scroll"), vec2(0.0, 184.5)),
+            (Id::unique("project-terminal-scroll"), vec2(0.0, 41.0)),
+        ];
+        for (id, offset) in views {
+            let state: State = serde_json::from_value(serde_json::json!({
+                "offset": offset,
+                "max_offset": vec2(0.0, 1000.0),
+            })).unwrap();
+            state.store(&before, id);
+        }
+        let document = Document::Workspace(crate::config::WorkspaceProfile {
+            egui_memory: before.memory(|memory| serde_json::to_string(memory).ok()),
+            ..Default::default()
+        });
+        let encoded = serde_json::to_vec(&document).unwrap();
+        let decoded: Document = serde_json::from_slice(&encoded).unwrap();
+        decoded.validate().unwrap();
+        let Document::Workspace(workspace) = decoded else { unreachable!() };
+        let restored = Context::default();
+        restored.memory_mut(|memory| {
+            *memory = serde_json::from_str(workspace.egui_memory.as_deref().unwrap()).unwrap();
+        });
+        for (id, offset) in views {
+            assert_eq!(State::load(&restored, id).unwrap().clamped_offset(), offset);
+        }
+    }
+
     #[test]
     fn explicit_timeline_open_preserves_sidecars_and_rejects_wrong_tagged_documents() {
         let dir = temp_dir();

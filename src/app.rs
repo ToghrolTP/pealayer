@@ -1092,8 +1092,21 @@ impl eframe::App for PealayerApp {
         // eframe calls logic even while minimized/occluded. Commands, device
         // results and authoritative snapshots must never depend on painting.
         for request in crate::peer::take_gui_requests() {
-            let result=if request.deadline< std::time::Instant::now(){Err("Request expired before application; change was not applied".into())}else{self.apply_peer_request(ctx,&request.path,request.value)};
-            let _=request.reply.send(result);
+            if request.deadline < std::time::Instant::now() {
+                let _ = request.reply.send(Err("Request expired before application; change was not applied".into()));
+            } else if request.path == "/api/peer/documents" {
+                match serde_json::from_value(request.value) {
+                    Ok(document) => {
+                        let deadline = request.deadline;
+                        let reply = Box::new(move |result| { let _ = request.reply.send(result); });
+                        self.dispatch_document_request(ctx, document, Some(reply), Some(deadline));
+                    }
+                    Err(error) => { let _ = request.reply.send(Err(format!("Invalid document request: {error}"))); }
+                }
+            } else {
+                let result = self.apply_peer_request(ctx, &request.path, request.value);
+                let _ = request.reply.send(result);
+            }
         }
         if self.web_only {
             // Keep the native event/render loop alive for libmpv and the
@@ -4408,7 +4421,9 @@ impl PealayerApp {
         if let InteropCommand::Documents {request}=&command {
             if let Some(client)=crate::peer::client() {
                 if let Err(error)=client.queue("/api/peer/documents",serde_json::to_value(request).unwrap()) {self.show_error=Some(error);}
-            } else if let Err(error)=self.document_request(ctx,request.clone()) {self.show_error=Some(error);}
+            } else {
+                self.dispatch_document_request(ctx, request.clone(), None, None);
+            }
             return;
         }
         if crate::peer::active() && let InteropCommand::Launch{request}=&command {
@@ -7666,7 +7681,7 @@ impl PealayerApp {
             ("audio_import",crate::mpv::sfx::importing()),
             ("asset_import",self.asset_import.busy()),
             ("terminal_session",self.terminal_state.busy()),
-            ("project_operation",crate::ui::projects::busy(ctx) || self.project_restore_busy() || self.scene_operation_busy()),
+            ("project_operation",crate::ui::projects::busy(ctx) || self.document_io_busy() || self.project_restore_busy() || self.scene_operation_busy()),
         ] {items.push(Item {domain:domain.into(),state:if busy {State::Busy} else {State::Clean}});}
         Inspection::new(items)
     }
@@ -8361,7 +8376,6 @@ impl PealayerApp {
     fn apply_peer_request(&mut self,ctx:&egui::Context,path:&str,value:serde_json::Value)->Result<serde_json::Value,String>{
         if crate::peer::active(){return Err("Only the authoritative instance can apply session changes".into())}
         match path {
-            "/api/peer/documents" => return self.document_request(ctx, serde_json::from_value(value).map_err(|e|format!("Invalid document request: {e}"))?),
             "/api/peer/open"=>{
                 let target=value.get("target").and_then(serde_json::Value::as_str).ok_or("Media target is required")?;
                 if target.is_empty() || target.len()>32768{return Err("Invalid media target".into())}
