@@ -20,7 +20,7 @@ pub struct DemoCoordinatorSession {
     pub virtual_board: VirtualBoardSession,
     pub supervisor: CoordinatorSupervisor,
     pub client: ControllerClient,
-    pub temp_root: PathBuf,
+    _temp_root: DemoDataRoot,
 }
 
 pub fn resolve_controller_binary() -> Option<PathBuf> {
@@ -83,18 +83,29 @@ pub fn resolve_controller_binary() -> Option<PathBuf> {
     None
 }
 
+struct DemoDataRoot(PathBuf);
+
+impl Drop for DemoDataRoot {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
+}
+
 impl DemoCoordinatorSession {
     pub fn start() -> Result<Self, String> {
         crate::four_d::demo_cleanup::cleanup_stale_demo_resources();
 
         let vb = VirtualBoardSession::spawn()?;
+        vb.send_command("door closed")
+            .map_err(|error| format!("initialize virtual enclosure: {error}"))?;
 
         let run_id = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
             .as_nanos();
         let temp_root = std::env::temp_dir().join(format!("pealayer-demo-coordinator-{}-{run_id}", std::process::id()));
-        std::fs::create_dir_all(&temp_root).map_err(|e| format!("create demo coordinator temp root: {e}"))?;
+        std::fs::create_dir(&temp_root).map_err(|e| format!("create demo coordinator temp root: {e}"))?;
+        let temp_root = DemoDataRoot(temp_root);
 
         let (supervisor, address) = if let Some(binary) = resolve_controller_binary() {
             let mut last_err = String::new();
@@ -127,8 +138,8 @@ impl DemoCoordinatorSession {
                     &format!("127.0.0.1:{coordinator_port}"),
                     "--no-connect",
                 ])
-                .env("PCCONTROLLER_DATA_DIR", &temp_root)
-                .env("PCCONTROLLER_CONFIG_DIR", &temp_root)
+                .env("PCCONTROLLER_DATA_DIR", &temp_root.0)
+                .env("PCCONTROLLER_CONFIG_DIR", &temp_root.0)
                 .stdout(Stdio::null())
                 .stderr(Stdio::null());
 
@@ -172,7 +183,7 @@ impl DemoCoordinatorSession {
             }
 
             let options = EmbeddedHostOptions {
-                data_root: temp_root.clone(),
+                data_root: temp_root.0.clone(),
                 app_id: "pealayer.demo".into(),
                 app_name: "Pealayer Demo".into(),
                 disable_auto_connect: true,
@@ -231,19 +242,20 @@ impl DemoCoordinatorSession {
         }
 
         let profile = client.call("controller.board_profile.get", json!({}))
-            .unwrap_or_else(|_| json!({"revision": 0}));
-        let revision = profile.get("revision").cloned().unwrap_or(json!(0));
-        let _ = client.call("controller.board_profile.update", json!({
+            .map_err(|error| format!("read demo board profile: {error}"))?;
+        let revision = profile.get("revision")
+            .ok_or("demo board profile did not advertise a revision")?;
+        client.call("controller.board_profile.update", json!({
             "key": "demo",
             "mode": "cinema-seat-motion",
             "expected_revision": revision,
-        }));
+        })).map_err(|error| format!("configure demo board profile: {error}"))?;
 
         Ok(Self {
             virtual_board: vb,
             supervisor,
             client,
-            temp_root,
+            _temp_root: temp_root,
         })
     }
 }
@@ -259,6 +271,5 @@ impl Drop for DemoCoordinatorSession {
                 let _ = host.shutdown();
             }
         }
-        let _ = std::fs::remove_dir_all(&self.temp_root);
     }
 }

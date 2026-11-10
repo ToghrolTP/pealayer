@@ -26,6 +26,8 @@ impl ManagedChild {
         #[cfg(windows)]
         {
             use std::os::windows::io::AsRawHandle;
+            use std::os::windows::process::CommandExt;
+            use windows::Win32::System::Threading::CREATE_NO_WINDOW;
             use windows::Win32::Foundation::{CloseHandle, HANDLE};
             use windows::Win32::System::JobObjects::{
                 AssignProcessToJobObject, CreateJobObjectW, JobObjectExtendedLimitInformation,
@@ -56,7 +58,13 @@ impl ManagedChild {
                 ));
             }
 
-            let child = cmd.spawn()?;
+            let child = match cmd.creation_flags(CREATE_NO_WINDOW.0).spawn() {
+                Ok(child) => child,
+                Err(error) => {
+                    let _ = unsafe { CloseHandle(job) };
+                    return Err(error);
+                }
+            };
             let child_handle = HANDLE(child.as_raw_handle());
             if let Err(e) = unsafe { AssignProcessToJobObject(job, child_handle) } {
                 let _ = unsafe { CloseHandle(job) };
