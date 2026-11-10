@@ -5194,6 +5194,10 @@ impl PealayerApp {
             InteropCommand::SetHardwareConnection { connected } => {
                 let endpoint=self.serial_port.trim().to_string();
                 if connected && endpoint.is_empty() {self.set_osd(self.tr("Enter a hardware endpoint before connecting."));return;}
+                if connected && crate::four_d::controller::is_demo_endpoint(&endpoint) {
+                    self.start_virtual_board_demo();
+                    return;
+                }
                 self.connection_notice=None;
                 if self.engine_handle.sender.send(crate::four_d::engine::EngineMessage::ReconfigureEndpoint{endpoint,connect:connected}).is_err() {
                     self.set_osd("Hardware connection engine is unavailable".into());
@@ -7391,32 +7395,51 @@ impl PealayerApp {
 
     pub fn request_hardware_connection(&mut self) {
         let endpoint = self.serial_port.trim().to_owned();
-        if !endpoint.is_empty() {
-            if let Ok(mut selected) = self.engine_handle.serial_port.lock() {
-                *selected = endpoint;
-            }
-            self.connection_notice = None;
-            self.engine_handle.connection_requested.store(
-                true,
-                std::sync::atomic::Ordering::Relaxed,
-            );
-            self.save_config();
+        if endpoint.is_empty() {
+            self.connection_notice = Some(self.tr("Enter a hardware endpoint before connecting."));
+            return;
         }
+        if crate::four_d::controller::is_demo_endpoint(&endpoint) {
+            self.prepare_virtual_board_showcase();
+        }
+        if let Ok(mut selected) = self.engine_handle.serial_port.lock() {
+            *selected = endpoint;
+        }
+        self.connection_notice = None;
+        self.engine_handle.connection_requested.store(
+            true,
+            std::sync::atomic::Ordering::Relaxed,
+        );
+        self.save_config();
     }
 
     pub fn start_virtual_board_demo(&mut self) {
-        self.serial_port = crate::four_d::controller::DEMO_ENDPOINT.to_string();
-        if self.current_video_path.is_none() {
-            if let Some(media) = crate::four_d::demo_timeline::demo_media_target() {
-                self.load_media_target(&media.to_string_lossy());
-            }
+        if crate::peer::active() || self.is_connected
+            || self.engine_handle.connection_requested.load(Ordering::Relaxed)
+        {
+            self.set_osd(self.tr("Disconnect the current hardware or remote session before starting the demo."));
+            return;
         }
-        if self.timeline.instances.is_empty() {
+        self.serial_port = crate::four_d::controller::DEMO_ENDPOINT.to_string();
+        self.request_hardware_connection();
+    }
+
+    fn prepare_virtual_board_showcase(&mut self) {
+        if self.current_video_path.is_none() && !self.is_timeline_dirty() {
+            let Some(media) = crate::four_d::demo_timeline::demo_media_target() else {
+                self.set_osd(self.tr("Demo clip unavailable. Open a video to use with the Virtual Board."));
+                return;
+            };
+            // Give the coordinator time to attach before any showcase cue can fire.
+            let _ = self.mpv.set_property("pause", true);
+            self.pending_external_pause = crate::mpv::external::active();
+            self.load_media_target(&media.to_string_lossy());
+            self.pause();
+        }
+        if self.current_video_path.is_some() && self.timeline == Timeline::default() {
             self.timeline = crate::four_d::demo_timeline::build_demo_showcase_timeline();
             self.sync_timeline_engine();
         }
-        self.request_hardware_connection();
-        self.save_config();
     }
 
     fn remote_neighbor(&self, direction: i32, automatic: bool) -> Option<crate::remote_location::Playback> {
