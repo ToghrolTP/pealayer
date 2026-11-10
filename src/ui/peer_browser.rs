@@ -8,7 +8,7 @@ pub enum Purpose {
     Audio,
     Subtitle,
     TimelineOpen,
-    TimelineSave,
+    TimelineSave { sidecar: bool },
     ConfigImport,
     ConfigExport(Box<crate::config::AppConfig>),
     PreferenceFile { key: String, extensions: Vec<String> },
@@ -335,7 +335,7 @@ pub fn draw(app: &mut crate::app::PealayerApp, ui: &mut egui::Ui) {
                     Purpose::Media | Purpose::Audio | Purpose::Subtitle | Purpose::TimelineOpen => {
                         "Open"
                     }
-                    Purpose::TimelineSave | Purpose::ConfigExport(_) => "Save",
+                    Purpose::TimelineSave { .. } | Purpose::ConfigExport(_) => "Save",
                     Purpose::ConfigImport => "Import",
                     Purpose::PreferenceFile { .. } => "Select",
                 };
@@ -373,7 +373,10 @@ pub fn draw(app: &mut crate::app::PealayerApp, ui: &mut egui::Ui) {
                     Purpose::ConfigImport=>crate::config::AppConfig::load_from_path(std::path::Path::new(&selected)).map(|config|{context.data_mut(|data|data.insert_temp(egui::Id::new("peer_imported_config"),config));}),
                     Purpose::ConfigExport(config)=>client.post("/api/peer/files",&serde_json::json!({"operation":"export_config","path":selected,"config":config})).map(|_|()),
                     Purpose::TimelineOpen=>client.post("/api/peer/files",&serde_json::json!({"operation":"open_timeline","path":selected})).map(|_|()),
-                    Purpose::TimelineSave=>client.post("/api/peer/files",&serde_json::json!({"operation":"save_timeline","path":selected})).map(|_|()),
+                    Purpose::TimelineSave { sidecar } => {
+                        let operation = if sidecar { "save_timeline_sidecar" } else { "save_timeline" };
+                        client.post("/api/peer/files", &serde_json::json!({"operation": operation, "path": selected})).map(|_|())
+                    },
                     Purpose::Audio=>client.post("/api/peer/media",&serde_json::json!({"operation":"command","name":"audio-add","args":[selected]})).map(|_|()),
                     Purpose::Subtitle=>client.post("/api/peer/media",&serde_json::json!({"operation":"command","name":"sub-add","args":[selected]})).map(|_|()),
                     Purpose::Media=>Ok(()),
@@ -431,6 +434,6 @@ mod tests {
         state.busy = true;
         assert!(!valid_selection(&state));
         assert!(!selectable_file(&state.purpose, "icon.png.exe"));
-        assert!(selectable_file(&Purpose::TimelineSave, "untitled.json"));
+        assert!(selectable_file(&Purpose::TimelineSave { sidecar: false }, "untitled.json"));
     }
 }

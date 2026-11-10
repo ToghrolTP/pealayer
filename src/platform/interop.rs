@@ -123,6 +123,7 @@ impl LaunchReceiptCache {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum InteropCommand {
+    Documents { request: crate::projects::Request },
     /// Transport-owned provenance, impossible to deserialize from a wire payload.
     #[serde(skip)]
     NativeLocal { command: Box<InteropCommand> },
@@ -1867,6 +1868,7 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
             .ok_or_else(|| format!("missing string parameter: {}", names.join(" or ")))
     };
     let command = match request.method.as_str() {
+        "pealayer.documents" => Some(InteropCommand::Documents { request: serde_json::from_value(request.params.clone()).map_err(|e|e.to_string())? }),
         "pealayer.process.status" => Some(InteropCommand::GetProcessStatus),
         "pealayer.process.quit" => Some(InteropCommand::QuitLocal),
         "pealayer.process.connect" => Some(InteropCommand::ConnectPeer {
@@ -3007,6 +3009,7 @@ pub(crate) fn dispatch_local_payload(
     expected_session_id: Option<u32>,
 ) -> String {
     if let Some(response) = crate::update::rpc::payload(payload, false, tx) { return response; }
+    if let Some(response) = crate::projects::rpc_payload(payload, false) { return response; }
     if let Some(response) = crate::terminal_access::native_payload(payload, egui_ctx) { return response; }
     if let Some(response) = crate::downloads::rpc_payload(payload, false) { return response; }
     if let Some(response) = crate::server::discovery::rpc_payload(payload) { return response; }

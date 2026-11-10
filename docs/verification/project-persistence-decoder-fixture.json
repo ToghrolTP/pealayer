@@ -1,0 +1,47 @@
+{
+  "source_revision": "abc77de16731b58e8cadcfc560e71739ddafa124",
+  "executable_sha256": "5b44af6ef2ef5172bb4e4e2152b3d3dac5b0fde85eb240d89f37e12936d29172",
+  "runtime": "Isolated Windows Pealayer with internal libmpv and a separately managed mpv executable",
+  "media": "Generated 8-second 25 fps local test pattern and a deliberately corrupt local MP4",
+  "board_connected": false,
+  "internal": [
+    {
+      "status": 409,
+      "case": "HTTP stale authority"
+    },
+    {
+      "timeline_zoom": 125.0,
+      "settled_seek_target": 3.64,
+      "case": "same-path exact restore",
+      "paused": true,
+      "position_seconds": 3.64
+    },
+    {
+      "previous_timeline_retained": true,
+      "elapsed_ms": 1011,
+      "case": "corrupt local media rollback",
+      "paused": true,
+      "position_seconds": 3.64
+    }
+  ],
+  "external": [
+    {
+      "status": 409,
+      "case": "HTTP stale authority"
+    },
+    {
+      "timeline_zoom": 125.0,
+      "settled_seek_target": 3.64,
+      "case": "same-path exact restore",
+      "paused": true,
+      "position_seconds": 3.64
+    },
+    {
+      "previous_timeline_retained": true,
+      "elapsed_ms": 1454,
+      "case": "corrupt local media rollback",
+      "paused": true,
+      "position_seconds": 3.64
+    }
+  ]
+}

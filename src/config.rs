@@ -1159,6 +1159,7 @@ mod seekbar_marker_tests {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(default)]
 pub struct AppConfig {
+    pub project_discovery: crate::projects::Discovery,
     pub external_mpv: crate::mpv::external::Settings,
     pub volume: f64,
     pub is_muted: bool,
@@ -1230,6 +1231,8 @@ pub struct AppConfig {
     pub video_click_frame_only: bool,
     pub playback_speed: f64,
     pub temporary_fast_forward_speed: f64,
+    pub double_click_interval_ms: u32,
+    pub hold_fast_forward_wait_for_double_click: bool,
     pub subtitle_font_size: f64,
     pub numeric_input_steps: BTreeMap<String, NumericInputSteps>,
     /// Prefer compact human units (for example `1s`) in editable time fields.
@@ -1382,6 +1385,7 @@ pub struct EffectCueSession {
 impl Default for AppConfig {
     fn default() -> Self {
         Self {
+            project_discovery: crate::projects::Discovery::default(),
             external_mpv: crate::mpv::external::Settings::default(),
             volume: 100.0,
             is_muted: false,
@@ -1450,6 +1454,8 @@ impl Default for AppConfig {
             video_click_frame_only: true,
             playback_speed: 1.0,
             temporary_fast_forward_speed: 2.0,
+            double_click_interval_ms: 300,
+            hold_fast_forward_wait_for_double_click: true,
             subtitle_font_size: 55.0,
             numeric_input_steps: BTreeMap::new(),
             human_readable_time_units: true,
@@ -2282,6 +2288,9 @@ impl AppConfig {
     }
 
     pub fn validate(&self) -> Result<(), String> {
+        if self.project_discovery.folders.len()>32768 || self.project_discovery.associations.len()>1000 {
+            return Err("Project discovery exceeds folder or remembered association limits".into());
+        }
         self.mouse_bindings.validate()?;
         if [self.simple_workspace.controls_x,self.simple_workspace.controls_y].iter().any(|v| !v.is_finite() || !(0.0..=1.0).contains(v)) {
             return Err("Simple control position must be between 0 and 1".into());
@@ -2340,6 +2349,9 @@ impl AppConfig {
             || !(1.0..=16.0).contains(&self.temporary_fast_forward_speed)
         {
             return Err("temporary_fast_forward_speed must be between 1 and 16".to_string());
+        }
+        if !(100..=1_000).contains(&self.double_click_interval_ms) {
+            return Err("double_click_interval_ms must be between 100 and 1000".to_string());
         }
         if self.numeric_input_steps.len() > 256 || self.numeric_input_steps.iter().any(|(key, steps)|
             key.is_empty() || key.len() > 128 || !steps.is_valid()) {
