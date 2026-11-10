@@ -256,6 +256,7 @@ const fa: Record<string, string> = {
   "Automatic (recommended)": "خودکار (پیشنهادی)",
   "Behavior": "رفتار",
   "Board capture": "ضبط روی برد",
+  "The board’s recording buffer filled up. Earlier actions may be missing.": "حافظهٔ موقت ضبط برد پر شده است. ممکن است برخی فرمان‌های قبلی در ضبط نباشند.",
   "Browse": "مرور",
   "Buzzer": "بیزر",
   "Capture mode": "حالت ضبط",
