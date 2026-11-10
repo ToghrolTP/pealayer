@@ -18639,6 +18639,8 @@ impl<'a> PealayerTabViewer<'a> {
 
                                         let filmcraft_ruler = self.app.native_timeline_style == crate::config::NativeTimelineStyle::FilmCraft;
                                         if filmcraft_ruler {
+                                            super::craft_theme::paint_buffered_overview(&ruler_painter,ruler_rect,
+                                                rect.left(),zoom,self.app.buffered_until(),&craft_tokens);
                                             super::craft_theme::paint_frame_ruler(&ruler_painter, ruler_rect,
                                                 rect.left(), zoom, self.app.media_fps, &craft_tokens);
                                         } else {

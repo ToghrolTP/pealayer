@@ -780,6 +780,58 @@ pub fn paint_frame_ruler(painter: &egui::Painter, rect: egui::Rect, origin_x: f3
 }
 
 /// How far the Timeline reaches, in seconds: ten minutes past the end of the sequence (FilmCraft standard).
+/// FilmCraft's original monitor track and terminal rings, painted over the
+/// real accessible slider. All overlays use its actual value range.
+pub fn paint_monitor_seek(ui: &egui::Ui, response: &egui::Response, fraction: f32, buffered: Option<f32>) {
+    let tokens = current(ui.ctx());
+    let color = |c: Color32| c.gamma_multiply(if response.enabled() {1.0} else {0.4});
+    let range = super::controls::seekbar_value_range(response.rect);
+    if range.end() <= range.start() { return; }
+    let track = egui::Rect::from_min_max(egui::pos2(*range.start(),response.rect.center().y-4.0),
+        egui::pos2(*range.end(),response.rect.center().y+4.0));
+    let p = ui.painter().with_clip_rect(response.rect.intersect(ui.clip_rect()));
+    p.rect_filled(track,4.0,color(tokens.separator));
+    let x = egui::lerp(range.clone(),fraction.clamp(0.0,1.0));
+    if let Some(end) = buffered.filter(|end|end.is_finite() && *end > fraction) {
+        p.rect_filled(egui::Rect::from_min_max(egui::pos2(x,track.top()),
+            egui::pos2(egui::lerp(range.clone(),end.clamp(0.0,1.0)),track.bottom())),2.0,color(tokens.accent.gamma_multiply(0.3)));
+    }
+    for edge in [*range.start(),*range.end()] {
+        p.circle_filled(egui::pos2(edge,track.center().y),3.5,color(tokens.panel_bg));
+        p.circle_stroke(egui::pos2(edge,track.center().y),3.5,Stroke::new(1.25,color(tokens.icon_active)));
+    }
+    let top = response.rect.top()+1.0;
+    paint_filmcraft_playhead(&p,&p,x,top,top+8.0,track.bottom(),color(tokens.playhead));
+    if response.has_focus() { p.rect_stroke(response.rect.shrink(0.5),3.0,Stroke::new(1.0,tokens.focus),StrokeKind::Inside); }
+}
+
+pub fn paint_monitor_volume(ui: &egui::Ui, response: &egui::Response, fraction: f32) {
+    let t = current(ui.ctx());
+    let color = |c: Color32| c.gamma_multiply(if response.enabled() {1.0} else {0.4});
+    let range = super::controls::seekbar_value_range(response.rect);
+    if range.end() <= range.start() { return; }
+    let x = egui::lerp(range.clone(),fraction.clamp(0.0,1.0));
+    let p=ui.painter().with_clip_rect(response.rect.intersect(ui.clip_rect()));
+    let track=egui::Rect::from_min_max(egui::pos2(*range.start(),response.rect.center().y-2.0),egui::pos2(*range.end(),response.rect.center().y+2.0));
+    p.rect_filled(track,2.0,color(t.separator));
+    p.rect_filled(egui::Rect::from_min_max(track.min,egui::pos2(x,track.bottom())),2.0,color(t.accent));
+    p.circle_filled(egui::pos2(x,track.center().y),4.5,color(t.panel_bg));
+    p.circle_stroke(egui::pos2(x,track.center().y),4.5,Stroke::new(1.5,color(if response.hovered() || response.dragged() {t.tab_text_active} else {t.icon_active})));
+    if response.has_focus() { p.rect_stroke(response.rect.shrink(0.5),3.0,Stroke::new(1.0,t.focus),StrokeKind::Inside); }
+}
+
+/// The original two-point overview represents buffered media, not rendered
+/// frames. No buffer observation means no fabricated green progress.
+pub fn paint_buffered_overview(p: &egui::Painter, ruler: egui::Rect, origin_x:f32, pps:f32,
+    buffered_until:Option<f64>, t:&Tokens) {
+    if let Some(end)=buffered_until.filter(|v|v.is_finite() && *v>0.0)
+        && pps.is_finite() && pps>0.0 {
+        let end=origin_x+end as f32*pps;
+        let bar=egui::Rect::from_min_max(egui::pos2(origin_x,ruler.bottom()-2.0),egui::pos2(end,ruler.bottom())).intersect(ruler);
+        if bar.is_positive() { p.with_clip_rect(ruler.intersect(p.clip_rect())).rect_filled(bar,0.0,t.render_green); }
+    }
+}
+
 pub fn timeline_extent(sequence_seconds: f64) -> f64 {
     sequence_seconds.max(0.0) + 600.0
 }
@@ -975,6 +1027,20 @@ pub fn dropdown_text(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn filmcraft_restored_monitor_art_has_real_pentagon_rings_and_bounded_paint() {
+        for scale in [1.0,1.5,2.0] {
+            let ctx=egui::Context::default();ctx.set_pixels_per_point(scale);
+            let output=ctx.run_ui(egui::RawInput::default(),|ui| {
+                let (_,response)=ui.allocate_exact_size(egui::vec2(400.0,28.0),egui::Sense::click_and_drag());
+                super::paint_monitor_seek(ui,&response,0.4375,Some(0.75));
+                super::paint_monitor_volume(ui,&response,0.5);
+            });
+            assert!(output.shapes.iter().any(|s|matches!(&s.shape,egui::Shape::Path(p) if p.closed && p.points.len()==5)),"live monitor lost its pentagonal playhead");
+            assert!(output.shapes.iter().filter(|s|matches!(&s.shape,egui::Shape::Circle(_))).count()>=6,"terminal and volume rings lost");
+            output.drop_without_applying_deltas();
+        }
+    }
     use super::*;
 
     #[test]

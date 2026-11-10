@@ -924,6 +924,35 @@ pub enum NativeMonitorStyle { #[default] Compact, FilmCraft }
 
 #[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
+pub enum MonitorAspect { #[default] Source, Wide, Classic, Cinema }
+impl MonitorAspect {
+    pub fn ratio(self, source: f64) -> f64 {
+        match self { Self::Source => source, Self::Wide => 16.0/9.0,
+            Self::Classic => 4.0/3.0, Self::Cinema => 2.35 }
+    }
+    pub fn label(self) -> &'static str {
+        match self { Self::Source => "Fit", Self::Wide => "16:9", Self::Classic => "4:3", Self::Cinema => "2.35:1" }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum MonitorResolution { #[default] Full, Half, Quarter, Eighth }
+impl MonitorResolution {
+    pub fn divisor(self) -> i32 { match self { Self::Full=>1, Self::Half=>2, Self::Quarter=>4, Self::Eighth=>8 } }
+    pub fn label(self) -> &'static str { match self { Self::Full=>"Full", Self::Half=>"1/2", Self::Quarter=>"1/4", Self::Eighth=>"1/8" } }
+}
+
+/// Preview presentation never overwrites decoder-owned source metadata.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(default, deny_unknown_fields)]
+pub struct MonitorPreview {
+    pub aspect: MonitorAspect,
+    pub resolution: MonitorResolution,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
 pub enum NativeTimelineStyle { #[default] Standard, FilmCraft }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq, Hash)]
@@ -1145,6 +1174,8 @@ pub struct AppConfig {
     pub monospace_font_name: String,
     pub workspace_ui: WorkspaceUi,
     pub native_monitor_style: NativeMonitorStyle,
+    pub native_transport_style: NativeMonitorStyle,
+    pub monitor_preview: MonitorPreview,
     pub native_timeline_style: NativeTimelineStyle,
     pub craft_show_close_buttons: bool,
     pub craft_show_collapse_buttons: bool,
@@ -1357,6 +1388,8 @@ impl Default for AppConfig {
             monospace_font_name: String::new(),
             workspace_ui: WorkspaceUi::CraftUi,
             native_monitor_style: NativeMonitorStyle::Compact,
+            native_transport_style: NativeMonitorStyle::Compact,
+            monitor_preview: MonitorPreview::default(),
             native_timeline_style: NativeTimelineStyle::Standard,
             craft_show_close_buttons: true,
             craft_show_collapse_buttons: false,
@@ -1890,6 +1923,8 @@ impl AppConfig {
         self.monospace_font_name.clone_from(&source.monospace_font_name);
         self.workspace_ui = source.workspace_ui;
         self.native_monitor_style = source.native_monitor_style;
+        self.native_transport_style = source.native_transport_style;
+        self.monitor_preview = source.monitor_preview;
         self.native_timeline_style = source.native_timeline_style;
         self.craft_show_close_buttons = source.craft_show_close_buttons;
         self.craft_show_collapse_buttons = source.craft_show_collapse_buttons;
@@ -2556,6 +2591,25 @@ pub(crate) fn replace_file(source: &std::path::Path, destination: &std::path::Pa
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn filmcraft_preview_choices_are_independent_persistent_and_validated() {
+        let original=AppConfig::default();
+        let updated=original.apply_patch(&serde_json::json!({
+            "native_transport_style":"film_craft",
+            "monitor_preview":{"aspect":"classic","resolution":"quarter"}
+        })).unwrap();
+        let saved:AppConfig=serde_json::from_value(serde_json::to_value(&updated).unwrap()).unwrap();
+        assert_eq!(saved.native_transport_style,NativeMonitorStyle::FilmCraft);
+        assert_eq!(saved.native_monitor_style,NativeMonitorStyle::Compact);
+        assert_eq!(saved.monitor_preview.aspect,MonitorAspect::Classic);
+        assert_eq!(saved.monitor_preview.resolution,MonitorResolution::Quarter);
+        assert_eq!(saved.control_bars,original.control_bars);
+        assert_eq!(saved.workspace_dock_layout,original.workspace_dock_layout);
+        assert!(original.apply_patch(&serde_json::json!({"monitor_preview":{"resolution":"fake"}})).is_err());
+        assert_eq!(MonitorAspect::Source.ratio(2.39),2.39);
+        assert_eq!(MonitorAspect::Classic.ratio(2.39),4.0/3.0);
+    }
 
     #[test]
     fn native_panel_styles_default_to_preserved_designs_and_round_trip_independently() {

@@ -17,6 +17,7 @@ param(
     [ValidateRange(300,2160)][int]$Height=800,
     [ValidateRange(1024,65535)][int]$Port=18092,
     [switch]$SyntheticMedia,
+    [ValidateRange(0.1,11.0)][double]$PositionSeconds=5.25,
     [switch]$KeepOpen
 )
 $ErrorActionPreference='Stop'
@@ -54,7 +55,26 @@ $profile | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $configPath -Encod
 $mediaPath=$null
 if ($SyntheticMedia) {
     $mediaPath=Join-Path $privateDirectory 'public-test-pattern.mp4'
-    & ffmpeg -nostdin -v error -f lavfi -i 'testsrc2=size=640x360:rate=24' -f lavfi -i 'anullsrc=r=48000:cl=stereo' -t 12 -c:v mpeg4 -q:v 4 -c:a aac $mediaPath
+    $chapters=Join-Path $privateDirectory 'chapters.ffmetadata'
+    @'
+;FFMETADATA1
+[CHAPTER]
+TIMEBASE=1/1000
+START=0
+END=4000
+title=Introduction
+[CHAPTER]
+TIMEBASE=1/1000
+START=4000
+END=8000
+title=Demonstration
+[CHAPTER]
+TIMEBASE=1/1000
+START=8000
+END=12000
+title=Finale
+'@ | Set-Content -LiteralPath $chapters -Encoding utf8
+    & ffmpeg -nostdin -v error -f lavfi -i 'testsrc2=size=640x360:rate=24' -f lavfi -i 'anullsrc=r=48000:cl=stereo' -f ffmetadata -i $chapters -map 0:v -map 1:a -map_metadata 2 -map_chapters 2 -t 12 -c:v mpeg4 -q:v 4 -c:a aac $mediaPath
     if ($LASTEXITCODE -ne 0) { throw 'Synthetic media generation failed.' }
 }
 function Get-Review([string]$Path) { Invoke-RestMethod "$base$Path" -TimeoutSec 3 }
@@ -95,6 +115,15 @@ try {
     [void]$process.Start(); $launched=$true
     Wait-Review { try { (Get-Review '/api/process/status').process_id -eq $process.Id } catch { $false } } 'the isolated API'
     $identity=Assert-Identity
+    if ($SyntheticMedia) {
+        Wait-Review {(Get-Review '/api/player/playback').duration_seconds -ge 11.9} 'finite synthetic media'
+        $null=Post-Review '/api/rpc' @{jsonrpc='2.0';id=20;method='pealayer.pause';params=@{}}
+        $null=Post-Review '/api/rpc' @{jsonrpc='2.0';id=21;method='pealayer.seek_to';params=@{seconds=$PositionSeconds}}
+        Wait-Review {
+            $playback=Get-Review '/api/player/playback'
+            !$playback.playing -and !$playback.seek_pending -and [Math]::Abs($playback.position_seconds-$PositionSeconds) -lt 0.06
+        } 'paused nonzero playhead'
+    }
     if (!$Baseline) {
         $null=Post-Review '/api/config' @{native_monitor_style=$MonitorStyle;native_timeline_style=$TimelineStyle}
         Wait-Review {
@@ -126,6 +155,7 @@ try {
             logical_width=$width; logical_height=$Height; pixels_per_point=$window.pixels_per_point
             pixel_width=$captured.Width; pixel_height=$captured.Height; method='PrintWindow-PW_RENDERFULLCONTENT'
             inspected=$false
+            playback= $(if($SyntheticMedia){Get-Review '/api/player/playback'}else{$null})
         })
         Write-Host "Captured $filename; inspect the image before claiming visual acceptance."
     }

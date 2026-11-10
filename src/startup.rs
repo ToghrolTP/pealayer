@@ -641,6 +641,8 @@ pub fn run() -> eframe::Result {
                 theme_preference: crate::config::resolved_theme(&loaded_config),
                 color_palette: loaded_config.color_palette,
                 native_monitor_style: loaded_config.native_monitor_style,
+                native_transport_style: loaded_config.native_transport_style,
+                monitor_preview: loaded_config.monitor_preview,
                 native_timeline_style: loaded_config.native_timeline_style,
                 rtl,
                 mpv: crate::mpv::player::Player(mpv_static),
