@@ -100,3 +100,19 @@ tests also compiled against this draft, but do not validate project semantics.
 
 No scene load is permission to actuate hardware. User files, private review
 profiles and generated Web build output are not part of this checkpoint.
+## Reconciliation evidence
+
+- The isolated Windows build passed 27 distinct focused native tests, including
+  document round-trips, linked audio resolution, the decoder fence, authority
+  permissions, scene operation safety, and dirty-draft preservation. Native code
+  under test is the same as in the Web capture revision.
+- Web TypeScript, 53 application parity checks, responsive guardrails, and the
+  production Web build passed.
+- [Web screenshots and capture manifest](../screenshots/pr227) show the actual
+  built Project metadata editor at desktop and mobile widths, plus media
+  metadata and the millisecond position control. Chromium checked that the
+  dialog fits both widths and keeps its footer reachable. A synthetic authority
+  replacement returned a conflict and the browser surfaced it at both widths.
+  Synthetic project data exercises the visual and browser request path only.
+  Native rendering, live decoder restoration, controller output, and deployment
+  still need acceptance.
