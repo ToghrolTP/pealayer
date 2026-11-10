@@ -1,4 +1,5 @@
 //! Optional application command surface. Visibility never owns workspace panels.
+use crate::ui::palette::native::controls::CheckboxUiExt;
 use eframe::egui;
 use serde::{Deserialize, Serialize};
 
@@ -595,7 +596,7 @@ mod native {
                             .iter()
                             .any(|id| id == command.id());
                         if ui
-                            .checkbox(
+                            .themed_checkbox(
                                 &mut visible,
                                 format!("{}  {}", command.icon(), app.tr(command.label())),
                             )
@@ -1026,7 +1027,7 @@ mod native {
                                             );
                                         }
                                         if ui
-                                            .checkbox(
+                                            .themed_checkbox(
                                                 &mut visible,
                                                 format!(
                                                     "{}  {}",

@@ -1,5 +1,6 @@
 //! Download Center shared by the player and standalone utility.
 use crate::{AddRequest, Engine, EngineSettings, Manager, PublicJob, Snapshot, State};
+use palette::controls::CheckboxUiExt;
 use egui::{self, Color32, RichText, Stroke, TextStyle, Vec2};
 use egui_phosphor::regular::{
     ARROW_DOWN, ARROW_UP, CARET_DOWN, CHECK_CIRCLE, CLOCK, COPY, DOTS_THREE, DOWNLOAD_SIMPLE,
@@ -252,7 +253,7 @@ impl View {
                     ui.weak("Connections");
                     ui.add(egui::DragValue::new(&mut self.connections).range(1..=16));
                 }
-                ui.checkbox(&mut self.use_proxy, "Use proxy");
+                ui.themed_checkbox(&mut self.use_proxy, "Use proxy");
             });
         });
 

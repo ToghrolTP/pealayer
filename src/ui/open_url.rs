@@ -1,3 +1,4 @@
+use crate::ui::palette::native::controls::CheckboxUiExt;
 use crate::app::PealayerApp;
 use eframe::egui;
 use reqwest::header::{
@@ -545,7 +546,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 let configure_label = app.tr("Configure proxy");
                                 ui.horizontal_wrapped(|ui| {
                                     if ui
-                                        .checkbox(&mut app.open_url_use_proxy, proxy_label)
+                                        .themed_checkbox(&mut app.open_url_use_proxy, proxy_label)
                                         .changed()
                                     {
                                         app.url_inspector.manual_proxy = true;
@@ -942,7 +943,7 @@ fn text_edit_context_menu(
             crate::ui::icons::TEXT_ALIGN_LEFT,
             tr(language, "Wrap long URLs in a text area")
         );
-        if ui.checkbox(multiline, wrap_label).changed() {
+        if ui.themed_checkbox(multiline, wrap_label).changed() {
             wrap_changed = true;
             close = true;
         }
@@ -1446,7 +1447,7 @@ fn draw_recent_location(
             ui.separator();
             let mut play_on_click = !default_click_edits;
             if ui
-                .checkbox(
+                .themed_checkbox(
                     &mut play_on_click,
                     tr(language, "Play when a recent location is clicked"),
                 )

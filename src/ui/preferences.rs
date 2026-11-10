@@ -1,3 +1,4 @@
+use crate::ui::palette::native::controls::CheckboxUiExt;
 use crate::ui::dropdown::DropdownUiExt;
 use crate::app::PealayerApp;
 use crate::config::{AppConfig, AppLanguage, AppTheme};
@@ -1158,7 +1159,7 @@ fn render_contract_control(
                 let option = control.options.iter().find(|option| option.value == value).unwrap();
                 ui.push_id((control.key, value.to_string()), |ui| ui.horizontal(|ui| {
                     let mut visible = !hidden.contains(&value);
-                    if ui.checkbox(&mut visible, format!("{}  {}", option.icon.unwrap_or(""), tr(option.label))).changed() {
+                    if ui.themed_checkbox(&mut visible, format!("{}  {}", option.icon.unwrap_or(""), tr(option.label))).changed() {
                         hidden.retain(|candidate| *candidate != value);
                         if !visible { hidden.push(value.clone()); }
                         changed = true;
@@ -1332,7 +1333,7 @@ fn render_contract_control(
                             };
                             let mut checked = selected.iter().any(|selected| selected == value);
                             ui.horizontal(|ui| {
-                                let checkbox = ui.checkbox(&mut checked, "");
+                                let checkbox = ui.themed_checkbox(&mut checked, "");
                                 let clicked = checkbox.clicked();
                                 let mut checkbox = crate::ui::dropdown::register_choice(ui, checkbox, checked);
                                 if checkbox.clicked() && !clicked {
@@ -2044,7 +2045,7 @@ fn preference_checkbox_row(ui: &mut egui::Ui, label: &str, checked: &mut bool) -
             // in the value column let responsive stacking split them across two
             // lines, making the visible icon look like a non-interactive control.
             ui.style_mut().wrap_mode = Some(egui::TextWrapMode::Wrap);
-            ui.add(egui::Checkbox::new(
+            ui.add(crate::ui::palette::native::controls::Checkbox::new(
                 checked,
                 egui::RichText::new(label).size(13.0),
             ))

@@ -3132,11 +3132,11 @@ mod tests {
         );
         assert_eq!(
             decoration_colors(true, ColorPalette::Pastel),
-            (0x00301b15, 0x00fff5f4)
+            (0x00472e24, 0x00fff5f4)
         );
         assert_eq!(
             decoration_colors(false, ColorPalette::Pastel),
-            (0x00fcf1f1, 0x00422726)
+            (0x00fcf1f2, 0x00422726)
         );
         assert_eq!(
             decoration_colors(true, ColorPalette::Native),

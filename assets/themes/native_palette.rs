@@ -4,6 +4,9 @@ use super::egui;
 use std::collections::BTreeMap;
 use std::sync::OnceLock;
 
+#[path = "native_controls.rs"]
+pub mod controls;
+
 type PaletteCatalog = BTreeMap<String, BTreeMap<String, BTreeMap<String, String>>>;
 
 pub fn colors(palette: &str, dark: bool) -> &'static BTreeMap<String, String> {

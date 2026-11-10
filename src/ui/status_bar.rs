@@ -1,3 +1,4 @@
+use crate::ui::palette::native::controls::CheckboxUiExt;
 use crate::app::PealayerApp;
 use crate::config::{StatusBarFpsMode, StatusBarWidget as Widget, StatusChartMetric};
 use crate::four_d::controller::{HardwareCapabilities, HardwareStatusLed};
@@ -924,7 +925,7 @@ fn item_menu(app: &mut PealayerApp, ui: &mut egui::Ui, item: Widget, log_id: egu
                 }
             }
         });
-        changed |= ui.checkbox(&mut app.status_bar.connection_mode, "Connection mode").changed();
+        changed |= ui.themed_checkbox(&mut app.status_bar.connection_mode, "Connection mode").changed();
         if !app.serial_port.is_empty() && ui.dropdown_choice(false, app.tr("Copy endpoint")).clicked() {
             ui.ctx().copy_text(app.serial_port.clone()); ui.close();
         }
@@ -971,17 +972,17 @@ fn item_menu(app: &mut PealayerApp, ui: &mut egui::Ui, item: Widget, log_id: egu
     }
     if item == Widget::Fps || metric_index(item).is_some() {
         let label = app.tr("Use monospace");
-        changed |= ui.checkbox(&mut app.status_bar.monospace[item as usize], label).changed();
+        changed |= ui.themed_checkbox(&mut app.status_bar.monospace[item as usize], label).changed();
     }
     if let Some(index) = metric_index(item) {
         let label = app.tr("Semantic colors");
-        changed |= ui.checkbox(&mut app.status_bar.semantic_colors, label).changed();
+        changed |= ui.themed_checkbox(&mut app.status_bar.semantic_colors, label).changed();
         ui.menu_button(app.tr("Value range"), |ui| {
             let (factor, unit) = match item { Widget::Voltage => (1000.0, "V"), Widget::Current => (1.0, "mA"), _ => (100.0, "°C") };
             for (bound, label) in [(0, "Minimum"), (1, "Maximum")] {
                 ui.horizontal(|ui| {
                     let mut enabled = app.status_bar.metric_limits[index][bound].is_some();
-                    if ui.checkbox(&mut enabled, app.tr(label)).changed() {
+                    if ui.themed_checkbox(&mut enabled, app.tr(label)).changed() {
                         let initial = app.status_bar.metric_limits[index][1-bound].map(|other|
                             if bound==0 { 0.min(other) } else { 0.max(other) }).unwrap_or(0);
                         app.status_bar.metric_limits[index][bound] = enabled.then_some(initial); changed = true;
@@ -1018,7 +1019,7 @@ fn item_menu(app: &mut PealayerApp, ui: &mut egui::Ui, item: Widget, log_id: egu
     }
     if item == Widget::Chart {
         let pause_label = app.tr("Pause chart logging");
-        changed |= ui.checkbox(&mut app.status_bar.chart_paused, pause_label).changed();
+        changed |= ui.themed_checkbox(&mut app.status_bar.chart_paused, pause_label).changed();
         if ui.dropdown_choice(false, app.tr("Copy chart history")).clicked() {
             let history = ui.ctx().data(|data| data.get_temp::<TelemetryLog>(log_id)).unwrap_or_default();
             let mut csv = String::from("elapsed_seconds,voltage_V,current_mA,temperature_C\n");
@@ -1177,8 +1178,8 @@ fn group_items(app: &PealayerApp, end: bool, hardware: Option<&HardwareCapabilit
 fn group_menu(app: &mut PealayerApp, ui: &mut egui::Ui, end: bool) {
     ui.strong(app.tr("Status bar"));
     let mut changed = false;
-    let label = app.tr("Show dividers"); changed |= ui.checkbox(&mut app.status_bar.dividers, label).changed();
-    let label = app.tr("Semantic colors"); changed |= ui.checkbox(&mut app.status_bar.semantic_colors, label).changed();
+    let label = app.tr("Show dividers"); changed |= ui.themed_checkbox(&mut app.status_bar.dividers, label).changed();
+    let label = app.tr("Semantic colors"); changed |= ui.themed_checkbox(&mut app.status_bar.semantic_colors, label).changed();
     ui.separator();
     for item in app.status_bar.ordered() {
         let here = app.status_bar.visible(item) && app.status_bar.at_end(item) == end;

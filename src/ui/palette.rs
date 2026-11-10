@@ -73,8 +73,7 @@ pub(super) fn paint_gradient(
     ).with_texture(texture.id(), uv));
 }
 
-/// Untextured chrome gradient, suitable for a reserved background paint slot.
-pub(super) fn horizontal_gradient(
+fn horizontal_gradient(
     rect: egui::Rect,
     start: egui::Color32,
     end: egui::Color32,

@@ -1,3 +1,4 @@
+use crate::ui::palette::native::controls::CheckboxUiExt;
 use crate::ui::dropdown::DropdownUiExt;
 use crate::app::PealayerApp;
 use eframe::egui;
@@ -706,7 +707,7 @@ fn settings(
                 .unwrap_or(fallback);
             ui.horizontal(|ui| {
                 let changed = ui
-                    .checkbox(&mut override_enabled, app.tr("Override with custom color"))
+                    .themed_checkbox(&mut override_enabled, app.tr("Override with custom color"))
                     .changed();
                 ui.add_enabled_ui(override_enabled, |ui| {
                     crate::ui::color_picker::color_button_srgb(ui, &mut override_color)
@@ -922,7 +923,7 @@ fn setting_control(ui: &mut egui::Ui, label: &str, control: impl FnOnce(&mut egu
 
 fn checkbox_setting(ui: &mut egui::Ui, label: &str, value: &mut bool) {
     setting_control(ui, label, |ui| {
-        ui.checkbox(value, "");
+        ui.themed_checkbox(value, "");
     });
 }
 
@@ -961,7 +962,7 @@ fn bit_checkbox(ui: &mut egui::Ui, value: &mut u8, bit: u8, label: &str, availab
         return;
     }
     let mut enabled = *value & bit != 0;
-    if ui.checkbox(&mut enabled, label).changed() {
+    if ui.themed_checkbox(&mut enabled, label).changed() {
         if enabled {
             *value |= bit;
         } else {

@@ -1,4 +1,5 @@
 //! One shared remote-browser state; no directory parsing or network I/O on the UI thread.
+use crate::ui::palette::native::controls::CheckboxUiExt;
 use crate::ui::dropdown::DropdownUiExt;
 use super::{dialog, icons};
 use crate::{app::PealayerApp, remote_location as remote};
@@ -79,7 +80,7 @@ pub fn draw(app: &mut PealayerApp, ctx: &egui::Context) {
                 if ui.add_enabled(!state.loading && remote::normalize(&view.target).is_ok(), egui::Button::new(browse_caption)).clicked() || response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) { navigate = Some(view.target.clone()); }
             });
             ui.horizontal(|ui| {
-                if ui.checkbox(&mut proxy, "Use proxy").on_hover_text("A manual choice overrides automatic route selection for this dialog. Off bypasses system and custom proxies.").changed() { view.proxy_override = Some(proxy); }
+                if ui.themed_checkbox(&mut proxy, "Use proxy").on_hover_text("A manual choice overrides automatic route selection for this dialog. Off bypasses system and custom proxies.").changed() { view.proxy_override = Some(proxy); }
                 if let Some(listing) = &state.listing {
                     ui.separator(); ui.label(format!("{} {}", icons::GLOBE, listing.host));
                     if let Some(server) = &listing.server { ui.label(egui::RichText::new(server).weak()); }
@@ -147,7 +148,7 @@ pub fn draw(app: &mut PealayerApp, ctx: &egui::Context) {
             }
             ui.separator();
             let mut auto_next=state.auto_next; let mut thumbnails=state.thumbnails;
-            ui.horizontal_wrapped(|ui| {ui.checkbox(&mut auto_next,"Automatically play next file");ui.checkbox(&mut thumbnails,"Thumbnails");});
+            ui.horizontal_wrapped(|ui| {ui.themed_checkbox(&mut auto_next,"Automatically play next file");ui.themed_checkbox(&mut thumbnails,"Thumbnails");});
             if auto_next!=state.auto_next||thumbnails!=state.thumbnails {app.apply_interop_command(ctx,crate::platform::interop::InteropCommand::UpdateConfig {values:serde_json::json!({"remote_folder_auto_next":auto_next,"remote_folder_thumbnails":thumbnails})},"Remote browser");}
             ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 if dialog::action_button(ui,icons::X,"Close").clicked(){close=true;}

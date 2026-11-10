@@ -1,3 +1,4 @@
+use crate::ui::palette::native::controls::CheckboxUiExt;
 use crate::ui::dropdown::DropdownUiExt;
 use crate::app::PealayerApp;
 use eframe::egui;
@@ -148,7 +149,7 @@ pub(crate) fn draw_estop_release_dialog(app: &mut PealayerApp, ui: &mut egui::Ui
             ui.add_space(6.0);
             ui.label(message);
             ui.add_space(10.0);
-            ui.checkbox(&mut app.skip_estop_release_confirmation_draft, skip_label);
+            ui.themed_checkbox(&mut app.skip_estop_release_confirmation_draft, skip_label);
             ui.add_space(12.0);
             ui.separator();
             ui.add_space(6.0);
@@ -226,14 +227,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let language = app.language;
     let rtl = app.rtl;
 
-    let pastel = app.color_palette == crate::config::ColorPalette::Pastel;
     let menu = egui::Panel::top("menu_bar").show_inside(ui, |ui| {
-        // Reserve paint order before laying out buttons and hit targets.
-        let background = pastel.then(|| {
-            let painter = ui.painter().clone();
-            let slot = painter.add(egui::Shape::Noop);
-            (painter, slot)
-        });
         egui::MenuBar::new().ui(ui, |ui| {
             ui.with_layout(crate::ui::i18n::layout(rtl, egui::Align::Center), |ui| {
                 top_menu_button(ui, app.tr("File"), |ui| {
@@ -437,7 +431,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     ui.separator();
 
                     let mut vis = app.sub_visibility;
-                    if ui.checkbox(&mut vis, app.tr("Enable Subtitles")).changed() {
+                    if ui.themed_checkbox(&mut vis, app.tr("Enable Subtitles")).changed() {
                         app.set_subtitle_visibility(vis);
                     }
 
@@ -526,7 +520,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     #[cfg(feature = "workspace-toolbar")]
                     {
                         let mut enabled = super::simple_controls::toolbar_visible(app);
-                        if ui.checkbox(&mut enabled, format!("{}  {}", crate::ui::icons::COMMAND, app.tr("Command toolbar"))).changed() {
+                        if ui.themed_checkbox(&mut enabled, format!("{}  {}", crate::ui::icons::COMMAND, app.tr("Command toolbar"))).changed() {
                             super::simple_controls::set_toolbar_visible(app,enabled);
                             if app.show_four_d_editor {app.deferred_config_save = true;}
                             else {app.request_simple_workspace_save(ui.ctx());}
@@ -539,14 +533,14 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     #[cfg(feature = "workspace-terminal")]
                     {
                         let mut enabled = app.terminal_state.preferences.enabled;
-                        if ui.checkbox(&mut enabled, format!("{}  {}", crate::ui::icons::TERMINAL_WINDOW, app.tr("Terminal"))).changed() {
+                        if ui.themed_checkbox(&mut enabled, format!("{}  {}", crate::ui::icons::TERMINAL_WINDOW, app.tr("Terminal"))).changed() {
                             app.terminal_state.preferences.enabled = enabled;
                             app.deferred_config_save = true;
                         }
                     }
                     let mut sidebar_rail_enabled = app.sidebar_rail_state.enabled;
                     if ui
-                        .checkbox(&mut sidebar_rail_enabled, app.tr("Sidebar Rail"))
+                        .themed_checkbox(&mut sidebar_rail_enabled, app.tr("Sidebar Rail"))
                         .changed()
                     {
                         app.sidebar_rail_state.enabled = sidebar_rail_enabled;
@@ -567,7 +561,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     };
                                     let tab_icon = crate::ui::layout::PealayerTab::from(pane).icon();
                                     let label = format!("{visibility_icon}  {tab_icon}  {}", pane.title(app.language));
-                                    if ui.checkbox(&mut open, label).changed() {
+                                    if ui.themed_checkbox(&mut open, label).changed() {
                                         if open {
                                             if let Err(error) = app.open_sidebar_pane(pane) {
                                                 app.set_osd(error);
@@ -841,18 +835,14 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                 });
             });
         });
-        background
     });
-    if let Some((painter, slot)) = menu.inner {
+    if app.color_palette == crate::config::ColorPalette::Pastel {
         let rect = menu.response.rect;
         let stripe = egui::Rect::from_min_max(
             egui::pos2(rect.left(), rect.bottom() - 1.0),
             rect.max,
         );
         let color = |role| crate::ui::palette::color(app.color_palette, ui.visuals().dark_mode, role);
-        painter.set(slot, crate::ui::palette::horizontal_gradient(
-            rect, color("chrome-start"), color("chrome-end"),
-        ));
         crate::ui::palette::paint_gradient(
             ui.painter(), stripe, 0, color("gradient-start"), color("gradient-end"), 1.0,
         );

@@ -1,3 +1,4 @@
+use crate::ui::palette::native::controls::CheckboxUiExt;
 use crate::ui::dropdown::DropdownUiExt;
 use crate::app::{EffectDragPayload, PealayerApp};
 use crate::config::TimelineToolbarAction;
@@ -5706,10 +5707,10 @@ fn draw_board_card_context_menu(
             let relay_prefix_label = app.tr("Prefix relay identifiers");
             let mut changed = false;
             changed |= ui
-                .checkbox(&mut app.compact_hardware_controls, compact_label)
+                .themed_checkbox(&mut app.compact_hardware_controls, compact_label)
                 .changed();
             changed |= ui
-                .checkbox(&mut app.prefix_relay_identifiers, relay_prefix_label)
+                .themed_checkbox(&mut app.prefix_relay_identifiers, relay_prefix_label)
                 .changed();
             if changed {
                 app.save_config();
@@ -5731,10 +5732,10 @@ fn draw_board_card_context_menu(
             let pause_disconnect_label = app.tr("Pause playback on disconnect");
             let mut changed = false;
             changed |= ui
-                .checkbox(&mut app.auto_connect_hardware, auto_connect_label)
+                .themed_checkbox(&mut app.auto_connect_hardware, auto_connect_label)
                 .changed();
             changed |= ui
-                .checkbox(
+                .themed_checkbox(
                     &mut app.pause_on_hardware_disconnect,
                     pause_disconnect_label,
                 )
@@ -5748,7 +5749,7 @@ fn draw_board_card_context_menu(
     ui.separator();
     let mut estop = app.estop_active;
     if ui
-        .checkbox(
+        .themed_checkbox(
             &mut estop,
             format!("{} {}", crate::ui::icons::WARNING, app.tr("E-STOP")),
         )
@@ -6492,7 +6493,7 @@ fn draw_control_context_menu(
     if control_supports_presentation_policy(control) {
         let mut locked = control.locked;
         if ui
-            .checkbox(
+            .themed_checkbox(
                 &mut locked,
                 format!("{} {}", crate::ui::icons::LOCK, app.tr("Lock channel")),
             )
@@ -8459,7 +8460,7 @@ fn draw_compact_relay_group(
                             }
                             let mut locked = control.locked;
                             if ui
-                                .checkbox(
+                                .themed_checkbox(
                                     &mut locked,
                                     format!(
                                         "{} {}",
@@ -14177,7 +14178,7 @@ pub fn draw_workspace_tab_menu(app: &mut PealayerApp, ui: &mut egui::Ui) {
             ""
         };
         let label = format!("{visibility_icon}  {}  {}{location_suffix}", tab.icon(), tab.title(app));
-        if ui.checkbox(&mut visible, label).changed() {
+        if ui.themed_checkbox(&mut visible, label).changed() {
             if visible && !is_open {
                 app.open_or_focus_tab(tab);
             } else if !visible && is_open {
@@ -15596,7 +15597,7 @@ impl<'a> PealayerTabViewer<'a> {
                                         ui.menu_button(label, |ui| {
                                                 let mut linked = row.linked;
                                                 if ui
-                                                    .checkbox(
+                                                    .themed_checkbox(
                                                         &mut linked,
                                                         self.app.tr("Link to timeline"),
                                                     )
@@ -15609,7 +15610,7 @@ impl<'a> PealayerTabViewer<'a> {
                                                 let mut visible = row.visible;
                                                 if ui
                                                     .add_enabled_ui(linked, |ui| {
-                                                        ui.checkbox(
+                                                        ui.themed_checkbox(
                                                             &mut visible,
                                                             self.app.tr("Show timeline track"),
                                                         )
@@ -20128,7 +20129,7 @@ impl<'a> PealayerTabViewer<'a> {
                                 ui.separator();
                                 let mut compact_rows = self.app.compact_timeline_tracks;
                                 if ui
-                                    .checkbox(
+                                    .themed_checkbox(
                                         &mut compact_rows,
                                         self.app.tr("Compact track rows"),
                                     )

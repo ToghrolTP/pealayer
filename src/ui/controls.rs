@@ -1,3 +1,4 @@
+use crate::ui::palette::native::controls::CheckboxUiExt;
 use crate::app::PealayerApp;
 use eframe::egui;
 
@@ -1048,10 +1049,10 @@ pub fn transport_context_menu(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let milliseconds_label = app.tr("Show milliseconds");
     let remaining_label = app.tr("Show time remaining");
     config_changed |= ui
-        .checkbox(&mut app.show_subseconds, milliseconds_label)
+        .themed_checkbox(&mut app.show_subseconds, milliseconds_label)
         .changed();
     config_changed |= ui
-        .checkbox(&mut app.show_remaining_time, remaining_label)
+        .themed_checkbox(&mut app.show_remaining_time, remaining_label)
         .changed();
     if config_changed {
         app.save_config();
