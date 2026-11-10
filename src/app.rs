@@ -908,6 +908,9 @@ pub struct PealayerApp {
     pub(crate) windows_mica_backdrop: bool,
     pub(crate) windows_dwm_theming: bool,
     pub(crate) windows_video_taskbar_thumbnail: bool,
+    pub(crate) windows_video_renderer: crate::config::WindowsVideoRenderer,
+    #[cfg(windows)]
+    pub(crate) active_d3d11_composition: bool,
     pub(crate) windows_thumbnail_toolbar: bool,
     pub(crate) windows_jump_list_quick_actions: bool,
     pub opengl_vsync: bool,
@@ -1908,6 +1911,8 @@ impl eframe::App for PealayerApp {
 
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         let _timing = crate::performance::span(crate::performance::Phase::Ui);
+        #[cfg(windows)]
+        if self.active_d3d11_composition { crate::platform::d3d11_composition::begin_frame(); }
         let is_fullscreen = ui.input(|input| input.viewport().fullscreen.unwrap_or(false));
         if let Some(winit_window) = frame.winit_window() {
             if let Some(monitor) = winit_window.current_monitor() {
@@ -1982,6 +1987,8 @@ impl eframe::App for PealayerApp {
             }
         }
 
+        #[cfg(windows)]
+        let init_rtt = init_rtt && !self.active_d3d11_composition;
         if init_rtt {
             if let Some(gl) = frame.gl() {
                 unsafe {
@@ -2226,6 +2233,15 @@ impl eframe::App for PealayerApp {
         self.draw_timeline_close_confirmation(ui.ctx());
         crate::ui::terminal::draw_exit_confirmation(self, ui.ctx());
         crate::ui::video::finish_released_gesture(self,ui.ctx());
+        #[cfg(windows)]
+        if self.active_d3d11_composition {
+            let covered = crate::ui::video::composition_obscured(self, ui.ctx());
+            if covered && crate::platform::d3d11_composition::active() { ui.ctx().request_repaint(); }
+            crate::platform::d3d11_composition::finish_frame(covered);
+            if !crate::platform::d3d11_composition::active() {
+                crate::ui::video::sync_native_osd(self, ui.ctx(), None, egui::Vec2::ZERO);
+            }
+        }
     }
 
     fn save(&mut self, _storage: &mut dyn eframe::Storage) {
@@ -2235,6 +2251,8 @@ impl eframe::App for PealayerApp {
     fn persist_egui_memory(&self)->bool { !crate::peer::active() }
 
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
+        #[cfg(windows)]
+        if self.active_d3d11_composition { crate::platform::d3d11_composition::shutdown(); }
         crate::downloads::shutdown();
         crate::mpv::external::shutdown();
         // Never leave a press-and-hold channel active merely because Pealayer
@@ -7740,6 +7758,7 @@ impl PealayerApp {
         cfg.windows_mica_backdrop = self.windows_mica_backdrop;
         cfg.windows_dwm_theming = self.windows_dwm_theming;
         cfg.windows_video_taskbar_thumbnail = self.windows_video_taskbar_thumbnail;
+        cfg.windows_video_renderer = self.windows_video_renderer;
         cfg.windows_thumbnail_toolbar = self.windows_thumbnail_toolbar;
         cfg.windows_jump_list_quick_actions = self.windows_jump_list_quick_actions;
         cfg.opengl_vsync = self.opengl_vsync;
@@ -8160,6 +8179,7 @@ impl PealayerApp {
         self.windows_mica_backdrop = config.windows_mica_backdrop;
         self.windows_dwm_theming = config.windows_dwm_theming;
         self.windows_video_taskbar_thumbnail = config.windows_video_taskbar_thumbnail;
+        self.windows_video_renderer = config.windows_video_renderer;
         self.windows_thumbnail_toolbar = config.windows_thumbnail_toolbar;
         let jump_list_changed =
             self.windows_jump_list_quick_actions != config.windows_jump_list_quick_actions;
@@ -10509,6 +10529,9 @@ impl Default for PealayerApp {
             windows_mica_backdrop: false,
             windows_dwm_theming: true,
             windows_video_taskbar_thumbnail: true,
+            windows_video_renderer: crate::config::WindowsVideoRenderer::default(),
+            #[cfg(windows)]
+            active_d3d11_composition: false,
             windows_thumbnail_toolbar: true,
             windows_jump_list_quick_actions: true,
             opengl_vsync: true,

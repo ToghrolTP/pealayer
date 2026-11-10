@@ -356,21 +356,11 @@ pub fn reset_shell() {
     }
 }
 
-/// Called only with the current render context and the MPV FBO bound.
 #[cfg(target_os = "windows")]
-pub unsafe fn capture(
-    gl: &eframe::glow::Context,
-    hwnd: isize,
-    source: eframe::glow::Framebuffer,
-    width: i32,
-    height: i32,
-    media: &str,
-    frame_updated: bool,
-) {
-    use eframe::glow::{self, HasContext};
+pub(super) fn capture_size(media: &str, width: i32, height: i32, frame_updated: bool) -> Option<(u32, u32)> {
     let plan = if let Ok(mut state) = PREVIEW.lock() {
         if !state.enabled || width <= 0 || height <= 0 {
-            return;
+            return None;
         }
         if state.media != media {
             state.media = media.to_owned();
@@ -388,7 +378,7 @@ pub unsafe fn capture(
         CapturePlan::Idle
     };
     match plan {
-        CapturePlan::Idle => return,
+        CapturePlan::Idle => return None,
         CapturePlan::RetryAfter(delay) => {
             // DWM can ask for the invalidated thumbnail immediately. If the
             // 30 Hz limiter simply returns here, no later paint is guaranteed
@@ -397,11 +387,52 @@ pub unsafe fn capture(
             if let Some(ctx) = REPAINT.get() {
                 ctx.request_repaint_after(delay);
             }
-            return;
+            return None;
         }
         CapturePlan::Capture => {}
     }
-    let (w, h) = fit_size(width as u32, height as u32, 640, 360);
+    Some(fit_size(width as u32, height as u32, 640, 360))
+}
+
+#[cfg(target_os = "windows")]
+pub(super) fn submit_capture(hwnd: isize, media: &str, frame: image::RgbaImage) {
+    let Ok(mut state) = PREVIEW.lock() else { return; };
+    if !state.enabled || state.media != media { return; }
+    state.frame = Some(frame);
+    state.captured = Some(Instant::now());
+    state.frame_dirty = false;
+    state.captured_frames += 1;
+    drop(state);
+    let _ = unsafe { windows::Win32::Graphics::Dwm::DwmInvalidateIconicBitmaps(
+        windows::Win32::Foundation::HWND(hwnd as *mut _),
+    ) };
+}
+
+#[cfg(windows)]
+pub(crate) fn composition_full_capture_pending() -> bool {
+    use std::sync::atomic::Ordering;
+    FULL_REQUESTED.load(Ordering::Acquire)
+        || MINIMIZE_WAITING.load(Ordering::Acquire) != 0
+        || FULL.lock().is_ok_and(|state| {
+            state.pending.is_some_and(|at| at.elapsed() < Duration::from_secs(2))
+        })
+}
+
+/// Called only with the current render context and the MPV FBO bound.
+#[cfg(target_os = "windows")]
+pub unsafe fn capture(
+    gl: &eframe::glow::Context,
+    hwnd: isize,
+    source: eframe::glow::Framebuffer,
+    width: i32,
+    height: i32,
+    media: &str,
+    frame_updated: bool,
+) {
+    use eframe::glow::{self, HasContext};
+    let Some((w, h)) = capture_size(media, width, height, frame_updated) else {
+        return;
+    };
     unsafe {
         // Preserve split FBO bindings and pixel packing. Never read the egui
         // framebuffer, which would include controls/OSD and leak through panels.
@@ -500,15 +531,9 @@ pub unsafe fn capture(
         for pixel in rgba.chunks_exact_mut(4) {
             pixel[3] = 255;
         }
-        if let Ok(mut state) = PREVIEW.lock() {
-            state.frame = image::RgbaImage::from_raw(w, h, rgba);
-            state.captured = Some(Instant::now());
-            state.frame_dirty = false;
-            state.captured_frames += 1;
+        if let Some(frame) = image::RgbaImage::from_raw(w, h, rgba) {
+            submit_capture(hwnd, media, frame);
         }
-        let _ = windows::Win32::Graphics::Dwm::DwmInvalidateIconicBitmaps(
-            windows::Win32::Foundation::HWND(hwnd as *mut _),
-        );
     }
 }
 
@@ -621,8 +646,12 @@ pub fn diagnostics() -> serde_json::Value {
         "frame_age_ms":state.captured.map(|at|at.elapsed().as_millis() as u64),"error":state.error})).unwrap_or_default();
     #[cfg(not(target_os = "windows"))]
     let full = serde_json::Value::Null;
+    #[cfg(windows)]
+    let composition = super::d3d11_composition::diagnostics();
+    #[cfg(not(windows))]
+    let composition = serde_json::Value::Null;
     serde_json::json!({"video_only":state.enabled,"branding":branding,
-        "full_preview":full,
+        "full_preview":full,"directcomposition":composition,
         "dwm_configuration":{"supported":cfg!(target_os="windows"),
             "force_iconic":state.enabled,"has_iconic_bitmap":state.enabled,
             "source":"successful DwmSetWindowAttribute calls","error":state.configuration_error},

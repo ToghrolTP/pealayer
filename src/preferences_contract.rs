@@ -1314,6 +1314,18 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             "Windows graphics and composition",
             "Use Mica backdrop",
         ),
+        #[cfg(windows)]
+        {
+            let mut control = PreferenceControl::select(
+                "windows_video_renderer",
+                "advanced",
+                "Windows graphics and composition",
+                "Video renderer",
+                &[("open_gl", "OpenGL"), ("d3d11", "D3D11 / DirectComposition")],
+            );
+            control.description = Some("Experimental native Windows video presentation. Applies after restart.");
+            control
+        },
         PreferenceControl::boolean(
             "windows_video_taskbar_thumbnail",
             "advanced",
