@@ -5860,6 +5860,19 @@ impl PealayerApp {
                     }
                     self.refresh_media_tracks();
                 }
+                // libmpv2 converts a failed EndFile to Err(Raw(error)).
+                // Match media-load failures only after this project has
+                // observed its own StartFile boundary.
+                Some(Err(libmpv2::Error::Raw(
+                    libmpv2::mpv_error::LoadingFailed
+                    | libmpv2::mpv_error::UnknownFormat
+                    | libmpv2::mpv_error::Unsupported
+                    | libmpv2::mpv_error::NothingToPlay
+                    | libmpv2::mpv_error::AoInitFailed
+                    | libmpv2::mpv_error::VoInitFailed,
+                ))) if self.project_decoder_failed() => {
+                    self.fail_project_media_load("decoder rejected the media");
+                }
                 Some(Ok(_)) => {}
                 _ => break,
             }
