@@ -10,11 +10,12 @@ pub(crate) fn layout(
     font: egui::FontId,
     color: egui::Color32,
 ) -> Arc<egui::Galley> {
-    let digit_width = ui.fonts_mut(|fonts| {
-        ('0'..='9')
-            .map(|ch| fonts.glyph_width(&font, ch))
-            .fold(0.0_f32, f32::max)
-    });
+    // Measure the shaped section, not the font's raw glyph advance. CoreText
+    // system faces can shape a different advance (including variation metrics),
+    // which otherwise left a fractional drift despite equal raw-width padding.
+    let advances: [f32;10] = std::array::from_fn(|digit| ui.fonts_mut(|fonts|
+        fonts.layout_no_wrap(char::from(b'0'+digit as u8).to_string(),font.clone(),color).size().x));
+    let digit_width = advances.iter().copied().fold(0.0_f32,f32::max);
     let mut job = egui::text::LayoutJob::default();
     let format = egui::TextFormat {
         font_id: font.clone(),
@@ -30,7 +31,7 @@ pub(crate) fn layout(
                 run.clear();
                 pending = 0.0;
             }
-            let advance = ui.fonts_mut(|fonts| fonts.glyph_width(&font, ch));
+            let advance = advances[(ch as u8-b'0') as usize];
             let pad = (digit_width - advance).max(0.0) * 0.5;
             // Explicit section boundaries avoid kerning across numeric cells;
             // ordinary words remain whole shaped runs, including RTL scripts.
