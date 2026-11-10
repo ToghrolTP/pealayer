@@ -41,6 +41,13 @@ export const uiFontCss = (choice: string, name = ''): string => choice === 'cust
 export const monoFontCss = (choice: string, name = ''): string => choice === 'custom' && name.trim()
   ? `${customFamily(name)}, ${monoFontCss('system')}` : choice === 'bundled' ? 'PealayerHack, monospace' : 'ui-monospace, Consolas, Menlo, monospace';
 
+export const statusFontCss = (choice: string, name = '', platform = ''): string => {
+  const fallback = /Windows|Win32|Win64/i.test(platform) ? 'PealayerInter, Inter, system-ui, Vazirmatn, sans-serif'
+    : /Mac|iPhone|iPad/i.test(platform) ? '-apple-system, BlinkMacSystemFont, PealayerInter, Vazirmatn, sans-serif'
+    : 'Roboto, system-ui, PealayerInter, Vazirmatn, sans-serif';
+  return choice === 'custom' && name.trim() ? `${customFamily(name)}, ${fallback}` : fallback;
+};
+
 /** Only preference fields enter config patches; host resolution is live state. */
 export function mergeAppearance<T extends Record<string, any>>(
   values: T,

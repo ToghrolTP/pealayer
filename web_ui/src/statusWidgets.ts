@@ -12,7 +12,7 @@ export const DEFAULT_VISIBILITY: StatusBarVisibility = {
   progress: true, chart: false, fps_mode: 'auto', chart_metric: 'voltage', order: [...WIDGETS],
   dividers: true, semantic_colors: false,
   connection_icon: 'plug', connection_mode: false, chart_paused: false,
-  monospace: WIDGETS.map((item) => ['fps', 'voltage', 'current', 'temperature'].includes(item)),
+  monospace: WIDGETS.map(() => false),
   trailing: WIDGETS.map((item) => item === 'workspace'), metric_limits: [[null, null], [null, null], [null, null]],
 };
 export function orderedWidgets(order?: readonly string[]): StatusWidget[] {

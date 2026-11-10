@@ -43,6 +43,7 @@
 }
 @font-face { font-family: PealayerUbuntu; src: url('../../assets/fonts/Ubuntu-Light.ttf') format('truetype'); font-display: swap; }
 @font-face { font-family: PealayerHack; src: url('../../assets/fonts/Hack-Regular.ttf') format('truetype'); font-display: swap; }
+@font-face { font-family: PealayerInter; src: url('../../assets/fonts/InterVariable.ttf') format('truetype'); font-weight: 100 900; font-display: swap; }
 @font-face { font-family: Vazirmatn; src: url('../../assets/fonts/Vazirmatn-Regular.ttf') format('truetype'); font-display: swap; }
 /* Optional licensed host font: no private font bytes are served or bundled. */
 @font-face { font-family: PealayerPersian; src: local('Yekan Bakh VF'), local('YekanBakh VF'); font-weight: 100 900; unicode-range: U+0600-06FF, U+0750-077F, U+08A0-08FF, U+FB50-FDFF, U+FE70-FEFF; font-display: swap; }
@@ -1143,7 +1144,7 @@ html[data-motion="disabled"] *, html[data-motion="disabled"] *::before, html[dat
 .status-widget--fps, .status-widget--fps .app-statusbar__fps { font-weight: 400; }
 .status-widget--voltage, .status-widget--current, .status-widget--temperature { font-size: 11px; font-weight: 400; color: var(--muted); font-variant-numeric: tabular-nums; }
 .app-statusbar .status-widget.is-monospace, .status-widget.is-monospace .app-statusbar__fps { font-family: var(--mono-font, monospace); }
-.app-statusbar .status-widget { font-family: var(--ui-font, sans-serif); border-radius: 3px; transition: background-color 120ms ease; }
+.app-statusbar .status-widget { font-family: var(--status-font, var(--ui-font, sans-serif)); font-variant-numeric: tabular-nums; border-radius: 3px; transition: background-color 120ms ease; }
 .app-statusbar .status-widget:hover, .app-statusbar .status-widget:focus-within { background: var(--surface-3); }
 html[data-motion="disabled"] .app-statusbar .status-widget { transition: none; }
 .status-widget--hot, .status-widget--estop { color: var(--red); }

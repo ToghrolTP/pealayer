@@ -512,6 +512,26 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         format!("{} {}", crate::ui::icons::TABS, app.tr("Panels")),
                         |ui| crate::ui::layout::draw_workspace_tab_menu(app, ui),
                     );
+                    #[cfg(feature = "workspace-toolbar")]
+                    {
+                        let mut enabled = app.toolbar_state.preferences.enabled;
+                        if ui.checkbox(&mut enabled, format!("{}  {}", crate::ui::icons::COMMAND, app.tr("Command toolbar"))).changed() {
+                            app.toolbar_state.preferences.enabled = enabled;
+                            app.deferred_config_save = true;
+                        }
+                        if ui.button(format!("{}  {}  Ctrl+Shift+P", crate::ui::icons::MAGNIFYING_GLASS, app.tr("Command palette"))).clicked() {
+                            app.toolbar_state.palette_open = true;
+                            ui.close();
+                        }
+                    }
+                    #[cfg(feature = "workspace-terminal")]
+                    {
+                        let mut enabled = app.terminal_state.preferences.enabled;
+                        if ui.checkbox(&mut enabled, format!("{}  {}", crate::ui::icons::TERMINAL_WINDOW, app.tr("Terminal"))).changed() {
+                            app.terminal_state.preferences.enabled = enabled;
+                            app.deferred_config_save = true;
+                        }
+                    }
                     let mut sidebar_rail_enabled = app.sidebar_rail_state.enabled;
                     if ui
                         .checkbox(&mut sidebar_rail_enabled, app.tr("Sidebar Rail"))

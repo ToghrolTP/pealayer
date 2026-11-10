@@ -17,6 +17,10 @@ pub enum SidebarPane {
 }
 
 impl SidebarPane {
+    pub const fn index(self) -> usize {
+        match self { Self::HardwareMonitor => 0, Self::MediaInspector => 1,
+            Self::EffectControls => 2, Self::EffectsLibrary => 3 }
+    }
     pub const ALL: [SidebarPane; 4] = [
         SidebarPane::HardwareMonitor,
         SidebarPane::MediaInspector,
@@ -107,9 +111,12 @@ impl<'a> PaneContent<SidebarPane> for SidebarPaneContent<'a> {
 
     fn body(&mut self, ui: &mut Ui, pane: &SidebarPane) {
         let tab = PealayerTab::from(*pane);
+        pane_header(self.app, ui, *pane);
         let mut viewer = crate::ui::layout::PealayerTabViewer::new(self.app);
         craft_ui::docking::DockContent::body(&mut viewer, ui, &tab);
     }
+
+    fn title_bar(&self, _pane: &SidebarPane) -> bool { false }
 
     fn default_state(&self, pane: &SidebarPane) -> PaneState {
         Self::default_pane_state(pane)
@@ -128,17 +135,81 @@ impl<'a> PaneContent<SidebarPane> for SidebarPaneContent<'a> {
     }
 
     fn menu(&mut self, ui: &mut Ui, pane: &SidebarPane) {
-        let label = match self.app.language {
-            crate::config::AppLanguage::Persian => "انتقال به میز کار",
-            _ => "Dock to Workspace",
-        };
-        let icon = crate::ui::icons::GRID_FOUR;
-        if ui.button(format!("{icon}  {label}")).clicked() {
-            let tab = PealayerTab::from(*pane);
-            self.app.open_or_focus_tab(tab);
-            ui.close();
-        }
+        crate::ui::layout::PealayerTabViewer::new(self.app)
+            .draw_context_menu(ui, (*pane).into());
     }
+}
+
+/// The side host owns resizing/focus; Pealayer owns its complete native chrome.
+fn pane_header(app: &mut PealayerApp, ui: &mut Ui, pane: SidebarPane) {
+    use eframe::egui::{self, Sense};
+    let tab = PealayerTab::from(pane);
+    let tokens = super::craft_theme::current(ui.ctx());
+    let height = 32.0_f32.max(egui::TextStyle::Body.resolve(ui.style()).size + 12.0);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), height), Sense::click());
+    ui.painter().rect_filled(rect, 0.0, tokens.tab_bg);
+    let options = super::panel_chrome::HeaderOptions::current();
+    let rtl = app.rtl;
+    let mut edge = if rtl { rect.left() + 3.0 } else { rect.right() - 3.0 };
+    let mut slot = || {
+        let x = if rtl { edge + 12.0 } else { edge - 12.0 };
+        edge += if rtl { 24.0 } else { -24.0 };
+        egui::Rect::from_center_size(egui::pos2(x, rect.center().y), egui::Vec2::splat(24.0))
+    };
+    let mut hide = false;
+    if options.close {
+        let close = slot();
+        hide |= ui.add_enabled_ui(!app.dock_state.locked, |ui| {
+            super::panel_chrome::button(ui, close, Id::unique(("sidebar-close", pane)), super::icons::X, &app.tr("Close panel"))
+        }).inner.clicked();
+    }
+    let menu_rect = slot();
+    let menu = super::panel_chrome::button(ui, menu_rect, Id::unique(("sidebar-menu", pane)), super::icons::DOTS_THREE, &app.tr("Panel menu"));
+    let interactive = ui.is_enabled() && ui.ctx().memory(|memory| memory.is_above_modal_layer(ui.layer_id()));
+    let requested = ui.ctx().data_mut(|data| {
+        let id = Id::unique("sidebar-menu-request");
+        let wanted = interactive && data.get_temp::<PealayerTab>(id) == Some(tab);
+        if wanted { data.remove::<PealayerTab>(id); }
+        wanted
+    });
+    let menu_open = if requested { Some(egui::SetOpenCommand::Bool(true)) }
+        else { menu.clicked().then_some(egui::SetOpenCommand::Toggle) };
+    egui::Popup::menu(&menu).open_memory(menu_open).show(|ui| {
+        crate::ui::layout::PealayerTabViewer::new(app).draw_context_menu(ui, tab);
+    });
+    if options.collapse {
+        let collapse = slot();
+        hide |= ui.add_enabled_ui(!app.dock_state.locked, |ui| {
+            super::panel_chrome::button(ui, collapse, Id::unique(("sidebar-collapse", pane)),
+                if app.rtl { super::icons::CARET_LEFT } else { super::icons::CARET_RIGHT }, &app.tr("Hide panel"))
+        }).inner.clicked();
+    }
+    let title_rect = if app.rtl {
+        egui::Rect::from_min_max(egui::pos2(edge + 5.0, rect.top()), egui::pos2(rect.right() - 8.0, rect.bottom()))
+    } else {
+        egui::Rect::from_min_max(egui::pos2(rect.left() + 8.0, rect.top()), egui::pos2(edge - 5.0, rect.bottom()))
+    };
+    let icon = egui::Rect::from_center_size(egui::pos2(if app.rtl {title_rect.right()-9.0} else {title_rect.left()+9.0},rect.center().y),egui::Vec2::splat(18.0));
+    super::panel_chrome::paint_icon(ui.painter(), icon, tab.icon(), tokens.icon);
+    let mut caption = title_rect;
+    if app.rtl { caption.max.x -= 24.0; } else { caption.min.x += 24.0; }
+    let galley = ui.painter().layout_no_wrap(tab.title(app), egui::TextStyle::Body.resolve(ui.style()), tokens.text);
+    let x = if app.rtl {caption.right()-galley.mesh_bounds.right()} else {caption.left()-galley.mesh_bounds.left()};
+    ui.painter().with_clip_rect(caption).galley(egui::pos2(x,rect.center().y-galley.mesh_bounds.center().y),galley,tokens.text);
+    response.context_menu(|ui| crate::ui::layout::PealayerTabViewer::new(app).draw_context_menu(ui, tab));
+    if hide {
+        app.sidebar_rail_state.remember_side(pane);
+        app.sidebar_rail_state.open = None;
+        app.deferred_config_save = true;
+        ui.ctx().request_repaint();
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+pub struct PanelSize {
+    pub horizontal: bool,
+    /// Size of the panel's own side, not an unrelated split's first child.
+    pub own: craft_ui::layout::SplitSize,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -147,6 +218,9 @@ pub struct SidebarRailState {
     pub open: Option<SidebarPane>,
     pub width: f32,
     pub enabled: bool,
+    pub last_sidebar: [bool; 4],
+    pub widths: [Option<f32>; 4],
+    pub dock_sizes: [Option<PanelSize>; 7],
 }
 
 impl Default for SidebarRailState {
@@ -155,11 +229,32 @@ impl Default for SidebarRailState {
             open: None,
             width: SidebarPaneContent::DEFAULT_WIDTH,
             enabled: true,
+            last_sidebar: [false; 4],
+            widths: [None; 4],
+            dock_sizes: [None; 7],
         }
     }
 }
 
 impl SidebarRailState {
+    pub fn remember_side(&mut self, pane: SidebarPane) {
+        self.last_sidebar[pane.index()] = true;
+        self.widths[pane.index()] = Some(self.width);
+    }
+
+    pub fn remember_dock_size(&mut self, tab: PealayerTab, location: &craft_ui::docking::Location<PealayerTab>) {
+        use craft_ui::{docking::{Placement, Zone}, layout::SplitSize};
+        if let (Placement::Split(zone), Some(size)) = (&location.placement, location.size) {
+            let second = matches!(zone, Zone::Right | Zone::Bottom);
+            let own = match (size, second) {
+                (SplitSize::Ratio(v), true) => SplitSize::Ratio(1.0-v),
+                (SplitSize::FixedFirst(v), true) => SplitSize::FixedSecond(v),
+                (SplitSize::FixedSecond(v), true) => SplitSize::FixedFirst(v),
+                (size, _) => size,
+            };
+            self.dock_sizes[tab_index(tab)] = Some(PanelSize { horizontal: matches!(zone, Zone::Left | Zone::Right), own });
+        }
+    }
     /// Content can dock itself, but a stale pre-render copy must not undo
     /// close/resize actions requested by the pane chrome in this frame.
     fn finish_pane_frame(
@@ -183,13 +278,20 @@ impl SidebarRailState {
 
     pub fn apply_pane_request(&mut self, request: PaneRequest<SidebarPane>) {
         match request {
-            PaneRequest::Close(_) => self.open = None,
-            PaneRequest::Resize(_, size) => {
-                self.width = size.clamp(SidebarPaneContent::MIN_WIDTH, SidebarPaneContent::MAX_WIDTH)
+            PaneRequest::Close(pane) => { self.remember_side(pane); self.open = None; },
+            PaneRequest::Resize(pane, size) => {
+                self.width = size.clamp(SidebarPaneContent::MIN_WIDTH, SidebarPaneContent::MAX_WIDTH);
+                self.widths[pane.index()] = Some(self.width);
             }
             _ => {}
         }
     }
+}
+
+pub fn tab_index(tab: PealayerTab) -> usize {
+    match tab { PealayerTab::ProgramMonitor => 0, PealayerTab::MediaInspector => 1,
+        PealayerTab::Timeline => 2, PealayerTab::EffectControls => 3,
+        PealayerTab::EffectsLibrary => 4, PealayerTab::HardwareMonitor => 5, PealayerTab::Terminal => 6 }
 }
 
 pub fn show_sidebar_rail(
@@ -212,8 +314,10 @@ pub fn show_sidebar_rail(
 
     // Mutual exclusivity: if a pane is open in the sidebar rail, close it from the dock grid
     if let Some(pane) = state.open {
+        state.remember_side(pane);
         let tab = PealayerTab::from(pane);
         if app.dock_state.layout.contains(&tab) {
+            if let Ok(location) = app.dock_state.layout.location(&tab) { state.remember_dock_size(tab, &location); }
             match app.dock_state.set_visible(
                 tab,
                 false,
@@ -235,6 +339,7 @@ pub fn show_sidebar_rail(
         let open_panes = [pane];
         let mut content = SidebarPaneContent { app };
         let out = PaneHost::new(Id::unique("pealayer-sidebar-pane-host"))
+            .body_margin(eframe::egui::Margin::ZERO)
             // F1-F8 belong to Pealayer's relay-recording dispatcher. The
             // donor host must not also interpret F6 as pane navigation.
             .f6(false)
@@ -246,6 +351,7 @@ pub fn show_sidebar_rail(
                 |_| Some(PaneState::docked(Edge::End, state.width)),
                 &mut content,
             );
+        *state = app.sidebar_rail_state;
         state.finish_pane_frame(app.sidebar_rail_state.open, out.requests.iter().cloned());
         Some(out)
     } else {
@@ -267,6 +373,55 @@ mod tests {
     use super::*;
     use eframe::egui;
     use craft_ui::panes::{Edge, PaneContent, PaneRequest, Place, RailRequest};
+
+    #[test]
+    fn sidebar_header_uses_working_shared_menu_and_close_without_stale_location() {
+        let _guard = crate::app::tests::lock_app_tests();
+        for rtl in [false,true] {
+            let ctx=egui::Context::default(); crate::ui::i18n::configure_ui_fonts(&ctx,rtl);
+            let mut app=PealayerApp::default(); app.engine_handle=crate::four_d::engine::memory_only_test_engine(); app.rtl=rtl;
+            app.open_sidebar_pane(SidebarPane::EffectsLibrary).unwrap();
+            let mut frame = |events:Vec<egui::Event>| {
+                let mut out=ctx.run_ui(egui::RawInput {events,screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(1000.0,700.0))),..Default::default()},|ui| {
+                    let mut state=app.sidebar_rail_state;
+                    show_sidebar_rail(&mut app,ui,&mut state); app.sidebar_rail_state=state;
+                }); out.textures_delta.clear(); out
+            };
+            frame(vec![]);frame(vec![]);
+            let menu=ctx.read_response(Id::unique(("sidebar-menu",SidebarPane::EffectsLibrary))).unwrap().rect;
+            let close=ctx.read_response(Id::unique(("sidebar-close",SidebarPane::EffectsLibrary))).unwrap().rect;
+            assert_eq!(menu.center().y,close.center().y);
+            let pos=menu.center();frame(vec![egui::Event::PointerMoved(pos)]);
+            for pressed in [true,false] {frame(vec![egui::Event::PointerButton {pos,button:egui::PointerButton::Primary,pressed,modifiers:Default::default()}]);}
+            let out=frame(vec![]);
+            assert!(out.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Text(t) if t.galley.text().contains("Dock to Workspace"))));
+            // Close the popup without mutating the panel, then use its real ×.
+            frame(vec![egui::Event::Key {key:egui::Key::Escape,physical_key:None,pressed:true,repeat:false,modifiers:Default::default()}]);
+            frame(vec![]);
+            let pos=close.center();frame(vec![egui::Event::PointerMoved(pos)]);
+            for pressed in [true,false] {frame(vec![egui::Event::PointerButton {pos,button:egui::PointerButton::Primary,pressed,modifiers:Default::default()}]);}
+            drop(frame);
+            assert_eq!(app.sidebar_rail_state.open,None);
+            assert!(app.sidebar_rail_state.last_sidebar[SidebarPane::EffectsLibrary.index()]);
+            app.toggle_rail_panel(&ctx,PealayerTab::EffectsLibrary).unwrap();
+            assert_eq!(app.sidebar_rail_state.open,Some(SidebarPane::EffectsLibrary));
+        }
+    }
+
+    #[test]
+    fn sidebar_empty_action_section_has_no_duplicate_menu_dividers() {
+        let _guard=crate::app::tests::lock_app_tests();
+        let ctx=egui::Context::default(); let mut app=PealayerApp::default();
+        let mut out=ctx.run_ui(egui::RawInput {screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(500.0,700.0))),..Default::default()},|ui| {
+            crate::ui::layout::PealayerTabViewer::new(&mut app).draw_context_menu(ui,PealayerTab::EffectsLibrary);
+        });
+        let separators:Vec<_>=out.shapes.iter().filter_map(|s|match &s.shape {
+            egui::Shape::LineSegment {points,..} if (points[0].y-points[1].y).abs()<0.1 && (points[0].x-points[1].x).abs()>200.0=>Some(points[0].y),_=>None
+        }).collect();
+        assert_eq!(separators.len(),2,"only title/panels and panels/preferences separators belong here: {separators:?}");
+        assert!(separators[1]-separators[0]>100.0);
+        out.textures_delta.clear();
+    }
 
     #[test]
     fn sidebar_rail_state_request_updates() {
@@ -410,6 +565,7 @@ mod tests {
             open: Some(SidebarPane::HardwareMonitor),
             width: 320.0,
             enabled: false,
+            ..Default::default()
         };
         let ctx = eframe::egui::Context::default();
         discard_ui_output(ctx.run_ui(eframe::egui::RawInput::default(), |ui| {
@@ -477,6 +633,7 @@ mod tests {
             open: Some(SidebarPane::HardwareMonitor),
             width: 300.0,
             enabled: true,
+            ..Default::default()
         };
 
         discard_ui_output(ctx.run_ui(eframe::egui::RawInput::default(), |ui| {

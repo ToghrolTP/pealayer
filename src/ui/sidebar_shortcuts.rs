@@ -23,10 +23,11 @@ pub enum RailAction {
     AudioSettings,
     SubtitleSettings,
     About,
+    Terminal,
 }
 
 impl RailAction {
-    pub const ALL: [Self; 17] = [
+    pub const ALL: [Self; 18] = [
         Self::HardwareMonitor,
         Self::MediaInspector,
         Self::EffectControls,
@@ -44,6 +45,7 @@ impl RailAction {
         Self::AudioSettings,
         Self::SubtitleSettings,
         Self::About,
+        Self::Terminal,
     ];
     pub fn tab(self) -> Option<Tab> {
         Some(match self {
@@ -53,11 +55,15 @@ impl RailAction {
             Self::EffectsLibrary => Tab::EffectsLibrary,
             Self::ProgramMonitor => Tab::ProgramMonitor,
             Self::Timeline => Tab::Timeline,
+            Self::Terminal => Tab::Terminal,
             _ => return None,
         })
     }
     pub fn pane(self) -> Option<Pane> {
         self.tab().and_then(|tab| Pane::try_from(tab).ok())
+    }
+    pub fn included(self) -> bool {
+        self != Self::Terminal || cfg!(feature = "workspace-terminal")
     }
     pub fn label(self) -> &'static str {
         match self {
@@ -78,6 +84,7 @@ impl RailAction {
             Self::AudioSettings => "Audio settings",
             Self::SubtitleSettings => "Subtitle settings",
             Self::About => "About",
+            Self::Terminal => "Terminal",
         }
     }
     pub fn icon(self) -> &'static str {
@@ -98,30 +105,23 @@ impl RailAction {
             _ => icons::INFO,
         }
     }
-    fn available(self, app: &mut PealayerApp) -> bool {
+    pub(crate) fn available(self, app: &mut PealayerApp) -> bool {
+        if self == Self::Terminal { return cfg!(feature = "workspace-terminal"); }
         if self == Self::RfManager {
             let caps = app.advertised_hardware();
             return super::hardware_monitor::show_rf(app.is_connected, caps.as_ref());
         }
         true
     }
-    fn activate(self, app: &mut PealayerApp, ctx: &egui::Context) {
+    pub(crate) fn activate(self, app: &mut PealayerApp, ctx: &egui::Context) {
         if !self.available(app) {
             return;
         }
         if self.tab().is_some() && app.dock_state.locked {
             return;
         }
-        if let Some(pane) = self.pane() {
-            if app.sidebar_rail_state.open == Some(pane) {
-                app.sidebar_rail_state.open = None;
-            } else if let Err(error) = app.open_sidebar_pane(pane) {
-                app.config_status = error;
-            }
-            return;
-        }
         if let Some(tab) = self.tab() {
-            app.open_or_focus_tab(tab);
+            if let Err(error) = app.toggle_rail_panel(ctx, tab) { app.config_status = error; }
             return;
         }
         use crate::platform::interop::InteropCommand as Command;
@@ -205,7 +205,7 @@ fn common_menu(app: &mut PealayerApp, ui: &mut egui::Ui) {
     ui.menu_button(
         format!("{}  {}", icons::PLUS, app.tr("Show / hide actions")),
         |ui| {
-            for action in app.sidebar_shortcuts.order() {
+            for action in app.sidebar_shortcuts.order().into_iter().filter(|action| action.included()) {
                 let mut visible = !app.sidebar_shortcuts.hidden.contains(&action);
                 if ui
                     .checkbox(
@@ -256,16 +256,9 @@ fn item_menu(action: RailAction, app: &mut PealayerApp, ui: &mut egui::Ui) {
     ui.strong(format!("{}  {}", action.icon(), app.tr(action.label())));
     ui.separator();
     let available = action.available(app);
-    let open_label = if action
-        .pane()
-        .is_some_and(|pane| app.sidebar_rail_state.open == Some(pane))
-    {
-        "Close sidebar pane"
-    } else if action.pane().is_some() {
-        "Open in sidebar"
-    } else {
-        "Open"
-    };
+    let open_label = if action.tab().is_none() { "Open" }
+        else if action.tab().is_some_and(|tab| app.is_tab_in_view(ui.ctx(), tab)) { "Hide panel" }
+        else { "Show panel" };
     if ui
         .add_enabled(
             available && (action.tab().is_none() || !app.dock_state.locked),
@@ -277,6 +270,12 @@ fn item_menu(action: RailAction, app: &mut PealayerApp, ui: &mut egui::Ui) {
         ui.close();
     }
     if let Some(tab) = action.tab() {
+        if let Some(pane) = action.pane() {
+            if ui.add_enabled(!app.dock_state.locked, egui::Button::new(format!("{}  {}", icons::GRID_FOUR, app.tr("Open in sidebar")))).clicked() {
+                if let Err(error) = app.open_sidebar_pane(pane) { app.config_status = error; }
+                ui.close();
+            }
+        }
         if ui
             .add_enabled(
                 !app.dock_state.locked,
@@ -339,6 +338,34 @@ fn item_menu(action: RailAction, app: &mut PealayerApp, ui: &mut egui::Ui) {
 }
 
 /// Native Phosphor targets share the application palette and never change size on hover.
+fn rail_button(ui: &mut egui::Ui, rect: Rect, action: RailAction, label: &str, enabled: bool, selected: bool, rtl: bool) -> egui::Response {
+    let response = ui.interact(rect, Id::unique(("sidebar-shortcut", action)), egui::Sense::click_and_drag());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
+    let tokens = super::craft_theme::current(ui.ctx());
+    let enabled = enabled && response.enabled();
+    let hovered = enabled && response.hovered();
+    let pressed = enabled && response.is_pointer_button_down_on();
+    let fill = if pressed { tokens.pressed }
+        else if selected { tokens.panel_bg.lerp_to_gamma(tokens.accent, if hovered { 0.22 } else { 0.14 }) }
+        else if hovered { tokens.hover } else { egui::Color32::TRANSPARENT };
+    let stroke = egui::Stroke::new(1.0, if selected { tokens.accent.gamma_multiply(if enabled { 0.65 } else { 0.2 }) }
+        else if hovered { tokens.border_subtle } else { egui::Color32::TRANSPARENT });
+    let bounds = rect.shrink(2.0);
+    ui.painter().rect(bounds, 6.0, fill, stroke, egui::StrokeKind::Inside);
+    if selected {
+        let x = if rtl { bounds.right()-1.0 } else { bounds.left()+1.0 };
+        ui.painter().vline(x, bounds.y_range().shrink(9.0), egui::Stroke::new(2.0, stroke.color));
+    }
+    if response.has_focus() {
+        ui.painter().rect_stroke(bounds, 6.0, egui::Stroke::new(1.5, tokens.focus), egui::StrokeKind::Inside);
+    }
+    let color = if !enabled { tokens.text_faint } else if selected || hovered { tokens.text } else { tokens.icon };
+    let galley = ui.painter().layout_no_wrap(action.icon().into(), egui::FontId::proportional(19.0), color);
+    let origin = rect.center() - galley.mesh_bounds.center().to_vec2();
+    ui.painter().with_clip_rect(rect).galley(origin, galley, color);
+    response.on_hover_cursor(if enabled { egui::CursorIcon::PointingHand } else { egui::CursorIcon::Default }).on_hover_text(label)
+}
+
 pub(super) fn show(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let before = app.sidebar_shortcuts.clone();
     let interactive = ui.is_enabled() && ui.ctx().memory(|m| m.is_above_modal_layer(ui.layer_id()));
@@ -386,7 +413,7 @@ pub(super) fn show(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             .sidebar_shortcuts
                             .order()
                             .into_iter()
-                            .filter(|action| !before.hidden.contains(action))
+                            .filter(|action| action.included() && !before.hidden.contains(action))
                         {
                             let (rect, _) = ui.allocate_exact_size(
                                 egui::Vec2::splat(super::craft_theme::RAIL_BUTTON),
@@ -395,39 +422,12 @@ pub(super) fn show(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             let hardware_available = action.available(app);
                             let available = hardware_available
                                 && (action.tab().is_none() || !app.dock_state.locked);
-                            let selected = action
-                                .pane()
-                                .is_some_and(|pane| app.sidebar_rail_state.open == Some(pane));
+                            let selected = action.tab().is_some_and(|tab| app.is_tab_in_view(ui.ctx(), tab));
                             let response = ui
                                 .add_enabled_ui(interactive, |ui| {
-                                    super::action_customization::control(
-                                        ui,
-                                        rect,
-                                        Id::unique(("sidebar-shortcut", action)),
-                                        "",
-                                        &app.tr(action.label()),
-                                        available,
-                                        selected,
-                                        false,
-                                    )
+                                    rail_button(ui, rect, action, &app.tr(action.label()), available, selected, app.rtl)
                                 })
                                 .inner;
-                            let color = if !available {
-                                ui.visuals().weak_text_color()
-                            } else if selected {
-                                ui.visuals().selection.bg_fill
-                            } else {
-                                ui.visuals().text_color()
-                            };
-                            let galley = ui.painter().layout_no_wrap(
-                                action.icon().into(),
-                                egui::FontId::proportional(19.0),
-                                color,
-                            );
-                            let origin = rect.center() - galley.mesh_bounds.center().to_vec2();
-                            ui.painter()
-                                .with_clip_rect(rect)
-                                .galley(origin, galley, color);
                             focusable.push(response.id);
                             if interactive {
                                 super::action_customization::register_drag(
@@ -630,29 +630,9 @@ pub(crate) fn commit_drop(app: &mut PealayerApp, ctx: &egui::Context) {
     if app.dock_state.locked {
         return;
     }
-    use craft_ui::docking::{Action, Permissions};
-    let action = match drop.anchor {
-        Some(anchor) if app.dock_state.layout.contains(&drop.tab) => Action::Move {
-            panel: drop.tab,
-            anchor,
-            placement: drop.placement,
-        },
-        Some(anchor) => Action::OpenAt {
-            panel: drop.tab,
-            anchor,
-            placement: drop.placement,
-        },
-        None => Action::Open {
-            panel: drop.tab,
-            anchor: None,
-        },
-    };
-    match app
-        .dock_state
-        .apply_all([action, Action::Activate { panel: drop.tab }], |_| {
-            Permissions::default()
-        }) {
+    match dock_panel(app, drop.tab, drop.anchor, drop.placement) {
         Ok(_) => {
+            app.sync_terminal_visibility_from_workspace();
             if Pane::try_from(drop.tab).ok() == app.sidebar_rail_state.open {
                 app.sidebar_rail_state.open = None;
             }
@@ -662,6 +642,53 @@ pub(crate) fn commit_drop(app: &mut PealayerApp, ctx: &egui::Context) {
         }
         Err(error) => app.config_status = format!("Cannot dock shortcut: {error:?}"),
     }
+}
+
+/// Shared UI/RPC transaction: preserve the last assigned split size even when
+/// moving through a tab group or the sidebar. A rejected destination changes nothing.
+pub(crate) fn dock_panel(app: &mut PealayerApp, tab: Tab, anchor: Option<Tab>, placement: craft_ui::docking::Placement<Tab>) -> Result<(), craft_ui::docking::DockError> {
+    use craft_ui::{docking::{Action, Location, Permissions, Placement, Zone}, layout::SplitSize};
+    if app.dock_state.locked { return Err(craft_ui::docking::DockError::NotAllowed); }
+    let mut memory = app.sidebar_rail_state;
+    let location = app.dock_state.layout.location(&tab).ok()
+        .or_else(|| app.dock_state.hidden.iter().find(|(panel,_)| *panel == tab).map(|(_,location)| location.clone()));
+    if let Some(location) = &location { memory.remember_dock_size(tab, location); }
+    let mut candidate = app.dock_state.clone();
+    if let (Some(anchor), Placement::Split(zone)) = (anchor, &placement)
+        && *zone != Zone::Center {
+        let horizontal = matches!(zone, Zone::Left | Zone::Right);
+        let side_width = Pane::try_from(tab).ok().filter(|pane| memory.last_sidebar[pane.index()])
+            .and_then(|pane| if memory.open == Some(pane) { Some(memory.width) } else { memory.widths[pane.index()] });
+        let own = side_width.filter(|width| horizontal && width.is_finite()).map(SplitSize::FixedFirst)
+            .or_else(|| memory.dock_sizes[super::sidebar_rail::tab_index(tab)]
+                .filter(|size| size.horizontal == horizontal).map(|size| size.own));
+        if candidate.layout.contains(&tab) { candidate.apply(Action::Close { panel: tab }, |_| Permissions::default())?; }
+        let second = matches!(zone, Zone::Right | Zone::Bottom);
+        let size = own.map(|size| match (size,second) {
+            (SplitSize::Ratio(v),true) => SplitSize::Ratio(1.0-v),
+            (SplitSize::FixedFirst(v),true) => SplitSize::FixedSecond(v),
+            (SplitSize::FixedSecond(v),true) => SplitSize::FixedFirst(v),
+            (size,_) => size,
+        });
+        candidate.layout.restore(tab, &Location { floating: None, anchor: Some(anchor), placement,
+            size, stack: None, sibling: vec![anchor], group: None })?;
+        candidate.hidden.retain(|(panel,_)| *panel != tab);
+    } else if let Some(anchor) = anchor {
+        let action = if candidate.layout.contains(&tab) { Action::Move {panel:tab,anchor,placement} }
+            else { Action::OpenAt {panel:tab,anchor,placement} };
+        candidate.apply(action, |_| Permissions::default())?;
+    } else {
+        candidate.set_visible(tab, true, Some(Tab::ProgramMonitor), |_| Permissions::default())?;
+    }
+    candidate.apply(Action::Activate { panel: tab }, |_| Permissions::default())?;
+    if let Ok(location) = candidate.layout.location(&tab) { memory.remember_dock_size(tab, &location); }
+    if let Ok(pane) = Pane::try_from(tab) {
+        if memory.open == Some(pane) { memory.remember_side(pane); memory.open = None; }
+        memory.last_sidebar[pane.index()] = false;
+    }
+    app.dock_state = candidate;
+    app.sidebar_rail_state = memory;
+    Ok(())
 }
 
 #[cfg(test)]
@@ -714,6 +741,126 @@ mod tests {
             _ => false,
         }
     }
+    #[test]
+    fn sidebar_toggle_restores_dock_location_and_size_without_relocation() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let ctx = egui::Context::default();
+        let mut app = PealayerApp::default();
+        let original = app.dock_state.layout.clone();
+        for _ in 0..3 {
+            RailAction::EffectsLibrary.activate(&mut app, &ctx);
+            assert!(!app.is_tab_open(Tab::EffectsLibrary));
+            assert_eq!(app.sidebar_rail_state.open, None);
+            RailAction::EffectsLibrary.activate(&mut app, &ctx);
+            assert_eq!(app.dock_state.layout, original);
+            assert_eq!(app.sidebar_rail_state.open, None);
+        }
+        // An inactive tab is first revealed, not removed from its group.
+        assert!(!app.is_tab_in_view(&ctx, Tab::HardwareMonitor));
+        RailAction::HardwareMonitor.activate(&mut app, &ctx);
+        assert!(app.is_tab_in_view(&ctx, Tab::HardwareMonitor));
+        RailAction::HardwareMonitor.activate(&mut app, &ctx);
+        assert!(!app.is_tab_open(Tab::HardwareMonitor));
+        assert!(app.is_tab_open(Tab::EffectControls));
+    }
+
+    #[test]
+    fn sidebar_toggle_retains_individual_width_and_destination_through_storage() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let ctx = egui::Context::default();
+        let mut app = PealayerApp::default();
+        for (pane,width) in [(Pane::EffectsLibrary,420.0),(Pane::MediaInspector,510.0)] {
+            app.open_sidebar_pane(pane).unwrap();
+            app.sidebar_rail_state.apply_pane_request(craft_ui::panes::PaneRequest::Resize(pane,width));
+            app.toggle_rail_panel(&ctx,pane.into()).unwrap();
+            assert_eq!(app.sidebar_rail_state.open,None);
+        }
+        app.sidebar_rail_state = serde_json::from_value(serde_json::to_value(app.sidebar_rail_state).unwrap()).unwrap();
+        for (pane,width) in [(Pane::EffectsLibrary,420.0),(Pane::MediaInspector,510.0)] {
+            app.toggle_rail_panel(&ctx,pane.into()).unwrap();
+            assert_eq!(app.sidebar_rail_state.open,Some(pane));
+            assert_eq!(app.sidebar_rail_state.width,width);
+            assert!(!app.dock_state.layout.contains(&pane.into()));
+            app.toggle_rail_panel(&ctx,pane.into()).unwrap();
+        }
+    }
+
+    #[test]
+    fn sidebar_drop_preserves_own_size_across_sides_tab_groups_and_cancel() {
+        use craft_ui::docking::{Placement,Zone};
+        let _guard = crate::app::tests::lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.toggle_rail_panel(&egui::Context::default(),Tab::EffectsLibrary).unwrap();
+        dock_panel(&mut app,Tab::EffectsLibrary,Some(Tab::ProgramMonitor),Placement::Split(Zone::Left)).unwrap();
+        let location = app.dock_state.layout.location(&Tab::EffectsLibrary).unwrap();
+        assert_eq!(location.size,Some(craft_ui::layout::SplitSize::Ratio(0.3)));
+        assert!(!app.sidebar_rail_state.last_sidebar[Pane::EffectsLibrary.index()]);
+        dock_panel(&mut app,Tab::EffectsLibrary,Some(Tab::ProgramMonitor),Placement::Split(Zone::Center)).unwrap();
+        app.sidebar_rail_state = serde_json::from_value(serde_json::to_value(app.sidebar_rail_state).unwrap()).unwrap();
+        dock_panel(&mut app,Tab::EffectsLibrary,Some(Tab::ProgramMonitor),Placement::Split(Zone::Right)).unwrap();
+        assert_eq!(app.dock_state.layout.location(&Tab::EffectsLibrary).unwrap().size,
+            Some(craft_ui::layout::SplitSize::Ratio(0.7)));
+        let workspace = app.dock_state.clone(); let state = app.sidebar_rail_state;
+        assert!(dock_panel(&mut app,Tab::EffectsLibrary,Some(Tab::MediaInspector),Placement::Split(Zone::Right)).is_err());
+        assert_eq!(app.dock_state,workspace); assert_eq!(app.sidebar_rail_state,state);
+        app.dock_state.validate().unwrap();
+        app.open_sidebar_pane(Pane::EffectsLibrary).unwrap();
+        app.sidebar_rail_state.apply_pane_request(craft_ui::panes::PaneRequest::Resize(Pane::EffectsLibrary,420.0));
+        dock_panel(&mut app,Tab::EffectsLibrary,Some(Tab::ProgramMonitor),Placement::Split(Zone::Right)).unwrap();
+        assert_eq!(app.dock_state.layout.location(&Tab::EffectsLibrary).unwrap().size,
+            Some(craft_ui::layout::SplitSize::FixedSecond(420.0)));
+    }
+
+    #[test]
+    fn sidebar_real_primary_click_toggles_without_moving_a_docked_panel() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let ctx = egui::Context::default(); let mut app = PealayerApp::default();
+        let original = app.dock_state.layout.clone();
+        for _ in 0..2 {frame(&ctx,&mut app,800.0,vec![]);}
+        let target=point(&ctx,RailAction::EffectsLibrary);
+        for expected in [false,true] {
+            frame(&ctx,&mut app,800.0,vec![egui::Event::PointerMoved(target)]);
+            for down in [true,false] {frame(&ctx,&mut app,800.0,vec![button(target,egui::PointerButton::Primary,down)]);}
+            assert_eq!(app.is_tab_open_in_dock(Tab::EffectsLibrary),expected);
+            assert_eq!(app.sidebar_rail_state.open,None);
+        }
+        assert_eq!(app.dock_state.layout,original);
+    }
+
+    #[test]
+    fn sidebar_active_icon_has_contrasting_ink_and_constant_geometry_in_every_state() {
+        use crate::config::{AppConfig,AppTheme,ColorPalette};
+        let _guard = crate::app::tests::lock_app_tests();
+        for palette in [ColorPalette::Native,ColorPalette::Studio] {for light in [false,true] {
+            for rtl in [false,true] {for scale in [1.0,1.25,2.0] {
+                let ctx=egui::Context::default(); crate::ui::i18n::configure_ui_fonts(&ctx,rtl);
+                crate::ui::configure_native_appearance(&ctx,&AppConfig {color_palette:palette,
+                    theme:if light {AppTheme::Light} else {AppTheme::Dark},..Default::default()});
+                ctx.set_pixels_per_point(scale);
+                let rect=Rect::from_min_size(egui::pos2(30.0,30.0),egui::vec2(40.0,40.0));
+                for (selected,enabled,hovered,pressed,focus) in [(false,true,false,false,false),(false,true,true,false,false),
+                    (true,true,false,false,false),(true,true,true,false,false),(true,true,true,true,false),
+                    (true,true,false,false,true),(true,false,false,false,false)] {
+                    let id=Id::unique(("sidebar-shortcut",RailAction::EffectsLibrary));
+                    if focus {ctx.memory_mut(|m|m.request_focus(id));} else {ctx.memory_mut(|m|m.surrender_focus(id));}
+                    let pos=if hovered {rect.center()} else {egui::pos2(200.0,200.0)};
+                    let mut output=ctx.run_ui(egui::RawInput {events:vec![egui::Event::PointerMoved(pos),button(pos,egui::PointerButton::Primary,pressed)],
+                        screen_rect:Some(Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(400.0,400.0))),..Default::default()},|ui| {
+                        let response=rail_button(ui,rect,RailAction::EffectsLibrary,"Effects Library",enabled,selected,rtl);
+                        assert_eq!(response.rect,rect);
+                    });
+                    let ink=output.shapes.iter().find_map(|s|match &s.shape {egui::Shape::Text(t) if t.galley.text()==RailAction::EffectsLibrary.icon()=>Some(t),_=>None}).expect("icon must always be painted");
+                    assert!((ink.visual_bounding_rect().center()-rect.center()).length()<1.0);
+                    let fill=output.shapes.iter().find_map(|s|match &s.shape {egui::Shape::Rect(r) if r.rect==rect.shrink(2.0)=>Some(r.fill),_=>None}).unwrap();
+                    for row in &ink.galley.rows {for vertex in &row.visuals.mesh.vertices {
+                        assert_ne!(vertex.color,fill,"icon disappeared into its background");
+                    }}
+                    output.textures_delta.clear();
+                }
+            }}
+        }}
+    }
+
     #[test]
     fn sidebar_shortcut_defaults_are_bounded_unique_and_round_trip() {
         let shortcuts = RailShortcuts::default();

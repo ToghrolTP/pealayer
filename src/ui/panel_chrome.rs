@@ -259,19 +259,59 @@ fn projected_layout(
     projected
 }
 
-/// Application-owned close controls on each actual visible tab (not just one
-/// close button for the selected group). Use upstream response rectangles, so
-/// overflowed tabs never acquire invisible hit targets.
-fn close_tabs(
+/// Center the icon and caption ink independently. Craft centers their shared
+/// line box, but an icon fallback face and the UI font have different baselines.
+/// Work on the final (possibly elided) galley without changing its logical size,
+/// text, tab hit target or horizontal glyph positions.
+fn center_tab_ink(text: &mut egui::epaint::TextShape, rect: egui::Rect, icon: char) {
+    let target = rect.center().y - text.pos.y;
+    let galley = std::sync::Arc::make_mut(&mut text.galley);
+    galley.mesh_bounds = egui::Rect::NOTHING;
+    for placed in &mut galley.rows {
+        let row = std::sync::Arc::make_mut(&mut placed.row);
+        let mut bounds = [egui::Rect::NOTHING; 2];
+        for glyph in &row.glyphs {
+            if glyph.uv_rect.is_nothing() {
+                continue;
+            }
+            let start = glyph.first_vertex as usize;
+            for vertex in &row.visuals.mesh.vertices[start..start + 4] {
+                if vertex.color.a() != 0 {
+                    bounds[usize::from(glyph.chr != icon)].extend_with(vertex.pos);
+                }
+            }
+        }
+        let offsets = bounds.map(|bounds| {
+            if bounds.is_positive() {
+                target - placed.pos.y - bounds.center().y
+            } else {
+                0.0
+            }
+        });
+        for glyph in &mut row.glyphs {
+            let offset = offsets[usize::from(glyph.chr != icon)];
+            glyph.pos.y += offset;
+            if !glyph.uv_rect.is_nothing() {
+                let start = glyph.first_vertex as usize;
+                for vertex in &mut row.visuals.mesh.vertices[start..start + 4] {
+                    vertex.pos.y += offset;
+                }
+            }
+        }
+        row.visuals.mesh_bounds = row.visuals.mesh.calc_bounds();
+        galley.mesh_bounds |= row.visuals.mesh_bounds.translate(placed.pos.to_vec2());
+    }
+}
+
+/// Align visible tab ink and add application-owned close controls on each
+/// actual tab. Overflowed tabs never acquire invisible paint or hit targets.
+fn decorate_tabs(
     app: &mut crate::app::PealayerApp,
     ui: &mut egui::Ui,
     area: egui::Id,
     blocked: bool,
     options: HeaderOptions,
 ) {
-    if !options.close {
-        return;
-    }
     let tabs: Vec<_> = app
         .dock_state
         .layout
@@ -294,6 +334,29 @@ fn close_tabs(
         let title = format!("{} {}", panel.icon(), panel.title(app));
         let mut clip = None;
         let mut fill = super::craft_theme::current(ui.ctx()).tab_bg;
+        ui.ctx().graphics_mut(|graphics| {
+            let Some(list) = graphics.get_mut(tab.layer_id) else {
+                return;
+            };
+            let indices: Vec<_> = list
+                .all_entries()
+                .enumerate()
+                .filter_map(|(index, shape)| {
+                    matches!(&shape.shape, egui::Shape::Text(text)
+                    if text.galley.text().contains(&title)
+                        && text.visual_bounding_rect().intersects(rect)
+                        && shape.clip_rect.intersects(rect))
+                    .then_some(egui::layers::ShapeIdx(index))
+                })
+                .collect();
+            for index in indices {
+                list.mutate_shape(index, |shape| {
+                    if let egui::Shape::Text(text) = &mut shape.shape {
+                        center_tab_ink(text, rect, panel.icon().chars().next().unwrap());
+                    }
+                });
+            }
+        });
         ui.ctx()
             .layer_painter(tab.layer_id)
             .for_each_shape(|shape| {
@@ -313,6 +376,9 @@ fn close_tabs(
         let Some(clip) = clip else {
             continue;
         };
+        if !options.close {
+            continue;
+        }
         let side = rect.height().min(24.0);
         let center = egui::pos2(
             if app.rtl {
@@ -350,6 +416,7 @@ fn close_tabs(
                 Default::default()
             }) {
             Ok(()) => {
+                app.sync_terminal_visibility_from_workspace();
                 app.deferred_config_save = true;
                 ui.ctx().request_repaint();
             }
@@ -413,7 +480,7 @@ pub(crate) fn show(app: &mut crate::app::PealayerApp, ui: &mut egui::Ui, raise: 
         ui.painter()
             .rect_filled(rect.expand(0.5).intersect(ui.clip_rect()), 0.0, background);
     }
-    close_tabs(app, ui, area, blocked, options);
+    decorate_tabs(app, ui, area, blocked, options);
     app.workspace_rendering = false;
     view = DockViewState::load(ui.ctx());
     for action in &output.actions {
@@ -430,6 +497,7 @@ pub(crate) fn show(app: &mut crate::app::PealayerApp, ui: &mut egui::Ui, raise: 
             log::warn!("Workspace action rejected: {error:?}");
         }
         if app.dock_state != before {
+            app.sync_terminal_visibility_from_workspace();
             app.deferred_config_save = true;
             ui.ctx().request_repaint();
         }
@@ -454,6 +522,36 @@ mod tests {
         app::PealayerApp,
         ui::layout::{PealayerTab as Tab, PealayerTabViewer},
     };
+
+    #[cfg(feature = "workspace-terminal")]
+    #[test]
+    fn terminal_uses_craft_individual_close_with_modal_and_lock_guards() {
+        let _guard = crate::app::tests::lock_app_tests();
+        for guarded in ["none", "modal", "locked"] {
+            let (ctx, mut app) = fixture(false);
+            app.dock_state = craft_ui::docking::Workspace::new(craft_ui::docking::Layout {
+                root: Some(craft_ui::docking::Node::Tabs { panels: vec![Tab::Timeline, Tab::Terminal], active: 1 }),
+                floating: Vec::new(),
+            });
+            app.sync_terminal_visibility_from_workspace();
+            for _ in 0..3 { frame(&ctx, &mut app, vec![], false); }
+            let close_id = egui::Id::new("workspace_dock_area").with(("close-panel", Tab::Terminal));
+            let point = ctx.read_response(close_id).expect("Terminal shares native individual close target").rect.center();
+            let sessions = app.terminal_state.status()["sessions"].clone();
+            app.dock_state.locked = guarded == "locked";
+            let blocked = guarded == "modal";
+            frame(&ctx, &mut app, vec![egui::Event::PointerMoved(point)], blocked);
+            for pressed in [true, false] {
+                frame(&ctx, &mut app, vec![egui::Event::PointerButton {
+                    pos: point, button: egui::PointerButton::Primary, pressed, modifiers: Default::default(),
+                }], blocked);
+            }
+            assert_eq!(app.dock_state.layout.contains(&Tab::Terminal), guarded != "none");
+            assert_eq!(app.terminal_state.preferences.enabled, guarded != "none");
+            assert!(app.dock_state.layout.contains(&Tab::Timeline));
+            assert_eq!(app.terminal_state.status()["sessions"], sessions);
+        }
+    }
 
     fn frame(
         ctx: &egui::Context,
@@ -554,6 +652,116 @@ mod tests {
                 })
                 .expect("real CraftUI header glyph missing")
         })
+    }
+
+    #[test]
+    fn craft_tab_icon_caption_and_close_share_the_actual_header_center() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let previous = crate::platform::interop::get_live_config();
+        struct RestoreConfig(crate::config::AppConfig);
+        impl Drop for RestoreConfig {
+            fn drop(&mut self) {
+                crate::platform::interop::set_live_config(self.0.clone());
+            }
+        }
+        let _restore = RestoreConfig(previous.clone());
+        for close in [false, true] {
+            let mut config = previous.clone();
+            config.craft_show_close_buttons = close;
+            crate::platform::interop::set_live_config(config);
+            for rtl in [false, true] {
+                for scale in [1.0, 1.25, 1.5, 2.0] {
+                    for dark in [false, true] {
+                        for floating in [false, true] {
+                            let (ctx, mut app) = fixture(rtl);
+                            app.language = if rtl {
+                                crate::config::AppLanguage::Persian
+                            } else {
+                                crate::config::AppLanguage::English
+                            };
+                            ctx.set_pixels_per_point(scale);
+                            ctx.set_visuals(if dark {
+                                egui::Visuals::dark()
+                            } else {
+                                egui::Visuals::light()
+                            });
+                            if floating {
+                                app.dock_state.layout = Layout {
+                                    root: None,
+                                    floating: vec![craft_ui::docking::Floating::single(
+                                        vec![Tab::EffectControls, Tab::MediaInspector],
+                                        0,
+                                        [30.0, 40.0, 600.0, 350.0],
+                                    )],
+                                };
+                            }
+                            for _ in 0..3 {
+                                frame(&ctx, &mut app, vec![], false);
+                            }
+                            let output = frame(&ctx, &mut app, vec![], false);
+                            for panel in [Tab::EffectControls, Tab::MediaInspector] {
+                                let tab = ctx
+                                    .read_response(tab_id(
+                                        egui::Id::new("workspace_dock_area"),
+                                        panel,
+                                    ))
+                                    .expect("actual visible upstream tab");
+                                let title = format!("{} {}", panel.icon(), panel.title(&app));
+                                let text = output.shapes.iter().find_map(|shape| match &shape.shape {
+                                    egui::Shape::Text(text) if text.galley.text().contains(&title)
+                                        && text.visual_bounding_rect().intersects(tab.rect) => Some(text),
+                                    _ => None,
+                                }).unwrap_or_else(|| panic!("painted {panel:?} caption missing: close={close}, RTL={rtl}, scale={scale}, dark={dark}, floating={floating}; title={title:?}; tab={:?}; text={:?}", tab.rect,
+                                    output.shapes.iter().filter_map(|shape| match &shape.shape { egui::Shape::Text(t) => Some((t.galley.text(), t.visual_bounding_rect())), _=>None }).take(8).collect::<Vec<_>>()));
+                                let mut ink = [egui::Rect::NOTHING; 2];
+                                for placed in &text.galley.rows {
+                                    for glyph in &placed.row.glyphs {
+                                        if glyph.uv_rect.is_nothing() {
+                                            continue;
+                                        }
+                                        let start = glyph.first_vertex as usize;
+                                        let group = usize::from(
+                                            glyph.chr != panel.icon().chars().next().unwrap(),
+                                        );
+                                        for vertex in
+                                            &placed.row.visuals.mesh.vertices[start..start + 4]
+                                        {
+                                            if vertex.color.a() != 0 {
+                                                ink[group].extend_with(
+                                                    vertex.pos
+                                                        + placed.pos.to_vec2()
+                                                        + text.pos.to_vec2(),
+                                                );
+                                            }
+                                        }
+                                    }
+                                }
+                                for (part, ink) in ["icon", "caption"].into_iter().zip(ink) {
+                                    assert!(ink.is_positive(), "missing {part}");
+                                    assert!(
+                                        (ink.center().y - tab.rect.center().y).abs() < 0.1,
+                                        "{part} off center at RTL={rtl}, scale={scale}, dark={dark}, floating={floating}: {ink:?} vs {:?}",
+                                        tab.rect
+                                    );
+                                }
+                                if close {
+                                    let button = ctx
+                                        .read_response(
+                                            egui::Id::new("workspace_dock_area")
+                                                .with(("close-panel", panel)),
+                                        )
+                                        .expect("individual close target");
+                                    assert!(
+                                        (button.rect.center().y - tab.rect.center().y).abs() < 0.1
+                                    );
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        crate::platform::interop::set_live_config(previous);
     }
 
     #[test]

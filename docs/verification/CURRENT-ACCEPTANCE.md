@@ -23,6 +23,65 @@ FilmCraft controls. Those controls and working preview selectors are restored;
 the superseded gallery is replaced with inspected nonzero-playhead comparisons.
 The linked audit records the passing tests and incomplete production-package gate.
 
+## Publication and workspace tools checkpoint
+
+[Proportional numeric status typography](status-tabular-typography.md) fixes the
+FPS icon/digit-center mismatch, bundles Inter for Windows and shares tabular
+digit layout without requiring a monospace font. All 59 focused native tests and
+seven Web appearance tests pass, plus focused Web status/preview/RF checks. The
+canonical package is installed and hash-matched; inspected enlarged native
+captures show the prior 2-pixel discrepancy removed. The full remaining mono
+inventory and native OpenType limitation are documented. PR #278 owns this work;
+native macOS/Linux visual and deferred Cafe acceptance are not inferred.
+
+[Command toolbar completion](workspace-toolbar-completion.md) fixes the oversized
+palette, implements shared dots-to-Trash hiding, matches icon scale and clarifies
+disabled paint/cursors. All 41 focused tests pass. The clean package is installed
+and hash-matched, with inspected real before/after native captures; original
+paused playback, placement and temporary tool visibility are preserved. PR #277
+tracks this follow-up; hosted checks and user-deferred Cafe delivery remain separate.
+
+[Sidebar panel recovery](sidebar-panel-recovery.md) preserves each rail panel's
+location, toggle behavior and assigned size, replaces donor sidebar chrome,
+removes empty menu dividers and fixes disappearing active icons. All 63 distinct
+focused tests pass. The installed canonical build passes live API checks and
+matched native screenshot inspection, with the original layout/playback restored.
+Cafe delivery remains user-deferred/offline; hosted CI is a separate merge gate.
+
+[Remote directory encoding](remote-directory-encoding.md) corrects empty listings
+when query-based folder names and file links use equivalent escaping. All 19
+focused browser tests pass. The canonical local package now renders the user's
+six files with metadata and beginning thumbnails; paused media is preserved.
+Matched synthetic native before/after captures exclude the private URL. Cafe
+deployment remains user-deferred/offline; hosted CI is a separate merge gate.
+
+[Native FPS sizing](status-fps-width.md) fixes the fixed-slot clipping of larger
+frame rates and reduces the counter's secondary text size without changing other
+status fonts or tooltip typography. All 29 focused native status tests pass,
+including real clip containment through four-digit values and scale/direction/font
+coverage. The clean package is installed, independently hash-matched and captured
+before/after; paused media position and volume are preserved. Full hosted CI and
+user-deferred Cafe delivery are not implied by this local receipt.
+
+[Workspace tools](workspace-tools.md) records the standard full-featured package,
+local graceful installation, dockable Terminal, dedicated embedded Pealayer shell,
+editable toolbar and actual before/after captures. Both tools remain hidden by
+default; no application flavors were introduced. PortableShell profile discovery
+is merged upstream in #84. PR #273 owns Pealayer integration and its current-head
+CI/merge gate; use GitHub for the live merge state. The separate integration suite
+now passes 14 tests, explicitly covering hidden optional panes and visible Terminal
+round-tripping. Cafe delivery remains user-deferred/offline.
+
+[Native FPS comparison](native-fps-publication.md) publishes the real final tooltip
+crop and original before image for merged #253, superseding its pending-publication
+prose. The private full-window movie capture remains private. Merged #271 also has
+enlarged native header before/after images in its PR description. The full 12-image
+history in #228 remains intact. [About layout](about-dialog-layout.md) now has its
+missing real native capture too. The fresh combined native library suite passes
+1,301 tests, with six opt-in checks ignored. [Publication and merge procedure](github-publication.md)
+requires public-image verification and confirmed merges, not merely local evidence
+or a queued merge. #248 remains explicitly user-held and #227 remains unfinished.
+
 ## Remote folder navigation
 
 [Verified parent actions](remote-parent-navigation.md) replace the inferred Back
@@ -90,7 +149,8 @@ Program Monitor switching, explicit relaunch after Quit, internal fallback,
 rich mode choices and factual executable resolution. The canonical package and
 paused full-application close/recovery checks passed. **Dynamic taskbar artwork
 still fails canonical displayed-pixel acceptance**, including after human focus;
-PR #260 remains draft. See the linked receipt and remaining gate. Cafe is deferred.
+PR #260 is merged through #268; this does not close that displayed-artwork gate.
+See the linked receipt and remaining gate. Cafe is deferred.
 
 [Movable monitor volume](movable-monitor-volume.md) tracks grouped speaker/slider
 customization, hidden-by-default NLE track pickers, final Fullscreen placement

@@ -2,6 +2,36 @@
 mod build_metadata;
 use build_metadata::emit_build_metadata;
 
+fn build_embedded_terminal() {
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_WORKSPACE_TERMINAL");
+    if std::env::var_os("CARGO_FEATURE_WORKSPACE_TERMINAL").is_none() {
+        return;
+    }
+    let root = "third_party/portable-shell";
+    println!("cargo:rerun-if-changed={root}/include");
+    println!("cargo:rerun-if-changed={root}/src");
+    println!("cargo:rerun-if-changed={root}/host/terminal_profiles.c");
+    // The freestanding byte core, not the desktop workbench, OS shell or CRT
+    // replacements. The Rust host owns allocation, lifetime and dispatch.
+    cc::Build::new()
+        .include(format!("{root}/include"))
+        .file(format!("{root}/src/portable_shell.c"))
+        .define("PS_WORKBENCH", "0")
+        .std("c99")
+        .flag_if_supported("-fno-builtin")
+        .compile("pealayer_portable_shell");
+    // Optional native discovery adapter reads bounded terminal profile files;
+    // unlike the shell core this small adapter intentionally uses platform IO.
+    cc::Build::new()
+        .include(format!("{root}/include"))
+        .files([
+            format!("{root}/src/portable_terminal_profiles.c"),
+            format!("{root}/host/terminal_profiles.c"),
+        ])
+        .std("c99")
+        .compile("pealayer_terminal_profiles");
+}
+
 // About reports the versions actually linked by this package, not a second
 // hand-maintained inventory that becomes stale after dependency upgrades.
 fn emit_about_library_versions() {
@@ -57,6 +87,7 @@ mod windows_shell_icons;
 
 #[cfg(target_os = "windows")]
 fn main() {
+    build_embedded_terminal();
     emit_build_metadata();
     emit_about_library_versions();
     for name in [
@@ -209,6 +240,7 @@ fn main() {
 
 #[cfg(not(target_os = "windows"))]
 fn main() {
+    build_embedded_terminal();
     emit_build_metadata();
     emit_about_library_versions();
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {

@@ -31,7 +31,7 @@ import './styles.css';
 import './shared-toasts.css';
 import './asset-imports.css';
 import palettes from '../../assets/themes/palettes.json';
-import { accentForeground, controlDensityHeight, controlDensityText, mergeAppearance, paletteName as resolvePaletteName, resolvedAccent, resolvedAppearanceTheme, uiFontCss, monoFontCss } from './appearance';
+import { accentForeground, controlDensityHeight, controlDensityText, mergeAppearance, paletteName as resolvePaletteName, resolvedAccent, resolvedAppearanceTheme, uiFontCss, monoFontCss, statusFontCss } from './appearance';
 
 const { Sider, Content } = Layout;
 const RemoteControlTab = React.lazy(() => import('./components/RemoteControlTab').then((module) => ({ default: module.RemoteControlTab })));
@@ -155,10 +155,12 @@ const App: React.FC = () => {
   const controlHeight = controlDensityHeight(controlDensity);
   const uiFont = uiFontCss(appearance?.ui_font_family ?? appConfig?.ui_font_family ?? 'system', appearance?.ui_font_name ?? appConfig?.ui_font_name);
   const monoFont = monoFontCss(appearance?.monospace_font_family ?? appConfig?.monospace_font_family ?? 'system', appearance?.monospace_font_name ?? appConfig?.monospace_font_name);
+  const statusFont = statusFontCss(appearance?.ui_font_family ?? appConfig?.ui_font_family ?? 'system', appearance?.ui_font_name ?? appConfig?.ui_font_name, navigator.userAgent);
   useEffect(() => {
     document.documentElement.style.setProperty('--ui-font', uiFont);
     document.documentElement.style.setProperty('--mono-font', monoFont);
-  }, [uiFont, monoFont]);
+    document.documentElement.style.setProperty('--status-font', statusFont);
+  }, [uiFont, monoFont, statusFont]);
   useEffect(() => { document.documentElement.style.setProperty('--control-height', `${controlHeight}px`); }, [controlHeight]);
   useEffect(() => { document.documentElement.dataset.motion = animationsEnabled ? 'enabled' : 'disabled'; }, [animationsEnabled]);
 

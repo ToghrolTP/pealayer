@@ -70,6 +70,51 @@ pub(crate) fn hide_action<T: PartialEq>(hidden: &mut Vec<T>, action: T) -> bool 
         true
     }
 }
+
+/// Shared overflow-to-trash presentation. The owner validates its typed payload
+/// before calling; hover is reversible and only a primary release consumes it.
+pub(crate) fn menu_hide_target<T: Send + Sync + 'static>(
+    ui: &mut egui::Ui,
+    response: &Response,
+    dragging: bool,
+    font: egui::FontId,
+) -> Option<std::sync::Arc<T>> {
+    let fade = super::motion::hover_alpha(ui, response.id.with("hide-fade"), dragging);
+    if fade > 0.0 {
+        ui.painter().rect_filled(
+            response.rect.shrink(2.0),
+            4.0,
+            ui.visuals().error_fg_color.gamma_multiply(fade),
+        );
+    }
+    for (icon, alpha, ink) in [
+        (
+            super::icons::DOTS_THREE,
+            1.0 - fade,
+            ui.visuals().text_color(),
+        ),
+        (super::icons::TRASH, fade, egui::Color32::WHITE),
+    ] {
+        let ink = ink.gamma_multiply(alpha);
+        let galley = ui.painter().layout_no_wrap(icon.into(), font.clone(), ink);
+        let bounds = if galley.mesh_bounds.is_positive() {
+            galley.mesh_bounds
+        } else {
+            egui::Rect::from_min_size(egui::Pos2::ZERO, galley.size())
+        };
+        ui.painter().galley(
+            response.rect.center() - bounds.center().to_vec2(),
+            galley,
+            ink,
+        );
+    }
+    if dragging && ui.is_enabled() {
+        response.clone().on_hover_cursor(egui::CursorIcon::Grabbing);
+        drop_payload::<T>(response)
+    } else {
+        None
+    }
+}
 #[cfg(test)]
 pub(crate) fn owner(surface: crate::config::ControlBarSurface) -> Id {
     Id::new(("control-bar", surface))
@@ -122,9 +167,15 @@ pub(crate) fn control(
     let availability = super::motion::hover_alpha(ui, id.with("availability"), enabled);
     // Disabled actions retain drag customization, so their Response still
     // receives pointer hover. That must not brighten an unavailable icon.
-    let available_ink = if enabled { visuals.text_color() }
-        else { ui.visuals().widgets.inactive.text_color() };
-    let color = ui.visuals().weak_text_color().lerp_to_gamma(available_ink, availability);
+    let available_ink = if enabled {
+        visuals.text_color()
+    } else {
+        ui.visuals().widgets.inactive.text_color()
+    };
+    let color = ui
+        .visuals()
+        .weak_text_color()
+        .lerp_to_gamma(available_ink, availability);
     let button_rect = rect.shrink(if frame { 0.5 } else { 2.0 });
     ui.painter().rect(
         button_rect,
@@ -255,22 +306,16 @@ mod tests {
         let focus_id = egui::Id::new("focused-btn");
         let mut focused_output = ctx.run_ui(egui::RawInput::default(), |ui| {
             ui.memory_mut(|m| m.request_focus(focus_id));
-            control(
-                ui,
-                rect,
-                focus_id,
-                "D",
-                "Action D",
-                true,
-                false,
-                false,
-            );
+            control(ui, rect, focus_id, "D", "Action D", true, false, false);
         });
         focused_output.textures_delta.clear();
         let has_focus_stroke = focused_output.shapes.iter().any(|s| match &s.shape {
             egui::epaint::Shape::Rect(r) => r.stroke == style.focus_stroke,
             _ => false,
         });
-        assert!(has_focus_stroke, "focused control must paint focus outline stroke");
+        assert!(
+            has_focus_stroke,
+            "focused control must paint focus outline stroke"
+        );
     }
 }

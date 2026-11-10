@@ -22,6 +22,8 @@
 
 [Key Features](#key-features) • [System Architecture](#system-architecture) • [Feature Walkthrough](#feature-walkthrough) • [Hardware Protocols](#hardware-serial-protocol) • [Web Remote Control](#web-remote-control--restwebsocket-apis) • [Installation & Building](#installation--prerequisites) • [Shortcuts](#shortcut-keybindings)
 
+[📚 Version history and downloads](docs/releases/README.md) • [📝 Changelog](CHANGELOG.md) • [📸 Screenshots and provenance](docs/releases/SCREENSHOT-EVOLUTION.md)
+
 </div>
 
 ---
