@@ -2655,7 +2655,7 @@ mod tests {
         };
         assert!(matches!(*command,
             crate::platform::interop::InteropCommand::PreviewConfig { config } if config.color_palette == crate::config::ColorPalette::Studio));
-        assert!(helper.finish_preview(false));
+        assert!(helper.finish_preview(false), "{}", helper.draft.status);
         assert!(matches!(receiver.recv_timeout(std::time::Duration::from_secs(1)).unwrap(),
             crate::platform::interop::InteropCommand::CancelPreviewConfig));
     }
