@@ -1230,6 +1230,8 @@ pub struct AppConfig {
     pub video_click_frame_only: bool,
     pub playback_speed: f64,
     pub temporary_fast_forward_speed: f64,
+    pub double_click_interval_ms: u32,
+    pub hold_fast_forward_wait_for_double_click: bool,
     pub subtitle_font_size: f64,
     pub numeric_input_steps: BTreeMap<String, NumericInputSteps>,
     /// Prefer compact human units (for example `1s`) in editable time fields.
@@ -1450,6 +1452,8 @@ impl Default for AppConfig {
             video_click_frame_only: true,
             playback_speed: 1.0,
             temporary_fast_forward_speed: 2.0,
+            double_click_interval_ms: 300,
+            hold_fast_forward_wait_for_double_click: true,
             subtitle_font_size: 55.0,
             numeric_input_steps: BTreeMap::new(),
             human_readable_time_units: true,
@@ -2340,6 +2344,9 @@ impl AppConfig {
             || !(1.0..=16.0).contains(&self.temporary_fast_forward_speed)
         {
             return Err("temporary_fast_forward_speed must be between 1 and 16".to_string());
+        }
+        if !(100..=1_000).contains(&self.double_click_interval_ms) {
+            return Err("double_click_interval_ms must be between 100 and 1000".to_string());
         }
         if self.numeric_input_steps.len() > 256 || self.numeric_input_steps.iter().any(|(key, steps)|
             key.is_empty() || key.len() > 128 || !steps.is_valid()) {
