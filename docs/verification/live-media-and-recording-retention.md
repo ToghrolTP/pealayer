@@ -19,8 +19,9 @@ and [live recording](https://github.com/ToghrolTP/pealayer/tree/archive/live-rec
 - Focused Rust tests exercised the production media classification function for
   pending metadata, durationless media, a non-seekable live stream with a
   positive duration, a seekable RTSP recording, and a locked finite HTTP file.
-- The native paint regression checks the warning for an active, overflowed
-  board recording, plus within-capacity, host and inactive capture states.
+- The focused native regression passed against actual egui paint output for an
+  active, overflowed board recording and for within-capacity, host and inactive
+  capture states.
 - The Web test renders the production Effects Designer in Edge with simulated
   controller snapshots. It verifies warning visibility, icon and bounds in
   English desktop and Persian mobile layouts, and absence in the three
