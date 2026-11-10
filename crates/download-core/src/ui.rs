@@ -1,6 +1,6 @@
 //! Download Center shared by the player and standalone utility.
 use crate::{AddRequest, Engine, EngineSettings, Manager, PublicJob, Snapshot, State};
-use egui::{self, Color32, RichText, Stroke, Vec2};
+use egui::{self, Color32, RichText, Stroke, TextStyle, Vec2};
 use egui_phosphor::regular::{
     ARROW_DOWN, ARROW_UP, CARET_DOWN, CHECK_CIRCLE, CLOCK, COPY, DOTS_THREE, DOWNLOAD_SIMPLE,
     GAUGE, GEAR, LINK, MAGNIFYING_GLASS, PAUSE, PLAY, PLUS, STOP, TRASH, WARNING,
@@ -68,27 +68,34 @@ impl View {
         }
 
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new(DOWNLOAD_SIMPLE).size(22.0).color(accent(ui)));
+            ui.label(icon(DOWNLOAD_SIMPLE).size(22.0).color(accent(ui)));
             ui.heading("Download Center");
         });
         ui.horizontal_wrapped(|ui| {
-            ui.weak(format!("{GAUGE}  {}/s", bytes(snapshot.total_speed)));
-            ui.weak(format!("{CLOCK}  {} active", snapshot.active));
-            ui.weak(format!(
-                "{CHECK_CIRCLE}  {} complete",
-                snapshot
-                    .jobs
-                    .iter()
-                    .filter(|job| job.state == State::Complete)
-                    .count()
-            ));
+            let completed = snapshot
+                .jobs
+                .iter()
+                .filter(|job| job.state == State::Complete)
+                .count();
+            for (glyph, caption) in [
+                (GAUGE, format!("{}/s", bytes(snapshot.total_speed))),
+                (CLOCK, format!("{} active", snapshot.active)),
+                (CHECK_CIRCLE, format!("{completed} complete")),
+            ] {
+                ui.label(icon_caption(
+                    ui,
+                    glyph,
+                    RichText::new(caption).weak(),
+                    TextStyle::Body,
+                ));
+            }
         });
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             if ui
                 .selectable_label(
                     self.section == Section::Queue,
-                    format!("{DOWNLOAD_SIMPLE} Queue"),
+                    action_caption(ui, DOWNLOAD_SIMPLE, "Queue"),
                 )
                 .clicked()
             {
@@ -97,7 +104,7 @@ impl View {
             if ui
                 .selectable_label(
                     self.section == Section::Settings,
-                    format!("{GEAR} Settings"),
+                    action_caption(ui, GEAR, "Settings"),
                 )
                 .clicked()
             {
@@ -112,7 +119,8 @@ impl View {
             .show(ui, |ui| {
                 ui.add_space(6.0);
                 if let Some(error) = &self.error {
-                    ui.colored_label(ui.visuals().error_fg_color, format!("{WARNING} {error}"));
+                    let text = RichText::new(error).color(ui.visuals().error_fg_color);
+                    ui.label(icon_caption(ui, WARNING, text, TextStyle::Body));
                     ui.add_space(6.0);
                 }
                 match self.section {
@@ -177,7 +185,7 @@ impl View {
                         .desired_width(width.max(1.0)),
                 );
                 let clicked = ui
-                    .add_enabled(enabled, primary(ui, format!("{PLUS} Add download")))
+                    .add_enabled(enabled, primary(ui, PLUS, "Add download"))
                     .clicked();
                 add = clicked
                     || (!self.url.trim().is_empty()
@@ -186,15 +194,8 @@ impl View {
             };
             if ui.available_width() >= 420.0 {
                 ui.horizontal(|ui| {
-                    let button_width = ui
-                        .painter()
-                        .layout_no_wrap(
-                            format!("{PLUS} Add download"),
-                            egui::TextStyle::Button.resolve(ui.style()),
-                            ui.visuals().text_color(),
-                        )
-                        .size()
-                        .x
+                    let caption = action_caption(ui, PLUS, "Add download");
+                    let button_width = ui.fonts_mut(|fonts| fonts.layout_job(caption)).size().x
                         + 2.0 * ui.spacing().button_padding.x
                         + 8.0;
                     compose(
@@ -234,7 +235,7 @@ impl View {
                             rect.center(),
                             egui::Align2::CENTER_CENTER,
                             CARET_DOWN,
-                            egui::TextStyle::Small.resolve(ui.style()),
+                            icon_font_id(ui, TextStyle::Small),
                             visuals.text_color(),
                         );
                     })
@@ -281,7 +282,7 @@ impl View {
             search.rect.left_center() + egui::vec2(13.0, 0.0),
             egui::Align2::CENTER_CENTER,
             MAGNIFYING_GLASS,
-            egui::TextStyle::Body.resolve(ui.style()),
+            icon_font_id(ui, TextStyle::Body),
             ui.visuals().weak_text_color(),
         );
         let query = self.search.trim().to_lowercase();
@@ -301,7 +302,7 @@ impl View {
             panel(ui, |ui| {
                 ui.add_space(20.0);
                 ui.vertical_centered(|ui| {
-                    ui.label(RichText::new(DOWNLOAD_SIMPLE).size(30.0).color(accent(ui)));
+                    ui.label(icon(DOWNLOAD_SIMPLE).size(30.0).color(accent(ui)));
                     if snapshot.jobs.is_empty() {
                         ui.strong("No downloads yet");
                         ui.weak("Paste a link above to start your first download.");
@@ -332,7 +333,7 @@ impl View {
     ) {
         let (status, glyph, color) = state_style(ui, job.state);
         ui.horizontal(|ui| {
-            ui.label(RichText::new(DOWNLOAD_SIMPLE).size(19.0).color(color));
+            ui.label(icon(DOWNLOAD_SIMPLE).size(19.0).color(color));
             ui.add(egui::Label::new(RichText::new(&job.filename).strong()).truncate())
                 .on_hover_text(&job.filename);
         });
@@ -340,7 +341,12 @@ impl View {
             .on_hover_text(&job.source);
         ui.add_space(4.0);
         ui.horizontal_wrapped(|ui| {
-            ui.label(RichText::new(format!("{glyph} {status}")).color(color));
+            ui.label(icon_caption(
+                ui,
+                glyph,
+                RichText::new(status).color(color),
+                TextStyle::Body,
+            ));
             ui.weak(engine_name(job.engine));
             if job.engine == Engine::Aria2 {
                 ui.weak(format!("{} connections", job.connections));
@@ -370,19 +376,20 @@ impl View {
             speed_chart(ui, &job.samples, color);
         }
         if let Some(error) = &job.error {
-            ui.colored_label(ui.visuals().error_fg_color, format!("{WARNING} {error}"));
+            let text = RichText::new(error).color(ui.visuals().error_fg_color);
+            ui.label(icon_caption(ui, WARNING, text, TextStyle::Body));
         }
         ui.horizontal_wrapped(|ui| {
             for (action, icon, label) in [("pause", PAUSE, "Pause"), ("resume", PLAY, "Resume")] {
-                if job.actions.contains(&action) && ui.button(format!("{icon} {label}")).clicked() {
+                if job.actions.contains(&action)
+                    && ui.button(action_caption(ui, icon, label)).clicked()
+                {
                     self.error = manager.action(&job.id, action).err();
                 }
             }
             if job.state == State::Complete
                 && job.output.is_some()
-                && ui
-                    .add(primary(ui, format!("{PLAY} Play in Pealayer")))
-                    .clicked()
+                && ui.add(primary(ui, PLAY, "Play in Pealayer")).clicked()
             {
                 *play = job.output.clone();
             }
@@ -398,10 +405,10 @@ impl View {
                 .iter()
                 .any(|(action, _, _)| job.actions.contains(action))
             {
-                ui.menu_button(format!("{DOTS_THREE} More"), |ui| {
+                ui.menu_button(action_caption(ui, DOTS_THREE, "More"), |ui| {
                     for (action, icon, label) in actions {
                         if job.actions.contains(&action)
-                            && ui.button(format!("{icon} {label}")).clicked()
+                            && ui.button(action_caption(ui, icon, label)).clicked()
                         {
                             self.error = manager.action(&job.id, action).err();
                             ui.close();
@@ -414,7 +421,12 @@ impl View {
 
     fn settings(&mut self, ui: &mut egui::Ui, manager: &Manager, snapshot: &Snapshot) {
         panel(ui, |ui| {
-            ui.strong(format!("{GAUGE}  Transfer limits"));
+            ui.label(icon_caption(
+                ui,
+                GAUGE,
+                RichText::new("Transfer limits").strong(),
+                TextStyle::Body,
+            ));
             let current = (snapshot.max_concurrent, snapshot.bytes_per_second);
             let (concurrent, limit) = self.limits.get_or_insert(current);
             ui.horizontal_wrapped(|ui| {
@@ -452,7 +464,12 @@ impl View {
 
         ui.add_space(8.0);
         panel(ui, |ui| {
-            ui.strong(format!("{GEAR}  aria2 executable"));
+            ui.label(icon_caption(
+                ui,
+                GEAR,
+                RichText::new("aria2 executable").strong(),
+                TextStyle::Body,
+            ));
             ui.weak("Find a bundled or installed executable by name or full path.");
             if self.aria2_executable.is_empty()
                 && self.resolved.is_none()
@@ -467,7 +484,7 @@ impl View {
                     .desired_width(ui.available_width()),
             );
             let resolve = ui
-                .button(format!("{MAGNIFYING_GLASS} Resolve path"))
+                .button(action_caption(ui, MAGNIFYING_GLASS, "Resolve path"))
                 .clicked();
             if input.lost_focus() || resolve {
                 self.resolve_aria2(ui.ctx());
@@ -489,13 +506,19 @@ impl View {
                         let path = path.display().to_string();
                         ui.horizontal(|ui| {
                             if ui
-                                .button(COPY)
+                                .button(icon(COPY))
                                 .on_hover_text("Copy executable path")
                                 .clicked()
                             {
                                 ui.ctx().copy_text(path.clone());
                             }
-                            ui.add(egui::Label::new(format!("{CHECK_CIRCLE} {path}")).truncate())
+                            let caption = icon_caption(
+                                ui,
+                                CHECK_CIRCLE,
+                                RichText::new(&path),
+                                TextStyle::Body,
+                            );
+                            ui.add(egui::Label::new(caption).truncate())
                                 .on_hover_text(path);
                         });
                     }
@@ -508,7 +531,12 @@ impl View {
 
         ui.add_space(8.0);
         panel(ui, |ui| {
-            ui.strong(format!("{LINK}  Local aria2 connection"));
+            ui.label(icon_caption(
+                ui,
+                LINK,
+                RichText::new("Local aria2 connection").strong(),
+                TextStyle::Body,
+            ));
             if let Some(endpoint) = &snapshot.aria2_endpoint {
                 ui.weak(format!("Configured for {endpoint}"));
             } else {
@@ -532,10 +560,7 @@ impl View {
             );
             ui.horizontal_wrapped(|ui| {
                 if ui
-                    .add_enabled(
-                        self.pending.is_none(),
-                        primary(ui, format!("{LINK} Connect aria2")),
-                    )
+                    .add_enabled(self.pending.is_none(), primary(ui, LINK, "Connect aria2"))
                     .clicked()
                 {
                     let manager = manager.clone();
@@ -607,8 +632,49 @@ fn accent(ui: &egui::Ui) -> Color32 {
     ui.visuals().selection.bg_fill
 }
 
-fn primary(ui: &egui::Ui, label: String) -> egui::Button<'static> {
-    egui::Button::new(RichText::new(label).color(ui.visuals().selection.stroke.color))
+fn icon(glyph: &str) -> RichText {
+    RichText::new(glyph).family(egui::FontFamily::Name("phosphor".into()))
+}
+
+fn icon_font_id(ui: &egui::Ui, style: TextStyle) -> egui::FontId {
+    egui::FontId::new(
+        style.resolve(ui.style()).size,
+        egui::FontFamily::Name("phosphor".into()),
+    )
+}
+
+fn icon_caption(
+    ui: &egui::Ui,
+    glyph: &str,
+    caption: RichText,
+    style: TextStyle,
+) -> egui::text::LayoutJob {
+    let mut layout = egui::text::LayoutJob::default();
+    caption.append_to(&mut layout, ui.style(), style.into(), egui::Align::Center);
+    let format = layout.sections[0].format.clone();
+    let mut label = egui::text::LayoutJob::default();
+    label.append(
+        &format!("{glyph} "),
+        0.0,
+        egui::TextFormat {
+            font_id: egui::FontId::new(
+                format.font_id.size,
+                egui::FontFamily::Name("phosphor".into()),
+            ),
+            ..format.clone()
+        },
+    );
+    label.append(&layout.text, 0.0, format);
+    label
+}
+
+fn action_caption(ui: &egui::Ui, glyph: &str, label: &str) -> egui::text::LayoutJob {
+    icon_caption(ui, glyph, RichText::new(label), TextStyle::Button)
+}
+
+fn primary(ui: &egui::Ui, glyph: &str, label: &str) -> egui::Button<'static> {
+    let label = RichText::new(label).color(ui.visuals().selection.stroke.color);
+    egui::Button::new(icon_caption(ui, glyph, label, TextStyle::Button))
         .fill(accent(ui))
         .min_size(egui::vec2(0.0, ui.spacing().interact_size.y))
 }
@@ -679,11 +745,19 @@ pub fn bytes(value: u64) -> String {
 mod tests {
     use super::*;
 
+    fn test_context() -> egui::Context {
+        let context = egui::Context::default();
+        let mut fonts = egui::FontDefinitions::default();
+        egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+        context.set_fonts(fonts);
+        context
+    }
+
     #[test]
     fn queue_and_settings_fit_a_narrow_window() {
         let root = std::env::temp_dir().join(format!("pealayer-ui-{}", uuid::Uuid::new_v4()));
         let manager = Manager::open(root.clone()).unwrap();
-        let context = egui::Context::default();
+        let context = test_context();
         let mut view = View::default();
         for section in [Section::Queue, Section::Settings] {
             view.section = section;
@@ -737,7 +811,7 @@ mod tests {
             .unwrap();
         manager.action(&id, "pause").unwrap();
         let mut view = View::default();
-        let context = egui::Context::default();
+        let context = test_context();
         let mut output = context.run_ui(egui::RawInput::default(), |ui| {
             view.draw(ui, &manager);
         });
@@ -792,7 +866,7 @@ mod tests {
             pending: Some(receiver),
             ..Default::default()
         };
-        let context = egui::Context::default();
+        let context = test_context();
         let mut output = context.run_ui(egui::RawInput::default(), |ui| {
             view.draw(ui, &manager);
         });

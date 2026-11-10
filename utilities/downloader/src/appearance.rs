@@ -114,6 +114,12 @@ pub fn install(ctx: &egui::Context) {
             .insert(0, name);
     }
     egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+    // Bundled Inter uses some of the same private-use codepoints. Icon-only
+    // runs must use the real symbol face while captions keep the selected font.
+    fonts.families.insert(
+        egui::FontFamily::Name("phosphor".into()),
+        vec!["phosphor".into()],
+    );
     ctx.set_fonts(fonts);
 }
 
