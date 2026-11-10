@@ -85,5 +85,18 @@ Before and after screenshots are real Web UI captures at 1280 × 900:
 ![Integrated controls on an existing sequence](screenshots/integrated-capture-existing.jpg)
 ![Live capture with both relay edges](screenshots/integrated-capture-active.jpg)
 
-Café's HTTP updater manifest endpoint timed out; remote deployment has not
-been verified. Both PRs remain draft/unmerged.
+Production deployment was still pending at that checkpoint.
+
+## Restored live recording checkpoint
+
+The [original recording checkpoint](https://github.com/ToghrolTP/pealayer/tree/archive/live-recording-checkpoint)
+is preserved in Git ancestry, including the original Web source and generated
+assets. The current Effects Designer shows captured steps in the sequence
+being edited and keeps the same PCController effect ID on Finish.
+
+The [recording retention update](https://github.com/ToghrolTP/pealayer/pull/299)
+restores the warning when an active board-retained capture reports overflow.
+Focused native paint and browser checks cover the warning and the ordinary
+capture states. Physical capture and controller acceptance remain tracked in
+[#40](https://github.com/ToghrolTP/pealayer/issues/40) and
+[#141](https://github.com/ToghrolTP/pealayer/issues/141).
