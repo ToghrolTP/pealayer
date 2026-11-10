@@ -139,7 +139,7 @@ impl DemoCoordinatorSession {
                     "--no-connect",
                 ])
                 .env("PCCONTROLLER_DATA_DIR", &temp_root.0)
-                .env("PCCONTROLLER_CONFIG_DIR", &temp_root.0)
+                .env("PCCONTROLLER_CONFIG", temp_root.0.join("config.json"))
                 .stdout(Stdio::null())
                 .stderr(Stdio::null());
 
