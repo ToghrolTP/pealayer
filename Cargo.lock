@@ -3563,6 +3563,7 @@ dependencies = [
  "image",
  "pealayer-downloads",
  "serde_json",
+ "windows",
  "winres",
 ]
 

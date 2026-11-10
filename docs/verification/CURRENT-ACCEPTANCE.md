@@ -25,12 +25,43 @@ The linked audit records the passing tests and incomplete production-package gat
 
 ## Publication and workspace tools checkpoint
 
+[Subtitle timeline segments](subtitle-timeline-segments.md) add an opt-in
+native display for individual source cue intervals, with local FFprobe
+indexing and visible gaps. Sources without readable timing show their status.
+
+[Remote Location presentation](remote-location-presentation.md) replaces the
+incomplete rows with shared List/Grid controls, restrained interaction states,
+visible preview loading/failure/retry and bounded menus with real owner-backed
+Properties. Native pointer/paint and Web contract checks cover the new behavior;
+installation and actual native/browser screenshot acceptance remain open.
+
+[Surface-scoped mouse controls](mouse-bindings.md) add configurable Back/Forward
+actions, video click-versus-drag modifiers, default middle-click fullscreen and
+authority-owned verified folder history across native/Web. The isolated native
+suite and focused Web checks pass; package/runtime/physical-input acceptance is
+still pending. The completion helper requires the new committed, frozen source;
+its no-discard guard must not be bypassed.
+
 [Shared Terminal and Pealayer Shell](terminal-host-experience.md) includes live
 updater phases, prompt-safe structured status, the typed Preferences table, and
 native/Web views of the same paired host sessions. The graceful updater
 restarted the isolated review with the matching embedded Web bundle. Final
 native and Web captures and the runtime receipt are recorded in PR #281.
 The regular installation was closed and the Cafe API tunnel was unreachable.
+
+[Playback interaction follow-up](player-input-follow-up.md) fixes FPS-unit
+centering, direct volume input, elapsed clipping/shortened groups, picture-only
+gestures, upper hardware navigation and browser-link drops. The full native pass
+and focused refinements are recorded there. Packaging/installed settings,
+physical media keys and actual new-build screenshots remain explicit gates.
+[#292](https://github.com/ToghrolTP/pealayer/issues/292) tracks deferred tabular
+elapsed/duration typography separately.
+
+[Media presentation](media-presentation.md) adds distinct native seek/frame
+glyphs, independently configurable filename-first local/remote titles, decoded
+Recent names and globe markers. Original playback/copy/history targets remain
+unchanged. Packaging, installed visual verification and deferred Cafe delivery
+remain separate acceptance gates.
 
 [Proportional numeric status typography](status-tabular-typography.md) fixes the
 FPS icon/digit-center mismatch, bundles Inter for Windows and shares tabular

@@ -9,6 +9,12 @@ impl Timing {
 }
 static TIMINGS: [Timing; 12] = [const { Timing::new() }; 12];
 static RENDERER: OnceLock<serde_json::Value> = OnceLock::new();
+pub fn hardware_backdrop_available() -> bool {
+    RENDERER.get().and_then(|value|value["renderer"].as_str()).is_some_and(|renderer| {
+        let renderer=renderer.to_ascii_lowercase();
+        !["llvmpipe","softpipe","software","swiftshader","gdi generic","microsoft basic"].iter().any(|name|renderer.contains(name))
+    })
+}
 pub struct Span { phase: usize, start: std::time::Instant }
 pub fn span(phase: Phase) -> Span { Span { phase: phase as usize, start: std::time::Instant::now() } }
 impl Drop for Span {

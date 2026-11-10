@@ -19,6 +19,7 @@ use std::thread;
 use std::time::Duration;
 
 use include_dir::{Dir, include_dir};
+use crate::platform::interop::InteropCommand;
 
 const MAX_HTTP_REQUEST_BYTES: usize = 1024 * 1024;
 static EMBEDDED_WEB_UI: Dir<'_> = include_dir!("$CARGO_MANIFEST_DIR/web_ui/dist");
@@ -1338,10 +1339,16 @@ fn remote_command_permission(command: &crate::platform::interop::InteropCommand)
     match command {
         InteropCommand::UpdateBranding { update } if update.values.as_object().is_some_and(|values|
             values.iter().any(|(key,value)| key.starts_with("app_icon") && key != "app_icon_preset" && value.is_string())) => Some("Web host file access permission is disabled"),
-        InteropCommand::BrowseRemote { .. } | InteropCommand::SelectRemote { .. } | InteropCommand::Open { .. } => Some("Web host file access permission is disabled"),
+        command if remote_file_permission_required(command) => Some("Web host file access permission is disabled"),
         InteropCommand::Launch { request } => if request.target.is_some() || request.commands.iter().any(|c| remote_command_permission(c).is_some()) { Some("Web host file access permission is disabled") } else { None },
         _ => None,
     }
+}
+
+fn remote_file_permission_required(command: &InteropCommand) -> bool {
+    matches!(command, InteropCommand::BrowseRemote { .. } | InteropCommand::SelectRemote { .. }
+        | InteropCommand::Open { .. } | InteropCommand::RemoteHistory { .. }
+        | InteropCommand::InspectRemote { target: Some(_) } | InteropCommand::RetryRemoteThumbnail { .. })
 }
 
 fn update_status_response(
@@ -2286,6 +2293,13 @@ mod tests {
         let config = crate::config::AppConfig { web_allow_file_access: false, ..Default::default() };
         assert_eq!(denied_web_capability("GET", "/api/remote/thumbnail", &config), Some("host file access"));
         assert_eq!(denied_web_capability("GET", "/api/remote/state", &config), Some("host file access"));
+        for command in [InteropCommand::BrowseRemote{target:url.into(),use_proxy:None,clipboard:false},
+            InteropCommand::RemoteHistory{direction:-1,parent:false},InteropCommand::RemoteHistory{direction:1,parent:false},
+            InteropCommand::InspectRemote{target:Some(url.into())},InteropCommand::RetryRemoteThumbnail{target:url.into()}] {
+            assert!(remote_file_permission_required(&command));
+        }
+        assert!(!remote_file_permission_required(&InteropCommand::InspectRemote{target:None}));
+        assert!(!remote_file_permission_required(&InteropCommand::CloseRemoteBrowser));
     }
 
     #[test]

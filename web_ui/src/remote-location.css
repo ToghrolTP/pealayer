@@ -1,19 +1,51 @@
 .remote-location-address { display: flex; gap: 8px; }
 .remote-location-address .ant-input-affix-wrapper { flex: 1; min-width: 0; }
 .remote-location-options { margin: 12px 0; }
-.remote-file-filter { margin-bottom: 12px; }
+.remote-file-filter { flex: 1; min-width: 0; }
+.remote-browser-tools { display: flex; align-items: center; gap: 12px; margin: 12px 0; }
+.remote-browser-tools .ant-segmented { flex-shrink: 0; background: var(--surface-2); border: 1px solid var(--line); }
+.remote-browser-tools .ant-segmented-item { color: var(--muted); }
+.remote-browser-tools .ant-segmented-item-selected { color: var(--text); background: color-mix(in srgb, var(--accent) 16%, var(--surface-2)); box-shadow: none; }
+.remote-browser-tools .ant-segmented-item:hover { color: var(--text); background: var(--surface-3); }
+.remote-browser-tools .ant-segmented-item-selected:hover { background: color-mix(in srgb, var(--accent) 20%, var(--surface-3)); }
 .remote-route-errors { display: grid; gap: 8px; margin: 12px 0; }
 .remote-route-errors .ant-alert-description { white-space: pre-wrap; overflow-wrap: anywhere; }
 .remote-file-name { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .remote-file-name .ant-typography { min-width: 0; }
-.remote-file-thumbnail { width: 64px; height: 38px; display: flex; align-items: center; justify-content: center; flex: 0 0 64px; border-radius: 6px; overflow: hidden; background: var(--surface-2, rgba(128,128,128,.1)); color: var(--muted); font-size: 22px; }
+.remote-file-thumbnail { position: relative; width: 64px; height: 38px; display: flex; align-items: center; justify-content: center; flex: 0 0 64px; border-radius: 6px; overflow: hidden; background: var(--canvas); color: var(--muted); font-size: 22px; }
+.remote-file-thumbnail > .ant-btn { position: absolute; inset-inline-end: 2px; bottom: 2px; color: var(--amber); background: var(--surface-2); }
 .remote-file-thumbnail img { width: 100%; height: 100%; object-fit: contain; }
-.remote-file-selected td { background: var(--accent-soft, rgba(128,128,128,.15)) !important; }
+.remote-location-modal .ant-table-row > td { background: var(--surface-1); }
+.remote-location-modal .ant-table-row:hover > td { background: var(--surface-3) !important; }
+.remote-location-modal .remote-file-selected > td { background: color-mix(in srgb, var(--accent) 15%, var(--surface-2)) !important; }
+.remote-location-modal .remote-file-selected:hover > td { background: color-mix(in srgb, var(--accent) 20%, var(--surface-3)) !important; }
+.remote-location-modal .ant-table-row > td:first-child { border-inline-start: 2px solid transparent; }
+.remote-location-modal .remote-file-selected > td:first-child { border-inline-start-color: var(--accent); }
+.remote-location-modal .ant-btn-primary { color: var(--text); background: color-mix(in srgb, var(--accent) 17%, var(--surface-2)); border-color: color-mix(in srgb, var(--accent) 45%, var(--line)); box-shadow: none; }
+.remote-location-modal .ant-btn-primary:enabled:hover { color: var(--text); background: color-mix(in srgb, var(--accent) 24%, var(--surface-3)); border-color: var(--accent); }
+.remote-location-modal .ant-btn:disabled { color: var(--muted); background: var(--surface-1); border-color: var(--line); opacity: .45; cursor: not-allowed; }
+.remote-file-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 180px), 1fr)); gap: 10px; max-height: 360px; overflow: auto; padding: 2px; }
+.remote-grid-card { position: relative; padding: 8px; min-width: 0; border: 1px solid var(--line); border-radius: 8px; background: var(--surface-2); cursor: pointer; transition: background-color 140ms ease, border-color 140ms ease; }
+.remote-grid-card:hover { background: var(--surface-3); border-color: var(--line-strong); }
+.remote-grid-card:active { background: color-mix(in srgb, var(--accent) 12%, var(--surface-3)); }
+.remote-grid-card--selected { background: color-mix(in srgb, var(--accent) 15%, var(--surface-2)); border-color: color-mix(in srgb, var(--accent) 50%, var(--line)); }
+.remote-grid-card--selected:hover { background: color-mix(in srgb, var(--accent) 20%, var(--surface-3)); }
+.remote-grid-card:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
+.remote-grid-card[aria-disabled="true"] { opacity: .55; cursor: not-allowed; }
+.remote-grid-card > .remote-file-thumbnail { width: 100%; height: 100px; }
+.remote-grid-caption { display: grid; gap: 4px; margin-top: 8px; padding-inline-end: 30px; min-width: 0; }
+.remote-grid-caption > .ant-typography { min-width: 0; font-size: 12px; }
+.remote-grid-card > .ant-btn { position: absolute; inset-inline-end: 6px; bottom: 10px; }
+.remote-grid-sort { margin-bottom: 8px; }
+.remote-location-modal .remote-sort-active { color: var(--text); background: var(--surface-3); }
+.remote-grid-loading { display: flex; align-items: center; gap: 8px; height: 28px; color: var(--muted); }
+.remote-properties-modal .ant-descriptions-item-content { overflow-wrap: anywhere; word-break: break-word; }
+.remote-properties-modal .ant-descriptions-item-label { width: 100px; color: var(--muted); }
 .remote-file-info { margin-top: 12px; }
 .remote-location-modal .ant-table-row { cursor: pointer; }
 .remote-location-modal .ant-typography-secondary { color: var(--muted); }
 .remote-location-modal .ant-spin-container { min-height: 320px; }
 .remote-location-modal .ant-btn { display: inline-flex; align-items: center; justify-content: center; flex-shrink: 0; border-width: 1px; transform: none; }
 .remote-location-modal .ant-table-row > td { transition: background-color 160ms ease; }
-@media (prefers-reduced-motion: reduce) { .remote-location-modal .ant-table-row > td { transition: none; } }
-@media (max-width: 600px) { .remote-location-options { gap: 6px !important; } .remote-location-modal .ant-modal-body { max-height: calc(100dvh - 190px) !important; } }
+@media (prefers-reduced-motion: reduce) { .remote-location-modal .ant-table-row > td, .remote-grid-card { transition: none; } }
+@media (max-width: 600px) { .remote-location-options { gap: 6px !important; } .remote-location-modal .ant-modal-body { max-height: calc(100dvh - 190px) !important; } .remote-view-label { display: none; } .remote-browser-tools { gap: 8px; } }

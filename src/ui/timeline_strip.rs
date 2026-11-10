@@ -1,5 +1,6 @@
 //! Palette-owned media strips and horizontally pinned, clip-bounded captions.
 use crate::config::ColorPalette;
+use crate::subtitle_timing::Timing;
 use eframe::egui::{self, Color32, Rect};
 
 #[derive(Clone, Copy)]
@@ -50,10 +51,40 @@ pub(super) fn paint_media(
 ) {
     let style = MediaStyle::resolve(palette, dark, kind);
     let opacity = if active && enabled { 1.0 } else { 0.52 };
+    paint_body(
+        painter,
+        rect,
+        style,
+        opacity,
+        palette,
+    );
+    paint_label(
+        painter,
+        rect,
+        title,
+        egui::FontId::proportional(11.0),
+        style.ink.gamma_multiply(if enabled { 1.0 } else { 0.68 }),
+        true,
+        10.0,
+        10.0,
+        rtl,
+    );
+}
+
+fn paint_body(
+    painter: &egui::Painter,
+    rect: Rect,
+    style: MediaStyle,
+    opacity: f32,
+    palette: ColorPalette,
+) {
     if let Some(end) = style.fill_end {
         super::palette::paint_gradient(painter, rect, 4, style.fill, end, opacity);
     } else {
         painter.rect_filled(rect, 4.0, style.fill.gamma_multiply(opacity));
+    }
+    if rect.width() < 2.0 {
+        return;
     }
     painter.rect_stroke(
         rect,
@@ -62,11 +93,7 @@ pub(super) fn paint_media(
             1.0,
             style
                 .edge
-                .gamma_multiply(if palette != ColorPalette::Native {
-                    opacity
-                } else {
-                    1.0
-                }),
+                .gamma_multiply(if palette == ColorPalette::Native { 1.0 } else { opacity }),
         ),
         egui::StrokeKind::Inside,
     );
@@ -77,12 +104,56 @@ pub(super) fn paint_media(
         );
         painter.rect_filled(cap, 1.0, style.accent.gamma_multiply(0.7 * opacity));
     }
+}
+
+pub(super) fn paint_subtitle_timing(
+    painter: &egui::Painter,
+    rect: Rect,
+    duration: f64,
+    timing: Option<&Timing>,
+    palette: ColorPalette,
+    dark: bool,
+    active: bool,
+    rtl: bool,
+) {
+    let visible = painter.clip_rect().intersect(rect);
+    if !visible.is_positive() || !duration.is_finite() || duration <= 0.0 {
+        return;
+    }
+    let style = MediaStyle::resolve(palette, dark, MediaKind::Subtitle);
+    let message = match timing {
+        Some(Timing::Ready(spans)) if !spans.is_empty() => {
+            let time_at = |x: f32| f64::from(x - rect.left()) / f64::from(rect.width()) * duration;
+            let x_at = |time: f64| {
+                rect.left()
+                    + (time.clamp(0.0, duration) / duration * f64::from(rect.width())) as f32
+            };
+            let opacity = if active { 1.0 } else { 0.52 };
+            for cue in spans.visible(time_at(visible.left()), time_at(visible.right())) {
+                let cue_rect =
+                    Rect::from_x_y_ranges(x_at(cue.start)..=x_at(cue.end), rect.y_range());
+                if cue_rect.is_positive() {
+                    paint_body(
+                        painter,
+                        cue_rect,
+                        style,
+                        opacity,
+                        palette,
+                    );
+                }
+            }
+            return;
+        }
+        Some(Timing::Ready(_)) => "No timed cues in this subtitle track",
+        Some(Timing::Unavailable(reason)) => reason,
+        Some(Timing::Loading) | None => "Reading subtitle timecodes…",
+    };
     paint_label(
         painter,
         rect,
-        title,
+        message.to_owned(),
         egui::FontId::proportional(11.0),
-        style.ink.gamma_multiply(if enabled { 1.0 } else { 0.68 }),
+        style.ink.gamma_multiply(0.7),
         true,
         10.0,
         10.0,
@@ -149,6 +220,53 @@ pub(super) fn paint_label(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn subtitle_timing_paints_only_the_cue_intervals() {
+        use crate::subtitle_timing::{Span, Spans};
+
+        let ctx = egui::Context::default();
+        let strip = Rect::from_min_size(egui::pos2(20.0, 20.0), egui::vec2(400.0, 24.0));
+        let timing = Timing::Ready(Spans::new(vec![
+            Span {
+                start: 1.0,
+                end: 2.0,
+            },
+            Span {
+                start: 5.0,
+                end: 6.5,
+            },
+        ]));
+        let style = MediaStyle::resolve(ColorPalette::Studio, true, MediaKind::Subtitle);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            paint_subtitle_timing(
+                ui.painter(),
+                strip,
+                10.0,
+                Some(&timing),
+                ColorPalette::Studio,
+                true,
+                true,
+                false,
+            );
+        });
+        output.textures_delta.clear();
+        let ranges: Vec<_> = output
+            .shapes
+            .iter()
+            .filter_map(|shape| match &shape.shape {
+                egui::Shape::Rect(rect) if rect.fill == style.fill => Some(rect.rect.x_range()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(
+            ranges,
+            [
+                egui::Rangef::new(60.0, 100.0),
+                egui::Rangef::new(220.0, 280.0)
+            ]
+        );
+    }
 
     #[test]
     fn active_and_disabled_strip_paint_preserves_native_borders_and_semantic_dimming() {
@@ -349,20 +467,24 @@ mod tests {
     fn short_or_offscreen_strips_never_leak_labels_and_explicit_overflow_is_preserved() {
         let ctx = egui::Context::default();
         let viewport = Rect::from_min_max(egui::pos2(100.0, 20.0), egui::pos2(400.0, 100.0));
-        assert!(label_bounds(
-            Rect::from_min_max(egui::pos2(40.0, 30.0), egui::pos2(90.0, 60.0)),
-            viewport,
-            10.0,
-            10.0
-        )
-        .is_none());
-        assert!(label_bounds(
-            Rect::from_min_max(egui::pos2(390.0, 30.0), egui::pos2(600.0, 60.0)),
-            viewport,
-            10.0,
-            10.0
-        )
-        .is_none());
+        assert!(
+            label_bounds(
+                Rect::from_min_max(egui::pos2(40.0, 30.0), egui::pos2(90.0, 60.0)),
+                viewport,
+                10.0,
+                10.0
+            )
+            .is_none()
+        );
+        assert!(
+            label_bounds(
+                Rect::from_min_max(egui::pos2(390.0, 30.0), egui::pos2(600.0, 60.0)),
+                viewport,
+                10.0,
+                10.0
+            )
+            .is_none()
+        );
         for hide in [false, true] {
             let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
                 paint_label(

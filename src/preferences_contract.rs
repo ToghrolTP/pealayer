@@ -512,6 +512,12 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
         control
     };
     let mut controls = vec![
+        PreferenceControl::boolean("simple_workspace.show_menu_bar", "playback", "Simple workspace", "Show menu bar in Simple workspace"),
+        PreferenceControl::boolean("simple_workspace.show_toolbar", "playback", "Simple workspace", "Show command toolbar in Simple workspace"),
+        PreferenceControl::boolean("simple_workspace.show_status_bar", "playback", "Simple workspace", "Show status bar in Simple workspace"),
+        PreferenceControl::select("simple_workspace.backdrop", "playback", "Simple workspace", "Control bar background", &[("auto","Automatic GPU blur"),("blur","GPU blur"),("solid","Solid background")]),
+        PreferenceControl::number("simple_workspace.controls_x", "playback", "Simple workspace", "Control bar horizontal position", 0.0, 1.0, 0.01),
+        PreferenceControl::number("simple_workspace.controls_y", "playback", "Simple workspace", "Control bar vertical position", 0.0, 1.0, 0.01),
         PreferenceControl::boolean("ui.sidebar_rail.enabled", "sidebar_rail", "Sidebar rail", "Show sidebar rail"),
         PreferenceControl::number("ui.sidebar_rail.width", "sidebar_rail", "Sidebar rail", "Sidebar pane width", 240.0, 600.0, 10.0),
         {
@@ -560,6 +566,10 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             &[("native", "Neutral (default)"), ("studio", "Studio"), ("pastel", "Pastel")],
         ),
         PreferenceControl::accent(config),
+        PreferenceControl::select("local_media_title_format", "appearance", "Window title", "Local media title",
+            &[("file_name", "Filename"), ("file_stem", "Filename without extension"), ("location", "Full location")]),
+        PreferenceControl::select("remote_media_title_format", "appearance", "Window title", "Remote media title",
+            &[("file_name", "Filename"), ("file_stem", "Filename without extension"), ("location", "Full location")]),
         PreferenceControl::select("workspace_ui", "appearance", "Interface", "Workspace interface",
             &[("craft_ui", "CraftUI"), ("egui_dock", "egui Dock")]),
         PreferenceControl::select("native_monitor_style", "appearance", "Workspace panels", "Program Monitor controls",
@@ -781,6 +791,12 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
             control
         },
         PreferenceControl::boolean(
+            "timeline_subtitle_segments",
+            "playback",
+            "Subtitles",
+            "Show subtitle cue segments in the timeline",
+        ),
+        PreferenceControl::boolean(
             "restore_last_media_on_startup",
             "playback",
             "Playback history",
@@ -847,6 +863,7 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
         ),
         PreferenceControl::boolean("remote_folder_auto_next", "playback", "Remote folders", "Automatically play the next file in the folder"),
         PreferenceControl::boolean("remote_folder_thumbnails", "playback", "Remote folders", "Generate thumbnails for listed media files"),
+        PreferenceControl::select("remote_folder_view", "playback", "Remote folders", "Remote folder layout", &[("list", "List"), ("grid", "Grid")]),
         PreferenceControl::boolean(
             "auto_connect_hardware",
             "hardware",
@@ -1086,6 +1103,12 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
                 ("none", "Do nothing"),
             ],
         ),
+        PreferenceControl::boolean(
+            "video_click_frame_only",
+            "input",
+            "Video surface",
+            "Apply video gestures only inside the picture",
+        ),
         PreferenceControl::select(
             "playing_drag_action",
             "input",
@@ -1107,6 +1130,7 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
                 ("play_pause", "Play / pause"),
                 ("toggle_mute", "Mute / unmute"),
                 ("toggle_fullscreen", "Toggle fullscreen"),
+                ("boss_key", "Boss key: pause and minimize"),
                 ("context_menu", "Open context menu"),
                 ("none", "Do nothing"),
             ],
@@ -1132,6 +1156,7 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
                 ("play_pause", "Play / pause"),
                 ("toggle_mute", "Mute / unmute"),
                 ("toggle_fullscreen", "Toggle fullscreen"),
+                ("boss_key", "Boss key: pause and minimize"),
                 ("context_menu", "Open context menu"),
                 ("none", "Do nothing"),
             ],
@@ -1425,6 +1450,7 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
         let index = controls.iter().position(|control| control.key == after).unwrap() + 1;
         controls.insert(index, control);
     }
+    controls.extend(mouse_binding_controls());
     let mut hints = std::collections::HashSet::new();
     for control in &mut controls {
         control.icon = semantic_preference_icon(control);
@@ -1434,6 +1460,49 @@ pub fn preference_controls(config: &crate::config::AppConfig) -> Vec<PreferenceC
         }
     }
     controls
+}
+
+fn mouse_binding_controls()->Vec<PreferenceControl> {
+    const VIDEO:&[(&str,&str)]=&[("none","Do nothing"),("inherit","Use unmodified action"),
+        ("seek_backward","Seek backward"),("seek_forward","Seek forward"),
+        ("previous_chapter","Previous chapter"),("next_chapter","Next chapter"),
+        ("previous_file","Previous file"),("next_file","Next file"),
+        ("frame_backward","Previous frame"),("frame_forward","Next frame"),
+        ("play_pause","Play / pause"),("toggle_mute","Mute / unmute"),
+        ("toggle_fullscreen","Toggle fullscreen"),("boss_key","Boss key: pause and minimize")];
+    const CANVAS:&[(&str,&str)]=&[("none","Do nothing"),("inherit","Use unmodified action"),
+        ("pan_left","Pan left"),("pan_right","Pan right"),("zoom_out","Zoom out"),("zoom_in","Zoom in")];
+    const BROWSER:&[(&str,&str)]=&[("none","Do nothing"),("inherit","Use unmodified action"),
+        ("history_back","Back"),("history_forward","Forward"),("parent_folder","Parent folder")];
+    let mut result=Vec::new();
+    macro_rules! scope {($name:literal,$group:literal,$options:expr)=>{
+        for (key,label,modified) in [
+            (concat!("mouse_bindings.",$name,".back"),"Back button (4)",false),
+            (concat!("mouse_bindings.",$name,".forward"),"Forward button (5)",false),
+            (concat!("mouse_bindings.",$name,".ctrl_back"),"Ctrl / Command + Back",true),
+            (concat!("mouse_bindings.",$name,".ctrl_forward"),"Ctrl / Command + Forward",true),
+            (concat!("mouse_bindings.",$name,".alt_back"),"Alt + Back",true),
+            (concat!("mouse_bindings.",$name,".alt_forward"),"Alt + Forward",true),
+            (concat!("mouse_bindings.",$name,".shift_back"),"Shift + Back",true),
+            (concat!("mouse_bindings.",$name,".shift_forward"),"Shift + Forward",true),
+        ] {
+            let mut control=PreferenceControl::select(key,"input",$group,label,$options);
+            if !modified {control.options.retain(|o|o.value!="inherit");}
+            control.description=Some("Only the surface where the press starts owns it. Combined modifiers use Ctrl / Command, then Alt, then Shift. Actions are captured on press; dragging or cancelling never invokes a click.");
+            result.push(control);
+        }
+    }}
+    scope!("video","Video: Back / Forward buttons",VIDEO);
+    scope!("timeline","Timeline: Back / Forward buttons",CANVAS);
+    scope!("effect_designer","Effect Designer: Back / Forward buttons",CANVAS);
+    scope!("remote_browser","Remote browser: Back / Forward buttons",BROWSER);
+    for (key,label) in [("mouse_bindings.ctrl_left_drag","Ctrl / Command + left drag"),("mouse_bindings.alt_middle_drag","Alt + middle drag")] {
+        let mut control=PreferenceControl::select(key,"input","Video modifiers",label,&[("move_window","Move application window"),("seek","Seek video"),("temporary_fast_forward","Temporarily fast-forward"),("none","Do nothing")]);
+        control.description=Some("Modifier-drag mode does not also run the button's click action. Video gestures honor the picture-only setting.");
+        result.push(control);
+    }
+    result.push(PreferenceControl::boolean("mouse_bindings.shift_right_context_menu","input","Video modifiers","Shift + right button always opens the context menu"));
+    result
 }
 
 fn semantic_preference_icon(control: &PreferenceControl) -> &'static str {
@@ -1478,6 +1547,7 @@ fn semantic_preference_icon(control: &PreferenceControl) -> &'static str {
         key if key.starts_with("subtitle_") => "subtitles",
         key if key.starts_with("timeline_") => "waveform",
         key if key.starts_with("web_") => "globe",
+        key if key.starts_with("mouse_bindings.") => "mouse",
         key if key.starts_with("keyboard_") || key.starts_with("shortcut_") || key.starts_with("media_keys_") => "keyboard",
         _ => match control.kind {
             PreferenceControlKind::ActionList => "list-checks",
@@ -1542,6 +1612,33 @@ pub fn set_value_at_path(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn mouse_bindings_are_complete_in_shared_preferences_and_reject_cross_surface_actions() {
+        let cfg=crate::config::AppConfig::default();let contract=super::preferences_contract(&cfg);
+        let controls=contract.controls.iter().filter(|c|c.key.starts_with("mouse_bindings.")).collect::<Vec<_>>();
+        assert_eq!(controls.len(),35);
+        for control in controls {
+            assert_eq!(control.section,"input");assert_eq!(control.icon,"mouse");
+            let value=super::value_at_path(&contract.values,control.key).unwrap();
+            if !control.options.is_empty(){assert!(control.options.iter().any(|o|&o.value==value),"{}",control.key);}
+        }
+        let changed=cfg.apply_patch(&serde_json::json!({"mouse_bindings":{"video":{"back":"boss_key"}},"middle_click_action":"boss_key"})).unwrap();
+        assert_eq!(changed.mouse_bindings.video.back,crate::pointer_bindings::Action::BossKey);
+        assert_eq!(changed.mouse_bindings.timeline,cfg.mouse_bindings.timeline);
+        assert!(cfg.apply_patch(&serde_json::json!({"mouse_bindings":{"timeline":{"back":"boss_key"}}})).is_err());
+    }
+    #[test]
+    fn media_title_choices_have_independent_shared_settings_and_filename_defaults() {
+        let contract = super::preferences_contract(&crate::config::AppConfig::default());
+        for key in ["local_media_title_format", "remote_media_title_format"] {
+            let control = contract.controls.iter().find(|c| c.key == key).unwrap();
+            assert_eq!(control.section, "appearance");
+            assert_eq!(control.group, "Window title");
+            assert_eq!(control.options.iter().map(|o| o.value.as_str().unwrap()).collect::<Vec<_>>(), ["file_name", "file_stem", "location"]);
+            assert_eq!(super::value_at_path(&contract.defaults, key), Some(&serde_json::json!("file_name")));
+        }
+    }
+
     #[test]
     fn native_panel_styles_have_independent_api_controls_and_preserve_saved_layouts() {
         use crate::config::{AppConfig, ControlBarAction, WorkspaceUi};
@@ -2306,7 +2403,7 @@ mod tests {
         let config = crate::config::AppConfig::default();
         assert_eq!(
             config.middle_click_action,
-            crate::config::PlayerClickAction::None
+            crate::config::PlayerClickAction::ToggleFullscreen
         );
         assert_eq!(
             config.middle_hold_action,
@@ -2318,7 +2415,7 @@ mod tests {
         );
         assert_eq!(
             config.right_hold_action,
-            crate::config::PlayerDragAction::None
+            crate::config::PlayerDragAction::Seek
         );
 
         let controls = preference_controls(&config);

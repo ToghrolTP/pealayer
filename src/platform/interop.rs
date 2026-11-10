@@ -179,8 +179,11 @@ pub enum InteropCommand {
     },
     BrowseRemote { #[serde(default)] target: String, #[serde(default)] use_proxy: Option<bool>, #[serde(default)] clipboard: bool },
     SelectRemote { target: String, #[serde(default)] play: bool },
+    InspectRemote { target: Option<String> },
+    RetryRemoteThumbnail { target: String },
     SortRemote { by: crate::remote_location::SortBy, #[serde(default)] descending: bool },
     CloseRemoteBrowser,
+    RemoteHistory {direction:i32, #[serde(default)] parent:bool},
     SetFullscreen {
         enabled: bool,
     },
@@ -207,6 +210,8 @@ pub enum InteropCommand {
         tab: crate::ui::about::AboutTab,
     },
     OpenMediaInformation,
+    OpenDownloadCenter,
+    CopyMediaLocation,
     OpenMediaFolder,
     EditConfiguration,
     OpenBoardInformation {
@@ -581,7 +586,7 @@ impl InteropCommand {
         // authority and follow normal session forwarding instead.
         matches!(self,Self::ImportAssets{request} if request.owner_id.is_none()) ||
         matches!(self, Self::GetWorkspaceTools | Self::WorkspaceTools { .. } | Self::QuitLocal | Self::GetProcessStatus | Self::ConnectPeer { .. } | Self::InspectAuthoring { .. } | Self::NavigatePreferences { .. } | Self::OpenAbout { .. }
-            | Self::GetWindow | Self::SetWindow { .. } | Self::Activate | Self::Minimize | Self::Maximize | Self::Restore | Self::SetFullscreen { .. } | Self::ToggleFullscreen)
+            | Self::GetWindow | Self::SetWindow { .. } | Self::Activate | Self::Minimize | Self::Maximize | Self::Restore | Self::SetFullscreen { .. } | Self::ToggleFullscreen | Self::CopyMediaLocation | Self::OpenDownloadCenter)
     }
 
     pub fn query_result(&self) -> Option<Value> {
@@ -887,8 +892,11 @@ impl InteropCommand {
             Self::ShowOsd { options, .. } => options.validate(),
             Self::PublishToast { toast } => toast.validate(),
             Self::InvokeToastAction { id, action_id, .. } if !crate::messaging::valid_id(id) || !crate::messaging::valid_id(action_id) => Err("invalid notification action identity".into()),
+            Self::RemoteHistory {direction,parent} if !matches!(direction,-1|1) || *parent && *direction!= -1 => Err("Remote history direction must be -1 or 1".into()),
             Self::BrowseRemote { target, .. } if !target.is_empty() => crate::remote_location::normalize(target).map(|_| ()),
             Self::SelectRemote { target, .. } => crate::remote_location::normalize(target).map(|_| ()),
+            Self::InspectRemote { target: Some(target) } => crate::remote_location::normalize(target).map(|_| ()),
+            Self::RetryRemoteThumbnail { target } => crate::remote_location::normalize(target).map(|_| ()),
             Self::DismissToast { id } if !crate::messaging::valid_id(id) => Err("invalid toast ID".into()),
             Self::SetWorkspace { profile }
             | Self::DeleteWorkspaceProfile { id: profile }
@@ -930,7 +938,7 @@ pub fn command_catalog() -> Value {
         "transports": ["native", "http", "json-rpc", "websocket", "tcp-ndjson", "binary-udp"],
         "process": { "status": "/api/process/status", "authoring": "/api/process/authoring", "command": "/api/process/command", "methods": ["pealayer.process.status", "pealayer.process.connect", "pealayer.process.quit"], "scope": "local process, never relayed to authority", "connect": "validated, idempotent, graceful restart; poll local status after reconnect" },
         "messaging": { "contract": "pealayer.messages.v1", "snapshot": "/api/messages", "subscription": "/ws", "publish": "pealayer.toast.show", "dismiss": "pealayer.toast.dismiss", "invoke": "pealayer.toast.invoke", "max_actions": 4, "default_action": "bound action ID", "state": "pealayer.messages.state", "surfaces": ["egui", "web", "terminal"], "persistent_timeout_ms": 0 },
-        "remote_folders": { "browse": "pealayer.remote.browse", "select": "pealayer.remote.select", "sort": "pealayer.remote.sort", "close": "pealayer.remote.close", "state": "/api/remote/state", "thumbnail": "/api/remote/thumbnail", "subscription": "/ws" },
+        "remote_folders": { "browse": "pealayer.remote.browse", "history": "pealayer.remote.history", "select": "pealayer.remote.select", "inspect": "pealayer.remote.inspect", "sort": "pealayer.remote.sort", "close": "pealayer.remote.close", "state": "/api/remote/state", "thumbnail": "/api/remote/thumbnail", "thumbnail_retry": "pealayer.remote.thumbnail.retry", "subscription": "/ws" },
         "preferences_navigation": { "method": "pealayer.preferences.navigate", "command": "navigate_preferences", "section": "optional schema section ID", "scroll_y": "absolute logical pixel offset, clamped to content", "scope": "local native process, including its Preferences helper", "accepted": "queued, not confirmation that a frame has rendered" },
         "about_navigation": { "method": "pealayer.about.open", "command": "open_about", "tab": ["overview", "build", "board", "libraries"], "scope": "local native process, never relayed to authority", "accepted": "queued, not confirmation that a frame has rendered" },
         "commands": [
@@ -940,7 +948,7 @@ pub fn command_catalog() -> Value {
             "chapter_previous", "chapter_next", "set_chapter",
             "seek", "seek_to", "seek_abs", "scrub_to", "finish_scrub", "set_volume", "set_mute", "toggle_mute",
             "set_rate", "set_fullscreen", "toggle_fullscreen", "activate", "minimize",
-            "maximize", "restore", "open_preferences", "navigate_preferences", "open_media_information", "open_media_folder", "edit_configuration", "open_board_information", "show_message", "show_osd", "hide_osd", "set_workspace",
+            "maximize", "restore", "open_preferences", "navigate_preferences", "open_media_information", "copy_media_location", "open_media_folder", "edit_configuration", "open_board_information", "show_message", "show_osd", "hide_osd", "set_workspace",
             "create_workspace_profile", "update_workspace_profile", "delete_workspace_profile",
             "open_about",
             "move_workspace_profile", "timeline.track.update", "timeline.track.manage", "update_config",
@@ -983,6 +991,7 @@ pub fn command_catalog() -> Value {
     catalog["commands"].as_array_mut().unwrap().extend([serde_json::json!("update_branding"), serde_json::json!("get_branding")]);
     catalog["branding"]["clear"] = serde_json::json!("pealayer.branding.clear");
     catalog["commands"].as_array_mut().unwrap().push(serde_json::json!("clear_branding"));
+    catalog["commands"].as_array_mut().unwrap().push(serde_json::json!("open_download_center"));
     catalog["updates"] = serde_json::json!({"http":"/api/update/", "methods":crate::update::rpc::METHODS,
         "scope":"local process, never implicitly relayed to authority", "chunk_bytes":crate::update::rpc::CHUNK_BYTES,
         "encoding":"base64", "completion":"exact artifact and health acknowledgement, not transfer acceptance"});
@@ -1089,6 +1098,8 @@ pub fn parse_text_command(input: &str) -> Result<InteropCommand, String> {
         "restore" => InteropCommand::Restore,
         "preferences" | "open_preferences" | "open-preferences" => InteropCommand::OpenPreferences,
         "media_information" | "open_media_information" => InteropCommand::OpenMediaInformation,
+        "open_download_center" => InteropCommand::OpenDownloadCenter,
+        "copy_media_location" => InteropCommand::CopyMediaLocation,
         "media_folder" | "open_media_folder" => InteropCommand::OpenMediaFolder,
         "edit_configuration" | "edit_config" => InteropCommand::EditConfiguration,
         "message" | "show_message" | "show-message" => InteropCommand::ShowMessage {
@@ -1390,6 +1401,10 @@ pub struct PlayerStatusResponse {
     /// Measured native UI cadence, not the monitor refresh rate or browser FPS.
     pub ui_fps: Option<f64>,
     pub current_video: Option<String>,
+    /// Presentation only; current_video remains the encoded source identity.
+    pub media_display_name: Option<String>,
+    pub media_location_display: Option<String>,
+    pub mouse_bindings: crate::pointer_bindings::Bindings,
     pub media_session: crate::platform::media_controls::SessionMetadata,
     pub media_session_capabilities: crate::platform::media_controls::SessionCapabilities,
     pub quick_seek_seconds: f64,
@@ -1752,6 +1767,9 @@ impl Default for PlayerStatusResponse {
             media_fps: 0.0,
             ui_fps: None,
             current_video: None,
+            media_display_name: None,
+            media_location_display: None,
+            mouse_bindings: Default::default(),
             media_session: Default::default(),
             media_session_capabilities: Default::default(),
             quick_seek_seconds: 10.0,
@@ -1943,8 +1961,11 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         }
         "browse_remote" | "pealayer.remote.browse" => Some(InteropCommand::BrowseRemote { target: request.params.get("target").and_then(Value::as_str).unwrap_or_default().into(), use_proxy: request.params.get("use_proxy").and_then(Value::as_bool), clipboard: request.params.get("clipboard").and_then(Value::as_bool).unwrap_or(false) }),
         "select_remote" | "pealayer.remote.select" => Some(InteropCommand::SelectRemote { target: string(&["target"])? , play: request.params.get("play").and_then(Value::as_bool).unwrap_or(false) }),
+        "inspect_remote" | "pealayer.remote.inspect" => Some(InteropCommand::InspectRemote { target: match request.params.get("target") { None | Some(Value::Null) => None, Some(Value::String(target)) => Some(target.clone()), _ => return Err("target must be a URL string or null".into()) } }),
+        "retry_remote_thumbnail" | "pealayer.remote.thumbnail.retry" => Some(InteropCommand::RetryRemoteThumbnail {target:string(&["target"])?}),
         "sort_remote" | "pealayer.remote.sort" => Some(InteropCommand::SortRemote { by: serde_json::from_value(request.params.get("by").cloned().unwrap_or(Value::String("name".into()))).map_err(|_| "sort must be name, date or size".to_string())?, descending: request.params.get("descending").and_then(Value::as_bool).unwrap_or(false) }),
         "close_remote_browser" | "pealayer.remote.close" => Some(InteropCommand::CloseRemoteBrowser),
+        "remote_history" | "pealayer.remote.history" => Some(InteropCommand::RemoteHistory {direction:request.params.get("direction").and_then(Value::as_i64).and_then(|v|i32::try_from(v).ok()).ok_or("direction must be -1 or 1")?,parent:request.params.get("parent").map(|v|v.as_bool().ok_or("parent must be boolean")).transpose()?.unwrap_or(false)}),
         "fullscreen"
         | "set_fullscreen"
         | "pealayer.fullscreen.set" => {
@@ -1991,6 +2012,8 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         "media_information" | "open_media_information" | "pealayer.media.information" => {
             Some(InteropCommand::OpenMediaInformation)
         }
+        "copy_media_location" | "pealayer.media.copy_location" => Some(InteropCommand::CopyMediaLocation),
+        "open_download_center" | "pealayer.ui.downloads.open" => Some(InteropCommand::OpenDownloadCenter),
         "media_folder" | "open_media_folder" | "pealayer.media.folder" => {
             Some(InteropCommand::OpenMediaFolder)
         }
@@ -2639,6 +2662,7 @@ pub struct LiveFrameConfig {
     pub web_sync_interval_ms: u32,
     pub remote_folder_auto_next: bool,
     pub remote_folder_thumbnails: bool,
+    pub remote_folder_view: crate::remote_location::ViewMode,
     pub appearance: AppearanceState,
 }
 
@@ -2650,6 +2674,7 @@ impl LiveFrameConfig {
             web_sync_interval_ms: config.web_sync_interval_ms,
             remote_folder_auto_next: config.remote_folder_auto_next,
             remote_folder_thumbnails: config.remote_folder_thumbnails,
+            remote_folder_view: config.remote_folder_view,
             appearance: AppearanceState::new(config, dark),
         }
     }
@@ -2859,9 +2884,12 @@ fn spawn_windows_pipe_listener(
                 thread::sleep(std::time::Duration::from_millis(250));
                 continue;
             }
-            let connected = unsafe { ConnectNamedPipe(handle, None) }.is_ok()
-                || unsafe { GetLastError() } == ERROR_PIPE_CONNECTED;
-            if connected {
+            // Keep an instance registered across requests. Closing the last
+            // instance between clients can make CallNamedPipe fail immediately
+            // because the name no longer exists, even with a wait timeout.
+            while unsafe { ConnectNamedPipe(handle, None) }.is_ok()
+                || unsafe { GetLastError() } == ERROR_PIPE_CONNECTED
+            {
                 let mut request = vec![0u8; 65_536];
                 let mut bytes_read = 0u32;
                 if unsafe { ReadFile(handle, Some(&mut request), Some(&mut bytes_read), None) }
@@ -2888,7 +2916,9 @@ fn spawn_windows_pipe_listener(
                     };
                     let _ = unsafe { FlushFileBuffers(handle) };
                 }
-                let _ = unsafe { DisconnectNamedPipe(handle) };
+                if unsafe { DisconnectNamedPipe(handle) }.is_err() {
+                    break;
+                }
             }
             let _ = unsafe { CloseHandle(handle) };
         }
@@ -3747,6 +3777,28 @@ mod tests {
         assert_eq!(command_from_json_rpc(&rpc).unwrap(), Some(copied));
         assert!(parse_text_command("browse_remote javascript:bad").is_err());
         assert!(matches!(parse_text_command("browse_remote").unwrap(), InteropCommand::BrowseRemote { .. }));
+        for (method,expected) in [("pealayer.remote.inspect",InteropCommand::InspectRemote{target:Some(target.into())}),
+            ("pealayer.remote.thumbnail.retry",InteropCommand::RetryRemoteThumbnail{target:target.into()})] {
+            assert_eq!(parse_interop_request(&serde_json::to_string(&expected).unwrap()).unwrap().1,expected);
+            let rpc=JsonRpcRequest{jsonrpc:Some("2.0".into()),id:Value::Null,method:method.into(),params:serde_json::json!({"target":target})};
+            assert_eq!(command_from_json_rpc(&rpc).unwrap(),Some(expected));
+            assert!(command_from_json_rpc(&JsonRpcRequest{params:serde_json::json!({"target":true}),..rpc}).is_err());
+        }
+        let close=JsonRpcRequest{jsonrpc:Some("2.0".into()),id:Value::Null,method:"pealayer.remote.inspect".into(),params:serde_json::json!({"target":null})};
+        assert_eq!(command_from_json_rpc(&close).unwrap(),Some(InteropCommand::InspectRemote{target:None}));
+        for (direction, parent) in [(-1, false), (1, false), (-1, true)] {
+            let expected = InteropCommand::RemoteHistory { direction, parent };
+            assert_eq!(parse_interop_request(&serde_json::to_string(&expected).unwrap()).unwrap().1, expected);
+            let rpc = JsonRpcRequest { jsonrpc: Some("2.0".into()), id: Value::Null,
+                method: "pealayer.remote.history".into(), params: serde_json::json!({"direction":direction,"parent":parent}) };
+            assert_eq!(command_from_json_rpc(&rpc).unwrap(), Some(expected));
+        }
+        for params in [serde_json::json!({"direction":0}), serde_json::json!({"direction":1,"parent":true}),
+            serde_json::json!({"direction":-1,"parent":"yes"}), serde_json::json!({"direction":1.5})] {
+            let rpc = JsonRpcRequest { jsonrpc: Some("2.0".into()), id: Value::Null,
+                method: "pealayer.remote.history".into(), params };
+            assert!(command_from_json_rpc(&rpc).is_err());
+        }
     }
 
     #[test]

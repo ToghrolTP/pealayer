@@ -1,6 +1,17 @@
 import assert from 'node:assert/strict';
 import {readFileSync} from 'node:fs';
 import {mediaControlsAllowed} from '../src/mediaControlsPolicy.ts';
+import {insideMediaPicture} from '../src/mediaPicture.ts';
+const portraitBox={left:10,top:20,width:800,height:700};
+assert.equal(insideMediaPicture(410,50,portraitBox,1920,1080),false);
+assert.equal(insideMediaPicture(410,370,portraitBox,1920,1080),true);
+assert.equal(insideMediaPicture(410,690,portraitBox,1920,1080),false);
+const wideBox={left:10,top:20,width:1000,height:400};
+assert.equal(insideMediaPicture(20,220,wideBox,640,480),false);
+assert.equal(insideMediaPicture(510,220,wideBox,640,480),true);
+assert.equal(insideMediaPicture(1000,220,wideBox,640,480),false);
+assert.equal(insideMediaPicture(510,220,wideBox,0,480),false);
+assert.equal(insideMediaPicture(510,220,wideBox,NaN,480),false);
 for(const enabled of [false,true])for(const background of [false,true])for(const foreground of [false,true]){
   assert.equal(mediaControlsAllowed(enabled,background,foreground),enabled&&(background||foreground));
 }

@@ -663,8 +663,14 @@ fn render_widget(
             };
             let font = fps_font(ui, app.status_bar.uses_monospace(item));
             let numeric_center = super::numeric_text::center_y(ui, font.clone());
-            let galley = super::numeric_text::layout(ui, &fps.formatted, font, color);
-            let pos = egui::pos2(number_rect.right()-3.0-galley.size().x, number_rect.center().y-numeric_center);
+            let value = fps.formatted.strip_suffix(" fps").unwrap_or(&fps.formatted);
+            let unit = ui.painter().layout_no_wrap("fps".into(), font.clone(), color);
+            let gap = ui.fonts_mut(|fonts| fonts.glyph_width(&font, ' '));
+            let unit_rect = egui::Rect::from_min_max(
+                egui::pos2(number_rect.right()-unit.size().x-6.0,number_rect.top()), number_rect.max);
+            paint_centered_galley(ui, unit_rect, unit.clone(), color, egui::Align::Max);
+            let galley = super::numeric_text::layout(ui, value, font, color);
+            let pos = egui::pos2(number_rect.right()-3.0-unit.size().x-gap-galley.size().x, number_rect.center().y-numeric_center);
             ui.painter().with_clip_rect(number_rect).galley(pos, galley, color);
             return Some((
                 response.on_hover_ui(|ui| fps_details(ui, app, &fps, true)),
@@ -908,6 +914,7 @@ fn item_menu(app: &mut PealayerApp, ui: &mut egui::Ui, item: Widget, log_id: egu
         }
     }
     if item == Widget::Connection {
+        hardware_preferences_item(app, ui);
         ui.menu_button(app.tr("Connection icon"), |ui| {
             use crate::config::StatusConnectionIcon;
             for (value, label) in [(StatusConnectionIcon::Plug, "Plug"), (StatusConnectionIcon::Circle, "Circle"),
@@ -1117,6 +1124,27 @@ fn item_menu(app: &mut PealayerApp, ui: &mut egui::Ui, item: Widget, log_id: egu
     }
 }
 
+fn hardware_preferences_item(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    if ui.dropdown_choice(false, format!("{} {}", super::icons::GEAR, app.tr("Hardware preferences"))).clicked() {
+        super::preferences::navigate(app, ui.ctx(), crate::preferences_contract::PreferencesNavigation {
+            section: Some("hardware".into()), scroll_y: 0.0,
+        });
+        ui.close();
+    }
+}
+
+pub(super) fn hardware_context_menu(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    ui.strong(format!("{} {}",super::icons::PLUG,app.tr("Hardware connection")));
+    ui.separator();
+    if ui.dropdown_choice(false,format!("{} {}",super::icons::GAUGE,app.tr("Hardware Monitor"))).clicked() {
+        app.open_or_focus_tab(super::layout::PealayerTab::HardwareMonitor); ui.close();
+    }
+    hardware_preferences_item(app, ui);
+    if !app.serial_port.is_empty() && ui.dropdown_choice(false,format!("{} {}",super::icons::COPY,app.tr("Copy endpoint"))).clicked() {
+        ui.ctx().copy_text(app.serial_port.clone()); ui.close();
+    }
+}
+
 fn present(app: &PealayerApp, item: Widget, hardware: Option<&HardwareCapabilities>, progress: &[StatusProgress]) -> bool {
     let live = hardware.filter(|h| h.board_connected);
     match item {
@@ -1272,6 +1300,7 @@ pub(crate) fn status_bar_panel_frame(tokens: &crate::ui::craft_theme::Tokens) ->
 }
 
 pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    if !app.show_four_d_editor && !app.simple_workspace.show_status_bar { return; }
     let _timing = crate::performance::span(crate::performance::Phase::Status);
     if ui.input(|i| i.viewport().fullscreen.unwrap_or(false)) { return; }
     let tokens = crate::ui::craft_theme::current(ui.ctx());
@@ -1337,6 +1366,43 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
 #[cfg(test)]
 mod tests {
     #[test]
+    fn hardware_context_menu_opens_and_applies_its_choice_at_the_trailing_end() {
+        let _guard = crate::app::tests::lock_app_tests();
+        for rtl in [false, true] {
+            let ctx = egui::Context::default();
+            crate::ui::i18n::configure_ui_fonts(&ctx, false);
+            let mut app = PealayerApp::default();
+            app.engine_handle = crate::four_d::engine::memory_only_test_engine();
+            app.rtl = rtl;
+            for item in Widget::ALL { app.status_bar.set_visible(item, item == Widget::Connection); }
+            app.status_bar.place_at_end(Widget::Connection, true);
+            app.status_bar.connection_mode = false;
+            let mut time = 0.0;
+            let mut frame = |app: &mut PealayerApp, events| {
+                time += 0.1;
+                let mut output = ctx.run_ui(egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(1000.0,500.0))),
+                    time: Some(time), events, ..Default::default()
+                }, |ui| draw(app,ui));
+                output.textures_delta.clear(); output
+            };
+            frame(&mut app,vec![]); frame(&mut app,vec![]);
+            let rect = ctx.data(|d| d.get_temp::<Vec<(Widget,egui::Rect)>>(egui::Id::new("test-status-widget-rects"))).unwrap()[0].1;
+            let button = |pos, button, pressed| egui::Event::PointerButton {pos,button,pressed,modifiers:egui::Modifiers::NONE};
+            frame(&mut app,vec![egui::Event::PointerMoved(rect.center()),button(rect.center(),egui::PointerButton::Secondary,true)]);
+            frame(&mut app,vec![button(rect.center(),egui::PointerButton::Secondary,false)]);
+            let output = frame(&mut app,vec![]);
+            let row = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(t) if t.galley.text() == "Connection mode" => Some(egui::Rect::from_min_size(t.pos,t.galley.size())), _=>None,
+            }).expect("Hardware context menu must be visible");
+            frame(&mut app,vec![egui::Event::PointerMoved(row.center()),button(row.center(),egui::PointerButton::Primary,true)]);
+            frame(&mut app,vec![button(row.center(),egui::PointerButton::Primary,false)]);
+            assert!(app.status_bar.connection_mode,"choosing the menu item must apply, RTL={rtl}");
+            assert!(app.pending_status_bar_save.is_some());
+        }
+    }
+
+    #[test]
     fn native_fonts_center_status_ink_and_use_available_connection_space() {
         let _guard = crate::app::tests::lock_app_tests();
         for family in [crate::config::UiFontFamily::System, crate::config::UiFontFamily::Bundled] {
@@ -1359,7 +1425,7 @@ mod tests {
                     for widget in [Widget::Fps,Widget::Connection] {
                         let rect=rects.iter().find(|(w,_)|*w==widget).unwrap().1;
                         let text=output.shapes.iter().find_map(|shape| match &shape.shape {
-                            egui::Shape::Text(text) if (widget==Widget::Fps && text.galley.text().ends_with("fps"))
+                            egui::Shape::Text(text) if (widget==Widget::Fps && text.galley.text().parse::<f64>().is_ok())
                                 || (widget==Widget::Connection && text.galley.text().contains("Hardware:")) => Some(text),_=>None
                         }).expect("status caption");
                         let ink=text.galley.mesh_bounds.translate(text.pos.to_vec2());
@@ -1707,6 +1773,9 @@ mod tests {
             app.engine_handle = crate::four_d::engine::memory_only_test_engine();
             app.rtl = rtl;
             app.show_four_d_editor = true;
+            // This test switches into Simple and back through the bar itself.
+            // Simple normally hides it; explicitly enable this optional surface.
+            app.simple_workspace.show_status_bar = true;
             for widget in Widget::ALL { app.status_bar.set_visible(widget, widget == Widget::Workspace); }
             app.status_bar.dividers = dividers;
             let mut author = app.capture_workspace_profile(&ctx);
@@ -1941,7 +2010,7 @@ mod tests {
                         &TelemetryLog::default(), &[], 148.0).unwrap().0.rect;
                 });
                 let shape = output.shapes.iter().find(|shape|
-                    matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text().ends_with("fps")))
+                    matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text().parse::<f64>().is_ok()))
                     .expect("painted FPS value");
                 let egui::Shape::Text(text) = &shape.shape else { unreachable!() };
                 let ink = text.galley.mesh_bounds.translate(text.pos.to_vec2());
@@ -1983,17 +2052,22 @@ mod tests {
                 render_widget(&app,ui,Widget::Fps,None,&TelemetryLog::default(),&[],100.0);
             });
             let actual=output.shapes.iter().find_map(|s| match &s.shape {
-                egui::Shape::Text(t) if t.galley.text().ends_with("fps") => Some(t.galley.job.sections[0].format.font_id.clone()),_=>None
+                egui::Shape::Text(t) if t.galley.text() != "fps" && (t.galley.text().parse::<f64>().is_ok() || t.galley.text() == "—") => Some(t.galley.job.sections[0].format.font_id.clone()),_=>None
             }).unwrap();
             assert_eq!(Some(actual),expected,"wrong FPS weight for {mode:?}, paused={paused}");
             let caption=output.shapes.iter().find_map(|shape| match &shape.shape {
-                egui::Shape::Text(text) if text.galley.text().ends_with("fps") => Some(text), _=>None,
+                egui::Shape::Text(text) if text.galley.text().parse::<f64>().is_ok() || text.galley.text() == "—" => Some(text), _=>None,
             }).unwrap();
             let icon=output.shapes.iter().find_map(|shape| match &shape.shape {
                 egui::Shape::Text(text) if [crate::ui::icons::GAUGE,crate::ui::icons::FILE_VIDEO].contains(&text.galley.text()) => Some(text), _=>None,
             }).unwrap();
             assert!((icon.pos.y+icon.galley.mesh_bounds.center().y-caption.pos.y-numeric_center).abs()<0.05,
                 "icon and numeric center diverged for {mode:?}");
+            let unit=output.shapes.iter().find_map(|shape|match &shape.shape {
+                egui::Shape::Text(t) if t.galley.text()=="fps"=>Some(t),_=>None,
+            }).unwrap();
+            assert!((unit.pos.y+unit.galley.mesh_bounds.center().y-caption.pos.y-numeric_center).abs()<0.05,
+                "fps unit must share the visible numeric center, not its descender baseline");
             output.textures_delta.clear();
         }
     }

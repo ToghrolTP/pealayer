@@ -550,7 +550,7 @@ export const EffectsTab: React.FC<EffectsTabProps> = ({ state, sendCmd, locale, 
           </Space></div>
           <ConfigProvider componentDisabled={captureBusy}>
           <SequenceTimeline key={draft.id} steps={draft.steps} repeatCount={draft.repeat_count} repeatIntervalMs={draft.repeat_interval_ms} locale={locale} controls={state.hardware_details?.controls} disabled={captureBusy} wheelPreferences={state.timeline_wheel_preferences}
-            onRepeatChange={(repeat_count,repeat_interval_ms) => setDraft({...draft,repeat_count,repeat_interval_ms})}
+            mouseButtons={state.mouse_bindings?.effect_designer} onRepeatChange={(repeat_count,repeat_interval_ms) => setDraft({...draft,repeat_count,repeat_interval_ms})}
             cueColors={state.effect_designer_cue_colors}
             human={state.human_readable_time_units !== false} actionsRef={sequenceActions} extraKinds={sequenceExtraKinds(state.hardware_details)} onSelect={index => setActiveStep(String(index))} onEdit={revealStepProperties} onChange={steps => setDraft({ ...draft, steps })} />
           <Collapse className="effect-step-list" activeKey={[activeStep]} onChange={keys => setActiveStep(String(Array.isArray(keys) ? keys[0] ?? '' : keys))} items={draft.steps.map((step, index) => ({

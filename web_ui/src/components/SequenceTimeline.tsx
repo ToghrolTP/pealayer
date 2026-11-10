@@ -7,16 +7,19 @@ import { designerCueColor, designerCueInk, editEffectRepeatInterval, stepRepetit
 import defaultCueColors from '../../../assets/themes/designer-cue-colors.json';
 import { tr, UiLocale } from '../i18n';
 import { defaultTimelineWheelPreferences, timelineWheelAction, sequenceWheelNavigation, TimelineWheelPreferences } from '../timelineWheel';
+import { useExtraMouse } from '../mouseBindings';
+import type { MouseButtons } from '../mouseBindings';
 
 /** Pure authoring gestures: never seek, preview or send hardware commands. */
 export interface SequenceTimelineActions { addStep: () => void }
-export function SequenceTimeline<T extends SequenceStep>({ steps, onChange, locale, controls = [], disabled = false, onSelect, onEdit, human = true, extraKinds = [], actionsRef, wheelPreferences = defaultTimelineWheelPreferences, repeatCount = 1, repeatIntervalMs = 0, onRepeatChange, cueColors = defaultCueColors }: {
+export function SequenceTimeline<T extends SequenceStep>({ steps, onChange, locale, controls = [], disabled = false, onSelect, onEdit, human = true, extraKinds = [], actionsRef, wheelPreferences = defaultTimelineWheelPreferences, repeatCount = 1, repeatIntervalMs = 0, onRepeatChange, cueColors = defaultCueColors, mouseButtons }: {
   steps: T[]; onChange: (steps: T[]) => void; locale: UiLocale;
   controls?: Array<{ key: string; name: string; default_name?: string; kind: string; locked?: boolean }>;
   disabled?: boolean; onSelect?: (index: number) => void; human?: boolean;
   onEdit?: (index: number) => void;
   extraKinds?: string[]; actionsRef?: { current: SequenceTimelineActions | null };
   wheelPreferences?: TimelineWheelPreferences;
+  mouseButtons?: MouseButtons;
   repeatCount?: number; repeatIntervalMs?: number;
   onRepeatChange?: (count: number, intervalMs: number) => void;
   cueColors?: Record<string, string>;
@@ -76,6 +79,18 @@ export function SequenceTimeline<T extends SequenceStep>({ steps, onChange, loca
     repeatCount, repeatPreview ?? repeatIntervalMs, showRepeats, Math.max(0, (viewport.left - 140 - 40) / scale * 1000),
     (viewport.left + viewport.width) / scale * 1000, drag.current ?? undefined);
   const width = Math.max(600, span * scale + 160);
+  const extraMouse = useExtraMouse(mouseButtons, action => {
+    const element=container.current; if(!element || disabled || drag.current) return;
+    if(action!=='pan_left' && action!=='pan_right' && action!=='zoom_out' && action!=='zoom_in') return;
+    const delta=action==='pan_left' ? -element.clientWidth*.65 : action==='pan_right' ? element.clientWidth*.65 : action==='zoom_in' ? -120 : 120;
+    const next=sequenceWheelNavigation(scaleRef.current,action==='zoom_in'||action==='zoom_out'?'zoom':'horizontal_scroll',delta,
+      element.scrollLeft,element.scrollTop,element.clientWidth/2,element.clientWidth,element.clientHeight,element.scrollHeight,span);
+    const content=element.firstElementChild as HTMLElement|null;
+    if(content) content.style.minWidth=`${next.width+140}px`;
+    element.querySelectorAll<HTMLElement>('.sequence-authoring__lane').forEach(lane=>{lane.style.width=`${next.width}px`;});
+    scaleRef.current=next.scale;setScale(next.scale);element.scrollLeft=next.left;element.scrollTop=next.top;
+    setViewport({left:element.scrollLeft,width:element.clientWidth});
+  });
   useEffect(() => {
     const element = container.current; if (!element) return;
     const wheel = (event: WheelEvent) => {
@@ -213,7 +228,7 @@ export function SequenceTimeline<T extends SequenceStep>({ steps, onChange, loca
         const first = Math.min(...steps.map(step => step.at_us)); commit(steps.map(step => ({ ...step, at_us: step.at_us - first })));
       }}>{tr(locale, 'Remove delay')}</Button>
     </Space>
-    <div className="sequence-authoring__scroll" ref={container} onScroll={event => setViewport({ left: event.currentTarget.scrollLeft, width: event.currentTarget.clientWidth })}>
+    <div className="sequence-authoring__scroll" ref={container} {...extraMouse} onScroll={event => setViewport({ left: event.currentTarget.scrollLeft, width: event.currentTarget.clientWidth })}>
       <div style={{ minWidth: width + 140 }}>
         {lanes.map(lane => <div className={`sequence-authoring__row ${selectedLane === lane ? 'is-selected' : ''}`} key={lane}>
           <button type="button" className="sequence-authoring__label" aria-pressed={selectedLane === lane} disabled={disabled}

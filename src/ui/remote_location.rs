@@ -3,6 +3,8 @@ use crate::ui::dropdown::DropdownUiExt;
 use super::{dialog, icons};
 use crate::{app::PealayerApp, remote_location as remote};
 use eframe::egui;
+#[path = "remote_location_widgets.rs"]
+mod widgets;
 
 #[derive(Clone, Default)]
 struct View {
@@ -42,18 +44,39 @@ pub fn draw(app: &mut PealayerApp, ctx: &egui::Context) {
     let mut close = false;
     let mut navigate = None;
     let mut selected = None;
+    let mut inspected = None;
     let mut proxy = state.use_proxy;
     egui::Window::new(format!("{}  Remote location", icons::FOLDER_OPEN))
         .id(id).open(&mut open).resizable(true)
         .default_rect(geometry.default_rect).min_size(geometry.min_size).max_size(geometry.max_size)
         .constrain_to(geometry.bounds).frame(dialog::opaque_window_frame_from_context(ctx))
         .show(ctx, |ui| {
+            widgets::apply_style(ui);
+            if let Some(action)=super::mouse_buttons::take_action(ui,ui.max_rect(),app.mouse_bindings.remote_browser) {
+                use crate::pointer_bindings::Action as M;
+                let command=match action {
+                    M::HistoryBack=>Some(crate::platform::interop::InteropCommand::RemoteHistory{direction:-1,parent:false}),
+                    M::HistoryForward=>Some(crate::platform::interop::InteropCommand::RemoteHistory{direction:1,parent:false}),
+                    M::ParentFolder=>Some(crate::platform::interop::InteropCommand::RemoteHistory{direction:-1,parent:true}),_=>None,
+                };
+                if let Some(command)=command {app.apply_interop_command(ctx,command,"Remote browser mouse");}
+            }
             ui.horizontal(|ui| {
+                for (available,icon,caption,direction) in [
+                    (state.history_back_url.is_some()||state.listing.as_ref().is_some_and(|l|l.parent_url.is_some()),icons::ARROW_LEFT,"Back",-1),
+                    (state.history_forward_url.is_some(),icons::ARROW_RIGHT,"Forward",1)] {
+                    if ui.add_enabled(!state.loading&&available,egui::Button::new(icon)).on_hover_text(caption).clicked() {
+                        app.apply_interop_command(ctx,crate::platform::interop::InteropCommand::RemoteHistory{direction,parent:false},"Remote browser");
+                    }
+                }
                 ui.label(icons::LINK);
-                let response = ui.add(crate::ui::dialog::singleline_text_edit(ui, &mut view.target).hint_text("https://host/folder/").desired_width((ui.available_width() - 88.0).max(90.0)));
+                let browse_caption = format!("{} Browse",icons::MAGNIFYING_GLASS);
+                let browse_width = ui.painter().layout_no_wrap(browse_caption.clone(),egui::TextStyle::Button.resolve(ui.style()),ui.visuals().text_color()).size().x
+                    + ui.spacing().button_padding.x*2.0 + ui.spacing().item_spacing.x;
+                let response = ui.add(crate::ui::dialog::singleline_text_edit(ui, &mut view.target).hint_text("https://host/folder/").desired_width((ui.available_width() - browse_width).max(60.0)));
                 if response.changed() { view.edited_at = Some(std::time::Instant::now()); }
                 response.context_menu(|ui| { if ui.button(format!("{}  Copy", icons::COPY)).clicked() { ui.ctx().copy_text(view.target.clone()); ui.close(); } if ui.button("Paste").clicked() { ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste); ui.close(); } });
-                if ui.add_enabled(!state.loading && remote::normalize(&view.target).is_ok(), egui::Button::new(format!("{} Browse", icons::MAGNIFYING_GLASS))).clicked() || response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) { navigate = Some(view.target.clone()); }
+                if ui.add_enabled(!state.loading && remote::normalize(&view.target).is_ok(), egui::Button::new(browse_caption)).clicked() || response.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter)) { navigate = Some(view.target.clone()); }
             });
             ui.horizontal(|ui| {
                 if ui.checkbox(&mut proxy, "Use proxy").on_hover_text("A manual choice overrides automatic route selection for this dialog. Off bypasses system and custom proxies.").changed() { view.proxy_override = Some(proxy); }
@@ -77,52 +100,45 @@ pub fn draw(app: &mut PealayerApp, ctx: &egui::Context) {
                 if let Some(warning) = &listing.warning { ui.label(egui::RichText::new(warning).weak()); }
                 ui.separator();
                 ui.horizontal(|ui| {
-                    ui.label(icons::MAGNIFYING_GLASS);
-                    ui.add(crate::ui::dialog::singleline_text_edit(ui, &mut view.filter).hint_text("Filter files...").desired_width(180.0));
+                    let mut grid = state.view_mode == remote::ViewMode::Grid;
+                    icons::search_view_header(ui, &mut view.filter, ui.id().with("remote-search"), &mut grid, "Filter files...", app.language);
+                    if grid != (state.view_mode == remote::ViewMode::Grid) {
+                        app.apply_interop_command(ctx, crate::platform::interop::InteropCommand::UpdateConfig {values:serde_json::json!({"remote_folder_view":if grid {"grid"} else {"list"}})}, "Remote browser layout");
+                    }
+                });
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(egui::RichText::new("Sort by").small().weak());
                     for (by, label) in [(remote::SortBy::Name, "Name"), (remote::SortBy::Date, "Date"), (remote::SortBy::Size, "Size")] {
-                        if ui.dropdown_choice(state.sort == by, label).clicked() { remote::sort(by, if state.sort == by { !state.descending } else { false }); }
+                        if ui.dropdown_choice(state.sort == by, label).clicked() { app.apply_interop_command(ctx,crate::platform::interop::InteropCommand::SortRemote {by,descending:if state.sort == by { !state.descending } else { false }},"Remote browser sort"); }
                     }
                     ui.label(egui::RichText::new(if state.descending { "Descending" } else { "Ascending" }).weak());
                 });
                 let parent = listing.parent_url.as_ref().map(|url| remote::RemoteEntry { name: "Parent folder".into(), url: url.clone(), is_dir: true, playable: false, size_bytes: None, modified: None });
-                let entries: Vec<_> = parent.iter().chain(listing.entries.iter().filter(|e| e.name.to_lowercase().contains(&view.filter.to_lowercase()))).collect();
-                egui::ScrollArea::vertical().id_salt("remote-files").max_height((ui.available_height()-95.0).clamp(100.0,500.0)).auto_shrink([false,false]).show_rows(ui, 52.0, entries.len(), |ui, range| {
-                    for index in range {
-                        let entry = entries[index];
-                        let is_parent=parent.as_ref().is_some_and(|p|p.url==entry.url);
-                        ui.push_id(&entry.url, |ui| {
-                            let (rect, response) = ui.allocate_exact_size(egui::vec2(ui.available_width(), 50.0), egui::Sense::click());
-                            if state.selected.as_deref() == Some(&entry.url) { ui.painter().rect_filled(rect, 6.0, ui.visuals().selection.bg_fill); }
-                            let thumb_rect = egui::Rect::from_min_size(rect.min + egui::vec2(6.0,5.0), egui::vec2(66.0,40.0));
-                            let mut shown = false;
-                            if state.thumbnails && entry.playable {
-                                if let Ok(Some(path)) = remote::thumbnail(&entry.url, ui.ctx()) {
-                                    let texture_id = egui::Id::new(("remote-thumb", &entry.url));
-                                    let texture = ui.ctx().data_mut(|d| d.get_temp::<egui::TextureHandle>(texture_id)).or_else(|| {
-                                        let image = image::open(path).ok()?.thumbnail(132,80).to_rgba8();
-                                        let texture = ui.ctx().load_texture(format!("remote:{}", entry.url), egui::ColorImage::from_rgba_unmultiplied([image.width() as usize,image.height() as usize],image.as_raw()), egui::TextureOptions::LINEAR);
-                                        ui.ctx().data_mut(|d| d.insert_temp(texture_id,texture.clone())); Some(texture)
-                                    });
-                                    if let Some(texture) = texture { ui.painter().image(texture.id(),thumb_rect,egui::Rect::from_min_max(egui::Pos2::ZERO,egui::pos2(1.0,1.0)),egui::Color32::WHITE); shown = true; }
-                                }
+                let filter = view.filter.to_lowercase();
+                let entries: Vec<_> = parent.iter().chain(listing.entries.iter()
+                    .chain(listing.file.iter().filter(|file|!listing.entries.iter().any(|entry|entry.url==file.url)))
+                    .filter(|e| e.name.to_lowercase().contains(&filter))).collect();
+                let grid = state.view_mode == remote::ViewMode::Grid;
+                let (columns, width, height) = widgets::item_geometry(ui, grid);
+                egui::ScrollArea::vertical().id_salt(("remote-files",grid))
+                    .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysVisible)
+                    .max_height((ui.available_height()-100.0).max(80.0)).auto_shrink([false,false])
+                    .show_rows(ui, height+8.0, entries.len().div_ceil(columns), |ui, range| {
+                    for row in range {
+                        ui.horizontal(|ui| {
+                            ui.spacing_mut().item_spacing.x = 8.0;
+                            for entry in entries.iter().skip(row*columns).take(columns) {
+                                let is_parent=parent.as_ref().is_some_and(|parent|parent.url==entry.url);
+                                ui.push_id(&entry.url, |ui| {
+                                    match widgets::entry(ui,entry,is_parent,&state,grid,egui::vec2(width,height)) {
+                                        Some(widgets::Action::Open(target)) => navigate=Some(target),
+                                        Some(widgets::Action::Select(target,play)) => selected=Some((target,play)),
+                                        Some(widgets::Action::Inspect(target)) => inspected=Some(target),
+                                        Some(widgets::Action::Retry(target)) => app.apply_interop_command(ctx,crate::platform::interop::InteropCommand::RetryRemoteThumbnail {target},"Remote thumbnail retry"),
+                                        None => {}
+                                    }
+                                });
                             }
-                            if !shown { ui.painter().text(thumb_rect.center(),egui::Align2::CENTER_CENTER,if is_parent {icons::ARROW_UP} else if entry.is_dir {icons::FOLDER_OPEN} else {icons::FILE_VIDEO},egui::FontId::proportional(24.0),ui.visuals().weak_text_color()); }
-                            let name_rect = egui::Rect::from_min_max(rect.min+egui::vec2(82.0,if is_parent {15.0}else{7.0}), egui::pos2(rect.right()-80.0,rect.bottom()));
-                            ui.scope_builder(egui::UiBuilder::new().max_rect(name_rect), |ui| {
-                                ui.add(egui::Label::new(egui::RichText::new(&entry.name).strong()).truncate()).on_hover_text(&entry.name);
-                                if let Some(details)=entry_details(entry,is_parent){ui.label(egui::RichText::new(details).small().weak());}
-                            });
-                            ui.scope_builder(egui::UiBuilder::new().max_rect(egui::Rect::from_min_size(egui::pos2(rect.right()-70.0,rect.top()+10.0),egui::vec2(65.0,30.0))), |ui| {
-                                if ui.add_enabled(!state.loading && (entry.playable || entry.is_dir),egui::Button::new(if entry.is_dir {icons::ARROW_RIGHT} else {icons::PLAY})).on_hover_text(if entry.is_dir {"Open folder"} else {"Play"}).clicked() { if entry.is_dir {navigate=Some(entry.url.clone());} else {selected=Some((entry.url.clone(),true));} }
-                            });
-                            if !state.loading && response.clicked() { if entry.is_dir { navigate=Some(entry.url.clone()); } else { selected=Some((entry.url.clone(),false)); } }
-                            if !state.loading && response.double_clicked() { if entry.is_dir {navigate=Some(entry.url.clone());} else if entry.playable {selected=Some((entry.url.clone(),true));} }
-                            response.context_menu(|ui| {
-                                if !entry.is_dir && ui.add_enabled(!state.loading && entry.playable,egui::Button::new(format!("{} Play",icons::PLAY))).clicked(){selected=Some((entry.url.clone(),true));ui.close();}
-                                if entry.is_dir && ui.add_enabled(!state.loading,egui::Button::new(format!("{} Open folder",icons::FOLDER_OPEN))).clicked(){navigate=Some(entry.url.clone());ui.close();}
-                                if ui.button(format!("{} Copy URL",icons::COPY)).clicked(){ui.ctx().copy_text(entry.url.clone());ui.close();}
-                                if !is_parent {ui.separator();ui.label(&entry.name);if let Some(details)=entry_details(entry,false){ui.label(details);}}
-                            });
                         });
                     }
                 });
@@ -152,19 +168,22 @@ pub fn draw(app: &mut PealayerApp, ctx: &egui::Context) {
     if let Some(target) = &navigate { view.last_sent_target = target.clone(); }
     let proxy_override = view.proxy_override;
     ctx.data_mut(|d| d.insert_temp(id, view));
-    if !open || close || dialog::escape_pressed(ctx) {
-        remote::close();
+    if !open || close || state.inspected.is_none() && dialog::escape_pressed(ctx) {
+        app.apply_interop_command(ctx,crate::platform::interop::InteropCommand::CloseRemoteBrowser,"Remote browser");
         return;
     }
     if let Some(target) = navigate {
-        if let Err(error) = remote::request(&target, proxy_override, false, ctx) {
-            app.set_osd(error);
-        }
+        app.apply_interop_command(ctx,crate::platform::interop::InteropCommand::BrowseRemote {target,use_proxy:proxy_override,clipboard:false},"Remote browser");
+        ctx.request_repaint();
     }
     if let Some((target, play)) = selected {
-        if let Err(error) = remote::select(&target, play) {
-            app.set_osd(error);
-        }
+        app.apply_interop_command(ctx,crate::platform::interop::InteropCommand::SelectRemote {target,play},"Remote browser");
+    }
+    if let Some(target) = inspected {
+        app.apply_interop_command(ctx,crate::platform::interop::InteropCommand::InspectRemote {target:Some(target)},"Remote browser properties");
+    }
+    if let Some(entry) = &state.inspected {
+        if widgets::properties(ctx,entry) {app.apply_interop_command(ctx,crate::platform::interop::InteropCommand::InspectRemote {target:None},"Remote browser properties");}
     }
 }
 

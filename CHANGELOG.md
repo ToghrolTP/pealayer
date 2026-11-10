@@ -6,7 +6,46 @@ Versioned history replaces the former single unreleased list. [Read the chronolo
 
 - Command palette/toolbar sizing, disabled paint and drag-to-hide completion: [#277](https://github.com/ToghrolTP/pealayer/pull/277).
 - Proportional/tabular FPS digit alignment: [#278](https://github.com/ToghrolTP/pealayer/pull/278).
-- Full projects/scenes: [#226](https://github.com/ToghrolTP/pealayer/issues/226), draft [#227](https://github.com/ToghrolTP/pealayer/pull/227). Optional FilmCraft remains user-held in [#248](https://github.com/ToghrolTP/pealayer/pull/248).
+- Full projects/scenes: [#226](https://github.com/ToghrolTP/pealayer/issues/226), draft [#227](https://github.com/ToghrolTP/pealayer/pull/227).
+- Optional FilmCraft monitor and timeline styling, with the Compact and Standard options retained ([#248](https://github.com/ToghrolTP/pealayer/pull/248)).
+
+### ⬇️ Download Center
+
+- Browse a searchable queue with clear transfer states, speed history, and
+  separate settings. The standalone window follows Pealayer’s saved theme,
+  accent, and control density.
+- Find aria2 by executable name or path and inspect the resolved location
+  before connecting to its local RPC service.
+
+### 🎚️ Playback controls
+
+- The video context menu offers a horizontal playback-speed slider with
+  nine presets and normal speed at the center.
+
+### 🎬 Subtitle timeline
+
+- Optionally show timed subtitle cues as separate segments, with the gaps
+  between them visible. Toggle this from the subtitle track menu or Playback
+  preferences.
+
+### 🗂️ Remote locations
+
+- Browse files in a saved List or Grid layout, with consistent hover, selection
+  and keyboard-focus styling that follows the application's palette.
+- See when thumbnails are loading, inspect failures and retry unavailable previews.
+- Open item Properties from the context menu; long filenames stay bounded in
+  menus and wrap in the details dialog. Search now shares the corrected icon
+  picker header, with its magnifier inside the field and view controls aligned.
+
+### 🖱️ Contextual mouse controls
+
+- Configure Back/Forward buttons separately for video, timelines, effects and
+  remote folders, including Ctrl/Command, Alt and Shift variants.
+- Middle-click video defaults to fullscreen; use configurable modifier drags
+  for seeking or native window movement. A right-click opens the menu, while
+  right-drag seeks; Shift+right always opens the menu.
+- Remote folders gain shared Back/Forward history that advances only when the
+  destination loads successfully. Failed navigation keeps the last good view.
 
 ## 🧰 v0.11.0-alpha.1 — Command tools, remote folders and sidebar recovery
 

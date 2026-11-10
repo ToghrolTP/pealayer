@@ -1,25 +1,23 @@
-//! Shared palette data is also imported by the Web UI; neither renderer owns
-//! a separate copy of the named themes.
+//! Pealayer’s palette adapter for the shared desktop theme.
 use eframe::egui;
 use std::collections::BTreeMap;
-use std::sync::OnceLock;
 
-type PaletteCatalog = BTreeMap<String, BTreeMap<String, BTreeMap<String, String>>>;
+#[path = "../../assets/themes/native_palette.rs"]
+pub(super) mod native;
+
+fn name(palette: crate::config::ColorPalette) -> &'static str {
+    match palette {
+        crate::config::ColorPalette::Studio => "studio",
+        crate::config::ColorPalette::Pastel => "pastel",
+        crate::config::ColorPalette::Native => "native",
+    }
+}
 
 pub fn colors(
     palette: crate::config::ColorPalette,
     dark: bool,
 ) -> &'static BTreeMap<String, String> {
-    static CATALOG: OnceLock<PaletteCatalog> = OnceLock::new();
-    let catalog = CATALOG.get_or_init(|| {
-        serde_json::from_str(include_str!("../../assets/themes/palettes.json"))
-            .expect("bundled theme palettes must be valid")
-    });
-    &catalog[match palette {
-        crate::config::ColorPalette::Studio => "studio",
-        crate::config::ColorPalette::Pastel => "pastel",
-        crate::config::ColorPalette::Native => "native",
-    }][if dark { "dark" } else { "light" }]
+    native::colors(name(palette), dark)
 }
 
 pub fn color(
@@ -27,53 +25,11 @@ pub fn color(
     dark: bool,
     role: &str,
 ) -> eframe::egui::Color32 {
-    let [r, g, b] = crate::config::parse_rgb_hex(&colors(palette, dark)[role])
-        .expect("bundled palette colors must be RGB hex values");
-    eframe::egui::Color32::from_rgb(r, g, b)
+    native::color(name(palette), dark, role)
 }
 
 pub fn apply(visuals: &mut eframe::egui::Visuals, palette: crate::config::ColorPalette) {
-    use eframe::egui::Stroke;
-    let dark = visuals.dark_mode;
-    let rgb = |role| color(palette, dark, role);
-    let panel = rgb("surface-0");
-    let surface = rgb("surface-1");
-    let control = rgb("surface-2");
-    let hover = rgb("surface-3");
-    let text = rgb("text");
-    let muted = rgb("muted");
-    let border = Stroke::new(1.0, rgb("line"));
-    let hover_border = Stroke::new(1.0, rgb("line-strong"));
-    visuals.warn_fg_color = rgb("amber");
-    visuals.error_fg_color = rgb("red");
-    visuals.panel_fill = panel;
-    visuals.window_fill = surface;
-    visuals.window_stroke = border;
-    visuals.extreme_bg_color = rgb("canvas");
-    visuals.text_edit_bg_color = Some(panel);
-    visuals.code_bg_color = control;
-    visuals.faint_bg_color = control;
-    visuals.weak_text_color = Some(muted);
-    visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, text);
-    visuals.widgets.noninteractive.bg_stroke = border;
-    visuals.widgets.noninteractive.bg_fill = surface;
-    visuals.widgets.noninteractive.weak_bg_fill = surface;
-    visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, text);
-    visuals.widgets.inactive.bg_stroke = border;
-    visuals.widgets.inactive.bg_fill = control;
-    visuals.widgets.inactive.weak_bg_fill = control;
-    visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, text);
-    visuals.widgets.hovered.bg_stroke = hover_border;
-    visuals.widgets.hovered.bg_fill = hover;
-    visuals.widgets.hovered.weak_bg_fill = hover;
-    // Expanded selectors/menu triggers use egui's independent open state.
-    // Leaving it untouched leaks stock grey into the selected palette.
-    visuals.widgets.open.fg_stroke = Stroke::new(1.0, text);
-    visuals.widgets.open.bg_stroke = hover_border;
-    visuals.widgets.open.bg_fill = surface;
-    visuals.widgets.open.weak_bg_fill = control;
-    // Active/selection colors remain accent-aware and keep the existing light
-    // theme contrast fix. Palette selection never changes geometry or sizing.
+    native::apply(visuals, name(palette));
 }
 
 /// Paint a rounded gradient with the same clip and edge AA as a solid egui

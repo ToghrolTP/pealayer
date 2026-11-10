@@ -3,12 +3,12 @@
 
 use crate::ui::dropdown::DropdownUiExt;
 pub use egui_phosphor::regular::{
-    APP_WINDOW, ARROW_CLOCKWISE, ARROW_COUNTER_CLOCKWISE, ARROW_DOWN, ARROW_RIGHT,
+    APP_WINDOW, ARROW_CLOCKWISE, ARROW_COUNTER_CLOCKWISE, ARROW_DOWN, ARROW_LEFT, ARROW_RIGHT,
     ARROW_SQUARE_OUT, ARROW_UP, ARROWS_IN, ARROWS_OUT, BELL, BROADCAST, CAR, CARET_DOWN,
     CARET_LEFT, CARET_RIGHT, CHECK, CHECK_SQUARE, CIRCUITRY, CLIPBOARD, CLOCK,
     CLOCK_COUNTER_CLOCKWISE, COMMAND, COPY,
     CPU, DIAMOND, DOOR, DOT_OUTLINE, DOTS_SIX_VERTICAL, DOTS_THREE, ERASER, EYE, EYE_SLASH, FAN,
-    FAST_FORWARD, FILE_VIDEO, FIRE, FLOPPY_DISK, FOLDER_OPEN, FRAME_CORNERS, GAUGE, GEAR, GLOBE,
+    FAST_FORWARD, FILE, FILE_VIDEO, FIRE, FLOPPY_DISK, FOLDER_OPEN, FRAME_CORNERS, GAUGE, GEAR, GLOBE,
     GRID_FOUR, HAND_TAP, HEADPHONES, HOURGLASS_MEDIUM, IMAGE, INFO, KEYBOARD, LAMP, LIGHTBULB, LIGHTNING,
     LINK, LINK_SIMPLE, LIST, LIST_CHECKS, LOCK, MAGNIFYING_GLASS, MINUS, MONITOR_PLAY, MUSIC_NOTE,
     PALETTE, PAPER_PLANE_TILT, PAUSE, PENCIL_SIMPLE, PLAY, PLUG, PLUS, POWER, PROHIBIT, PUSH_PIN,
@@ -296,8 +296,21 @@ fn icon_picker_header(
     grid: &mut bool,
     config: IconPickerConfig<'_>,
 ) -> eframe::egui::Response {
+    search_view_header(ui, search, search_id, grid, config.search_hint, config.language)
+}
+
+/// Shared framed search prefix and trailing List/Grid switch. Remote browser
+/// and icon pickers must not fork the measured input/icon/view geometry.
+pub(crate) fn search_view_header(
+    ui: &mut eframe::egui::Ui,
+    search: &mut String,
+    search_id: eframe::egui::Id,
+    grid: &mut bool,
+    hint: &str,
+    language: crate::config::AppLanguage,
+) -> eframe::egui::Response {
     use eframe::egui;
-    let rtl = config.language.is_rtl();
+    let rtl = language.is_rtl();
     let height = crate::ui::control_density::height(ui);
     let button_width = height.max(26.0);
     let group_width = button_width * 2.0 + 4.0;
@@ -316,7 +329,7 @@ fn icon_picker_header(
     let response = ui.place(search_rect,
         crate::ui::dialog::singleline_text_edit(ui, search)
             .id_salt(search_id.with("input"))
-            .hint_text(config.search_hint)
+            .hint_text(hint)
             .horizontal_align(if rtl { egui::Align::Max } else { egui::Align::Min })
             .margin(margin).desired_width(search_rect.width()));
     let icon_slot = egui::Rect::from_center_size(
@@ -366,8 +379,8 @@ fn icon_picker_header(
         let ink = if galley.mesh_bounds.is_finite() { galley.mesh_bounds } else { galley.rect };
         painter.galley(rect.center() - ink.center().to_vec2(), galley, color);
         button.widget_info(|| egui::WidgetInfo::selected(egui::Role::RadioButton, ui.is_enabled(),
-            selected, crate::ui::i18n::tr(config.language, label)));
-        button.on_hover_text(crate::ui::i18n::tr(config.language, label));
+            selected, crate::ui::i18n::tr(language, label)));
+        button.on_hover_text(crate::ui::i18n::tr(language, label));
     }
     #[cfg(test)]
     ui.data_mut(|data| data.insert_temp(search_id.with("header-geometry"), (row, response.rect, group, buttons, icon_slot)));

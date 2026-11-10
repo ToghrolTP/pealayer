@@ -16167,6 +16167,23 @@ impl<'a> PealayerTabViewer<'a> {
                                                 open_media_track_properties(self.app, track_row);
                                                 ui.close();
                                             }
+                                            if matches!(track_row.kind, TimelineTrackKind::Subtitle(_))
+                                                && ui.selectable_label(
+                                                    self.app.timeline_subtitle_segments,
+                                                    self.app.tr("Show subtitle cue segments"),
+                                                ).clicked()
+                                            {
+                                                self.app.apply_interop_command(
+                                                    ui.ctx(),
+                                                    crate::platform::interop::InteropCommand::UpdateConfig {
+                                                        values: serde_json::json!({
+                                                            "timeline_subtitle_segments": !self.app.timeline_subtitle_segments,
+                                                        }),
+                                                    },
+                                                    "Subtitle track menu",
+                                                );
+                                                ui.close();
+                                            }
                                             ui.separator();
                                         }
                                         if let Some(control_key) = track_row.control_key.as_ref() {
@@ -17378,6 +17395,21 @@ impl<'a> PealayerTabViewer<'a> {
                                                         row_y + timeline_track_height - 4.0,
                                                     ),
                                                 );
+                                                if let TimelineTrackKind::Subtitle(track_id) = track_row.kind
+                                                    && self.app.timeline_subtitle_segments
+                                                {
+                                                    crate::ui::timeline_strip::paint_subtitle_timing(
+                                                        &painter,
+                                                        clip_rect,
+                                                        self.app.duration,
+                                                        self.app.subtitle_timing.get(track_id),
+                                                        self.app.color_palette,
+                                                        ui.visuals().dark_mode,
+                                                        track_row.active && track_row.enabled,
+                                                        self.app.rtl,
+                                                    );
+                                                    continue;
+                                                }
                                                 crate::ui::timeline_strip::paint_media(
                                                     &painter, clip_rect, kind,
                                                     format!("{icon}  {}", crate::ui::i18n::visual_text(display_language, &track_row.name)),
@@ -19186,6 +19218,13 @@ impl<'a> PealayerTabViewer<'a> {
                                 }
                             }
 
+                            if let Some(action)=super::mouse_buttons::take_action(ui,timeline_viewport,self.app.mouse_bindings.timeline) {
+                                use crate::pointer_bindings::Action as M;
+                                pending_timeline_toolbar_action=match action {
+                                    M::PanLeft=>Some(TimelineToolbarAction::PanLeft),M::PanRight=>Some(TimelineToolbarAction::PanRight),
+                                    M::ZoomOut=>Some(TimelineToolbarAction::ZoomOut),M::ZoomIn=>Some(TimelineToolbarAction::ZoomIn),_=>None,
+                                };
+                            }
                             if let Some(action) = pending_timeline_toolbar_action.take() {
                                 let current_offset = timeline_scroll_state.offset();
                                 let current_zoom = self.app.timeline_zoom;
