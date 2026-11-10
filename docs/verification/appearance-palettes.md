@@ -6,14 +6,18 @@ In desktop or Web **Preferences → Appearance → Interface → Color palette**
 
 ## Pastel previews
 
-Dark slate surfaces, light lavender panels, and lilac-to-rose accents come from a shared palette catalog. The native timeline uses separate gradients for video, audio, and subtitles. Voltage, current, and temperature charts use cyan, mint, and rose in both clients.
+Pastel uses dark indigo surfaces and cool lavender in light mode. The native menu bar and Web header share an indigo-to-plum gradient above the lilac-to-rose divider. The Web player has an ambient gradient and more visible slider tracks. Hover and press colors distinguish control states without changing their bounds. Media strips and the cyan, mint, and rose chart colors carry forward from the original palette.
 
-| Theme | Desktop | Web |
+| Surface | Before | After |
 | --- | --- | --- |
-| Dark | [Native NLE](appearance-palettes/pastel-native-dark.png) | [Web player](appearance-palettes/pastel-web-dark.png) |
-| Light | [Native NLE](appearance-palettes/pastel-native-light.png) | [Web player](appearance-palettes/pastel-web-light.png) |
+| Desktop, dark | [Original](appearance-palettes/pastel-native-dark.png) | [Refined](../screenshots/pastel-refined-native-dark.png) |
+| Desktop, light | [Original](appearance-palettes/pastel-native-light.png) | [Refined](../screenshots/pastel-refined-native-light.png) |
+| Web, dark | [Original](appearance-palettes/pastel-web-dark.png) | [Refined](../screenshots/pastel-refined-web-dark.png) |
+| Web, light | [Original](appearance-palettes/pastel-web-light.png) | [Refined](../screenshots/pastel-refined-web-light.png) |
 
-The captures use an isolated instance with the same paused sample video in both themes. Live preview switched both clients between light and dark. Returning to Studio removed the Pastel gradient from the Web header, and canceling the native preview restored the saved dark appearance.
+The Windows captures use the same 800 × 600 logical-point NLE viewport at 150% scale. The Web captures use the same 1418 × 822 viewport. Both use the same paused sample at the start of the clip. The refined native capture ran the clean `769b995` build, and the Web capture used the `b18744d` bundle through the app's Web root override.
+
+Live preview switched both clients between light and dark. Returning to Studio cleared Pastel's Web colors and gradients. The enabled Web control menu used its new hover border with the same bounds before and during hover. Canceling the native light preview restored the saved dark appearance.
 
 ## Original Studio and Neutral rollout
 
