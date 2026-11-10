@@ -455,7 +455,14 @@ impl PealayerApp {
             Ok(value)=>crate::scene_apply::Completion::from_success(value),
             Err(_)=>crate::scene_apply::Completion::from_error_data(result.error_detail.as_ref()),
         };
-        if let Some(operation)=self.project.scene_operation.as_mut() {operation.complete(ticket,completion,std::time::Instant::now());}
+        if let Some(operation) = self.project.scene_operation.as_mut() {
+            operation.complete(ticket, completion, std::time::Instant::now());
+            if operation.is_finished() {
+                // IPC-only coordinators may not push output telemetry. Refresh
+                // once at completion so capture sees current sampled values.
+                self.engine_handle.request_catalog_refresh();
+            }
+        }
         self.project.scene_ticket=None;
         self.poll_scene_operation();
     }
