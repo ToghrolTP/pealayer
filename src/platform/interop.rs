@@ -210,6 +210,7 @@ pub enum InteropCommand {
         tab: crate::ui::about::AboutTab,
     },
     OpenMediaInformation,
+    OpenDownloadCenter,
     CopyMediaLocation,
     OpenMediaFolder,
     EditConfiguration,
@@ -585,7 +586,7 @@ impl InteropCommand {
         // authority and follow normal session forwarding instead.
         matches!(self,Self::ImportAssets{request} if request.owner_id.is_none()) ||
         matches!(self, Self::GetWorkspaceTools | Self::WorkspaceTools { .. } | Self::QuitLocal | Self::GetProcessStatus | Self::ConnectPeer { .. } | Self::InspectAuthoring { .. } | Self::NavigatePreferences { .. } | Self::OpenAbout { .. }
-            | Self::GetWindow | Self::SetWindow { .. } | Self::Activate | Self::Minimize | Self::Maximize | Self::Restore | Self::SetFullscreen { .. } | Self::ToggleFullscreen | Self::CopyMediaLocation)
+            | Self::GetWindow | Self::SetWindow { .. } | Self::Activate | Self::Minimize | Self::Maximize | Self::Restore | Self::SetFullscreen { .. } | Self::ToggleFullscreen | Self::CopyMediaLocation | Self::OpenDownloadCenter)
     }
 
     pub fn query_result(&self) -> Option<Value> {
@@ -990,6 +991,7 @@ pub fn command_catalog() -> Value {
     catalog["commands"].as_array_mut().unwrap().extend([serde_json::json!("update_branding"), serde_json::json!("get_branding")]);
     catalog["branding"]["clear"] = serde_json::json!("pealayer.branding.clear");
     catalog["commands"].as_array_mut().unwrap().push(serde_json::json!("clear_branding"));
+    catalog["commands"].as_array_mut().unwrap().push(serde_json::json!("open_download_center"));
     catalog["updates"] = serde_json::json!({"http":"/api/update/", "methods":crate::update::rpc::METHODS,
         "scope":"local process, never implicitly relayed to authority", "chunk_bytes":crate::update::rpc::CHUNK_BYTES,
         "encoding":"base64", "completion":"exact artifact and health acknowledgement, not transfer acceptance"});
@@ -1096,6 +1098,7 @@ pub fn parse_text_command(input: &str) -> Result<InteropCommand, String> {
         "restore" => InteropCommand::Restore,
         "preferences" | "open_preferences" | "open-preferences" => InteropCommand::OpenPreferences,
         "media_information" | "open_media_information" => InteropCommand::OpenMediaInformation,
+        "open_download_center" => InteropCommand::OpenDownloadCenter,
         "copy_media_location" => InteropCommand::CopyMediaLocation,
         "media_folder" | "open_media_folder" => InteropCommand::OpenMediaFolder,
         "edit_configuration" | "edit_config" => InteropCommand::EditConfiguration,
@@ -2006,6 +2009,7 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
             Some(InteropCommand::OpenMediaInformation)
         }
         "copy_media_location" | "pealayer.media.copy_location" => Some(InteropCommand::CopyMediaLocation),
+        "open_download_center" | "pealayer.ui.downloads.open" => Some(InteropCommand::OpenDownloadCenter),
         "media_folder" | "open_media_folder" | "pealayer.media.folder" => {
             Some(InteropCommand::OpenMediaFolder)
         }

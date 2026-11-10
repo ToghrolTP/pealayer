@@ -16,10 +16,13 @@ libmpv dependency and does not launch the player merely by opening.
 
 ### Connected engines
 
-- Built-in Rust: HTTP(S), validated byte resume and bandwidth pacing. Native
+- Built-in: HTTP(S), validated byte resume and bandwidth pacing. Native
   segmented transfers remain unfinished; use aria2 for multiple connections.
 - External local aria2: Engine settings validates its RPC endpoint and optional
-  secret. Queue jobs support 1–16 connections, telemetry, pause/resume/removal,
+  secret. The desktop executable check uses the same name and path resolver
+  as external mpv, with bundled tools preferred for a bare executable name.
+  It shows the resolved path independently of the RPC connection. Queue jobs
+  support 1–16 connections, telemetry, pause/resume/removal,
   speed changes and verified output. Saved transfer IDs are paused on recovery.
   Lost control cannot silently remove an unclaimed transfer. Remote-host endpoints
   are rejected because their files are not this host's owned cache.
@@ -72,6 +75,7 @@ Existing native IPC, HTTP `/api/rpc` and WebSocket JSON-RPC:
 | Method | Parameters |
 | --- | --- |
 | `pealayer.downloads.list` | Empty object |
+| `pealayer.ui.downloads.open` | Empty object. Opens the local native Download Center. |
 | `pealayer.downloads.add` | `url`; optional `filename`, `use_proxy`, `proxy_url`, `engine`, `connections` |
 | `pealayer.downloads.action` | `id`, `action`: pause, resume, cancel, remove, move_up, move_down, remux_mp4, extract_audio |
 | `pealayer.downloads.configure` | `max_concurrent` (1–8), `bytes_per_second` (0 = unlimited) |

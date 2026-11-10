@@ -1,4 +1,5 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
+mod appearance;
 mod icon;
 struct Downloader {
     manager: Result<pealayer_downloads::Manager, String>,
@@ -14,11 +15,12 @@ impl eframe::App for Downloader {
     fn ui(&mut self, ui: &mut eframe::egui::Ui, _: &mut eframe::Frame) {
         eframe::egui::CentralPanel::default().show(ui, |ui| {
             if let Some(error) = &self.error {
-                ui.colored_label(eframe::egui::Color32::LIGHT_RED, error);
+                ui.colored_label(ui.visuals().error_fg_color, error);
             }
             match &self.manager {
                 Err(error) => {
-                    ui.label(error);
+                    ui.heading("Download Center unavailable");
+                    ui.colored_label(ui.visuals().error_fg_color, error);
                 }
                 Ok(manager) => {
                     if let Some(path) = self.view.draw(ui, manager) {
@@ -69,9 +71,7 @@ fn main() -> eframe::Result {
             "--smoke-test" => {
                 // Headless UI/dependency smoke: no production queue, GPU window or download.
                 let context = eframe::egui::Context::default();
-                let mut fonts = eframe::egui::FontDefinitions::default();
-                egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
-                context.set_fonts(fonts);
+                appearance::install(&context);
                 let mut output = context.run_ui(Default::default(), |ui| {
                     ui.label("Pealayer Downloader");
                 });
@@ -107,12 +107,7 @@ fn main() -> eframe::Result {
         "Pealayer Downloader",
         options,
         Box::new(|creation| {
-            let mut fonts = eframe::egui::FontDefinitions::default();
-            egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
-            creation.egui_ctx.set_fonts(fonts);
-            creation
-                .egui_ctx
-                .set_theme(eframe::egui::ThemePreference::System);
+            appearance::install(&creation.egui_ctx);
             Ok(Box::new(Downloader {
                 manager: pealayer_downloads::default_root()
                     .and_then(pealayer_downloads::Manager::open),

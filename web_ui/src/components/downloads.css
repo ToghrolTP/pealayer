@@ -1,6 +1,13 @@
 .download-center { max-width: 1120px; margin-inline: auto; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
 .download-heading { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-width: 0; }
 .download-heading h3 { margin: 0 !important; }
+.download-header { padding: 4px 0 2px; }
+.download-header h3 { margin: 0 0 8px !important; }
+.download-header h3 .anticon { color: var(--accent); }
+.download-summary, .download-queue-toolbar { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 14px; }
+.download-summary { color: var(--muted); font-variant-numeric: tabular-nums; }
+.download-summary .anticon { margin-inline-end: 4px; }
+.download-queue-toolbar > .ant-input-affix-wrapper { flex: 1 1 240px; min-width: 0; }
 .download-compose .ant-card-body { display: flex; flex-direction: column; gap: 16px; }
 .download-add { display: flex; gap: 10px; align-items: center; }
 .download-add .ant-input { min-width: 0; }
@@ -13,6 +20,7 @@
 .download-name { display: flex; align-items: center; gap: 12px; min-width: 0; }
 .download-name > .anticon { color: var(--accent); font-size: 24px; flex: 0 0 auto; }
 .download-name > div { min-width: 0; display: flex; flex-direction: column; }
+.download-name > div > :last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .download-stats { display: flex; flex-wrap: wrap; gap: 16px; color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; }
 .download-chart { width: 100%; height: 38px; margin-block: 10px; color: var(--accent); }
 .download-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 12px; }
@@ -24,6 +32,8 @@
 @media (max-width: 600px) {
   .download-heading { align-items: center; flex-wrap: wrap; }
   .download-center .ant-card-body { padding: 14px; }
+  .download-add { flex-wrap: wrap; }
+  .download-add > .ant-btn { margin-inline-start: auto; }
   .download-compose label { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
   .download-reorder { margin-inline-start: 0; }
   .download-actions .ant-btn { flex: 1 1 auto; }

@@ -4647,6 +4647,10 @@ impl PealayerApp {
                 self.open_or_focus_tab(crate::ui::layout::PealayerTab::MediaInspector);
                 ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
             }
+            InteropCommand::OpenDownloadCenter => {
+                crate::downloads::open(ctx);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+            }
             InteropCommand::CopyMediaLocation => {
                 match self.current_video_path.as_deref().ok_or_else(||"No media is loaded".to_string())
                     .and_then(crate::media::source_location) {

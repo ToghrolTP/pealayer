@@ -67,6 +67,8 @@ impl Work {
             while !stopping.load(Ordering::Relaxed) {
                 match listener.accept() {
                     Ok((mut stream, _)) => {
+                        // Winsock can inherit the nonblocking listener mode.
+                        stream.set_nonblocking(false).unwrap();
                         stream
                             .set_read_timeout(Some(Duration::from_secs(2)))
                             .unwrap();
@@ -188,7 +190,7 @@ fn external_aria2_downloads_via_the_shared_queue() {
         .unwrap()
         .port();
     let mut command =
-        Command::new(tools::find("aria2c").expect("install aria2 for engine acceptance"));
+        Command::new(tools::resolve_aria2("aria2c").expect("install aria2 for engine acceptance"));
     hidden(&mut command);
     command
         .args([

@@ -3,17 +3,10 @@ use eframe::egui;
 use crate::config::UiControlDensity;
 
 pub fn configure(style: &mut egui::Style, density: UiControlDensity) {
-    style.spacing.interact_size.y = density.base_height();
     // Before 88741e3, egui 0.36.2 supplied an 18-point minimum and 1-point
     // vertical padding. Deriving padding from icon width would inflate that
     // restored size again when the text is taller than the icon.
-    style.spacing.button_padding.y = if density == UiControlDensity::ExtraCompact { 1.0 }
-        else { ((style.spacing.interact_size.y - style.spacing.icon_width) * 0.5).max(0.0) };
-    // Stroke changes must never expand a field, chevron or neighboring widget.
-    for visuals in [&mut style.visuals.widgets.inactive, &mut style.visuals.widgets.hovered,
-        &mut style.visuals.widgets.active, &mut style.visuals.widgets.open] {
-        visuals.expansion = 0.0;
-    }
+    super::palette::native::configure_density(style, density.base_height());
 }
 
 pub fn height(ui: &egui::Ui) -> f32 {

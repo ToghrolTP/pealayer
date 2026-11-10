@@ -6,6 +6,14 @@ retroactively attributed to an older download.
 
 ## Next milestone · unreleased
 
+### ⬇️ Download Center
+
+- Browse a searchable queue with clear transfer states, speed history, and
+  separate settings. The standalone window follows Pealayer’s saved theme,
+  accent, and control density.
+- Find aria2 by executable name or path and inspect the resolved location
+  before connecting to its local RPC service.
+
 - The video context menu offers a horizontal playback-speed slider with
   nine presets and normal speed at the center.
 
