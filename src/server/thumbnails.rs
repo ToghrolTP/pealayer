@@ -10,7 +10,16 @@ const REMOTE_THUMBNAIL_PIPELINE_REVISION: &str = "remote-20-percent-v1";
 const SEEK_THUMBNAIL_PIPELINE_REVISION: &str = "seek-preview-320x180-v1";
 const SEEK_THUMBNAIL_FILTER: &str = "scale=320:180:force_original_aspect_ratio=decrease,pad=320:180:(ow-iw)/2:(oh-ih)/2:color=0x0b0f14";
 const MAX_SEEK_THUMBNAILS: usize = 512;
-static SEEK_THUMBNAIL_STAGE_ID: AtomicU64 = AtomicU64::new(1);
+static THUMBNAIL_STAGE_ID: AtomicU64 = AtomicU64::new(1);
+
+// Each extractor owns its staging file; only complete images are shared.
+fn thumbnail_stage_path(cache_dir: &Path, cache_key: &str) -> PathBuf {
+    cache_dir.join(format!(
+        "{cache_key}.{}.{}.tmp.jpg",
+        std::process::id(),
+        THUMBNAIL_STAGE_ID.fetch_add(1, Ordering::Relaxed)
+    ))
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RemoteThumbnailFile {
@@ -56,8 +65,7 @@ pub fn get_or_generate_thumbnail(video_path: &Path) -> Option<PathBuf> {
         return Some(thumb_path);
     }
 
-    let staged_path = cache_dir.join(format!("{cache_key}.tmp.jpg"));
-    let _ = std::fs::remove_file(&staged_path);
+    let staged_path = thumbnail_stage_path(&cache_dir, &cache_key);
     let input = video_path.to_string_lossy();
     let output = staged_path.to_string_lossy();
 
@@ -133,25 +141,26 @@ pub fn get_or_generate_remote_thumbnail(
     std::fs::create_dir_all(&cache_dir)
         .map_err(|error| format!("Could not create the thumbnail cache: {error}"))?;
 
-    let position_seconds = probe_remote_duration(media_url, use_proxy, proxy_url)
-        .filter(|duration| duration.is_finite() && *duration > 0.0)
-        .map(|duration| duration * 0.20);
     let cache_key = remote_thumbnail_cache_key(media_url);
     let thumb_path = cache_dir.join(format!("{cache_key}.jpg"));
     if thumb_path.exists() {
         return Ok(RemoteThumbnailFile {
             path: thumb_path,
-            position_seconds,
+            position_seconds: None,
         });
     }
 
-    let staged_path = cache_dir.join(format!("{cache_key}.tmp.jpg"));
-    let _ = std::fs::remove_file(&staged_path);
+    let position_seconds = probe_remote_duration(media_url, use_proxy, proxy_url)
+        .filter(|duration| duration.is_finite() && *duration > 0.0)
+        .map(|duration| duration * 0.20);
+
+    let staged_path = thumbnail_stage_path(&cache_dir, &cache_key);
     let output = staged_path.to_string_lossy().into_owned();
     let seek = position_seconds.unwrap_or(0.0).to_string();
 
     let mut ffmpeg = silent_command("ffmpeg");
     configure_remote_proxy(&mut ffmpeg, use_proxy, proxy_url);
+    ffmpeg.args(["-user_agent", crate::remote_location::USER_AGENT]);
     let ffmpeg_ok = ffmpeg
         .args([
             "-hide_banner",
@@ -185,6 +194,7 @@ pub fn get_or_generate_remote_thumbnail(
         let start_arg = format!("--start={seek}");
         let mut mpv = silent_command("mpv");
         configure_remote_proxy(&mut mpv, use_proxy, proxy_url);
+        mpv.arg(format!("--user-agent={}", crate::remote_location::USER_AGENT));
         mpv.args([
             media_url,
             "--no-config",
@@ -230,6 +240,7 @@ pub fn get_or_generate_seek_thumbnail(
     proxy_url: Option<&str>,
 ) -> Result<PathBuf, String> {
     let second = seek_preview_second(position_seconds)?;
+    let use_proxy = crate::remote_location::playback_proxy_for(media_target).unwrap_or(use_proxy);
     let target = media_target.trim();
     if target.is_empty() {
         return Err("No media target is available for seek preview".to_string());
@@ -248,19 +259,14 @@ pub fn get_or_generate_seek_thumbnail(
         return Ok(thumbnail_path);
     }
 
-    let stage_id = SEEK_THUMBNAIL_STAGE_ID.fetch_add(1, Ordering::Relaxed);
-    let staged_path = cache_dir.join(format!(
-        "{cache_key}.{}.{}.tmp.jpg",
-        std::process::id(),
-        stage_id
-    ));
-    let _ = std::fs::remove_file(&staged_path);
+    let staged_path = thumbnail_stage_path(&cache_dir, &cache_key);
     let output = staged_path.to_string_lossy().into_owned();
     let seek = second.to_string();
 
     let mut ffmpeg = silent_command("ffmpeg");
     if remote {
         configure_remote_proxy(&mut ffmpeg, use_proxy, proxy_url);
+        ffmpeg.args(["-user_agent", crate::remote_location::USER_AGENT]);
     }
     let ffmpeg_ok = ffmpeg
         .args([
@@ -396,6 +402,7 @@ fn probe_remote_duration(media_url: &str, use_proxy: bool, proxy_url: Option<&st
     let mut command = silent_command("ffprobe");
     command.stdout(Stdio::piped());
     configure_remote_proxy(&mut command, use_proxy, proxy_url);
+    command.args(["-user_agent", crate::remote_location::USER_AGENT]);
     let output = command
         .args([
             "-v",
@@ -531,6 +538,16 @@ fn thumbnail_cache_key(video_path: &Path) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn concurrent_extractors_never_share_staging_files() {
+        let cache = Path::new("cache");
+        let first = thumbnail_stage_path(cache, "same-media");
+        let second = thumbnail_stage_path(cache, "same-media");
+        assert_ne!(first, second);
+        assert_eq!(first.parent(), Some(cache));
+        assert!(first.to_string_lossy().ends_with(".tmp.jpg"));
+    }
 
     #[test]
     fn test_thumbnail_cache_path() {

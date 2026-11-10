@@ -1,6 +1,102 @@
+#[path = "scripts/build-metadata.rs"]
+mod build_metadata;
+use build_metadata::emit_build_metadata;
+
+fn build_embedded_terminal() {
+    println!("cargo:rerun-if-env-changed=CARGO_FEATURE_WORKSPACE_TERMINAL");
+    if std::env::var_os("CARGO_FEATURE_WORKSPACE_TERMINAL").is_none() {
+        return;
+    }
+    let root = "third_party/portable-shell";
+    println!("cargo:rerun-if-changed={root}/include");
+    println!("cargo:rerun-if-changed={root}/src");
+    println!("cargo:rerun-if-changed={root}/host/terminal_profiles.c");
+    println!("cargo:rerun-if-changed=src/ui/portable_shell_editor.c");
+    // The freestanding byte core, not the desktop workbench, OS shell or CRT
+    // replacements. The Rust host owns allocation, lifetime and dispatch.
+    cc::Build::new()
+        .include(format!("{root}/include"))
+        .file(format!("{root}/src/portable_shell.c"))
+        .file("src/ui/portable_shell_editor.c")
+        .define("PS_WORKBENCH", "0")
+        .define("PS_BORDER_STYLES", "1")
+        .define("PS_DIALOG_STYLES", "1")
+        .std("c99")
+        .flag_if_supported("-fno-builtin")
+        // This archive includes the Pealayer adapter as well as the byte core.
+        // Do not reuse the core-only archive identity from comparison builds
+        // that share the host's Cargo cache.
+        .compile("pealayer_portable_shell_host");
+    // Optional native discovery adapter reads bounded terminal profile files;
+    // unlike the shell core this small adapter intentionally uses platform IO.
+    cc::Build::new()
+        .include(format!("{root}/include"))
+        .files([
+            format!("{root}/src/portable_terminal_profiles.c"),
+            format!("{root}/host/terminal_profiles.c"),
+        ])
+        .std("c99")
+        .compile("pealayer_terminal_profiles");
+}
+
+// About reports the versions actually linked by this package, not a second
+// hand-maintained inventory that becomes stale after dependency upgrades.
+fn emit_about_library_versions() {
+    println!("cargo:rerun-if-changed=Cargo.lock");
+    let lock = include_str!("Cargo.lock");
+    for package in [
+        "egui",
+        "eframe",
+        "craft-ui",
+        "egui-phosphor",
+        "libmpv2",
+        "serde",
+        "serde_json",
+        "tungstenite",
+        "serialport",
+        "souvlaki",
+        "rfd",
+        "uuid",
+    ] {
+        let versions: Vec<String> = lock
+            .split("[[package]]")
+            .filter_map(|entry| {
+                // Cargo's generated lockfile stores package name/version as quoted
+                // strings. Read only those top-level fields, never dependencies.
+                let field = |key: &str| {
+                    entry.lines().find_map(|line| {
+                        let value = line.strip_prefix(key)?.strip_prefix(" = ")?;
+                        serde_json::from_str::<String>(value).ok()
+                    })
+                };
+                (field("name").as_deref() == Some(package))
+                    .then(|| field("version"))
+                    .flatten()
+            })
+            .collect();
+        assert_eq!(
+            versions.len(),
+            1,
+            "About inventory requires exactly one locked {package}"
+        );
+        let key = package.replace('-', "_").to_ascii_uppercase();
+        println!("cargo:rustc-env=PEALAYER_DEP_{key}={}", versions[0]);
+    }
+}
+
+#[cfg(target_os = "windows")]
+#[allow(dead_code)]
+#[path = "src/platform/windows_quick_actions.rs"]
+mod windows_quick_actions;
+#[cfg(target_os = "windows")]
+#[path = "src/platform/windows_shell_icons.rs"]
+mod windows_shell_icons;
+
 #[cfg(target_os = "windows")]
 fn main() {
+    build_embedded_terminal();
     emit_build_metadata();
+    emit_about_library_versions();
     for name in [
         "APP_NAME",
         "APP_PUBLISHER",
@@ -110,25 +206,35 @@ fn main() {
     if std::path::Path::new(&icon).exists() {
         res.set_icon(&icon);
     }
+    let out_dir = std::path::PathBuf::from(
+        std::env::var_os("OUT_DIR").expect("Cargo did not provide OUT_DIR"),
+    );
+    for action in windows_quick_actions::WINDOWS_QUICK_ACTIONS {
+        let task_icon = out_dir.join(format!("quick-action-{}.ico", action.icon_resource_id));
+        std::fs::write(
+            &task_icon,
+            windows_shell_icons::shell_icon_ico(action.icon_glyph),
+        )
+        .expect("write generated Windows task icon");
+        res.set_icon_with_id(
+            &task_icon.to_string_lossy(),
+            &action.icon_resource_id.to_string(),
+        );
+    }
+    println!("cargo:rerun-if-changed=src/platform/windows_quick_actions.rs");
+    println!("cargo:rerun-if-changed=src/platform/windows_shell_icons.rs");
     res.compile().expect("failed to compile Windows resources");
 
-    // This package exposes both a library and a binary. Resource-only archives
-    // have no symbols for the executable to reference, so both GNU ld and
-    // MSVC's linker may discard them. Attach the generated resource object on
-    // GNU and retain the entire resource library on MSVC explicitly.
+    // The thin executable links the library. winres's MSVC directive already
+    // propagates its COFF resource object through that library; attaching it
+    // again to the binary causes duplicate VERSION/icon resources. GNU emits a
+    // symbol-less archive instead, so attach its object directly to the binary.
     let out_dir = std::path::PathBuf::from(
         std::env::var_os("OUT_DIR").expect("Cargo did not provide OUT_DIR"),
     );
     match std::env::var("CARGO_CFG_TARGET_ENV").as_deref() {
         Ok("gnu") => {
             let resource = out_dir.join("resource.o");
-            println!("cargo:rustc-link-arg-bin=pealayer={}", resource.display());
-        }
-        Ok("msvc") => {
-            // winres names the rc.exe output resource.lib, but it is a COFF
-            // resource object rather than an archive. Pass it directly to
-            // link.exe; treating it as an archive lets /OPT:REF discard it.
-            let resource = out_dir.join("resource.lib");
             println!("cargo:rustc-link-arg-bin=pealayer={}", resource.display());
         }
         _ => {}
@@ -141,7 +247,9 @@ fn main() {
 
 #[cfg(not(target_os = "windows"))]
 fn main() {
+    build_embedded_terminal();
     emit_build_metadata();
+    emit_about_library_versions();
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("macos") {
         if let Ok(output) = std::process::Command::new("brew")
             .args(["--prefix", "mpv"])
@@ -166,84 +274,6 @@ fn main() {
                 println!("cargo:rustc-link-search=native={path}");
                 println!("cargo:rustc-link-arg=-Wl,-rpath,{path}");
             }
-        }
-    }
-}
-
-fn emit_build_metadata() {
-    for name in [
-        "PROFILE",
-        "TARGET",
-        "SOURCE_DATE_EPOCH",
-        "GITHUB_SHA",
-        "GITHUB_REF_NAME",
-    ] {
-        println!("cargo:rerun-if-env-changed={name}");
-    }
-
-    let git_output = |args: &[&str]| {
-        std::process::Command::new("git")
-            .args(args)
-            .output()
-            .ok()
-            .filter(|output| output.status.success())
-            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
-            .filter(|value| !value.is_empty())
-    };
-    let commit = std::env::var("GITHUB_SHA")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| git_output(&["rev-parse", "HEAD"]))
-        .unwrap_or_else(|| "unknown".to_string());
-    let branch = std::env::var("GITHUB_REF_NAME")
-        .ok()
-        .filter(|value| !value.trim().is_empty())
-        .or_else(|| git_output(&["rev-parse", "--abbrev-ref", "HEAD"]))
-        .unwrap_or_else(|| "unknown".to_string());
-    let dirty = std::process::Command::new("git")
-        .args(["status", "--porcelain", "--untracked-files=no"])
-        .output()
-        .ok()
-        .filter(|output| output.status.success())
-        .is_some_and(|output| !output.stdout.is_empty());
-    let rustc =
-        std::process::Command::new(std::env::var_os("RUSTC").unwrap_or_else(|| "rustc".into()))
-            .arg("--version")
-            .output()
-            .ok()
-            .filter(|output| output.status.success())
-            .map(|output| String::from_utf8_lossy(&output.stdout).trim().to_string())
-            .unwrap_or_else(|| "unknown".to_string());
-
-    println!("cargo:rustc-env=PEALAYER_GIT_COMMIT={commit}");
-    println!("cargo:rustc-env=PEALAYER_GIT_BRANCH={branch}");
-    println!("cargo:rustc-env=PEALAYER_GIT_DIRTY={dirty}");
-    println!(
-        "cargo:rustc-env=PEALAYER_BUILD_PROFILE={}",
-        std::env::var("PROFILE").unwrap_or_else(|_| "unknown".to_string())
-    );
-    println!(
-        "cargo:rustc-env=PEALAYER_BUILD_TARGET={}",
-        std::env::var("TARGET").unwrap_or_else(|_| "unknown".to_string())
-    );
-    println!("cargo:rustc-env=PEALAYER_RUSTC_VERSION={rustc}");
-    println!(
-        "cargo:rustc-env=PEALAYER_SOURCE_DATE_EPOCH={}",
-        std::env::var("SOURCE_DATE_EPOCH").unwrap_or_else(|_| "not supplied".to_string())
-    );
-    println!("cargo:rerun-if-changed=.git/HEAD");
-    if let Some(git_dir) = git_output(&["rev-parse", "--git-dir"]) {
-        let head = std::fs::read_to_string(std::path::Path::new(&git_dir).join("HEAD")).ok();
-        if let Some(reference) = head.and_then(|value| {
-            value
-                .strip_prefix("ref: ")
-                .map(str::trim)
-                .map(str::to_string)
-        }) {
-            println!(
-                "cargo:rerun-if-changed={}",
-                std::path::Path::new(&git_dir).join(reference).display()
-            );
         }
     }
 }

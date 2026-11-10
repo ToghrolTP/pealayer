@@ -13,6 +13,9 @@ param(
     [string[]]$Locale = @('en', 'fa'),
     [ValidateSet('main', 'preferences')]
     [string]$Surface = 'main',
+    [ValidateRange(0, 5)]
+    [int]$PreferencesTab = 0,
+    [string]$PreferenceIcon,
     [int]$WindowWidth = 0,
     [int]$WindowHeight = 0,
     [int]$ScrollNotches = 0,
@@ -38,6 +41,10 @@ $resolvedExecutable = (Resolve-Path -LiteralPath $Executable).Path
 $artifactProductName = (Get-Item -LiteralPath $resolvedExecutable).VersionInfo.ProductName
 $effectiveAppName = if ($AppName) { $AppName.Trim() } elseif ($artifactProductName) { $artifactProductName } else { 'Application' }
 $resolvedBranding = if ($Branding) { (Resolve-Path -LiteralPath $Branding -ErrorAction Stop).Path } else { $null }
+$resolvedPreferenceIcon = if ($PreferenceIcon) { (Resolve-Path -LiteralPath $PreferenceIcon -ErrorAction Stop).Path } else { $null }
+if ($resolvedPreferenceIcon -and -not (Test-Path -LiteralPath $resolvedPreferenceIcon -PathType Leaf)) {
+    throw 'PreferenceIcon must name an existing image file.'
+}
 if (-not $OutputDirectory) {
     $OutputDirectory = Join-Path $repositoryRoot 'docs\screenshots'
 }
@@ -163,16 +170,28 @@ public static class PealayerScreenshotNative {
     }
 
     public static void SendMouseWheel(IntPtr hwnd, int clientX, int clientY, int notches) {
+        Point original;
+        GetCursorPos(out original);
         Point point = new Point { X = clientX, Y = clientY };
         if (!ClientToScreen(hwnd, ref point)) {
             throw new InvalidOperationException("ClientToScreen failed for mouse-wheel capture setup.");
         }
         long packedPoint = ((long)(point.Y & 0xffff) << 16) | (uint)(point.X & 0xffff);
         int direction = Math.Sign(notches);
-        for (int index = 0; index < Math.Abs(notches); index++) {
-            int delta = direction * 120;
-            long packedDelta = (long)(delta & 0xffff) << 16;
-            SendMessage(hwnd, 0x020A, new IntPtr(packedDelta), new IntPtr(packedPoint));
+        // egui routes wheel events using its current hovered position. Sending
+        // WM_MOUSEWHEEL alone does not update that position after a fresh launch.
+        SetForegroundWindow(hwnd);
+        SetCursorPos(point.X, point.Y);
+        System.Threading.Thread.Sleep(100);
+        try {
+            for (int index = 0; index < Math.Abs(notches); index++) {
+                int delta = direction * 120;
+                long packedDelta = (long)(delta & 0xffff) << 16;
+                SendMessage(hwnd, 0x020A, new IntPtr(packedDelta), new IntPtr(packedPoint));
+            }
+            System.Threading.Thread.Sleep(200);
+        } finally {
+            SetCursorPos(original.X, original.Y);
         }
     }
 
@@ -346,11 +365,12 @@ for ($localeIndex = 0; $localeIndex -lt $Locale.Count; $localeIndex++) {
     $start.EnvironmentVariables['APP_NAME'] = $effectiveAppName
     $start.EnvironmentVariables['PEALAYER_INSTANCE_ID'] = "screenshot-$captureSession-$language"
     $captureConfig = Join-Path $captureProfile "$language-settings.json"
-    if ($HardwareEndpoint -or $WorkspaceDockLayout) {
-        @{
-            hardware_endpoint = if ($HardwareEndpoint) { $HardwareEndpoint.Trim() } else { $null }
-            workspace_dock_layout = if ($WorkspaceDockLayout) { $WorkspaceDockLayout } else { $null }
-        } |
+    if ($HardwareEndpoint -or $WorkspaceDockLayout -or $resolvedPreferenceIcon) {
+        $captureSettings = @{}
+        if ($HardwareEndpoint) { $captureSettings.hardware_endpoint = $HardwareEndpoint.Trim() }
+        if ($WorkspaceDockLayout) { $captureSettings.workspace_dock_layout = $WorkspaceDockLayout }
+        if ($resolvedPreferenceIcon) { $captureSettings.app_icon = $resolvedPreferenceIcon }
+        $captureSettings |
             ConvertTo-Json |
             Set-Content -LiteralPath $captureConfig -Encoding utf8
     }
@@ -360,7 +380,7 @@ for ($localeIndex = 0; $localeIndex -lt $Locale.Count; $localeIndex++) {
         $start.ArgumentList.Add('--preferences-helper')
         $start.ArgumentList.Add('0')
         $start.ArgumentList.Add('--preferences-tab')
-        $start.ArgumentList.Add('0')
+        $start.ArgumentList.Add($PreferencesTab.ToString())
     }
     if ($resolvedBranding) {
         $start.EnvironmentVariables['APPLICATION_BRAND'] = $resolvedBranding
@@ -463,6 +483,8 @@ $manifest = [ordered]@{
     executable_sha256 = $executableHash
     application_name = $effectiveAppName
     surface = $Surface
+    preferences_tab = if ($Surface -eq 'preferences') { $PreferencesTab } else { $null }
+    configured_icon = [bool]$resolvedPreferenceIcon
     requested_window_size = "${effectiveWindowWidth}x${effectiveWindowHeight}"
     scroll_notches = $ScrollNotches
     click_client_points = @($ClickClientPoint)

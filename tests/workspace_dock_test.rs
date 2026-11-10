@@ -1,5 +1,5 @@
-use egui_dock::DockState;
-use pealayer::config::AppConfig;
+use craft_ui::docking::Workspace;
+use pealayer::config::{AppConfig, AppLanguage};
 use pealayer::ui::layout::{PealayerTab, create_initial_layout};
 
 #[test]
@@ -17,14 +17,15 @@ fn test_config_workspace_dock_layout_field() {
 }
 
 #[test]
-fn test_pealayer_tab_all_contains_six_tabs() {
-    assert_eq!(PealayerTab::ALL.len(), 6);
+fn test_pealayer_tab_catalog_includes_optional_terminal() {
+    assert_eq!(PealayerTab::ALL.len(), 7);
     assert!(PealayerTab::ALL.contains(&PealayerTab::ProgramMonitor));
     assert!(PealayerTab::ALL.contains(&PealayerTab::MediaInspector));
     assert!(PealayerTab::ALL.contains(&PealayerTab::Timeline));
     assert!(PealayerTab::ALL.contains(&PealayerTab::EffectControls));
     assert!(PealayerTab::ALL.contains(&PealayerTab::EffectsLibrary));
     assert!(PealayerTab::ALL.contains(&PealayerTab::HardwareMonitor));
+    assert!(PealayerTab::ALL.contains(&PealayerTab::Terminal));
 }
 
 #[test]
@@ -33,109 +34,159 @@ fn test_dock_state_serde_roundtrip() {
     let json_str = serde_json::to_string(&dock_state).expect("serialize dock state to JSON");
     assert!(!json_str.is_empty());
 
-    let deserialized: DockState<PealayerTab> =
+    let deserialized: Workspace<PealayerTab> =
         serde_json::from_str(&json_str).expect("deserialize dock state from JSON");
 
     for tab in PealayerTab::ALL
         .into_iter()
-        .filter(|tab| *tab != PealayerTab::MediaInspector)
+        .filter(|tab| !matches!(tab, PealayerTab::MediaInspector | PealayerTab::Terminal))
     {
         assert!(
-            deserialized.find_tab(&tab).is_some(),
+            deserialized.layout.contains(&tab),
             "tab {:?} should be present after round-trip",
             tab
         );
     }
     assert!(
-        deserialized
-            .find_tab(&PealayerTab::MediaInspector)
-            .is_none(),
+        !deserialized
+            .layout
+            .contains(&PealayerTab::MediaInspector),
         "the optional Media Inspector must remain hidden in the default workspace"
+    );
+    assert!(
+        !deserialized.layout.contains(&PealayerTab::Terminal),
+        "the optional Terminal must remain hidden in the default workspace"
     );
 }
 
 #[test]
 fn test_pealayer_tab_titles_and_icons() {
-    let app = pealayer::app::PealayerApp::default();
+    let language = AppLanguage::English;
     for tab in PealayerTab::ALL {
-        assert!(!tab.title(&app).is_empty());
+        assert!(!tab.title_for_language(language).is_empty());
+        assert!(!tab.title_for_language(AppLanguage::Persian).is_empty());
         assert!(!tab.icon().is_empty());
     }
-    assert_eq!(PealayerTab::ProgramMonitor.title(&app), "Program Monitor");
-    assert_eq!(PealayerTab::MediaInspector.title(&app), "Media Inspector");
-    assert_eq!(PealayerTab::Timeline.title(&app), "Timeline");
-    assert_eq!(PealayerTab::EffectControls.title(&app), "Effect Controls");
-    assert_eq!(PealayerTab::EffectsLibrary.title(&app), "Effects Library");
-    assert_eq!(PealayerTab::HardwareMonitor.title(&app), "Hardware Monitor");
+    assert_eq!(
+        PealayerTab::ProgramMonitor.title_for_language(language),
+        "Program Monitor"
+    );
+    assert_eq!(
+        PealayerTab::MediaInspector.title_for_language(language),
+        "Media Inspector"
+    );
+    assert_eq!(
+        PealayerTab::Timeline.title_for_language(language),
+        "Timeline"
+    );
+    assert_eq!(
+        PealayerTab::EffectControls.title_for_language(language),
+        "Effect Controls"
+    );
+    assert_eq!(
+        PealayerTab::EffectsLibrary.title_for_language(language),
+        "Effects Library"
+    );
+    assert_eq!(
+        PealayerTab::HardwareMonitor.title_for_language(language),
+        "Hardware Monitor"
+    );
 }
 
-use pealayer::ui::layout::restore_tab_to_canonical_slot;
+use pealayer::ui::layout::reveal_and_focus_tab;
 
 #[test]
 fn test_restore_timeline_to_canonical_slot() {
     let mut dock_state = create_initial_layout();
-    let path = dock_state
-        .find_tab(&PealayerTab::Timeline)
-        .expect("find timeline");
-    dock_state.remove_tab(path);
-    assert!(dock_state.find_tab(&PealayerTab::Timeline).is_none());
+    assert!(dock_state.layout.contains(&PealayerTab::Timeline));
+    let _ = dock_state.set_visible(
+        PealayerTab::Timeline,
+        false,
+        None,
+        |_| craft_ui::docking::Permissions::default(),
+    );
+    assert!(!dock_state.layout.contains(&PealayerTab::Timeline));
 
-    restore_tab_to_canonical_slot(&mut dock_state, PealayerTab::Timeline);
-    assert!(dock_state.find_tab(&PealayerTab::Timeline).is_some());
+    reveal_and_focus_tab(&mut dock_state, PealayerTab::Timeline);
+    assert!(dock_state.layout.contains(&PealayerTab::Timeline));
 }
 
 #[test]
 fn test_restore_controls_next_to_hardware_monitor() {
     let mut dock_state = create_initial_layout();
-    let path = dock_state
-        .find_tab(&PealayerTab::EffectControls)
-        .expect("find effect controls");
-    dock_state.remove_tab(path);
-    assert!(dock_state.find_tab(&PealayerTab::EffectControls).is_none());
+    assert!(dock_state.layout.contains(&PealayerTab::EffectControls));
+    let _ = dock_state.set_visible(
+        PealayerTab::EffectControls,
+        false,
+        None,
+        |_| craft_ui::docking::Permissions::default(),
+    );
+    assert!(!dock_state.layout.contains(&PealayerTab::EffectControls));
 
-    restore_tab_to_canonical_slot(&mut dock_state, PealayerTab::EffectControls);
-    assert!(dock_state.find_tab(&PealayerTab::EffectControls).is_some());
+    reveal_and_focus_tab(&mut dock_state, PealayerTab::EffectControls);
+    assert!(dock_state.layout.contains(&PealayerTab::EffectControls));
 }
 
 #[test]
 fn test_restore_optional_media_inspector() {
     let mut dock_state = create_initial_layout();
-    assert!(dock_state.find_tab(&PealayerTab::MediaInspector).is_none());
+    assert!(!dock_state.layout.contains(&PealayerTab::MediaInspector));
 
-    restore_tab_to_canonical_slot(&mut dock_state, PealayerTab::MediaInspector);
-    assert!(dock_state.find_tab(&PealayerTab::MediaInspector).is_some());
+    reveal_and_focus_tab(&mut dock_state, PealayerTab::MediaInspector);
+    assert!(dock_state.layout.contains(&PealayerTab::MediaInspector));
+}
+
+#[cfg(feature = "workspace-terminal")]
+#[test]
+fn test_optional_terminal_visibility_survives_roundtrip() {
+    let mut workspace = create_initial_layout();
+    assert!(!workspace.layout.contains(&PealayerTab::Terminal));
+    reveal_and_focus_tab(&mut workspace, PealayerTab::Terminal);
+    let json = serde_json::to_string(&workspace).expect("serialize visible terminal");
+    let restored: Workspace<PealayerTab> =
+        serde_json::from_str(&json).expect("deserialize visible terminal");
+    assert!(restored.layout.contains(&PealayerTab::Terminal));
+    assert!(restored.layout.contains(&PealayerTab::Timeline));
 }
 
 #[test]
 fn test_restore_into_empty_dock() {
     let mut dock_state = create_initial_layout();
     for tab in PealayerTab::ALL {
-        if let Some(path) = dock_state.find_tab(&tab) {
-            dock_state.remove_tab(path);
-        }
+        let _ = dock_state.set_visible(
+            tab,
+            false,
+            None,
+            |_| craft_ui::docking::Permissions::default(),
+        );
     }
-    assert_eq!(dock_state.iter_all_tabs().count(), 0);
+    assert_eq!(dock_state.layout.panels().len(), 0);
 
-    restore_tab_to_canonical_slot(&mut dock_state, PealayerTab::ProgramMonitor);
-    assert!(dock_state.find_tab(&PealayerTab::ProgramMonitor).is_some());
-    assert_eq!(dock_state.iter_all_tabs().count(), 1);
+    reveal_and_focus_tab(&mut dock_state, PealayerTab::ProgramMonitor);
+    assert!(dock_state.layout.contains(&PealayerTab::ProgramMonitor));
+    assert_eq!(dock_state.layout.panels().len(), 1);
 }
 
 static CONFIG_TEST_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
+fn require_parent_isolated_config() {
+    let path = std::env::var_os("PEALAYER_CONFIG_FILE")
+        .expect("Set an isolated PEALAYER_CONFIG_FILE before starting workspace persistence tests");
+    assert!(std::path::Path::new(&path).is_absolute());
+    // Never mutate process environment underneath libmpv/native threads.
+}
+
 #[test]
 fn test_pealayer_app_tab_toggle_and_focus() {
     let _guard = CONFIG_TEST_MUTEX.lock().unwrap();
-    let temp_dir =
-        std::env::temp_dir().join(format!("pealayer_dock_toggle_{}", uuid::Uuid::new_v4()));
-    let _ = std::fs::create_dir_all(&temp_dir);
-    let config_path = temp_dir.join("config.json");
-    unsafe {
-        std::env::set_var("PEALAYER_CONFIG_FILE", &config_path);
-    }
+    require_parent_isolated_config();
 
     let mut app = pealayer::app::PealayerApp::default();
     assert!(app.is_tab_open(PealayerTab::Timeline));
+    assert_eq!(
+        PealayerTab::Timeline.title(&app),
+        app.tr("Timeline")
+    );
 
     // Toggle Timeline off
     app.toggle_tab(PealayerTab::Timeline);
@@ -148,38 +199,28 @@ fn test_pealayer_app_tab_toggle_and_focus() {
     // Calling open_or_focus_tab on already open tab keeps it open
     app.open_or_focus_tab(PealayerTab::Timeline);
     assert!(app.is_tab_open(PealayerTab::Timeline));
-
-    unsafe {
-        std::env::remove_var("PEALAYER_CONFIG_FILE");
-    }
-    let _ = std::fs::remove_dir_all(&temp_dir);
 }
 
 #[test]
 fn test_corrupt_dock_json_fallback() {
     let invalid_json = "{ corrupted invalid json ...";
-    let fallback = serde_json::from_str::<DockState<PealayerTab>>(invalid_json)
+    let fallback = serde_json::from_str::<Workspace<PealayerTab>>(invalid_json)
         .unwrap_or_else(|_| create_initial_layout());
 
     for tab in PealayerTab::ALL
         .into_iter()
-        .filter(|tab| *tab != PealayerTab::MediaInspector)
+        .filter(|tab| !matches!(tab, PealayerTab::MediaInspector | PealayerTab::Terminal))
     {
-        assert!(fallback.find_tab(&tab).is_some());
+        assert!(fallback.layout.contains(&tab));
     }
-    assert!(fallback.find_tab(&PealayerTab::MediaInspector).is_none());
+    assert!(!fallback.layout.contains(&PealayerTab::MediaInspector));
+    assert!(!fallback.layout.contains(&PealayerTab::Terminal));
 }
 
 #[test]
 fn test_app_save_dock_layout_persists_to_config() {
     let _guard = CONFIG_TEST_MUTEX.lock().unwrap();
-    let temp_dir =
-        std::env::temp_dir().join(format!("pealayer_dock_persist_{}", uuid::Uuid::new_v4()));
-    let _ = std::fs::create_dir_all(&temp_dir);
-    let config_path = temp_dir.join("config.json");
-    unsafe {
-        std::env::set_var("PEALAYER_CONFIG_FILE", &config_path);
-    }
+    require_parent_isolated_config();
 
     let mut app = pealayer::app::PealayerApp::default();
     app.save_dock_layout();
@@ -187,18 +228,13 @@ fn test_app_save_dock_layout_persists_to_config() {
     let cfg = pealayer::config::AppConfig::load();
     assert!(cfg.workspace_dock_layout.is_some());
     let layout_json = cfg.workspace_dock_layout.unwrap();
-    let deserialized: DockState<PealayerTab> =
+    let deserialized: Workspace<PealayerTab> =
         serde_json::from_str(&layout_json).expect("valid dock state JSON");
     assert!(
         deserialized
-            .find_tab(&PealayerTab::ProgramMonitor)
-            .is_some()
+            .layout
+            .contains(&PealayerTab::ProgramMonitor)
     );
-
-    unsafe {
-        std::env::remove_var("PEALAYER_CONFIG_FILE");
-    }
-    let _ = std::fs::remove_dir_all(&temp_dir);
 }
 
 #[test]
@@ -210,15 +246,20 @@ fn test_pealayer_tab_icons_not_empty() {
 
 #[test]
 fn test_workspace_window_menu_translations() {
-    let app = pealayer::app::PealayerApp::default();
-    assert_eq!(app.tr("Window"), "Window");
-    assert_eq!(app.tr("Panels"), "Panels");
+    let en = AppLanguage::English;
+    assert_eq!(pealayer::ui::i18n::tr(en, "Workspace"), "Workspace");
+    assert_eq!(pealayer::ui::i18n::tr(en, "Window"), "Window");
+    assert_eq!(pealayer::ui::i18n::tr(en, "Panels"), "Panels");
     assert_eq!(
-        app.tr("Reset Workspace to Default"),
+        pealayer::ui::i18n::tr(en, "Reset Workspace to Default"),
         "Reset Workspace to Default"
     );
 
     let fa = pealayer::config::AppLanguage::Persian;
+    assert_eq!(
+        pealayer::ui::i18n::tr(fa, "Workspace"),
+        pealayer::ui::i18n::visual_text(fa, "فضای کاری")
+    );
     assert_eq!(
         pealayer::ui::i18n::tr(fa, "Window"),
         pealayer::ui::i18n::visual_text(fa, "پنجره")
@@ -234,5 +275,15 @@ fn test_workspace_window_menu_translations() {
     assert_eq!(
         pealayer::ui::i18n::tr(fa, "All workspace panels are closed"),
         pealayer::ui::i18n::visual_text(fa, "همه پنل‌های فضای کاری بسته شده‌اند")
+    );
+    assert_eq!(
+        pealayer::ui::i18n::tr(
+            fa,
+            "Open panels from the Workspace menu above, or reset the workspace."
+        ),
+        pealayer::ui::i18n::visual_text(
+            fa,
+            "پنل‌ها را از منوی فضای کاری در بالا باز کنید یا فضای کاری را بازنشانی نمایید."
+        )
     );
 }

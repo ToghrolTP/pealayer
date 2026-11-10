@@ -1,3 +1,5 @@
+use crate::ui::palette::native::controls::CheckboxUiExt;
+use crate::ui::dropdown::DropdownUiExt;
 use crate::app::PealayerApp;
 use crate::four_d::controller::{HardwareAction, HardwareCapabilities, HardwareControl};
 use eframe::egui;
@@ -110,18 +112,24 @@ fn action_dispatch(control: &HardwareControl, action: &HardwareAction) -> Hardwa
 }
 
 pub(crate) fn invoke_action(app: &PealayerApp, control: &HardwareControl, action: &HardwareAction) {
-    let message = match action_dispatch(control, action) {
-        HardwareActionDispatch::Advertised(action_id) => {
-            crate::four_d::engine::EngineMessage::InvokeControllerAction { action_id }
-        }
-        HardwareActionDispatch::ControllerCommand(command) => {
-            crate::four_d::engine::EngineMessage::ControllerCall {
-                method: "controller.command.execute".to_string(),
-                params: serde_json::json!({"command": command}),
-            }
-        }
+    let (method, params, refresh_catalog) = match action_dispatch(control, action) {
+        HardwareActionDispatch::Advertised(action_id) => (
+            "controller.action.invoke",
+            serde_json::json!({"action_id": action_id}),
+            true,
+        ),
+        HardwareActionDispatch::ControllerCommand(command) => (
+            "controller.command.execute",
+            serde_json::json!({"command": command}),
+            false,
+        ),
     };
-    let _ = app.engine_handle.sender.send(message);
+    let _ = app.engine_handle.queue_controller_intent(
+        control.key.clone(),
+        method,
+        params,
+        refresh_catalog,
+    );
 }
 
 /// Dispatch an advertised action through the same routing policy used by the
@@ -148,27 +156,31 @@ pub(crate) fn invoke_action_by_id(
     Ok(())
 }
 
-fn set_relay(app: &PealayerApp, relay: u8, on: bool) {
-    let _ = app
-        .engine_handle
-        .sender
-        .send(crate::four_d::engine::EngineMessage::ControllerCall {
-            method: "controller.command.execute".to_string(),
-            params: serde_json::json!({
-                "command": format!("relay {relay} {}", if on { "on" } else { "off" })
-            }),
-        });
+pub(crate) fn set_relay(app: &PealayerApp, relay: u8, on: bool) {
+    let _ = app.engine_handle.queue_controller_intent(
+        format!("relay.{relay}"),
+        "controller.command.execute",
+        serde_json::json!({
+            "command": format!("relay {relay} {}", if on { "on" } else { "off" })
+        }),
+        false,
+    );
+}
+
+pub(crate) fn toggle_relay(app: &PealayerApp, relay: u8) {
+    // Resolve on the coordinator after the preceding edge has completed,
+    // never from a stale rendered indicator or an invented optimistic state.
+    let _ = app.engine_handle.queue_controller_intent(format!("relay.{relay}"),
+        "controller.command.execute", serde_json::json!({"command": format!("relay {relay} toggle")}), false);
 }
 
 pub(crate) fn set_pwm(app: &PealayerApp, channel: u8, percent: f64) {
-    let raw = (percent.clamp(0.0, 100.0) * 4095.0 / 100.0).round() as u16;
-    let _ = app
-        .engine_handle
-        .sender
-        .send(crate::four_d::engine::EngineMessage::ControllerCall {
-            method: "controller.pwm.set".to_string(),
-            params: serde_json::json!({"channel": channel, "value": raw}),
-        });
+    let _ = app.engine_handle.queue_controller_intent(
+        format!("pwm.{channel}"),
+        "controller.pwm.set",
+        serde_json::json!({"channel": channel, "percent": percent.clamp(0.0, 100.0)}),
+        false,
+    );
 }
 
 pub(crate) fn managed_controls(capabilities: &HardwareCapabilities) -> Vec<HardwareControl> {
@@ -323,7 +335,7 @@ fn channel_binding_summary(app: &PealayerApp, channel_key: &str) -> Option<(Stri
     let short = bindings
         .iter()
         .take(2)
-        .map(|binding| binding.chord.display_name())
+        .map(|binding| binding.display_shortcut())
         .collect::<Vec<_>>()
         .join(" · ");
     let short = if bindings.len() > 2 {
@@ -336,7 +348,7 @@ fn channel_binding_summary(app: &PealayerApp, channel_key: &str) -> Option<(Stri
         .map(|binding| {
             format!(
                 "{} — {}{}",
-                binding.chord.display_name(),
+                binding.display_shortcut(),
                 hardware_binding_action_label(binding, app),
                 if binding.global {
                     format!(" ({})", app.tr("Global"))
@@ -506,11 +518,7 @@ fn open_detail(
         .pwm_channels
         .iter()
         .find(|channel| channel.key == control.key)
-        .and_then(|channel| {
-            (capabilities.telemetry.pwm_channel == Some(channel.id))
-                .then_some(capabilities.telemetry.pwm_value.unwrap_or(0))
-        })
-        .map(|value| f64::from(value) * 100.0 / 4095.0)
+        .and_then(|channel| capabilities.observed_pwm_percent(channel.id))
         .unwrap_or(0.0);
 }
 
@@ -532,7 +540,7 @@ pub(crate) fn draw_manager_live_action(
     capabilities: &HardwareCapabilities,
     control: &HardwareControl,
 ) {
-    let enabled = !app.estop_active && !control.locked;
+    let enabled = !app.estop_active && !control.locked && !app.hardware_programming_blocked();
     let on = channel_is_active(capabilities, control);
     let is_motion = crate::ui::layout::is_motion_control(control);
     // Motion is directional, not boolean. It must never fall through to the
@@ -739,11 +747,11 @@ pub(crate) fn draw_timeline_live_control(
             .unwrap_or(0);
         let mut percent = ui
             .data_mut(|data| data.get_temp::<f64>(value_id))
-            .unwrap_or_else(|| f64::from(telemetry_raw) * 100.0 / 4095.0);
+            .unwrap_or_else(|| capabilities.pwm_percent(channel, telemetry_raw));
         let response = crate::ui::layout::draw_pwm_editor_row(
             ui,
             &mut percent,
-            !app.estop_active && !control.locked,
+            !app.estop_active && !control.locked && !app.hardware_programming_blocked(),
         );
         ui.data_mut(|data| data.insert_temp(value_id, percent));
         crate::ui::layout::transmit_pwm_editor_response(
@@ -769,7 +777,7 @@ fn draw_motion_mode_selector(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let toggle_help = app.tr("Keep moving until Stop is pressed");
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 3.0;
-        ui.selectable_value(
+        ui.dropdown_value(
             &mut app.motion_control_mode,
             crate::config::MotionControlMode::Toggle,
             toggle,
@@ -777,7 +785,7 @@ fn draw_motion_mode_selector(app: &mut PealayerApp, ui: &mut egui::Ui) {
         .on_hover_text(toggle_help);
         // This selector is hosted in a right-to-left action slot. Paint Toggle
         // first so the user-facing order remains Push, then Toggle.
-        ui.selectable_value(
+        ui.dropdown_value(
             &mut app.motion_control_mode,
             crate::config::MotionControlMode::Hold,
             hold,
@@ -912,14 +920,8 @@ fn manager_channel_name(
                 if editing {
                     let input_width =
                         (width - 2.0 * (MANAGER_NAME_ACTION_WIDTH + MANAGER_NAME_GAP)).max(1.0);
-                    let edit = ui.add_sized(
-                        [input_width, MANAGER_NAME_HEIGHT],
-                        egui::TextEdit::singleline(draft)
-                            .id(input_id)
-                            .font(egui::FontId::proportional(MANAGER_NAME_FONT_SIZE))
-                            .margin(egui::Margin::symmetric(4, 0))
-                            .vertical_align(egui::Align::Center),
-                    );
+                    let edit = crate::ui::dialog::inline_caption_edit(ui, input_id, draft,
+                        egui::vec2(input_width, MANAGER_NAME_HEIGHT), egui::FontId::proportional(MANAGER_NAME_FONT_SIZE), egui::Align::Min);
                     if request_focus {
                         edit.request_focus();
                     }
@@ -1243,7 +1245,7 @@ fn draw_channel_manager_page(
                     .is_some_and(|pointer| predicted_rect.contains(pointer));
                 let row_selected = selected.contains(&control.key);
                 let order_focused = ui.memory(|memory| memory.has_focus(order_edit_id));
-                let order_alpha = ui.ctx().animate_bool(
+                let order_alpha = crate::ui::motion::hover_alpha(ui,
                     egui::Id::new(("manager-order-visible", &control.key)),
                     row_hovered || order_focused,
                 );
@@ -1283,7 +1285,7 @@ fn draw_channel_manager_page(
                     |ui| {
                         let mut checked = selected.contains(&control.key);
                         if ui
-                            .checkbox(&mut checked, "")
+                            .themed_checkbox(&mut checked, "")
                             .on_hover_text(app.tr("Select for bulk actions"))
                             .changed()
                         {
@@ -1425,8 +1427,8 @@ fn draw_channel_manager_page(
                                             egui::Stroke::new(1.0, ui.visuals().error_fg_color);
                                     }
                                     ui.add_sized(
-                                        [42.0, 25.0],
-                                        egui::TextEdit::singleline(&mut order_draft)
+                                        [42.0, crate::ui::control_density::height(ui)],
+                                        crate::ui::dialog::singleline_text_edit(ui, &mut order_draft)
                                             .id(order_edit_id)
                                             .horizontal_align(egui::Align::Center)
                                             .vertical_align(egui::Align::Center)
@@ -1792,9 +1794,9 @@ fn draw_binding_action_editor(
             .iter()
             .any(|action| action.verb.eq_ignore_ascii_case("off"));
     let is_pwm = matches!(control.kind.as_str(), "pwm" | "mosfet");
-    let has_hold_pair = control.actions.len() >= 2;
+    let has_hold_pair = control.actions.len() >= 2 && draft.then.is_empty();
     let mut mode = binding_editor_mode(&draft.action);
-    egui::ComboBox::from_id_salt(("hardware-binding-mode", &draft.id))
+    crate::ui::dropdown::ComboBox::from_id_salt(("hardware-binding-mode", &draft.id))
         .selected_text(match mode {
             BindingEditorMode::Action => app.tr("Run one action"),
             BindingEditorMode::Toggle => app.tr("Toggle On / Off"),
@@ -1803,23 +1805,23 @@ fn draw_binding_action_editor(
         })
         .width(250.0)
         .show_ui(ui, |ui| {
-            ui.selectable_value(
+            ui.dropdown_value(
                 &mut mode,
                 BindingEditorMode::Action,
                 app.tr("Run one action"),
             );
             ui.add_enabled_ui(has_toggle, |ui| {
-                ui.selectable_value(
+                ui.dropdown_value(
                     &mut mode,
                     BindingEditorMode::Toggle,
                     app.tr("Toggle On / Off"),
                 );
             });
             ui.add_enabled_ui(is_pwm, |ui| {
-                ui.selectable_value(&mut mode, BindingEditorMode::Pwm, app.tr("Set PWM level"));
+                ui.dropdown_value(&mut mode, BindingEditorMode::Pwm, app.tr("Set PWM level"));
             });
             ui.add_enabled_ui(has_hold_pair, |ui| {
-                ui.selectable_value(
+                ui.dropdown_value(
                     &mut mode,
                     BindingEditorMode::Hold,
                     app.tr("While key is held"),
@@ -1839,13 +1841,13 @@ fn draw_binding_action_editor(
                 .find(|action| action.id == *action_id)
                 .map(|action| action.name.as_str())
                 .unwrap_or(action_id);
-            egui::ComboBox::from_id_salt(("hardware-binding-action", &draft.id))
+            crate::ui::dropdown::ComboBox::from_id_salt(("hardware-binding-action", &draft.id))
                 .selected_text(selected)
                 .width(250.0)
                 .show_ui(ui, |ui| {
                     for action in &control.actions {
                         if ui
-                            .selectable_label(action.id == *action_id, &action.name)
+                            .dropdown_choice(action.id == *action_id, &action.name)
                             .clicked()
                         {
                             *action_id = action.id.clone();
@@ -1888,13 +1890,13 @@ fn draw_binding_action_editor(
                 .spacing(egui::vec2(12.0, 8.0))
                 .show(ui, |ui| {
                     ui.label(app.tr("Key pressed"));
-                    egui::ComboBox::from_id_salt(("binding-press", &draft.id))
+                    crate::ui::dropdown::ComboBox::from_id_salt(("binding-press", &draft.id))
                         .selected_text(press_label.as_str())
                         .width(220.0)
                         .show_ui(ui, |ui| {
                             for action in &control.actions {
                                 if ui
-                                    .selectable_label(action.id == *press_action_id, &action.name)
+                                    .dropdown_choice(action.id == *press_action_id, &action.name)
                                     .clicked()
                                 {
                                     *press_action_id = action.id.clone();
@@ -1905,13 +1907,13 @@ fn draw_binding_action_editor(
                         });
                     ui.end_row();
                     ui.label(app.tr("Key released"));
-                    egui::ComboBox::from_id_salt(("binding-release", &draft.id))
+                    crate::ui::dropdown::ComboBox::from_id_salt(("binding-release", &draft.id))
                         .selected_text(release_label.as_str())
                         .width(220.0)
                         .show_ui(ui, |ui| {
                             for action in &control.actions {
                                 if ui
-                                    .selectable_label(action.id == *release_action_id, &action.name)
+                                    .dropdown_choice(action.id == *release_action_id, &action.name)
                                     .clicked()
                                 {
                                     *release_action_id = action.id.clone();
@@ -1951,7 +1953,8 @@ fn draw_hardware_binding_dialog(
             .find_map(crate::hardware_shortcuts::chord_from_egui_event)
             && let Some(binding) = draft.as_mut()
         {
-            binding.chord = chord;
+            let append = ctx.data_mut(|data| data.remove_temp::<bool>(egui::Id::new("hardware-binding-append"))).unwrap_or(false);
+            if append { binding.then.push(chord); } else { binding.chord = chord; binding.then.clear(); }
             app.hardware_binding_capturing = false;
         }
     }
@@ -2056,14 +2059,25 @@ fn draw_hardware_binding_dialog(
                             let label = if app.hardware_binding_capturing {
                                 app.tr("Press a key or key combination…")
                             } else {
-                                binding.chord.display_name()
+                                binding.display_shortcut()
                             };
                             let button = egui::Button::new(
                                 egui::RichText::new(label).size(16.0).strong(),
                             )
                             .min_size(egui::vec2(270.0, 42.0));
                             if ui.add(button).clicked() {
+                                ctx.data_mut(|data| data.insert_temp(egui::Id::new("hardware-binding-append"), false));
                                 app.hardware_binding_capturing = true;
+                            }
+                            if ui.add_enabled(!binding.global && binding.then.len() < 3
+                                && !matches!(binding.action, crate::config::HardwareKeyBindingAction::Hold { .. }),
+                                egui::Button::new(format!("{} {}", crate::ui::icons::PLUS, app.tr("Record next key"))))
+                                .clicked() {
+                                ctx.data_mut(|data| data.insert_temp(egui::Id::new("hardware-binding-append"), true));
+                                app.hardware_binding_capturing = true;
+                            }
+                            if !binding.then.is_empty() && ui.button(app.tr("Clear sequence")).clicked() {
+                                binding.then.clear();
                             }
                             if app.hardware_binding_capturing
                                 && ui
@@ -2099,15 +2113,15 @@ fn draw_hardware_binding_dialog(
                     crate::ui::icons::GLOBE,
                     &app.tr("Availability"),
                     |ui| {
-                        ui.checkbox(&mut binding.enabled, app.tr("Binding enabled"));
-                        ui.checkbox(
+                        ui.themed_checkbox(&mut binding.enabled, app.tr("Binding enabled"));
+                        ui.add_enabled_ui(binding.then.is_empty(), |ui| ui.themed_checkbox(
                             &mut binding.global,
                             format!(
                                 "{} ({})",
                                 app.tr("Work when Pealayer is not in the foreground"),
                                 hardware_binding_platform_label(app)
                             ),
-                        );
+                        ));
                         ui.label(
                             egui::RichText::new(if binding.global {
                                 app.tr("The operating system registers and delivers this hotkey to Pealayer.")
@@ -2213,11 +2227,11 @@ fn draw_hardware_binding_dialog(
                                 ui.set_width(ui.available_width());
                                 ui.horizontal(|ui| {
                                     let mut enabled = binding.enabled;
-                                    if ui.checkbox(&mut enabled, "").changed() {
+                                    if ui.themed_checkbox(&mut enabled, "").changed() {
                                         toggle_binding = Some((binding.id.clone(), enabled));
                                     }
                                     ui.label(
-                                        egui::RichText::new(binding.chord.display_name())
+                                        egui::RichText::new(binding.display_shortcut())
                                             .strong()
                                             .color(accent),
                                     );
@@ -2342,7 +2356,7 @@ fn channel_option_toggle(
                         ui.label(egui::RichText::new(detail).small().weak());
                     });
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        ui.checkbox(value, "")
+                        ui.themed_checkbox(value, "")
                     })
                     .inner
                 })
@@ -2426,6 +2440,11 @@ fn draw_channel_live_control(
     capabilities: &HardwareCapabilities,
     control: &HardwareControl,
 ) {
+    if let Some(channel) = capabilities.pwm_channels.iter().find(|channel| channel.key == control.key) {
+        crate::ui::layout::draw_pwm_card_editor(app, ui, capabilities, control, channel, ui.available_width());
+        crate::ui::layout::draw_pwm_power_actions(app, ui, capabilities, control);
+        return;
+    }
     if !control.actions.is_empty() {
         let columns = if ui.available_width() >= 520.0 { 3 } else { 1 };
         let is_motion = crate::ui::layout::is_motion_control(control);
@@ -2444,13 +2463,14 @@ fn draw_channel_live_control(
         for row in actions.chunks(columns) {
             ui.columns(columns, |uis| {
                 for (index, action) in row.iter().enumerate() {
+                    let enabled = !app.estop_active && !control.locked && !app.hardware_programming_blocked();
+                    let button = crate::ui::layout::hardware_action_button(&uis[index], format!(
+                        "{}  {}", crate::ui::icons::action(&action.verb),
+                        crate::ui::i18n::visual_text(app.language, &action.name)), &action.verb,
+                        crate::ui::layout::hardware_action_selected(capabilities, control, &action.verb), enabled);
                     let response = uis[index].add_enabled(
-                        !app.estop_active && !control.locked,
-                        egui::Button::new(format!(
-                            "{}  {}",
-                            crate::ui::icons::action(&action.verb),
-                            crate::ui::i18n::visual_text(app.language, &action.name)
-                        ))
+                        enabled,
+                        button
                         .corner_radius(7.0)
                         .min_size(egui::vec2(uis[index].available_width(), 34.0)),
                     );
@@ -2491,7 +2511,7 @@ fn draw_channel_live_control(
             .enumerate()
             {
                 let response = uis[index].add_enabled(
-                    !app.estop_active && !control.locked,
+                    !app.estop_active && !control.locked && !app.hardware_programming_blocked(),
                     egui::Button::new(format!("{icon}  {label}"))
                         .corner_radius(7.0)
                         .min_size(egui::vec2(uis[index].available_width(), 36.0)),
@@ -2602,6 +2622,14 @@ fn draw_channel_detail_page(
                         });
                     ui.add_space(9.0);
 
+                    if !control.actions.is_empty() && ui.button(format!("{} {}", crate::ui::icons::RADIO,
+                        app.tr("Assign RF code…"))).clicked() {
+                        crate::ui::rf::open_control_assignment(app, control);
+                    }
+
+                    if let Some(channel) = pwm_channel(capabilities, &control.key) {
+                        crate::ui::pwm_policy::draw(app, ui, capabilities, channel);
+                    }
                     let board_name =
                         crate::ui::i18n::visual_text(app.language, &capabilities.board_name);
                     let kind_name = channel_kind_label(app, &control.kind);
@@ -2666,8 +2694,8 @@ fn draw_channel_detail_page(
                                         &app.hardware_control_name_draft,
                                     );
                                     ui.add_sized(
-                                        [field_width, 28.0],
-                                        egui::TextEdit::singleline(
+                                        [field_width, crate::ui::control_density::height(ui)],
+                                        crate::ui::dialog::singleline_text_edit(ui,
                                             &mut app.hardware_control_name_draft,
                                         )
                                         .horizontal_align(align),
@@ -2679,17 +2707,14 @@ fn draw_channel_detail_page(
                                         crate::ui::icons::FOLDER_OPEN,
                                         app.tr("Group")
                                     ));
-                                    crate::ui::group_picker::group_picker(
+                                    ui.add_enabled_ui(!crate::ui::layout::channel_control_is_raw_relay(&capabilities, &control), |ui| crate::ui::group_picker::group_picker(
                                         ui,
                                         ("channel-group", &control.key),
                                         &mut app.hardware_control_group_draft,
-                                        capabilities
-                                            .controls
-                                            .iter()
-                                            .map(|item| item.group.as_str()),
+                                        crate::ui::layout::channel_folder_names(&capabilities, &control.kind),
                                         field_width,
                                         app.language,
-                                    );
+                                    ));
                                     ui.end_row();
 
                                     ui.label(format!(
@@ -2703,7 +2728,7 @@ fn draw_channel_detail_page(
                                         &mut app.hardware_control_icon_draft,
                                         crate::ui::icons::IconPickerConfig {
                                             language: app.language,
-                                            presets: crate::ui::icons::CONTROL_ICON_PRESETS,
+                                            presets: crate::ui::icons::control_icon_catalog(),
                                             fallback_glyph: crate::ui::icons::control(
                                                 &control.kind,
                                                 "",
@@ -2958,11 +2983,11 @@ fn draw_channel_detail_page(
                                 } else {
                                     for binding in &bindings {
                                         let state = if binding.enabled {
-                                            binding.chord.display_name()
+                                            binding.display_shortcut()
                                         } else {
                                             format!(
                                                 "{} ({})",
-                                                binding.chord.display_name(),
+                                                binding.display_shortcut(),
                                                 app.tr("disabled")
                                             )
                                         };
@@ -3221,7 +3246,7 @@ mod tests {
                         let layer_id = ui.layer_id();
                         let row = manager_channel_row(ui, "relay.5", layer_id, true, 0.58, |ui| {
                             let mut selected = true;
-                            let checkbox = ui.checkbox(&mut selected, "").rect;
+                            let checkbox = ui.themed_checkbox(&mut selected, "").rect;
                             let remaining = ui.available_width();
                             ui.allocate_exact_size(
                                 egui::vec2(remaining - 36.0, 27.0),
@@ -3420,7 +3445,7 @@ mod tests {
                     ui.set_width(520.0);
                     let layer = ui.layer_id();
                     let row = manager_channel_row(ui, "relay.5", layer, selected, 1.0, |ui| {
-                        checkbox_rect = ui.checkbox(&mut selected, "").rect;
+                        checkbox_rect = ui.themed_checkbox(&mut selected, "").rect;
                         let start = ui.next_widget_position();
                         name_rect = egui::Rect::from_min_size(
                             start,

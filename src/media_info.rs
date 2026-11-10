@@ -1,13 +1,13 @@
-use libmpv2::Mpv;
+use crate::mpv::player::Player as Mpv;
 use std::collections::BTreeMap;
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MediaPropertyGroup {
     pub name: String,
     pub properties: Vec<(String, String)>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MediaCollectionEntry {
     pub index: i64,
     pub properties: BTreeMap<String, String>,
@@ -23,7 +23,7 @@ pub struct MediaChapter {
 /// A static, factual snapshot read directly from libmpv after a file loads or
 /// when the user explicitly refreshes the Media Inspector. Exact libmpv keys
 /// are retained so the diagnostic surface never invents or obscures data.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct MediaFileInfo {
     pub loaded: bool,
     pub groups: Vec<MediaPropertyGroup>,
@@ -32,6 +32,20 @@ pub struct MediaFileInfo {
     pub chapters: Vec<MediaCollectionEntry>,
     pub editions: Vec<MediaCollectionEntry>,
     pub playlist: Vec<MediaCollectionEntry>,
+}
+
+impl MediaFileInfo {
+    /// Automation gets the same cached factual inspector data, without source
+    /// URL credentials. Never probe mpv from an HTTP/IPC/window-message thread.
+    pub fn redacted(&self)->Self {
+        let mut value=self.clone();
+        for group in &mut value.groups {for (_,text) in &mut group.properties {*text=crate::media::redact_media_target(text);}}
+        for text in value.metadata.values_mut().chain(value.filtered_metadata.values_mut()) {*text=crate::media::redact_media_target(text);}
+        for entry in value.chapters.iter_mut().chain(value.editions.iter_mut()).chain(value.playlist.iter_mut()) {
+            for text in entry.properties.values_mut() {*text=crate::media::redact_media_target(text);}
+        }
+        value
+    }
 }
 
 const PROPERTY_GROUPS: &[(&str, &[&str])] = &[
@@ -133,6 +147,11 @@ const PROPERTY_GROUPS: &[(&str, &[&str])] = &[
         ],
     ),
 ];
+
+pub(crate) fn observed_roots() -> std::collections::BTreeSet<&'static str> {
+    PROPERTY_GROUPS.iter().flat_map(|(_, keys)| keys.iter().map(|key| key.split('/').next().unwrap_or(key)))
+        .chain(["filtered-metadata", "edition-list", "playlist"]).collect()
+}
 
 fn property_text(mpv: &Mpv, name: &str) -> Option<String> {
     mpv.get_property::<String>(name)

@@ -1,27 +1,77 @@
 pub mod about;
 pub mod audio;
 pub mod board_info;
-pub mod color_picker;
 pub mod controls;
+pub(crate) mod mouse_buttons;
+pub mod control_density;
+mod monitor_controls;
+pub mod color_picker;
+pub mod craft_theme;
+pub mod motion;
+pub mod digital_twin;
 pub mod dialog;
+pub(crate) mod window_chrome;
+pub mod dropdown;
 pub mod effects_library;
+pub(crate) mod strip_designer;
+pub(crate) mod strip_layers;
+pub(crate) mod pixel_diagnostic;
+mod elegance_theme;
+pub use elegance_theme::sync_elegance_theme;
 pub mod error;
 pub mod four_d;
 pub mod group_picker;
 pub mod hardware_control;
+pub(crate) mod hardware_monitor;
+pub(crate) mod pwm_policy;
 pub mod i18n;
+pub(crate) mod fonts;
+pub(crate) mod numeric_text;
+pub(crate) mod egui_dock;
+pub(crate) mod panel_chrome;
+pub(crate) mod player_mode;
 pub mod icons;
+pub(crate) mod keycaps;
 pub mod layout;
+mod timeline_toolbar;
+pub(crate) mod zoom_shortcuts;
+pub(crate) mod timeline_strip;
 pub mod media_inspector;
 pub mod media_track_properties;
 pub mod media_tracks;
 pub mod menu;
 pub mod open_url;
+pub mod remote_location;
+pub mod rf;
 pub mod palette;
 pub mod preferences;
+pub mod peer_browser;
 pub mod seek_preview;
 pub mod status_bar;
+pub mod sidebar_rail;
+pub mod sidebar_shortcuts;
+pub mod workspace_toolbar;
+pub mod terminal;
+pub mod terminal_settings;
+#[cfg(feature="workspace-terminal")]
+pub mod terminal_remote;
+#[cfg(feature = "workspace-terminal")]
+mod terminal_backend;
+#[cfg(feature = "workspace-terminal")]
+mod portable_shell_host;
+#[cfg(feature = "workspace-terminal")]
+mod shell_status;
+#[cfg(feature = "workspace-terminal")]
+pub mod terminal_profiles;
+#[cfg(feature = "workspace-terminal")]
+mod terminal_screen;
+#[cfg(feature = "workspace-terminal")]
+mod terminal_parser;
+pub(crate) mod action_customization;
+pub(crate) mod control_bar;
+pub(crate) mod simple_controls;
 pub mod subtitles;
+pub mod toasts;
 pub mod video;
 pub mod workspace_profiles;
 
@@ -88,6 +138,7 @@ fn dark_accent_fill(
 /// eframe/winit supplies native ThemeChanged events to egui's system_theme;
 /// selecting an explicit theme here would stop following those events.
 pub fn configure_native_appearance(ctx: &eframe::egui::Context, config: &crate::config::AppConfig) {
+    motion::configure(ctx, config.ui_animation_mode);
     ctx.set_theme(match crate::config::resolved_theme(config) {
         crate::config::AppTheme::System => eframe::egui::ThemePreference::System,
         crate::config::AppTheme::Light => eframe::egui::ThemePreference::Light,
@@ -125,6 +176,9 @@ pub fn configure_main_window_style(ctx: &eframe::egui::Context) {
 /// theme can change later without reconstructing widget styling, and both the
 /// main window and independently hosted dialogs use this same function.
 pub fn configure_native_visuals(ctx: &eframe::egui::Context, config: &crate::config::AppConfig) {
+    window_chrome::install(ctx);
+    i18n::configure_preferred_fonts(ctx, config);
+    color_picker::configure_language(ctx, config.language);
     use eframe::egui::{Color32, CornerRadius, Stroke, Theme, Visuals};
 
     let [red, green, blue] = platform_accent_rgb(config);
@@ -188,9 +242,47 @@ pub fn configure_native_visuals(ctx: &eframe::egui::Context, config: &crate::con
 
     palette::apply(&mut dark, config.color_palette);
     palette::apply(&mut light, config.color_palette);
+
+    let tokens_dark = craft_theme::Tokens::for_kind(craft_theme::ThemeKind::Dark)
+        .with_appearance(Some([red, green, blue]), false).with_visuals(&dark);
+    let tokens_light = craft_theme::Tokens::for_kind(craft_theme::ThemeKind::Light)
+        .with_appearance(Some([red, green, blue]), false).with_visuals(&light);
+
+    // Apply FilmCraft widget interaction fills, strokes, and borders
+    dark.widgets.hovered.bg_fill = tokens_dark.hover;
+    dark.widgets.active.bg_fill = tokens_dark.pressed;
+    dark.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, tokens_dark.field_border);
+    dark.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, tokens_dark.field_border);
+    dark.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, tokens_dark.separator);
+    dark.widgets.hovered.fg_stroke = Stroke::new(1.0_f32, tokens_dark.tab_text_active);
+    dark.widgets.active.fg_stroke = Stroke::new(1.0_f32, tokens_dark.tab_text_active);
+
+    light.widgets.hovered.bg_fill = tokens_light.hover;
+    light.widgets.inactive.bg_stroke = Stroke::new(1.0_f32, tokens_light.field_border);
+    light.widgets.hovered.bg_stroke = Stroke::new(1.0_f32, tokens_light.field_border);
+    light.widgets.noninteractive.bg_stroke = Stroke::new(1.0_f32, tokens_light.separator);
+
+    if config.color_palette == crate::config::ColorPalette::Pastel {
+        for visuals in [&mut dark, &mut light] {
+            let edge = Stroke::new(
+                1.0,
+                palette::color(config.color_palette, visuals.dark_mode, "hover-line"),
+            );
+            visuals.widgets.hovered.bg_stroke = edge;
+            visuals.widgets.open.bg_stroke = edge;
+            visuals.widgets.active.bg_stroke = Stroke::new(1.0, accent);
+            visuals.widgets.active.weak_bg_fill = visuals.widgets.active.bg_fill;
+        }
+    }
+
     ctx.set_visuals_of(Theme::Dark, dark);
     ctx.set_visuals_of(Theme::Light, light);
+    palette::native::controls::configure(ctx, config.color_palette == crate::config::ColorPalette::Pastel);
     ctx.all_styles_mut(configure_interaction_style);
+    ctx.all_styles_mut(|style| control_density::configure(style, config.ui_control_density));
+    craft_theme::set_themes(ctx, tokens_dark, tokens_light);
+    elegance_theme::set_source_palette(ctx, config.color_palette);
+    motion::configure(ctx, config.ui_animation_mode);
 }
 
 #[cfg(test)]
@@ -411,4 +503,39 @@ mod tests {
             }
         }
     }
+
+    #[test]
+    fn craft_tokens_follow_active_theme_and_preserve_each_pealayer_palette() {
+        for palette in [crate::config::ColorPalette::Native, crate::config::ColorPalette::Studio] {
+            let ctx = eframe::egui::Context::default();
+            let config = crate::config::AppConfig { color_palette: palette, ..Default::default() };
+            super::configure_native_appearance(&ctx, &config);
+            for theme in [eframe::egui::Theme::Light, eframe::egui::Theme::Dark, eframe::egui::Theme::Light] {
+                ctx.set_theme(theme);
+                let tokens = super::craft_theme::current(&ctx);
+                let style = ctx.style_of(theme);
+                assert_eq!(tokens.kind == super::craft_theme::ThemeKind::Light, theme == eframe::egui::Theme::Light);
+                assert_eq!(tokens.panel_bg, style.visuals.panel_fill);
+                assert_eq!(tokens.card_bg, style.visuals.window_fill);
+                assert_eq!(tokens.text, style.visuals.text_color());
+            }
+        }
+    }
+
+    #[test]
+    fn native_visuals_use_craft_theme_tokens_and_widget_palette() {
+        let ctx = eframe::egui::Context::default();
+        let config = crate::config::AppConfig {
+            theme: crate::config::AppTheme::Dark,
+            ..Default::default()
+        };
+        super::configure_native_visuals(&ctx, &config);
+        let dark_style = ctx.style_of(eframe::egui::Theme::Dark);
+        let tokens = super::craft_theme::current(&ctx);
+
+        assert_eq!(dark_style.visuals.widgets.hovered.bg_fill, tokens.hover);
+        assert_eq!(dark_style.visuals.widgets.active.bg_fill, tokens.pressed);
+        assert_eq!(dark_style.visuals.widgets.inactive.bg_stroke.color, tokens.field_border);
+    }
 }
+pub(crate) mod validated_input;

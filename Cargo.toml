@@ -6,10 +6,34 @@ description = "Hardware-accelerated 4D cinema player and physical-effect authori
 repository = "https://github.com/ToghrolTP/pealayer"
 license = "MIT"
 
+[workspace]
+members = ["crates/download-core", "utilities/downloader"]
+default-members = ["."]
+resolver = "3"
+
+[features]
+default = ["workspace-toolbar", "workspace-terminal"]
+workspace-toolbar = []
+workspace-terminal = ["dep:vt100", "dep:vte", "dep:portable-pty", "dep:unicode-width"]
+
 [dependencies]
-eframe = { version = "0.36.2", features = ["glow", "persistence"] }
+vt100 = { version = "0.15.2", optional = true }
+unicode-width = { version = "0.1.14", optional = true }
+vte = { version = "0.11.1", optional = true }
+portable-pty = { version = "0.9.0", optional = true }
+pealayer-downloads = { path = "crates/download-core", features = ["ui"] }
+craft-ui = { git = "https://github.com/storytold/craft-libs.git", features = ["serde"] }
+# Upstream egui 0.37 port (anhosh/egui_dock#354), pinned for reproducible builds.
+egui_dock = { git = "https://github.com/crumblingstatue/egui_dock.git", rev = "4bd1dcd90c7a71ed3bf38159f49a2992fa653c2c", features = ["serde"] }
+# Match eframe's dynamic Fontconfig backend: both Fontique versions share the
+# same fontconfig-sys instance, whose dlopen feature removes direct symbols.
+fontique = { version = "0.12.0", features = ["fontconfig-dlopen"] }
+eframe = { version = "0.37", features = ["glow", "persistence"] }
+egui-elegance = "=0.17.4"
+winit = { version = "0.30", default-features = false }
 env_logger = "0.11.11"
-libmpv2 = { version = "6.0.0", features = ["render"] }
+libmpv2 = { version = "7.0.0", features = ["render"] }
+libmpv2-sys = "=4.0.1"
 log = "0.4.31"
 jiff = "0.2.28"
 libloading = "0.9.0"
@@ -17,45 +41,69 @@ rfd = "0.17.2"
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.150"
 uuid = { version = "1.26.1", features = ["v4", "serde"] }
-egui_dock = { version = "0.21.1", features = ["serde"] }
 egui-phosphor = { version = "0.14.0", default-features = false, features = ["regular"] }
+egui_extras = { version = "0.37", default-features = false, features = ["svg"] }
 serialport = "4.10.1"
 httparse = "1.10.1"
+httpdate = "1.0.3"
 tungstenite = "0.30.0"
 reqwest = { version = "0.12.28", default-features = false, features = ["blocking", "json", "rustls-tls"] }
-sha2 = "0.10.9"
+sha2 = "0.11.0"
+base64 = "0.22.1"
 flate2 = "1.1.9"
 tar = "0.4.46"
-zip = { version = "8.1.0", default-features = false, features = ["deflate-flate2-zlib-rs"] }
+zip = { version = "9.0.2", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 url = "2.5.8"
-image = { version = "0.25.9", default-features = false, features = ["jpeg", "png"] }
+image = { version = "0.25.9", default-features = false, features = ["ico", "jpeg", "png", "webp"] }
 include_dir = "0.7.4"
 raw-window-handle = "0.6.2"
-souvlaki = { version = "0.8.3", default-features = false, features = ["use_zbus"] }
-ar-reshaper = "1.5.0"
-unicode-bidi = "0.3.18"
+souvlaki = { version = "0.9.3", default-features = false, features = ["use_zbus"] }
 ab_glyph = "0.2"
 notify = "8.2.0"
 open = "5.4.4"
-global-hotkey = "0.8.0"
+global-hotkey = "0.9.0"
 network-interface = "2.0.5"
+socket2 = "0.6.5"
+mdns-sd = "0.21.5"
+scraper = "0.29.0"
+arboard = { version = "3.6.1", default-features = false }
 
 [build-dependencies]
+cc = "1.2.63"
 winres = "0.1.12"
 serde_json = "1.0.150"
+ab_glyph = "0.2"
+egui-phosphor = { version = "0.14.0", default-features = false, features = ["regular"] }
 
 [dev-dependencies]
 ttf-parser = "0.25.1"
+# Compile the MPRIS adapter's pure/interface tests on Windows too. Production
+# Windows still registers only SMTC, never a second D-Bus/media-key listener.
+zbus = "5.19.0"
+
+[target.'cfg(all(unix, not(any(target_os = "macos", target_os = "ios", target_os = "android"))))'.dependencies]
+zbus = "5.19.0"
 
 [target.'cfg(windows)'.dependencies]
 winreg = "0.56.0"
+windows-core = "0.62"
 windows = { version = "0.62", features = [
+    "Foundation",
+    "Media",
+    "Storage_Streams",
+    "Win32_System_WinRT",
     "Win32_Foundation",
     "Win32_Security",
     "Win32_UI_Shell",
     "Win32_UI_Shell_Common",
     "Win32_UI_Shell_PropertiesSystem",
     "Win32_System_Com",
+    "Win32_System_Console",
+    "Win32_System_Diagnostics_Debug",
+    "Win32_System_DataExchange",
+    "Win32_System_Ole",
+    "Win32_System_Memory",
+    "Win32_System_SystemServices",
     "Win32_System_Com_StructuredStorage",
     "Win32_System_Variant",
     "Win32_System_LibraryLoader",
@@ -63,11 +111,48 @@ windows = { version = "0.62", features = [
     "Win32_System_IO",
     "Win32_System_Pipes",
     "Win32_System_Threading",
+    "Win32_System_JobObjects",
     "Win32_Storage_FileSystem",
     "Win32_Graphics_Dwm",
     "Win32_UI_WindowsAndMessaging",
     "Win32_Graphics_Gdi",
 ] }
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSFont", "objc2-core-foundation"] }
+
+[profile.dev]
+# Routine builds reuse dependencies without large symbol files or incremental snapshots.
+# Opt in to symbols only for a specific diagnosis; see LOCAL-WORKSPACE-HYGIENE.md.
+debug = 0
+incremental = false
+
+[profile.test]
+debug = 0
+incremental = false
+
 [profile.release]
+debug = 0
+incremental = false
 strip = "symbols"
+
+[patch.crates-io]
+ecolor = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+emath = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+epaint = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+epaint_default_fonts = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui-winit = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui-wgpu = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui_glow = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui_extras = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui_kittest = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui_system_font_provider = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+eframe = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui_demo_lib = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+egui_inspection = { git = "https://github.com/storytold/egui.git", rev = "6d518fc799681571963842f95b55a6b68431b15a" }
+winit = { git = "https://github.com/storytold/winit.git", rev = "a517b3846ee8457d84ee4975110bfda6797c44dc" }
+egui-phosphor = { git = "https://github.com/xangelix/egui-phosphor.git", branch = "egui-0.37" }

@@ -9,6 +9,7 @@ use std::sync::mpsc::{Receiver, channel};
 #[cfg(any(unix, windows))]
 use std::sync::{Arc, Mutex};
 use std::thread;
+static NATIVE_ENDPOINT:std::sync::OnceLock<String>=std::sync::OnceLock::new();
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct LaunchRequest {
@@ -56,6 +57,9 @@ impl LaunchRequest {
             return Err("launch request must not contain more than 64 commands".to_string());
         }
         for command in &self.commands {
+            if command.is_process_local() {
+                return Err("Process lifecycle commands must be sent individually, not in a session launch".into());
+            }
             if matches!(command, InteropCommand::Launch { .. }) {
                 return Err("launch request must not contain a nested launch command".to_string());
             }
@@ -92,7 +96,7 @@ fn validate_launch_destination(
 
 #[cfg(any(unix, windows, test))]
 #[derive(Default)]
-struct LaunchReceiptCache {
+pub(crate) struct LaunchReceiptCache {
     operation_ids: std::collections::VecDeque<String>,
 }
 
@@ -119,6 +123,13 @@ impl LaunchReceiptCache {
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "command", rename_all = "snake_case")]
 pub enum InteropCommand {
+    /// Transport-owned provenance, impossible to deserialize from a wire payload.
+    #[serde(skip)]
+    NativeLocal { command: Box<InteropCommand> },
+    #[serde(skip)]
+    InspectAuthoring { request_id: u64 },
+    RfControl { operation: String, #[serde(default)] params: Value },
+    OpenRfManager,
     Launch {
         request: LaunchRequest,
     },
@@ -136,15 +147,17 @@ pub enum InteropCommand {
     Seek {
         seconds: f64,
     },
+    /// Use the authority's current paused/playing mode and configured step.
+    TransportNudge { direction: i32 },
     SeekTo {
         seconds: f64,
     },
+    ScrubTo { seconds: f64 },
+    FinishScrub { seconds: f64 },
     SeekAbs {
         percentage: f64,
     },
-    #[serde(alias = "volume")]
     SetVolume {
-        #[serde(alias = "level")]
         value: f64,
     },
     SetMute {
@@ -154,11 +167,23 @@ pub enum InteropCommand {
     SetRate {
         rate: f64,
     },
-    #[serde(alias = "open_video")]
+    SelectMediaTrack {
+        kind: String,
+        id: i64,
+    },
+    DisableMediaTrack {
+        kind: String,
+    },
     Open {
-        #[serde(alias = "path")]
         target: String,
     },
+    BrowseRemote { #[serde(default)] target: String, #[serde(default)] use_proxy: Option<bool>, #[serde(default)] clipboard: bool },
+    SelectRemote { target: String, #[serde(default)] play: bool },
+    InspectRemote { target: Option<String> },
+    RetryRemoteThumbnail { target: String },
+    SortRemote { by: crate::remote_location::SortBy, #[serde(default)] descending: bool },
+    CloseRemoteBrowser,
+    RemoteHistory {direction:i32, #[serde(default)] parent:bool},
     SetFullscreen {
         enabled: bool,
     },
@@ -167,8 +192,26 @@ pub enum InteropCommand {
     Minimize,
     Maximize,
     Restore,
+    GetWindow,
+    SetWindow { #[serde(flatten)] placement: crate::platform::window_control::Placement },
+    GetPlayback,
+    GetMedia,
+    GetChapters,
+    FrameStep { frames: i32 },
     OpenPreferences,
+    GetWorkspaceTools,
+    WorkspaceTools { #[serde(flatten)] request: crate::workspace_tools::Request },
+    NavigatePreferences {
+        #[serde(flatten)]
+        navigation: crate::preferences_contract::PreferencesNavigation,
+    },
+    OpenAbout {
+        #[serde(default)]
+        tab: crate::ui::about::AboutTab,
+    },
     OpenMediaInformation,
+    OpenDownloadCenter,
+    CopyMediaLocation,
     OpenMediaFolder,
     EditConfiguration,
     OpenBoardInformation {
@@ -177,6 +220,12 @@ pub enum InteropCommand {
     ShowMessage {
         message: String,
     },
+    PublishToast {
+        #[serde(flatten)]
+        toast: crate::messaging::ToastRequest,
+    },
+    DismissToast { id: String },
+    InvokeToastAction { id: String, created_at_ms: u64, action_id: String },
     ShowOsd {
         message: String,
         #[serde(default)]
@@ -184,6 +233,13 @@ pub enum InteropCommand {
     },
     HideOsd,
     Quit,
+    /// Process-local lifecycle: close this process, never its remote authority.
+    QuitLocal,
+    GetProcessStatus,
+    ConnectPeer {
+        #[serde(flatten)]
+        request: crate::process_control::ConnectRequest,
+    },
     SetWorkspace {
         profile: String,
     },
@@ -204,6 +260,24 @@ pub enum InteropCommand {
         id: String,
         direction: i32,
     },
+    UpdateTimelineTrack {
+        key: String,
+        #[serde(default)]
+        linked: Option<bool>,
+        #[serde(default)]
+        visible: Option<bool>,
+        #[serde(default)]
+        muted: Option<bool>,
+        #[serde(default)]
+        soloed: Option<bool>,
+        #[serde(default)]
+        locked: Option<bool>,
+        #[serde(default)]
+        selected: Option<bool>,
+    },
+    ManageTimelineTrack {
+        key: String,
+    },
     AddEffectCue {
         effect_id: String,
         start_time_ms: u64,
@@ -211,20 +285,57 @@ pub enum InteropCommand {
     RemoveEffectCue {
         instance_id: String,
     },
+    OpenTimelineCueEditor {
+        instance_id: String,
+        #[serde(default)]
+        presentation: Option<crate::config::TimelineCueEditorPresentation>,
+    },
     UpdateEffectCue {
         instance_id: String,
         start_time_ms: u64,
         duration_ms: u64,
     },
+    PlaceTimelineCue {
+        instance_id: String,
+        start_time_ms: u64,
+        #[serde(default)] control_key: Option<String>,
+        #[serde(default)] duplicate_id: Option<String>,
+    },
+    AddDirectControlCue {
+        control_key: String,
+        value_basis_points: u16,
+        start_time_ms: u64,
+        duration_ms: u64,
+        #[serde(default)]
+        behavior: crate::four_d::models::DirectCueBehavior,
+        #[serde(default)]
+        end_value_basis_points: u16,
+    },
+    UpdateDirectControlCueValue {
+        instance_id: String,
+        value_basis_points: u16,
+        #[serde(default)]
+        behavior: Option<crate::four_d::models::DirectCueBehavior>,
+        #[serde(default)]
+        end_value_basis_points: Option<u16>,
+    },
     AddControllerEffectCue {
         reference: String,
         start_time_ms: u64,
     },
+    ImportAssets { request: crate::assets::ImportRequest },
+    ReviewAsset { id: uuid::Uuid, accept: bool },
+    ResolveTimelineClose {decision:crate::app::TimelineCloseDecision},
     PlayControllerEffect {
         reference: String,
     },
     StopControllerEffect,
-    CreateControllerEffectGroup {
+    StopAudioPreview,
+    RefreshAudioOutputs,
+    SetPlayerMode { mode: crate::mpv::external::Mode },
+    ResolvePlayerExecutable { executable: String },
+    SaveControllerEffectGroup {
+        original_name: String,
         name: String,
         icon: String,
     },
@@ -234,13 +345,21 @@ pub enum InteropCommand {
     SaveControllerEffect {
         effect: WebControllerEffectDraft,
     },
+    PublishAndRunControllerEffect {
+        effect: WebControllerEffectDraft,
+    },
     StartControllerEffectRecording {
         name: String,
         category: String,
         color: String,
         mode: String,
+        #[serde(default)]
+        capture_selection: crate::four_d::controller::HardwareCaptureSelection,
+        #[serde(default)]
+        effect: Option<WebControllerEffectDraft>,
     },
     RefreshControllerEffectRecording,
+    RefreshCaptureCapabilities,
     SaveControllerEffectRecording,
     DiscardControllerEffectRecording,
     SetRecording {
@@ -256,25 +375,75 @@ pub enum InteropCommand {
         channel: u8,
         percent: f64,
     },
+    SetHardwarePwmPolicy {
+        channel: u8,
+        on_behavior: crate::four_d::controller::PwmOnBehavior,
+    },
+    RefreshHardwareCatalog,
+    SetHardwareConnection { connected: bool },
+    HardwareAuthority {
+        operation: String,
+        #[serde(default)]
+        requester_id: String,
+    },
+    PlayHardwareMelody {
+        name: String,
+        repeats: u8,
+    },
+    PlayHardwareTone {
+        frequency_hz: u16,
+        duration_ms: u16,
+    },
+    StopHardwareBuzzer,
     UpdateHardwarePresentation {
         key: String,
         fields: Value,
     },
+    UpdateHardwareFolder { fields: Value },
     ConfigureAddressableStrip {
         pixels: u16,
     },
+    SetAddressableStripColorOrder { order:String },
+    RestoreControllerEffectExamples,
+    OpenStripDesigner { reference:Option<String> },
     FillAddressableStrip {
         red: u8,
         green: u8,
         blue: u8,
         brightness: u8,
     },
+    SetAddressableStripPixel {
+        pixel: u16,
+        pixels: u16,
+        red: u8,
+        green: u8,
+        blue: u8,
+        brightness: u8,
+    },
+    SendAddressableStripFrame {
+        pixels: u16,
+        rgb: Vec<u8>,
+    },
+    StartAddressableStripRainbow {
+        pixels: u16,
+        fps: u8,
+    },
+    StartAddressableStripEffect {
+        id: String,
+        pixels: u16,
+        fps: u8,
+    },
+    StopAddressableStrip,
+    RefreshAddressableStripStatus,
     ClearAddressableStrip,
     PressFrontPanelKey {
         key: String,
     },
     UpdateConfig {
         values: Value,
+    },
+    UpdateBranding {
+        update: crate::branding::BrandingUpdate,
     },
     PreviewConfig {
         config: Box<crate::config::AppConfig>,
@@ -284,6 +453,8 @@ pub enum InteropCommand {
     },
     CancelPreviewConfig,
     ReloadConfig,
+    GetBranding,
+    ClearBranding,
     GetStatus,
 }
 
@@ -399,14 +570,73 @@ fn valid_workspace_profile_icon(value: &str) -> bool {
     valid_workspace_profile_id(value)
 }
 
+fn valid_timeline_track_key(value: &str) -> bool {
+    let value = value.trim();
+    !value.is_empty()
+        && value.len() <= 192
+        && value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, ':' | '.' | '-' | '_')
+        })
+}
+
 impl InteropCommand {
+    pub fn is_process_local(&self) -> bool {
+        // A native sender owns unuploaded paths. Let its local importer
+        // transfer them; owner-stamped browser receipts already belong to the
+        // authority and follow normal session forwarding instead.
+        matches!(self,Self::ImportAssets{request} if request.owner_id.is_none()) ||
+        matches!(self, Self::GetWorkspaceTools | Self::WorkspaceTools { .. } | Self::QuitLocal | Self::GetProcessStatus | Self::ConnectPeer { .. } | Self::InspectAuthoring { .. } | Self::NavigatePreferences { .. } | Self::OpenAbout { .. }
+            | Self::GetWindow | Self::SetWindow { .. } | Self::Activate | Self::Minimize | Self::Maximize | Self::Restore | Self::SetFullscreen { .. } | Self::ToggleFullscreen | Self::CopyMediaLocation | Self::OpenDownloadCenter)
+    }
+
+    pub fn query_result(&self) -> Option<Value> {
+        match self {
+            Self::GetWorkspaceTools => Some(crate::workspace_tools::snapshot()),
+            Self::ResolvePlayerExecutable { executable } => Some(match crate::mpv::external::resolve_executable(executable) {
+                Ok(path) => serde_json::json!({"input":executable,"resolved":path,"error":null}),
+                Err(error) => serde_json::json!({"input":executable,"resolved":null,"error":error}),
+            }),
+            Self::GetWindow => Some(serde_json::to_value(crate::platform::window_control::snapshot()).expect("window status")),
+            Self::GetPlayback => {
+                let status=get_live_status();
+                Some(serde_json::json!({"playing":status.playing,"loaded":status.current_video.is_some(),"position_seconds":status.playback_time,
+                    "duration_seconds":status.duration,"volume":status.volume,"muted":status.muted,"rate":status.playback_rate,
+                    "seekable":status.seekable,"live":status.live,"seek_pending":status.seek_pending,"settled_seek_revision":status.settled_seek_revision,
+                    "settled_seek_target":status.settled_seek_target,"buffered_until":status.buffered_until,"buffering_percent":status.buffering_percent}))
+            },
+            Self::GetMedia => { let status=get_live_status();Some(serde_json::json!({"target":status.current_video,"information":get_live_media_information(),"tracks":status.media_tracks,"chapters":status.chapters,"current_chapter_index":status.current_chapter_index,"duration_seconds":status.duration,"media_fps":status.media_fps})) },
+            Self::GetChapters => {let status=get_live_status();Some(serde_json::json!({"chapters":status.chapters,"current_chapter_index":status.current_chapter_index}))},
+            Self::GetStatus => Some(serde_json::to_value(get_live_status())
+                .unwrap_or_else(|_| serde_json::json!({"status":"initializing"}))),
+            Self::GetProcessStatus => Some(crate::process_control::status()),
+            Self::GetBranding => Some(crate::branding::snapshot()),
+            _ => None,
+        }
+    }
+
     pub fn validate(&self) -> Result<(), String> {
         match self {
+            Self::WorkspaceTools { request } => request.validate(),
+            Self::ResolvePlayerExecutable { executable } if executable.len() > 4096 || executable.contains(['\r', '\n', '\0']) => Err("Invalid player executable".into()),
+            Self::SetWindow { placement } => placement.validate(),
+            Self::FrameStep { frames } if *frames==0 || frames.unsigned_abs()>120 => Err("Frame step must be a nonzero count within ±120".into()),
+            Self::ImportAssets { request } => request.validate(),
+            Self::ConnectPeer { request } => request.validate(),
+            Self::NavigatePreferences { navigation } => navigation.validate(),
+            Self::RfControl { operation, params } => {
+                if !crate::ui::rf::OPERATIONS.contains(&operation.as_str()) || !params.is_object() || params.to_string().len() > 32768 {
+                    Err("Invalid RF operation or parameters".to_string())
+                } else { Ok(()) }
+            },
             Self::Launch { request } => request.validate(),
+            Self::TransportNudge { direction } if !matches!(direction, -1 | 1) => {
+                Err("Transport direction must be -1 or 1".into())
+            }
             Self::Seek { seconds } if !seconds.is_finite() => {
                 Err("seek value must be finite".to_string())
             }
-            Self::SeekTo { seconds } if !seconds.is_finite() || *seconds < 0.0 => {
+            Self::SeekTo { seconds } | Self::ScrubTo { seconds } | Self::FinishScrub { seconds }
+                if !seconds.is_finite() || *seconds < 0.0 => {
                 Err("absolute seek time must be a finite non-negative value".to_string())
             }
             Self::SeekAbs { percentage }
@@ -423,13 +653,67 @@ impl InteropCommand {
             Self::SetRate { rate } if !rate.is_finite() || !(0.05..=16.0).contains(rate) => {
                 Err("playback rate must be a finite value from 0.05 to 16".to_string())
             }
+            Self::SelectMediaTrack { kind, id }
+                if !matches!(kind.as_str(), "video" | "audio" | "subtitle") || *id < 0 =>
+            {
+                Err("media track selection requires video, audio, or subtitle and a non-negative ID".to_string())
+            }
+            Self::DisableMediaTrack { kind }
+                if !matches!(kind.as_str(), "video" | "audio" | "subtitle") =>
+            {
+                Err("media track kind must be video, audio, or subtitle".to_string())
+            }
             Self::SetHardwarePwm { percent, .. }
                 if !percent.is_finite() || !(0.0..=100.0).contains(percent) =>
             {
                 Err("PWM percent must be a finite value from 0 to 100".to_string())
             }
+            Self::SetHardwarePwmPolicy { channel, .. } if *channel >= 16 => {
+                Err("PWM policy channel must be from 0 to 15".to_string())
+            }
+            Self::PlayHardwareMelody { name, repeats }
+                if name.trim().is_empty() || name.len() > 64 || *repeats > 20 =>
+            {
+                Err("melody playback requires a configured name and 0–20 repeats".to_string())
+            }
+            Self::PlayHardwareTone {
+                frequency_hz,
+                duration_ms,
+            } if !(20..=20_000).contains(frequency_hz) || *duration_ms == 0 =>
+            {
+                Err("buzzer tone requires 20–20000 Hz and a positive duration".to_string())
+            }
             Self::ConfigureAddressableStrip { pixels } if *pixels == 0 => {
                 Err("addressable strip pixel count must be greater than zero".to_string())
+            }
+            Self::SetAddressableStripColorOrder {order} if !matches!(order.as_str(),"RGB"|"RBG"|"GRB"|"GBR"|"BRG"|"BGR") => Err("Invalid strip color order".into()),
+            Self::SetAddressableStripPixel { pixel, pixels, .. }
+                if *pixels == 0 || *pixel >= *pixels =>
+            {
+                Err("addressable strip pixel must be inside the configured pixel count".to_string())
+            }
+            Self::SendAddressableStripFrame { pixels, rgb }
+                if *pixels == 0 || rgb.len() != usize::from(*pixels) * 3 =>
+            {
+                Err("addressable strip frame must contain exactly three bytes per pixel".to_string())
+            }
+            Self::StartAddressableStripRainbow { pixels, fps }
+                if *pixels == 0 || *fps == 0 =>
+            {
+                Err("addressable strip rainbow requires a pixel count and frame rate".to_string())
+            }
+            Self::StartAddressableStripEffect { id, pixels, fps }
+                if *pixels == 0
+                    || *fps == 0
+                    || id.is_empty()
+                    || id.len() > 64
+                    || !id.chars().all(|character| {
+                        character.is_ascii_lowercase()
+                            || character.is_ascii_digit()
+                            || matches!(character, '.' | '-' | '_')
+                    }) =>
+            {
+                Err("addressable strip effect request is invalid".to_string())
             }
             Self::InvokeHardwareAction { action_id }
                 if action_id.trim().is_empty()
@@ -439,6 +723,10 @@ impl InteropCommand {
                     }) =>
             {
                 Err("hardware action ID is invalid".to_string())
+            }
+            Self::HardwareAuthority { operation, requester_id }
+                if !matches!(operation.as_str(), "request" | "accept" | "reject" | "release" | "lock" | "unlock") || requester_id.len()>180 => {
+                Err("publishing authority operation or requester is invalid".into())
             }
             Self::UpdateHardwarePresentation { key, fields }
                 if key.trim().is_empty()
@@ -450,6 +738,9 @@ impl InteropCommand {
             {
                 Err("hardware presentation update is invalid".to_string())
             }
+            Self::UpdateHardwareFolder { fields } if !fields.is_object() => {
+                Err("hardware folder update is invalid".into())
+            }
             Self::PressFrontPanelKey { key }
                 if !matches!(key.to_ascii_uppercase().as_str(), "K1" | "K2" | "K3" | "K4") =>
             {
@@ -457,6 +748,24 @@ impl InteropCommand {
             }
             Self::OpenBoardInformation { tab } if *tab > 3 => {
                 Err("board information tab must be between 0 and 3".to_string())
+            }
+            Self::UpdateTimelineTrack {
+                key,
+                linked,
+                visible,
+                muted,
+                soloed,
+                locked,
+                selected,
+            } if !valid_timeline_track_key(key)
+                || [linked, visible, muted, soloed, locked, selected]
+                    .iter()
+                    .all(|value| value.is_none()) =>
+            {
+                Err("timeline track update requires a valid key and at least one field".to_string())
+            }
+            Self::ManageTimelineTrack { key } if !valid_timeline_track_key(key) => {
+                Err("timeline track key is invalid".to_string())
             }
             Self::Open { target } if target.trim().is_empty() || target.len() > 32_768 => {
                 Err("media target must contain 1 to 32768 bytes".to_string())
@@ -466,7 +775,7 @@ impl InteropCommand {
             {
                 Err("effect_id must be a valid effect UUID".to_string())
             }
-            Self::RemoveEffectCue { instance_id }
+            Self::RemoveEffectCue { instance_id } | Self::OpenTimelineCueEditor { instance_id, .. }
                 if uuid::Uuid::parse_str(instance_id.trim()).is_err() =>
             {
                 Err("instance_id must be a valid cue UUID".to_string())
@@ -484,6 +793,38 @@ impl InteropCommand {
                         .to_string(),
                 )
             }
+            Self::AddDirectControlCue {
+                control_key,
+                value_basis_points,
+                duration_ms,
+                end_value_basis_points,
+                ..
+            } if control_key.trim().is_empty()
+                || control_key.len() > 128
+                || *value_basis_points > 10_000
+                || *end_value_basis_points > 10_000
+                || *duration_ms < 100
+                || *duration_ms > 86_400_000 =>
+            {
+                Err("direct cue requires a channel key, 0..100% value, and 100 ms..24 hour duration".to_string())
+            }
+            Self::PlaceTimelineCue { instance_id, control_key, duplicate_id, .. }
+                if uuid::Uuid::parse_str(instance_id).is_err()
+                    || duplicate_id.as_ref().is_some_and(|id| uuid::Uuid::parse_str(id).is_err())
+                    || control_key.as_ref().is_some_and(|key| !matches!(key.as_str(), "seat.a" | "seat.b")) => {
+                Err("cue placement requires UUIDs and a compatible seat track".into())
+            }
+            Self::UpdateDirectControlCueValue {
+                instance_id,
+                value_basis_points,
+                end_value_basis_points,
+                ..
+            } if uuid::Uuid::parse_str(instance_id.trim()).is_err()
+                || *value_basis_points > 10_000
+                || end_value_basis_points.is_some_and(|value| value > 10_000) =>
+            {
+                Err("direct cue value requires a valid UUID and 0..100% value".to_string())
+            }
             Self::AddControllerEffectCue { reference, .. }
             | Self::PlayControllerEffect { reference }
             | Self::DeleteControllerEffect { reference }
@@ -491,12 +832,18 @@ impl InteropCommand {
             {
                 Err("controller effect reference is invalid".to_string())
             }
-            Self::SaveControllerEffect { effect } => effect.validate(),
-            Self::CreateControllerEffectGroup { name, icon }
+            Self::SaveControllerEffect { effect } | Self::PublishAndRunControllerEffect { effect } => effect.validate(),
+            Self::SaveControllerEffectGroup {
+                original_name,
+                name,
+                icon,
+            }
                 if name.trim().is_empty()
                     || name.len() > 64
+                    || original_name.len() > 64
                     || icon.len() > 64
                     || name.chars().any(char::is_control)
+                    || original_name.chars().any(char::is_control)
                     || icon.chars().any(char::is_control) =>
             {
                 Err("Group name and icon must be bounded printable values".to_owned())
@@ -506,6 +853,7 @@ impl InteropCommand {
                 category,
                 color,
                 mode,
+                ..
             } if name.trim().is_empty()
                 || name.len() > 64
                 || category.trim().is_empty()
@@ -524,6 +872,17 @@ impl InteropCommand {
                         .to_string(),
                 )
             }
+            Self::StartControllerEffectRecording { capture_selection, .. } if capture_selection.is_empty()
+                || capture_selection.control_keys.len() > 64 || capture_selection.opcodes.len() > 256
+                || capture_selection.control_keys.iter().any(|key| key.is_empty() || key.len() > 128) => {
+                Err("Select valid channels or opcodes to record".into())
+            }
+            Self::StartControllerEffectRecording { effect: Some(effect), .. } => {
+                if effect.kind != "sequence" {
+                    return Err("Capture requires a sequence effect".into());
+                }
+                effect.validate()
+            }
             Self::ShowMessage { message } if message.chars().count() > 2_048 => {
                 Err("message must not exceed 2048 characters".to_string())
             }
@@ -531,6 +890,14 @@ impl InteropCommand {
                 Err("OSD message must not exceed 2048 characters".to_string())
             }
             Self::ShowOsd { options, .. } => options.validate(),
+            Self::PublishToast { toast } => toast.validate(),
+            Self::InvokeToastAction { id, action_id, .. } if !crate::messaging::valid_id(id) || !crate::messaging::valid_id(action_id) => Err("invalid notification action identity".into()),
+            Self::RemoteHistory {direction,parent} if !matches!(direction,-1|1) || *parent && *direction!= -1 => Err("Remote history direction must be -1 or 1".into()),
+            Self::BrowseRemote { target, .. } if !target.is_empty() => crate::remote_location::normalize(target).map(|_| ()),
+            Self::SelectRemote { target, .. } => crate::remote_location::normalize(target).map(|_| ()),
+            Self::InspectRemote { target: Some(target) } => crate::remote_location::normalize(target).map(|_| ()),
+            Self::RetryRemoteThumbnail { target } => crate::remote_location::normalize(target).map(|_| ()),
+            Self::DismissToast { id } if !crate::messaging::valid_id(id) => Err("invalid toast ID".into()),
             Self::SetWorkspace { profile }
             | Self::DeleteWorkspaceProfile { id: profile }
             | Self::MoveWorkspaceProfile { id: profile, .. }
@@ -554,6 +921,7 @@ impl InteropCommand {
                 Err("workspace profile direction must be -1 or 1".to_string())
             }
             Self::UpdateConfig { values } => crate::config::AppConfig::validate_patch_shape(values),
+            Self::UpdateBranding { update } => update.validate(),
             Self::PreviewConfig { config } | Self::CommitPreviewConfig { config } => {
                 config.validate()
             }
@@ -563,30 +931,71 @@ impl InteropCommand {
 }
 
 pub fn command_catalog() -> Value {
-    serde_json::json!({
+    let terminal=serde_json::json!({"available":cfg!(feature="workspace-terminal"),"pair":"pealayer.terminal.pair","revoke":"pealayer.terminal.revoke","native_control":"pealayer.terminal.control","control":"/api/terminal/control","events":"/api/terminal/events?after=REVISION","authorization":"native-issued memory-only Bearer key; eight-hour expiry; same-origin browser; remote execution opt-in","operations":["snapshot","create","create_profile","select","close","clear","input","scroll","refresh_profiles"],"ownership":"host session IDs and profiles shared by native and Web; HTTP follows the Pealayer authority"});
+    let assets=serde_json::json!({"import":"pealayer.assets.import","review":"pealayer.assets.review","snapshot":"/api/assets","upload":"/api/assets/upload","chunk_bytes":crate::server::asset_upload::CHUNK_BYTES,"destinations":["player","library","timeline","audio-source"],"placement":"integer milliseconds; scene/timeline imports append after review, never replace the session","ownership":"transfer receipts pinned to the receiving session owner; hardware effect programs remain with PCController"});
+    let mut catalog=serde_json::json!({
         "contract": "pealayer.control",
-        "transports": ["native", "http", "json-rpc"],
+        "transports": ["native", "http", "json-rpc", "websocket", "tcp-ndjson", "binary-udp"],
+        "process": { "status": "/api/process/status", "authoring": "/api/process/authoring", "command": "/api/process/command", "methods": ["pealayer.process.status", "pealayer.process.connect", "pealayer.process.quit"], "scope": "local process, never relayed to authority", "connect": "validated, idempotent, graceful restart; poll local status after reconnect" },
+        "messaging": { "contract": "pealayer.messages.v1", "snapshot": "/api/messages", "subscription": "/ws", "publish": "pealayer.toast.show", "dismiss": "pealayer.toast.dismiss", "invoke": "pealayer.toast.invoke", "max_actions": 4, "default_action": "bound action ID", "state": "pealayer.messages.state", "surfaces": ["egui", "web", "terminal"], "persistent_timeout_ms": 0 },
+        "remote_folders": { "browse": "pealayer.remote.browse", "history": "pealayer.remote.history", "select": "pealayer.remote.select", "inspect": "pealayer.remote.inspect", "sort": "pealayer.remote.sort", "close": "pealayer.remote.close", "state": "/api/remote/state", "thumbnail": "/api/remote/thumbnail", "thumbnail_retry": "pealayer.remote.thumbnail.retry", "subscription": "/ws" },
+        "preferences_navigation": { "method": "pealayer.preferences.navigate", "command": "navigate_preferences", "section": "optional schema section ID", "scroll_y": "absolute logical pixel offset, clamped to content", "scope": "local native process, including its Preferences helper", "accepted": "queued, not confirmation that a frame has rendered" },
+        "about_navigation": { "method": "pealayer.about.open", "command": "open_about", "tab": ["overview", "build", "board", "libraries"], "scope": "local native process, never relayed to authority", "accepted": "queued, not confirmation that a frame has rendered" },
         "commands": [
+            "import_assets", "review_asset", "resolve_timeline_close",
             "open", "play", "pause", "toggle_pause", "stop", "next", "previous",
+            "browse_remote", "select_remote", "sort_remote", "close_remote_browser",
             "chapter_previous", "chapter_next", "set_chapter",
-            "seek", "seek_to", "seek_abs", "set_volume", "set_mute", "toggle_mute",
+            "seek", "seek_to", "seek_abs", "scrub_to", "finish_scrub", "set_volume", "set_mute", "toggle_mute",
             "set_rate", "set_fullscreen", "toggle_fullscreen", "activate", "minimize",
-            "maximize", "restore", "open_preferences", "open_media_information", "open_media_folder", "edit_configuration", "open_board_information", "show_message", "show_osd", "hide_osd", "set_workspace",
+            "maximize", "restore", "open_preferences", "navigate_preferences", "open_media_information", "copy_media_location", "open_media_folder", "edit_configuration", "open_board_information", "show_message", "show_osd", "hide_osd", "set_workspace",
             "create_workspace_profile", "update_workspace_profile", "delete_workspace_profile",
-            "move_workspace_profile", "update_config",
+            "open_about",
+            "move_workspace_profile", "timeline.track.update", "timeline.track.manage", "update_config",
             "reload_config", "add_effect_cue", "update_effect_cue", "remove_effect_cue", "set_recording",
-            "get_status", "quit", "controller_effect_cue.add", "controller_effect.play",
-            "controller_effect.stop", "controller_effect.save", "controller_effect.delete",
-            "controller_effect.group.create",
+            "get_status", "publish_toast", "dismiss_toast", "invoke_toast_action", "quit", "controller_effect_cue.add", "controller_effect.play",
+            "controller_effect.stop", "controller_effect.save", "controller_effect.delete", "audio_effect.stop", "audio.outputs.refresh",
+            "controller_effect.group.save",
+            "timeline.cue.place", "timeline.cue.edit", "controller_effect.publish_and_run", "controller_effect.record.capabilities",
             "controller_effect.record.start", "controller_effect.record.status",
             "controller_effect.record.save", "controller_effect.record.discard",
-            "set_emergency_stop", "invoke_hardware_action", "set_hardware_pwm",
-            "configure_addressable_strip", "fill_addressable_strip", "clear_addressable_strip",
-            "press_front_panel_key", "board_information"
+            "set_emergency_stop", "invoke_hardware_action", "set_hardware_pwm", "refresh_hardware_catalog", "set_hardware_connection",
+            "configure_addressable_strip", "fill_addressable_strip", "set_addressable_strip_pixel",
+            "send_addressable_strip_frame", "start_addressable_strip_rainbow",
+            "start_addressable_strip_effect", "stop_addressable_strip",
+            "refresh_addressable_strip_status", "clear_addressable_strip",
+            "hardware.strip.color_order", "controller_effect.restore_examples", "controller_effect.strip.edit",
+            "press_front_panel_key", "board_information", "rf_control", "open_rf_manager"
         ],
         "json_rpc_prefix": "pealayer",
+        "hardware_connection": {"method":"pealayer.hardware.connection","command":"set_hardware_connection","params":{"connected":"required boolean"},"scope":"current session authority; existing configured endpoint"},
+        "transport": { "nudge": "pealayer.transport.nudge", "directions": [-1,1],
+            "paused_step": "frame_step_count", "playing_step": "quick_seek_seconds" },
         "discovery": "/api/player/commands"
-    })
+    });
+    catalog["workspace_tools"] = serde_json::json!({ "status":"pealayer.workspace.tools.get", "control":"pealayer.workspace.tools.control", "scope":"local process, never relayed", "actions":["set_visible","palette","terminal"], "terminal_operations":["connect","disconnect","clear","write","resize"], "execution":"connect/write/resize require native local IPC; browser requests are rejected", "privacy":"metadata only; no transcript or history", "accepted":"queued once, not execution acknowledgement" });
+    catalog["terminal"] = terminal;
+    catalog["window"]=serde_json::json!({"get":"pealayer.window.get","set":"pealayer.window.set","scope":"local process, never remote authority","units":"logical_points","position":"outer origin","size":"inner client size","states":["normal","minimized","maximized","fullscreen"],"bounds_without_state":"restore to normal, then place","acknowledgement":"queued; poll observed window state"});
+    catalog["native_ipc"]=serde_json::json!({"endpoint":NATIVE_ENDPOINT.get(),"encoding":"UTF-8 JSON or JSON-RPC, newline terminated"});
+    #[cfg(windows)]
+    {catalog["transports"].as_array_mut().unwrap().push(Value::String("wm-copydata".into()));catalog["wm_copydata"]=serde_json::json!({"request_dwdata":crate::platform::copydata::REQUEST,"response_dwdata":crate::platform::copydata::RESPONSE,"encoding":"UTF-8 JSON or JSON-RPC","limit_bytes":1048576,"reply":"wParam sender HWND; asynchronous WM_COPYDATA response; same Windows session","acknowledgement":"LRESULT=1 means queued, not applied"});}
+    catalog["playback_queries"]=serde_json::json!(["pealayer.playback.get","pealayer.media.get","pealayer.chapters.get","pealayer.status"]);
+    catalog["commands"].as_array_mut().unwrap().extend(["get_window","set_window","get_playback","get_media","get_chapters","frame_step","set_player_mode","resolve_player_executable"].map(|s|Value::String(s.into())));
+    catalog["external_player"] = serde_json::json!({"mode":"pealayer.player.mode","modes":["internal","external","dual","remote"],"resolve":"pealayer.player.executable.resolve","params":{"executable":"name or full path"},"closed":"dual falls back to internal; external-only stays stopped; explicitly reselect to relaunch","status":"external_mpv in /api/player/status"});
+    catalog.as_object_mut().unwrap().insert("assets".into(),assets);
+    catalog.as_object_mut().unwrap().insert("branding".into(), serde_json::json!({
+        "get":"pealayer.branding.get", "update":"pealayer.branding.update", "http":"/api/branding",
+        "persist":"optional boolean; false by default", "values":crate::branding::BRANDING_KEYS,
+        "accepted":"queued; read effective/configured branding to confirm application"
+    }));
+    catalog["commands"].as_array_mut().unwrap().extend([serde_json::json!("update_branding"), serde_json::json!("get_branding")]);
+    catalog["branding"]["clear"] = serde_json::json!("pealayer.branding.clear");
+    catalog["commands"].as_array_mut().unwrap().push(serde_json::json!("clear_branding"));
+    catalog["commands"].as_array_mut().unwrap().push(serde_json::json!("open_download_center"));
+    catalog["updates"] = serde_json::json!({"http":"/api/update/", "methods":crate::update::rpc::METHODS,
+        "scope":"local process, never implicitly relayed to authority", "chunk_bytes":crate::update::rpc::CHUNK_BYTES,
+        "encoding":"base64", "completion":"exact artifact and health acknowledgement, not transfer acceptance"});
+    catalog
 }
 
 pub fn parse_text_command(input: &str) -> Result<InteropCommand, String> {
@@ -659,6 +1068,8 @@ pub fn parse_text_command(input: &str) -> Result<InteropCommand, String> {
         "seek_to" | "seek-to" => InteropCommand::SeekTo {
             seconds: number("seek-to")?,
         },
+        "scrub_to" => InteropCommand::ScrubTo { seconds: number("scrub_to")? },
+        "finish_scrub" => InteropCommand::FinishScrub { seconds: number("finish_scrub")? },
         "seek_abs" | "seek-abs" => InteropCommand::SeekAbs {
             percentage: number("seek-abs")?,
         },
@@ -675,6 +1086,8 @@ pub fn parse_text_command(input: &str) -> Result<InteropCommand, String> {
         "open" => InteropCommand::Open {
             target: argument.to_string(),
         },
+        "browse_remote" => InteropCommand::BrowseRemote { target: argument.into(), use_proxy: None, clipboard: false },
+        "close_remote_browser" => InteropCommand::CloseRemoteBrowser,
         "fullscreen" | "set_fullscreen" | "set-fullscreen" => InteropCommand::SetFullscreen {
             enabled: boolean()?,
         },
@@ -685,11 +1098,18 @@ pub fn parse_text_command(input: &str) -> Result<InteropCommand, String> {
         "restore" => InteropCommand::Restore,
         "preferences" | "open_preferences" | "open-preferences" => InteropCommand::OpenPreferences,
         "media_information" | "open_media_information" => InteropCommand::OpenMediaInformation,
+        "open_download_center" => InteropCommand::OpenDownloadCenter,
+        "copy_media_location" => InteropCommand::CopyMediaLocation,
         "media_folder" | "open_media_folder" => InteropCommand::OpenMediaFolder,
         "edit_configuration" | "edit_config" => InteropCommand::EditConfiguration,
         "message" | "show_message" | "show-message" => InteropCommand::ShowMessage {
             message: argument.to_string(),
         },
+        "toast" => InteropCommand::PublishToast { toast: crate::messaging::ToastRequest { actions: Vec::new(), default_action: None, details: None,
+            id: None, title: String::new(), message: argument.to_string(),
+            severity: crate::messaging::Severity::Info, timeout_ms: 5000,
+        } },
+        "dismiss_toast" => InteropCommand::DismissToast { id: argument.into() },
         "osd" | "show_osd" | "show-osd" => InteropCommand::ShowOsd {
             message: argument.to_string(),
             options: OsdOptions::default(),
@@ -719,6 +1139,16 @@ pub fn parse_text_command(input: &str) -> Result<InteropCommand, String> {
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AppearanceState {
+    pub ui_animation_mode: crate::config::UiAnimationMode,
+    pub ui_control_density: crate::config::UiControlDensity,
+    pub ui_font_family: crate::config::UiFontFamily,
+    pub monospace_font_family: crate::config::UiFontFamily,
+    pub ui_font_name: String,
+    pub monospace_font_name: String,
+    pub workspace_ui: crate::config::WorkspaceUi,
+    pub native_monitor_style: crate::config::NativeMonitorStyle,
+    pub native_timeline_style: crate::config::NativeTimelineStyle,
+    pub preferences_grouped_navigation: bool,
     pub theme: crate::config::AppTheme,
     pub color_palette: crate::config::ColorPalette,
     pub accent_color: crate::config::AccentColor,
@@ -733,6 +1163,16 @@ impl AppearanceState {
         let [red, green, blue] = crate::ui::platform_accent_rgb(config);
         Self {
             theme: crate::config::resolved_theme(config),
+            ui_animation_mode: config.ui_animation_mode,
+            ui_control_density: config.ui_control_density,
+            ui_font_family: config.ui_font_family,
+            monospace_font_family: config.monospace_font_family,
+            ui_font_name: config.ui_font_name.clone(),
+            monospace_font_name: config.monospace_font_name.clone(),
+            workspace_ui: config.workspace_ui,
+            native_monitor_style: config.native_monitor_style,
+            native_timeline_style: config.native_timeline_style,
+            preferences_grouped_navigation: config.preferences_grouped_navigation,
             color_palette: config.color_palette,
             accent_color: config.accent_color,
             custom_accent_color: config.custom_accent_color.clone(),
@@ -746,12 +1186,209 @@ impl AppearanceState {
     }
 }
 
+/// Build identity reported by every control transport. This deliberately
+/// excludes paths and host names so a remote coordinator can identify a
+/// Pealayer build without leaking user- or machine-specific information.
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct ApplicationIdentity {
+    pub name: String,
+    pub description: String,
+    pub version: String,
+    pub commit: String,
+    pub dirty: bool,
+    pub platform: String,
+    pub arch: String,
+}
+
+impl ApplicationIdentity {
+    pub fn current(name: &str) -> Self {
+        Self {
+            name: name.to_string(),
+            description: live_app_description(),
+            version: env!("CARGO_PKG_VERSION").to_string(),
+            commit: env!("PEALAYER_GIT_COMMIT").to_string(),
+            dirty: env!("PEALAYER_GIT_DIRTY") == "true",
+            platform: std::env::consts::OS.to_string(),
+            arch: std::env::consts::ARCH.to_string(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RuntimeControlEndpoints {
+    pub port: u16,
+    pub web_ui: String,
+    pub health: String,
+    pub ipc: String,
+    pub json_rpc: String,
+    pub websocket: String,
+}
+
+impl RuntimeControlEndpoints {
+    fn current() -> Self {
+        let port = crate::config::control_port();
+        Self {
+            port,
+            web_ui: format!("http://127.0.0.1:{port}/"),
+            health: format!("http://127.0.0.1:{port}/healthz"),
+            ipc: format!("http://127.0.0.1:{port}/api/ipc"),
+            json_rpc: format!("http://127.0.0.1:{port}/api/rpc"),
+            websocket: format!("ws://127.0.0.1:{port}/ws"),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct RuntimeExecutableIdentity {
+    pub file_name: String,
+    pub size_bytes: u64,
+    pub sha256: String,
+}
+
+/// Immutable process/runtime facts that are safe to expose through local IPC
+/// and authenticated/shared HTTP control. The potentially expensive file
+/// fingerprints are populated once in the background.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RuntimeIdentity {
+    pub process_id: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<u32>,
+    pub inspection: String,
+    pub control: RuntimeControlEndpoints,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub executable: Option<RuntimeExecutableIdentity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub libmpv: Option<crate::update::LibmpvRuntimeIdentity>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl RuntimeIdentity {
+    fn pending() -> Self {
+        Self {
+            process_id: std::process::id(),
+            session_id: current_process_session_id(),
+            inspection: "pending".to_string(),
+            control: RuntimeControlEndpoints::current(),
+            executable: None,
+            libmpv: None,
+            error: None,
+        }
+    }
+}
+
+impl Default for RuntimeIdentity {
+    fn default() -> Self {
+        Self {
+            process_id: 0,
+            session_id: None,
+            inspection: "unavailable".to_string(),
+            control: RuntimeControlEndpoints::default(),
+            executable: None,
+            libmpv: None,
+            error: None,
+        }
+    }
+}
+
+fn current_process_session_id() -> Option<u32> {
+    #[cfg(target_os = "windows")]
+    {
+        return crate::platform::windows::current_session_id().ok();
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        None
+    }
+}
+
+/// Return cached self-diagnostics without hashing the executable or libmpv on
+/// the UI/status publisher thread. A caller may briefly observe `pending` and
+/// poll the same status method until it becomes `ready` or `error`.
+pub fn runtime_identity() -> RuntimeIdentity {
+    static IDENTITY: std::sync::OnceLock<
+        std::sync::Arc<std::sync::Mutex<RuntimeIdentity>>,
+    > = std::sync::OnceLock::new();
+    let identity = IDENTITY.get_or_init(|| {
+        let identity = std::sync::Arc::new(std::sync::Mutex::new(RuntimeIdentity::pending()));
+        let background_identity = std::sync::Arc::clone(&identity);
+        let spawn_result = thread::Builder::new()
+            .name("pealayer-runtime-inspection".to_string())
+            .spawn(move || {
+                let result = crate::update::current_manifest().and_then(|manifest| {
+                    let executable = std::env::current_exe()
+                        .map_err(|error| format!("resolve current executable: {error}"))?;
+                    let file_name = executable
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .unwrap_or("pealayer")
+                        .to_string();
+                    Ok((
+                        RuntimeExecutableIdentity {
+                            file_name,
+                            size_bytes: manifest.size,
+                            sha256: manifest.sha256,
+                        },
+                        manifest.libmpv_runtime,
+                    ))
+                });
+                if let Ok(mut current) = background_identity.lock() {
+                    match result {
+                        Ok((executable, libmpv)) => {
+                            current.inspection = "ready".to_string();
+                            current.executable = Some(executable);
+                            current.libmpv = libmpv;
+                            current.error = None;
+                        }
+                        Err(error) => {
+                            current.inspection = "error".to_string();
+                            current.error = Some(error);
+                        }
+                    }
+                }
+            });
+        if let Err(error) = spawn_result
+            && let Ok(mut current) = identity.lock()
+        {
+            current.inspection = "error".to_string();
+            current.error = Some(format!("start runtime inspection: {error}"));
+        }
+        identity
+    });
+    let snapshot = identity
+        .lock()
+        .map(|identity| identity.clone())
+        .unwrap_or_default();
+    snapshot
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlayerStatusResponse {
+    pub window: crate::platform::window_control::WindowStatus,
+    #[serde(default)]
+    pub external_mpv: crate::mpv::external::Status,
+    #[serde(default)]
+    pub application: ApplicationIdentity,
+    #[serde(default)]
+    pub runtime: RuntimeIdentity,
+    #[serde(default)]
+    pub asset_imports: Value,
+    pub pending_timeline_change: bool,
+    #[serde(default)] pub rf: Value,
+    #[serde(default)]
+    pub remote_browser: crate::remote_location::BrowserState,
+    #[serde(default)]
+    pub messages: crate::messaging::MessageSnapshot,
     pub status: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub appearance: Option<AppearanceState>,
+    #[serde(default)]
+    pub app_icon_revision: u64,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timeline_wheel_preferences: Option<crate::config::TimelineWheelPreferences>,
     pub playing: bool,
+    #[serde(default = "default_human_time_units")]
+    pub human_readable_time_units: bool,
     pub volume: f64,
     #[serde(default)]
     pub muted: bool,
@@ -759,11 +1396,33 @@ pub struct PlayerStatusResponse {
     pub playback_rate: f64,
     pub playback_time: f64,
     pub duration: f64,
+    #[serde(default)]
+    pub media_fps: f64,
+    /// Measured native UI cadence, not the monitor refresh rate or browser FPS.
+    pub ui_fps: Option<f64>,
     pub current_video: Option<String>,
+    /// Presentation only; current_video remains the encoded source identity.
+    pub media_display_name: Option<String>,
+    pub media_location_display: Option<String>,
+    pub mouse_bindings: crate::pointer_bindings::Bindings,
+    pub media_session: crate::platform::media_controls::SessionMetadata,
+    pub media_session_capabilities: crate::platform::media_controls::SessionCapabilities,
+    pub quick_seek_seconds: f64,
+    #[serde(default)]
+    pub media_tracks: Vec<WebMediaTrack>,
     #[serde(default)]
     pub chapters: Vec<WebMediaChapter>,
     #[serde(default)]
     pub current_chapter_index: Option<i64>,
+    pub seekbar_markers: crate::config::SeekbarMarkersConfig,
+    pub effect_designer_cue_colors: std::collections::BTreeMap<String, String>,
+    pub control_bars: crate::config::ControlBarsConfig,
+    pub media_keys_enabled: bool,
+    pub media_keys_background_enabled: bool,
+    pub timeline_keyframes: Vec<crate::four_d::models::TimelineKeyframe>,
+    pub seek_pending: bool,
+    pub settled_seek_revision: u64,
+    pub settled_seek_target: Option<f64>,
     #[serde(default)]
     pub seekable: bool,
     #[serde(default)]
@@ -796,6 +1455,8 @@ pub struct PlayerStatusResponse {
     #[serde(default)]
     pub hardware_error: Option<String>,
     #[serde(default)]
+    pub hardware_sync: serde_json::Value,
+    #[serde(default)]
     pub estop_active: bool,
     #[serde(default)]
     pub hardware: Option<HardwareStatusSummary>,
@@ -810,15 +1471,31 @@ pub struct PlayerStatusResponse {
     #[serde(default)]
     pub controller_effects: Vec<WebControllerEffect>,
     #[serde(default)]
+    pub audio_devices: Vec<crate::mpv::audio_output::AudioDevice>,
+    #[serde(default)]
+    pub audio_import_pending: bool,
+    #[serde(default)]
+    pub audio_preview_ids: Vec<String>,
+    #[serde(default)]
+    pub audio_voices: Vec<crate::mpv::sfx::AudioVoiceState>,
+    #[serde(default)]
     pub controller_effect_groups: Vec<crate::four_d::controller::HardwareEffectGroup>,
     #[serde(default)]
     pub effect_recording: WebEffectRecording,
     #[serde(default)]
     pub cues: Vec<WebEffectCue>,
+    /// Exact ordered track inventory rendered by the native timeline.
+    #[serde(default)]
+    pub timeline_tracks: Vec<WebTimelineTrack>,
+    /// Currently visible native OSD, projected into every remote surface.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub osd: Option<WebOsdState>,
     #[serde(default)]
     pub hardware_details: Option<Value>,
     #[serde(default)]
     pub update: crate::update::UpdateStatus,
+    #[serde(default)]
+    pub status_operations: Vec<crate::ui::status_bar::StatusProgress>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -826,6 +1503,69 @@ pub struct WebMediaChapter {
     pub index: i64,
     pub title: String,
     pub time_seconds: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WebMediaTrack {
+    pub id: i64,
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub language: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub codec: Option<String>,
+    #[serde(default)]
+    pub selected: bool,
+    #[serde(default)]
+    pub is_default: bool,
+    #[serde(default)]
+    pub forced: bool,
+    #[serde(default)]
+    pub external: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+pub struct WebTimelineTrack {
+    pub key: String,
+    pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    pub kind: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub lane: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control_key: Option<String>,
+    pub active: bool,
+    pub enabled: bool,
+    pub linked: bool,
+    pub visible: bool,
+    pub dimmed: bool,
+    #[serde(default)]
+    pub selected: bool,
+    #[serde(default)]
+    pub muted: bool,
+    #[serde(default)]
+    pub soloed: bool,
+    #[serde(default)]
+    pub locked: bool,
+    #[serde(default)]
+    pub supports_mute: bool,
+    #[serde(default)]
+    pub supports_solo: bool,
+    #[serde(default)]
+    pub supports_lock: bool,
+    #[serde(default)]
+    pub manageable: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WebOsdState {
+    pub message: String,
+    pub remaining_ms: u64,
+    pub default_position: OsdAnchor,
+    #[serde(default)]
+    pub options: OsdOptions,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -857,6 +1597,15 @@ pub struct WebEffectCue {
     pub start_time_ms: u64,
     pub duration_ms: u64,
     pub duration_display: String,
+    pub resizable: bool,
+    pub behavior: Option<crate::four_d::models::DirectCueBehavior>,
+    pub end_value_basis_points: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub control_key: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub value_basis_points: Option<u16>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub motion_direction: Option<crate::four_d::models::DirectMotionDirection>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
@@ -882,6 +1631,8 @@ pub struct WebControllerEffect {
 
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct WebEffectRecording {
+    pub capture_selection: crate::four_d::controller::HardwareCaptureSelection,
+    pub capabilities: crate::four_d::controller::HardwareCaptureCapabilities,
     pub active: bool,
     pub id: u8,
     pub name: String,
@@ -939,11 +1690,9 @@ impl WebControllerEffectDraft {
             let value = value.trim();
             (!value.is_empty()
                 && value.len() <= 64
-                && value
-                    .chars()
-                    .all(|character| character.is_alphanumeric() || " -_".contains(character)))
+                && !value.chars().any(char::is_control))
             .then_some(())
-            .ok_or_else(|| format!("{label} must contain 1 to 64 safe characters"))
+            .ok_or_else(|| format!("{label} must contain 1 to 64 printable characters"))
         };
         field("effect name", &self.name)?;
         field("effect category", &self.category)?;
@@ -951,23 +1700,42 @@ impl WebControllerEffectDraft {
             field("effect icon", &self.icon)?;
         }
         match self.kind.as_str() {
-            "sequence" => self
-                .id
-                .parse::<u8>()
-                .map(|_| ())
-                .map_err(|_| "sequence effect id must be from 0 to 255".to_string()),
+            "audio" => {
+                uuid::Uuid::parse_str(&self.id).map_err(|_| "SFX ID must be a UUID")?;
+                let program: crate::mpv::sfx::AudioProgram = serde_json::from_value(self.program.clone()).map_err(|e| format!("Invalid SFX settings: {e}"))?;
+                program.validate()
+            }
+            "sequence" => {
+                self.id.parse::<u8>()
+                    .map_err(|_| "sequence effect id must be from 0 to 255".to_string())?;
+                // Reject malformed authored steps before acknowledging the RPC
+                // instead of discovering them later in the UI dispatch queue.
+                let steps = self.program.get("steps").unwrap_or(&self.program);
+                let steps = serde_json::from_value::<Vec<crate::four_d::controller::HardwareMacroStep>>(steps.clone())
+                    .map_err(|error| format!("Invalid effect sequence: {error}"))?;
+                let count = self.program.get("repeat_count").map(|value| value.as_u64()
+                    .and_then(|value| u16::try_from(value).ok()).ok_or("Invalid effect repeat count"))
+                    .transpose()?.unwrap_or(1);
+                let interval = self.program.get("repeat_interval_ms").map(|value| value.as_u64()
+                    .and_then(|value| u32::try_from(value).ok()).ok_or("Invalid effect repeat interval"))
+                    .transpose()?.unwrap_or(0);
+                crate::ui::effects_library::repeated_sequence_duration_ms(&steps, count, interval)?;
+                Ok(())
+            }
             "strip-stream" => {
                 if !valid_controller_effect_reference(&self.id) || !self.program.is_object() {
                     return Err(
                         "lighting effect requires a safe id and a program object".to_string()
                     );
                 }
-                Ok(())
+                crate::four_d::strip_program::validate_definition(&self.program,self.default_pixels,self.default_fps,self.duration_ms)
             }
-            _ => Err("effect kind must be sequence or strip-stream".to_string()),
+            _ => Err("effect kind must be sequence, strip-stream or audio".to_string()),
         }
     }
 }
+
+fn default_human_time_units() -> bool { true }
 
 fn default_playback_rate() -> f64 {
     1.0
@@ -976,17 +1744,47 @@ fn default_playback_rate() -> f64 {
 impl Default for PlayerStatusResponse {
     fn default() -> Self {
         Self {
+            external_mpv: crate::mpv::external::Status::default(),
+            window: crate::platform::window_control::WindowStatus::default(),
+            application: ApplicationIdentity::default(),
+            runtime: RuntimeIdentity::default(),
+            asset_imports: crate::assets::snapshot(),
+            pending_timeline_change: false,
+            rf: Value::Null,
             status: String::new(),
+            messages: crate::messaging::MessageSnapshot::default(),
+            remote_browser: crate::remote_location::BrowserState::default(),
             appearance: None,
+            app_icon_revision: 0,
+            timeline_wheel_preferences: None,
             playing: false,
+            human_readable_time_units: true,
             volume: 0.0,
             muted: false,
             playback_rate: default_playback_rate(),
             playback_time: 0.0,
             duration: 0.0,
+            media_fps: 0.0,
+            ui_fps: None,
             current_video: None,
+            media_display_name: None,
+            media_location_display: None,
+            mouse_bindings: Default::default(),
+            media_session: Default::default(),
+            media_session_capabilities: Default::default(),
+            quick_seek_seconds: 10.0,
+            media_tracks: Vec::new(),
             chapters: Vec::new(),
             current_chapter_index: None,
+            seekbar_markers: crate::config::SeekbarMarkersConfig::default(),
+            effect_designer_cue_colors: crate::config::default_designer_cue_colors(),
+            control_bars: crate::config::ControlBarsConfig::default(),
+            media_keys_enabled: true,
+            media_keys_background_enabled: true,
+            timeline_keyframes: Vec::new(),
+            seek_pending: false,
+            settled_seek_revision: 0,
+            settled_seek_target: None,
             seekable: false,
             live: false,
             buffered_until: None,
@@ -1001,6 +1799,7 @@ impl Default for PlayerStatusResponse {
             hardware_transport: None,
             hardware_connected: false,
             hardware_error: None,
+            hardware_sync: serde_json::Value::Null,
             estop_active: false,
             hardware: None,
             recording: false,
@@ -1008,10 +1807,17 @@ impl Default for PlayerStatusResponse {
             recordable_track_count: 0,
             effects: Vec::new(),
             controller_effects: Vec::new(),
+            audio_devices: Vec::new(),
+            audio_import_pending: false,
+            audio_preview_ids: Vec::new(),
+            audio_voices: Vec::new(),
             controller_effect_groups: Vec::new(),
             effect_recording: WebEffectRecording::default(),
             cues: Vec::new(),
+            timeline_tracks: Vec::new(),
+            osd: None,
             hardware_details: None,
+            status_operations: Vec::new(),
             update: crate::update::UpdateStatus::default(),
         }
     }
@@ -1061,77 +1867,108 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
             .ok_or_else(|| format!("missing string parameter: {}", names.join(" or ")))
     };
     let command = match request.method.as_str() {
-        "play" | "pealayer.play" | "pealayer.player.play" => Some(InteropCommand::Play),
-        "pause" | "pealayer.pause" | "pealayer.player.pause" => Some(InteropCommand::Pause),
-        "toggle" | "toggle_pause" | "pealayer.toggle" | "pealayer.player.toggle" => {
+        "pealayer.process.status" => Some(InteropCommand::GetProcessStatus),
+        "pealayer.process.quit" => Some(InteropCommand::QuitLocal),
+        "pealayer.process.connect" => Some(InteropCommand::ConnectPeer {
+            request: serde_json::from_value(request.params.clone()).map_err(|error|error.to_string())?,
+        }),
+        "pealayer.rf" | "rf_control" => Some(InteropCommand::RfControl { operation: string(&["operation"])?, params: request.params.get("params").cloned().unwrap_or_else(||serde_json::json!({})) }),
+        "pealayer.rf.open" => Some(InteropCommand::OpenRfManager),
+        "play" | "pealayer.play" => Some(InteropCommand::Play),
+        "pause" | "pealayer.pause" => Some(InteropCommand::Pause),
+        "toggle" | "toggle_pause" | "pealayer.toggle" => {
             Some(InteropCommand::TogglePause)
         }
-        "stop" | "pealayer.stop" | "pealayer.player.stop" => Some(InteropCommand::Stop),
-        "next" | "pealayer.next" | "pealayer.player.next" => Some(InteropCommand::Next),
-        "previous" | "prev" | "pealayer.previous" | "pealayer.player.previous" => {
+        "stop" | "pealayer.stop" => Some(InteropCommand::Stop),
+        "next" | "pealayer.next" => Some(InteropCommand::Next),
+        "previous" | "prev" | "pealayer.previous" => {
             Some(InteropCommand::Previous)
         }
         "chapter_previous"
         | "previous_chapter"
-        | "pealayer.chapter.previous"
-        | "pealayer.player.chapter.previous" => Some(InteropCommand::PreviousChapter),
+        | "pealayer.chapter.previous" => Some(InteropCommand::PreviousChapter),
         "chapter_next"
         | "next_chapter"
-        | "pealayer.chapter.next"
-        | "pealayer.player.chapter.next" => Some(InteropCommand::NextChapter),
-        "chapter" | "set_chapter" | "pealayer.chapter.set" | "pealayer.player.chapter.set" => {
+        | "pealayer.chapter.next" => Some(InteropCommand::NextChapter),
+        "chapter" | "set_chapter" | "pealayer.chapter.set" => {
             let index = request
                 .params
                 .get("index")
-                .or_else(|| request.params.get("chapter"))
                 .and_then(Value::as_i64)
                 .ok_or_else(|| "missing integer parameter: index".to_string())?;
             Some(InteropCommand::SetChapter { index })
         }
-        "seek" | "pealayer.seek" | "pealayer.player.seek" => Some(InteropCommand::Seek {
+        "pealayer.transport.nudge" => Some(InteropCommand::TransportNudge {
+            direction: request.params.get("direction").and_then(Value::as_i64)
+                .filter(|direction| matches!(direction, -1 | 1))
+                .ok_or("Transport direction must be -1 or 1")? as i32,
+        }),
+        "seek" | "pealayer.seek" => Some(InteropCommand::Seek {
             seconds: number(&["seconds"])?,
         }),
-        "seek_to" | "pealayer.seek_to" | "pealayer.player.seek_to" => {
+        "seek_to" | "pealayer.seek_to" => {
             Some(InteropCommand::SeekTo {
-                seconds: number(&["seconds", "position"])?,
+                seconds: number(&["seconds"])?,
             })
         }
-        "seek_abs" | "pealayer.seek_absolute" | "pealayer.player.seek_absolute" => {
+        "seek_abs" | "pealayer.seek_absolute" => {
             Some(InteropCommand::SeekAbs {
                 percentage: number(&["percentage"])?,
             })
         }
-        "volume" | "set_volume" | "pealayer.volume.set" | "pealayer.player.volume.set" => {
+        "scrub_to" | "pealayer.scrub_to" => Some(InteropCommand::ScrubTo { seconds: number(&["seconds"])? }),
+        "finish_scrub" | "pealayer.finish_scrub" => Some(InteropCommand::FinishScrub { seconds: number(&["seconds"])? }),
+        "volume" | "set_volume" | "pealayer.volume.set" => {
             Some(InteropCommand::SetVolume {
-                value: number(&["value", "level"])?,
+                value: number(&["value"])?,
             })
         }
-        "mute" | "set_mute" | "pealayer.mute.set" | "pealayer.player.mute.set" => {
+        "mute" | "set_mute" | "pealayer.mute.set" => {
             let muted = request
                 .params
                 .get("muted")
-                .or_else(|| request.params.get("enabled"))
                 .and_then(Value::as_bool)
                 .ok_or_else(|| "missing boolean parameter: muted".to_string())?;
             Some(InteropCommand::SetMute { muted })
         }
-        "toggle_mute" | "pealayer.mute.toggle" | "pealayer.player.mute.toggle" => {
+        "toggle_mute" | "pealayer.mute.toggle" => {
             Some(InteropCommand::ToggleMute)
         }
-        "rate" | "set_rate" | "pealayer.rate.set" | "pealayer.player.rate.set" => {
+        "rate" | "set_rate" | "pealayer.rate.set" => {
             Some(InteropCommand::SetRate {
                 rate: number(&["rate", "value"])?,
             })
         }
-        "open" | "open_video" | "pealayer.open" | "pealayer.player.open" => {
-            Some(InteropCommand::Open {
-                target: string(&["target", "path"])?,
+        "media.track.select" | "pealayer.media.track.select" => {
+            Some(InteropCommand::SelectMediaTrack {
+                kind: string(&["kind", "type"])?.trim().to_ascii_lowercase(),
+                id: request
+                    .params
+                    .get("id")
+                    .and_then(Value::as_i64)
+                    .ok_or_else(|| "missing media track id".to_string())?,
             })
         }
+        "media.track.disable" | "pealayer.media.track.disable" => {
+            Some(InteropCommand::DisableMediaTrack {
+                kind: string(&["kind", "type"])?.trim().to_ascii_lowercase(),
+            })
+        }
+        "open" | "pealayer.open" => {
+            Some(InteropCommand::Open {
+                target: string(&["target"])?,
+            })
+        }
+        "browse_remote" | "pealayer.remote.browse" => Some(InteropCommand::BrowseRemote { target: request.params.get("target").and_then(Value::as_str).unwrap_or_default().into(), use_proxy: request.params.get("use_proxy").and_then(Value::as_bool), clipboard: request.params.get("clipboard").and_then(Value::as_bool).unwrap_or(false) }),
+        "select_remote" | "pealayer.remote.select" => Some(InteropCommand::SelectRemote { target: string(&["target"])? , play: request.params.get("play").and_then(Value::as_bool).unwrap_or(false) }),
+        "inspect_remote" | "pealayer.remote.inspect" => Some(InteropCommand::InspectRemote { target: match request.params.get("target") { None | Some(Value::Null) => None, Some(Value::String(target)) => Some(target.clone()), _ => return Err("target must be a URL string or null".into()) } }),
+        "retry_remote_thumbnail" | "pealayer.remote.thumbnail.retry" => Some(InteropCommand::RetryRemoteThumbnail {target:string(&["target"])?}),
+        "sort_remote" | "pealayer.remote.sort" => Some(InteropCommand::SortRemote { by: serde_json::from_value(request.params.get("by").cloned().unwrap_or(Value::String("name".into()))).map_err(|_| "sort must be name, date or size".to_string())?, descending: request.params.get("descending").and_then(Value::as_bool).unwrap_or(false) }),
+        "close_remote_browser" | "pealayer.remote.close" => Some(InteropCommand::CloseRemoteBrowser),
+        "remote_history" | "pealayer.remote.history" => Some(InteropCommand::RemoteHistory {direction:request.params.get("direction").and_then(Value::as_i64).and_then(|v|i32::try_from(v).ok()).ok_or("direction must be -1 or 1")?,parent:request.params.get("parent").map(|v|v.as_bool().ok_or("parent must be boolean")).transpose()?.unwrap_or(false)}),
         "fullscreen"
         | "set_fullscreen"
-        | "pealayer.fullscreen.set"
-        | "pealayer.player.fullscreen.set" => {
+        | "pealayer.fullscreen.set" => {
             let enabled = request
                 .params
                 .get("enabled")
@@ -1146,12 +1983,37 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         "minimize" | "pealayer.window.minimize" => Some(InteropCommand::Minimize),
         "maximize" | "pealayer.window.maximize" => Some(InteropCommand::Maximize),
         "restore" | "pealayer.window.restore" => Some(InteropCommand::Restore),
+        "get_window" | "pealayer.window.get" => Some(InteropCommand::GetWindow),
+        "set_window" | "pealayer.window.set" => Some(InteropCommand::SetWindow {
+            placement: serde_json::from_value(request.params.clone()).map_err(|error|error.to_string())?,
+        }),
+        "get_playback" | "pealayer.playback.get" => Some(InteropCommand::GetPlayback),
+        "get_media" | "pealayer.media.get" => Some(InteropCommand::GetMedia),
+        "get_chapters" | "pealayer.chapters.get" => Some(InteropCommand::GetChapters),
+        "frame_step" | "pealayer.frame.step" => Some(InteropCommand::FrameStep {
+            frames: request.params.get("frames").and_then(Value::as_i64).and_then(|n|i32::try_from(n).ok()).ok_or("frames must be an integer within ±120")?,
+        }),
         "preferences" | "open_preferences" | "pealayer.window.preferences" => {
             Some(InteropCommand::OpenPreferences)
         }
+        "navigate_preferences" | "pealayer.preferences.navigate" => Some(InteropCommand::NavigatePreferences {
+            navigation: serde_json::from_value(request.params.clone()).map_err(|error| error.to_string())?,
+        }),
+        "pealayer.workspace.tools.get" => Some(InteropCommand::GetWorkspaceTools),
+        "pealayer.workspace.tools.control" => Some(InteropCommand::WorkspaceTools {
+            request: serde_json::from_value(request.params.clone()).map_err(|error|error.to_string())?,
+        }),
+        "pealayer.about.open" => Some(InteropCommand::OpenAbout {
+            tab: match request.params.get("tab") {
+                Some(value) => serde_json::from_value(value.clone()).map_err(|error| error.to_string())?,
+                None => crate::ui::about::AboutTab::default(),
+            },
+        }),
         "media_information" | "open_media_information" | "pealayer.media.information" => {
             Some(InteropCommand::OpenMediaInformation)
         }
+        "copy_media_location" | "pealayer.media.copy_location" => Some(InteropCommand::CopyMediaLocation),
+        "open_download_center" | "pealayer.ui.downloads.open" => Some(InteropCommand::OpenDownloadCenter),
         "media_folder" | "open_media_folder" | "pealayer.media.folder" => {
             Some(InteropCommand::OpenMediaFolder)
         }
@@ -1182,6 +2044,14 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
                 .unwrap_or(0);
             Some(InteropCommand::OpenBoardInformation { tab })
         }
+        "publish_toast" | "toast.show" | "pealayer.toast.show" => Some(InteropCommand::PublishToast {
+            toast: serde_json::from_value(request.params.clone()).map_err(|e| format!("invalid toast: {e}"))?,
+        }),
+        "pealayer.toast.invoke" => Some(InteropCommand::InvokeToastAction {
+            id: string(&["id"])?, action_id: string(&["action_id"])?,
+            created_at_ms: request.params.get("created_at_ms").and_then(Value::as_u64).ok_or("created_at_ms is required")?,
+        }),
+        "dismiss_toast" | "toast.dismiss" | "pealayer.toast.dismiss" => Some(InteropCommand::DismissToast { id: string(&["id"])? }),
         "message" | "show_message" | "pealayer.message.show" => Some(InteropCommand::ShowMessage {
             message: request
                 .params
@@ -1258,6 +2128,22 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
                     .ok_or_else(|| "missing workspace move direction".to_string())?,
             })
         }
+        "timeline.track.update" | "pealayer.timeline.track.update" => {
+            Some(InteropCommand::UpdateTimelineTrack {
+                key: string(&["key", "track"] )?,
+                linked: request.params.get("linked").and_then(Value::as_bool),
+                visible: request.params.get("visible").and_then(Value::as_bool),
+                muted: request.params.get("muted").and_then(Value::as_bool),
+                soloed: request.params.get("soloed").and_then(Value::as_bool),
+                locked: request.params.get("locked").and_then(Value::as_bool),
+                selected: request.params.get("selected").and_then(Value::as_bool),
+            })
+        }
+        "timeline.track.manage" | "pealayer.timeline.track.manage" => {
+            Some(InteropCommand::ManageTimelineTrack {
+                key: string(&["key", "track"] )?,
+            })
+        }
         "effect_cue.add" | "pealayer.effect_cue.add" | "pealayer.timeline.effect.add" => {
             Some(InteropCommand::AddEffectCue {
                 effect_id: string(&["effect_id", "effect"])?,
@@ -1290,6 +2176,57 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
                     .ok_or_else(|| "missing cue duration_ms".to_string())?,
             })
         }
+        "direct_cue.add" | "pealayer.direct_cue.add" | "pealayer.timeline.direct.add" => {
+            Some(InteropCommand::AddDirectControlCue {
+                behavior: request.params.get("behavior").map(|value| serde_json::from_value(value.clone()))
+                    .transpose().map_err(|_| "invalid direct cue behavior".to_string())?.unwrap_or_default(),
+                end_value_basis_points: request.params.get("end_value_basis_points").map(|value| serde_json::from_value(value.clone()))
+                    .transpose().map_err(|_| "invalid cue end value".to_string())?.unwrap_or(0),
+                control_key: string(&["control_key", "channel"])?,
+                value_basis_points: request
+                    .params
+                    .get("value_basis_points")
+                    .and_then(Value::as_u64)
+                    .or_else(|| {
+                        request.params.get("percent").and_then(Value::as_f64).map(|value| {
+                            (value.clamp(0.0, 100.0) * 100.0).round() as u64
+                        })
+                    })
+                    .and_then(|value| u16::try_from(value).ok())
+                    .ok_or_else(|| "missing direct cue value".to_string())?,
+                start_time_ms: request
+                    .params
+                    .get("start_time_ms")
+                    .or_else(|| request.params.get("time_ms"))
+                    .and_then(Value::as_u64)
+                    .unwrap_or_default(),
+                duration_ms: request
+                    .params
+                    .get("duration_ms")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(1_000),
+            })
+        }
+        "direct_cue.value" | "pealayer.direct_cue.value" => {
+            Some(InteropCommand::UpdateDirectControlCueValue {
+                behavior: request.params.get("behavior").map(|value| serde_json::from_value(value.clone()))
+                    .transpose().map_err(|_| "invalid direct cue behavior".to_string())?,
+                end_value_basis_points: request.params.get("end_value_basis_points").map(|value| serde_json::from_value(value.clone()))
+                    .transpose().map_err(|_| "invalid cue end value".to_string())?,
+                instance_id: string(&["instance_id", "cue_id"])?,
+                value_basis_points: request
+                    .params
+                    .get("value_basis_points")
+                    .and_then(Value::as_u64)
+                    .or_else(|| {
+                        request.params.get("percent").and_then(Value::as_f64).map(|value| {
+                            (value.clamp(0.0, 100.0) * 100.0).round() as u64
+                        })
+                    })
+                    .and_then(|value| u16::try_from(value).ok())
+                    .ok_or_else(|| "missing direct cue value".to_string())?,
+            })
+        }
         "controller_effect_cue.add" | "pealayer.controller_effect_cue.add" => {
             Some(InteropCommand::AddControllerEffectCue {
                 reference: string(&["reference", "effect"])?,
@@ -1301,6 +2238,14 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
                     .unwrap_or_default(),
             })
         }
+        "pealayer.assets.import" => Some(InteropCommand::ImportAssets {
+            request: serde_json::from_value(request.params.clone()).map_err(|e|format!("Invalid asset import: {e}"))?,
+        }),
+        "pealayer.assets.review" => Some(InteropCommand::ReviewAsset {
+            id: serde_json::from_value(request.params.get("id").cloned().unwrap_or_default()).map_err(|_|"Asset review requires a UUID".to_string())?,
+            accept: request.params.get("accept").and_then(Value::as_bool).ok_or("Asset review requires accept: true or false")?,
+        }),
+        "pealayer.timeline.resolve_pending"=>Some(InteropCommand::ResolveTimelineClose{decision:serde_json::from_value(request.params.get("decision").cloned().ok_or("A save, discard or cancel decision is required")?).map_err(|e|format!("Invalid timeline decision: {e}"))?}),
         "controller_effect.play" | "pealayer.controller_effect.play" => {
             Some(InteropCommand::PlayControllerEffect {
                 reference: string(&["reference", "effect"])?,
@@ -1309,14 +2254,27 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         "controller_effect.stop" | "pealayer.controller_effect.stop" => {
             Some(InteropCommand::StopControllerEffect)
         }
-        "controller_effect.group.create" | "pealayer.controller_effect.group.create" => {
-            Some(InteropCommand::CreateControllerEffectGroup {
+        "audio_effect.stop" => Some(InteropCommand::StopAudioPreview),
+        "audio.outputs.refresh" => Some(InteropCommand::RefreshAudioOutputs),
+        "pealayer.player.mode" => Some(InteropCommand::SetPlayerMode {
+            mode: serde_json::from_value(request.params.get("mode").cloned().ok_or("A player mode is required")?)
+                .map_err(|_| "Use internal, external, dual or remote".to_string())?,
+        }),
+        "pealayer.player.executable.resolve" => Some(InteropCommand::ResolvePlayerExecutable { executable: string(&["executable"])? }),
+        "controller_effect.group.save" | "pealayer.controller_effect.group.save" => {
+            Some(InteropCommand::SaveControllerEffectGroup {
+                original_name: request
+                    .params
+                    .get("original_name")
+                    .and_then(Value::as_str)
+                    .ok_or_else(|| "missing original_name".to_string())?
+                    .to_owned(),
                 name: string(&["name"])?,
                 icon: request
                     .params
                     .get("icon")
                     .and_then(Value::as_str)
-                    .unwrap_or_default()
+                    .ok_or_else(|| "missing group icon".to_string())?
                     .to_owned(),
             })
         }
@@ -1332,6 +2290,9 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         }
         "controller_effect.record.start" | "pealayer.controller_effect.record.start" => {
             Some(InteropCommand::StartControllerEffectRecording {
+                capture_selection: request.params.get("capture_selection").cloned()
+                    .map(serde_json::from_value).transpose().map_err(|error| format!("invalid capture selection: {error}"))?.unwrap_or_default(),
+                effect: request.params.get("effect").cloned().map(serde_json::from_value).transpose().map_err(|error|format!("invalid capture effect: {error}"))?,
                 name: string(&["name"])?,
                 category: request
                     .params
@@ -1356,6 +2317,25 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
         "controller_effect.record.status" | "pealayer.controller_effect.record.status" => {
             Some(InteropCommand::RefreshControllerEffectRecording)
         }
+        "controller_effect.publish_and_run" => Some(InteropCommand::PublishAndRunControllerEffect {
+            effect: serde_json::from_value(request.params.clone()).map_err(|error| format!("invalid controller effect: {error}"))?,
+        }),
+        "timeline.cue.edit" => Some(InteropCommand::OpenTimelineCueEditor {
+            instance_id: string(&["instance_id"])?,
+            presentation: request.params.get("presentation")
+                .map(|value| serde_json::from_value(value.clone())
+                    .map_err(|_| "presentation must be dialog or panel".to_string())).transpose()?,
+        }),
+        "timeline.cue.place" => Some(InteropCommand::PlaceTimelineCue {
+            instance_id: string(&["instance_id"])?,
+            start_time_ms: request.params.get("start_time_ms").and_then(Value::as_u64)
+                .ok_or_else(|| "missing cue start_time_ms".to_string())?,
+            control_key: request.params.get("control_key").map(|value| value.as_str().map(str::to_owned)
+                .ok_or_else(|| "control_key must be a string".to_string())).transpose()?,
+            duplicate_id: request.params.get("duplicate_id").map(|value| value.as_str().map(str::to_owned)
+                .ok_or_else(|| "duplicate_id must be a UUID string".to_string())).transpose()?,
+        }),
+        "controller_effect.record.capabilities" => Some(InteropCommand::RefreshCaptureCapabilities),
         "controller_effect.record.save" | "pealayer.controller_effect.record.save" => {
             Some(InteropCommand::SaveControllerEffectRecording)
         }
@@ -1396,6 +2376,59 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
                 percent: number(&["percent", "value"])?,
             })
         }
+        "hardware.pwm.policy.set" => {
+            let channel = request.params.get("channel").and_then(Value::as_u64)
+                .filter(|channel| *channel < 16).map(|channel| channel as u8)
+                .ok_or_else(|| "missing valid PWM channel".to_string())?;
+            let on_behavior = serde_json::from_value(request.params["on_behavior"].clone())
+                .map_err(|_| "on_behavior must be full or restore".to_string())?;
+            Some(InteropCommand::SetHardwarePwmPolicy { channel, on_behavior })
+        }
+        "hardware.catalog.refresh" | "pealayer.hardware.catalog.refresh" => {
+            Some(InteropCommand::RefreshHardwareCatalog)
+        }
+        "pealayer.hardware.connection" => Some(InteropCommand::SetHardwareConnection {
+            connected: request.params.get("connected").and_then(Value::as_bool).ok_or("Hardware connection requires connected: true or false")?,
+        }),
+        "pealayer.hardware.authority" => {
+            let operation = string(&["operation"])?;
+            if !matches!(operation.as_str(), "request" | "accept" | "reject" | "release" | "lock" | "unlock") {
+                return Err("invalid authority operation".into());
+            }
+            Some(InteropCommand::HardwareAuthority {
+                operation,
+                requester_id: request.params.get("requester_id").and_then(Value::as_str).unwrap_or_default().into(),
+            })
+        }
+        "hardware.buzzer.melody" | "pealayer.hardware.buzzer.melody" => {
+            let repeats = request
+                .params
+                .get("repeats")
+                .and_then(Value::as_u64)
+                .and_then(|value| u8::try_from(value).ok())
+                .ok_or_else(|| "missing valid melody repeat count".to_string())?;
+            Some(InteropCommand::PlayHardwareMelody {
+                name: string(&["name", "melody"])?,
+                repeats,
+            })
+        }
+        "hardware.buzzer.tone" | "pealayer.hardware.buzzer.tone" => {
+            let word = |name: &str| {
+                request
+                    .params
+                    .get(name)
+                    .and_then(Value::as_u64)
+                    .and_then(|value| u16::try_from(value).ok())
+                    .ok_or_else(|| format!("missing valid buzzer {name}"))
+            };
+            Some(InteropCommand::PlayHardwareTone {
+                frequency_hz: word("frequency_hz")?,
+                duration_ms: word("duration_ms")?,
+            })
+        }
+        "hardware.buzzer.stop" | "pealayer.hardware.buzzer.stop" => {
+            Some(InteropCommand::StopHardwareBuzzer)
+        }
         "hardware.presentation.update" | "pealayer.hardware.presentation.update" => {
             Some(InteropCommand::UpdateHardwarePresentation {
                 key: string(&["key", "channel"])?,
@@ -1406,6 +2439,7 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
                     .ok_or_else(|| "missing hardware presentation fields".to_string())?,
             })
         }
+        "hardware.folder.update" => Some(InteropCommand::UpdateHardwareFolder { fields: request.params.clone() }),
         "hardware.strip.configure" | "pealayer.hardware.strip.configure" => {
             let pixels = request
                 .params
@@ -1415,6 +2449,9 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
                 .ok_or_else(|| "missing valid addressable strip pixel count".to_string())?;
             Some(InteropCommand::ConfigureAddressableStrip { pixels })
         }
+        "hardware.strip.color_order" => Some(InteropCommand::SetAddressableStripColorOrder {order:request.params.get("order").and_then(Value::as_str).ok_or("Missing strip color order")?.to_owned()}),
+        "controller_effect.restore_examples" => Some(InteropCommand::RestoreControllerEffectExamples),
+        "controller_effect.strip.edit" => Some(InteropCommand::OpenStripDesigner {reference:request.params.get("reference").and_then(Value::as_str).map(str::to_owned)}),
         "hardware.strip.fill" | "pealayer.hardware.strip.fill" => {
             let byte = |name: &str| {
                 request
@@ -1431,6 +2468,91 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
                 brightness: byte("brightness")?,
             })
         }
+        "hardware.strip.pixel" | "pealayer.hardware.strip.pixel" => {
+            let word = |name: &str| {
+                request
+                    .params
+                    .get(name)
+                    .and_then(Value::as_u64)
+                    .and_then(|value| u16::try_from(value).ok())
+                    .ok_or_else(|| format!("missing valid strip {name}"))
+            };
+            let byte = |name: &str| {
+                request
+                    .params
+                    .get(name)
+                    .and_then(Value::as_u64)
+                    .and_then(|value| u8::try_from(value).ok())
+                    .ok_or_else(|| format!("missing valid strip {name}"))
+            };
+            Some(InteropCommand::SetAddressableStripPixel {
+                pixel: word("pixel")?,
+                pixels: word("pixels")?,
+                red: byte("red")?,
+                green: byte("green")?,
+                blue: byte("blue")?,
+                brightness: byte("brightness")?,
+            })
+        }
+        "hardware.strip.frame" | "pealayer.hardware.strip.frame" => {
+            let pixels = request
+                .params
+                .get("pixels")
+                .and_then(Value::as_u64)
+                .and_then(|value| u16::try_from(value).ok())
+                .ok_or_else(|| "missing valid addressable strip pixel count".to_string())?;
+            let rgb = request
+                .params
+                .get("rgb")
+                .and_then(Value::as_array)
+                .ok_or_else(|| "missing valid strip RGB frame".to_string())?
+                .iter()
+                .map(|value| {
+                    value
+                        .as_u64()
+                        .and_then(|value| u8::try_from(value).ok())
+                        .ok_or_else(|| "strip RGB values must be bytes".to_string())
+                })
+                .collect::<Result<Vec<_>, _>>()?;
+            Some(InteropCommand::SendAddressableStripFrame { pixels, rgb })
+        }
+        "hardware.strip.rainbow" | "pealayer.hardware.strip.rainbow" => {
+            let pixels = request
+                .params
+                .get("pixels")
+                .and_then(Value::as_u64)
+                .and_then(|value| u16::try_from(value).ok())
+                .ok_or_else(|| "missing valid addressable strip pixel count".to_string())?;
+            let fps = request
+                .params
+                .get("fps")
+                .and_then(Value::as_u64)
+                .and_then(|value| u8::try_from(value).ok())
+                .ok_or_else(|| "missing valid strip frame rate".to_string())?;
+            Some(InteropCommand::StartAddressableStripRainbow { pixels, fps })
+        }
+        "hardware.strip.effect" | "pealayer.hardware.strip.effect" => {
+            let id = string(&["id", "effect_id"])?;
+            let pixels = request
+                .params
+                .get("pixels")
+                .and_then(Value::as_u64)
+                .and_then(|value| u16::try_from(value).ok())
+                .ok_or_else(|| "missing valid addressable strip pixel count".to_string())?;
+            let fps = request
+                .params
+                .get("fps")
+                .and_then(Value::as_u64)
+                .and_then(|value| u8::try_from(value).ok())
+                .ok_or_else(|| "missing valid strip frame rate".to_string())?;
+            Some(InteropCommand::StartAddressableStripEffect { id, pixels, fps })
+        }
+        "hardware.strip.stop" | "pealayer.hardware.strip.stop" => {
+            Some(InteropCommand::StopAddressableStrip)
+        }
+        "hardware.strip.status" | "pealayer.hardware.strip.status" => {
+            Some(InteropCommand::RefreshAddressableStripStatus)
+        }
         "hardware.strip.clear" | "pealayer.hardware.strip.clear" => {
             Some(InteropCommand::ClearAddressableStrip)
         }
@@ -1445,8 +2567,13 @@ pub fn command_from_json_rpc(request: &JsonRpcRequest) -> Result<Option<InteropC
                 values: request.params.clone(),
             })
         }
+        "pealayer.branding.update" => Some(InteropCommand::UpdateBranding {
+            update: serde_json::from_value(request.params.clone()).map_err(|error| format!("Invalid branding request: {error}"))?,
+        }),
+        "pealayer.branding.get" => Some(InteropCommand::GetBranding),
+        "pealayer.branding.clear" => Some(InteropCommand::ClearBranding),
         "config.reload" | "pealayer.config.reload" => Some(InteropCommand::ReloadConfig),
-        "get_status" | "player.status" | "pealayer.status" | "pealayer.player.status" => None,
+        "get_status" | "player.status" | "pealayer.status" | "pealayer.messages.state" => None,
         method => return Err(format!("unknown Pealayer JSON-RPC method: {method}")),
     };
     if let Some(command) = &command {
@@ -1466,11 +2593,18 @@ pub fn json_rpc_error(id: &Value, code: i32, message: &str) -> String {
 static LIVE_STATUS: std::sync::RwLock<Option<PlayerStatusResponse>> = std::sync::RwLock::new(None);
 static LIVE_CONFIG: std::sync::RwLock<Option<crate::config::AppConfig>> =
     std::sync::RwLock::new(None);
+static LIVE_CONFIG_REVISION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 pub fn set_live_status(status: PlayerStatusResponse) {
     if let Ok(mut lock) = LIVE_STATUS.write() {
         *lock = Some(status);
     }
+}
+pub fn get_live_message_snapshot() -> crate::messaging::MessageSnapshot {
+    LIVE_STATUS.read().ok().and_then(|status|status.as_ref().map(|s|s.messages.clone())).unwrap_or_default()
+}
+pub fn get_live_remote_revision() -> u64 {
+    LIVE_STATUS.read().ok().and_then(|status|status.as_ref().map(|s|s.remote_browser.revision)).unwrap_or_default()
 }
 
 /// Avoid cloning the timeline and hardware snapshot on every video frame just
@@ -1482,7 +2616,16 @@ pub fn get_live_appearance() -> Option<AppearanceState> {
         .and_then(|status| status.as_ref().and_then(|status| status.appearance.clone()))
 }
 
+static LIVE_MEDIA_INFORMATION: std::sync::RwLock<Option<crate::media_info::MediaFileInfo>>=std::sync::RwLock::new(None);
+pub fn set_live_media_information(info:crate::media_info::MediaFileInfo) {
+    if let Ok(mut current)=LIVE_MEDIA_INFORMATION.write(){*current=Some(info);}
+}
+pub fn get_live_media_information()->crate::media_info::MediaFileInfo {
+    if let Some(client)=crate::peer::client() && let Some(view)=client.snapshot().and_then(|snapshot|snapshot.session.media_view) {return view.file.redacted();}
+    LIVE_MEDIA_INFORMATION.read().ok().and_then(|value|value.clone()).unwrap_or_default()
+}
 pub fn get_live_status() -> PlayerStatusResponse {
+    if let Some(client)=crate::peer::client() && let Some(snapshot)=client.snapshot() && let Ok(status)=serde_json::from_value(snapshot.session.status){return status;}
     if let Ok(lock) = LIVE_STATUS.read() {
         if let Some(ref st) = *lock {
             return st.clone();
@@ -1497,7 +2640,56 @@ pub fn get_live_status() -> PlayerStatusResponse {
 pub fn set_live_config(config: crate::config::AppConfig) {
     if let Ok(mut lock) = LIVE_CONFIG.write() {
         *lock = Some(config);
+        LIVE_CONFIG_REVISION.fetch_add(1, std::sync::atomic::Ordering::Release);
     }
+}
+
+/// Monotonic signal for consumers that only need to react when configuration
+/// changes. This avoids cloning the complete application configuration from a
+/// per-frame rendering path just to discover that it is unchanged.
+pub fn live_config_revision() -> u64 {
+    LIVE_CONFIG_REVISION.load(std::sync::atomic::Ordering::Acquire)
+}
+
+pub(crate) fn invalidate_live_config_revision() {
+    LIVE_CONFIG_REVISION.fetch_add(1, std::sync::atomic::Ordering::Release);
+}
+
+#[derive(Clone)]
+pub struct LiveFrameConfig {
+    pub web_enabled: bool,
+    pub binary_udp_enabled: bool,
+    pub web_sync_interval_ms: u32,
+    pub remote_folder_auto_next: bool,
+    pub remote_folder_thumbnails: bool,
+    pub remote_folder_view: crate::remote_location::ViewMode,
+    pub appearance: AppearanceState,
+}
+
+impl LiveFrameConfig {
+    fn from_config(config: &crate::config::AppConfig, dark: bool) -> Self {
+        Self {
+            web_enabled: crate::config::resolved_web_enabled(config),
+            binary_udp_enabled: config.binary_udp.enabled,
+            web_sync_interval_ms: config.web_sync_interval_ms,
+            remote_folder_auto_next: config.remote_folder_auto_next,
+            remote_folder_thumbnails: config.remote_folder_thumbnails,
+            remote_folder_view: config.remote_folder_view,
+            appearance: AppearanceState::new(config, dark),
+        }
+    }
+}
+
+/// Return only the configuration needed by the per-frame publisher. Cloning
+/// the complete AppConfig here used to copy workspace, history and media state
+/// on every repaint even though the renderer reads only four small values.
+pub fn get_live_frame_config(dark: bool) -> LiveFrameConfig {
+    if let Ok(config) = LIVE_CONFIG.read()
+        && let Some(config) = config.as_ref()
+    {
+        return LiveFrameConfig::from_config(config, dark);
+    }
+    LiveFrameConfig::from_config(&crate::config::AppConfig::load(), dark)
 }
 
 pub fn get_live_config() -> crate::config::AppConfig {
@@ -1506,6 +2698,27 @@ pub fn get_live_config() -> crate::config::AppConfig {
         .ok()
         .and_then(|config| config.clone())
         .unwrap_or_else(crate::config::AppConfig::load)
+}
+
+pub(crate) fn live_app_description() -> String {
+    LIVE_CONFIG.read().ok().and_then(|config| config.as_ref().map(crate::config::resolved_app_description))
+        .unwrap_or_else(|| crate::config::resolved_app_description(&crate::config::AppConfig::default()))
+}
+
+/// Small live-policy read for the media observer; no config/disk clone per tick.
+pub(crate) fn external_mpv_settings() -> crate::mpv::external::Settings {
+    LIVE_CONFIG.read().ok().and_then(|config|config.as_ref().map(|config|config.external_mpv.clone())).unwrap_or_default()
+}
+
+pub(crate) fn allow_unattended_hardware_takeover() -> bool {
+    !crate::peer::active() && LIVE_CONFIG.read().ok()
+        .and_then(|config| config.as_ref().map(|config| config.allow_unattended_hardware_takeover))
+        .unwrap_or(false)
+}
+
+pub(crate) fn live_control_port() -> Option<u16> {
+    LIVE_CONFIG.read().ok()
+        .and_then(|config| config.as_ref().map(|config| config.web_port))
 }
 
 pub fn get_socket_path() -> PathBuf {
@@ -1671,9 +2884,12 @@ fn spawn_windows_pipe_listener(
                 thread::sleep(std::time::Duration::from_millis(250));
                 continue;
             }
-            let connected = unsafe { ConnectNamedPipe(handle, None) }.is_ok()
-                || unsafe { GetLastError() } == ERROR_PIPE_CONNECTED;
-            if connected {
+            // Keep an instance registered across requests. Closing the last
+            // instance between clients can make CallNamedPipe fail immediately
+            // because the name no longer exists, even with a wait timeout.
+            while unsafe { ConnectNamedPipe(handle, None) }.is_ok()
+                || unsafe { GetLastError() } == ERROR_PIPE_CONNECTED
+            {
                 let mut request = vec![0u8; 65_536];
                 let mut bytes_read = 0u32;
                 if unsafe { ReadFile(handle, Some(&mut request), Some(&mut bytes_read), None) }
@@ -1700,7 +2916,9 @@ fn spawn_windows_pipe_listener(
                     };
                     let _ = unsafe { FlushFileBuffers(handle) };
                 }
-                let _ = unsafe { DisconnectNamedPipe(handle) };
+                if unsafe { DisconnectNamedPipe(handle) }.is_err() {
+                    break;
+                }
             }
             let _ = unsafe { CloseHandle(handle) };
         }
@@ -1710,6 +2928,7 @@ fn spawn_windows_pipe_listener(
 pub fn parse_interop_request(
     line: &str,
 ) -> Result<(Option<serde_json::Value>, InteropCommand), String> {
+    if line.len()>1024*1024 {return Err("Control request exceeds 1 MiB".into());}
     let val: serde_json::Value = serde_json::from_str(line).map_err(|e| e.to_string())?;
 
     // Check if JSON-RPC 2.0 format
@@ -1765,8 +2984,21 @@ pub fn format_interop_error(id: Option<serde_json::Value>, code: i32, message: &
     }
 }
 
+pub(crate) fn request_id(payload:&str)->Option<Value> {
+    serde_json::from_str::<Value>(payload).ok().and_then(|value|value.get("id").cloned())
+}
+
+/// Commands from IPC/HTTP must wake an inactive Windows owner as well as egui.
+/// The native edge is scheduled on the shared shell worker, never under a
+/// context transaction or on the receiving window's message callback.
+pub(crate) fn wake_command_dispatcher(ctx: &eframe::egui::Context) {
+    ctx.request_repaint();
+    #[cfg(target_os = "windows")]
+    crate::platform::taskbar_preview::request_repaint();
+}
+
 #[cfg(any(unix, windows, test))]
-fn dispatch_local_payload(
+pub(crate) fn dispatch_local_payload(
     payload: &str,
     tx: &std::sync::mpsc::Sender<InteropCommand>,
     egui_ctx: &eframe::egui::Context,
@@ -1774,13 +3006,17 @@ fn dispatch_local_payload(
     expected_identity: &str,
     expected_session_id: Option<u32>,
 ) -> String {
+    if let Some(response) = crate::update::rpc::payload(payload, false, tx) { return response; }
+    if let Some(response) = crate::terminal_access::native_payload(payload, egui_ctx) { return response; }
+    if let Some(response) = crate::downloads::rpc_payload(payload, false) { return response; }
+    if let Some(response) = crate::server::discovery::rpc_payload(payload) { return response; }
+    if let Ok(value) = serde_json::from_str::<serde_json::Value>(payload)
+        && let Some(response) = crate::server::binary_udp::rpc(&value, true) { return response.to_string(); }
     let (id, command) = match parse_interop_request(payload) {
         Ok(parsed) => parsed,
-        Err(error) => return format_interop_error(None, -32600, &error),
+        Err(error) => return format_interop_error(request_id(payload), -32600, &error),
     };
-    if matches!(command, InteropCommand::GetStatus) {
-        let value = serde_json::to_value(get_live_status())
-            .unwrap_or_else(|_| serde_json::json!({"status":"initializing"}));
+    if let Some(value) = command.query_result() {
         return format_interop_response(id, &value);
     }
     let operation_id = match &command {
@@ -1794,6 +3030,7 @@ fn dispatch_local_payload(
         }
         _ => None,
     };
+    let command=if matches!(&command,InteropCommand::UpdateConfig {..}|InteropCommand::PreviewConfig {..}|InteropCommand::CommitPreviewConfig {..}) {InteropCommand::NativeLocal {command:Box::new(command)}} else {command};
     if let Some(operation_id) = operation_id {
         let mut receipts = match launch_receipts.lock() {
             Ok(receipts) => receipts,
@@ -1814,7 +3051,7 @@ fn dispatch_local_payload(
     } else if tx.send(command).is_err() {
         return format_interop_error(id, -32000, "application dispatcher is unavailable");
     }
-    egui_ctx.request_repaint();
+    wake_command_dispatcher(egui_ctx);
     format_interop_response(id, &serde_json::json!({"status":"accepted"}))
 }
 
@@ -1855,6 +3092,15 @@ pub fn spawn_interop_listener(
     egui_ctx: eframe::egui::Context,
     application_identity: String,
 ) {
+    #[cfg(windows)]
+    let _=NATIVE_ENDPOINT.set(windows_pipe_name(&application_identity));
+    #[cfg(unix)]
+    let _=NATIVE_ENDPOINT.set(get_socket_path().to_string_lossy().into_owned());
+    #[cfg(windows)]
+    crate::platform::copydata::start(tx.clone(),egui_ctx.clone(),application_identity.clone());
+    // Keep the listening identity stable even if branding is previewed or this
+    // process is a named review/remote-client instance.
+    egui_ctx.data_mut(|data| data.insert_temp(eframe::egui::Id::new("native-listener-identity"), application_identity.clone()));
     // TCP automation now shares the unified HTTP/WebSocket listener at
     // `/api/ipc`. Keep the native Unix socket because it consumes no TCP port.
     #[cfg(unix)]
@@ -1926,7 +3172,7 @@ pub fn spawn_interop_server(egui_ctx: eframe::egui::Context) -> Receiver<Interop
     rx
 }
 
-const PCCONTROLLER_ACTIONS: &str = "pealayer.play,pealayer.pause,pealayer.toggle,pealayer.stop,pealayer.next,pealayer.previous,pealayer.chapter.next,pealayer.chapter.previous,pealayer.chapter.set,pealayer.seek,pealayer.seek_to,pealayer.seek_absolute,pealayer.volume.set,pealayer.mute.set,pealayer.mute.toggle,pealayer.rate.set,pealayer.open,pealayer.fullscreen.set,pealayer.fullscreen.toggle,pealayer.workspace.set,pealayer.window.activate,pealayer.window.minimize,pealayer.window.maximize,pealayer.window.restore,pealayer.quit";
+const PCCONTROLLER_ACTIONS: &str = "pealayer.play,pealayer.pause,pealayer.toggle,pealayer.stop,pealayer.next,pealayer.previous,pealayer.chapter.next,pealayer.chapter.previous,pealayer.chapter.set,pealayer.seek,pealayer.seek_to,pealayer.seek_absolute,pealayer.volume.set,pealayer.mute.set,pealayer.mute.toggle,pealayer.rate.set,pealayer.open,pealayer.fullscreen.set,pealayer.fullscreen.toggle,pealayer.workspace.set,pealayer.window.activate,pealayer.window.minimize,pealayer.window.maximize,pealayer.window.restore,pealayer.quit,pealayer.command";
 
 struct ControllerAction {
     command: Option<InteropCommand>,
@@ -1974,6 +3220,7 @@ fn controller_action_from_event(event: &Value, instance_id: &str) -> Option<Cont
         None
     } else {
         match kind.as_str() {
+            "pealayer.command" => serde_json::from_str::<InteropCommand>(value).ok().filter(|command| command.validate().is_ok()),
             "pealayer.play" => Some(InteropCommand::Play),
             "pealayer.pause" => Some(InteropCommand::Pause),
             "pealayer.toggle" => Some(InteropCommand::TogglePause),
@@ -2082,6 +3329,42 @@ fn controller_rpc(id: u64, method: &str, params: Value) -> tungstenite::Message 
     )
 }
 
+pub(crate) fn controller_instance_id() -> String {
+    format!("pealayer:{}:{}", controller_host_name(), crate::config::control_port())
+}
+
+fn controller_host_name() -> String {
+    std::env::var("COMPUTERNAME").or_else(|_|std::env::var("HOSTNAME"))
+        .unwrap_or_else(|_|format!("desktop-{}",std::process::id()))
+        .chars().filter(|c| c.is_ascii_alphanumeric() || *c=='-' || *c=='_').take(100).collect()
+}
+
+pub(crate) fn controller_instance_identity(instance_id: &str, name: &str) -> Value {
+    let config = get_live_config();
+    let port = crate::peer::client().map(|client| client.local_port)
+        .unwrap_or_else(|| crate::config::runtime_port("PEALAYER_PORT", config.web_port));
+    let remotely_listening = crate::config::resolved_web_enabled(&config)
+        && crate::config::resolved_web_bind_addresses(&config)
+            .is_ok_and(|addresses| addresses.iter().any(|address| !address.is_loopback()));
+    let peer_origin = if remotely_listening {
+        format!("http://{}:{}/", controller_host_name(), port)
+    } else { String::new() };
+    serde_json::json!({
+        "id": instance_id, "surface":"pealayer", "page":"player", "state":"active", "lease_seconds":45,
+        "self":{"kind":"native","pid":std::process::id(),"vars":{
+            "rpc":format!("http://127.0.0.1:{port}/api/rpc"),
+            "websocket":format!("ws://127.0.0.1:{port}/ws"),
+            "ipc":format!("http://127.0.0.1:{port}/api/ipc"),
+            "web_ui":format!("http://127.0.0.1:{port}/")}},
+        "values":{"application":name,"version":env!("CARGO_PKG_VERSION"),"commit":env!("PEALAYER_GIT_COMMIT"),
+            "peer_origin":peer_origin,
+            "update_contract":"pealayer.update", "update_transports":"http,json-rpc,websocket,native",
+            "os":std::env::consts::OS,"arch":std::env::consts::ARCH,"host":controller_host_name(),
+            "app_actions":PCCONTROLLER_ACTIONS,"control_contract":"pealayer.control",
+            "control_transports":"native,http,websocket,json-rpc","coordinator":"pccontroller","serial_owner":"pccontroller"}
+    })
+}
+
 fn report_controller_instance(
     socket: &mut tungstenite::WebSocket<tungstenite::stream::MaybeTlsStream<std::net::TcpStream>>,
     id: u64,
@@ -2091,30 +3374,7 @@ fn report_controller_instance(
         .send(controller_rpc(
             id,
             "controller.app.instance.report",
-            serde_json::json!({
-                "id": instance_id,
-                "surface": "pealayer",
-                "page": "player",
-                "state": "active",
-                "lease_seconds": 45,
-                "self": {
-                    "kind": "native",
-                    "pid": std::process::id(),
-                    "vars": {
-                        "rpc": format!("http://127.0.0.1:{}/api/rpc", crate::config::control_port()),
-                        "websocket": format!("ws://127.0.0.1:{}/ws", crate::config::control_port()),
-                        "ipc": format!("http://127.0.0.1:{}/api/ipc", crate::config::control_port()),
-                        "web_ui": format!("http://127.0.0.1:{}/", crate::config::control_port()),
-                    },
-                },
-                "values": {
-                    "app_actions": PCCONTROLLER_ACTIONS,
-                    "control_contract": "pealayer.control",
-                    "control_transports": "native,http,websocket,json-rpc",
-                    "coordinator": "pccontroller",
-                    "serial_owner": "pccontroller",
-                },
-            }),
+            controller_instance_identity(instance_id, &crate::config::resolved_app_name(&get_live_config())),
         ))
         .map_err(|error| format!("report Pealayer instance to PCController: {error}"))
 }
@@ -2160,6 +3420,9 @@ fn gate_controller_subscription_message(
             .and_then(Value::as_str)
             .filter(|value| !value.trim().is_empty())
             .ok_or_else(|| "PCController subscription omitted its host identity".to_string())?;
+        if !push_target.matches_source_instance(instance_id) {
+            return Err("PCController push identity differs from the selected RPC coordinator; waiting for its catalog".into());
+        }
         push_target.observe_source_instance(instance_id);
         *subscription_ready = true;
         return Ok(pending.drain(..).collect());
@@ -2171,6 +3434,17 @@ fn gate_controller_subscription_message(
         pending.push_back(message);
     }
     Ok(Vec::new())
+}
+
+fn controller_subscription_params() -> Value {
+    serde_json::json!({
+        "topics":["state","events","status","opcodes"],
+        "interval_ms":500,
+        // Changed display edges must not be decimated against RGB/PWM frames.
+        // egui merges repaint requests; slow telemetry remains at 500 ms.
+        "state_interval_ms":0,
+        "after_id":0
+    })
 }
 
 fn run_pccontroller_action_bridge(
@@ -2187,24 +3461,19 @@ fn run_pccontroller_action_bridge(
 
     let (mut socket, _) = tungstenite::connect(endpoint)
         .map_err(|error| format!("connect to PCController action WebSocket: {error}"))?;
-    *connected_once = true;
     if let tungstenite::stream::MaybeTlsStream::Plain(stream) = socket.get_mut() {
         stream
             .set_read_timeout(Some(Duration::from_millis(250)))
             .map_err(|error| format!("configure PCController action read timeout: {error}"))?;
     }
 
-    let instance_id = format!("pealayer:desktop-{}", std::process::id());
+    let instance_id = controller_instance_id();
     let mut next_id = 1_u64;
     socket
         .send(controller_rpc(
             next_id,
             "controller.subscribe",
-            serde_json::json!({
-                "topics":["state","events","status","opcodes"],
-                "interval_ms":100,
-                "after_id":0
-            }),
+            controller_subscription_params(),
         ))
         .map_err(|error| format!("subscribe to PCController actions: {error}"))?;
     next_id += 1;
@@ -2217,11 +3486,31 @@ fn run_pccontroller_action_bridge(
     let mut receipt_order = VecDeque::new();
     let mut subscription_ready = false;
     let mut pending_pre_ack = VecDeque::new();
+    let subscription_started = Instant::now();
+    let mut subscribed_host = String::new();
+    let mut last_ping = Instant::now();
+    let mut pending_ping: Option<(u64, Instant)> = None;
     loop {
         if !push_target.is_alive() || push_target.websocket_endpoint().as_deref() != Some(endpoint)
         {
             let _ = socket.close(None);
             return Ok(());
+        }
+        if !subscription_ready && subscription_started.elapsed() > Duration::from_secs(5) {
+            return Err("PCController subscription acknowledgement timed out".into());
+        }
+        if subscription_ready && !push_target.matches_source_instance(&subscribed_host) {
+            return Err("PCController RPC coordinator changed; reconnecting push subscription".into());
+        }
+        if pending_ping.is_some_and(|(_,sent)|sent.elapsed() > Duration::from_secs(5)) {
+            return Err("PCController action transport heartbeat timed out".into());
+        }
+        if subscription_ready && pending_ping.is_none() && last_ping.elapsed() >= Duration::from_secs(2) {
+            socket.send(controller_rpc(next_id,"controller.ping",serde_json::json!({})))
+                .map_err(|error|format!("ping PCController action transport: {error}"))?;
+            pending_ping=Some((next_id,Instant::now()));
+            next_id=next_id.wrapping_add(1).max(1);
+            last_ping=Instant::now();
         }
         while let Ok(acknowledgement) = acknowledgement_rx.try_recv() {
             send_action_ack(&mut socket, &mut next_id, acknowledgement)?;
@@ -2236,6 +3525,13 @@ fn run_pccontroller_action_bridge(
                 let Ok(message) = serde_json::from_str::<Value>(&text) else {
                     continue;
                 };
+                if pending_ping.is_some_and(|(id,_)|message.get("id").and_then(Value::as_u64)==Some(id)) {
+                    if let Some(error)=message.get("error").filter(|value|!value.is_null()) { return Err(format!("PCController heartbeat rejected: {error}")); }
+                    pending_ping=None;
+                }
+                if !subscription_ready && message.get("id").and_then(Value::as_u64)==Some(1) {
+                    subscribed_host=message["result"]["instance_id"].as_str().unwrap_or_default().to_owned();
+                }
                 let was_subscription_ready = subscription_ready;
                 let ready_messages = gate_controller_subscription_message(
                     message,
@@ -2244,6 +3540,7 @@ fn run_pccontroller_action_bridge(
                     push_target,
                 )?;
                 if subscription_ready && !was_subscription_ready {
+                    *connected_once = true;
                     egui_ctx.request_repaint();
                 }
                 for message in ready_messages {
@@ -2315,13 +3612,16 @@ pub fn spawn_pccontroller_action_bridge(
                 continue;
             };
             let mut connected_once = false;
-            if let Err(error) = run_pccontroller_action_bridge(
+            let result = if endpoint.starts_with("udp://") {
+                run_pccontroller_udp_bridge(&tx,&egui_ctx,&push_target,&endpoint,&mut connected_once)
+            } else { run_pccontroller_action_bridge(
                 &tx,
                 &egui_ctx,
                 &push_target,
                 &endpoint,
                 &mut connected_once,
-            ) {
+            ) };
+            if let Err(error) = result {
                 log::warn!(
                     "[PCController] {error}; retrying push transport in {} ms",
                     retry_delay.as_millis()
@@ -2347,9 +3647,159 @@ pub fn spawn_pccontroller_action_bridge(
     rx
 }
 
+fn run_pccontroller_udp_bridge(
+    tx:&std::sync::mpsc::Sender<ControllerDelivery>,ctx:&eframe::egui::Context,
+    target:&crate::four_d::engine::ControllerPushTarget,endpoint:&str,connected:&mut bool,
+)->Result<(),String>{
+    use std::collections::{HashSet,VecDeque};
+    use std::time::{Duration,Instant};
+    let address=endpoint.strip_prefix("udp://").ok_or("Invalid UDP endpoint")?;
+    let mut client=crate::server::udp_client::Client::connect(address,Duration::from_secs(3))?;
+    let call=|client:&mut crate::server::udp_client::Client,method:&str,params:Value|->Result<Value,String>{
+        let response=client.call(&serde_json::json!({"jsonrpc":"2.0","id":1,"method":method,"params":params}),None)?;
+        if let Some(error)=response.get("error").filter(|e|!e.is_null()){return Err(crate::four_d::controller::controller_json_rpc_error(error).message);}Ok(response["result"].clone())
+    };
+    let snapshot=call(&mut client,"controller.snapshot",serde_json::json!({}))?;
+    let host=snapshot["host_instance_id"].as_str().or_else(||snapshot.pointer("/host/instance_id").and_then(Value::as_str)).unwrap_or_default().to_string();
+    if !target.matches_source_instance(&host){return Err("UDP/RPC coordinator identity is not yet authoritative".into());}
+    let instance=controller_instance_id();
+    call(&mut client,"controller.app.instance.report",controller_instance_identity(&instance,&crate::config::resolved_app_name(&get_live_config())))?;
+    client.subscribe()?;*connected=true;
+    if target.apply_notification("controller.snapshot",&snapshot){ctx.request_repaint();}
+    let (ack_tx,ack_rx)=channel();let mut receipts=HashSet::new();let mut order=VecDeque::new();
+    let mut lease=Instant::now();let mut heartbeat=Instant::now();
+    while target.is_alive()&&target.websocket_endpoint().as_deref()==Some(endpoint){
+        if !target.matches_source_instance(&host){return Err("UDP coordinator changed; reconnect required".into());}
+        while let Ok(ack)=ack_rx.try_recv(){call(&mut client,"controller.app.action.ack",ack)?;}
+        if lease.elapsed()>=Duration::from_secs(10){client.subscribe()?;lease=Instant::now();}
+        if heartbeat.elapsed()>=Duration::from_secs(2){call(&mut client,"controller.ping",serde_json::json!({}))?;heartbeat=Instant::now();}
+        let Some(message)=client.event(Duration::from_millis(100))?else{continue;};
+        let Some(method)=message["method"].as_str()else{continue;};let params=&message["params"];
+        if target.apply_notification(method,params){ctx.request_repaint();}
+        if !matches!(method,"controller.event"|"controller.state"){continue;}
+        let Some(action)=controller_action_from_event(params,&instance)else{continue;};
+        if receipts.insert(action.receipt_key.clone()){
+            order.push_back(action.receipt_key.clone());if order.len()>256{if let Some(old)=order.pop_front(){receipts.remove(&old);}}
+            if let Some(command)=action.command{tx.send(ControllerDelivery{command,acknowledgement:action.acknowledgement,acknowledgement_tx:ack_tx.clone()}).map_err(|e|e.to_string())?;ctx.request_repaint();}
+            else{call(&mut client,"controller.app.action.ack",action.acknowledgement)?;}
+        }
+    }Ok(())
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn pwm_policy_rpc_requires_an_explicit_channel_and_known_policy() {
+        for policy in ["full", "restore"] {
+            let request: JsonRpcRequest = serde_json::from_value(serde_json::json!({"jsonrpc":"2.0",
+                "id":1,"method":"hardware.pwm.policy.set","params":{"channel":1,"on_behavior":policy}})).unwrap();
+            let command = command_from_json_rpc(&request).unwrap().unwrap();
+            assert!(matches!(command, InteropCommand::SetHardwarePwmPolicy { channel:1, .. }));
+        }
+        for params in [serde_json::json!({"on_behavior":"restore"}),
+            serde_json::json!({"channel":16,"on_behavior":"restore"}),
+            serde_json::json!({"channel":1,"on_behavior":"toggle"})] {
+            let request: JsonRpcRequest = serde_json::from_value(serde_json::json!({"jsonrpc":"2.0",
+                "id":1,"method":"hardware.pwm.policy.set","params":params})).unwrap();
+            assert!(command_from_json_rpc(&request).is_err());
+        }
+    }
     use super::*;
+
+    #[test]
+    fn contextual_nudge_rpc_is_typed_bounded_and_uses_the_authority_step() {
+        for direction in [-1,1] {
+            let request=JsonRpcRequest {jsonrpc:Some("2.0".into()),id:Value::Null,
+                method:"pealayer.transport.nudge".into(),params:serde_json::json!({"direction":direction})};
+            assert_eq!(command_from_json_rpc(&request).unwrap(),Some(InteropCommand::TransportNudge {direction}));
+        }
+        for direction in [0,2,-2,i64::MAX] {
+            let request=JsonRpcRequest {jsonrpc:Some("2.0".into()),id:Value::Null,
+                method:"pealayer.transport.nudge".into(),params:serde_json::json!({"direction":direction})};
+            assert!(command_from_json_rpc(&request).is_err());
+        }
+        assert!(InteropCommand::TransportNudge {direction:0}.validate().is_err());
+    }
+
+    #[test]
+    fn process_status_and_quit_use_the_native_dispatcher_without_session_forwarding() {
+        let (tx,rx)=std::sync::mpsc::channel();
+        let context=eframe::egui::Context::default();
+        let receipts=Arc::new(Mutex::new(LaunchReceiptCache::default()));
+        let query=r#"{"jsonrpc":"2.0","id":1,"method":"pealayer.process.status"}"#;
+        let response=dispatch_local_payload(query,&tx,&context,&receipts,"Pealayer",None);
+        let value:Value=serde_json::from_str(&response).unwrap();
+        assert_eq!(value["result"]["process_id"],std::process::id());
+        assert!(rx.try_recv().is_err());
+        let response=dispatch_local_payload(r#"{"command":"quit_local"}"#,&tx,&context,&receipts,"Pealayer",None);
+        assert!(response.contains("accepted"));
+        assert_eq!(rx.try_recv().unwrap(),InteropCommand::QuitLocal);
+    }
+
+    #[test]
+    fn live_frame_config_projects_only_render_loop_inputs() {
+        let config = crate::config::AppConfig {
+            web_sync_interval_ms: 321,
+            remote_folder_auto_next: false,
+            remote_folder_thumbnails: false,
+            ..Default::default()
+        };
+        let projected = LiveFrameConfig::from_config(&config, true);
+        assert_eq!(projected.web_sync_interval_ms, 321);
+        assert!(!projected.remote_folder_auto_next);
+        assert!(!projected.remote_folder_thumbnails);
+        assert_eq!(projected.appearance.resolved_theme, crate::config::AppTheme::Dark);
+    }
+
+    #[test]
+    fn controller_subscription_keeps_changed_frames_immediate_and_bounds_telemetry() {
+        let params = controller_subscription_params();
+        assert_eq!(params["interval_ms"], 500);
+        assert_eq!(params["state_interval_ms"], 0);
+        assert!(params["topics"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|topic| topic == "events"));
+    }
+
+    #[test]
+    fn remote_folder_json_rpc_ipc_parity() {
+        let target = "https://files.invalid/folder/";
+        let expected = InteropCommand::BrowseRemote { target: target.into(), use_proxy: Some(false), clipboard: false };
+        let json = serde_json::to_string(&expected).unwrap();
+        assert_eq!(parse_interop_request(&json).unwrap().1, expected);
+        let rpc = JsonRpcRequest { jsonrpc: Some("2.0".into()), id: Value::Null, method: "pealayer.remote.browse".into(), params: serde_json::json!({"target":target,"use_proxy":false}) };
+        assert_eq!(command_from_json_rpc(&rpc).unwrap(), Some(expected));
+        let copied = InteropCommand::BrowseRemote { target: target.into(), use_proxy: None, clipboard: true };
+        assert_eq!(parse_interop_request(&serde_json::to_string(&copied).unwrap()).unwrap().1, copied);
+        let rpc = JsonRpcRequest { jsonrpc: Some("2.0".into()), id: Value::Null, method: "pealayer.remote.browse".into(), params: serde_json::json!({"target":target,"clipboard":true}) };
+        assert_eq!(command_from_json_rpc(&rpc).unwrap(), Some(copied));
+        assert!(parse_text_command("browse_remote javascript:bad").is_err());
+        assert!(matches!(parse_text_command("browse_remote").unwrap(), InteropCommand::BrowseRemote { .. }));
+        for (method,expected) in [("pealayer.remote.inspect",InteropCommand::InspectRemote{target:Some(target.into())}),
+            ("pealayer.remote.thumbnail.retry",InteropCommand::RetryRemoteThumbnail{target:target.into()})] {
+            assert_eq!(parse_interop_request(&serde_json::to_string(&expected).unwrap()).unwrap().1,expected);
+            let rpc=JsonRpcRequest{jsonrpc:Some("2.0".into()),id:Value::Null,method:method.into(),params:serde_json::json!({"target":target})};
+            assert_eq!(command_from_json_rpc(&rpc).unwrap(),Some(expected));
+            assert!(command_from_json_rpc(&JsonRpcRequest{params:serde_json::json!({"target":true}),..rpc}).is_err());
+        }
+        let close=JsonRpcRequest{jsonrpc:Some("2.0".into()),id:Value::Null,method:"pealayer.remote.inspect".into(),params:serde_json::json!({"target":null})};
+        assert_eq!(command_from_json_rpc(&close).unwrap(),Some(InteropCommand::InspectRemote{target:None}));
+        for (direction, parent) in [(-1, false), (1, false), (-1, true)] {
+            let expected = InteropCommand::RemoteHistory { direction, parent };
+            assert_eq!(parse_interop_request(&serde_json::to_string(&expected).unwrap()).unwrap().1, expected);
+            let rpc = JsonRpcRequest { jsonrpc: Some("2.0".into()), id: Value::Null,
+                method: "pealayer.remote.history".into(), params: serde_json::json!({"direction":direction,"parent":parent}) };
+            assert_eq!(command_from_json_rpc(&rpc).unwrap(), Some(expected));
+        }
+        for params in [serde_json::json!({"direction":0}), serde_json::json!({"direction":1,"parent":true}),
+            serde_json::json!({"direction":-1,"parent":"yes"}), serde_json::json!({"direction":1.5})] {
+            let rpc = JsonRpcRequest { jsonrpc: Some("2.0".into()), id: Value::Null,
+                method: "pealayer.remote.history".into(), params };
+            assert!(command_from_json_rpc(&rpc).is_err());
+        }
+    }
 
     #[test]
     fn test_parse_interop_commands() {
@@ -2373,28 +3823,12 @@ mod tests {
             panic!("Expected Open command");
         }
 
-        let open_alias_json = r#"{"command":"open_video","path":"/video2.mp4"}"#;
-        let cmd: InteropCommand = serde_json::from_str(open_alias_json).unwrap();
-        if let InteropCommand::Open { target } = cmd {
-            assert_eq!(target, "/video2.mp4");
-        } else {
-            panic!("Expected Open command with aliases");
-        }
-
         let live_json = r#"{"command":"open","target":"rtsp://camera.invalid/live"}"#;
         let cmd: InteropCommand = serde_json::from_str(live_json).unwrap();
         assert!(matches!(
             cmd,
             InteropCommand::Open { target } if target == "rtsp://camera.invalid/live"
         ));
-
-        let vol_alias_json = r#"{"command":"volume","level":45.0}"#;
-        let cmd: InteropCommand = serde_json::from_str(vol_alias_json).unwrap();
-        if let InteropCommand::SetVolume { value } = cmd {
-            assert_eq!(value, 45.0);
-        } else {
-            panic!("Expected SetVolume command with aliases");
-        }
 
         assert_eq!(
             parse_text_command("preferences").unwrap(),
@@ -2424,6 +3858,21 @@ mod tests {
             parse_text_command("emergency-stop off").unwrap(),
             InteropCommand::SetEmergencyStop { active: false }
         );
+    }
+
+    #[test]
+    fn scrub_gestures_have_shared_text_json_and_rpc_contracts() {
+        for (name, expected) in [("scrub_to", InteropCommand::ScrubTo { seconds: 10.125 }),
+            ("finish_scrub", InteropCommand::FinishScrub { seconds: 10.125 })] {
+            assert_eq!(parse_text_command(&format!("{name} 10.125")).unwrap(), expected);
+            let parsed: InteropCommand = serde_json::from_value(serde_json::json!({"command":name,"seconds":10.125})).unwrap();
+            assert_eq!(parsed, expected);
+            let request = JsonRpcRequest { jsonrpc: Some("2.0".into()), id: Value::Null,
+                method: format!("pealayer.{name}"), params: serde_json::json!({"seconds":10.125}) };
+            assert_eq!(command_from_json_rpc(&request).unwrap(), Some(expected));
+        }
+        assert!(InteropCommand::ScrubTo { seconds: f64::NAN }.validate().is_err());
+        assert!(InteropCommand::FinishScrub { seconds: -1.0 }.validate().is_err());
     }
 
     #[test]
@@ -2561,6 +4010,20 @@ mod tests {
     }
 
     #[test]
+    fn toast_transports_share_validation_and_contract() {
+        let command = parse_text_command("toast Hardware ready").unwrap();
+        let direct = serde_json::from_str::<InteropCommand>(r#"{"command":"publish_toast","message":"Hardware ready"}"#).unwrap();
+        assert_eq!(command, direct);
+        let request = JsonRpcRequest { jsonrpc: Some("2.0".into()), id: serde_json::json!(1), method: "pealayer.toast.show".into(), params: serde_json::json!({"message":"Hardware ready"}) };
+        assert_eq!(command_from_json_rpc(&request).unwrap(), Some(command));
+        let invalid = JsonRpcRequest { params: serde_json::json!({"message":"","timeout_ms":1}), ..request };
+        assert!(command_from_json_rpc(&invalid).is_err());
+        let dismiss = JsonRpcRequest { method: "pealayer.toast.dismiss".into(), params: serde_json::json!({"id":"work.1"}), ..invalid };
+        assert_eq!(command_from_json_rpc(&dismiss).unwrap(), Some(InteropCommand::DismissToast { id: "work.1".into() }));
+        assert!(command_catalog()["messaging"]["surfaces"].as_array().unwrap().contains(&serde_json::json!("terminal")));
+    }
+
+    #[test]
     fn chapter_navigation_is_shared_by_text_and_json_rpc_controls() {
         assert_eq!(
             parse_text_command("chapter-next").unwrap(),
@@ -2591,19 +4054,26 @@ mod tests {
     #[test]
     fn web_controller_effect_commands_are_typed_and_validated() {
         let group: JsonRpcRequest = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","id":1,"method":"controller_effect.group.create","params":{"name":"Cinema lighting","icon":"lamp"}}"#,
+            r#"{"jsonrpc":"2.0","id":1,"method":"controller_effect.group.save","params":{"original_name":"Lighting","name":"Cinema lighting","icon":"lamp"}}"#,
         ).unwrap();
         assert!(matches!(command_from_json_rpc(&group).unwrap(),
-            Some(InteropCommand::CreateControllerEffectGroup { name, icon })
-                if name == "Cinema lighting" && icon == "lamp"));
+            Some(InteropCommand::SaveControllerEffectGroup { original_name, name, icon })
+                if original_name == "Lighting" && name == "Cinema lighting" && icon == "lamp"));
         assert!(
-            InteropCommand::CreateControllerEffectGroup {
+            InteropCommand::SaveControllerEffectGroup {
+                original_name: String::new(),
                 name: " ".to_owned(),
                 icon: String::new(),
             }
             .validate()
             .is_err()
         );
+
+        let obsolete_group_create: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":1,"method":"controller_effect.group.create","params":{"name":"Legacy","icon":"folder"}}"#,
+        )
+        .unwrap();
+        assert!(command_from_json_rpc(&obsolete_group_create).is_err());
         let cue: JsonRpcRequest = serde_json::from_str(
             r#"{"jsonrpc":"2.0","id":1,"method":"pealayer.controller_effect_cue.add","params":{"reference":"effect:lighting-primary","start_time_ms":1250}}"#,
         )
@@ -2615,6 +4085,22 @@ mod tests {
         ));
 
         let cue_id = uuid::Uuid::new_v4().to_string();
+        let editor = JsonRpcRequest {
+            jsonrpc: Some("2.0".into()), id: serde_json::json!("editor"), method: "timeline.cue.edit".into(),
+            params: serde_json::json!({"instance_id": cue_id, "presentation": "dialog"}),
+        };
+        let command = command_from_json_rpc(&editor).unwrap().unwrap();
+        command.validate().unwrap();
+        assert!(matches!(command, InteropCommand::OpenTimelineCueEditor {
+            presentation: Some(crate::config::TimelineCueEditorPresentation::Dialog), ..
+        }));
+        assert!(command_from_json_rpc(&JsonRpcRequest {
+            params: serde_json::json!({"instance_id": cue_id, "presentation": "unsupported"}),
+            ..editor.clone()
+        }).is_err());
+        assert!(command_from_json_rpc(&JsonRpcRequest {
+            params: serde_json::json!({"instance_id": "not-a-uuid"}), ..editor
+        }).is_err());
         let update = JsonRpcRequest {
             jsonrpc: Some("2.0".to_string()),
             id: serde_json::json!(2),
@@ -2635,7 +4121,7 @@ mod tests {
         ));
 
         let save: JsonRpcRequest = serde_json::from_str(
-            r#"{"jsonrpc":"2.0","id":3,"method":"controller_effect.save","params":{"id":"lighting-primary","name":"Lighting primary","icon":"lightning","category":"Lighting","kind":"strip-stream","program":{"primitive":"police"},"default_fps":30,"duration_ms":5000,"default_pixels":100,"is_new":true}}"#,
+            r#"{"jsonrpc":"2.0","id":3,"method":"controller_effect.save","params":{"id":"lighting-primary","name":"Lighting primary","icon":"lightning","category":"Lighting","kind":"strip-stream","program":{"primitive":"alternating-zones","period_ms":1000,"step_ms":100,"swap_after_steps":5},"default_fps":30,"duration_ms":5000,"default_pixels":100,"is_new":true}}"#,
         )
         .unwrap();
         assert!(matches!(
@@ -2643,8 +4129,14 @@ mod tests {
             Some(InteropCommand::SaveControllerEffect { effect })
                 if effect.id == "lighting-primary"
                     && effect.icon == "lightning"
-                    && effect.program["primitive"] == "police"
+                    && effect.program["primitive"] == "alternating-zones"
         ));
+
+        // Demo names are user effects, not executable primitive IDs. Keep the
+        // public API strict rather than restoring the removed built-in alias.
+        let mut invalid_program = save.clone();
+        invalid_program.params["program"] = serde_json::json!({"primitive":"police"});
+        assert!(command_from_json_rpc(&invalid_program).is_err());
 
         let invalid: JsonRpcRequest = serde_json::from_str(
             r#"{"jsonrpc":"2.0","id":4,"method":"controller_effect.play","params":{"reference":"effect; delete all"}}"#,
@@ -2676,6 +4168,27 @@ mod tests {
             rx.recv_timeout(std::time::Duration::from_secs(1)).unwrap(),
             InteropCommand::SetRate { rate: 1.25 }
         );
+    }
+
+    #[test]
+    fn window_and_media_commands_share_json_and_rpc_contracts() {
+        let placement=serde_json::json!({"x":-50,"y":40,"width":960,"height":640,"state":"normal"});
+        let rpc=serde_json::json!({"jsonrpc":"2.0","id":"place","method":"pealayer.window.set","params":placement});
+        let (_,command)=parse_interop_request(&rpc.to_string()).unwrap();
+        let mut plain=placement;plain["command"]=Value::String("set_window".into());
+        assert_eq!(parse_interop_request(&plain.to_string()).unwrap().1,command);
+        assert!(command.is_process_local());
+        for (method,command) in [("pealayer.window.get",InteropCommand::GetWindow),("pealayer.playback.get",InteropCommand::GetPlayback),("pealayer.media.get",InteropCommand::GetMedia),("pealayer.chapters.get",InteropCommand::GetChapters)] {
+            let rpc=serde_json::json!({"jsonrpc":"2.0","id":9,"method":method,"params":{}});
+            assert_eq!(parse_interop_request(&rpc.to_string()).unwrap().1,command);
+            assert!(command.query_result().unwrap().is_object());
+        }
+        for params in [serde_json::json!({"width":0}),serde_json::json!({"state":"invalid"}),serde_json::json!({"x":"40"}),serde_json::json!({"widht":900})] {
+            assert!(parse_interop_request(&serde_json::json!({"jsonrpc":"2.0","id":1,"method":"pealayer.window.set","params":params}).to_string()).is_err());
+        }
+        assert!(InteropCommand::FrameStep{frames:0}.validate().is_err());
+        assert!(InteropCommand::FrameStep{frames:-1}.validate().is_ok());
+        assert!(InteropCommand::FrameStep{frames:121}.validate().is_err());
     }
 
     #[test]
@@ -2727,6 +4240,16 @@ mod tests {
     #[test]
     fn test_status_response_serialization() {
         let resp = PlayerStatusResponse {
+            application: ApplicationIdentity::current("Pealayer Test"),
+            runtime: RuntimeIdentity {
+                inspection: "ready".to_string(),
+                executable: Some(RuntimeExecutableIdentity {
+                    file_name: "pealayer.exe".to_string(),
+                    size_bytes: 42,
+                    sha256: "a".repeat(64),
+                }),
+                ..RuntimeIdentity::default()
+            },
             status: "ok".to_string(),
             playing: true,
             estop_active: true,
@@ -2744,6 +4267,8 @@ mod tests {
         assert!(json.contains("\"volume\":80.0"));
         assert!(json.contains("\"fullscreen\":true"));
         assert!(json.contains("\"estop_active\":true"));
+        assert!(json.contains("\"name\":\"Pealayer Test\""));
+        assert!(json.contains("\"file_name\":\"pealayer.exe\""));
     }
 
     #[test]
@@ -2808,6 +4333,24 @@ mod tests {
     }
 
     #[test]
+    fn obsolete_player_namespace_and_parameter_aliases_are_rejected() {
+        let obsolete_method: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":1,"method":"pealayer.player.open","params":{"target":"movie.mkv"}}"#,
+        )
+        .unwrap();
+        assert!(command_from_json_rpc(&obsolete_method).is_err());
+
+        let obsolete_parameter: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":2,"method":"pealayer.open","params":{"path":"movie.mkv"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            command_from_json_rpc(&obsolete_parameter).unwrap_err(),
+            "missing string parameter: target"
+        );
+    }
+
+    #[test]
     fn workspace_profile_rpc_uses_stable_ids_and_shared_crud_commands() {
         let restore = JsonRpcRequest {
             jsonrpc: Some("2.0".to_string()),
@@ -2842,6 +4385,75 @@ mod tests {
                 capture: true,
             })
         );
+    }
+
+    #[test]
+    fn timeline_track_rpc_uses_one_validated_cross_surface_contract() {
+        let update: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"track","method":"pealayer.timeline.track.update","params":{"key":"hardware:relay.5","visible":false,"muted":true,"selected":true}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            command_from_json_rpc(&update).unwrap(),
+            Some(InteropCommand::UpdateTimelineTrack {
+                key: "hardware:relay.5".into(),
+                linked: None,
+                visible: Some(false),
+                muted: Some(true),
+                soloed: None,
+                locked: None,
+                selected: Some(true),
+            })
+        );
+
+        let manage: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"track","method":"timeline.track.manage","params":{"track":"hardware:pwm.1"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            command_from_json_rpc(&manage).unwrap(),
+            Some(InteropCommand::ManageTimelineTrack {
+                key: "hardware:pwm.1".into(),
+            })
+        );
+
+        let empty: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"track","method":"timeline.track.update","params":{"key":"hardware:relay.5"}}"#,
+        )
+        .unwrap();
+        assert!(command_from_json_rpc(&empty).is_err());
+    }
+
+    #[test]
+    fn media_track_rpc_uses_one_validated_cross_surface_contract() {
+        let select: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"track","method":"pealayer.media.track.select","params":{"kind":"audio","id":5}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            command_from_json_rpc(&select).unwrap(),
+            Some(InteropCommand::SelectMediaTrack {
+                kind: "audio".into(),
+                id: 5,
+            })
+        );
+
+        let disable: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"track","method":"media.track.disable","params":{"kind":"subtitle"}}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            command_from_json_rpc(&disable).unwrap(),
+            Some(InteropCommand::DisableMediaTrack {
+                kind: "subtitle".into(),
+            })
+        );
+
+        let invalid: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"track","method":"media.track.select","params":{"kind":"telemetry","id":1}}"#,
+        )
+        .unwrap();
+        assert!(command_from_json_rpc(&invalid).is_err());
     }
 
     #[test]
@@ -2887,6 +4499,16 @@ mod tests {
 
     #[test]
     fn parses_hardware_presentation_updates_for_web_channel_management() {
+        for connected in [true,false] {
+            let request:JsonRpcRequest=serde_json::from_value(serde_json::json!({"jsonrpc":"2.0","id":"connection","method":"pealayer.hardware.connection","params":{"connected":connected}})).unwrap();
+            assert_eq!(command_from_json_rpc(&request).unwrap(),Some(InteropCommand::SetHardwareConnection{connected}));
+        }
+        let invalid:JsonRpcRequest=serde_json::from_value(serde_json::json!({"jsonrpc":"2.0","id":"connection","method":"pealayer.hardware.connection","params":{"connected":"yes"}})).unwrap();
+        assert!(command_from_json_rpc(&invalid).is_err());
+        let folder: JsonRpcRequest = serde_json::from_str(r#"{"jsonrpc":"2.0","id":"folder","method":"hardware.folder.update","params":{"operation":"move","kind":"pwm","name":"Lighting","keys":["pwm.0"]}}"#).unwrap();
+        assert!(matches!(command_from_json_rpc(&folder).unwrap(), Some(InteropCommand::UpdateHardwareFolder { fields }) if fields["operation"] == "move" && fields["keys"][0] == "pwm.0"));
+        let invalid: JsonRpcRequest = serde_json::from_str(r#"{"jsonrpc":"2.0","id":"folder","method":"hardware.folder.update","params":[]}"#).unwrap();
+        assert!(command_from_json_rpc(&invalid).is_err());
         let request: JsonRpcRequest = serde_json::from_str(
             r#"{"jsonrpc":"2.0","id":"channel","method":"hardware.presentation.update","params":{"key":"relay.5","fields":{"name":"Seat fan","order":2}}}"#,
         )
@@ -2896,6 +4518,98 @@ mod tests {
             Some(InteropCommand::UpdateHardwarePresentation { key, fields })
                 if key == "relay.5" && fields["name"] == "Seat fan" && fields["order"] == 2
         ));
+
+        let refresh: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"melodies","method":"hardware.catalog.refresh"}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            command_from_json_rpc(&refresh).unwrap(),
+            Some(InteropCommand::RefreshHardwareCatalog)
+        ));
+    }
+
+    #[test]
+    fn parses_complete_buzzer_web_controls() {
+        let melody: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"melody","method":"hardware.buzzer.melody","params":{"name":"attention","repeats":3}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            command_from_json_rpc(&melody).unwrap(),
+            Some(InteropCommand::PlayHardwareMelody { name, repeats: 3 }) if name == "attention"
+        ));
+
+        let tone: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"tone","method":"hardware.buzzer.tone","params":{"frequency_hz":440,"duration_ms":250}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            command_from_json_rpc(&tone).unwrap(),
+            Some(InteropCommand::PlayHardwareTone {
+                frequency_hz: 440,
+                duration_ms: 250,
+            })
+        ));
+
+        let stop: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"stop","method":"hardware.buzzer.stop"}"#,
+        )
+        .unwrap();
+        assert_eq!(
+            command_from_json_rpc(&stop).unwrap(),
+            Some(InteropCommand::StopHardwareBuzzer)
+        );
+
+        let invalid: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"tone","method":"hardware.buzzer.tone","params":{"frequency_hz":10,"duration_ms":0}}"#,
+        )
+        .unwrap();
+        assert!(command_from_json_rpc(&invalid).is_err());
+    }
+
+    #[test]
+    fn parses_complete_addressable_strip_web_controls() {
+        let rainbow: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"rainbow","method":"hardware.strip.rainbow","params":{"pixels":100,"fps":20}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            command_from_json_rpc(&rainbow).unwrap(),
+            Some(InteropCommand::StartAddressableStripRainbow { pixels: 100, fps: 20 })
+        ));
+
+        let pixel: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"pixel","method":"hardware.strip.pixel","params":{"pixel":4,"pixels":12,"red":1,"green":2,"blue":3,"brightness":128}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            command_from_json_rpc(&pixel).unwrap(),
+            Some(InteropCommand::SetAddressableStripPixel {
+                pixel: 4,
+                pixels: 12,
+                red: 1,
+                green: 2,
+                blue: 3,
+                brightness: 128,
+            })
+        ));
+
+        let frame: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"frame","method":"hardware.strip.frame","params":{"pixels":2,"rgb":[255,0,0,0,0,255]}}"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            command_from_json_rpc(&frame).unwrap(),
+            Some(InteropCommand::SendAddressableStripFrame { pixels: 2, rgb })
+                if rgb == vec![255, 0, 0, 0, 0, 255]
+        ));
+
+        let invalid_frame: JsonRpcRequest = serde_json::from_str(
+            r#"{"jsonrpc":"2.0","id":"bad-frame","method":"hardware.strip.frame","params":{"pixels":2,"rgb":[255,0,0]}}"#,
+        )
+        .unwrap();
+        assert!(command_from_json_rpc(&invalid_frame).is_err());
     }
 
     #[test]
@@ -2972,6 +4686,7 @@ mod tests {
                 "pealayer.window.maximize",
                 "pealayer.window.restore",
                 "pealayer.quit",
+                "pealayer.command",
             ]
         );
 
@@ -3115,12 +4830,21 @@ mod tests {
             100
         );
 
+        let acknowledgement = serde_json::json!({"jsonrpc":"2.0","id":1,"result":{"subscribed":true,"instance_id":"new-host"}});
+        assert!(gate_controller_subscription_message(acknowledgement.clone(), &mut ready, &mut pending, &target).is_err());
+        assert!(!ready);
+        // A WebSocket on another coordinator must not overwrite RPC identity.
+        assert_eq!(handle.hardware_capabilities.lock().unwrap().as_ref().unwrap().host_instance_id,"old-host");
+        // Model the independently refreshed authoritative RPC catalog.
+        {
+            let mut slot=handle.hardware_capabilities.lock().unwrap();
+            let capabilities=slot.as_mut().unwrap();
+            capabilities.host_instance_id="new-host".into();
+            capabilities.status_led=None;
+            capabilities.status_led_revision=0;
+        }
         let buffered = gate_controller_subscription_message(
-            serde_json::json!({
-                "jsonrpc": "2.0",
-                "id": 1,
-                "result": {"subscribed": true, "instance_id": "new-host"}
-            }),
+            acknowledgement,
             &mut ready,
             &mut pending,
             &target,

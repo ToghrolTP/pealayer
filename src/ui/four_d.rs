@@ -1,3 +1,4 @@
+use crate::ui::dropdown::DropdownUiExt;
 use crate::app::PealayerApp;
 use eframe::egui;
 
@@ -162,7 +163,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     egui::Grid::new("create_template_grid").show(ui, |ui| {
                         ui.label(app.tr("Name:"));
                         let name_align = crate::ui::i18n::input_alignment(app.rtl, &name);
-                        ui.add(egui::TextEdit::singleline(&mut name).horizontal_align(name_align));
+                        ui.add(crate::ui::dialog::singleline_text_edit(ui, &mut name).horizontal_align(name_align));
                         ui.end_row();
 
                         ui.label(app.tr("Icon:"));
@@ -186,11 +187,12 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             &mut duration_ms,
                             50..=10_000,
                             50.0,
+                            app.human_readable_time_units,
                         ));
                         ui.end_row();
 
                         ui.label(app.tr("Output:"));
-                        egui::ComboBox::from_id_salt("custom_template_relay")
+                        crate::ui::dropdown::ComboBox::from_id_salt("custom_template_relay")
                             .selected_text(
                                 relay_capabilities
                                     .iter()
@@ -200,7 +202,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             )
                             .show_ui(ui, |ui| {
                                 for relay in &relay_capabilities {
-                                    ui.selectable_value(
+                                    ui.dropdown_value(
                                         &mut target_relay,
                                         relay.id,
                                         app.display_text(&relay.name),
@@ -312,7 +314,7 @@ pub fn draw_editor(app: &mut PealayerApp, ui: &mut egui::Ui) {
 
                         ui.horizontal(|ui| {
                             let mut text_edit =
-                                egui::TextEdit::singleline(&mut time_str).desired_width(80.0);
+                                crate::ui::dialog::singleline_text_edit(ui, &mut time_str).desired_width(80.0);
                             if !is_valid {
                                 text_edit = text_edit.text_color(egui::Color32::RED);
                             }

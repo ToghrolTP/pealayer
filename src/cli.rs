@@ -3,6 +3,7 @@ use std::net::TcpStream;
 use std::time::Duration;
 
 use crate::platform::interop::{InteropCommand, LaunchRequest};
+use crate::update::console::{ColorChoice, OutputOptions};
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CliOptions {
@@ -17,10 +18,11 @@ pub struct CliOptions {
 #[derive(Debug, Clone, PartialEq)]
 pub enum CliAction {
     RunGui(CliOptions),
+    RunClient { endpoint: String, port: u16, options: CliOptions },
     SendRemote(String),
-    PushUpdate(String),
-    UpdateFrom { url: String, sha256: Option<String> },
-    UpdateStatus(String),
+    PushUpdate { target: String, output: OutputOptions },
+    UpdateFrom { url: String, sha256: Option<String>, output: OutputOptions },
+    UpdateStatus { target: String, output: OutputOptions },
     RegisterAssociations,
     UnregisterAssociations,
     PrintHelp(String),
@@ -28,6 +30,7 @@ pub enum CliAction {
 }
 
 pub fn resolved_instance_identity() -> String {
+    if let Some(client)=crate::peer::client(){return format!("Pealayer:peer:{}",client.local_port)}
     let mut identity = crate::config::resolved_app_name(&crate::config::AppConfig::load());
     if let Ok(instance_id) = std::env::var("PEALAYER_INSTANCE_ID") {
         let instance_id = instance_id.trim();
@@ -52,6 +55,8 @@ ARGUMENTS:
 
 PLAYER OPTIONS:
   --open <FILE_OR_URL>      Open media (equivalent to the positional argument)
+  --browse <HTTP_URL>       Browse a remote folder or a file's siblings
+  --no-proxy               Bypass proxies for the preceding --browse
   --play                    Start or resume playback
   --pause                   Pause playback
   --toggle-pause            Toggle play/pause
@@ -85,19 +90,28 @@ PLAYER OPTIONS:
   --quit                    Close the running application
   --command <COMMAND>       Queue a unified text or JSON command; repeatable
   --remote <COMMAND>        Send one unified command and exit
+                             Use 'toast TEXT' for synchronized native/web toasts;
+                             JSON supports severity, stable ID and expiry.
 
 UPDATE OPTIONS:
   --deploy-to <HOST:PORT>   Stream this verified executable to a Pealayer peer
   --update-from <URL>       Ask the running instance to fetch, verify and apply an update
   --sha256 <HASH>           Required/expected hash for the preceding --update-from URL
   --update-status [HOST]    Query local or remote update progress
+  --json                    Update commands: emit one JSON result instead of human output
+  --color <auto|always|never> Update commands: semantic colors (default auto)
+  --no-color                Update commands: plain output; also respects NO_COLOR
+                            Put output options after the update command.
 
 APPLICATION OPTIONS:
+  --connect <pealayer://HOST:PORT>  Control a remote Pealayer session
+  --client-port <PORT>       Local relay Web/API port (default 8081)
   --web-only, --headless     Run the full backend with only the Web/PWA interface visible
   --register-associations    Register Pealayer as the default media handler
   --unregister-associations  Unregister Pealayer file associations
   -h, --help                 Print help information
   -V, --version              Print version information
+  --build-info               Print embedded build identity as JSON; no player is started
 "#,
         env!("CARGO_PKG_VERSION")
     )
@@ -110,6 +124,8 @@ pub fn parse_cli_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliActi
     let mut volume = None;
     let mut commands = Vec::new();
     let mut web_only = false;
+    let mut peer_endpoint = None;
+    let mut client_port = 8081;
 
     let parse_number = |option: &str, value: String| {
         value
@@ -119,6 +135,15 @@ pub fn parse_cli_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliActi
 
     while let Some(arg) = args_iter.next() {
         match arg.as_str() {
+            "--connect" => {
+                let value=args_iter.next().ok_or("--connect requires a Pealayer endpoint")?;
+                crate::peer::endpoint(&value)?;
+                peer_endpoint=Some(value);
+            }
+            "--client-port" => {
+                client_port=args_iter.next().ok_or("--client-port requires a port")?.parse::<u16>().map_err(|_|"Invalid client port")?;
+                if client_port==0{return Err("Client port must be nonzero".into())}
+            }
             "-h" | "--help" => {
                 return Ok(CliAction::PrintHelp(format_help_message()));
             }
@@ -127,6 +152,11 @@ pub fn parse_cli_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliActi
                     "pealayer {}",
                     env!("CARGO_PKG_VERSION")
                 )));
+            }
+            "--build-info" => {
+                return Ok(CliAction::PrintVersion(serde_json::to_string(
+                    &crate::platform::interop::ApplicationIdentity::current("Pealayer"),
+                ).map_err(|error| error.to_string())?));
             }
             "--web-only" | "--headless" => {
                 web_only = true;
@@ -191,6 +221,8 @@ pub fn parse_cli_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliActi
             "--maximize" => commands.push(InteropCommand::Maximize),
             "--restore" => commands.push(InteropCommand::Restore),
             "--preferences" => commands.push(InteropCommand::OpenPreferences),
+            "--browse" => { let target = args_iter.next().ok_or("--browse requires a remote URL")?; let command = InteropCommand::BrowseRemote { target, use_proxy: None, clipboard: false }; command.validate()?; commands.push(command); },
+            "--no-proxy" => { let Some(InteropCommand::BrowseRemote { use_proxy, .. }) = commands.last_mut() else { return Err("Use --no-proxy immediately after --browse URL".into()); }; *use_proxy = Some(false); },
             "--media-info" => commands.push(InteropCommand::OpenMediaInformation),
             "--media-folder" => commands.push(InteropCommand::OpenMediaFolder),
             "--edit-config" => commands.push(InteropCommand::EditConfiguration),
@@ -240,29 +272,20 @@ pub fn parse_cli_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliActi
                 let target = args_iter
                     .next()
                     .ok_or("Option '--deploy-to' requires a Pealayer host or URL")?;
-                return Ok(CliAction::PushUpdate(target));
+                let (output, _, _) = parse_update_options(args_iter, false, false)?;
+                return Ok(CliAction::PushUpdate { target, output });
             }
             "--update-from" => {
                 let url = args_iter
                     .next()
                     .ok_or("Option '--update-from' requires an HTTP(S) URL")?;
-                let mut sha256 = None;
-                if let Some(option) = args_iter.next() {
-                    if option != "--sha256" {
-                        return Err(format!("Unexpected update option: {option}"));
-                    }
-                    sha256 = Some(
-                        args_iter
-                            .next()
-                            .ok_or("Option '--sha256' requires a 64-character digest")?,
-                    );
-                }
-                return Ok(CliAction::UpdateFrom { url, sha256 });
+                let (output, sha256, _) = parse_update_options(args_iter, true, false)?;
+                return Ok(CliAction::UpdateFrom { url, sha256, output });
             }
             "--update-status" => {
-                return Ok(CliAction::UpdateStatus(args_iter.next().unwrap_or_else(
-                    || format!("127.0.0.1:{}", crate::config::control_port()),
-                )));
+                let (output, _, host) = parse_update_options(args_iter, false, true)?;
+                let target = host.unwrap_or_else(|| format!("127.0.0.1:{}", crate::config::control_port()));
+                return Ok(CliAction::UpdateStatus { target, output });
             }
             "--" => {
                 let positional = args_iter
@@ -287,19 +310,59 @@ pub fn parse_cli_args<I: IntoIterator<Item = String>>(args: I) -> Result<CliActi
         }
     }
 
-    Ok(CliAction::RunGui(CliOptions {
+    if target.as_deref().is_some_and(|value|value.starts_with("pealayer://")) {
+        peer_endpoint=target.take();
+    }
+    let options=CliOptions {
         target,
         fullscreen,
         volume,
         commands,
         web_only,
-    }))
+    };
+    Ok(if let Some(endpoint)=peer_endpoint {CliAction::RunClient {endpoint,port:client_port,options}}else{CliAction::RunGui(options)})
+}
+
+fn parse_update_options(
+    mut args: impl Iterator<Item = String>,
+    allow_hash: bool,
+    allow_host: bool,
+) -> Result<(OutputOptions, Option<String>, Option<String>), String> {
+    let mut output = OutputOptions::default();
+    let mut hash = None;
+    let mut host = None;
+    while let Some(option) = args.next() {
+        match option.as_str() {
+            "--json" => output.json = true,
+            "--no-color" => output.color = ColorChoice::Never,
+            "--color" => {
+                output.color = match args.next().as_deref() {
+                    Some("auto") => ColorChoice::Auto,
+                    Some("always") => ColorChoice::Always,
+                    Some("never") => ColorChoice::Never,
+                    _ => return Err("--color requires auto, always or never".into()),
+                };
+            }
+            "--sha256" if allow_hash && hash.is_none() => {
+                let value = args.next().ok_or("--sha256 requires a 64-character digest")?;
+                if value.len() != 64 || !value.bytes().all(|byte| byte.is_ascii_hexdigit()) {
+                    return Err("--sha256 requires a 64-character hexadecimal digest".into());
+                }
+                hash = Some(value);
+            }
+            value if allow_host && !value.starts_with('-') && host.is_none() => host = Some(option),
+            _ => return Err(format!("Unexpected update option: {option}")),
+        }
+    }
+    Ok((output, hash, host))
 }
 
 pub fn send_remote_command(cmd_str: &str) -> Result<String, String> {
     let trimmed = cmd_str.trim();
     let payload = if trimmed.starts_with('{') {
-        crate::platform::interop::parse_interop_request(trimmed)?;
+        if !serde_json::from_str::<serde_json::Value>(trimmed).ok().is_some_and(|v|v["method"].as_str().is_some_and(|m|matches!(m,"pealayer.terminal.control"|"pealayer.terminal.pair"|"pealayer.terminal.revoke"))) {
+            crate::platform::interop::parse_interop_request(trimmed)?;
+        }
         trimmed.to_string()
     } else {
         serde_json::to_string(&crate::platform::interop::parse_text_command(trimmed)?)
@@ -347,8 +410,14 @@ pub fn try_forward_launch_request(request: &LaunchRequest) -> bool {
         Ok(payload) => payload,
         Err(_) => return false,
     };
-    send_unified_request(&payload, Duration::from_millis(500))
-        .is_ok_and(|response| response.contains("\"status\":\"accepted\""))
+    let accepted = send_unified_request(&payload, Duration::from_millis(500))
+        .is_ok_and(|response| response.contains("\"status\":\"accepted\""));
+    if request.commands.iter().any(|command| matches!(command, InteropCommand::OpenPreferences)) {
+        crate::diagnostics::record_shell_action(
+            if accepted { "forward_accepted" } else { "forward_failed" }, "preferences",
+        );
+    }
+    accepted
 }
 
 fn send_unified_request(payload: &str, timeout: Duration) -> Result<String, String> {
@@ -404,40 +473,47 @@ mod tests {
     use super::*;
 
     #[test]
+    fn update_output_options_are_explicit_and_do_not_swallow_invalid_arguments() {
+        let parse = |args: &[&str]| parse_cli_args(args.iter().map(|value| value.to_string()));
+        assert_eq!(parse(&["pealayer", "--deploy-to", "peer:8080", "--json", "--no-color"]).unwrap(),
+            CliAction::PushUpdate { target: "peer:8080".into(), output: OutputOptions { json: true, color: ColorChoice::Never } });
+        assert!(matches!(parse(&["pealayer", "--update-status", "--json", "peer:8080"]).unwrap(),
+            CliAction::UpdateStatus { target, output: OutputOptions { json: true, .. } } if target == "peer:8080"));
+        assert!(matches!(parse(&["pealayer", "--update-status", "--color", "always"]).unwrap(),
+            CliAction::UpdateStatus { output: OutputOptions { color: ColorChoice::Always, .. }, .. }));
+        let digest = "a".repeat(64);
+        assert!(matches!(parse(&["pealayer", "--update-from", "https://example.invalid/update", "--json", "--sha256", &digest]).unwrap(),
+            CliAction::UpdateFrom { sha256: Some(value), output: OutputOptions { json: true, .. }, .. } if value == digest));
+        for args in [
+            vec!["pealayer", "--deploy-to", "peer", "--garbage"],
+            vec!["pealayer", "--deploy-to", "peer", "--sha256", &digest],
+            vec!["pealayer", "--update-status", "peer", "extra"],
+            vec!["pealayer", "--update-status", "--color", "bogus"],
+            vec!["pealayer", "--update-from", "url", "--sha256", "no"],
+            vec!["pealayer", "--json"],
+        ] { assert!(parse(&args).is_err(), "{args:?}"); }
+    }
+
+    #[test]
+    fn remote_folder_cli_uses_the_shared_contract() {
+        let CliAction::RunGui(options) = parse_cli_args(["pealayer", "--browse", "https://files.invalid/folder/", "--no-proxy"].map(String::from)).unwrap() else { panic!("GUI expected"); };
+        assert_eq!(options.commands, vec![InteropCommand::BrowseRemote { target: "https://files.invalid/folder/".into(), use_proxy: Some(false), clipboard: false }]);
+        assert!(parse_cli_args(["pealayer", "--no-proxy"].map(String::from)).is_err());
+    }
+
+    #[test]
     fn application_shortcut_actions_have_cli_and_ipc_parity() {
-        let args = vec![
-            "pealayer".to_owned(),
-            "--media-info".to_owned(),
-            "--media-folder".to_owned(),
-            "--edit-config".to_owned(),
-        ];
-        let CliAction::RunGui(parsed) = parse_cli_args(args).unwrap() else {
-            panic!("GUI command request expected")
-        };
-        assert_eq!(
-            parsed.commands,
-            vec![
-                InteropCommand::OpenMediaInformation,
-                InteropCommand::OpenMediaFolder,
-                InteropCommand::EditConfiguration
-            ]
-        );
+        let args = vec!["pealayer".to_owned(), "--media-info".to_owned(), "--media-folder".to_owned(), "--edit-config".to_owned()];
+        let CliAction::RunGui(parsed) = parse_cli_args(args).unwrap() else { panic!("GUI command request expected") };
+        assert_eq!(parsed.commands, vec![InteropCommand::OpenMediaInformation, InteropCommand::OpenMediaFolder, InteropCommand::EditConfiguration]);
         for (name, expected) in [
             ("media_information", InteropCommand::OpenMediaInformation),
             ("media_folder", InteropCommand::OpenMediaFolder),
             ("edit_config", InteropCommand::EditConfiguration),
         ] {
-            assert_eq!(
-                crate::platform::interop::parse_text_command(name).unwrap(),
-                expected
-            );
+            assert_eq!(crate::platform::interop::parse_text_command(name).unwrap(), expected);
             let request = serde_json::json!({"jsonrpc":"2.0", "id":1, "method":name, "params":{}});
-            assert_eq!(
-                crate::platform::interop::parse_interop_request(&request.to_string())
-                    .unwrap()
-                    .1,
-                expected
-            );
+            assert_eq!(crate::platform::interop::parse_interop_request(&request.to_string()).unwrap().1, expected);
         }
     }
 
@@ -501,6 +577,13 @@ mod tests {
             parse_cli_args(args_v).unwrap(),
             CliAction::PrintVersion(_)
         ));
+
+        let CliAction::PrintVersion(identity) = parse_cli_args(vec![
+            "pealayer".into(), "--build-info".into(),
+        ]).unwrap() else { panic!("build identity must exit before starting a player") };
+        let identity: crate::platform::interop::ApplicationIdentity = serde_json::from_str(&identity).unwrap();
+        assert_eq!(identity.commit, env!("PEALAYER_GIT_COMMIT"));
+        assert_eq!(identity.dirty, env!("PEALAYER_GIT_DIRTY") == "true");
 
         let message = parse_cli_args(vec![
             "pealayer".to_string(),

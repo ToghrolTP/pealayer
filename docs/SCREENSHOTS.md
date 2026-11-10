@@ -12,7 +12,7 @@ the exact PR artifact:
 
 ```powershell
 pwsh -File scripts/update-screenshots-windows.ps1 `
-  -Executable target/release/pealayer.exe `
+  -Executable "$env:LOCALAPPDATA\Programs\Pealayer\build-cache\cargo-target\release\pealayer.exe" `
   -Theme dark -Locale en,fa
 ```
 
@@ -21,7 +21,7 @@ dedicated surface (the default remains the main application window):
 
 ```powershell
 pwsh -File scripts/update-screenshots-windows.ps1 `
-  -Executable target/release/pealayer.exe `
+  -Executable "$env:LOCALAPPDATA\Programs\Pealayer\build-cache\cargo-target\release\pealayer.exe" `
   -Surface preferences -Theme dark -Locale en
 ```
 

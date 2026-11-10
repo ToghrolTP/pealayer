@@ -1,5 +1,45 @@
+use crate::ui::palette::native::controls::CheckboxUiExt;
+use crate::ui::dropdown::DropdownUiExt;
 use crate::app::PealayerApp;
 use eframe::egui;
+
+const HEADER_ENDPOINT_WIDTH: f32 = 154.0;
+
+pub(super) fn recent_media_menu(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    if app.recent_media.is_empty() {
+        ui.label(app.tr("No recent media"));
+        return;
+    }
+    for path in app.recent_media.clone() {
+        let target = path.to_string_lossy();
+        let icon = if crate::media::is_remote_media_target(&target) {
+            crate::ui::icons::GLOBE
+        } else { crate::ui::icons::FILE_VIDEO };
+        let label = app.display_text(&crate::media::media_target_label(&target));
+        if ui.button(format!("{icon}  {label}"))
+            .on_hover_text(crate::media::media_location_display(&target)).clicked() {
+            ui.close();
+            app.load_media_target(&target);
+        }
+    }
+    ui.separator();
+    if ui.button(app.tr("Clear Recent")).clicked() {
+        ui.close();
+        app.clear_recent_media();
+    }
+}
+
+fn header_endpoint_combo<R>(ui: &mut egui::Ui, selected_text: String,
+    body: impl FnOnce(&mut egui::Ui) -> R) -> egui::InnerResponse<egui::InnerResponse<Option<R>>> {
+    ui.allocate_ui_with_layout(egui::vec2(HEADER_ENDPOINT_WIDTH, crate::ui::control_density::height(ui)),
+        egui::Layout::left_to_right(egui::Align::Center), |ui| {
+            // ComboBox::width is a minimum. Extend would let the endpoint and
+            // chevron paint into the already-allocated Disconnect control.
+            crate::ui::dropdown::ComboBox::from_id_salt("hardware_endpoint_select")
+                .selected_text(selected_text).width(HEADER_ENDPOINT_WIDTH).truncate().height(240.0)
+                .show_ui(ui, |ui| { ui.set_min_width(240.0); body(ui) })
+        })
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct TrackMenuState {
@@ -109,7 +149,7 @@ pub(crate) fn draw_estop_release_dialog(app: &mut PealayerApp, ui: &mut egui::Ui
             ui.add_space(6.0);
             ui.label(message);
             ui.add_space(10.0);
-            ui.checkbox(&mut app.skip_estop_release_confirmation_draft, skip_label);
+            ui.themed_checkbox(&mut app.skip_estop_release_confirmation_draft, skip_label);
             ui.add_space(12.0);
             ui.separator();
             ui.add_space(6.0);
@@ -182,51 +222,36 @@ fn top_menu_button<R>(
 }
 
 pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    let _timing = crate::performance::span(crate::performance::Phase::Menu);
     let ctx = ui.ctx().clone();
     let language = app.language;
     let rtl = app.rtl;
 
-    egui::Panel::top("menu_bar").show_inside(ui, |ui| {
+    let menu = egui::Panel::top("menu_bar").show_inside(ui, |ui| {
         egui::MenuBar::new().ui(ui, |ui| {
             ui.with_layout(crate::ui::i18n::layout(rtl, egui::Align::Center), |ui| {
                 top_menu_button(ui, app.tr("File"), |ui| {
                     if ui.button(app.tr("Open Video File...")).clicked() {
                         ui.close();
-                        if let Some(path) = rfd::FileDialog::new()
-                            .add_filter("Video Files", &["mp4", "mkv", "avi", "webm", "mov", "flv"])
-                            .pick_file()
-                        {
-                            app.load_video_file(path);
-                        }
+                        app.open_media_file_dialog(&ctx);
                     }
 
                     if ui.button(app.tr("Open Location / URL...")).clicked() {
                         ui.close();
                         app.show_open_url_dialog = true;
                     }
+                    if ui.button(format!("{} Connect to Pealayer...",crate::ui::icons::GLOBE)).clicked(){crate::ui::peer_browser::connection_dialog(&ctx);ui.close();}
+                    if ui.button(format!("{}  Browse remote folder...", crate::ui::icons::FOLDER_OPEN)).clicked() {
+                        let _ = crate::remote_location::request("", None, false, ui.ctx());
+                        ui.close();
+                    }
+                    if ui.button(format!("{} Start Virtual Board Demo", crate::ui::icons::LIGHTNING)).clicked() {
+                        ui.close();
+                        app.start_virtual_board_demo();
+                    }
 
                     crate::ui::icons::submenu(ui, app.tr("Open Recent"), |ui| {
-                        if app.recent_media.is_empty() {
-                            ui.label(app.tr("No recent media"));
-                        } else {
-                            for path in app.recent_media.clone() {
-                                let target = path.to_string_lossy();
-                                let label = crate::media::media_target_label(&target);
-                                if ui
-                                    .button(app.display_text(&label))
-                                    .on_hover_text(crate::media::redact_media_target(&target))
-                                    .clicked()
-                                {
-                                    ui.close();
-                                    app.load_media_target(&target);
-                                }
-                            }
-                            ui.separator();
-                            if ui.button(app.tr("Clear Recent")).clicked() {
-                                ui.close();
-                                app.clear_recent_media();
-                            }
-                        }
+                        recent_media_menu(app, ui);
                     });
 
                     let has_video = app.current_video_path.is_some();
@@ -235,7 +260,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         app.apply_interop_command(&ctx, crate::platform::interop::InteropCommand::OpenMediaInformation, "menu");
                         ui.close();
                     }
-                    let has_local_folder = app.current_video_path.as_deref()
+                    let has_local_folder = crate::peer::active()&&app.current_video_path.is_some() || app.current_video_path.as_deref()
                         .is_some_and(|path| crate::application_shortcuts::containing_media_folder(path).is_ok());
                     if ui.add_enabled(has_local_folder, egui::Button::new(format!("{} {}", crate::ui::icons::FOLDER_OPEN, app.tr("Open containing folder")))
                         .shortcut_text(&app.application_shortcuts.media_folder)).clicked() {
@@ -247,18 +272,31 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         .clicked()
                     {
                         ui.close();
-                        app.close_video();
+                        app.request_close_video();
                     }
 
                     if ui.button(app.tr("Open Timeline Project...")).clicked() {
                         ui.close();
-                        if let Some(path) = rfd::FileDialog::new()
+                        if crate::peer::active(){crate::ui::peer_browser::open(&ctx,crate::ui::peer_browser::Purpose::TimelineOpen,None);}
+                        else if let Some(path) = rfd::FileDialog::new()
                             .add_filter("Pealayer Timeline", &["json"])
                             .pick_file()
                         {
                             match crate::four_d::models::Timeline::load_from_file(&path) {
                                 Ok(timeline) => {
+                                    app.track_muted = timeline.track_muted.clone();
+                                    app.track_soloed = timeline.track_soloed.clone();
+                                    app.track_locked = timeline.track_locked.clone();
+                                    if let Some(ref target) = timeline.media_target {
+                                        if app.current_video_path.is_none() {
+                                            let media_file = std::path::PathBuf::from(target);
+                                            if media_file.exists() {
+                                                app.load_video_file(media_file);
+                                            }
+                                        }
+                                    }
                                     app.timeline = timeline;
+                                    app.timeline_saved_baseline = Some(app.snapshot_timeline());
                                     let compiled = crate::four_d::engine::compile_timeline(
                                         &app.timeline,
                                         &app.track_muted,
@@ -281,33 +319,45 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     let save_enabled = app.current_video_path.as_ref().is_some_and(|path| {
                         !crate::media::is_remote_media_target(&path.to_string_lossy())
                     });
-                    let save_btn = egui::Button::new(app.tr("Save Timeline (Sidecar)"));
+                    let save_btn = egui::Button::new(app.tr("Save Timeline (Sidecar)"))
+                        .shortcut_text("Ctrl+S");
                     if ui.add_enabled(save_enabled, save_btn).clicked() {
                         ui.close();
-                        if let Some(ref video_path) = app.current_video_path {
-                            let mut sidecar = video_path.clone();
-                            sidecar.set_extension("4d.json");
-                            if let Err(e) = app.timeline.save_to_file(&sidecar) {
-                                app.show_error = Some(format!("Failed to save timeline: {}", e));
-                            }
+                        if crate::peer::active(){crate::ui::peer_browser::open(&ctx,crate::ui::peer_browser::Purpose::TimelineSave,None);}
+                        else if let Err(e) = app.save_current_timeline_sidecar() {
+                            app.show_error = Some(e);
                         }
                     }
 
                     if ui.button(app.tr("Save Timeline As...")).clicked() {
                         ui.close();
-                        if let Some(path) = rfd::FileDialog::new()
+                        if crate::peer::active(){crate::ui::peer_browser::open(&ctx,crate::ui::peer_browser::Purpose::TimelineSave,None);}
+                        else if let Some(path) = rfd::FileDialog::new()
                             .add_filter("Pealayer Timeline", &["json"])
                             .save_file()
                         {
+                            app.timeline.track_muted = app.track_muted.clone();
+                            app.timeline.track_soloed = app.track_soloed.clone();
+                            app.timeline.track_locked = app.track_locked.clone();
+                            app.timeline.media_target = app.current_video_path.as_ref().map(|p| p.to_string_lossy().to_string());
                             if let Err(e) = app.timeline.save_to_file(&path) {
                                 app.show_error = Some(format!("Failed to save timeline: {}", e));
+                            } else {
+                                app.timeline_saved_baseline = Some(app.snapshot_timeline());
+                                let name = path.file_name().and_then(|n| n.to_str()).unwrap_or("timeline");
+                                app.set_osd(format!("{} {name}", app.tr("Timeline saved:")));
                             }
                         }
                     }
 
                     ui.separator();
+                    if ui.button(format!("{} Downloads", egui_phosphor::regular::DOWNLOAD_SIMPLE)).clicked() {
+                        crate::downloads::open(&ctx);
+                        ui.close();
+                    }
                     if ui.button(app.tr("Quit")).clicked() {
-                        ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+                        ui.close();
+                        app.request_quit(&ctx);
                     }
                 });
 
@@ -381,7 +431,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     ui.separator();
 
                     let mut vis = app.sub_visibility;
-                    if ui.checkbox(&mut vis, app.tr("Enable Subtitles")).changed() {
+                    if ui.themed_checkbox(&mut vis, app.tr("Enable Subtitles")).changed() {
                         app.set_subtitle_visibility(vis);
                     }
 
@@ -393,12 +443,17 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     }
                 });
 
+                enum ChapterAction {
+                    Previous,
+                    Next,
+                    Jump(i64),
+                }
+
                 top_menu_button(ui, app.tr("Chapters"), |ui| {
-                    let chapters = app.media_chapters();
-                    let current = app.active_media_chapter().map(|chapter| chapter.index);
-                    if chapters.is_empty() {
+                    if app.media_chapters().is_empty() {
                         ui.add_enabled(false, egui::Label::new(app.tr("No chapters")));
                     } else {
+                        let mut action = None;
                         ui.horizontal(|ui| {
                             if ui
                                 .button(format!(
@@ -408,7 +463,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 ))
                                 .clicked()
                             {
-                                app.previous_media_chapter();
+                                action = Some(ChapterAction::Previous);
                                 ui.close();
                             }
                             if ui
@@ -419,12 +474,13 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 ))
                                 .clicked()
                             {
-                                app.next_media_chapter();
+                                action = Some(ChapterAction::Next);
                                 ui.close();
                             }
                         });
                         ui.separator();
-                        for chapter in chapters {
+                        let current = app.active_media_chapter().map(|chapter| chapter.index);
+                        for chapter in app.media_chapters() {
                             let label = format!(
                                 "{}  {}",
                                 crate::duration::format_time_value_ms(
@@ -433,29 +489,27 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 chapter.title
                             );
                             if ui
-                                .selectable_label(current == Some(chapter.index), label)
+                                .dropdown_choice(current == Some(chapter.index), label)
                                 .clicked()
                             {
-                                app.jump_to_media_chapter(chapter.index);
+                                action = Some(ChapterAction::Jump(chapter.index));
                                 ui.close();
                             }
+                        }
+                        match action {
+                            Some(ChapterAction::Previous) => app.previous_media_chapter(),
+                            Some(ChapterAction::Next) => app.next_media_chapter(),
+                            Some(ChapterAction::Jump(index)) => app.jump_to_media_chapter(index),
+                            None => {}
                         }
                     }
                 });
 
                 // Workspace switcher
                 top_menu_button(ui, app.tr("Workspace"), |ui| {
-                    for (id, profile) in app.ordered_workspace_profiles() {
-                        let active = app.active_workspace_profile.as_deref() == Some(id.as_str());
-                        let label = format!(
-                            "{}  {}",
-                            crate::ui::icons::workspace_icon(&profile.icon),
-                            profile.name
-                        );
-                        if ui.selectable_label(active, label).clicked() {
-                            app.restore_workspace_profile(ui.ctx(), &id);
-                            ui.close();
-                        }
+                    if let Some(id) = crate::ui::workspace_profiles::profile_choices(ui,
+                        &app.ordered_workspace_profiles(), app.active_workspace_profile.as_deref()) {
+                        app.restore_workspace_profile(ui.ctx(), &id);
                     }
                     ui.separator();
                     crate::ui::icons::submenu(
@@ -463,37 +517,66 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                         format!("{} {}", crate::ui::icons::TABS, app.tr("Panels")),
                         |ui| crate::ui::layout::draw_workspace_tab_menu(app, ui),
                     );
-                    ui.separator();
-                    if ui
-                        .button(format!(
-                            "{}  {}",
-                            crate::ui::icons::FLOPPY_DISK,
-                            app.tr("Manage workspaces...")
-                        ))
-                        .clicked()
+                    #[cfg(feature = "workspace-toolbar")]
                     {
-                        app.show_workspace_profiles_dialog = true;
-                        ui.close();
-                    }
-                });
-
-                top_menu_button(ui, app.tr("Window"), |ui| {
-                    ui.label(egui::RichText::new(app.tr("Panels")).strong());
-                    ui.separator();
-
-                    for tab in crate::ui::layout::PealayerTab::ALL {
-                        let is_open = app.is_tab_open(tab);
-                        let icon = tab.icon();
-                        let name = tab.title(app);
-                        let label = format!("{icon}  {name}");
-
-                        let mut checked = is_open;
-                        if ui.checkbox(&mut checked, label).clicked() {
-                            app.toggle_tab(tab);
+                        let mut enabled = super::simple_controls::toolbar_visible(app);
+                        if ui.themed_checkbox(&mut enabled, format!("{}  {}", crate::ui::icons::COMMAND, app.tr("Command toolbar"))).changed() {
+                            super::simple_controls::set_toolbar_visible(app,enabled);
+                            if app.show_four_d_editor {app.deferred_config_save = true;}
+                            else {app.request_simple_workspace_save(ui.ctx());}
+                        }
+                        if ui.button(format!("{}  {}  Ctrl+Shift+P", crate::ui::icons::MAGNIFYING_GLASS, app.tr("Command palette"))).clicked() {
+                            app.toolbar_state.palette_open = true;
                             ui.close();
                         }
                     }
-
+                    #[cfg(feature = "workspace-terminal")]
+                    {
+                        let mut enabled = app.terminal_state.preferences.enabled;
+                        if ui.themed_checkbox(&mut enabled, format!("{}  {}", crate::ui::icons::TERMINAL_WINDOW, app.tr("Terminal"))).changed() {
+                            app.terminal_state.preferences.enabled = enabled;
+                            app.deferred_config_save = true;
+                        }
+                    }
+                    let mut sidebar_rail_enabled = app.sidebar_rail_state.enabled;
+                    if ui
+                        .themed_checkbox(&mut sidebar_rail_enabled, app.tr("Sidebar Rail"))
+                        .changed()
+                    {
+                        app.sidebar_rail_state.enabled = sidebar_rail_enabled;
+                        app.save_config();
+                    }
+                    if app.sidebar_rail_state.enabled {
+                        crate::ui::icons::submenu(
+                            ui,
+                            format!("{} {}", crate::ui::icons::APP_WINDOW, app.tr("Sidebar Panes")),
+                            |ui| {
+                                for pane in crate::ui::sidebar_rail::SidebarPane::ALL {
+                                    let is_open = app.sidebar_rail_state.open == Some(pane);
+                                    let mut open = is_open;
+                                    let visibility_icon = if is_open {
+                                        crate::ui::icons::EYE
+                                    } else {
+                                        crate::ui::icons::EYE_SLASH
+                                    };
+                                    let tab_icon = crate::ui::layout::PealayerTab::from(pane).icon();
+                                    let label = format!("{visibility_icon}  {tab_icon}  {}", pane.title(app.language));
+                                    if ui.themed_checkbox(&mut open, label).changed() {
+                                        if open {
+                                            if let Err(error) = app.open_sidebar_pane(pane) {
+                                                app.set_osd(error);
+                                            } else {
+                                                app.save_config();
+                                            }
+                                        } else if is_open {
+                                            app.sidebar_rail_state.open = None;
+                                            app.save_config();
+                                        }
+                                    }
+                                }
+                            },
+                        );
+                    }
                     ui.separator();
                     if ui
                         .button(format!(
@@ -505,6 +588,17 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     {
                         app.dock_state = crate::ui::layout::create_initial_layout();
                         app.save_dock_layout();
+                        ui.close();
+                    }
+                    if ui
+                        .button(format!(
+                            "{}  {}",
+                            crate::ui::icons::FLOPPY_DISK,
+                            app.tr("Manage workspaces...")
+                        ))
+                        .clicked()
+                    {
+                        app.show_workspace_profiles_dialog = true;
                         ui.close();
                     }
                 });
@@ -521,7 +615,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             (crate::config::AppLanguage::Persian, app.tr("Persian")),
                         ] {
                             if ui
-                                .selectable_label(app.language_preference == preference, label)
+                                .dropdown_choice(app.language_preference == preference, label)
                                 .clicked()
                             {
                                     app.set_language(ui.ctx(), preference);
@@ -536,7 +630,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                             (crate::config::AppDirection::Rtl, app.tr("Right to left")),
                         ] {
                             if ui
-                                .selectable_label(app.direction_preference == preference, label)
+                                .dropdown_choice(app.direction_preference == preference, label)
                                 .clicked()
                             {
                                 app.set_direction(preference);
@@ -602,6 +696,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     }
 
                     // 2. Coordinator/direct-diagnostic connection toggle & dropdown
+                    if let Some(client)=crate::peer::client(){
+                        let text=client.origin.as_str().replacen("http://","pealayer://",1);
+                        ui.label(format!("{} {text}",crate::ui::icons::GLOBE));
+                        ui.label(if app.is_connected{"Remote session"}else{"Disconnected"});
+                    } else {
                     let connection_requested = app
                         .engine_handle
                         .connection_requested
@@ -625,23 +724,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     if conn_btn.clicked() {
                         let should_connect = !(app.is_connected || connection_requested);
                         if should_connect {
-                            let endpoint = app.serial_port.trim().to_owned();
-                            if endpoint.is_empty() {
-                                app.connection_notice = Some(
-                                    app.tr("Enter a hardware endpoint before connecting."),
-                                );
-                            } else {
-                                app.serial_port = endpoint.clone();
-                                if let Ok(mut selected) = app.engine_handle.serial_port.lock() {
-                                    *selected = endpoint;
-                                }
-                                app.connection_notice = None;
-                                app.engine_handle.connection_requested.store(
-                                    true,
-                                    std::sync::atomic::Ordering::Relaxed,
-                                );
-                                app.save_config();
-                            }
+                            app.request_hardware_connection();
                         } else {
                             app.engine_handle.connection_requested.store(
                                 false,
@@ -656,21 +739,31 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     // paths are valid even when they are not visible to the local enumerator.
                     let mut endpoint_changed = false;
                     ui.add_enabled_ui(!app.is_connected && !connection_requested, |ui| {
-                        ui.allocate_ui(egui::vec2(154.0, 20.0), |ui| {
-                            egui::ComboBox::from_id_salt("hardware_endpoint_select")
-                                .selected_text(&app.serial_port)
-                                .width(154.0)
-                                .height(240.0)
-                                .show_ui(ui, |ui| {
-                                    for endpoint in crate::four_d::controller::available_endpoints()
+                        let selected_display = if crate::four_d::controller::is_demo_endpoint(&app.serial_port) {
+                            format!("{} Virtual Board (Demo)", crate::ui::icons::LIGHTNING)
+                        } else {
+                            app.serial_port.clone()
+                        };
+                        header_endpoint_combo(ui, selected_display, |ui| {
+                                    for endpoint in std::iter::once(crate::four_d::controller::DEMO_ENDPOINT.to_string())
+                                        .chain(crate::four_d::controller::available_endpoints())
+                                        .chain(crate::server::binary_udp::discovered_controllers())
                                     {
-                                        endpoint_changed |= ui
-                                            .selectable_value(
+                                        let item_label = if crate::four_d::controller::is_demo_endpoint(&endpoint) {
+                                            format!("{} Virtual Board (Demo Simulation)", crate::ui::icons::LIGHTNING)
+                                        } else {
+                                            endpoint.clone()
+                                        };
+                                        if ui
+                                            .dropdown_value(
                                                 &mut app.serial_port,
                                                 endpoint.clone(),
-                                                endpoint,
+                                                item_label,
                                             )
-                                            .changed();
+                                            .changed()
+                                        {
+                                            endpoint_changed = true;
+                                        }
                                     }
 
                                     ui.separator();
@@ -680,25 +773,29 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                     );
                                     endpoint_changed |= ui
                                         .add_sized(
-                                            [240.0, 22.0],
-                                            egui::TextEdit::singleline(&mut app.serial_port)
+                                            [240.0, crate::ui::control_density::height(ui)],
+                                            crate::ui::dialog::singleline_text_edit(ui, &mut app.serial_port)
                                                 .hint_text(endpoint_hint),
                                         )
                                         .on_hover_text(app.tr(
                                             "Enter a PCController endpoint or an OS hardware path.",
                                         ))
                                         .changed();
-                                });
                         });
                     });
                     if endpoint_changed {
+                        if let Ok(mut selected) = app.engine_handle.serial_port.lock() {
+                            *selected = app.serial_port.clone();
+                        }
                         app.save_config();
                     }
 
                     // Connection visual indicator dot
-                    let dot_color = if app.is_connected {
+                    let hardware = app.advertised_hardware();
+                    let availability = crate::four_d::programming::hardware_availability(app.is_connected, connection_requested, hardware.as_ref());
+                    let dot_color = if availability == crate::four_d::programming::HardwareAvailability::Ready {
                         egui::Color32::from_rgb(46, 204, 113) // Green
-                    } else if connection_requested {
+                    } else if app.is_connected || connection_requested {
                         egui::Color32::from_rgb(241, 196, 15) // Amber
                     } else {
                         egui::Color32::from_rgb(231, 76, 60) // Red
@@ -709,8 +806,12 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     ui.painter()
                         .circle_filled(dot_rect.center(), 4.0, dot_color);
 
-                    let status_lbl = if app.is_connected {
-                        if crate::four_d::controller::is_controller_endpoint(&app.serial_port) {
+                    let status_lbl = if app.is_connected && matches!(availability, crate::four_d::programming::HardwareAvailability::Programming | crate::four_d::programming::HardwareAvailability::ProgrammingLatch | crate::four_d::programming::HardwareAvailability::ProgrammingRecovery) {
+                        app.tr(availability.label())
+                    } else if app.is_connected {
+                        if crate::four_d::controller::is_demo_endpoint(&app.serial_port) {
+                            format!("{} Virtual Board (Demo)", crate::ui::icons::LIGHTNING)
+                        } else if crate::four_d::controller::is_controller_endpoint(&app.serial_port) {
                             app.advertised_hardware()
                                 .filter(|capabilities| capabilities.board_connected)
                                 .map(|capabilities| app.display_text(&capabilities.board_name))
@@ -726,13 +827,26 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     };
                     ui.add(
                         egui::Label::new(egui::RichText::new(status_lbl).size(10.0).weak())
-                            .truncate(),
+                            .truncate().sense(egui::Sense::click()),
                     )
-                    .on_hover_text(&app.serial_port);
+                    .on_hover_text(&app.serial_port)
+                    .context_menu(|ui| super::status_bar::hardware_context_menu(app, ui));
+                    }
                 });
             });
         });
     });
+    if app.color_palette == crate::config::ColorPalette::Pastel {
+        let rect = menu.response.rect;
+        let stripe = egui::Rect::from_min_max(
+            egui::pos2(rect.left(), rect.bottom() - 1.0),
+            rect.max,
+        );
+        let color = |role| crate::ui::palette::color(app.color_palette, ui.visuals().dark_mode, role);
+        crate::ui::palette::paint_gradient(
+            ui.painter(), stripe, 0, color("gradient-start"), color("gradient-end"), 1.0,
+        );
+    }
 }
 
 pub fn format_track_label(id: i64, lang: Option<&str>, title: Option<&str>) -> String {
@@ -750,7 +864,159 @@ pub fn format_track_label(id: i64, lang: Option<&str>, title: Option<&str>) -> S
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn recent_menu_paints_decoded_filenames_and_globe_without_mutating_sources() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let mut app = crate::app::PealayerApp::default();
+        app.recent_media = vec!["https://user:secret@example.invalid/My%20movie%20%26amp%3B%20you.mkv?token=private".into(), r"C:\media\Local%20film.mkv".into()];
+        let original = app.recent_media.clone();
+        let ctx = egui::Context::default();
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| super::recent_media_menu(&mut app,ui));
+        let text = output.shapes.iter().filter_map(|shape| match &shape.shape {
+            egui::Shape::Text(t) => Some(t.galley.text()), _ => None,
+        }).collect::<Vec<_>>().join("\n");
+        assert!(text.contains("My movie & you.mkv"));
+        assert!(text.contains(crate::ui::icons::GLOBE));
+        assert!(text.contains("Local%20film.mkv"));
+        assert!(!text.contains("secret") && !text.contains("token=private"));
+        assert_eq!(app.recent_media,original);
+        output.textures_delta.clear();
+    }
     use super::*;
+
+    #[test]
+    fn upper_hardware_label_context_menu_opens_preferences() {
+        let _guard=crate::app::tests::lock_app_tests();
+        let ctx=egui::Context::default(); let mut app=PealayerApp::default();
+        app.engine_handle=crate::four_d::engine::memory_only_test_engine();
+        let mut time=0.0;
+        let mut frame=|app:&mut PealayerApp,events| {
+            time+=0.1;
+            let mut output=ctx.run_ui(egui::RawInput {time:Some(time),events,
+                screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(1800.0,800.0))),..Default::default()},|ui|draw(app,ui));
+            output.textures_delta.clear(); output
+        };
+        fn point(output:&egui::FullOutput,label:&str)->egui::Pos2 {
+            output.shapes.iter().find_map(|shape|match &shape.shape {
+                egui::Shape::Text(t) if t.galley.text().contains(label)=>Some(t.pos+t.galley.rect.center().to_vec2()),_=>None,
+            }).expect("hardware header/menu caption")
+        }
+        frame(&mut app,vec![]); let output=frame(&mut app,vec![]);
+        let header=point(&output,"Hardware Disconnected");
+        let button=|pos,button,pressed|egui::Event::PointerButton {pos,button,pressed,modifiers:egui::Modifiers::NONE};
+        frame(&mut app,vec![egui::Event::PointerMoved(header),button(header,egui::PointerButton::Secondary,true)]);
+        frame(&mut app,vec![button(header,egui::PointerButton::Secondary,false)]);
+        let output=frame(&mut app,vec![]); let row=point(&output,"Hardware preferences");
+        frame(&mut app,vec![egui::Event::PointerMoved(row),button(row,egui::PointerButton::Primary,true)]);
+        frame(&mut app,vec![button(row,egui::PointerButton::Primary,false)]);
+        assert!(app.show_preferences_dialog,"menu selection must actually open Preferences");
+        drop(frame);
+        app.native_dialog_windows=false;
+        let mut output=ctx.run_ui(Default::default(),|ui|crate::ui::preferences::draw(&mut app,ui));
+        output.textures_delta.clear();
+        let hardware=crate::preferences_contract::preference_sections().iter().position(|section|section.id=="hardware").unwrap();
+        assert_eq!(app.preferences_tab,hardware,"rendered Preferences must consume the exact Hardware navigation");
+    }
+
+    #[test]
+    fn workspace_popup_does_not_contain_hardware_rf_controls() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let ctx = egui::Context::default();
+        let mut app = PealayerApp::default();
+        app.engine_handle = crate::four_d::engine::memory_only_test_engine();
+        fn frame(ctx: &egui::Context, app: &mut PealayerApp, events: Vec<egui::Event>) -> egui::FullOutput {
+            ctx.run_ui(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(1600.0,800.0))), events, ..Default::default() }, |ui| draw(app,ui))
+        }
+        fn text_pos(shape: &egui::Shape, text: &str) -> Option<egui::Pos2> {
+            match shape {
+                egui::Shape::Text(t) if t.galley.text().contains(text) => Some(t.pos+t.galley.rect.center().to_vec2()),
+                egui::Shape::Vec(shapes) => shapes.iter().find_map(|s|text_pos(s,text)),
+                _ => None,
+            }
+        }
+        let mut first=frame(&ctx,&mut app,vec![]);
+        let point=first.shapes.iter().find_map(|shape|text_pos(&shape.shape,"Workspace")).expect("workspace heading");
+        first.textures_delta.clear();
+        for pressed in [true,false] {
+            let mut output=frame(&ctx,&mut app,vec![egui::Event::PointerMoved(point),egui::Event::PointerButton {pos:point,button:egui::PointerButton::Primary,pressed,modifiers:egui::Modifiers::NONE}]);
+            output.textures_delta.clear();
+        }
+        let mut menu=frame(&ctx,&mut app,vec![]);
+        assert!(menu.shapes.iter().any(|s|text_pos(&s.shape,"Panels").is_some()),"workspace menu must open");
+        assert!(menu.shapes.iter().all(|s|text_pos(&s.shape,"RF controls…").is_none()),"RF controls belong to hardware");
+        menu.textures_delta.clear();
+    }
+
+    #[test]
+    fn header_endpoint_chevron_stays_clear_of_disconnect_across_density_and_fonts() {
+        for density in crate::config::UiControlDensity::ALL {
+            for font in [12.0, 14.0, 20.0, 24.0] {
+                for scale in [1.0, 1.25, 2.0] {
+                    let context=egui::Context::default();
+                    context.set_pixels_per_point(scale);
+                    context.all_styles_mut(|style| {
+                        crate::ui::control_density::configure(style,density);
+                        style.text_styles.insert(egui::TextStyle::Button,egui::FontId::proportional(font));
+                    });
+                    let mut endpoint_rect=egui::Rect::NOTHING;
+                    let mut disconnect_rect=egui::Rect::NOTHING;
+                    for (enabled,hovered) in [(true,false),(true,true),(false,false),(false,true)] {
+                        let mut output=context.run_ui(egui::RawInput{
+                            screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(600.0,180.0))),
+                            events:if hovered {vec![egui::Event::PointerMoved(endpoint_rect.right_center()-egui::vec2(10.0,0.0))]} else {vec![]},
+                            ..Default::default()
+                        },|ui| {
+                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui| {
+                                disconnect_rect=ui.button("Disconnect").rect;
+                                endpoint_rect=ui.add_enabled_ui(enabled,|ui|
+                                    header_endpoint_combo(ui,"pccontroller://very-long-cinema-controller-host:8787".into(),|_|{}).inner.response.rect).inner;
+                            });
+                        });
+                        output.textures_delta.clear();
+                        assert!((endpoint_rect.width()-HEADER_ENDPOINT_WIDTH).abs()<0.01,"{density:?} font={font} rect={endpoint_rect:?}");
+                        assert!(endpoint_rect.right()<disconnect_rect.left(),"overlapping trigger hit targets: {endpoint_rect:?} {disconnect_rect:?}");
+                        for shape in &output.shapes {
+                            if let egui::Shape::Path(path)=&shape.shape {
+                                if path.points.len()==3 && (path.stroke.width-1.5).abs()<0.01 {
+                                    assert!(path.points.iter().all(|point|endpoint_rect.contains(*point)),"chevron leaves trigger");
+                                    assert!(!shape.clip_rect.intersects(disconnect_rect),"chevron painter can bleed into Disconnect");
+                                }
+                            }
+                        }
+                        output.textures_delta.clear();
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn header_endpoint_popup_keeps_its_own_full_width_clip() {
+        let context=egui::Context::default();
+        let mut trigger=egui::Rect::NOTHING;
+        let mut popup_choice=egui::Rect::NOTHING;
+        let mut choice_clip=egui::Rect::NOTHING;
+        for pass in 0..3 {
+            let mut output=context.run_ui(egui::RawInput{
+                screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(600.0,300.0))),
+                events:if pass==1 {vec![egui::Event::PointerMoved(trigger.center()),
+                    egui::Event::PointerButton{pos:trigger.center(),button:egui::PointerButton::Primary,pressed:true,modifiers:egui::Modifiers::NONE},
+                    egui::Event::PointerButton{pos:trigger.center(),button:egui::PointerButton::Primary,pressed:false,modifiers:egui::Modifiers::NONE}]} else {vec![]},
+                ..Default::default()
+            },|ui| {
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center),|ui| {
+                    let _=ui.button("Disconnect");
+                    trigger=header_endpoint_combo(ui,"pccontroller://127.0.0.1:8787".into(),|ui| {
+                        popup_choice=ui.add_sized([240.0,crate::ui::control_density::height(ui)],egui::Button::new("A wide endpoint choice")).rect;
+                        choice_clip=ui.clip_rect();
+                    }).inner.response.rect;
+                });
+            });
+            output.textures_delta.clear();
+        }
+        assert!(popup_choice.width()>=240.0);
+        assert!(choice_clip.contains_rect(popup_choice),"closed trigger clipping must not constrain the popup: choice={popup_choice:?}, clip={choice_clip:?}");
+    }
 
     #[test]
     fn track_menu_is_contextual_to_media_and_discovered_tracks() {

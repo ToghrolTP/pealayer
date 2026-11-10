@@ -1,3 +1,4 @@
+use crate::ui::dropdown::DropdownUiExt;
 use crate::app::{MediaTrackInfo, MediaTrackKey, MediaTrackType, PealayerApp};
 use crate::media_info::{MediaCollectionEntry, MediaFileInfo, MediaPropertyGroup};
 use eframe::egui;
@@ -305,8 +306,9 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     let refresh_label = app.tr("Refresh from libmpv");
     let copy_label = app.tr("Copy all");
     let search_hint = app.tr("Search properties");
+    let remote=app.current_video_path.as_deref().and_then(std::path::Path::to_str).is_some_and(crate::media::is_remote_media_target);
 
-    ui.horizontal(|ui| {
+    ui.horizontal_wrapped(|ui| {
         ui.heading(app.tr("Media Inspector"));
         ui.add_space(4.0);
         if ui
@@ -320,6 +322,11 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
             .clicked()
         {
             app.refresh_media_tracks();
+        }
+        if ui.add_enabled(has_media,egui::Button::new(format!("{}  {}",crate::ui::icons::COPY,app.tr(if remote {"Copy link"} else {"Copy location"}))))
+            .on_hover_text(app.tr("Copy the media source location to the clipboard" )).clicked() {
+            let ctx=ui.ctx().clone();
+            app.apply_interop_command(&ctx,crate::platform::interop::InteropCommand::CopyMediaLocation,"Media Inspector");
         }
     });
     if !has_media {
@@ -344,8 +351,8 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
     ui.horizontal(|ui| {
         ui.label(crate::ui::icons::MAGNIFYING_GLASS);
         let response = ui.add_sized(
-            [ui.available_width().min(360.0), 24.0],
-            egui::TextEdit::singleline(&mut filter).hint_text(search_hint),
+            [ui.available_width().min(360.0), crate::ui::control_density::height(ui)],
+            crate::ui::dialog::singleline_text_edit(ui, &mut filter).hint_text(search_hint),
         );
         if response.changed() {
             ui.ctx()
@@ -381,7 +388,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                     .show(ui, |ui| {
                         ui.set_width(ui.available_width());
                         if ui
-                            .selectable_label(
+                            .dropdown_choice(
                                 selection == InspectorSelection::File,
                                 format!("{}  File and metadata", crate::ui::icons::INFO),
                             )
@@ -403,7 +410,7 @@ pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
                                 label.push_str(&format!(" · {language}"));
                             }
                             if ui
-                                .selectable_label(
+                                .dropdown_choice(
                                     selection == InspectorSelection::Track(key),
                                     format!("{}  {label}", track_icon(track.kind)),
                                 )

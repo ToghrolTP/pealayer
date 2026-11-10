@@ -1,3 +1,5 @@
+use crate::ui::palette::native::controls::CheckboxUiExt;
+use crate::ui::dropdown::DropdownUiExt;
 use crate::app::PealayerApp;
 use eframe::egui;
 
@@ -239,7 +241,7 @@ fn overview(
             let name_align = crate::ui::i18n::input_alignment(app.rtl, &app.board_name_draft);
             ui.add_enabled(
                 app.board_operation.is_none(),
-                egui::TextEdit::singleline(&mut app.board_name_draft)
+                crate::ui::dialog::singleline_text_edit(ui, &mut app.board_name_draft)
                     .horizontal_align(name_align)
                     .char_limit(8)
                     .desired_width(150.0),
@@ -590,6 +592,7 @@ fn settings(
                     &mut settings.stream_period_ms,
                     0..=u16::MAX as u64,
                     10.0,
+                    app.human_readable_time_units,
                 ))
                 .on_hover_text(app.tr("Use 0 to disable periodic telemetry"));
             });
@@ -704,10 +707,10 @@ fn settings(
                 .unwrap_or(fallback);
             ui.horizontal(|ui| {
                 let changed = ui
-                    .checkbox(&mut override_enabled, app.tr("Override with custom color"))
+                    .themed_checkbox(&mut override_enabled, app.tr("Override with custom color"))
                     .changed();
                 ui.add_enabled_ui(override_enabled, |ui| {
-                    ui.color_edit_button_srgb(&mut override_color)
+                    crate::ui::color_picker::color_button_srgb(ui, &mut override_color)
                         .on_hover_text(app.tr("Choose the live status-light color"));
                 });
                 let busy = app.board_operation.is_some();
@@ -758,10 +761,19 @@ fn settings(
                     );
                 });
                 setting_control(ui, &app.tr("Exit hold"), |ui| {
-                    ui.add(
-                        egui::Slider::new(&mut settings.motion_exit_hold_seconds, 1..=31)
-                            .suffix(" s"),
-                    );
+                    let mut hold_ms = u64::from(settings.motion_exit_hold_seconds) * 1_000;
+                    if ui
+                        .add(crate::duration::time_value_drag(
+                            &mut hold_ms,
+                            1_000..=31_000,
+                            1_000.0,
+                            app.human_readable_time_units,
+                        ))
+                        .changed()
+                    {
+                        settings.motion_exit_hold_seconds =
+                            hold_ms.div_ceil(1_000).clamp(1, 31) as u8;
+                    }
                 });
                 if capabilities.supports_motion_break_setting {
                     setting_control(ui, &app.tr("Motion break"), |ui| {
@@ -769,6 +781,7 @@ fn settings(
                             &mut settings.motion_break_ms,
                             1..=255,
                             1.0,
+                            app.human_readable_time_units,
                         ));
                     });
                 }
@@ -910,7 +923,7 @@ fn setting_control(ui: &mut egui::Ui, label: &str, control: impl FnOnce(&mut egu
 
 fn checkbox_setting(ui: &mut egui::Ui, label: &str, value: &mut bool) {
     setting_control(ui, label, |ui| {
-        ui.checkbox(value, "");
+        ui.themed_checkbox(value, "");
     });
 }
 
@@ -934,12 +947,12 @@ fn enum_combo(ui: &mut egui::Ui, id: &'static str, value: &mut u8, options: &[(u
         .find(|(candidate, _)| candidate == value)
         .map(|(_, label)| label.clone())
         .unwrap_or_else(|| value.to_string());
-    egui::ComboBox::from_id_salt(id)
+    crate::ui::dropdown::ComboBox::from_id_salt(id)
         .selected_text(selected)
         .width(ui.available_width().max(180.0))
         .show_ui(ui, |ui| {
             for (candidate, label) in options {
-                ui.selectable_value(value, *candidate, label);
+                ui.dropdown_value(value, *candidate, label);
             }
         });
 }
@@ -949,7 +962,7 @@ fn bit_checkbox(ui: &mut egui::Ui, value: &mut u8, bit: u8, label: &str, availab
         return;
     }
     let mut enabled = *value & bit != 0;
-    if ui.checkbox(&mut enabled, label).changed() {
+    if ui.themed_checkbox(&mut enabled, label).changed() {
         if enabled {
             *value |= bit;
         } else {

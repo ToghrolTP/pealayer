@@ -1,17 +1,26 @@
-import React, { useMemo, useRef, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
+import '../hardware-monitor.css';
+import { hardwareAvailability, hardwareLabels, hardwareOutputsAvailable, hardwareMonitorReady, hardwareMonitorRfAvailable, hardwareMonitorEmpty } from '../hardwareAvailability';
+import { reconcilePWMDrafts } from '../pwmDrafts';
+import { hardwareControlIdentity } from '../hardwareIdentity';
+import { defaultPwmCard, guardHardwarePointerStart, observedControlActive, powerActionSelected, pwmAdjustment, pwmActionVisible, pwmIndicatorAction, pwmRowActions } from '../pwmCard';
+import { RfManager } from './RfManager';
+import { PwmPolicyEditor } from './PwmPolicyEditor';
+import { PublishingAuthority } from './PublishingAuthority';
+import { ColorPicker } from './ColorPicker';
 import {
   Alert,
   Button,
   Card,
-  ColorPicker,
   Collapse,
   Divider,
   Dropdown,
-  Empty,
   Input,
   InputNumber,
   Modal,
+  Popover,
   Segmented,
+  Select,
   Slider,
   Space,
   Tag,
@@ -30,10 +39,17 @@ import {
   ExperimentOutlined,
   MenuOutlined,
   MoreOutlined,
+  MinusOutlined,
+  PlusOutlined,
   EyeInvisibleOutlined,
   EyeOutlined,
+  InfoCircleOutlined,
   LockOutlined,
+  PlayCircleOutlined,
   PushpinOutlined,
+  ReloadOutlined,
+  SoundOutlined,
+  StopOutlined,
   UnlockOutlined,
   PoweroffOutlined,
   ThunderboltOutlined,
@@ -43,10 +59,16 @@ import {
 import type { PlayerState } from './RemoteControlTab';
 import { tr, UiLocale } from '../i18n';
 import { GroupSelect } from './GroupSelect';
+import { effectGlyph } from '../effectIcons';
+import { SevenSegmentDisplay } from './SevenSegmentDisplay';
+import { MelodySelect } from './MelodySelect';
+import { useHardwareFolders } from './HardwareFolders';
+import { channelFolderGroups, channelFolderKind, isRawSeatRelay } from '../channelFolders';
 
 interface HardwareTabProps {
   state: PlayerState;
-  sendCmd: (command: string, payload?: Record<string, unknown>) => void;
+  sendCmd: (command: string, payload?: Record<string, unknown>) => Promise<boolean>;
+  onPreferences?: () => void;
   locale: UiLocale;
 }
 
@@ -60,7 +82,15 @@ const isMotionControl = (control: HardwareControl) =>
 
 const isStopAction = (action: HardwareAction) => action.verb.toLowerCase() === 'stop';
 
-const controlIcon = (kind: string) => {
+const powerActionClass = (verb: string, selected: boolean) => {
+  const power = verb.toLowerCase();
+  return selected && ['on', 'off', 'up', 'down'].includes(power)
+    ? `hardware-power-action hardware-power-action--${power}${selected ? ' is-selected' : ''}`
+    : '';
+};
+
+const controlIcon = (kind: string, customIcon = '') => {
+  if (customIcon.trim()) return effectGlyph(customIcon);
   if (/pwm|mosfet/i.test(kind)) return <DashboardOutlined />;
   if (/seat|motion/i.test(kind)) return <ExperimentOutlined />;
   if (/light|strip|led/i.test(kind)) return <BulbOutlined />;
@@ -86,14 +116,7 @@ const controlCaption = (
 
 const controlIdentity = (
   control: NonNullable<PlayerState['hardware_details']>['controls'][number],
-) => {
-  if (/relay/i.test(control.kind) && control.channel != null) return `R${control.channel}`;
-  if (/pwm|mosfet/i.test(control.kind) && control.channel != null) return `CH${control.channel}`;
-  if (control.key === 'seat.a') return 'A';
-  if (control.key === 'seat.b') return 'B';
-  const parts = control.key.split('.');
-  return parts[parts.length - 1]?.toUpperCase() || control.key;
-};
+) => hardwareControlIdentity(control);
 
 const telemetryValue = (value: number | boolean | null | undefined, unit = '') => {
   if (value === null || value === undefined) return '—';
@@ -101,31 +124,104 @@ const telemetryValue = (value: number | boolean | null | undefined, unit = '') =
   return `${value}${unit}`;
 };
 
-export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale }) => {
+export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale, onPreferences }) => {
   const details = state.hardware_details;
+  const outputAvailable = hardwareOutputsAvailable(state);
+  const availability = hardwareAvailability(state);
   const [stripPixels, setStripPixels] = useState<number | null>(null);
   const [stripColor, setStripColor] = useState('#38D27A');
+  const [stripSecondColor, setStripSecondColor] = useState('#2478FF');
   const [stripBrightness, setStripBrightness] = useState(255);
+  const [stripFps, setStripFps] = useState<number | null>(null);
+  const [stripPixel, setStripPixel] = useState(0);
+  const [stripMode, setStripMode] = useState('solid');
+  const [stripEffectId, setStripEffectId] = useState('');
+  const [melodyName, setMelodyName] = useState('');
+  const [melodyRepeats, setMelodyRepeats] = useState(1);
+  const [melodyLoop, setMelodyLoop] = useState(false);
+  const [toneFrequency, setToneFrequency] = useState(440);
+  const [toneDuration, setToneDuration] = useState(250);
   const [pwmDrafts, setPwmDrafts] = useState<Record<string, number>>({});
+  const pwmEditing = useRef(new Set<string>());
+  const pwmSentAt = useRef<Record<string, number>>({});
+  const pwmOwner = `${details?.host_instance_id}/${details?.connection_generation}`;
+  useEffect(() => { setPwmDrafts({}); pwmEditing.current.clear(); pwmSentAt.current = {}; }, [pwmOwner]);
+  useEffect(() => {
+    if (details) setPwmDrafts(current => reconcilePWMDrafts(current,pwmEditing.current,pwmSentAt.current,details.pwm_revision ?? 0,details.controls));
+  }, [details]);
   const [managerOpen, setManagerOpen] = useState(false);
   const [detailKey, setDetailKey] = useState<string | null>(null);
+  const [rfAssignment, setRfAssignment] = useState<{ key: string; name: string; nonce: number }>();
   const [renamingKey, setRenamingKey] = useState<string | null>(null);
   const [renameDraft, setRenameDraft] = useState('');
   const [dragKey, setDragKey] = useState<string | null>(null);
   const [dropKey, setDropKey] = useState<string | null>(null);
+  const [optimisticActive, setOptimisticActive] = useState<Record<string, { value: boolean; startedAt: number }>>({});
   const heldMotionPointers = useRef(new Map<string, number>());
   const controls = useMemo(
     () => [...(details?.controls ?? [])].sort((left, right) => left.order - right.order || left.key.localeCompare(right.key)),
     [details],
   );
+  const melodies = details?.melodies ?? [];
+  const channelFolders = useHardwareFolders(details, locale, sendCmd, dragKey,
+    () => { setDragKey(null); setDropKey(null); }, () => { setDetailKey(null); setManagerOpen(true); });
+  const selectedMelody = melodies.some((melody) => melody.name === melodyName)
+    ? melodyName
+    : melodies[0]?.name ?? '';
   const updatePresentation = (key: string, fields: Record<string, unknown>) =>
     sendCmd('hardware.presentation.update', { key, fields });
+  const displayedActive = (control: HardwareControl) => /pwm|mosfet/i.test(control.kind)
+    ? observedControlActive(control) : optimisticActive[control.key]?.value ?? observedControlActive(control);
+  useEffect(() => {
+    const authoritative = new Map((details?.controls ?? []).map((control) => [control.key, observedControlActive(control)]));
+    const now = Date.now();
+    setOptimisticActive((current) => {
+      const next = { ...current };
+      let changed = false;
+      for (const [key, pending] of Object.entries(current)) {
+        if (authoritative.get(key) === pending.value || now - pending.startedAt > 2_500) {
+          delete next[key];
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [details]);
+  const invokeAction = (control: HardwareControl, action: HardwareAction) => {
+    const verb = action.verb.toLowerCase();
+    if (!isMotionControl(control) && !/pwm|mosfet/i.test(control.kind) && ['on', 'off', 'toggle'].includes(verb)) {
+      const value = verb === 'on' ? true : verb === 'off' ? false : !displayedActive(control);
+      setOptimisticActive((current) => ({ ...current, [control.key]: { value, startedAt: Date.now() } }));
+    }
+    return sendCmd('hardware.action.invoke', { action_id: action.id }).then((accepted) => {
+      if (!accepted) {
+        setOptimisticActive((current) => {
+          const next = { ...current };
+          delete next[control.key];
+          return next;
+        });
+      }
+      return accepted;
+    });
+  };
+  const toggleAction = (control: HardwareControl) => {
+    if (displayedActive(control) === undefined) return control.actions.find((action) => action.verb.toLowerCase() === 'toggle');
+    const wanted = displayedActive(control) ? 'off' : 'on';
+    return control.actions.find((action) => action.verb.toLowerCase() === wanted)
+      ?? control.actions.find((action) => action.verb.toLowerCase() === 'toggle');
+  };
   const actionInputProps = (control: HardwareControl, action: HardwareAction) => {
-    const invoke = () => sendCmd('hardware.action.invoke', { action_id: action.id });
-    if (!isMotionControl(control)) return { onClick: invoke };
-
+    const invoke = () => void invokeAction(control, action);
     const keyboardInvoke = (event: React.MouseEvent<HTMLElement>) => {
       if (event.detail === 0) invoke();
+    };
+    if (!isMotionControl(control)) return {
+      onPointerDown: (event: React.PointerEvent<HTMLElement>) => {
+        if (event.button !== 0) return;
+        event.preventDefault();
+        invoke();
+      },
+      onClick: keyboardInvoke,
     };
     if (isStopAction(action) || (details?.motion_control_mode ?? 'hold') === 'toggle') {
       return {
@@ -170,9 +266,65 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
       onClick: (event: React.MouseEvent<HTMLElement>) => event.preventDefault(),
     };
   };
-  const visibleActions = (control: HardwareControl) => control.actions.filter(
-    (action) => !isStopAction(action) || Boolean(control.active),
-  );
+  const pwmPreferences = details?.pwm_card ?? defaultPwmCard;
+  const visibleActions = (control: HardwareControl) => /pwm|mosfet/i.test(control.kind)
+    ? pwmRowActions(pwmPreferences, control.actions)
+    : control.actions.filter((action) => !isStopAction(action) || displayedActive(control));
+  const indicatorAction = (control: HardwareControl) => /pwm|mosfet/i.test(control.kind)
+    ? pwmIndicatorAction(pwmPreferences, control.actions, displayedActive(control))
+    : toggleAction(control);
+  const pwmEditor = (control: HardwareControl) => {
+    const value = pwmDrafts[control.key] ?? control.percent;
+    const disabled = control.locked || !outputAvailable || Boolean(state.estop_active)
+      || details?.pwm_available === false || control.percent == null;
+    const adjust = (sign: number, modifiers: {ctrlKey?:boolean;metaKey?:boolean;shiftKey?:boolean}) => {
+      if (disabled || value == null || control.channel == null) return;
+      const percent = Math.round(Math.max(0, Math.min(100, value + sign * pwmAdjustment(modifiers))) * 10) / 10;
+      pwmSentAt.current[control.key] = details?.pwm_revision ?? 0;
+      setPwmDrafts(current => ({...current, [control.key]: percent}));
+      sendCmd('hardware.pwm.set', {channel: control.channel, percent});
+    };
+    const step = (verb: 'decrease' | 'increase') => {
+      const action = control.actions.find(action => action.verb.toLowerCase() === verb);
+      return pwmPreferences.show_step_buttons && action && pwmActionVisible(pwmPreferences, verb) ? <Tooltip title={tr(locale, action.name || action.verb)}>
+        <Button aria-label={tr(locale, verb === 'decrease' ? 'Decrease' : 'Increase')}
+          icon={verb === 'decrease' ? <MinusOutlined /> : <PlusOutlined />}
+          disabled={disabled} onClick={event => adjust(verb === 'decrease' ? -1 : 1, event)} />
+      </Tooltip> : null;
+    };
+    return <div className="hardware-control__pwm"
+      onMouseDownCapture={guardHardwarePointerStart} onPointerDownCapture={guardHardwarePointerStart}
+      onKeyDownCapture={event => {
+        if (!disabled && ['ArrowLeft','ArrowRight','ArrowDown','ArrowUp'].includes(event.key)) {
+          event.preventDefault(); event.stopPropagation();
+          adjust(['ArrowLeft','ArrowDown'].includes(event.key) ? -1 : 1, event);
+        }
+      }} ref={element => {
+        if (!element) return;
+        const wheel = (event: WheelEvent) => {
+          if (!disabled && event.deltaY) { event.preventDefault(); event.stopPropagation(); adjust(-Math.sign(event.deltaY), event); }
+        };
+        element.addEventListener('wheel', wheel, {passive:false});
+        return () => element.removeEventListener('wheel', wheel);
+      }}>
+      {step('decrease')}
+      {value == null ? <span className="hardware-control__pwm-unknown">—</span> : <Slider
+        min={0} max={100} step={0.1} value={value} disabled={disabled}
+        onChange={(percent) => {
+          pwmEditing.current.add(control.key);
+          pwmSentAt.current[control.key] = details?.pwm_revision ?? 0;
+          setPwmDrafts(current => ({ ...current, [control.key]: percent }));
+          if (control.channel != null) sendCmd('hardware.pwm.set', { channel: control.channel, percent });
+        }}
+        onChangeComplete={() => {
+          pwmEditing.current.delete(control.key);
+          setPwmDrafts(current => reconcilePWMDrafts(current, pwmEditing.current, pwmSentAt.current,
+            details?.pwm_revision ?? 0, details?.controls ?? []));
+        }} />}
+      {step('increase')}
+      <output>{value == null ? '—' : `${value.toFixed(1)}%`}</output>
+    </div>;
+  };
   const moveControl = (key: string, delta: number) => {
     const source = controls.find((control) => control.key === key);
     if (!source) return;
@@ -184,14 +336,13 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
   const dropControl = (sourceKey: string, targetKey: string) => {
     const source = controls.find((control) => control.key === sourceKey);
     const target = controls.find((control) => control.key === targetKey);
-    if (!source || !target || source.kind !== target.kind || source.key === target.key) return;
+    if (!source || !target || source.kind !== target.kind || source.key === target.key || isRawSeatRelay(source) || isRawSeatRelay(target)) return;
     const peers = controls.filter((control) => control.kind === source.kind);
-    updatePresentation(sourceKey, { order: peers.findIndex((control) => control.key === targetKey) });
+    updatePresentation(sourceKey, { order: peers.findIndex((control) => control.key === targetKey), group: target.group });
   };
   const grouped = useMemo(() => {
     const result = new Map<string, { label: string; order: number; controls: NonNullable<typeof details>['controls'] }>();
     for (const control of details?.controls ?? []) {
-      if (control.hidden) continue;
       const section = semanticSection(control.kind, locale);
       const current = result.get(section.key) ?? { label: section.label, order: section.order, controls: [] };
       current.controls.push(control);
@@ -199,16 +350,44 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
     }
     return [...result.entries()].sort(([, left], [, right]) => left.order - right.order).map(([key, section]) => ({
       key,
-      label: <span className="hardware-section-title">{section.label}<Tag>{section.controls.length}</Tag></span>,
-      children: <div className="hardware-control-grid">
-        {section.controls.sort((left, right) => left.order - right.order).map((control) => {
+      label: channelFolders.sectionMenu(channelFolderKind(section.controls[0]?.kind ?? key), <>{section.label}<Tag>{section.controls.filter((control) => !control.hidden).length}</Tag></>),
+      children: <div className="hardware-folder-list">
+        {channelFolderGroups(section.controls, channelFolders.folders, channelFolderKind(section.controls[0]?.kind ?? key)).map((folder) => <section className="hardware-folder" key={`${folder.raw}:${folder.name}`}>
+          {channelFolders.folderHeader(folder)}
+          {!channelFolders.closed.has(`${folder.kind}:${folder.raw ? 'raw' : folder.name}`) && <div className="hardware-control-grid">
+        {folder.controls.map((control) => {
           const isPwm = /pwm|mosfet/i.test(control.kind);
-          const value = pwmDrafts[control.key] ?? control.percent ?? 0;
-          return <article
-            className={`hardware-control ${control.locked ? 'is-locked' : ''} ${dragKey === control.key ? 'is-dragging' : ''} ${dropKey === control.key ? 'is-drop-target' : ''}`}
+          const active = displayedActive(control);
+          const immediateToggle = indicatorAction(control);
+          const contextItems = [
+            { key: 'manage', label: tr(locale, 'Manage'), icon: <ToolOutlined /> },
+            { key: 'rename', label: tr(locale, 'Rename'), icon: <ExperimentOutlined /> },
+            { key: 'assign-rf', label: tr(locale, 'Assign RF code…'), disabled: !control.actions.length },
+            ...channelFolders.moveItems(control),
+            immediateToggle ? { key: 'toggle', label: tr(locale, immediateToggle.name || immediateToggle.verb), icon: <PoweroffOutlined /> } : null,
+            { type: 'divider' as const },
+            { key: 'visibility', label: tr(locale, control.hidden ? 'Show in Hardware Monitor' : 'Hide from Hardware Monitor'), icon: control.hidden ? <EyeOutlined /> : <EyeInvisibleOutlined /> },
+            { key: 'lock', label: tr(locale, control.locked ? 'Unlock' : 'Lock'), icon: control.locked ? <UnlockOutlined /> : <LockOutlined /> },
+          ].filter(Boolean) as any;
+          return <Dropdown
             key={control.key}
+            trigger={['contextMenu']}
+            menu={{
+              items: contextItems,
+              onClick: ({ key }) => {
+                if (key === 'manage') { setDetailKey(control.key); setManagerOpen(true); }
+                if (key === 'assign-rf') setRfAssignment({ key: control.key, name: control.name, nonce: Date.now() });
+                if (key === 'rename') { setRenamingKey(control.key); setRenameDraft(control.name || control.default_name); setManagerOpen(true); }
+                if (key === 'toggle' && immediateToggle) void invokeAction(control, immediateToggle);
+                if (key === 'visibility') updatePresentation(control.key, { hidden: !control.hidden });
+                if (key === 'lock') updatePresentation(control.key, { locked: !control.locked });
+                if (key.startsWith('folder:')) void channelFolders.move(channelFolderKind(control.kind), key.slice(7), [control.key]);
+              },
+            }}
+          ><article
+            className={`hardware-control ${control.locked ? 'is-locked' : ''} ${dragKey === control.key ? 'is-dragging' : ''} ${dropKey === control.key ? 'is-drop-target' : ''}`}
             onDragOver={(event) => {
-              if (dragKey && dragKey !== control.key) {
+              if (dragKey && dragKey !== control.key && !isRawSeatRelay(control) && controls.some((source) => source.key === dragKey && source.kind === control.kind && !isRawSeatRelay(source))) {
                 event.preventDefault();
                 setDropKey(control.key);
               }
@@ -221,10 +400,10 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
               setDropKey(null);
             }}
           >
-            <span className="hardware-control__icon">{controlIcon(control.kind)}</span>
+            <span className="hardware-control__icon">{controlIcon(control.kind, control.icon)}</span>
             <span
               className="hardware-control__drag"
-              draggable
+              draggable={!isRawSeatRelay(control)}
               title={tr(locale, 'Drag to reorder channel')}
               onDragStart={(event) => {
                 const card = event.currentTarget.closest<HTMLElement>('.hardware-control');
@@ -245,55 +424,84 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
               <strong>{control.name || control.default_name}</strong>
               <span>{controlCaption(control, locale)}</span>
             </div>
-            {isPwm ? <div className="hardware-control__pwm">
-              <Slider
-                min={0}
-                max={100}
-                step={0.1}
-                value={value}
-                disabled={control.locked || !state.hardware_connected}
-                onChange={(percent) => {
-                  setPwmDrafts((current) => ({ ...current, [control.key]: percent }));
-                  if (control.channel !== null && control.channel !== undefined) {
-                    sendCmd('hardware.pwm.set', { channel: control.channel, percent });
-                  }
-                }}
-              />
-              <output>{value.toFixed(1)}%</output>
-            </div> : <span
-              className={`hardware-control__indicator ${control.active ? 'is-on' : ''}`}
-              aria-label={control.active ? tr(locale, 'On') : tr(locale, 'Off')}
-            />}
+            <button
+              type="button"
+              className={`hardware-control__indicator ${active ? 'is-on' : ''} ${active === undefined ? 'is-unknown' : ''}`}
+              style={{ '--indicator-color': control.indicator_color || control.color || 'var(--green)' } as React.CSSProperties}
+              aria-label={tr(locale, isMotionControl(control) ? control.direction === 'up' ? 'Up' : control.direction === 'down' ? 'Down' : control.direction === 'stop' ? 'Stopped' : 'State unavailable from the board' : active === undefined ? 'State unavailable from the board' : active ? 'On' : 'Off')}
+              title={tr(locale, immediateToggle?.name || (active === undefined ? 'State unavailable from the board' : active ? 'Off' : 'On'))}
+              disabled={!immediateToggle || control.locked || !outputAvailable || Boolean(state.estop_active)}
+              {...(immediateToggle ? actionInputProps(control, immediateToggle) : {})}
+            />
+            {isPwm && pwmEditor(control)}
             <Space.Compact className="hardware-control__actions">
               {visibleActions(control).map((action) => <Tooltip title={action.name || action.verb} key={action.id}>
                 <Button
-                  disabled={control.locked || !state.hardware_connected || (state.estop_active && action.verb !== 'stop')}
+                  disabled={control.locked || !outputAvailable || (state.estop_active && action.verb !== 'stop')}
                   danger={action.verb === 'stop'}
+                  className={powerActionClass(action.verb, powerActionSelected(action.verb, active, control.direction))}
+                  type={powerActionSelected(action.verb, active) ? 'primary' : 'default'}
                   {...actionInputProps(control, action)}
                 >
                   {action.name || action.verb}
                 </Button>
               </Tooltip>)}
             </Space.Compact>
-          </article>;
-        })}
+          </article></Dropdown>;
+        })}</div>}
+        </section>)}
       </div>,
     }));
-  }, [details, locale, pwmDrafts, sendCmd, state.estop_active, state.hardware_connected, dragKey, dropKey, controls]);
+  }, [details, locale, pwmDrafts, sendCmd, state.estop_active, outputAvailable, dragKey, dropKey, controls, optimisticActive, channelFolders]);
 
-  if (!details || !state.controller_connected) {
+  if (!details || !hardwareMonitorReady(state)) {
+    const empty = hardwareMonitorEmpty(state);
     return <section className="surface-page hardware-page">
-      <Empty
-        image={<DisconnectOutlined />}
-        description={tr(locale, state.controller_connected ? 'No board is connected or advertising capabilities' : 'Connecting to PCController…')}
-      />
+      <header className="surface-page__header"><Typography.Title level={2}>{tr(locale, 'Hardware Monitor')}</Typography.Title></header>
+      <Card className="surface-card hardware-empty-state">
+        <div className="hardware-empty-state__heading"><span className="hardware-empty-state__icon">{empty.progress ? <ReloadOutlined spin /> : <DisconnectOutlined />}</span><Typography.Title level={4}>{tr(locale, empty.title)}</Typography.Title></div>
+        <div className="hardware-empty-state__message">
+          <Typography.Paragraph type="secondary" role="status" aria-live="polite">{tr(locale, empty.detail)}</Typography.Paragraph>
+          {empty.diagnostics && <Popover title={tr(locale, 'Connection details')} trigger={['hover', 'click']} destroyOnHidden
+            content={<Typography.Paragraph copyable style={{ maxWidth: 'min(440px, calc(100vw - 64px))', maxHeight: 240, overflow: 'auto', whiteSpace: 'pre-wrap', overflowWrap: 'anywhere', margin: 0 }}>{empty.diagnostics}</Typography.Paragraph>}>
+            <Button type="text" shape="circle" size="small" icon={<InfoCircleOutlined />} aria-label={tr(locale, 'Connection details')} />
+          </Popover>}
+        </div>
+        <Space wrap>
+          {empty.primary === 'connect' && <Button icon={<UsbOutlined />} onClick={() => sendCmd('pealayer.hardware.connection', { connected: true })}>{tr(locale, 'Connect')}</Button>}
+          {empty.primary === 'refresh' && <Button icon={<ReloadOutlined />} onClick={() => sendCmd('hardware.catalog.refresh')}>{tr(locale, 'Refresh')}</Button>}
+          {onPreferences && <Button icon={<ToolOutlined />} onClick={onPreferences}>{tr(locale, 'Preferences')}</Button>}
+        </Space>
+      </Card>
     </section>;
   }
 
   const strip = details.strip;
   const pixels = stripPixels ?? strip?.default_pixels ?? 1;
+  const fps = stripFps ?? strip?.default_fps ?? 20;
   const color = /^#([0-9a-f]{6})$/i.exec(stripColor)?.[1] ?? '000000';
   const rgb = [0, 2, 4].map((offset) => Number.parseInt(color.slice(offset, offset + 2), 16));
+  const secondColor = /^#([0-9a-f]{6})$/i.exec(stripSecondColor)?.[1] ?? '000000';
+  const secondRgb = [0, 2, 4].map((offset) => Number.parseInt(secondColor.slice(offset, offset + 2), 16));
+  const stripEffects = (state.controller_effects ?? []).filter((effect) => effect.kind === 'strip-stream');
+  const activeEffectId = stripEffects.some((effect) => effect.id === stripEffectId)
+    ? stripEffectId
+    : stripEffects[0]?.id ?? '';
+  const availableStripModes = (strip?.modes ?? []).filter((mode) => ['solid', 'pixel', 'frame', 'rainbow', 'effect'].includes(mode));
+  const activeStripMode = availableStripModes.includes(stripMode) ? stripMode : availableStripModes[0] ?? 'solid';
+  const stripFrame = () => Array.from({ length: pixels }, (_, index) => {
+    const ratio = pixels <= 1 ? 0 : index / (pixels - 1);
+    return rgb.map((value, channel) => Math.round(
+      (value + (secondRgb[channel] - value) * ratio) * stripBrightness / 255,
+    ));
+  }).flat();
+  const stripPreviewBackground = activeStripMode === 'rainbow'
+    ? 'linear-gradient(90deg,#ff355e,#ff9f1c,#ffe66d,#2ec4b6,#2478ff,#8b5cf6,#ff355e)'
+    : activeStripMode === 'frame'
+      ? `linear-gradient(90deg,${stripColor},${stripSecondColor})`
+      : activeStripMode === 'pixel'
+        ? `linear-gradient(90deg,var(--surface-0) 0 44%,${stripColor} 44% 56%,var(--surface-0) 56%)`
+        : stripColor;
 
   return <section className="surface-page hardware-page">
     <header className="surface-page__header">
@@ -304,17 +512,26 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
           <UsbOutlined /> {details.port?.display_name || details.port?.friendly_name || details.port?.name || tr(locale, 'No board port')}
         </Typography.Text>
       </div>
-      <Space>
+      <Space wrap>
         {state.hardware_connected && <Button icon={<ToolOutlined />} onClick={() => setManagerOpen(true)}>{tr(locale, 'Manage channels')}</Button>}
-        <Tag color={state.hardware_connected ? 'success' : 'warning'}>{state.hardware_connected ? tr(locale, 'Connected') : tr(locale, 'Board unavailable')}</Tag>
+        <Tag color={availability === 'ok' ? 'success' : 'warning'}>{tr(locale, hardwareLabels[availability])}</Tag>
         <Button
+          className={`hardware-estop ${state.estop_active ? 'is-active' : ''}`}
           danger
-          type={state.estop_active ? 'primary' : 'default'}
+          type="primary"
           icon={<PoweroffOutlined />}
-          onClick={() => sendCmd('pealayer.estop.set', { active: !state.estop_active })}
+          onPointerDown={(event) => {
+            if (event.button !== 0) return;
+            event.preventDefault();
+            sendCmd('pealayer.estop.set', { active: !state.estop_active });
+          }}
+          onClick={(event) => {
+            if (event.detail === 0) sendCmd('pealayer.estop.set', { active: !state.estop_active });
+          }}
         >{tr(locale, 'E-STOP')}</Button>
       </Space>
     </header>
+    <PublishingAuthority state={state} sendCmd={sendCmd} controls locale={locale} />
 
     <Modal
       className="channel-manager-modal"
@@ -330,16 +547,21 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
       }}
     >
       {detailKey ? controls.filter((control) => control.key === detailKey).map((control) => <div className="channel-detail" key={control.key}>
-        <div className="channel-detail__identity"><span>{controlIcon(control.kind)}</span><div><strong>{control.name || control.default_name}</strong><code>{controlIdentity(control)}</code></div></div>
+        <div className="channel-detail__identity"><span>{controlIcon(control.kind, control.icon)}</span><div><strong>{control.name || control.default_name}</strong><code>{controlIdentity(control)}</code></div></div>
+        <Button disabled={!control.actions.length} onClick={() => setRfAssignment({ key: control.key, name: control.name, nonce: Date.now() })}>{tr(locale, 'Assign RF code…')}</Button>
         <label><span>{tr(locale, 'Name')}</span><Input defaultValue={control.name || control.default_name} onPressEnter={(event) => updatePresentation(control.key, { name: event.currentTarget.value.trim() })} /></label>
-        <label><span>{tr(locale, 'Group')}</span><GroupSelect value={control.group ?? ''} groups={controls.map((item) => item.group ?? '')} locale={locale} onChange={(group) => updatePresentation(control.key, { group })} /></label>
+        <label><span>{tr(locale, 'Group')}</span><GroupSelect value={control.group ?? ''} groups={channelFolders.folders.filter((folder) => folder.kind === channelFolderKind(control.kind)).map((folder) => folder.name)} locale={locale} onChange={(group) => !isRawSeatRelay(control) && updatePresentation(control.key, { group })} /></label>
         <dl className="detail-list">
           <div><dt>{tr(locale, 'Order')}</dt><dd>{control.order + 1}</dd></div>
           <div><dt>{tr(locale, 'Type')}</dt><dd>{control.kind}</dd></div>
           <div><dt>{tr(locale, 'Control')}</dt><dd>{control.control}</dd></div>
           <div><dt>{tr(locale, 'Stable key')}</dt><dd><code>{control.key}</code></dd></div>
         </dl>
-        <Space wrap>{visibleActions(control).map((action) => <Button key={action.id} disabled={control.locked || (state.estop_active && action.verb !== 'stop')} {...actionInputProps(control, action)}>{action.name || action.verb}</Button>)}</Space>
+        {/pwm|mosfet/i.test(control.kind) && pwmEditor(control)}
+        {/pwm|mosfet/i.test(control.kind) && <PwmPolicyEditor key={`${pwmOwner}:${control.key}`}
+          config={control.pwm_config} channel={control.channel} locale={locale}
+          disabled={!outputAvailable} sendCmd={sendCmd} />}
+        <Space wrap>{visibleActions(control).map((action) => <Button key={action.id} disabled={control.locked || !outputAvailable || (state.estop_active && action.verb !== 'stop')} {...actionInputProps(control, action)}>{action.name || action.verb}</Button>)}</Space>
       </div>) : <>
         <div className="channel-manager__summary">
           <strong>{details.board_name || tr(locale, 'PCController')}</strong>
@@ -363,7 +585,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
                 />}
               </header>
               {peers.map((control, index) => {
-                const active = Boolean(control.active);
+                const active = displayedActive(control);
                 const onAction = control.actions.find((action) => action.verb.toLowerCase() === 'on');
                 const offAction = control.actions.find((action) => action.verb.toLowerCase() === 'off');
                 const baseLiveActions = onAction && offAction
@@ -388,10 +610,10 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
                       setDropKey(null);
                     }}
                   >
-                    <span className={`hardware-control__indicator ${active ? 'is-on' : ''}`} />
+                    <span className={`hardware-control__indicator ${active ? 'is-on' : ''} ${active === undefined ? 'is-unknown' : ''}`} style={{ '--indicator-color': control.indicator_color || control.color || 'var(--green)' } as React.CSSProperties} />
                     <span
                       className="channel-manager__drag"
-                      draggable
+                      draggable={!isRawSeatRelay(control)}
                       title={tr(locale, 'Drag to reorder channel')}
                       onDragStart={(event) => {
                         const row = event.currentTarget.closest<HTMLElement>('.channel-manager__row');
@@ -410,6 +632,7 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
                     ><MenuOutlined /></span>
                     <span className="channel-manager__identity" title={control.key}>{controlIdentity(control)}</span>
                     {renamingKey === control.key ? <Input
+                        className="channel-manager__name-input"
                       autoFocus
                       size="small"
                       value={renameDraft}
@@ -435,10 +658,10 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
                     <Space.Compact className="channel-manager__live">
                       {liveActions.map((action) => {
                         const verb = action.verb.toLowerCase();
-                        const selected = (verb === 'on' && active) || (verb === 'off' && !active);
+                        const selected = powerActionSelected(verb, active, control.direction);
                         const icon = /up/.test(verb) ? <ArrowUpOutlined /> : /down/.test(verb) ? <ArrowDownOutlined /> : verb === 'on' ? <ThunderboltOutlined /> : <PoweroffOutlined />;
                         const label = verb === 'on' ? tr(locale, 'On') : verb === 'off' ? tr(locale, 'Off') : action.name || action.verb;
-                        return <Tooltip title={action.name || action.verb} key={action.id}><Button size="small" icon={icon} type={selected ? 'primary' : 'default'} danger={verb === 'stop'} disabled={control.locked || (state.estop_active && verb !== 'stop')} {...actionInputProps(control, action)}>{label}</Button></Tooltip>;
+                        return <Tooltip title={action.name || action.verb} key={action.id}><Button size="small" icon={icon} className={powerActionClass(verb, selected)} type={selected ? 'primary' : 'default'} danger={verb === 'stop'} disabled={control.locked || (state.estop_active && verb !== 'stop')} {...actionInputProps(control, action)}>{label}</Button></Tooltip>;
                       })}
                     </Space.Compact>
                     <div className="channel-manager__ordering">
@@ -503,24 +726,152 @@ export const HardwareTab: React.FC<HardwareTabProps> = ({ state, sendCmd, locale
     </div>
 
     <Collapse className="hardware-sections" defaultActiveKey={grouped.map((item) => item.key)} items={grouped} />
+    {channelFolders.dialogs}
+    {hardwareMonitorRfAvailable(state) && <RfManager key="rf-manager" rf={state.rf} hardwareConnected={state.hardware_connected} sendCmd={sendCmd} assignment={rfAssignment} locale={locale} />}
 
-    {strip && <Card className="surface-card strip-control" title={<Space><BulbOutlined />{tr(locale, 'Addressable lighting')}</Space>}>
-      <div className="strip-control__grid">
-        <label><span>{tr(locale, 'Pixels')}</span><InputNumber min={strip.minimum_pixels} max={strip.maximum_pixels} value={pixels} onChange={(value) => setStripPixels(value)} /></label>
-        <label><span>{tr(locale, 'Color')}</span><ColorPicker value={stripColor} disabledAlpha onChangeComplete={(value) => setStripColor(value.toHexString().toUpperCase())} /></label>
-        <label><span>{tr(locale, 'Brightness')}</span><Slider min={0} max={255} value={stripBrightness} onChange={setStripBrightness} /></label>
-        <Space wrap>
-          <Button onClick={() => sendCmd('hardware.strip.configure', { pixels })}>{tr(locale, 'Apply pixel count')}</Button>
-          <Button type="primary" onClick={() => sendCmd('hardware.strip.fill', { red: rgb[0], green: rgb[1], blue: rgb[2], brightness: stripBrightness })}>{tr(locale, 'Fill strip')}</Button>
-          <Button onClick={() => sendCmd('hardware.strip.clear')}>{tr(locale, 'Clear')}</Button>
-        </Space>
+    <Card
+      className={`surface-card buzzer-control${details.buzzer?.playing ? ' is-playing' : ''}`}
+      title={<Space><span className="buzzer-control__icon"><SoundOutlined /></span><span>{tr(locale, 'Buzzer & melodies')}</span></Space>}
+      extra={<Space size="small">
+        <Tag color={details.buzzer?.playing ? 'success' : 'default'}>
+          {details.buzzer?.playing ? tr(locale, 'Playing') : tr(locale, 'Idle')}
+        </Tag>
+        <Tooltip title={tr(locale, 'Refresh melody catalog')}>
+          <Button
+            type="text"
+            size="small"
+            icon={<ReloadOutlined />}
+            aria-label={tr(locale, 'Refresh melody catalog')}
+            onClick={() => sendCmd('hardware.catalog.refresh')}
+          />
+        </Tooltip>
+      </Space>}
+    >
+      <div className="buzzer-control__status">
+        <div>
+          <span>{tr(locale, 'Current output')}</span>
+          <strong>{details.buzzer?.playing ? details.buzzer.melody_name || tr(locale, 'Playing melody') : tr(locale, 'Silent')}</strong>
+        </div>
+        <Tag color={details.buzzer?.board_silent ? 'warning' : 'processing'}>
+          {tr(locale, details.buzzer?.board_silent ? 'Board muted' : 'Board audible')}
+        </Tag>
+      </div>
+
+      <div className="buzzer-control__melody">
+        <label>
+          <span>{tr(locale, 'Configured melody')}</span>
+          <MelodySelect
+            value={selectedMelody || undefined}
+            melodies={melodies}
+            locale={locale}
+            disabled={!state.controller_connected}
+            onChange={setMelodyName}
+            refresh={() => { void sendCmd('hardware.catalog.refresh'); }}
+          />
+        </label>
+        <label>
+          <span>{tr(locale, 'Repeats')}</span>
+          <InputNumber min={1} max={20} value={melodyRepeats} disabled={melodyLoop} onChange={(value) => setMelodyRepeats(value ?? 1)} />
+        </label>
+        <label className="buzzer-control__loop">
+          <span>{tr(locale, 'Playback mode')}</span>
+          <Segmented
+            value={melodyLoop ? 'loop' : 'repeat'}
+            options={[
+              { value: 'repeat', label: tr(locale, 'Repeat count') },
+              { value: 'loop', label: tr(locale, 'Loop until stopped') },
+            ]}
+            onChange={(value) => setMelodyLoop(value === 'loop')}
+          />
+        </label>
+      </div>
+
+      <div className="buzzer-control__actions">
+        <Button
+          type="primary"
+          icon={<PlayCircleOutlined />}
+          disabled={!outputAvailable || !selectedMelody || Boolean(state.estop_active)}
+          onClick={() => sendCmd('hardware.buzzer.melody', { name: selectedMelody, repeats: melodyLoop ? 0 : melodyRepeats })}
+        >{tr(locale, 'Play melody')}</Button>
+        <Button danger={Boolean(details.buzzer?.playing)} disabled={!state.hardware_connected || !details.buzzer?.playing} icon={<StopOutlined />} onClick={() => sendCmd('hardware.buzzer.stop')}>{tr(locale, 'Stop buzzer')}</Button>
+      </div>
+
+      <Collapse className="buzzer-control__diagnostics" ghost items={[{
+        key: 'tone', label: <Space><SoundOutlined />{tr(locale, 'Tone tester')}</Space>, children:
+      <div className="buzzer-control__tone">
+        <label><span>{tr(locale, 'Frequency')}</span><InputNumber min={20} max={20000} addonAfter="Hz" value={toneFrequency} onChange={(value) => setToneFrequency(value ?? 440)} /></label>
+        <label><span>{tr(locale, 'Duration')}</span><InputNumber min={1} max={65535} addonAfter="ms" value={toneDuration} onChange={(value) => setToneDuration(value ?? 250)} /></label>
+        <Button
+          icon={<SoundOutlined />}
+          disabled={!outputAvailable || Boolean(state.estop_active)}
+          onClick={() => sendCmd('hardware.buzzer.tone', { frequency_hz: toneFrequency, duration_ms: toneDuration })}
+        >{tr(locale, 'Play tone')}</Button>
+      </div>
+      }]} />
+
+      {details.buzzer?.board_silent && <Alert type="warning" showIcon message={tr(locale, 'The physical board is muted; playback requests will be accepted but may not be audible.')} />}
+    </Card>
+
+    {strip && <Card
+      className={`surface-card strip-control${strip.running ? ' is-running' : ''}`}
+      title={<Space><span className="strip-control__icon"><BulbOutlined /></span><span>{tr(locale, 'Addressable lighting')}</span></Space>}
+      extra={<Space size="small">
+        <Tag color={strip.running ? 'success' : 'default'}>{strip.running ? (strip.active_name || tr(locale, 'Streaming')) : tr(locale, 'Idle')}</Tag>
+        <Tooltip title={tr(locale, 'Refresh status')}><Button type="text" size="small" icon={<ReloadOutlined />} aria-label={tr(locale, 'Refresh status')} onClick={() => sendCmd('hardware.strip.status')} /></Tooltip>
+      </Space>}
+    >
+      <div className="strip-control__preview" aria-label={tr(locale, 'Lighting preview')}>
+        <div style={{ background: stripPreviewBackground, opacity: Math.max(.12, stripBrightness / 255) }} />
+        <span>{pixels} {tr(locale, 'pixels')}</span>
+        <span>{fps} FPS</span>
+      </div>
+
+      <div className="strip-control__configuration">
+        {!!strip.color_orders?.length&&<label><span>{tr(locale,'Color order')}</span><Select value={strip.color_order} options={strip.color_orders.map(value=>({value,label:value}))} onChange={order=>{void sendCmd('hardware.strip.color_order',{order});}}/></label>}
+        <label><span>{tr(locale, 'Pixel count')}</span><InputNumber min={strip.minimum_pixels} max={strip.maximum_pixels} value={pixels} onChange={(value) => setStripPixels(value)} /></label>
+        <label><span>{tr(locale, 'Frames per second')}</span><InputNumber min={strip.minimum_fps} max={strip.maximum_fps} value={fps} onChange={(value) => setStripFps(value)} /></label>
+        <Button onClick={() => sendCmd('hardware.strip.configure', { pixels })}>{tr(locale, 'Configure')}</Button>
+      </div>
+
+      {!!strip.stream?.pixels&&<Space wrap><span>{strip.stream.frames_acked} {tr(locale,'ACKed frames')}</span><span>{strip.stream.frames_failed} {tr(locale,'Failed frames')}</span>{strip.stream.last_error&&<Typography.Text type="danger">{strip.stream.last_error}</Typography.Text>}</Space>}
+      <Segmented
+        block
+        className="strip-control__modes"
+        value={activeStripMode}
+        onChange={(value) => setStripMode(String(value))}
+        options={availableStripModes.map((mode) => ({
+          value: mode,
+          label: tr(locale, mode === 'solid' ? 'Solid' : mode === 'pixel' ? 'Pixel' : mode === 'frame' ? 'Gradient' : mode === 'rainbow' ? 'Rainbow' : 'Effects'),
+        }))}
+      />
+
+      <div className="strip-control__editor">
+        {['solid', 'pixel', 'frame'].includes(activeStripMode) && <label><span>{tr(locale, 'Color')}</span><ColorPicker value={stripColor} disabledAlpha showText onChangeComplete={(value) => setStripColor(value.toHexString().toUpperCase())} /></label>}
+        {activeStripMode === 'frame' && <label><span>{tr(locale, 'End color')}</span><ColorPicker value={stripSecondColor} disabledAlpha showText onChangeComplete={(value) => setStripSecondColor(value.toHexString().toUpperCase())} /></label>}
+        {activeStripMode === 'pixel' && <label><span>{tr(locale, 'Pixel')}</span><InputNumber min={0} max={Math.max(0, pixels - 1)} value={Math.min(stripPixel, Math.max(0, pixels - 1))} onChange={(value) => setStripPixel(value ?? 0)} /></label>}
+        {['solid', 'pixel', 'frame'].includes(activeStripMode) && <label className="strip-control__brightness"><span>{tr(locale, 'Brightness')} · {Math.round(stripBrightness * 100 / 255)}%</span><Slider min={0} max={255} value={stripBrightness} onChange={setStripBrightness} /></label>}
+        {activeStripMode === 'effect' && <label className="strip-control__effect"><span>{tr(locale, 'Effect')}</span><Select value={activeEffectId || undefined} placeholder={tr(locale, 'No lighting effects')} options={stripEffects.map((effect) => ({ value: effect.id, label: effect.name }))} onChange={setStripEffectId} /></label>}
+      </div>
+
+      <div className="strip-control__actions">
+        {activeStripMode === 'solid' && <Button type="primary" icon={<BulbOutlined />} onClick={() => sendCmd('hardware.strip.fill', { red: rgb[0], green: rgb[1], blue: rgb[2], brightness: stripBrightness })}>{tr(locale, 'Fill strip')}</Button>}
+        {activeStripMode === 'pixel' && <Button type="primary" icon={<BulbOutlined />} onClick={() => sendCmd('hardware.strip.pixel', { pixel: stripPixel, pixels, red: rgb[0], green: rgb[1], blue: rgb[2], brightness: stripBrightness })}>{tr(locale, 'Apply pixel')}</Button>}
+        {activeStripMode === 'frame' && <Button type="primary" icon={<BulbOutlined />} onClick={() => sendCmd('hardware.strip.frame', { pixels, rgb: stripFrame() })}>{tr(locale, 'Send gradient')}</Button>}
+        {activeStripMode === 'rainbow' && <Button type="primary" icon={<PlayCircleOutlined />} onClick={() => sendCmd('hardware.strip.rainbow', { pixels, fps })}>{tr(locale, 'Start rainbow')}</Button>}
+        {activeStripMode === 'effect' && <Button type="primary" icon={<PlayCircleOutlined />} disabled={!activeEffectId} onClick={() => sendCmd('hardware.strip.effect', { id: activeEffectId, pixels, fps })}>{tr(locale, 'Play effect')}</Button>}
+        {strip.running && <Button icon={<StopOutlined />} onClick={() => sendCmd('hardware.strip.stop')}>{tr(locale, 'Stop')}</Button>}
+        <Button onClick={() => sendCmd('hardware.strip.clear')}>{tr(locale, 'Clear')}</Button>
       </div>
     </Card>}
 
     {details.front_panel && <Card className="surface-card front-panel-card" title={<Space><DesktopOutlined />{tr(locale, 'Front panel')}</Space>}>
-      <div className="segment-display" aria-label={tr(locale, 'Seven segment display')}>
-        {details.front_panel.raw_segments.map((segment, index) => <span key={index}>{segment.toString(16).padStart(2, '0').toUpperCase()}</span>)}
-      </div>
+      <SevenSegmentDisplay
+        segments={details.front_panel.raw_segments}
+        brightness={details.front_panel.brightness}
+        active={details.front_panel.segments_active}
+        blinking={details.front_panel.blink}
+        label={tr(locale, 'Seven segment display')}
+      />
       <Space wrap>{['K1', 'K2', 'K3', 'K4'].map((key) => <Button key={key} onClick={() => sendCmd('hardware.front_panel.press', { key })}>{key}</Button>)}</Space>
       {details.front_panel.lcd_available && <div className="lcd-display"><span>{details.front_panel.lcd_line_1}</span><span>{details.front_panel.lcd_line_2}</span></div>}
     </Card>}

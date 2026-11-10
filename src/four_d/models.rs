@@ -1,10 +1,29 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+fn nonzero_relay<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u8, D::Error> {
+    let id = u8::deserialize(deserializer)?;
+    if id == 0 {
+        Err(serde::de::Error::custom("relay ID must be non-zero"))
+    } else {
+        Ok(id)
+    }
+}
+
+fn motion_side<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<u8, D::Error> {
+    let side = u8::deserialize(deserializer)?;
+    if side <= 1 {
+        Ok(side)
+    } else {
+        Err(serde::de::Error::custom("motion side must be zero or one"))
+    }
+}
+
 /// Represents the smallest unit of a command to a relay.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct AtomicAction {
     /// The non-zero relay ID advertised by the active PCController capability catalog.
+    #[serde(deserialize_with = "nonzero_relay")]
     pub relay_id: u8,
     /// The state to set the relay to: true = ON, false = OFF
     pub state: bool,
@@ -21,7 +40,7 @@ pub type Action = AtomicAction;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum HardwareTarget {
     Any,
-    Relay(u8),
+    Relay(#[serde(deserialize_with = "nonzero_relay")] u8),
     ControllerMacro,
 }
 
@@ -29,14 +48,14 @@ impl HardwareTarget {
     pub fn primary_relay_id(&self) -> Option<u8> {
         match self {
             Self::Any | Self::ControllerMacro => None,
-            Self::Relay(relay_id) => Some(*relay_id),
+            Self::Relay(relay_id) => (*relay_id != 0).then_some(*relay_id),
         }
     }
 
     pub fn is_compatible_with_relay(&self, relay_id: u8) -> bool {
         match self {
             Self::Any => relay_id != 0,
-            Self::Relay(target_id) => *target_id == relay_id,
+            Self::Relay(target_id) => relay_id != 0 && *target_id == relay_id,
             Self::ControllerMacro => false,
         }
     }
@@ -63,6 +82,112 @@ pub struct ControllerMacroCue {
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct ControllerStripEffectCue {
     pub id: String,
+}
+
+/// How a direct command behaves, independently of its visual placement.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum DirectCueBehavior {
+    SetKeep,
+    #[default]
+    Hold,
+    Ramp,
+}
+
+/// A semantic cinema-seat movement. The side index is zero-based to match
+/// PCController's prepared-timeline `motion` step contract.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub struct DirectMotionCue {
+    #[serde(deserialize_with = "motion_side")]
+    pub side: u8,
+    pub direction: DirectMotionDirection,
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum DirectMotionDirection {
+    #[default]
+    Up,
+    Down,
+}
+
+impl DirectMotionDirection {
+    pub fn controller_value(self) -> u8 {
+        match self {
+            Self::Up => 1,
+            Self::Down => 2,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Up => "Up",
+            Self::Down => "Down",
+        }
+    }
+}
+
+/// An authored channel command. SetKeep has no exit edge; timed commands have
+/// an explicit final value. Neither visual marker width nor zoom affects timing.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct DirectControlCue {
+    /// Stable PCController capability key, for example `relay.5` or `pwm.10`.
+    pub control_key: String,
+    /// Exact normalized value in basis points (0..=10_000).
+    pub value_basis_points: u16,
+    #[serde(default)]
+    pub behavior: DirectCueBehavior,
+    #[serde(default)]
+    pub end_value_basis_points: u16,
+    /// Present for semantic motion controls. Motion always has a finite active
+    /// interval and an explicit Stop edge; the percentage fields are ignored.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub motion: Option<DirectMotionCue>,
+}
+
+impl DirectControlCue {
+    pub(crate) fn can_retarget_to(&self, key: &str) -> bool {
+        fn channel(key: &str, prefix: &str, range: std::ops::RangeInclusive<u8>) -> Option<u8> {
+            key.strip_prefix(prefix)?.parse::<u8>().ok().filter(|value| range.contains(value))
+        }
+        if self.motion.is_some() {
+            return matches!(self.control_key.as_str(), "seat.a" | "seat.b") && matches!(key, "seat.a" | "seat.b");
+        }
+        (channel(&self.control_key, "relay.", 1..=8).is_some() && channel(key, "relay.", 1..=8).is_some())
+            || (channel(&self.control_key, "pwm.", 0..=15).is_some() && channel(key, "pwm.", 0..=15).is_some())
+    }
+
+    pub fn value_at(&self, elapsed_ms: u64, duration_ms: u64) -> u16 {
+        self.behavior.value_at(self.value_basis_points, self.end_value_basis_points, elapsed_ms, duration_ms)
+    }
+}
+
+impl DirectCueBehavior {
+    pub fn value_at(self, start: u16, end: u16, elapsed_ms: u64, duration_ms: u64) -> u16 {
+        let start = start.min(10_000);
+        let end = end.min(10_000);
+        match self {
+            DirectCueBehavior::SetKeep => start,
+            DirectCueBehavior::Hold => if elapsed_ms < duration_ms { start } else { end },
+            DirectCueBehavior::Ramp => {
+                let progress = elapsed_ms.min(duration_ms.max(1)) as f64 / duration_ms.max(1) as f64;
+                (f64::from(start) + (f64::from(end) - f64::from(start)) * progress).round() as u16
+            }
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum CueDurationPolicy {
+    /// Infer from the cue's authoritative source.
+    #[default]
+    Auto,
+    /// The referenced program owns its duration; placement is move-only.
+    Intrinsic,
+    /// The timeline interval owns its duration and exposes resize handles.
+    Resizable,
 }
 
 /// Capability-derived timeline lane for a PCController-owned effect.
@@ -116,6 +241,14 @@ pub struct Effect {
     pub controller_strip_effect: Option<ControllerStripEffectCue>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub controller_lane: Option<ControllerEffectLane>,
+    /// Optional direct channel value. These cues are authored and resized in
+    /// Pealayer; recorded macros and lighting programs remain intrinsic.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub direct_control: Option<DirectControlCue>,
+    #[serde(default)]
+    pub duration_policy: CueDurationPolicy,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_effect: Option<crate::mpv::sfx::AudioEffect>,
 }
 
 impl Effect {
@@ -130,6 +263,9 @@ impl Effect {
             controller_macro: None,
             controller_strip_effect: None,
             controller_lane: None,
+            direct_control: None,
+            duration_policy: CueDurationPolicy::Auto,
+            audio_effect: None,
         }
     }
 
@@ -150,6 +286,9 @@ impl Effect {
             controller_macro: None,
             controller_strip_effect: None,
             controller_lane: None,
+            direct_control: None,
+            duration_policy: CueDurationPolicy::Auto,
+            audio_effect: None,
         }
     }
 
@@ -170,6 +309,9 @@ impl Effect {
             controller_macro: Some(ControllerMacroCue { id: macro_id, mode }),
             controller_strip_effect: None,
             controller_lane: Some(ControllerEffectLane::Sequence),
+            direct_control: None,
+            duration_policy: CueDurationPolicy::Intrinsic,
+            audio_effect: None,
         }
     }
 
@@ -184,6 +326,70 @@ impl Effect {
             controller_macro: None,
             controller_strip_effect: Some(ControllerStripEffectCue { id: effect_id }),
             controller_lane: Some(ControllerEffectLane::Lighting),
+            direct_control: None,
+            duration_policy: CueDurationPolicy::Resizable,
+            audio_effect: None,
+        }
+    }
+
+    /// Whether the execution contract supports an authored active window.
+    /// Finite recordings retain source timing; strip streams run their unchanged
+    /// program for the placement duration. Presentation flags cannot override
+    /// those source semantics.
+    pub fn duration_resizable(&self) -> bool {
+        if self.is_state_marker() || self.audio_effect.is_some() || self.controller_macro.is_some() {
+            return false;
+        }
+        if self.controller_strip_effect.is_some() {
+            return true;
+        }
+        match self.duration_policy {
+            CueDurationPolicy::Intrinsic => false,
+            CueDurationPolicy::Resizable => true,
+            CueDurationPolicy::Auto => true,
+        }
+    }
+
+    pub fn is_state_marker(&self) -> bool {
+        self.direct_control.as_ref().is_some_and(|cue| cue.behavior == DirectCueBehavior::SetKeep)
+    }
+
+    pub fn direct_control(
+        name: String,
+        icon: String,
+        duration_ms: u64,
+        control_key: String,
+        value_basis_points: u16,
+        relay_id: Option<u8>,
+    ) -> Self {
+        let normalized = value_basis_points.min(10_000);
+        let actions = relay_id
+            .filter(|id| *id != 0)
+            .map(|relay_id| vec![AtomicAction {
+                relay_id,
+                state: normalized >= 5_000,
+                offset_ms: 0,
+            }])
+            .unwrap_or_default();
+        Self {
+            id: Uuid::new_v4(),
+            name,
+            icon,
+            duration_ms: duration_ms.max(100),
+            target: relay_id.map(HardwareTarget::for_relay).unwrap_or(HardwareTarget::Any),
+            actions,
+            controller_macro: None,
+            controller_strip_effect: None,
+            controller_lane: None,
+            direct_control: Some(DirectControlCue {
+                control_key,
+                value_basis_points: normalized,
+                behavior: DirectCueBehavior::Hold,
+                end_value_basis_points: 0,
+                motion: None,
+            }),
+            duration_policy: CueDurationPolicy::Resizable,
+            audio_effect: None,
         }
     }
 }
@@ -285,10 +491,22 @@ pub struct Timeline {
     #[serde(default)]
     pub keyframes: Vec<TimelineKeyframe>,
     /// Stable link/visibility policy for media, controller-effect, and hardware
-    /// tracks. Missing entries deliberately mean linked and visible so older
-    /// project files retain their previous appearance.
+    /// tracks. Missing entries deliberately mean linked and visible so a
+    /// partially authored current project remains usable and self-correcting.
     #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
     pub track_states: std::collections::BTreeMap<String, TimelineTrackState>,
+    /// Hardware relay tracks temporarily muted during playback
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub track_muted: std::collections::BTreeSet<u8>,
+    /// Hardware relay tracks soloed during playback
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub track_soloed: std::collections::BTreeSet<u8>,
+    /// Hardware relay tracks locked against accidental edits
+    #[serde(default, skip_serializing_if = "std::collections::BTreeSet::is_empty")]
+    pub track_locked: std::collections::BTreeSet<u8>,
+    /// Associated media target (video filename or URL)
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub media_target: Option<String>,
 }
 
 impl Default for Timeline {
@@ -303,6 +521,10 @@ impl Default for Timeline {
             analog_tracks: Vec::new(),
             keyframes: Vec::new(),
             track_states: std::collections::BTreeMap::new(),
+            track_muted: std::collections::BTreeSet::new(),
+            track_soloed: std::collections::BTreeSet::new(),
+            track_locked: std::collections::BTreeSet::new(),
+            media_target: None,
         }
     }
 }
@@ -312,6 +534,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn zero_relay_ids_are_rejected_even_from_imported_data() {
+        assert!(serde_json::from_str::<HardwareTarget>(r#"{"Relay":0}"#).is_err());
+        assert!(serde_json::from_str::<AtomicAction>(r#"{"relay_id":0,"state":true,"offset_ms":0}"#).is_err());
+        assert_eq!(HardwareTarget::Relay(0).primary_relay_id(), None);
+        assert!(!HardwareTarget::Relay(0).is_compatible_with_relay(0));
+    }
+
+    #[test]
     fn fresh_timeline_contains_no_invented_production_data() {
         let timeline = Timeline::default();
         assert!(timeline.instances.is_empty());
@@ -319,6 +549,70 @@ mod tests {
         assert!(timeline.analog_tracks.is_empty());
         assert!(timeline.keyframes.is_empty());
         assert!(timeline.track_states.is_empty());
+        assert!(timeline.track_muted.is_empty());
+        assert!(timeline.track_soloed.is_empty());
+        assert!(timeline.track_locked.is_empty());
+        assert!(timeline.media_target.is_none());
+    }
+
+    #[test]
+    fn finite_recordings_are_move_only_but_strip_windows_and_direct_values_are_resizable() {
+        let recorded = Effect::controller_macro(
+            "Recorded".into(),
+            String::new(),
+            2_000,
+            7,
+            "automatic".into(),
+        );
+        let lighting = Effect::controller_strip_effect("Lighting".into(), 3_000, "live-id".into());
+        let relay = Effect::direct_control(
+            "Relay on".into(),
+            String::new(),
+            1_000,
+            "relay.5".into(),
+            10_000,
+            Some(5),
+        );
+        assert!(!recorded.duration_resizable());
+        assert!(lighting.duration_resizable());
+        assert!(relay.duration_resizable());
+        assert_eq!(relay.actions[0].state, true);
+    }
+
+    #[test]
+    fn controller_execution_semantics_take_priority_over_stored_presentation_policy() {
+        let mut recorded = Effect::controller_macro(
+            "Recorded".into(), String::new(), 2_000, 7, "automatic".into(),
+        );
+        let mut lighting = Effect::controller_strip_effect("Lighting".into(), 3_000, "live-id".into());
+        for policy in [CueDurationPolicy::Auto, CueDurationPolicy::Intrinsic, CueDurationPolicy::Resizable] {
+            recorded.duration_policy = policy;
+            lighting.duration_policy = policy;
+            assert!(!recorded.duration_resizable());
+            assert!(lighting.duration_resizable());
+        }
+    }
+
+    #[test]
+    fn persistent_markers_are_move_only_and_do_not_have_an_exit_value() {
+        let mut effect = Effect::direct_control("Set".into(), String::new(), 1000, "pwm.2".into(), 3750, None);
+        let direct = effect.direct_control.as_mut().unwrap();
+        direct.behavior = DirectCueBehavior::SetKeep;
+        direct.end_value_basis_points = 0;
+        assert_eq!(direct.value_at(0, 1000), 3750);
+        assert_eq!(direct.value_at(86_400_000, 1000), 3750);
+        assert!(effect.is_state_marker());
+        assert!(!effect.duration_resizable());
+    }
+
+    #[test]
+    fn timed_values_have_exact_exit_edges_and_ramp_endpoints() {
+        assert_eq!(DirectCueBehavior::Hold.value_at(10_000, 0, 999, 1000), 10_000);
+        assert_eq!(DirectCueBehavior::Hold.value_at(10_000, 0, 1000, 1000), 0);
+        assert_eq!(DirectCueBehavior::Ramp.value_at(2000, 8000, 0, 1000), 2000);
+        assert_eq!(DirectCueBehavior::Ramp.value_at(2000, 8000, 500, 1000), 5000);
+        assert_eq!(DirectCueBehavior::Ramp.value_at(8000, 2000, 500, 1000), 5000);
+        assert_eq!(DirectCueBehavior::Ramp.value_at(2000, 8000, 1000, 1000), 8000);
     }
 
     #[test]
@@ -346,7 +640,7 @@ mod tests {
         let timeline: Timeline = serde_json::from_str(
             r#"{"instances":[],"templates":[],"analog_tracks":[],"keyframes":[]}"#,
         )
-        .expect("older timeline JSON should remain readable");
+        .expect("current timeline JSON may omit default track preferences");
         assert_eq!(
             timeline.track_state("hardware:relay.5"),
             TimelineTrackState::default()
@@ -435,7 +729,7 @@ impl Timeline {
             .templates
             .iter()
             .filter(|template| {
-                template.controller_macro.is_some() || template.controller_strip_effect.is_some()
+                template.controller_macro.is_some() || template.controller_strip_effect.is_some() || template.audio_effect.is_some()
             })
             .map(|template| template.id)
             .collect::<std::collections::BTreeSet<_>>();
@@ -472,6 +766,10 @@ impl Timeline {
             analog_tracks: Vec::new(),
             keyframes: Vec::new(),
             track_states,
+            track_muted: std::collections::BTreeSet::new(),
+            track_soloed: std::collections::BTreeSet::new(),
+            track_locked: std::collections::BTreeSet::new(),
+            media_target: self.media_target.clone(),
         }
     }
 

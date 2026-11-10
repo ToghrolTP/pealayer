@@ -38,9 +38,18 @@ a placeholder effect. Existing effect drafts are retained.
 
 PCController publishes `effect_groups` in its snapshot and includes empty group
 records in effects.json export/import. Pealayer relays creation through
-`controller_effect.group.create`; no Pealayer-owned group persistence was added.
+`controller_effect.group.save`; the same current contract creates a group when
+`original_name` is empty and updates its name and icon otherwise. No
+Pealayer-owned group persistence is added.
 The existing `category` storage key remains intact to preserve saved memberships;
 user-facing labels consistently say **Group**.
+
+Effect cards are draggable onto another group header in both the native and Web
+Effects Library. A drop republishes the existing authoritative effect definition
+with only its `category` changed; PCController's subsequent catalog event remains
+the source of truth for the rendered membership. Empty groups stay valid drop
+targets, but render dimmed and without a disclosure chevron because they have no
+children to expand.
 
 Automated renderer/input checks are not physical-board or desktop screenshot proof.
 

@@ -8,9 +8,170 @@ use eframe::egui;
 pub const NAVIGATION_HEIGHT: f32 = 32.0;
 pub const ACTION_HEIGHT: f32 = 28.0;
 pub const NAVIGATION_DETAIL_HEIGHT: f32 = 44.0;
-const ACTION_BUTTON_WIDTH: f32 = 104.0;
+pub const ACTION_BUTTON_WIDTH: f32 = 104.0;
 const CONTROL_CORNER_RADIUS: f32 = 7.0;
 const CONTROL_TEXT_SIZE: f32 = 13.0;
+pub const CLOSE_BUTTON_SIDE: f32 = 32.0;
+pub const CLOSE_GLYPH_SIZE: f32 = 22.0;
+
+/// Selectable captions reserve padding once; hover/selection strokes are painted
+/// inside the fixed hit rectangle, never included in text layout or row sizing.
+pub fn stable_toggle(ui: &mut egui::Ui, selected: &mut bool, label: &str) -> egui::Response {
+    let font = egui::TextStyle::Button.resolve(ui.style());
+    let galley = ui.painter().layout_no_wrap(label.into(), font, ui.visuals().text_color());
+    let padding = ui.spacing().button_padding;
+    let size = (galley.size() + padding * 2.0).max(ui.spacing().interact_size);
+    let (rect, mut response) = ui.allocate_exact_size(size, egui::Sense::click());
+    if response.clicked() {
+        *selected = !*selected;
+        response.mark_changed();
+    }
+    let visuals = ui.style().interact_selectable(&response, *selected);
+    if *selected || response.hovered() || response.has_focus() || response.is_pointer_button_down_on() {
+        ui.painter().rect(rect, visuals.corner_radius, visuals.weak_bg_fill, visuals.bg_stroke, egui::StrokeKind::Inside);
+    }
+    ui.painter().galley(rect.center() - galley.size() * 0.5, galley, visuals.fg_stroke.color);
+    response.widget_info(|| egui::WidgetInfo::selected(egui::Role::Button, response.enabled(), *selected, label));
+    response
+}
+
+/// Icon geometry is independent of text padding, font metrics and interact_size.
+/// Keep paint, hit target and focus outline inside the same exact square.
+pub fn close_button(ui: &mut egui::Ui, label: &str) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::Vec2::splat(CLOSE_BUTTON_SIDE), egui::Sense::click());
+    let visuals = ui.style().interact(&response);
+    let fill = if response.hovered() || response.is_pointer_button_down_on() || response.has_focus() {
+        visuals.weak_bg_fill
+    } else { egui::Color32::TRANSPARENT };
+    let stroke = if response.has_focus() { egui::Stroke::new(1.0, ui.visuals().selection.bg_fill) } else { visuals.bg_stroke };
+    ui.painter().rect(rect, visuals.corner_radius, fill, stroke, egui::StrokeKind::Inside);
+    let galley = ui.painter().layout_no_wrap("×".into(), egui::FontId::proportional(CLOSE_GLYPH_SIZE), visuals.fg_stroke.color);
+    // Center the visible ink, not the font's unused ascent or side bearings.
+    let ink = if galley.mesh_bounds.is_positive() { galley.mesh_bounds } else {
+        egui::Rect::from_min_size(egui::Pos2::ZERO, galley.size())
+    };
+    ui.painter().galley(rect.center() - ink.center().to_vec2(), galley, visuals.fg_stroke.color);
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, response.enabled(), label));
+    response.on_hover_text(label)
+}
+
+pub struct ConfirmationResponse {
+    pub dismissed: bool,
+    pub close: egui::Response,
+}
+
+pub(crate) fn confirmation_modal_frame(tokens: &crate::ui::craft_theme::Tokens) -> egui::Frame {
+    egui::Frame::new()
+        .fill(tokens.panel_bg)
+        .stroke(egui::Stroke::new(1.0, tokens.border_subtle))
+        .corner_radius(6.0)
+        .inner_margin(egui::Margin::same(12))
+}
+
+/// Shared unsaved-change chrome. Close/Escape mean Keep editing; the caller owns
+/// Save/Discard. Backdrop clicks never silently dispose of a dirty draft.
+pub fn confirmation_modal(ctx: &egui::Context, id: egui::Id, heading: &str,
+    icon: &str, message: &str, close_label: &str, footer: impl FnOnce(&mut egui::Ui) -> bool) -> ConfirmationResponse {
+    crate::ui::sync_elegance_theme(ctx);
+    let theme = elegance::Theme::current(ctx);
+    let tokens = crate::ui::craft_theme::current(ctx);
+    let focus_id = id.with("previous-focus");
+    let first_frame = ctx.data(|data| data.get_temp::<Option<egui::Id>>(focus_id)).is_none();
+    if first_frame {
+        let previous = ctx.memory(|memory| memory.focused());
+        ctx.data_mut(|data| data.insert_temp(focus_id, previous));
+    }
+    let width = (ctx.content_rect().width() - 64.0).clamp(160.0, 440.0);
+    let frame = confirmation_modal_frame(&tokens);
+    let modal = egui::Modal::new(id).frame(frame)
+        .backdrop_color(tokens.modal_backdrop).show(ctx, |ui| {
+            ui.ctx().accesskit_node_builder(ui.unique_id(), |node| {
+                node.set_role(egui::accesskit::Role::AlertDialog);
+                node.set_label(heading);
+            });
+            ui.set_width(width);
+            let close = ui.horizontal(|ui| {
+                // Reserve the trailing square first so long captions cannot push
+                // it out of the viewport. Text still reads start-aligned.
+                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                    let close = close_button(ui, close_label);
+                    let title_width = ui.available_width().max(1.0);
+                    ui.allocate_ui_with_layout(egui::vec2(title_width, CLOSE_BUTTON_SIDE),
+                        egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            if !icon.is_empty() {
+                                let (tile, _) = ui.allocate_exact_size(egui::Vec2::splat(CLOSE_BUTTON_SIDE), egui::Sense::hover());
+                                let accent = theme.palette.amber;
+                                ui.painter().circle_filled(tile.center(), CLOSE_BUTTON_SIDE * 0.5,
+                                    egui::Color32::from_rgba_unmultiplied(accent.r(), accent.g(), accent.b(), 35));
+                                ui.painter().text(tile.center(), egui::Align2::CENTER_CENTER, icon,
+                                    egui::FontId::proportional(20.0), accent);
+                            }
+                            ui.add(egui::Label::new(theme.heading_text(heading)).truncate());
+                        });
+                    close
+                }).inner
+            }).inner;
+            if first_frame { close.request_focus(); }
+            ui.add_space(6.0);
+            ui.separator();
+            ui.add_space(8.0);
+            ui.label(message);
+            ui.add_space(8.0);
+            ui.separator();
+            let resolved = ui.with_layout(egui::Layout::right_to_left(egui::Align::Center)
+                .with_main_wrap(true), footer).inner;
+            (close, resolved)
+        });
+    let (close, resolved) = modal.inner;
+    let dismissed = close.clicked() || (modal.is_top_modal && !modal.any_popup_open
+        && ctx.input_mut(|input| input.consume_key(egui::Modifiers::NONE, egui::Key::Escape)));
+    if dismissed || resolved {
+        let previous = ctx.data_mut(|data| data.remove_temp::<Option<egui::Id>>(focus_id)).flatten();
+        if let Some(previous) = previous { ctx.memory_mut(|memory| memory.request_focus(previous)); }
+    }
+    ConfirmationResponse { dismissed, close }
+}
+
+/// Single-line input text stays centered when its row supplies extra height.
+/// Multiline/wrapped editors intentionally keep TextEdit's top alignment.
+pub fn singleline_text_edit<'a>(ui: &egui::Ui, text: &'a mut dyn egui::TextBuffer) -> egui::TextEdit<'a> {
+    egui::TextEdit::singleline(text).vertical_align(egui::Align::Center)
+        .font(egui::TextStyle::Button).margin(egui::Margin::symmetric(4, 0))
+        .min_size(egui::vec2(0.0, crate::ui::control_density::height(ui)))
+}
+
+/// Inline captions and editors share one fixed slot. Paint the outline inside
+/// that slot instead of letting a TextEdit frame move its baseline by a pixel.
+pub fn inline_caption_edit(ui: &mut egui::Ui, id: egui::Id, text: &mut String,
+    size: egui::Vec2, font: egui::FontId, alignment: egui::Align) -> egui::Response {
+    let prev_interact = ui.spacing().interact_size;
+    if size.y < prev_interact.y {
+        ui.spacing_mut().interact_size.y = size.y;
+    }
+    let response = ui.add_sized(size, singleline_text_edit(ui, text).min_size(egui::vec2(0.0, size.y)).id(id).font(font)
+        .text_color(ui.visuals().strong_text_color()).horizontal_align(alignment)
+        .frame(egui::Frame::NONE.inner_margin(egui::Margin::symmetric(4, 0))).char_limit(64));
+    if size.y < prev_interact.y {
+        ui.spacing_mut().interact_size = prev_interact;
+    }
+    let visuals = ui.style().interact(&response);
+    let stroke = if visuals.bg_stroke.width > 0.0 { visuals.bg_stroke }
+        else { egui::Stroke::new(1.0, ui.visuals().widgets.noninteractive.fg_stroke.color) };
+    ui.painter().rect_stroke(response.rect, 3.0, stroke, egui::StrokeKind::Inside);
+    response
+}
+
+/// Workspace overlays paint immediately above their panel, never above dialogs.
+/// Raising individual controls to Foreground lets them escape modal backdrops.
+pub fn workspace_overlay_layer(
+    ui: &egui::Ui,
+    id: impl std::hash::Hash + std::fmt::Debug,
+) -> egui::LayerId {
+    let parent = ui.layer_id();
+    let child = egui::LayerId::new(parent.order, parent.id.with(id));
+    ui.ctx().set_sublayer(parent, child);
+    child
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DialogHost {
@@ -152,6 +313,14 @@ fn action_button_with_kind(
 }
 
 /// A shared, left-aligned navigation row for modal/dialog side rails.
+pub fn navigation_width(ui: &egui::Ui, label: &str) -> f32 {
+    let galley = ui.painter().layout_no_wrap(label.into(),
+        egui::FontId::proportional(CONTROL_TEXT_SIZE), ui.visuals().text_color());
+    // Same leading icon/text slot and trailing inset as navigation_control.
+    (33.0 + galley.size().x + 12.0).ceil().max(80.0)
+}
+
+/// A shared, left-aligned navigation row for modal/dialog side rails.
 pub fn navigation_button(
     ui: &mut egui::Ui,
     selected: bool,
@@ -235,17 +404,18 @@ fn navigation_control(
         } else {
             rect.center().y
         };
-        painter.text(
-            egui::pos2(text_x, title_y),
-            egui::Align2::LEFT_CENTER,
-            label,
-            egui::FontId::proportional(CONTROL_TEXT_SIZE),
-            if selected {
+        let text_color = if selected {
                 ui.visuals().widgets.hovered.fg_stroke.color
             } else {
                 ui.visuals().text_color()
-            },
-        );
+            };
+        let mut job = egui::text::LayoutJob::simple_singleline(label.into(),
+            egui::FontId::proportional(CONTROL_TEXT_SIZE), text_color);
+        job.wrap.max_width = (rect.right() - 12.0 - text_x).max(1.0);
+        job.wrap.max_rows = 1;
+        job.wrap.break_anywhere = true;
+        let galley = painter.layout_job(job);
+        painter.galley(egui::pos2(text_x, title_y - galley.size().y * 0.5), galley, text_color);
         if let Some(metadata) = metadata {
             painter.text(
                 egui::pos2(text_x, rect.center().y + 9.0),
@@ -256,7 +426,7 @@ fn navigation_control(
             );
         }
     }
-    response
+    response.on_hover_text(label)
 }
 
 /// Align dialog actions to the conventional trailing edge while respecting
@@ -312,6 +482,213 @@ pub fn escape_pressed(ctx: &egui::Context) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn built_in_window_title_background_reaches_the_window_edges() {
+        for palette in [crate::config::ColorPalette::Native, crate::config::ColorPalette::Studio] {
+        for dark in [false, true] { for rtl in [false, true] { for scale in [1.0, 1.25, 1.5, 2.0] {
+        let ctx=egui::Context::default();
+        let config=crate::config::AppConfig { color_palette:palette,
+            theme:if dark {crate::config::AppTheme::Dark} else {crate::config::AppTheme::Light},..Default::default() };
+        crate::ui::configure_native_appearance(&ctx,&config);
+        ctx.set_pixels_per_point(scale);
+        ctx.all_styles_mut(|style|style.right_to_left=rtl);
+        let mut output=None;
+        let mut outer=egui::Rect::NOTHING;
+        for frame in 0..4 {
+            let mut open=true;
+            let mut rendered=ctx.run_ui(egui::RawInput{screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(800.0,500.0))),time:Some(frame as f64*0.1),..Default::default()},|ui|{
+                outer=egui::Window::new("Header geometry").id(egui::Id::new("header-geometry-test"))
+                    .open(&mut open).default_pos(egui::pos2(40.0,40.0)).default_size(egui::vec2(480.0,240.0)).max_width(480.0)
+                    .collapsible(false).show(ui.ctx(),|ui|{ui.set_min_width(480.0);ui.label("Body");}).unwrap().response.rect;
+            });
+            rendered.textures_delta.clear();output=Some(rendered);
+        }
+        let output=output.unwrap();
+        let frames:Vec<_>=output.shapes.iter().filter_map(|shape|match &shape.shape {egui::Shape::Rect(rect) if rect.rect.top()<outer.top()+4.0 && rect.fill!=egui::Color32::TRANSPARENT=>Some((rect.rect.intersect(shape.clip_rect),rect.fill)),_=>None}).collect();
+        let header=frames.iter().filter(|(rect,_)|rect.height()<80.0 && rect.width()>100.0).max_by(|a,b|a.0.width().total_cmp(&b.0.width())).expect("painted title background").0;
+        assert!((header.left()-outer.left()).abs()<=2.0 && (header.right()-outer.right()).abs()<=2.0,"title background does not span its window: rtl={rtl}, scale={scale}, outer={outer:?}, frames={frames:?}");
+        } } } }
+    }
+    #[test]
+    fn loop_toggle_hover_selection_and_focus_do_not_move_text_or_neighbors() {
+        for dark in [false, true] {
+            for scale in [1.0, 1.25, 1.5, 2.0] {
+                let context = egui::Context::default();
+                context.set_pixels_per_point(scale);
+                context.set_visuals(if dark { egui::Visuals::dark() } else { egui::Visuals::light() });
+                let mut baseline = None;
+                for state in 0..6 {
+                    let mut selected = state == 3;
+                    let mut geometry = (egui::Rect::NOTHING, egui::Rect::NOTHING);
+                    let pointer = if state == 0 { egui::pos2(500.0, 300.0) } else { egui::pos2(35.0, 15.0) };
+                    let mut output = context.run_ui(egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(520.0, 320.0))),
+                        events: vec![egui::Event::PointerMoved(pointer)],
+                        ..Default::default()
+                    }, |ui| {
+                        ui.horizontal(|ui| {
+                            let toggle = super::stable_toggle(ui, &mut selected, "Loop until stopped");
+                            if state == 4 { toggle.request_focus(); }
+                            geometry = (toggle.rect, ui.label("Repeats").rect);
+                        });
+                    });
+                    let text_position = output.shapes.iter().find_map(|shape| match &shape.shape {
+                        egui::epaint::Shape::Text(text) if text.galley.text() == "Loop until stopped" => Some(text.pos),
+                        _ => None,
+                    }).expect("visible toggle caption");
+                    let current = (geometry, text_position);
+                    if let Some(baseline) = baseline { assert_eq!(current, baseline, "toggle shifted at {scale}, dark={dark}, state={state}"); }
+                    else { baseline = Some(current); }
+                    output.textures_delta.clear();
+                }
+            }
+        }
+    }
+    #[test]
+    fn close_square_and_ink_center_survive_fonts_scaling_and_interaction_states() {
+        use super::*;
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            for prefer_persian in [false, true] {
+                let context = egui::Context::default();
+                context.set_pixels_per_point(scale);
+                crate::ui::i18n::configure_ui_fonts(&context, prefer_persian);
+                context.all_styles_mut(|style| {
+                    style.spacing.interact_size = egui::Vec2::splat(80.0);
+                    style.spacing.button_padding = egui::vec2(18.0, 14.0);
+                    style.text_styles.insert(egui::TextStyle::Button, egui::FontId::proportional(30.0));
+                });
+                let mut previous = None;
+                for frame in 0..6 {
+                    let mut rect = egui::Rect::NOTHING;
+                    let point = previous.map(|rect: egui::Rect| rect.center()).unwrap_or(egui::Pos2::ZERO);
+                    let events = if frame == 0 { vec![] } else {
+                        let mut events = vec![egui::Event::PointerMoved(point)];
+                        if frame == 2 || frame == 3 {
+                            events.push(egui::Event::PointerButton { pos: point, button: egui::PointerButton::Primary,
+                                pressed: frame == 2, modifiers: egui::Modifiers::NONE });
+                        }
+                        events
+                    };
+                    let mut output = context.run_ui(egui::RawInput { events,
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(300.0, 200.0))),
+                        time: Some(frame as f64 * 0.05), ..Default::default()
+                    }, |ui| {
+                        let response = close_button(ui, "Close");
+                        rect = response.rect;
+                        if frame == 4 { response.request_focus(); }
+                    });
+                    assert_eq!(rect.size(), egui::Vec2::splat(CLOSE_BUTTON_SIDE));
+                    if let Some(previous) = previous { assert_eq!(rect, previous); }
+                    let ink_center = output.shapes.iter().find_map(|shape| match &shape.shape {
+                        egui::Shape::Text(text) if text.galley.text() == "×" =>
+                            Some(text.pos + text.galley.mesh_bounds.center().to_vec2()),
+                        _ => None,
+                    }).expect("visible close glyph");
+                    assert!(ink_center.distance(rect.center()) < 0.05);
+                    assert!(CLOSE_GLYPH_SIZE > egui::TextStyle::Small.resolve(&context.global_style()).size);
+                    output.textures_delta.clear();
+                    previous = Some(rect);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn confirmation_close_is_bounded_and_backdrop_is_not_destructive() {
+        use super::*;
+        for width in [350.0, 800.0] {
+            let context = egui::Context::default();
+            let mut open = true;
+            let mut close_rect = egui::Rect::NOTHING;
+            let render = |open: &mut bool, close_rect: &mut egui::Rect, events, time| {
+                context.run_ui(egui::RawInput { events,
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 500.0))),
+                    time: Some(time), ..Default::default()
+                }, |_| {
+                    if *open {
+                        let response = confirmation_modal(&context, egui::Id::new("test-confirm"),
+                            "Unsaved preferences with a long heading", crate::ui::icons::WARNING,
+                            "Save your changes before closing Preferences?", "Close", |ui| {
+                                let _ = ui.button("Cancel"); false
+                            });
+                        *close_rect = response.close.rect;
+                        *open = !response.dismissed;
+                    }
+                })
+            };
+            for time in [0.0, 0.05, 0.1] {
+                let mut output = render(&mut open, &mut close_rect, vec![], time);
+                output.textures_delta.clear();
+            }
+            assert_eq!(close_rect.size(), egui::Vec2::splat(CLOSE_BUTTON_SIDE));
+            assert!(close_rect.left() >= 0.0 && close_rect.right() <= width);
+            let press = |point, pressed| egui::Event::PointerButton { pos: point,
+                button: egui::PointerButton::Primary, pressed, modifiers: egui::Modifiers::NONE };
+            for (time, pressed) in [(0.15, true), (0.2, false)] {
+                let mut output = render(&mut open, &mut close_rect,
+                    vec![egui::Event::PointerMoved(egui::pos2(4.0, 4.0)), press(egui::pos2(4.0, 4.0), pressed)], time);
+                output.textures_delta.clear();
+            }
+            assert!(open, "Backdrop must not dismiss an unsaved-change confirmation");
+            let point = close_rect.center();
+            for (time, pressed) in [(0.25, true), (0.3, false)] {
+                let mut output = render(&mut open, &mut close_rect,
+                    vec![egui::Event::PointerMoved(point), press(point, pressed)], time);
+                output.textures_delta.clear();
+            }
+            assert!(!open, "Square Close must keep editing, without a footer action");
+        }
+    }
+
+    #[test]
+    fn confirmation_modal_frame_uses_craft_theme_tokens() {
+        use super::*;
+        let ctx = egui::Context::default();
+        let config = crate::config::AppConfig::default();
+        crate::ui::configure_native_visuals(&ctx, &config);
+        let tokens = crate::ui::craft_theme::current(&ctx);
+
+        let frame = confirmation_modal_frame(&tokens);
+        assert_eq!(frame.fill, tokens.panel_bg);
+        assert_eq!(frame.stroke.color, tokens.border_subtle);
+    }
+
+    #[test]
+    fn inline_caption_fonts_and_baselines_are_stable_with_an_inside_outline() {
+        use super::*;
+        for dark in [false,true] {
+            for scale in [1.0,1.25,1.5,2.0] {
+                let ctx = egui::Context::default(); ctx.set_pixels_per_point(scale);
+                ctx.set_visuals(if dark {egui::Visuals::dark()} else {egui::Visuals::light()});
+                let mut text = "Front accent lights".to_string();
+                let mut rect = egui::Rect::NOTHING;
+                let mut output = ctx.run_ui(egui::RawInput::default(),|ui| {
+                    rect = inline_caption_edit(ui,egui::Id::new("inline-baseline"),&mut text,egui::vec2(220.0,24.0),egui::FontId::proportional(13.0),egui::Align::Min).rect;
+                });
+                output.textures_delta.clear();
+                let shape = output.shapes.iter().find_map(|shape| match &shape.shape {
+                    egui::epaint::Shape::Text(shape) if shape.galley.job.text == text => Some(shape), _=>None,
+                }).expect("inline caption");
+                assert_eq!(shape.galley.job.sections[0].format.font_id,egui::FontId::proportional(13.0));
+                assert!((shape.pos.x - rect.left() - 4.0).abs() < 1.0);
+                assert!((shape.pos.y + shape.galley.size().y/2.0 - rect.center().y).abs() < 1.0);
+                assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,egui::epaint::Shape::Rect(shape) if shape.rect == rect && shape.stroke.width > 0.0)));
+            }
+        }
+    }
+    #[test]
+    fn single_line_text_is_centered_in_a_tall_input() {
+        let ctx = egui::Context::default();
+        let mut text = "Center me".to_owned();
+        let mut frame = ctx.run_ui(egui::RawInput::default(), |ui| {
+            let output = singleline_text_edit(ui, &mut text).min_size(egui::vec2(200.0, 46.0)).show(ui);
+            let text_center = output.galley_pos.y + output.galley.size().y * 0.5;
+            assert!((text_center - output.response.rect.center().y).abs() <= 1.0);
+            let wrapped = egui::TextEdit::multiline(&mut text).min_size(egui::vec2(200.0, 80.0)).show(ui);
+            assert!(wrapped.galley_pos.y + wrapped.galley.size().y < wrapped.response.rect.center().y);
+        });
+        frame.textures_delta.clear();
+    }
     use super::*;
 
     #[test]
@@ -404,7 +781,8 @@ mod tests {
         assert!(include_str!("effects_library.rs").contains("dialog::navigation_detail_button"));
         let shared_dialog = include_str!("dialog.rs");
         assert!(shared_dialog.contains("ui.visuals().text_color()"));
-        assert!(!shared_dialog.contains(concat!("strong_", "text_color()")));
+        let navigation = shared_dialog.split("pub fn navigation_button").nth(1).unwrap().split("#[cfg(test)]").next().unwrap();
+        assert!(!navigation.contains(concat!("strong_", "text_color()")));
     }
 
     #[test]
@@ -422,12 +800,176 @@ mod tests {
         assert_eq!(actual, egui::Color32::from_rgb(red, green, blue));
         assert_eq!(actual.a(), 255);
     }
+
+    #[test]
+    fn numeric_input_modifiers_and_bounds_are_truthful() {
+        let steps = crate::config::NumericInputSteps::for_step(0.1);
+        assert_eq!(numeric_adjustment(steps, egui::Modifiers::NONE), 0.1);
+        assert_eq!(numeric_adjustment(steps, egui::Modifiers::CTRL), 0.01);
+        assert_eq!(numeric_adjustment(steps, egui::Modifiers::SHIFT), 1.0);
+        assert_eq!(numeric_adjustment(steps, egui::Modifiers { ctrl: true, shift: true, ..Default::default() }), 0.01);
+        let mut value = 99.0;
+        assert!(adjust_numeric(&mut value, 10.0, 0.0, 100.0));
+        assert_eq!(value, 100.0);
+        assert!(!adjust_numeric(&mut value, 10.0, 0.0, 100.0));
+    }
+
+    #[test]
+    fn numeric_input_paste_rejects_nonfinite_and_accepts_units_and_negatives() {
+        assert_eq!(parse_numeric_paste(" -2.75 s ", " s", &(-600.0..=600.0)), Some(-2.75));
+        assert_eq!(parse_numeric_paste("120%", "%", &(0.0..=100.0)), Some(100.0));
+        for input in ["", "oops", "NaN", "inf", "-inf", "1,5", "12px"] {
+            assert_eq!(parse_numeric_paste(input, " s", &(-600.0..=600.0)), None, "{input}");
+        }
+    }
+
+    #[test]
+    fn numeric_input_paste_routes_only_to_requested_field_and_consumes_event() {
+        let ctx = egui::Context::default();
+        let mut first = 4.0;
+        let mut second = 6.0;
+        let mut output = ctx.run_ui(egui::RawInput { events: vec![egui::Event::Paste("12.5 s".into())], ..Default::default() }, |ui| {
+            let id = ui.make_persistent_id(("numeric-paste", "second"));
+            ui.ctx().data_mut(|data| data.insert_temp(id, true));
+            assert!(!receive_numeric_paste(ui, "first", &mut first, &(0.0..=100.0), " s"));
+            assert!(receive_numeric_paste(ui, "second", &mut second, &(0.0..=100.0), " s"));
+            assert!(!ui.input(|input| input.events.iter().any(|event| matches!(event, egui::Event::Paste(_)))));
+            assert!(!ui.ctx().data(|data| data.get_temp::<bool>(id).unwrap_or(false)));
+        });
+        output.textures_delta.clear();
+        assert_eq!(first, 4.0);
+        assert_eq!(second, 12.5);
+    }
+
+    #[test]
+    fn numeric_input_adjacent_buttons_use_actual_modifier_clicks() {
+        for (modifiers, expected) in [(egui::Modifiers::NONE, 11.0), (egui::Modifiers::CTRL, 10.1), (egui::Modifiers::SHIFT, 20.0)] {
+            let ctx = egui::Context::default();
+            ctx.all_styles_mut(|style| { style.animation_time = 0.0; style.spacing.item_spacing.x = 8.0; });
+            let mut value = 10.0;
+            let mut steps = Default::default();
+            let mut render = |mut events: Vec<egui::Event>| {
+                events.insert(0, egui::Event::ModifiersChanged(modifiers));
+                let mut output = ctx.run_ui(egui::RawInput { events,
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(500.0, 300.0))), ..Default::default()
+                }, |ui| {
+                    numeric_stepper(ui, "click-test", &mut value, 0.0..=100.0, 1.0, 0.0, 0, "", &mut steps, crate::config::AppLanguage::English);
+                });
+                output.textures_delta.clear();
+            };
+            render(Vec::new());
+            // Derived from the actual shared control's allocated geometry.
+            let point = egui::pos2(28.0 + 8.0 + 86.0 + 8.0 + 14.0, 13.0);
+            render(vec![egui::Event::PointerMoved(point), egui::Event::PointerButton { pos: point, button: egui::PointerButton::Primary, pressed: true, modifiers }]);
+            render(vec![egui::Event::PointerButton { pos: point, button: egui::PointerButton::Primary, pressed: false, modifiers }]);
+            assert!((value - expected).abs() < 1e-8, "modifier {modifiers:?}: got {value}, expected {expected}");
+        }
+    }
+
+    #[test]
+    fn numeric_slider_wheel_adjusts_once_and_does_not_scroll_the_dialog() {
+        for (modifiers, increment) in [(egui::Modifiers::NONE, 1.0), (egui::Modifiers::CTRL, 0.1), (egui::Modifiers::SHIFT, 10.0)] {
+            for unit in [egui::MouseWheelUnit::Point, egui::MouseWheelUnit::Line, egui::MouseWheelUnit::Page] {
+                let ctx = egui::Context::default();
+                let mut value = 50.0;
+                let mut offset = 0.0;
+                let mut slider_rect = egui::Rect::NOTHING;
+                let mut render = |events, value: &mut f64| {
+                    let mut output = ctx.run_ui(egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 260.0))), events, ..Default::default() }, |ui| {
+                        let result = egui::ScrollArea::vertical().max_height(150.0).show(ui, |ui| {
+                            let response = ui.add_sized([190.0, 24.0], egui::Slider::new(value, 0.0..=130.0).suffix("%"));
+                            slider_rect = response.rect;
+                            numeric_slider_wheel(ui, &response, value, 0.0..=130.0, crate::config::NumericInputSteps::for_step(1.0));
+                            ui.add_space(600.0);
+                        });
+                        offset = result.state.offset().y;
+                    });
+                    output.textures_delta.clear();
+                    slider_rect
+                };
+                render(vec![], &mut value);
+                let point = render(vec![], &mut value).left_center() + egui::vec2(20.0, 0.0);
+                let wheel = |delta| egui::Event::MouseWheel { unit, delta: egui::vec2(0.0, delta), modifiers, phase: egui::TouchPhase::Move, source: egui::MouseWheelSource::Wheel };
+                render(vec![egui::Event::PointerMoved(point), wheel(1.0)], &mut value);
+                assert!((value - (50.0 + increment)).abs() < 1e-8, "wrong increment: {modifiers:?}/{unit:?}");
+                for _ in 0..12 { render(vec![], &mut value); }
+                assert!((value - (50.0 + increment)).abs() < 1e-8, "smoothed tail applied the value repeatedly");
+                render(vec![wheel(-1.0)], &mut value);
+                assert!((value - 50.0).abs() < 1e-8);
+                drop(render);
+                assert_eq!(offset, 0.0, "wheel adjustment scrolled the dialog");
+            }
+        }
+    }
+
+    #[test]
+    fn numeric_slider_wheel_obeys_hover_disabled_and_bounds() {
+        let ctx = egui::Context::default();
+        let mut value = 130.0;
+        let mut response_rect = egui::Rect::NOTHING;
+        let mut render = |events, enabled, value: &mut f64| {
+            let mut changed = false;
+            let mut output = ctx.run_ui(egui::RawInput { events, ..Default::default() }, |ui| {
+                let response = ui.add_enabled(enabled, egui::Slider::new(value, 0.0..=130.0));
+                response_rect = response.rect;
+                changed = numeric_slider_wheel(ui, &response, value, 0.0..=130.0, crate::config::NumericInputSteps::for_step(1.0));
+            });
+            output.textures_delta.clear();
+            (response_rect, changed)
+        };
+        let point = render(vec![], true, &mut value).0.left_center() + egui::vec2(20.0, 0.0);
+        let wheel = |delta| egui::Event::MouseWheel { unit: egui::MouseWheelUnit::Point, delta: egui::vec2(0.0, delta), modifiers: egui::Modifiers::NONE, phase: egui::TouchPhase::Move, source: egui::MouseWheelSource::Wheel };
+        assert!(!render(vec![egui::Event::PointerMoved(point), wheel(10.0)], true, &mut value).1);
+        assert_eq!(value, 130.0);
+        render(vec![egui::Event::PointerMoved(point + egui::vec2(0.0, 100.0)), wheel(-10.0)], true, &mut value);
+        assert_eq!(value, 130.0, "wheel outside slider changed value");
+        render(vec![egui::Event::PointerMoved(point), wheel(-10.0)], false, &mut value);
+        assert_eq!(value, 130.0, "disabled slider changed value");
+        value = 0.0;
+        render(vec![wheel(-10.0)], true, &mut value);
+        assert_eq!(value, 0.0);
+    }
+
+    #[test]
+    fn numeric_input_context_menu_opens_and_resets_through_pointer_events() {
+        let ctx = egui::Context::default();
+        ctx.all_styles_mut(|style| style.animation_time = 0.0);
+        let mut value = 12.0;
+        let mut steps = Default::default();
+        let mut render = |events| {
+            let mut field_rect = egui::Rect::NOTHING;
+            let mut output = ctx.run_ui(egui::RawInput { events,
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(500.0, 400.0))), ..Default::default()
+            }, |ui| {
+                let response = ui.add_sized([120.0, 26.0], egui::DragValue::new(&mut value));
+                field_rect = response.rect;
+                numeric_context_menu(ui, &response, "menu-test", &mut value, 0.0..=100.0, 1.0, 55.0, "", &mut steps, crate::config::AppLanguage::English, 1e-9);
+            });
+            output.textures_delta.clear();
+            (field_rect, output)
+        };
+        let (rect, _) = render(Vec::new());
+        let press = |point, button, pressed| egui::Event::PointerButton { pos: point, button, pressed, modifiers: egui::Modifiers::NONE };
+        render(vec![egui::Event::PointerMoved(rect.center()), press(rect.center(), egui::PointerButton::Secondary, true)]);
+        render(vec![press(rect.center(), egui::PointerButton::Secondary, false)]);
+        let (_, output) = render(Vec::new());
+        let text_point = |label: &str| output.shapes.iter().find_map(|shape| match &shape.shape {
+            egui::Shape::Text(text) if text.galley.text().ends_with(label) => Some(text.pos + text.galley.size() / 2.0),
+            _ => None,
+        }).unwrap_or_else(|| panic!("missing numeric menu action: {label}"));
+        for label in ["Reset", "Copy", "Paste", "Adjustment steps"] { text_point(label); }
+        let reset = text_point("Reset");
+        render(vec![egui::Event::PointerMoved(reset), press(reset, egui::PointerButton::Primary, true)]);
+        render(vec![press(reset, egui::PointerButton::Primary, false)]);
+        assert_eq!(value, 55.0);
+    }
 }
 
 /// A visually consistent, width-bounded section used inside modal dialogs.
 pub fn section(ui: &mut egui::Ui, icon: &str, title: &str, body: impl FnOnce(&mut egui::Ui)) {
-    egui::Frame::group(ui.style())
-        .inner_margin(egui::Margin::same(12))
+    crate::ui::sync_elegance_theme(ui.ctx());
+    elegance::Card::new()
+        .padding(egui::Margin::same(12))
         .corner_radius(9.0)
         .show(ui, |ui| {
             ui.set_min_width(ui.available_width());
@@ -507,48 +1049,202 @@ pub fn setting_row(
 /// not drift in sizing, keyboard input, bounds, or icon treatment.
 pub fn numeric_stepper(
     ui: &mut egui::Ui,
+    key: &str,
     value: &mut f64,
     range: std::ops::RangeInclusive<f64>,
     step: f64,
+    reset: f64,
     decimals: usize,
     suffix: &str,
+    steps: &mut std::collections::BTreeMap<String, crate::config::NumericInputSteps>,
+    language: crate::config::AppLanguage,
 ) -> bool {
     let min = *range.start();
     let max = *range.end();
     let mut changed = false;
-    ui.horizontal(|ui| {
+    let adjustment = steps.get(key).copied().filter(|s| s.is_valid())
+        .unwrap_or_else(|| crate::config::NumericInputSteps::for_step(step));
+    let effective_step = numeric_adjustment(adjustment, ui.input(|i| i.modifiers));
+    ui.push_id(key, |ui| { ui.horizontal(|ui| {
+        changed |= receive_numeric_paste(ui, key, value, &range, suffix);
         let decrement = ui
             .add_sized(
                 [28.0, 26.0],
                 egui::Button::new(crate::ui::icons::MINUS).corner_radius(6.0),
             )
-            .on_hover_text(format!("Decrease by {step}"));
+            .on_hover_text(format!("Decrease by {effective_step} (Ctrl: fine; Shift: coarse)"));
         if decrement.clicked() {
-            *value = (*value - step).clamp(min, max);
-            changed = true;
+            changed |= adjust_numeric(value, -effective_step, min, max);
         }
 
         let response = ui.add_sized(
             [86.0, 26.0],
             egui::DragValue::new(value)
-                .speed(step)
-                .range(range)
-                .fixed_decimals(decimals)
+                .speed(effective_step)
+                .range(range.clone())
+                .min_decimals(decimals)
+                .max_decimals(decimals.max(9))
                 .suffix(suffix),
         );
         changed |= response.changed();
+        changed |= numeric_context_menu(ui, &response, key, value, range, step, reset, suffix, steps, language, 1e-9);
 
         let increment = ui
             .add_sized(
                 [28.0, 26.0],
                 egui::Button::new(crate::ui::icons::PLUS).corner_radius(6.0),
             )
-            .on_hover_text(format!("Increase by {step}"));
+            .on_hover_text(format!("Increase by {effective_step} (Ctrl: fine; Shift: coarse)"));
         if increment.clicked() {
-            *value = (*value + step).clamp(min, max);
-            changed = true;
+            changed |= adjust_numeric(value, effective_step, min, max);
         }
+    }); });
+    changed
+}
+
+/// Ctrl wins over Shift when both are held. Command provides the same fine
+/// adjustment on macOS; integer-valued callers clamp their steps to one.
+pub fn numeric_adjustment(steps: crate::config::NumericInputSteps, modifiers: egui::Modifiers) -> f64 {
+    if modifiers.ctrl || modifiers.command { steps.fine }
+    else if modifiers.shift { steps.coarse }
+    else { steps.normal }
+}
+
+fn adjust_numeric(value: &mut f64, delta: f64, min: f64, max: f64) -> bool {
+    let next = (*value + delta).clamp(min, max);
+    let changed = next != *value;
+    *value = next;
+    changed
+}
+
+/// Hovered sliders own their wheel gesture, including egui's smoothed tail,
+/// so adjusting a value cannot also scroll the containing settings dialog.
+/// Raw events are used once; replaying smooth deltas would multiply changes.
+pub fn numeric_slider_wheel(
+    ui: &egui::Ui,
+    response: &egui::Response,
+    value: &mut f64,
+    range: std::ops::RangeInclusive<f64>,
+    steps: crate::config::NumericInputSteps,
+) -> bool {
+    if !response.enabled() || !response.hovered() || egui::Popup::is_any_open(ui.ctx()) {
+        return false;
+    }
+    let delta = ui.ctx().input_mut(|input| {
+        let mut adjustment = 0.0;
+        let mut owns_wheel = false;
+        for event in &input.events {
+            if let egui::Event::MouseWheel { delta, modifiers, .. } = event {
+                let axis = if delta.y.abs() >= delta.x.abs() { delta.y } else { delta.x };
+                if axis.is_finite() && axis != 0.0 {
+                    owns_wheel = true;
+                    adjustment += f64::from(axis.signum()) * numeric_adjustment(steps, *modifiers);
+                }
+            }
+        }
+        if owns_wheel || input.smooth_scroll_delta != egui::Vec2::ZERO {
+            input.smooth_scroll_delta = egui::Vec2::ZERO;
+        }
+        adjustment
     });
+    delta != 0.0 && adjust_numeric(value, delta, *range.start(), *range.end())
+}
+
+fn parse_numeric_paste(text: &str, suffix: &str, range: &std::ops::RangeInclusive<f64>) -> Option<f64> {
+    let text = text.trim();
+    let text = if suffix.trim().is_empty() { text }
+        else { text.strip_suffix(suffix.trim()).unwrap_or(text).trim() };
+    text.parse::<f64>().ok().filter(|v| v.is_finite())
+        .map(|v| v.clamp(*range.start(), *range.end()))
+}
+
+/// Consume only the requested field's OS-delivered paste event. No clipboard
+/// polling or synthetic focus IDs (which previously broke Windows AccessKit).
+pub fn receive_numeric_paste(ui: &mut egui::Ui, key: &str, value: &mut f64,
+    range: &std::ops::RangeInclusive<f64>, suffix: &str) -> bool {
+    let id = ui.make_persistent_id(("numeric-paste", key));
+    if !ui.ctx().data(|data| data.get_temp::<bool>(id).unwrap_or(false)) { return false; }
+    let pasted = ui.input_mut(|input| {
+        let index = input.events.iter().position(|event| matches!(event, egui::Event::Paste(_)))?;
+        match input.events.remove(index) { egui::Event::Paste(text) => Some(text), _ => None }
+    });
+    if let Some(text) = pasted {
+        ui.ctx().data_mut(|data| data.remove::<bool>(id));
+        if let Some(next) = parse_numeric_paste(&text, suffix, range) {
+            let changed = *value != next;
+            *value = next;
+            return changed;
+        }
+    } else if ui.input(|input| input.pointer.any_pressed() || input.key_pressed(egui::Key::Escape)) {
+        ui.ctx().data_mut(|data| data.remove::<bool>(id));
+    }
+    false
+}
+
+/// Shared value menu for steppers and slider inputs. A true model default is
+/// supplied by the caller; step edits use the same persisted config contract.
+pub fn numeric_context_menu(ui: &mut egui::Ui, response: &egui::Response, key: &str,
+    value: &mut f64, range: std::ops::RangeInclusive<f64>, default_step: f64, reset: f64,
+    suffix: &str, steps: &mut std::collections::BTreeMap<String, crate::config::NumericInputSteps>,
+    language: crate::config::AppLanguage, minimum_step: f64) -> bool {
+    use crate::ui::icons;
+    let tr = |text| crate::ui::i18n::tr(language, text);
+    let mut changed = false;
+    let paste_id = ui.make_persistent_id(("numeric-paste", key));
+    let mut adjustment = steps.get(key).copied().filter(|s| s.is_valid())
+        .unwrap_or_else(|| crate::config::NumericInputSteps::for_step(default_step));
+    adjustment.normal = adjustment.normal.max(minimum_step);
+    adjustment.fine = adjustment.fine.max(minimum_step);
+    adjustment.coarse = adjustment.coarse.max(minimum_step);
+    let previous = adjustment;
+    response.context_menu(|ui| {
+        if ui.button(format!("{} {}", icons::ARROW_COUNTER_CLOCKWISE, tr("Reset"))).clicked() {
+            let next = reset.clamp(*range.start(), *range.end());
+            changed |= *value != next;
+            *value = next;
+            ui.close();
+        }
+        if ui.button(format!("{} {}", icons::COPY, tr("Copy"))).clicked() {
+            ui.ctx().copy_text(format!("{value}"));
+            ui.close();
+        }
+        if ui.button(format!("{} {}", icons::CLIPBOARD, tr("Paste"))).clicked() {
+            // Clear the old edit focus so the requested paste cannot also land
+            // in an unrelated text field or append to the numeric editor.
+            ui.ctx().memory_mut(|memory| { if let Some(id) = memory.focused() { memory.surrender_focus(id); } });
+            ui.ctx().data_mut(|data| data.insert_temp(paste_id, true));
+            ui.ctx().send_viewport_cmd(egui::ViewportCommand::RequestPaste);
+            ui.close();
+        }
+        ui.separator();
+        let step = numeric_adjustment(adjustment, ui.input(|input| input.modifiers));
+        for (icon, label, delta) in [(icons::PLUS, "Increase", step), (icons::MINUS, "Decrease", -step)] {
+            let next = (*value + delta).clamp(*range.start(), *range.end());
+            if ui.add_enabled(next != *value, egui::Button::new(format!("{icon} {} ({step}{suffix})", tr(label)))).clicked() {
+                changed |= adjust_numeric(value, delta, *range.start(), *range.end());
+                ui.close();
+            }
+        }
+        ui.menu_button(format!("{} {}", icons::SLIDERS_HORIZONTAL, tr("Adjustment steps")), |ui| {
+            egui::Grid::new(("numeric-steps", key)).num_columns(2).show(ui, |ui| {
+                for (label, value) in [("Normal", &mut adjustment.normal), ("Fine (Ctrl)", &mut adjustment.fine), ("Coarse (Shift)", &mut adjustment.coarse)] {
+                    ui.label(tr(label));
+                    ui.add(egui::DragValue::new(value).range(minimum_step..=1e12).speed(default_step / 10.0).max_decimals(9).suffix(suffix));
+                    ui.end_row();
+                }
+            });
+            if ui.button(format!("{} {}", icons::ARROW_COUNTER_CLOCKWISE, tr("Reset steps"))).clicked() {
+                adjustment = crate::config::NumericInputSteps::for_step(default_step);
+                adjustment.normal = adjustment.normal.max(minimum_step);
+                adjustment.fine = adjustment.fine.max(minimum_step);
+                adjustment.coarse = adjustment.coarse.max(minimum_step);
+            }
+        });
+    });
+    if adjustment != previous && adjustment.is_valid() {
+        steps.insert(key.to_string(), adjustment);
+        changed = true;
+    }
     changed
 }
 
@@ -561,6 +1257,26 @@ pub fn scroll_column(
     body: impl FnOnce(&mut egui::Ui),
 ) {
     scroll_column_impl(ui, id, max_height, false, body);
+}
+
+/// The same one-column layout with an explicit one-shot navigation offset.
+pub fn scroll_column_at(
+    ui: &mut egui::Ui,
+    id: impl std::hash::Hash + std::fmt::Debug,
+    offset: Option<f32>,
+    body: impl FnOnce(&mut egui::Ui),
+) -> f32 {
+    let mut scroll = egui::ScrollArea::vertical().id_salt(id).auto_shrink([false, false]);
+    if let Some(offset) = offset { scroll = scroll.vertical_scroll_offset(offset); }
+    scroll.show(ui, |ui| {
+        // The scrollbar owns part of the outer width. Use the content viewport,
+        // otherwise cards extend under the scrollbar/right edge.
+        let width = ui.available_width();
+        ui.allocate_ui_with_layout(egui::vec2(width, 0.0), egui::Layout::top_down(egui::Align::Min), |ui| {
+            ui.set_width(width);
+            body(ui);
+        });
+    }).state.offset().y
 }
 
 /// A vertically content-sized scroll column for compact dialogs. It behaves

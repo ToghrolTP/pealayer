@@ -58,6 +58,13 @@ pub fn apply_runtime(mpv: &Mpv, use_proxy: bool, custom_proxy: &str) -> Result<(
     .map_err(|error| format!("Could not apply the FFmpeg stream proxy policy: {error}"))
 }
 
+pub fn apply_player_runtime(mpv: &crate::mpv::player::Player, use_proxy: bool, custom_proxy: &str) -> Result<(), String> {
+    if !crate::mpv::external::active() {return apply_runtime(mpv.0,use_proxy,custom_proxy)}
+    let proxy=playback_proxy(use_proxy,custom_proxy).unwrap_or_default();
+    mpv.set_property("options/http-proxy",proxy.as_str()).map_err(|_|"External mpv is not ready to apply the playback proxy".to_string())?;
+    mpv.set_property("options/stream-lavf-o",stream_lavf_proxy_override(use_proxy)).map_err(|_|"External mpv could not apply the stream proxy policy".to_string())
+}
+
 /// libavformat consults proxy environment variables when its per-stream
 /// `http_proxy` option is absent. An explicitly empty value is therefore
 /// required when the Pealayer checkbox is off; clearing mpv's `http-proxy`

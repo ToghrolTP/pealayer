@@ -1,9 +1,14 @@
+#[path = "protocol_opcodes.rs"]
+mod protocol_opcodes;
+use protocol_opcodes::controller as wire;
+
 #[derive(Debug, PartialEq, Eq, Clone)]
 pub enum ProtocolError {
     InvalidCobs,
     CrcMismatch,
     PacketTooShort,
     UnknownOpcode(u8),
+    WrongProtocol,
 }
 
 impl std::fmt::Display for ProtocolError {
@@ -13,6 +18,7 @@ impl std::fmt::Display for ProtocolError {
             Self::CrcMismatch => write!(f, "CRC-8 mismatch"),
             Self::PacketTooShort => write!(f, "Packet payload too short"),
             Self::UnknownOpcode(code) => write!(f, "Unknown opcode: {:#04x}", code),
+            Self::WrongProtocol => write!(f, "Foreign controller protocol namespace"),
         }
     }
 }
@@ -115,10 +121,11 @@ pub fn cobs_decode(input: &[u8]) -> Result<Vec<u8>, ProtocolError> {
 }
 
 /// Strongly typed commands for 4D cinema hardware control.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+#[derive(Debug, PartialEq, Eq, Clone, Copy, serde::Serialize, serde::Deserialize)]
 pub enum Command {
     Ping,
     RelaySet { id: u8, state: bool },
+    MotionSide { side: u8, motion: u8 },
     PwmSet { channel: u8, value: u8 },
     AllOff,
 }
@@ -133,6 +140,7 @@ impl Command {
         match self {
             Self::Ping => vec![0x01],
             Self::RelaySet { id, state } => vec![0x02, *id, if *state { 1 } else { 0 }],
+            Self::MotionSide { side, motion } => vec![0x05, *side, *motion],
             Self::PwmSet { channel, value } => vec![0x03, *channel, *value],
             Self::AllOff => vec![0x04],
         }
@@ -199,12 +207,22 @@ pub fn parse_frame(frame: &[u8]) -> Result<Command, ProtocolError> {
             })
         }
         0x04 => Ok(Command::AllOff),
+        0x05 => {
+            if payload.len() < 3 {
+                return Err(ProtocolError::PacketTooShort);
+            }
+            Ok(Command::MotionSide {
+                side: payload[1],
+                motion: payload[2],
+            })
+        }
         _ => Err(ProtocolError::UnknownOpcode(opcode)),
     }
 }
 
-pub const PCCONTROLLER_MAGIC: u8 = 0xA5;
-pub const PCCONTROLLER_REVISION: u8 = 0x01;
+pub const PCCONTROLLER_MAGIC: u8 = wire::MAGIC;
+// Historical source spelling, fixed namespace marker rather than a generation.
+pub const PCCONTROLLER_REVISION: u8 = wire::RESERVED;
 
 impl Command {
     /// Serializes command into PCController wire contract frame:
@@ -212,16 +230,19 @@ impl Command {
     /// followed by COBS encoding and delimiter `0x00`.
     pub fn to_pccontroller_frame(&self, sequence: u8) -> Vec<u8> {
         match self {
-            Self::Ping => encode_pccontroller_frame(0x01, sequence, &[]),
+            Self::Ping => encode_pccontroller_frame(wire::HELLO, sequence, &[]),
             Self::RelaySet { id, state } => {
-                encode_pccontroller_frame(0x31, sequence, &[*id, if *state { 1 } else { 0 }])
+                encode_pccontroller_frame(wire::RELAY_SET, sequence, &[*id, if *state { 1 } else { 0 }])
+            }
+            Self::MotionSide { side, motion } => {
+                encode_pccontroller_frame(wire::RELAY_SIDE, sequence, &[*side, *motion])
             }
             Self::PwmSet { channel, value } => {
                 let pwm_12bit = ((*value as u32 * 4095) / 255) as u16;
                 let val_bytes = pwm_12bit.to_le_bytes();
-                encode_pccontroller_frame(0x11, sequence, &[*channel, val_bytes[0], val_bytes[1]])
+                encode_pccontroller_frame(wire::PWM_SET, sequence, &[*channel, val_bytes[0], val_bytes[1]])
             }
-            Self::AllOff => encode_pccontroller_frame(0x33, sequence, &[]),
+            Self::AllOff => encode_pccontroller_frame(wire::RELAY_ALL_OFF, sequence, &[]),
         }
     }
 }
@@ -247,6 +268,9 @@ pub fn encode_pccontroller_frame(opcode: u8, sequence: u8, payload: &[u8]) -> Ve
 /// Decodes and validates a PCController wire frame.
 /// Returns `Ok((opcode, sequence, payload))` on success.
 pub fn decode_pccontroller_frame(frame: &[u8]) -> Result<(u8, u8, Vec<u8>), ProtocolError> {
+    if frame.len() > wire::MAXIMUM_PAYLOAD + 8 {
+        return Err(ProtocolError::PacketTooShort);
+    }
     let frame_data = if frame.last() == Some(&0x00) {
         &frame[..frame.len() - 1]
     } else {
@@ -259,8 +283,11 @@ pub fn decode_pccontroller_frame(frame: &[u8]) -> Result<(u8, u8, Vec<u8>), Prot
     if decoded[0] != PCCONTROLLER_MAGIC {
         return Err(ProtocolError::InvalidCobs);
     }
+    if decoded[1] != wire::RESERVED {
+        return Err(ProtocolError::WrongProtocol);
+    }
     let payload_len = decoded[4] as usize;
-    if decoded.len() != 6 + payload_len {
+    if payload_len > wire::MAXIMUM_PAYLOAD || decoded.len() != 6 + payload_len {
         return Err(ProtocolError::PacketTooShort);
     }
     let (body, crc_slice) = decoded.split_at(decoded.len() - 1);

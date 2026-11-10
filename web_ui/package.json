@@ -4,22 +4,34 @@
   "version": "0.2.0",
   "type": "module",
   "scripts": {
+    "test:mouse": "node scripts/test-mouse-bindings.mjs",
+    "test:remote": "node scripts/test-remote-location.mjs",
     "dev": "vite",
-    "build": "tsc && vite build && node scripts/finalize-pwa.mjs && node scripts/verify-pwa.mjs",
+    "build": "node scripts/test-mouse-bindings.mjs && node scripts/test-terminal-keys.mjs && node scripts/test-responsive-layout.mjs && node scripts/test-application-parity.mjs && node scripts/test-timecode-editor.mjs && node scripts/test-preference-files.mjs && node scripts/test-timeline-wheel.mjs && node scripts/test-timeline-time.mjs && node scripts/test-messaging.mjs && node scripts/test-clipboard-urls.mjs && npm run build:bundle && node scripts/test-web-assets.mjs",
+    "build:bundle": "tsc && vite build && node scripts/finalize-pwa.mjs && node scripts/verify-pwa.mjs",
+    "test:rf": "node scripts/test-rf-presentation.mjs",
+    "test:strip": "node scripts/test-strip-designer.mjs",
+    "test:update": "node scripts/test-update-progress.mjs",
+    "test:pwm-card": "node scripts/test-pwm-card.mjs",
+    "test:pwm-policy": "node scripts/test-pwm-policy.mjs",
+    "test:folders": "node scripts/test-channel-folders.mjs",
+    "test:locations": "node scripts/test-file-locations.mjs",
+    "test:assets": "node scripts/test-asset-imports.mjs",
+    "prebuild": "npm run test:remote && npm run test:assets && npm run test:update && npm run test:strip && node scripts/test-rf-saved-layout.mjs && node scripts/test-controller-errors.mjs && node scripts/test-rf-binding-names.mjs && node scripts/test-pwm-policy.mjs && node scripts/test-pwm-card.mjs && node scripts/test-rf-presentation.mjs && node scripts/test-os-media-session.mjs && node scripts/test-hardware-availability.mjs && node scripts/test-seek-preview.mjs && node scripts/test-media-controls.mjs && node scripts/test-control-bars.mjs && node scripts/test-status-widgets.mjs && node scripts/test-channel-folders.mjs && node scripts/test-cue-authoring.mjs",
     "verify:pwa": "node scripts/verify-pwa.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
     "@ant-design/icons": "^6.3.4",
-    "antd": "^6.6.5",
-    "react": "^19.3.0",
-    "react-dom": "^19.3.0"
+    "antd": "^6.6.8",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1"
   },
   "devDependencies": {
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
-    "@vitejs/plugin-react": "^6.1.1",
+    "@vitejs/plugin-react": "^6.1.2",
     "typescript": "^7.0.2",
-    "vite": "^8.3.1"
+    "vite": "^8.3.5"
   }
 }

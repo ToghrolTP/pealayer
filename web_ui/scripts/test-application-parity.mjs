@@ -1,0 +1,112 @@
+import fs from 'node:fs';
+import path from 'node:path';
+import { filesystemBreadcrumbs } from '../src/fileLocations.ts';
+
+const root = path.resolve(import.meta.dirname, '..');
+const read = (file) => fs.readFileSync(path.join(root, file), 'utf8');
+const hardware = read('src/components/HardwareTab.tsx');
+const studio = read('src/components/StudioTab.tsx');
+const remote = read('src/components/RemoteControlTab.tsx');
+const playbackButton = read('src/components/PlaybackButton.tsx');
+const controlBar = read('src/components/ControlBar.tsx');
+const volumeControl = read('src/components/VolumeControl.tsx');
+const elapsedInput = read('src/components/ElapsedTimeInput.tsx');
+const media = read('src/components/MediaSurface.tsx');
+const library = read('src/components/MediaLibraryTab.tsx');
+const app = read('src/App.tsx');
+const statusBar = read('src/components/ApplicationStatusBar.tsx');
+const sevenSegment = read('src/components/SevenSegmentDisplay.tsx');
+const rfManager = read('src/components/RfManager.tsx');
+const effects = read('src/components/EffectsTab.tsx');
+const effectRecorder = read('src/components/EffectRecorder.tsx');
+const effectGroupDialog = read('src/components/EffectGroupDialog.tsx');
+const css = read('src/styles.css');
+const seekbar = read('src/components/seekbar.tsx');
+const colorPicker = read('src/components/ColorPicker.tsx');
+const preferences = read('src/components/PreferencesTab.tsx');
+const filePicker = read('src/components/ServerFilePicker.tsx');
+const authority = read('src/components/PublishingAuthority.tsx');
+const webPlatform = read('src/webPlatform.ts');
+
+const contracts = [
+  [effects.includes('category: draft.category') && effects.includes('draft?.category') && effects.includes('effectGroupName(effect)'),
+    'Effect folder preview follows the edited draft without changing the saved catalog'],
+  [app.includes('appearance?.ui_control_density') && app.includes('controlHeightSM: controlHeight') && app.includes('controlHeightLG: controlHeight')
+    && css.includes('height: var(--control-height, 24px)') && read('src/appearance.ts').includes('ui_control_density: appearance.ui_control_density'),
+    'Inputs, selectors and color menu rows follow one shared appearance density'],
+  [preferences.includes("control.kind === 'choice_slider'") && preferences.includes('max={options.length - 1} step={1}')
+    && preferences.includes('onChangeComplete={position =>') && app.includes('controlDensityHeight(controlDensity)')
+    && ['extra_compact', 'regular', 'comfortable', 'spacious'].every(choice => read('src/appearance.ts').includes(`case '${choice}': return`)),
+    'Density uses discrete semantic choices, shared five-level sizing and release-only Web persistence'],
+  [preferences.includes('className="preference-choice-slider__measure"') && preferences.includes('aria-hidden="true"')
+    && css.includes('.preference-choice-slider__measure { visibility: hidden; pointer-events: none; }')
+    && css.includes('.preference-choice-slider:focus-within .preference-choice-slider__value { border-color: var(--accent); }')
+    && css.includes('grid-area: 1 / 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;'),
+    'Density value capsule reserves every translated label width, supports narrow layouts and has layout-stable focus styling'],
+  [hardware.includes('disabled={!state.hardware_connected || !details.buzzer?.playing}'), 'Buzzer stop follows authoritative activity, not connection alone'],
+  [studio.includes('<ControlBar') && remote.includes('<ControlBar') && controlBar.includes('<VolumeControl') && volumeControl.includes("sendCmd('set_volume'") && controlBar.includes("sendCmd('set_mute'") && volumeControl.includes('aria-label={tr(locale, \'Volume\')}'), 'Simple and NLE share accessible horizontal volume and mute controls using session commands'],
+  [css.includes('.control-bar { width: 100%; min-width: 0; display: flex; flex-wrap: wrap;')
+    && css.includes('.control-bar__volume.media-volume')
+    && controlBar.includes("a==='mute'&&surface==='monitor'&&<VolumeControl")
+    && controlBar.includes('className="control-bar__inline-volume"')
+    && controlBar.includes("surface==='simple'&&<VolumeControl className=\"control-bar__volume\"")
+    && controlBar.includes('{group(false)}{middle}{group(true)}'),
+    'bounded groups wrap while Monitor volume belongs to its movable Mute action and Simple retains its trailing volume'],
+  [studio.includes('<ElapsedTimeInput') && remote.includes('<ElapsedTimeInput') && elapsedInput.includes('setSelectionRange') && elapsedInput.includes('onPaste=') && elapsedInput.includes("event.key === 'Escape'"), 'both playback surfaces share an immutable segmented elapsed-time editor with paste and cancellation'],
+  [studio.includes('<ControlBar') && remote.includes('<ControlBar') && controlBar.includes('<PlaybackButton') && playbackButton.includes('disabled={!loaded || playing === undefined}') && playbackButton.includes("playing ? 'Pause' : 'Play'"), 'both playback surfaces render their action and enabled state from the authoritative snapshot'],
+  [css.includes('.transport-action--play { --transport-color: var(--green); }') && css.includes('.transport-action--pause { --transport-color: var(--amber); }') && css.includes('border: 1px solid') && !css.includes('transform: translateY(1px);\n  box-shadow:'), 'transport intents share semantic colors and fixed borders instead of moving on hover/press'],
+  [studio.includes('useSeekbar(state, sendCmd)') && remote.includes('useSeekbar(state, sendCmd)') && seekbar.includes("send('scrub_to'") && seekbar.includes("send('finish_scrub'"), 'Simple and NLE seekbars share ordered live preview and exact commit commands'],
+  [seekbar.includes('state.settled_seek_revision') && seekbar.includes('baselineRevision.current') && seekbar.includes('state.settled_seek_target'), 'seek drafts wait for a correlated decoder settlement, not stale or already-advancing position samples'],
+  [seekbar.includes("'#969696'") && seekbar.includes("'#EF4444'") && css.includes('.seekbar-markers__chapter::after') && css.includes('height: 4px'), 'chapter ticks remain subtle and contained while named keyframes retain red dividers'],
+  [preferences.includes("control.kind === 'color'") && colorPicker.includes('assets/themes/ui-colors.json') && effects.includes("import { ColorPicker } from './ColorPicker'") && hardware.includes("import { ColorPicker } from './ColorPicker'"), 'marker preferences and effect/hardware pickers share the semantic swatch catalog'],
+  [app.includes('revision=${state.app_icon_revision') && webPlatform.includes('revision=${state.app_icon_revision'), 'runtime branding changes refresh the header, favicon, PWA and media-session imagery without a playback change'],
+  [authority.includes('Connect to authority') && authority.includes('authority.owner_endpoint') && authority.includes('disabled={!authority.owner_endpoint}'), 'conflicts offer the validated remote authority without inventing an endpoint'],
+  [app.includes('<PublishingAuthority') && hardware.includes('<PublishingAuthority') && authority.includes("sendCmd('pealayer.hardware.authority'") && authority.includes('authority.owner_id === actor'), 'publishing authority uses the same server reservation in controls and the global conflict dialog'],
+  [authority.includes('disabled={!paused || authority.exclusive}') && authority.includes("change('accept', request.client_id)") && authority.includes("change('unlock'") === false && authority.includes("'unlock' : 'lock'"), 'owner-consented handoff requires paused playback and production can be explicitly unlocked'],
+  [authority.includes('closable keyboard onCancel={dismiss}') && authority.includes('const dismiss = () => setDismissed(authority.revision);') && authority.includes('<Button onClick={dismiss}') && authority.indexOf('<Button onClick={dismiss}') < authority.indexOf('{owner && request ? <>'), 'every authority prompt has local-only Dismiss, close and Escape without accepting or rejecting a handoff'],
+  [preferences.includes('icon: string') && preferences.includes('controlIcons[control.icon]') && !preferences.includes('controlIcons[control.kind]'), 'preference row icons use semantic Rust metadata instead of input type'],
+  [preferences.includes("control.kind === 'file'") && preferences.includes('<ServerFilePicker') && preferences.includes('FolderOpenOutlined'), 'file preferences expose a real Browse action'],
+  [preferences.includes('contract?.groups.filter') && preferences.includes('group.default_open') && preferences.includes('<Collapse'), 'preference cards use shared ordering and optional disclosure'],
+  [filePicker.includes('/api/fs/browse') && filePicker.includes('AbortController') && filePicker.includes('setDirectory(null)'), 'preference file picker browses authoritative server files without stale failed listings'],
+  [hardware.includes("trigger={['contextMenu']}"), 'hardware cards expose a context menu'],
+  [hardware.includes('onPointerDown') && hardware.includes("hardware.action.invoke"), 'hardware actions dispatch on pointer-down'],
+  [hardware.includes('hardware-control__indicator') && hardware.includes('immediateToggle'), 'hardware indicators are actionable'],
+  [hardware.includes('optimisticActive') && hardware.includes('invokeAction'), 'hardware actions acknowledge pointer-down immediately while awaiting board state'],
+  [hardware.includes('controlIcon(control.kind, control.icon)'), 'hardware controls honor the shared custom icon contract'],
+  [hardware.includes('Buzzer & melodies') && hardware.includes("hardware.buzzer.melody") && hardware.includes("hardware.buzzer.tone") && hardware.includes("hardware.buzzer.stop"), 'hardware monitor exposes live melody, tone, and stop controls'],
+  [hardware.includes('<MelodySelect') && hardware.includes("refresh={() => { void sendCmd('hardware.catalog.refresh'); }}") &&
+    read('src/components/MelodySelect.tsx').includes('onOpenChange={(open) => { if (open) refresh(); }}'), 'shared melody picker refreshes the controller catalog on opening'],
+  [css.includes('.hardware-estop.ant-btn-primary'), 'E-STOP owns its filled danger styling'],
+  [sevenSegment.includes("mask & (1 << bit)") && hardware.includes('<SevenSegmentDisplay'), 'front-panel masks render as live seven-segment glyphs'],
+  [remote.includes('<MediaSurface') && studio.includes('<MediaSurface'), 'both player surfaces share the native media element'],
+  [media.includes('/api/fs/file?path=') && media.includes('<video'), 'browser playback consumes the range-serving endpoint'],
+  [media.includes('onPointerDown') && media.includes('onPointerMove') && media.includes('videoReleaseIntent(gesture') && media.includes('open={contextMenuOpen}') && media.includes('onContextMenu:'), 'video surfaces share configured, movement-aware pointer/context-menu gestures'],
+  [studio.includes('state.timeline_tracks') && studio.includes('timelineRows.map'), 'timeline renders the shared native track inventory'],
+  [studio.includes("const mode = copying ? 'move' : cue.resizable && localX <= edge") && studio.includes('{cue.resizable && <span className="timeline-cue__resize timeline-cue__resize--left"') && studio.includes('{cue.resizable && <span className="timeline-cue__resize timeline-cue__resize--right"'), 'Ctrl-copy bypasses resize; normal cue edges follow the Rust execution policy'],
+  [studio.includes("kind: 'pinch'") && studio.includes("event.button !== 1") && css.includes('.timeline-grid.is-panning'), 'timeline supports two-finger pinch/pan and middle-button panning'],
+  [studio.includes("trigger={['contextMenu']}") && studio.includes("sendCmd('timeline.track.update'") && studio.includes("sendCmd('timeline.track.manage'"), 'timeline track menus use shared selection, routing and management commands'],
+  [studio.includes('anyTimelineTrackSoloed') && studio.includes('is-solo-filtered') && css.includes('.timeline-row.is-muted') && css.includes('.timeline-row.is-soloed') && css.includes('.timeline-row.is-locked'), 'timeline tracks render semantic mute, solo-isolation, and lock states'],
+  [library.includes('filesystemBreadcrumbs(data.current_path)')
+    && JSON.stringify(filesystemBreadcrumbs('\\\\?\\D:\\Films')) === JSON.stringify(filesystemBreadcrumbs('D:\\Films'))
+    && JSON.stringify(filesystemBreadcrumbs('\\\\?\\UNC\\server\\share\\Films')) === JSON.stringify(filesystemBreadcrumbs('\\\\server\\share\\Films')),
+    'Windows namespace prefixes are removed from breadcrumbs'],
+  [library.includes("trigger={['contextMenu']}") && library.includes('Copy full path'), 'media entries expose application-style context actions'],
+  [media.includes('state.osd') && css.includes('.media-osd--custom'), 'Web video surfaces render the native configurable OSD contract'],
+  [app.includes('<ApplicationStatusBar') && statusBar.includes("trigger={['contextMenu']}") && statusBar.includes('status_rgb'), 'application footer renders live shared state and persisted context-menu visibility'],
+  [statusBar.includes("sendCmd('set_workspace', { profile: key })") && statusBar.includes('workspaceGlyph(activeWorkspace?.icon)') && statusBar.includes("trigger={['click']}") && !statusBar.includes('state.active_workspace_profile || state.workspace'), 'status workspace selector uses authoritative icons, renamed captions and stable-ID switching'],
+  [css.includes('.control-bar__action .ant-btn, .control-bar__overflow .ant-btn { width: var(--control-height); height: var(--control-height);') && controlBar.includes('stop:<StopOutlined/>'), 'control-bar icons use square density slots and Stop is not a record-like circled square'],
+  [css.includes('color-mix(in srgb, var(--accent) 74%') && !css.includes('.effect-profile__icon { width: 36px; height: 36px; display: grid; place-items: center; border-radius: 8px; color: var(--green)'), 'decorative Web UI surfaces use the shared accent rather than Pealayer green'],
+  [!rfManager.includes('setInterval'), 'RF manager uses push events and explicit refresh instead of polling'],
+  [rfManager.includes("command('catalog', { read_board: true })") && rfManager.includes('dataSource={entries}') && rfManager.includes('catalog.entries ?? []'), 'RF manager loads and renders authoritative learned board codes'],
+  [effectRecorder.includes('<Button type="primary" danger') && !effectRecorder.includes('recordingColors'), 'effect recording is always a solid red live-state action'],
+  [effects.includes("controller_effect.group.save") && effects.includes('original_name: groupDraft.original_name') && effectGroupDialog.includes('<EffectIconPicker'), 'effect parent groups expose editable icons through the current save contract'],
+  [effects.includes("setData('application/x-pealayer-effect'") && effects.includes('void moveEffectToGroup(effect, group.name)') && effects.includes('category,') && css.includes('.effect-group-title.is-drop-target'), 'effect cards can move between authoritative parent groups by drag and drop'],
+  [effects.includes("showArrow: group.items.length > 0") && effects.includes("collapsible: group.items.length === 0 ? 'icon'") && css.includes('.effect-group.is-empty'), 'empty effect groups are dimmed and do not expose a meaningless chevron'],
+];
+
+const failed = contracts.filter(([ok]) => !ok);
+if (failed.length) {
+  for (const [, message] of failed) console.error(`Missing parity contract: ${message}`);
+  process.exit(1);
+}
+console.log(`Web application parity guardrails passed (${contracts.length} contracts).`);

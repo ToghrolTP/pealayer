@@ -1,5 +1,4 @@
 use eframe::egui;
-use egui_dock::TabViewer;
 use pealayer::app::PealayerApp;
 use pealayer::four_d::controller::{HardwareAction, HardwareCapabilities, HardwareControl};
 use pealayer::four_d::curve::{AnalogTrack, Interpolation, Keyframe};
@@ -85,7 +84,7 @@ fn replay_timeline_pointer_buttons(with_content: bool) {
                 ..Default::default()
             },
             |ui| {
-                PealayerTabViewer { app: &mut app }.ui(ui, &mut PealayerTab::Timeline);
+                PealayerTabViewer::new(&mut app).ui(ui, &mut PealayerTab::Timeline);
             },
         );
         if let Some(update) = &output.platform_output.accesskit_update {

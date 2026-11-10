@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { PlayerState } from './components/RemoteControlTab';
+import { mediaControlsAllowed } from './mediaControlsPolicy';
+import { sessionActive, sessionActionEnabled, sessionPosition, sessionSeekOffset, shouldPublishSessionPosition } from './mediaSession';
 
 interface InstallPromptEvent extends Event {
   prompt(): Promise<void>;
@@ -52,21 +54,6 @@ function storedBoolean(key: string, fallback: boolean): boolean {
   return value === null ? fallback : value === 'true';
 }
 
-function mediaTitle(state: PlayerState, appName: string): string {
-  const source = state.current_video?.trim();
-  if (!source) return appName;
-  try {
-    const url = new URL(source);
-    const parts = url.pathname.split('/').filter(Boolean);
-    const tail = parts[parts.length - 1] || appName;
-    return decodeURIComponent(tail.replace(/\.[^.]+$/, ''));
-  } catch {
-    const parts = source.split(/[\\/]/).filter(Boolean);
-    const tail = parts[parts.length - 1] || appName;
-    try { return decodeURIComponent(tail.replace(/\.[^.]+$/, '')); } catch { return tail; }
-  }
-}
-
 function supportsStandaloneMode(): boolean {
   const navigatorWithStandalone = navigator as NavigatorWithStandalone;
   return window.matchMedia('(display-mode: standalone)').matches || navigatorWithStandalone.standalone === true;
@@ -86,7 +73,14 @@ export function useWebPlatform(
   const [audioFeedbackEnabled, setAudioFeedbackEnabledState] = useState(() => storedBoolean('audioFeedback', false));
   const [keepAwakeEnabled, setKeepAwakeEnabledState] = useState(() => storedBoolean('keepAwake', true));
   const wakeLockRef = useRef<WakeLockSentinel | null>(null);
+  const wakeLockDisabledRef = useRef(false);
   const audioContextRef = useRef<AudioContext | null>(null);
+  const mediaPolicyRef = useRef({enabled:state.media_keys_enabled,background:state.media_keys_background_enabled});
+  mediaPolicyRef.current = {enabled:state.media_keys_enabled,background:state.media_keys_background_enabled};
+  const mediaStateRef = useRef(state);
+  mediaStateRef.current = state;
+  const lastSessionPosition = useRef<{ position?: MediaPositionState; playing: boolean;
+    target?: string | null; initialized: boolean }>({ playing: false, initialized: false });
 
   const capabilities = useMemo<WebPlatformCapabilities>(() => {
     return {
@@ -140,42 +134,104 @@ export function useWebPlatform(
   }, []);
 
   useEffect(() => {
+    const stateName = !state.current_video ? 'stopped' : state.playing ? 'playing' : 'paused';
+    const href = appIconPath || `/api/runtime/app-icon?state=${stateName}`;
+    let favicon = document.querySelector<HTMLLinkElement>('link[rel="icon"]');
+    if (!favicon) {
+      favicon = document.createElement('link');
+      favicon.rel = 'icon';
+      document.head.appendChild(favicon);
+    }
+    // The runtime endpoint serves the configured image, including native ICO.
+    favicon.removeAttribute('type');
+    favicon.href = href;
+    const touchIcon = document.querySelector<HTMLLinkElement>('link[rel="apple-touch-icon"]');
+    if (touchIcon) touchIcon.href = `/api/runtime/app-icon-192.png?state=${stateName}&revision=${state.app_icon_revision ?? 0}`;
+    const manifest = document.querySelector<HTMLLinkElement>('link[rel="manifest"]');
+    if (manifest) manifest.href = `/manifest.webmanifest?revision=${state.app_icon_revision ?? 0}`;
+    let appTitle = document.querySelector<HTMLMetaElement>('meta[name="apple-mobile-web-app-title"]');
+    if (!appTitle) {
+      appTitle = document.createElement('meta');
+      appTitle.name = 'apple-mobile-web-app-title';
+      document.head.appendChild(appTitle);
+    }
+    appTitle.content = appName;
+  }, [appIconPath, appName, state.current_video, state.playing, state.app_icon_revision]);
+
+  useEffect(() => {
     if (!('mediaSession' in navigator)) return;
+    if (!sessionActive(state)) {
+      navigator.mediaSession.metadata = null;
+      navigator.mediaSession.playbackState = 'none';
+      return;
+    }
+    const stateName = !state.current_video ? 'stopped' : state.playing ? 'playing' : 'paused';
     navigator.mediaSession.metadata = new MediaMetadata({
-      title: mediaTitle(state, appName),
-      artist: appName,
-      album: state.live ? 'Live stream' : 'Pealayer media',
+      title: state.media_session!.title ?? '',
+      artist: state.media_session!.artist ?? '',
+      album: state.media_session!.album ?? '',
       artwork: [
-        { src: appIconPath || '/api/runtime/app-icon-192.png', sizes: '192x192', type: 'image/png' },
-        { src: '/api/runtime/app-icon-512.png', sizes: '512x512', type: 'image/png' },
+        { src: `/api/runtime/app-icon-192.png?state=${stateName}&revision=${state.app_icon_revision ?? 0}`, sizes: '192x192', type: 'image/png' },
+        { src: `/api/runtime/app-icon-512.png?state=${stateName}&revision=${state.app_icon_revision ?? 0}`, sizes: '512x512', type: 'image/png' },
       ],
     });
     navigator.mediaSession.playbackState = state.playing ? 'playing' : 'paused';
+  }, [appName, state.current_video, state.media_session?.title, state.media_session?.artist,
+    state.media_session?.album, state.playing, state.media_keys_enabled, state.app_icon_revision]);
+
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
     const actions: Array<[MediaSessionAction, MediaSessionActionHandler]> = [
       ['play', () => dispatchCommand('play')],
       ['pause', () => dispatchCommand('pause')],
-      ['stop', () => dispatchCommand('pause')],
-      ['seekbackward', (details) => dispatchCommand('seek', { seconds: -(details.seekOffset || 10) })],
-      ['seekforward', (details) => dispatchCommand('seek', { seconds: details.seekOffset || 10 })],
-      ['seekto', (details) => {
-        if (typeof details.seekTime === 'number') dispatchCommand('seek_to', { seconds: details.seekTime });
+      ['stop', () => dispatchCommand('stop')],
+      ['seekbackward', (details) => {
+        const offset = sessionSeekOffset(mediaStateRef.current, details.seekOffset);
+        if (offset !== undefined) dispatchCommand('seek', { seconds: -offset });
       }],
-      ['previoustrack', () => dispatchCommand('chapter_previous')],
-      ['nexttrack', () => dispatchCommand('chapter_next')],
+      ['seekforward', (details) => {
+        const offset = sessionSeekOffset(mediaStateRef.current, details.seekOffset);
+        if (offset !== undefined) dispatchCommand('seek', { seconds: offset });
+      }],
+      ['seekto', (details) => {
+        if (Number.isFinite(details.seekTime) && details.seekTime! >= 0)
+          dispatchCommand('seek_to', { seconds: details.seekTime });
+      }],
+      ['previoustrack', () => dispatchCommand('previous')],
+      ['nexttrack', () => dispatchCommand('next')],
     ];
+    let active = true;
     for (const [action, handler] of actions) {
-      try { navigator.mediaSession.setActionHandler(action, handler); } catch { /* Browser exposes only a subset. */ }
+      try { navigator.mediaSession.setActionHandler(action, sessionActionEnabled(state, action) ? (details) => {
+        const policy=mediaPolicyRef.current;
+        if(active && sessionActionEnabled(mediaStateRef.current, action)
+          && mediaControlsAllowed(policy.enabled,policy.background,document.visibilityState==='visible'&&document.hasFocus())) handler(details);
+      } : null); } catch { /* Browser exposes only a subset. */ }
     }
-    if (Number.isFinite(state.duration) && Number.isFinite(state.playback_time) && (state.duration ?? 0) > 0) {
-      try {
-        navigator.mediaSession.setPositionState({
-          duration: state.duration!,
-          playbackRate: state.playback_rate || 1,
-          position: Math.min(Math.max(0, state.playback_time || 0), state.duration!),
-        });
-      } catch { /* Live streams and partially-known media may reject position data. */ }
-    }
-  }, [appIconPath, appName, dispatchCommand, state.current_video, state.duration, state.live, state.playback_rate, state.playback_time, state.playing]);
+    return () => {
+      active=false; // retained callbacks cannot revive after preference changes/unmount
+      for(const [action] of actions) {
+        try {navigator.mediaSession.setActionHandler(action,null);} catch { /* Unsupported action. */ }
+      }
+    };
+  }, [dispatchCommand, state.current_video, state.media_keys_enabled,
+    state.media_session_capabilities?.can_play, state.media_session_capabilities?.can_pause,
+    state.media_session_capabilities?.can_stop, state.media_session_capabilities?.can_seek,
+    state.media_session_capabilities?.can_next, state.media_session_capabilities?.can_previous]);
+
+  useEffect(() => {
+    if (!('mediaSession' in navigator)) return;
+    const position = sessionPosition(state);
+    const previous = lastSessionPosition.current;
+    if (previous.initialized && previous.target === state.current_video
+      && !shouldPublishSessionPosition(previous.position, position, Boolean(state.playing), previous.playing)) return;
+    try {
+      // Calling without arguments explicitly clears a stale finite timeline.
+      navigator.mediaSession.setPositionState(position);
+      lastSessionPosition.current = { position, playing: Boolean(state.playing), target: state.current_video, initialized: true };
+    } catch { /* Unsupported position reporting does not break transport handlers. */ }
+  }, [state.current_video, state.seekable, state.duration, state.playback_rate,
+    state.playback_time, state.playing, state.media_keys_enabled]);
 
   useEffect(() => {
     const shouldHold = keepAwakeEnabled && state.playing && document.visibilityState === 'visible';
@@ -187,12 +243,15 @@ export function useWebPlatform(
         wakeLockRef.current = null;
         return;
       }
-      if (!wakeLockRef.current) {
+      if (!wakeLockRef.current && !wakeLockDisabledRef.current) {
         try {
           const sentinel = await navigator.wakeLock.request('screen');
           if (cancelled) await sentinel.release();
           else wakeLockRef.current = sentinel;
-        } catch { /* Permission, battery, or visibility can deny the request. */ }
+        } catch {
+          // Preserve upstream's bounded failure behavior for unavailable system services.
+          wakeLockDisabledRef.current = true;
+        }
       }
     };
     void updateWakeLock();
@@ -278,6 +337,11 @@ export function useWebPlatform(
       oscillator.stop(context.currentTime + 0.05);
     } catch { /* Audio feedback is best-effort and always user-configurable. */ }
   }, [audioFeedbackEnabled, hapticsEnabled]);
+
+  useEffect(() => {
+    window.addEventListener('pealayer:invalid-input', signalInteraction);
+    return () => window.removeEventListener('pealayer:invalid-input', signalInteraction);
+  }, [signalInteraction]);
 
   return {
     capabilities,

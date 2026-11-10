@@ -1,58 +1,21 @@
 use crate::config::AppLanguage;
 use eframe::egui;
-use std::sync::Arc;
 
-pub(crate) fn configure_ui_fonts(context: &egui::Context, prefer_vazirmatn: bool) {
-    let mut fonts = egui::FontDefinitions::default();
-    egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
+/// Also used by isolated native UI fixtures so their font metrics match the app.
+#[doc(hidden)]
+pub fn configure_ui_fonts(context: &egui::Context, prefer_vazirmatn: bool) {
+    crate::ui::fonts::install(context, &crate::config::AppConfig::default(), prefer_vazirmatn);
+}
 
-    // Prefer the platform UI face. Vazirmatn remains immediately behind it so
-    // Persian and Arabic text has a bundled, release-safe fallback. For a
-    // Persian UI the bundled font is first so shaping is consistent across OSes.
-    let system_font = [
-        #[cfg(target_os = "windows")]
-        r"C:\Windows\Fonts\segoeui.ttf",
-        #[cfg(target_os = "macos")]
-        "/System/Library/Fonts/SFNS.ttf",
-        #[cfg(target_os = "linux")]
-        "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
-        #[cfg(target_os = "linux")]
-        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
-    ]
-    .iter()
-    .find_map(|path| std::fs::read(path).ok());
-
-    fonts.font_data.insert(
-        "pealayer-vazirmatn".to_owned(),
-        Arc::new(egui::FontData::from_static(include_bytes!(
-            "../../assets/fonts/Vazirmatn-Regular.ttf"
-        ))),
-    );
-    if let Some(bytes) = system_font {
-        fonts.font_data.insert(
-            "pealayer-system-ui".to_owned(),
-            Arc::new(egui::FontData::from_owned(bytes)),
-        );
-    }
-
-    let has_system_font = fonts.font_data.contains_key("pealayer-system-ui");
-    let proportional = fonts
-        .families
-        .get_mut(&egui::FontFamily::Proportional)
-        .expect("egui provides a proportional font family");
-    if prefer_vazirmatn {
-        proportional.insert(0, "pealayer-vazirmatn".to_owned());
-        if has_system_font {
-            proportional.insert(1, "pealayer-system-ui".to_owned());
-        }
-    } else if has_system_font {
-        proportional.insert(0, "pealayer-system-ui".to_owned());
-        proportional.insert(1, "pealayer-vazirmatn".to_owned());
-    } else {
-        proportional.insert(0, "pealayer-vazirmatn".to_owned());
-    }
-
-    context.set_fonts(fonts);
+pub fn configure_preferred_fonts(context: &egui::Context, config: &crate::config::AppConfig) {
+    type Selection = (crate::config::UiFontFamily, crate::config::UiFontFamily, String, String, bool);
+    let key = egui::Id::new("preferred-ui-fonts");
+    let desired: Selection = (config.ui_font_family, config.monospace_font_family,
+        config.ui_font_name.clone(), config.monospace_font_name.clone(),
+        crate::config::resolve_language(crate::config::resolved_language_preference(config)) == AppLanguage::Persian);
+    if context.data(|data| data.get_temp::<Selection>(key)).as_ref() == Some(&desired) { return; }
+    crate::ui::fonts::install(context, config, desired.4);
+    context.data_mut(|data| data.insert_temp(key, desired));
 }
 
 /// Translate application-owned copy. Values learned from media metadata or
@@ -62,6 +25,293 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         return english.to_owned();
     }
     let translated = match english {
+        "Couldn't connect to PCController.\nCheck that it is running, then try again." => "اتصال به PCController برقرار نشد.\nمطمئن شوید برنامه در حال اجراست، سپس دوباره تلاش کنید.",
+        "Couldn't load the hardware controls. Try refreshing the connection." => "کنترل‌های سخت‌افزار بارگیری نشد. اتصال را تازه‌سازی کنید.",
+        "Connection details" => "جزئیات اتصال",
+        "Connecting to PCController…" => "در حال اتصال به PCController…",
+        "Hardware catalog unavailable" => "فهرست سخت‌افزار در دسترس نیست",
+        "No board connected" => "بردی متصل نیست",
+        "Hardware preferences" => "تنظیمات سخت‌افزار",
+        "Waiting for the configured PCController connection." => "در انتظار اتصال به PCController تنظیم‌شده.",
+        "Connect to PCController to discover live board controls." => "برای نمایش کنترل‌های زندهٔ برد به PCController متصل شوید.",
+        "Waiting for PCController to advertise the board capabilities." => "در انتظار دریافت قابلیت‌های برد از PCController.",
+        "Board controls are unavailable while programming or recovery is in progress." => "هنگام برنامه‌ریزی یا بازیابی، کنترل‌های برد در دسترس نیستند.",
+        "Strip designer" => "طراحی نوار نور",
+        "Segmented design" => "طرح بخش‌بندی‌شده",
+        "Segment" => "بخش",
+        "Layers" => "لایه‌ها",
+        "Layer" => "لایه",
+        "Layer name" => "نام لایه",
+        "Segment name" => "نام بخش",
+        "Add layer" => "افزودن لایه",
+        "Add segment" => "افزودن بخش",
+        "Delete segment" => "حذف بخش",
+        "Delete layer" => "حذف لایه",
+        "Offline preview" => "پیش‌نمایش آفلاین",
+        "Density" => "تراکم",
+        "Phase offset" => "اختلاف فاز",
+        "Duty cycle" => "درصد زمان روشن",
+        "Blink / Strobe" => "چشمک / فلاش",
+        "Breathing" => "تنفس",
+        "Pattern" => "الگو",
+        "Color order" => "ترتیب رنگ‌ها",
+        "ACKed frames" => "فریم تأییدشده",
+        "Failed frames" => "فریم ناموفق",
+        "Add example effects" => "افزودن افکت‌های نمونه",
+        "Reverse order" => "ترتیب معکوس",
+        "All pixels" => "تمام پیکسل‌ها",
+        "Clear selection" => "پاک‌کردن انتخاب",
+        "Invert selection" => "معکوس‌کردن انتخاب",
+        "Examples…" => "نمونه‌ها…",
+        "Workspace interface" => "رابط فضای کاری",
+        "Program Monitor controls" => "کنترل‌های نمایشگر برنامه",
+        "Timeline ruler" => "خط‌کش خط زمان",
+        "Workspace panels" => "پنل‌های فضای کاری",
+        "Standard" => "استاندارد",
+        "Group Preferences navigation" => "گروه‌بندی پیمایش تنظیمات",
+        "Personalization" => "شخصی‌سازی",
+        "Experience" => "تجربهٔ کاربری",
+        "Connections" => "اتصال‌ها",
+        "Application" => "برنامه",
+        "Choose installed font" => "انتخاب قلم نصب‌شده",
+        "Installed UI font" => "قلم نصب‌شدهٔ رابط",
+        "Installed monospace font" => "قلم نصب‌شدهٔ هم‌عرض",
+        "Sparkle" => "درخشش",
+        "Folder" => "پوشه",
+        "Plug" => "اتصال",
+        "Lightning" => "صاعقه",
+        "Light bulb" => "لامپ",
+        "Lamp" => "چراغ",
+        "Fan" => "فن",
+        "Power" => "برق",
+        "Speaker" => "بلندگو",
+        "Radio" => "رادیو",
+        "Car" => "خودرو",
+        "Door" => "در",
+        "Bell" => "زنگ",
+        "Fire" => "آتش",
+        "Snowflake" => "دانهٔ برف",
+        "Thermometer" => "دماسنج",
+        "Waveform" => "شکل موج",
+        "Circuitry" => "مدار",
+        "Gear" => "چرخ‌دنده",
+        "Monitor" => "نمایشگر",
+        "Tabs" => "زبانه‌ها",
+        "Hardware" => "سخت‌افزار",
+        "UI font" => "قلم رابط کاربری",
+        "Typography" => "تایپوگرافی",
+        "Monospace font" => "قلم هم‌عرض",
+        "System font" => "قلم سیستم",
+        "Bundled font" => "قلم همراه برنامه",
+        "Vazirmatn" => "وزیرمتن",
+        "Place at start" => "قرار دادن در ابتدا",
+        "Place at end" => "قرار دادن در انتها",
+        "Use monospace" => "استفاده از قلم هم‌عرض",
+        "Semantic colors" => "رنگ‌های معنایی",
+        "Value range" => "محدوده مقدار",
+        "Minimum" => "کمینه",
+        "Maximum" => "بیشینه",
+        "Show dividers" => "نمایش جداکننده‌ها",
+        "Fonts…" => "قلم‌ها…",
+        "Effects" => "جلوه‌ها",
+        "Layout" => "چیدمان",
+        "Select all cues" => "انتخاب همهٔ نشانه‌ها",
+        "Clear cue selection" => "پاک‌کردن انتخاب نشانه‌ها",
+        "Duplicate selected cues" => "کپی نشانه‌های انتخاب‌شده",
+        "Delete selected cues" => "حذف نشانه‌های انتخاب‌شده",
+        "Selected cues" => "نشانه‌های انتخاب‌شده",
+        "Ctrl-click to toggle; Shift-click to select a range" => "Ctrl و کلیک برای تغییر انتخاب؛ Shift و کلیک برای انتخاب محدوده",
+        "Instant cue (drag to move)" => "نشانهٔ لحظه‌ای (برای جابه‌جایی بکشید)",
+        "Lane" => "مسیر",
+        "RF" => "فرمان رادیویی",
+        "Effect is no longer available" => "این جلوه دیگر در دسترس نیست",
+        "New effect" => "جلوهٔ جدید",
+        "Timed multi-peripheral sequence" => "توالی زمان‌بندی‌شدهٔ چند دستگاه",
+        "Stable ID" => "شناسهٔ ثابت",
+        "LED count" => "تعداد LED",
+        "Lighting program" => "برنامهٔ نورپردازی",
+        "Keep offline draft" => "نگه‌داشتن پیش‌نویس آفلاین",
+        "Rest" => "سکوت",
+        "All relays off" => "خاموش‌کردن همهٔ رله‌ها",
+        "All PWM outputs off" => "خاموش‌کردن همهٔ خروجی‌های PWM",
+        "Status RGB" => "RGB وضعیت",
+        "Raw opcode" => "opcode خام",
+        "Choose…" => "انتخاب…",
+        "Sequence step" => "گام توالی",
+        "Add a step, choose the peripheral command, then set its exact time and parameters." => "یک گام اضافه کنید، فرمان دستگاه را انتخاب کنید و سپس زمان دقیق و پارامترهای آن را تنظیم کنید.",
+        "Publish & Run saves this draft before playing it; Delete requires a published effect." => "انتشار و اجرا، این پیش‌نویس را پیش از اجرا ذخیره می‌کند؛ حذف به یک جلوهٔ منتشرشده نیاز دارد.",
+        "Effects Designer" => "طراح جلوه‌ها",
+        "Capture selection" => "انتخاب ورودی‌های ضبط",
+        "Select channels or opcodes to record" => "کانال‌ها یا opcodeهای موردنظر برای ضبط را انتخاب کنید",
+        "Choose channels or opcodes; nothing is selected by default" => "کانال‌ها یا opcodeها را انتخاب کنید؛ پیش‌فرض هیچ‌کدام انتخاب نشده‌اند",
+        "All supported commands (all channels)" => "همهٔ فرمان‌های پشتیبانی‌شده (همهٔ کانال‌ها)",
+        "Opcode selection captures all targets of that command" => "انتخاب opcode، تمام هدف‌های آن فرمان را ضبط می‌کند",
+        "Opcodes (all targets)" => "opcodeها (همهٔ هدف‌ها)",
+        "Channels" => "کانال‌ها",
+        "Automatic capture" => "ضبط خودکار",
+        "Repeat effect" => "تکرار جلوه",
+        "Repeat step" => "تکرار گام",
+        "Show repeat ghosts" => "نمایش سایه‌های تکرار",
+        "Count" => "تعداد",
+        "Effect designer colors" => "رنگ‌های طراح جلوه",
+        "Drag to adjust repeat interval; resize to change shared cue length" => "برای تنظیم فاصلهٔ تکرار بکشید؛ برای تغییر مدت مشترک نشانه اندازه را تغییر دهید",
+        "Repeated cues are linked to their original; hiding them does not disable repetition" => "نشانه‌های تکراری به اصل خود متصل‌اند؛ پنهان کردن آن‌ها تکرار را غیرفعال نمی‌کند",
+        "Repeat the entire effect" => "تکرار تمام جلوه",
+        "Interval" => "فاصلهٔ تکرار",
+        "0s uses the full effect length; interval is start-to-start" => "۰ یعنی طول کامل جلوه؛ فاصله از شروع تا شروع محاسبه می‌شود",
+        "Effect repeat interval cannot be shorter than its length" => "فاصلهٔ تکرار نمی‌تواند از طول جلوه کوتاه‌تر باشد",
+        "Publish & Run" => "انتشار و اجرا",
+        "Choose a compatible unlocked seat track" => "یک مسیر صندلی سازگار و بدون قفل انتخاب کنید",
+        "Save the audio effect before previewing" => "جلوهٔ صوتی را پیش از پیش‌شنوی ذخیره کنید",
+        "Ctrl-drag to duplicate" => "برای کپی، Ctrl را نگه دارید و بکشید",
+        "Add or record a cue to begin the effect" => "برای شروع جلوه، یک cue اضافه یا ضبط کنید",
+        "Bits / protocol" => "بیت‌ها / پروتکل",
+        "Board mode" => "حالت برد",
+        "Board profile" => "پروفایل برد",
+        "Command" => "فرمان",
+        "Curve quality" => "کیفیت منحنی",
+        "Discard only this capture; existing sequence steps are retained" => "فقط این برداشت حذف می‌شود؛ مراحل قبلی توالی باقی می‌مانند",
+        "Display" => "نمایشگر",
+        "Easing" => "نرمی تغییر",
+        "Effect timeline" => "خط زمان جلوه",
+        "Finish" => "پایان",
+        "Front-panel action" => "عمل پنل جلو",
+        "Keep outputs on cancel" => "حفظ خروجی‌ها هنگام لغو",
+        "Label" => "برچسب",
+        "LCD message" => "پیام LCD",
+        "Length" => "طول",
+        "Move the first cue to zero without changing relative timing" => "انتقال نخستین cue به صفر بدون تغییر زمان‌بندی نسبی",
+        "Move to start" => "انتقال به ابتدا",
+        "Opcode" => "opcode",
+        "Page ID" => "شناسهٔ صفحه",
+        "Payload (hex)" => "داده (هگز)",
+        "PCController is unavailable" => "PCController در دسترس نیست",
+        "Publish the current sequence and capture at its end. Delete existing steps first to replace them." => "توالی فعلی منتشر و ضبط به انتهای آن اضافه می‌شود. برای جایگزینی، ابتدا مراحل قبلی را حذف کنید.",
+        "Pulse" => "پالس",
+        "PWM channel" => "کانال PWM",
+        "Relay mask" => "ماسک رله",
+        "Remove step" => "حذف مرحله",
+        "RF code" => "کد RF",
+        "Seat" => "صندلی",
+        "Semantic actions" => "عمل‌های معنایی",
+        "Sequence steps" => "مراحل توالی",
+        "Start" => "شروع",
+        "State" => "وضعیت",
+        "Text" => "متن",
+        "This sequence has no actions yet." => "این توالی هنوز هیچ عملی ندارد.",
+        "Timing tolerance" => "خطای مجاز زمان‌بندی",
+        "Transition" => "گذار",
+        "Visible for" => "مدت نمایش",
+        "Zoom" => "بزرگ‌نمایی",
+        "Action IDs" => "شناسه‌های عمل",
+        "Add step" => "افزودن مرحله",
+        "Audio effect" => "جلوهٔ صوتی",
+        "Audio file / URL" => "پرونده یا نشانی صوت",
+        "Automatic (recommended)" => "خودکار (پیشنهادی)",
+        "Behavior" => "رفتار",
+        "Board capture" => "ضبط روی برد",
+        "The board’s recording buffer filled up. Earlier actions may be missing." => "حافظهٔ موقت ضبط برد پر شده است. ممکن است برخی فرمان‌های قبلی در ضبط نباشند.",
+        "Browse" => "مرور",
+        "Buzzer" => "بیزر",
+        "Capture mode" => "حالت ضبط",
+        "Chapter" => "فصل",
+        "Chapters" => "فصل‌ها",
+        "Choose sound effect" => "انتخاب جلوهٔ صوتی",
+        "Clear steps" => "پاک‌کردن مراحل",
+        "Cue behavior" => "رفتار cue",
+        "Custom value..." => "مقدار دلخواه…",
+        "Delete all sequence steps?" => "همهٔ مراحل توالی حذف شوند؟",
+        "Delete cue" => "حذف cue",
+        "Delete effect?" => "جلوه حذف شود؟",
+        "Delete step?" => "مرحله حذف شود؟",
+        "Destination" => "مقصد",
+        "Device clock" => "ساعت دستگاه",
+        "Discard take" => "حذف برداشت",
+        "Discard this take?" => "این برداشت حذف شود؟",
+        "Display text" => "متن نمایشگر",
+        "Down" => "پایین",
+        "Duration (ms)" => "مدت (میلی‌ثانیه)",
+        "End value" => "مقدار پایانی",
+        "Ends at" => "پایان در",
+        "Execution" => "اجرا",
+        "Existing sequence steps are retained" => "مراحل قبلی توالی حفظ می‌شوند",
+        "Exit: Off" => "پایان: خاموش",
+        "Exit: On" => "پایان: روشن",
+        "Hardware timeline" => "خط زمان سخت‌افزار",
+        "Hardware timing fault" => "خطای زمان‌بندی سخت‌افزار",
+        "Host clock" => "ساعت میزبان",
+        "ID" => "شناسه",
+        "Lighting" => "نورپردازی",
+        "New audio effect" => "جلوهٔ صوتی جدید",
+        "No actions yet" => "هنوز هیچ عملی نیست",
+        "On exit" => "هنگام پایان",
+        "Other" => "سایر",
+        "Output device / backend" => "دستگاه / سامانهٔ خروجی",
+        "Payload" => "داده",
+        "PCController catalog" => "فهرست PCController",
+        "Preferences SFX output" => "خروجی جلوهٔ صوتی از تنظیمات",
+        "Preparing hardware" => "آماده‌سازی سخت‌افزار",
+        "Arming hardware" => "فعال‌سازی خط زمان سخت‌افزار",
+        "Hardware preparation blocked" => "آماده‌سازی سخت‌افزار متوقف شده",
+        "Hardware plan invalid" => "برنامه سخت‌افزار نامعتبر است",
+        "Hardware waiting" => "سخت‌افزار در انتظار است",
+        "Hardware authority required" => "اجازه انتشار سخت‌افزار لازم است",
+        "Preview unavailable" => "پیش‌نمایش در دسترس نیست",
+        "Keyframe" => "فریم کلیدی",
+        "Show thumbnails in Simple seek preview" => "نمایش تصویر در پیش‌نمایش جابه‌جایی فضای ساده",
+        "Show thumbnails in NLE seek preview" => "نمایش تصویر در پیش‌نمایش جابه‌جایی فضای تدوین",
+        "Adds a decoded frame to the shared cursor-position and chapter hover card" => "افزودن تصویر به کارت مشترک موقعیت نشانگر و فصل",
+        "Program" => "برنامه",
+        "Program must be valid JSON" => "برنامه باید JSON معتبر باشد",
+        "PWM" => "PWM",
+        "PWM ramp" => "تغییر تدریجی PWM",
+        "Read from audio on Save" => "خواندن از صوت هنگام ذخیره",
+        "Reading audio…" => "در حال خواندن صوت…",
+        "Record" => "ضبط",
+        "Seat A" => "صندلی A",
+        "Seat B" => "صندلی B",
+        "Seat motion" => "حرکت صندلی",
+        "Sequence" => "توالی",
+        "Set and keep" => "تنظیم و حفظ",
+        "Stop audio preview" => "توقف پیش‌شنوی",
+        "Strip pixel" => "پیکسل نوار",
+        "Timed cue..." => "cue زمان‌دار…",
+        "Timed hold" => "نگه‌داشتن زمان‌دار",
+        "Timed sequence" => "توالی زمان‌دار",
+        "Track actions" => "عمل‌های مسیر",
+        "Unavailable device" => "دستگاه در دسترس نیست",
+        "Until next command" => "تا فرمان بعدی",
+        "Add melody" => "افزودن ملودی",
+        "Add semantic action" => "افزودن عمل معنایی",
+        "Back" => "بازگشت",
+        "Device clock (forced)" => "ساعت دستگاه (اجباری)",
+        "Edit cue…" => "ویرایش cue…",
+        "Enter" => "ورود",
+        "Fade to" => "تغییر تدریجی به",
+        "Host clock (forced)" => "ساعت میزبان (اجباری)",
+        "Intensity" => "شدت",
+        "LCD" => "LCD",
+        "Quantize" => "هم‌تراز با شبکه",
+        "Quantize all cues" => "هم‌تراز کردن همهٔ نشانه‌ها با شبکه",
+        "Remove delay" => "حذف تأخیر",
+        "Snap" => "چسبیدن به شبکه",
+        "Snap to grid" => "چسبیدن به شبکه",
+        "Up" => "بالا",
+        "Ease in" => "نرمی آغاز",
+        "Ease out" => "نرمی پایان",
+        "Ease in/out" => "نرمی آغاز/پایان",
+        "No melodies" => "هیچ ملودی‌ای نیست",
+        "All live sources" => "منابع زنده",
+        "No actions selected" => "هیچ عملی انتخاب نشده است",
+        "Application icons" => "نمادهای برنامه",
+        "Application icon" => "نماد برنامه",
+        "Current" => "کنونی",
+        "Classic (previous)" => "کلاسیک (قبلی)",
+        "Default icon" => "نماد پیش‌فرض",
+        "Bundled application icon" => "نماد همراه برنامه",
+        "Use default icon" => "استفاده از نماد پیش‌فرض",
+        "Browse..." => "مرور…",
+        "Choose an image file" => "انتخاب پروندهٔ تصویر",
         "File" => "پرونده",
         "Edit" => "ویرایش",
         "Audio" => "صدا",
@@ -102,8 +352,8 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Panels" => "پنل‌ها",
         "Reset Workspace to Default" => "بازنشانی فضای کاری به حالت پیش‌فرض",
         "All workspace panels are closed" => "همه پنل‌های فضای کاری بسته شده‌اند",
-        "Open panels from the Window menu above, or reset the workspace." => {
-            "پنل‌ها را از منوی پنجره در بالا باز کنید یا فضای کاری را بازنشانی نمایید."
+        "Open panels from the Workspace menu above, or reset the workspace." => {
+            "پنل‌ها را از منوی فضای کاری در بالا باز کنید یا فضای کاری را بازنشانی نمایید."
         }
         "Help" => "راهنما",
         "Language" => "زبان",
@@ -114,6 +364,14 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Automatic" => "خودکار",
         "Left to right" => "چپ به راست",
         "Right to left" => "راست به چپ",
+        "Text alignment" => "تراز متن",
+        "Left" => "چپ",
+        "Center" => "وسط",
+        "Right" => "راست",
+        "Subtitle style" => "سبک زیرنویس",
+        "Horizontal placement is independent of text direction" => "جای افقی متن مستقل از جهت نوشتار است",
+        "Horizontal placement is independent of text direction; subtitle style preserves native styling without text processing" => "جای افقی متن مستقل از جهت نوشتار است؛ سبک زیرنویس بدون پردازش متن حفظ می‌شود",
+        "Preserve subtitle styling without text processing; processed text stays centered" => "حفظ سبک زیرنویس بدون پردازش متن؛ متن پردازش‌شده در وسط می‌ماند",
         "Subtitle layout" => "چیدمان زیرنویس",
         "Global text replacements" => "جایگزینی‌های سراسری متن",
         "Applied in order to every text subtitle" => "به‌ترتیب روی همهٔ زیرنویس‌های متنی اعمال می‌شود",
@@ -208,6 +466,7 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Hardware Monitor Dashboard" => "داشبورد پایش سخت‌افزار",
         "Hardware control" => "کنترل سخت‌افزار",
         "Manage..." => "مدیریت…",
+        "Reveal in Effect Controls" => "نمایش در کنترل‌های جلوه",
         "Manage channels" => "مدیریت کانال‌ها",
         "All board channels" => "همهٔ کانال‌های برد",
         "Order" => "ترتیب",
@@ -231,9 +490,12 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Place at playhead" => "قرار دادن در نشانگر پخش",
         "The Controller effects track is not available." => "ترک جلوه‌های کنترل‌کننده در دسترس نیست.",
         "Manage" => "مدیریت",
+        "Publish" => "انتشار",
         "Jump to cue start" => "پرش به آغاز نشانه",
         "Cue start" => "آغاز نشانه",
         "Run now" => "اجرای فوری",
+        "Starting…" => "در حال آغاز…",
+        "Stopping…" => "در حال توقف…",
         "Restore default name" => "بازگردانی نام پیش‌فرض",
         "Type" => "نوع",
         "Control" => "کنترل",
@@ -244,6 +506,7 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "New group" => "گروه جدید",
         "Color palette" => "پالت رنگ",
         "Studio" => "استودیو",
+        "Pastel" => "پاستل",
         "Neutral" => "خنثی",
         "Neutral (default)" => "خنثی (پیش‌فرض)",
         "Create effect" => "ایجاد جلوه",
@@ -302,6 +565,9 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Current decimals" => "رقم‌های اعشاری جریان",
         "Advanced" => "پیشرفته",
         "Programming latch" => "قفل برنامه‌ریزی",
+        "Programming latch active" => "قفل برنامه‌ریزی فعال است",
+        "Programming board…" => "در حال برنامه‌ریزی برد…",
+        "Programming recovery pending" => "بازیابی برنامه‌ریزی در انتظار است",
         "Programming latch blocks motion, relays, PWM, and lighting until disabled." => {
             "قفل برنامه‌ریزی تا زمان غیرفعال‌شدن، حرکت، رله‌ها، PWM و روشنایی را مسدود می‌کند."
         }
@@ -366,6 +632,32 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Stop stream" => "توقف جریان",
         "Streaming" => "در حال پخش",
         "Idle" => "آماده",
+        "Buzzer & melodies" => "بیزر و ملودی‌ها",
+        "Playing melody" => "ملودی در حال پخش است",
+        "Playing" => "در حال پخش",
+        "Board muted" => "برد بی‌صدا است",
+        "Board audible" => "صدای برد فعال است",
+        "Configured melody" => "ملودی پیکربندی‌شده",
+        "No configured melodies" => "هیچ ملودی پیکربندی نشده است",
+        "notes" => "نت",
+        "Refresh melody catalog" => "تازه‌سازی فهرست ملودی‌ها",
+        "Loop until stopped" => "تکرار تا زمان توقف",
+        "Repeats" => "تعداد تکرار",
+        "Play melody" => "پخش ملودی",
+        "Stop buzzer" => "توقف بیزر",
+        "Stop board effects" => "توقف جلوه‌های برد",
+        "Stop strip animation" => "توقف پویانمایی نوار LED",
+        "Clear LED strip" => "خاموش‌کردن نوار LED",
+        "Restore automatic status LED" => "بازگرداندن LED وضعیت خودکار",
+        "No live PCController board is connected" => "هیچ برد زنده‌ای به PCController متصل نیست",
+        "Board tray action is no longer available; reopen the menu" => "عملیات سینی برد دیگر در دسترس نیست؛ منو را دوباره باز کنید",
+        "PCController tray action" => "عملیات سینی PCController",
+        "Tone test" => "آزمایش صدا",
+        "Frequency" => "فرکانس",
+        "Play tone" => "پخش صدا",
+        "The physical board is muted; host routing may still be audible." => {
+            "برد فیزیکی بی‌صدا است؛ مسیر صدای میزبان ممکن است همچنان شنیده شود."
+        }
         "Unavailable" => "در دسترس نیست",
         "No addressable LED effects are advertised" => "هیچ جلوهٔ LED آدرس‌پذیری اعلام نشده است",
         "Seven-segment display" => "نمایشگر هفت‌بخشی",
@@ -456,6 +748,83 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Motion controls" => "کنترل‌های حرکتی",
         "Output controls" => "کنترل خروجی‌ها",
         "Update PWM outputs while dragging" => "به‌روزرسانی زندهٔ خروجی‌های PWM هنگام کشیدن",
+        "MOSFET cards" => "کارت‌های ماسفت",
+        "Show Toggle button" => "نمایش دکمهٔ تغییر وضعیت",
+        "Show slider step buttons" => "نمایش دکمه‌های کم و زیاد کنار لغزنده",
+        "Hardware shortcuts" => "میان‌برهای سخت‌افزار",
+        "R / P then digit toggles channel (0 = 10)" => "تغییر وضعیت کانال با R یا P و سپس رقم (۰ = کانال ۱۰)",
+        "Record next key" => "ثبت کلید بعدی",
+        "Clear sequence" => "پاک‌کردن توالی کلیدها",
+        "Keyboard shortcut ignored: channel state is unknown" => "میان‌بر اجرا نشد: وضعیت کانال نامشخص است",
+        "Shared On behavior" => "رفتار مشترکِ روشن‌کردن",
+        "An RF assignment with this name already exists. Choose another name." => "تخصیص ریموتی با این نام وجود دارد؛ نام دیگری انتخاب کنید.",
+        "Full brightness (100%)" => "روشنایی کامل (۱۰۰٪)",
+        "Restore last brightness" => "بازیابی آخرین روشنایی",
+        "Applies to all connected PCController clients" => "برای تمام کلاینت‌های متصل به PCController اعمال می‌شود",
+        "Apply policy" => "اعمال سیاست",
+        "Saving shared output policy…" => "در حال ذخیرهٔ سیاست مشترک خروجی…",
+        "Remembered brightness" => "روشنایی به‌یادسپرده‌شده",
+        "Unknown brightness falls back to 100%" => "روشنایی نامعلوم به ۱۰۰٪ برمی‌گردد",
+        "Confirmed brightness is saved in the selected board profile" => "روشنایی تأییدشده در پروفایل برد انتخاب‌شده ذخیره شده است",
+        "PCController manages confirmed brightness memory" => "PCController حافظهٔ روشنایی تأییدشده را مدیریت می‌کند",
+        "Saved buttons for this channel" => "کلیدهای ذخیره‌شدهٔ این کانال",
+        "Saved RF buttons" => "کلیدهای RF ذخیره‌شده",
+        "RF controls" => "کنترل‌های RF",
+        "Close RF controls" => "بستن کنترل‌های RF",
+        "Refresh learned buttons" => "بازخوانی کلیدهای یادگرفته‌شده",
+        "Assignments" => "تخصیص‌ها",
+        "Remotes" => "ریموت‌ها",
+        "New assignment" => "تخصیص جدید",
+        "Edit assignment" => "ویرایش تخصیص",
+        "Save assignment" => "ذخیرهٔ تخصیص",
+        "Use last received" => "استفاده از آخرین دریافت",
+        "Enter signal manually (advanced)" => "ورود دستی کد (پیشرفته)",
+        "Add action" => "افزودن فرمان",
+        "Remove action" => "حذف فرمان",
+        "Learn buttons" => "یادگیری کلیدها",
+        "Learned button" => "کلید یادگرفته‌شده",
+        "Gesture" => "نوع فشردن",
+        "Cooldown (ms)" => "وقفهٔ فرمان (میلی‌ثانیه)",
+        "Code (hex or decimal)" => "کد (شانزدهی یا ده‌دهی)",
+        "Pulse (µs)" => "پالس (میکروثانیه)",
+        "This button also has a board action. Unassign it in Remotes to replace it." => "این کلید فرمان روی برد هم دارد. برای جایگزینی آن، فرمان برد را در بخش ریموت‌ها حذف کنید.",
+        "Learning…" => "در حال یادگیری…",
+        "Stop learning" => "توقف یادگیری",
+        "Edit board action" => "ویرایش فرمان برد",
+        "Add observed button" => "افزودن کلید دریافت‌شده",
+        "Unassign board action" => "حذف فرمان برد",
+        "Remove learned button" => "حذف کلید یادگرفته‌شده",
+        "On-board assignment" => "تخصیص روی برد",
+        "Save on board" => "ذخیره روی برد",
+        "Last seen" => "آخرین دریافت",
+        "Unsaved RF changes" => "تغییرات ذخیره‌نشدهٔ RF",
+        "Discard unsaved RF changes?" => "تغییرات ذخیره‌نشدهٔ RF کنار گذاشته شوند؟",
+        "Remove RF assignment" => "حذف تخصیص RF",
+        "Remove this RF assignment?" => "این تخصیص RF حذف شود؟",
+        "Timed learning" => "یادگیری زمان‌دار",
+        "Continuously learn buttons" => "یادگیری پیوستهٔ دکمه‌ها",
+        "Save settings" => "ذخیرهٔ تنظیمات",
+        "Receiving" => "در حال دریافت",
+        "Not receiving" => "دریافت نمی‌شود",
+        "Receptions since this dialog opened" => "دریافت‌ها از باز شدن این گفتگو",
+        "PCController request timed out" => "مهلت پاسخ PCController تمام شد",
+        "Details" => "جزئیات",
+        "Diagnostics truncated" => "جزئیات فنی کوتاه شده است",
+        "PCController connection lost" => "اتصال PCController قطع شد",
+        "Board unavailable" => "برد در دسترس نیست",
+        "PCController connection is unavailable" => "اتصال به PCController در دسترس نیست",
+        "Check the connection and current state before retrying" => "پیش از تلاش دوباره، اتصال و وضعیت فعلی را بررسی کنید",
+        "You can retry when the controller is ready." => "وقتی کنترلر آماده شد می‌توانید دوباره تلاش کنید.",
+        "PCController reports that the board is unavailable." => "PCController اعلام کرده که برد در دسترس نیست.",
+        "Playback paused." => "پخش متوقف شد.",
+        "Shared On policy is not advertised for this channel" => "سیاست مشترک روشن‌کردن برای این کانال اعلام نشده است",
+        "Show On button" => "نمایش دکمهٔ روشن",
+        "Show Off button" => "نمایش دکمهٔ خاموش",
+        "Show Decrease button" => "نمایش دکمهٔ کاهش",
+        "Show Increase button" => "نمایش دکمهٔ افزایش",
+        "Show other action buttons" => "نمایش سایر دکمه‌های فرمان",
+        "Indicator click action" => "عملکرد کلیک روی نشانگر",
+        "Assign RF code…" => "تخصیص کد ریموت…",
         "Activate output buttons when pressed" => "فعال‌سازی دکمه‌های خروجی هنگام فشردن",
         "Motion / seat controls" => "کنترل حرکت / صندلی",
         "Moving up color" => "رنگ حرکت رو به بالا",
@@ -493,7 +862,16 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
             "در حالت تغییر وضعیت، جهت تا انتخاب فرمان بعدی فعال می‌ماند. در حالت نگه‌داشتن، با رهاکردن دکمه فرمان توقف فرستاده می‌شود."
         }
         "Video surface" => "سطح ویدئو",
+        "Numeric input" => "ورودی عددی",
+        "Human-readable time units" => "واحدهای زمانی خوانا",
+        "Automatically normalize time fields to units such as s, min, and h. Disable to always display milliseconds." => {
+            "نمایش خودکار زمان با واحدهای خوانا مانند ثانیه، دقیقه و ساعت؛ برای نمایش همیشگی میلی‌ثانیه غیرفعال کنید."
+        }
         "Keyboard shortcuts" => "میان‌برهای صفحه‌کلید",
+        "Respond to keyboard media controls" => "پاسخ به دکمه‌های رسانه‌ای صفحه‌کلید",
+        "Allow media controls while Pealayer is in the background" => "فعال‌سازی دکمه‌های رسانه‌ای هنگامی که پی‌لیر در پس‌زمینه است",
+        "Play, pause, stop, next/previous and seek through the OS media session. Independent of in-app shortcuts and hardware hotkeys." => "پخش، مکث، توقف، بعدی/قبلی و جابه‌جایی از طریق کنترل رسانه‌ای سیستم‌عامل؛ مستقل از میان‌برهای داخل برنامه و کلیدهای سخت‌افزاری.",
+        "Keep keyboard media buttons and OS transport controls working when another window has focus, including when Pealayer is minimized. Requires Respond to keyboard media controls; does not override the OS choice of media player." => "دکمه‌های رسانه‌ای صفحه‌کلید و سیستم‌عامل هنگام فعال‌بودن پنجره‌ای دیگر یا کوچک‌شدن پی‌لیر کار کنند. گزینهٔ پاسخ به دکمه‌های رسانه‌ای باید فعال باشد؛ انتخاب پخش‌کننده توسط سیستم‌عامل تغییر نمی‌کند.",
         "Enable in-app keyboard shortcuts and hardware bindings" => {
             "فعال‌سازی میان‌برها و کلیدهای سخت‌افزاری داخل برنامه"
         }
@@ -543,6 +921,9 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Clock" => "ساعت",
         "Media rate" => "نرخ رسانه",
         "Media frame rate" => "نرخ قاب رسانه",
+        "MPV render time" => "زمان ترسیم mpv",
+        "Peak render time" => "بیشترین زمان ترسیم",
+        "Click to switch frame rate source" => "برای تغییر منبع نرخ فریم کلیک کنید",
         "Telemetry" => "دورسنجی",
         "Workspace mode" => "حالت فضای کاری",
         "Search" => "جست‌وجو",
@@ -566,6 +947,17 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Group" => "گروه",
         "No group" => "بدون گروه",
         "Ungrouped" => "بدون گروه",
+        "Manage folders" | "Manage folders..." => "مدیریت پوشه‌ها",
+        "Manage folder" | "Manage folder..." => "مدیریت پوشه",
+        "New folder" | "New folder..." => "پوشهٔ جدید",
+        "Expand folders" => "بازکردن پوشه‌ها",
+        "Collapse folders" => "بستن پوشه‌ها",
+        "Move to folder" => "انتقال به پوشه",
+        "Delete folder" => "حذف پوشه",
+        "Confirm delete" => "تأیید حذف",
+        "Channels will be moved to Ungrouped." => "کانال‌ها به بخش بدون گروه منتقل می‌شوند.",
+        "A folder change is still pending" => "تغییر پوشه هنوز در انتظار تأیید است",
+        "Configure the attached board before editing folders" => "پیش از ویرایش پوشه‌ها، برد متصل را پیکربندی کنید",
         "Search or create group..." => "جست‌وجو یا ایجاد گروه…",
         "Create group" => "ایجاد گروه",
         "New..." => "جدید…",
@@ -608,6 +1000,63 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Technical details" => "جزئیات فنی",
         "Copy details" => "رونوشت جزئیات",
         "Close" => "بستن",
+        "Dismiss" => "بستن پیام",
+        "Publishing authority" => "اختیار انتشار",
+        "Close this prompt without changing publishing authority or pending requests." =>
+            "این پیام را بدون تغییر اختیار انتشار یا درخواست‌های در انتظار ببندید.",
+        "Screen" => "صفحه",
+        "Screen render rate" => "نرخ ترسیم صفحه",
+        "Current draw" => "جریان مصرفی",
+        "Voltage" => "ولتاژ",
+        "Temperature" => "دما",
+        "Temperature alert" => "هشدار دمای بالا",
+        "HOT alerts" => "هشدارهای دمای بالا",
+        "Hardware timing" => "زمان‌بندی سخت‌افزار",
+        "Operation progress" => "پیشرفت عملیات",
+        "PCController update" => "به‌روزرسانی PCController",
+        "Board firmware" => "میان‌افزار برد",
+        "Board EEPROM" => "EEPROM برد",
+        "Board readback" => "خواندن برد",
+        "Firmware build" => "ساخت میان‌افزار",
+        "Receiving update" => "دریافت به‌روزرسانی",
+        "Downloading update" => "بارگیری به‌روزرسانی",
+        "Telemetry log chart" => "نمودار ثبت اندازه‌گیری‌ها",
+        "Status message" => "پیام وضعیت",
+        "Clear chart history" => "پاک‌کردن تاریخچهٔ نمودار",
+        "Reset widget order" => "بازنشانی ترتیب ابزارک‌ها",
+        "Move earlier" => "انتقال به قبل",
+        "Control bar" => "نوار کنترل",
+        "Show / hide actions" => "نمایش / پنهان‌کردن فرمان‌ها",
+        "Reset toolbar" => "بازنشانی نوار ابزار",
+        "Timeline toolbar" => "نوار ابزار خط زمان",
+        "Show timeline toolbar" => "نمایش نوار ابزار خط زمان",
+        "Sidebar rail" => "نوار کناری",
+        "Show sidebar rail" => "نمایش نوار کناری",
+        "Hide sidebar rail" => "پنهان‌کردن نوار کناری",
+        "Sidebar pane width" => "عرض پنل کناری",
+        "Sidebar rail preferences" => "تنظیمات نوار کناری",
+        "Shortcuts" => "میان‌برها",
+        "Reset shortcuts" => "بازنشانی میان‌برها",
+        "Hide shortcut" => "پنهان‌کردن میان‌بر",
+        "Open in sidebar" => "بازکردن در نوار کناری",
+        "Close sidebar pane" => "بستن پنل کناری",
+        "Dock to Workspace" => "انتقال به فضای کاری",
+        "RF management" => "مدیریت رادیویی",
+        "Audio settings" => "تنظیمات صدا",
+        "Subtitle settings" => "تنظیمات زیرنویس",
+        "Downloads" => "بارگیری‌ها",
+        "Drag to reorder or dock in a workspace pane" => "برای جابه‌جایی یا افزودن به یک پنل بکشید",
+        "Drag to reorder; click to open the dialog" => "برای جابه‌جایی بکشید؛ برای بازکردن پنجره کلیک کنید",
+        "Requires connected RF-capable hardware" => "نیازمند اتصال سخت‌افزار دارای قابلیت رادیویی",
+        "Play / Pause" => "پخش / مکث",
+        "Pin controls" => "سنجاق‌کردن کنترل‌ها",
+        "Move later" => "انتقال به بعد",
+        "Discard changes" => "لغو تغییرات",
+        "Close the current cue editor first" => "ابتدا ویرایشگر نشانهٔ فعلی را ببندید",
+        "Discard changes?" => "تغییرات لغو شوند؟",
+        "Keep editing" => "ادامهٔ ویرایش",
+        "Save and close" => "ذخیره و بستن",
+        "This cue has unsaved changes. Save them or discard them before closing." => "این نشانه تغییرات ذخیره‌نشده دارد. پیش از بستن، آن‌ها را ذخیره یا لغو کنید.",
         "Save" => "ذخیره",
         "Preferences" => "تنظیمات",
         "Preferences saved" => "تنظیمات ذخیره شد",
@@ -765,6 +1214,7 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Frame Step Backward (-1 frame)" => "یک قاب عقب",
         "Adjust Volume on player/bar" => "تنظیم صدا روی پخش‌کننده",
         "Seek forward / backward" => "پیمایش جلو یا عقب",
+        "Add cue to selected track" => "افزودن نشانه به ترک انتخاب‌شده",
         "Toggle Fullscreen / Open Video" => "تمام‌صفحه یا باز کردن ویدئو",
         "Open Player Context Menu" => "باز کردن منوی زمینه‌ای پخش‌کننده",
         "Drop media file onto window to play" => "رسانه را برای پخش روی پنجره رها کنید",
@@ -823,6 +1273,40 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Windows blue" => "آبی ویندوز",
         "macOS blue" => "آبی مک‌اواس",
         "Custom" => "سفارشی",
+        "Technical" => "فنی",
+        "Sequence properties" => "ویژگی‌های توالی",
+        "Add track" => "افزودن مسیر",
+        "Grid" => "شبکه",
+        "Animations and transitions" => "پویانمایی و گذارها",
+        "Control density" => "تراکم کنترل‌ها",
+        "Connection icon" => "نماد اتصال",
+        "Connection mode" => "نوع اتصال",
+        "Circle" => "دایره",
+        "Copy endpoint" => "کپی نشانی اتصال",
+        "Copy value" => "کپی مقدار",
+        "Copy color" => "کپی رنگ",
+        "Copy message" => "کپی پیام",
+        "Show in chart" => "نمایش در نمودار",
+        "Pause chart logging" => "توقف ثبت نمودار",
+        "Copy chart history" => "کپی تاریخچه نمودار",
+        "Copy operation details" => "کپی جزئیات عملیات",
+        "Chandelier" => "لوستر",
+        "Loostr" => "لوستر",
+        "Stage light" => "نور صحنه",
+        "Garden" => "باغ",
+        "Extra compact" => "بسیار فشرده",
+        "Compact" => "فشرده",
+            "Comfortable" => "آزاد",
+            "Regular" => "معمولی",
+            "Spacious" => "جاداتر",
+        "Recent colors" => "رنگ‌های اخیر",
+        "Pealayer colors" => "رنگ‌های پی‌لیر",
+        "Orange" => "نارنجی",
+        "Amber" => "کهربایی",
+        "Cyan" => "فیروزه‌ای",
+        "Grey" => "خاکستری",
+        "Black" => "سیاه",
+        "Segment display" => "نمایشگر سون‌سگمنت",
         "Custom accent" => "رنگ تأکیدی سفارشی",
         "Font Size:" => "اندازهٔ قلم:",
         "Synchronization" => "همگام‌سازی",
@@ -835,6 +1319,9 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "4D Cinema Editor" => "ویرایشگر سینمای چهاربعدی",
         "Active output status" => "وضعیت خروجی‌های فعال",
         "Effect templates" => "الگوهای جلوه",
+        "Select a cue to inspect and edit" => "برای بررسی و ویرایش، یک نشانه را انتخاب کنید",
+        "Timing, routing, and output" => "زمان‌بندی، مسیریابی و خروجی",
+        "Batch-edit selected cues" => "ویرایش گروهی نشانه‌های انتخاب‌شده",
         "Icon" => "نماد",
         "Search icons..." => "جست‌وجوی نمادها…",
         "List view" => "نمای فهرست",
@@ -843,6 +1330,10 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "No matching icons" => "نماد منطبقی پیدا نشد",
         "Name" => "نام",
         "Duration" => "مدت",
+        "Add cue" => "افزودن نشانه",
+        "Cue added" => "نشانه افزوده شد",
+        "On" => "روشن",
+        "Off" => "خاموش",
         "Actions" => "عملیات",
         "Selected cue" => "نشانهٔ انتخاب‌شده",
         "1 cue" => "۱ نشانه",
@@ -855,10 +1346,18 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Exact timeline placement and length" => "جای‌گذاری و مدت دقیق در خط زمانی",
         "Starts" => "آغاز",
         "Go to cue" => "رفتن به نشانه",
+        "Show in timeline" => "نمایش در خط زمانی",
+        "Reveal this cue without seeking or changing playback" => "نمایش نشانه بدون جابه‌جایی یا تغییر پخش",
+        "Keep this cue and reveal it on the timeline without seeking" => "نگه‌داشتن نشانه و نمایش آن در خط زمانی بدون جابه‌جایی پخش",
+        "The cue or its timeline track is unavailable" => "نشانه یا مسیر آن در خط زمانی در دسترس نیست",
+        "Duplicate cue" => "تکثیر نشانه",
         "Untitled effect" => "جلوهٔ بی‌نام",
         "No cue selected" => "هیچ نشانه‌ای انتخاب نشده است",
         "Select a cue on the timeline to manage it" => {
             "برای مدیریت، نشانه‌ای را در خط زمانی انتخاب کنید"
+        }
+        "Select a hardware track and press A, or double-click its lane, to add a cue." => {
+            "برای افزودن نشانه، یک ترک سخت‌افزاری را انتخاب و A را فشار دهید، یا روی مسیر آن دوبار کلیک کنید."
         }
         "Cue unavailable" => "نشانه در دسترس نیست",
         "The selected cue is no longer on the timeline" => "نشانهٔ انتخاب‌شده دیگر در خط زمانی نیست",
@@ -867,7 +1366,10 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Hardware macro" => "ماکروی سخت‌افزاری",
         "PCController effect" => "جلوهٔ PCController",
         "Relay sequence" => "توالی رله",
+        "Direct channel cue" => "نشانهٔ مستقیم کانال",
         "Timeline effect" => "جلوهٔ خط زمانی",
+        "Live output on" => "خروجی زنده روشن است",
+        "Live output off" => "خروجی زنده خاموش است",
         "No live hardware outputs" => "هیچ خروجی سخت‌افزاری زنده‌ای در دسترس نیست",
         "Output" => "خروجی",
         "Set hardware target" => "تعیین مقصد سخت‌افزاری",
@@ -884,6 +1386,9 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Create" => "ساختن",
         "Timeline instances" => "نمونه‌های خط زمانی",
         "Start time" => "زمان آغاز",
+        "Select a relay or PWM timeline track first" => {
+            "ابتدا یک ترک رله یا PWM را در خط زمانی انتخاب کنید"
+        }
         "Effect" => "جلوه",
         "Unavailable project effect" => "جلوهٔ پروژه در دسترس نیست",
         "Delete" => "حذف",
@@ -999,33 +1504,36 @@ pub fn tr(language: AppLanguage, english: &'static str) -> String {
         "Add Keyframe\nInserts a keyframe at the current playhead position." => {
             "افزودن فریم کلیدی\nیک فریم کلیدی در موقعیت کنونی نشانگر درج می‌کند."
         }
-        "Timeline Ruler\nClick or drag to scrub playhead. Ctrl+Scroll to zoom time." => {
-            "خط‌کش خط زمانی\nبرای پیمایش کلیک یا درگ کنید؛ برای بزرگ‌نمایی Ctrl+اسکرول کنید."
+        "Use Ctrl or Command plus wheel to scroll tracks vertically" => {
+            "پیمایش عمودی ترک‌ها با Ctrl یا Command و چرخ ماوس"
         }
+        "Takes priority over Ctrl or Command plus wheel zoom; Shift plus wheel still scrolls horizontally" => {
+            "بر بزرگ‌نمایی با Ctrl یا Command اولویت دارد؛ Shift و چرخ ماوس همچنان پیمایش افقی است"
+        }
+        "Timeline Ruler\nClick or drag to scrub playhead. Scroll to zoom time." => {
+            "خط‌کش خط زمانی\nبرای پیمایش کلیک یا درگ کنید؛ برای بزرگ‌نمایی چرخ ماوس را بچرخانید."
+        }
+        "Virtual Board Digital Twin" => "دوقلوی دیجیتال برد شبیه‌ساز",
+        "Pop out digital twin to floating window" => "انتقال دوقلوی دیجیتال به پنجره شناور",
+        "Close floating digital twin window" => "بستن پنجره شناور دوقلوی دیجیتال",
+        "Toggle virtual enclosure door switch" => "تغییر وضعیت کلید درب محفظه",
+        "Click front-panel Key 1" => "فشردن کلید ۱ پنل جلویی",
+        "Click front-panel Key 2" => "فشردن کلید ۲ پنل جلویی",
+        "Click front-panel Key 3" => "فشردن کلید ۳ پنل جلویی",
+        "Click front-panel Key 4" => "فشردن کلید ۴ پنل جلویی",
+        "Inject RF Cue" => "تزریق سیگنال رادیویی (RF)",
+        "Simulate 24-bit RF remote key packet" => "شبیه‌سازی بستهٔ ۲۴ بیتی ریموت رادیویی",
+        "INTERLOCK ACTIVE" => "قفل ایمنی فعال",
         _ => english,
     };
     visual_text(language, translated)
 }
 
-/// Egui's built-in painter positions Unicode scalar values without complex
-/// Arabic shaping or the Unicode bidirectional algorithm. Convert application
-/// copy to presentation forms and visual order at the UI boundary while
-/// retaining logical Unicode in source, configuration, and protocol data.
-pub fn visual_text(language: AppLanguage, logical: &str) -> String {
-    if language != AppLanguage::Persian && !contains_arabic_script(logical) {
-        return logical.to_owned();
-    }
-
-    let shaped = ar_reshaper::reshape_line(logical);
-    let bidi = unicode_bidi::BidiInfo::new(&shaped, None);
-    let mut visual = String::with_capacity(shaped.len());
-    for (index, paragraph) in bidi.paragraphs.iter().enumerate() {
-        if index > 0 {
-            visual.push('\n');
-        }
-        visual.push_str(&bidi.reorder_line(paragraph, paragraph.range.clone()));
-    }
-    visual
+/// Egui 0.35+ performs native contextual text shaping and RTL layout via
+/// HarfRust. Application copy retains logical Unicode without manual
+/// presentation-form reordering.
+pub fn visual_text(_language: AppLanguage, logical: &str) -> String {
+    logical.to_owned()
 }
 
 /// Whether `text` contains Arabic-script Unicode, including Persian-specific
@@ -1079,34 +1587,24 @@ mod tests {
     #[test]
     fn translates_owned_copy_but_leaves_dynamic_names_untouched() {
         let persian = tr(AppLanguage::Persian, "Connect");
-        assert_ne!(persian, "اتصال");
-        assert!(persian.chars().any(|character| {
-            ('\u{FB50}'..='\u{FDFF}').contains(&character)
-                || ('\u{FE70}'..='\u{FEFF}').contains(&character)
-        }));
+        assert_eq!(persian, "اتصال");
         assert_eq!(tr(AppLanguage::English, "Connect"), "Connect");
         assert_eq!(tr(AppLanguage::Persian, "Cinema Relay A"), "Cinema Relay A");
     }
 
     #[test]
-    fn persian_copy_is_shaped_and_reordered_for_egui() {
+    fn persian_copy_retains_logical_unicode_for_native_egui_shaping() {
         let logical = "سلام دنیا".to_string();
         let visual = visual_text(AppLanguage::Persian, &logical);
         assert_eq!(logical, "سلام دنیا");
-        assert_eq!(visual, "ﺎﯿﻧﺩ ﻡﻼﺳ");
+        assert_eq!(visual, "سلام دنیا");
     }
 
     #[test]
-    fn dynamic_persian_name_is_shaped_even_in_english_ui() {
+    fn dynamic_persian_name_retains_logical_unicode() {
         let logical = "PCController رلهٔ‌اصلی ۱۲۳".to_string();
         let visual = visual_text(AppLanguage::English, &logical);
-        assert_eq!(logical, "PCController رلهٔ‌اصلی ۱۲۳");
-        assert_ne!(visual, logical);
-        assert!(visual.contains("PCController"));
-        assert!(visual.chars().any(|character| {
-            ('\u{FB50}'..='\u{FDFF}').contains(&character)
-                || ('\u{FE70}'..='\u{FEFF}').contains(&character)
-        }));
+        assert_eq!(visual, logical);
         assert_eq!(
             visual_text(AppLanguage::English, "PCController Relay A"),
             "PCController Relay A"
@@ -1114,7 +1612,7 @@ mod tests {
     }
 
     #[test]
-    fn bundled_vazirmatn_covers_shaped_persian_presentation_forms() {
+    fn bundled_vazirmatn_covers_persian_characters() {
         let font = include_bytes!("../../assets/fonts/Vazirmatn-Regular.ttf");
         let face = ttf_parser::Face::parse(font, 0).expect("bundled Vazirmatn must parse");
         for glyph in visual_text(AppLanguage::Persian, "سلام دنیا PCController ۱۲۳")
@@ -1123,7 +1621,7 @@ mod tests {
         {
             assert!(
                 face.glyph_index(glyph).is_some(),
-                "font lacks shaped glyph {glyph:?}"
+                "font lacks glyph {glyph:?}"
             );
         }
     }

@@ -1,130 +1,289 @@
+use crate::ui::palette::native::controls::CheckboxUiExt;
 use crate::app::PealayerApp;
+use crate::config::{StatusBarFpsMode, StatusBarWidget as Widget, StatusChartMetric};
+use crate::four_d::controller::{HardwareCapabilities, HardwareStatusLed};
+use crate::ui::dropdown::DropdownUiExt;
 use eframe::egui;
+use std::collections::VecDeque;
+use std::time::{Duration, Instant};
 
-fn friendly_name(value: &str) -> String {
-    value
-        .split(['-', '_', '.'])
-        .filter(|part| !part.is_empty())
-        .map(|part| {
-            let mut chars = part.chars();
-            chars
-                .next()
-                .map(|first| first.to_uppercase().collect::<String>() + chars.as_str())
-                .unwrap_or_default()
-        })
-        .collect::<Vec<_>>()
-        .join(" ")
+const ITEM_HEIGHT: f32 = 22.0;
+const LOG_LIMIT: usize = 240;
+const WORKSPACE_WIDTH: f32 = 190.0;
+const FPS_MIN_WIDTH: f32 = 88.0;
+const FPS_ICON_SPACE: f32 = 19.0;
+
+pub fn widget_label(item: Widget) -> &'static str {
+    match item {
+        Widget::Fps => "Frame rate",
+        Widget::Hot => "HOT alerts",
+        Widget::Estop => "E-STOP",
+        Widget::Connection => "Hardware connection",
+        Widget::StatusRgb => "Physical status RGB",
+        Widget::Voltage => "Voltage",
+        Widget::Current => "Current draw",
+        Widget::Temperature => "Temperature",
+        Widget::Warnings => "Hardware warnings",
+        Widget::Timeline => "Hardware timing",
+        Widget::Progress => "Operation progress",
+        Widget::Chart => "Telemetry log chart",
+        Widget::Message => "Status message",
+        Widget::Workspace => "Workspace mode",
+    }
 }
 
-pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
-    if ui.input(|input| input.viewport().fullscreen.unwrap_or(false)) {
-        return;
+fn widget_icon(item: Widget) -> &'static str {
+    use crate::ui::icons::*;
+    match item {
+        Widget::Fps => GAUGE,
+        Widget::Hot | Widget::Estop | Widget::Warnings => WARNING,
+        Widget::Connection => PLUG,
+        Widget::StatusRgb => LIGHTBULB,
+        Widget::Voltage => LIGHTNING,
+        Widget::Current => CIRCUITRY,
+        Widget::Temperature => THERMOMETER,
+        Widget::Chart => WAVEFORM,
+        Widget::Timeline => CLOCK,
+        Widget::Progress => ARROW_CLOCKWISE,
+        Widget::Message => INFO,
+        Widget::Workspace => APP_WINDOW,
     }
+}
 
-    let panel = egui::Panel::bottom("status_bar").show_inside(ui, |ui| {
-        ui.with_layout(
-            crate::ui::i18n::layout(app.rtl, egui::Align::Center),
-            |ui| {
-                if app.status_bar.media_rate
-                    && app.current_video_path.is_some()
-                    && app.media_fps.is_finite()
-                    && app.media_fps > 0.0
-                {
-                    let response = ui.label(format!("{:.2} fps", app.media_fps));
-                    if hide_item_menu(app, response, app.tr("Media frame rate")) {
-                        app.status_bar.media_rate = false;
-                        app.save_config();
-                    }
-                    ui.separator();
-                }
+#[derive(Debug, Clone, serde::Serialize, serde::Deserialize, PartialEq)]
+pub struct StatusProgress {
+    pub id: String,
+    pub source: String,
+    pub label: String,
+    pub phase: String,
+    pub fraction: Option<f32>,
+    pub detail: String,
+}
 
-                if app.status_bar.hardware {
-                    draw_hardware_status(app, ui);
-                }
+fn controller_operations(capabilities: &HardwareCapabilities) -> Vec<StatusProgress> {
+    let mut operations: Vec<_> = capabilities.operations.iter().filter(|operation| operation.active()).collect();
+    operations.sort_by(|left, right| right.updated_at.parse::<jiff::Timestamp>().ok()
+        .cmp(&left.updated_at.parse::<jiff::Timestamp>().ok()));
+    operations.into_iter().map(|operation| {
+        let (source, label) = match operation.kind.as_str() {
+            "host" => ("controller-host", "PCController update"),
+            "firmware" | "flash-restore" => ("controller-board", "Board firmware"),
+            "eeprom" => ("controller-board", "Board EEPROM"),
+            "device-capture" => ("controller-board", "Board readback"),
+            "firmware-build" => ("controller-board", "Firmware build"),
+            "artifact-upload" => ("controller-transfer", "Receiving update"),
+            "artifact-fetch" => ("controller-transfer", "Downloading update"),
+            _ => ("controller", operation.kind.as_str()),
+        };
+        StatusProgress {
+            id: operation.id.clone(), source: source.into(), label: label.into(),
+            phase: if operation.stage.is_empty() {operation.state.clone()} else {operation.stage.clone()},
+            fraction: operation.progress_percent.filter(|percent| *percent <= 100).map(|value| f32::from(value) / 100.0),
+            detail: operation.detail.clone(),
+        }
+    }).collect()
+}
 
-                if let Some(message) = current_status_message(app) {
-                    ui.separator();
-                    ui.add(
-                        egui::Label::new(egui::RichText::new(&message).small())
-                            .truncate()
-                            .selectable(false),
-                    )
-                    .on_hover_text(message);
-                }
+fn progress_color(ui: &egui::Ui, source: &str) -> egui::Color32 {
+    match source {
+        "controller-host" => egui::Color32::from_rgb(75, 155, 230),
+        "controller-board" => ui.visuals().warn_fg_color,
+        "controller-transfer" => egui::Color32::from_rgb(60, 175, 155),
+        _ => ui.visuals().selection.bg_fill,
+    }
+}
 
-                if app.estop_active {
-                    ui.separator();
-                    ui.colored_label(
-                        egui::Color32::from_rgb(231, 76, 60),
-                        format!("{} {}", crate::ui::icons::WARNING, app.tr("E-STOP ACTIVE")),
-                    );
-                }
+fn progress_label(app: &PealayerApp, operation: &StatusProgress) -> String {
+    let key = match operation.label.as_str() {
+        "PCController update" => "PCController update", "Board firmware" => "Board firmware",
+        "Board EEPROM" => "Board EEPROM", "Board readback" => "Board readback",
+        "Firmware build" => "Firmware build", "Receiving update" => "Receiving update",
+        "Downloading update" => "Downloading update", _ => return operation.label.clone(),
+    };
+    app.tr(key)
+}
 
-                if app.status_bar.workspace {
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        let response = ui.label(format!(
-                            "{}: {}",
-                            app.tr("Workspace"),
-                            app.active_workspace_name()
-                        ));
-                        if hide_item_menu(app, response, app.tr("Workspace mode")) {
-                            app.status_bar.workspace = false;
-                            app.save_config();
-                        }
-                    });
-                }
-            },
-        );
-    });
+fn app_update_operation(update: &crate::update::UpdateStatus) -> Option<StatusProgress> {
+    update.active().then(|| StatusProgress {
+        id: update.operation_id.clone().unwrap_or_else(|| "app-update".into()),
+        source: "app".into(),
+        label: "App update".into(),
+        phase: update.state.clone(),
+        fraction: update.progress_percent().map(|value| value as f32 / 100.0),
+        detail: update.message.clone(),
+    })
+}
 
-    panel
-        .response
-        .interact(egui::Sense::click())
-        .context_menu(|ui| {
-            let title = app.tr("Status bar");
-            let media_rate = app.tr("Media frame rate");
-            let hardware = app.tr("Hardware connection");
-            let telemetry = app.tr("Hardware telemetry");
-            let status_rgb = app.tr("Physical status RGB");
-            let warnings = app.tr("Hardware warnings");
-            let workspace = app.tr("Workspace mode");
-            ui.strong(title);
-            ui.separator();
-            let mut changed = false;
-            changed |= ui
-                .checkbox(&mut app.status_bar.media_rate, media_rate)
-                .changed();
-            changed |= ui
-                .checkbox(&mut app.status_bar.hardware, hardware)
-                .changed();
-            changed |= ui
-                .checkbox(&mut app.status_bar.telemetry, telemetry)
-                .changed();
-            changed |= ui
-                .checkbox(&mut app.status_bar.status_rgb, status_rgb)
-                .changed();
-            changed |= ui
-                .checkbox(&mut app.status_bar.warnings, warnings)
-                .changed();
-            changed |= ui
-                .checkbox(&mut app.status_bar.workspace, workspace)
-                .changed();
-            if changed {
-                app.save_config();
+pub fn active_operations(capabilities: Option<&HardwareCapabilities>) -> Vec<StatusProgress> {
+    let mut result: Vec<StatusProgress> = if let Some(snapshot) = crate::peer::client().and_then(|client| client.snapshot()) {
+        snapshot
+            .session
+            .status
+            .get("status_operations")
+            .cloned()
+            .and_then(|value| serde_json::from_value(value).ok())
+            .unwrap_or_default()
+    } else {
+        capabilities.map(controller_operations).unwrap_or_default()
+    };
+    // Updating this process must remain visible even while it consumes a peer.
+    if let Some(update) = app_update_operation(&crate::update::manager().status()) {
+        result.insert(0, update);
+    }
+    if let Some(downloads) = crate::downloads::progress_if_initialized() {
+        for job in downloads {
+            result.push(StatusProgress {
+                id: job.id.clone(),
+                source: "download".into(),
+                label: "Download".into(),
+                phase: format!("{:?}", job.state),
+                fraction: job
+                    .total
+                    .filter(|total| *total > 0)
+                    .map(|total| (job.downloaded as f64 / total as f64).clamp(0.0, 1.0) as f32),
+                detail: format!("{} bytes received · {} bytes/s", job.downloaded, job.speed),
+            });
+        }
+    }
+    result.truncate(16);
+    result
+}
+
+#[derive(Clone)]
+struct LogSample {
+    time: Instant,
+    values: [Option<f64>; 3],
+}
+#[derive(Clone, Default)]
+struct TelemetryLog {
+    samples: VecDeque<LogSample>,
+}
+
+impl TelemetryLog {
+    fn sample(&mut self, now: Instant, hardware: Option<&HardwareCapabilities>) {
+        if self
+            .samples
+            .back()
+            .is_some_and(|last| now.duration_since(last.time) < Duration::from_millis(500))
+        {
+            return;
+        }
+        let live = hardware
+            .filter(|hardware| hardware.board_connected)
+            .map(|hardware| &hardware.telemetry);
+        let values = live
+            .map(|value| {
+                [
+                    value.bus_mv.map(|value| f64::from(value) / 1000.0),
+                    value.current_ma.map(f64::from),
+                    value
+                        .led_temperature_centi_c
+                        .map(|value| f64::from(value) / 100.0),
+                ]
+            })
+            .unwrap_or([None; 3]);
+        self.samples.push_back(LogSample { time: now, values });
+        while self.samples.len() > LOG_LIMIT {
+            self.samples.pop_front();
+        }
+    }
+    fn index(metric: StatusChartMetric) -> usize {
+        match metric {
+            StatusChartMetric::Voltage => 0,
+            StatusChartMetric::Current => 1,
+            StatusChartMetric::Temperature => 2,
+        }
+    }
+    fn summary(&self, metric: StatusChartMetric) -> String {
+        let index = Self::index(metric);
+        let (name, unit) = match metric {
+            StatusChartMetric::Voltage => ("Voltage", "V"),
+            StatusChartMetric::Current => ("Current draw", "mA"),
+            StatusChartMetric::Temperature => ("Temperature", "°C"),
+        };
+        let values: Vec<_> = self
+            .samples
+            .iter()
+            .filter_map(|sample| sample.values[index])
+            .collect();
+        let range = if values.is_empty() {
+            "—".to_string()
+        } else {
+            format!(
+                "{:.2}–{:.2} {unit}",
+                values.iter().copied().fold(f64::INFINITY, f64::min),
+                values.iter().copied().fold(f64::NEG_INFINITY, f64::max)
+            )
+        };
+        format!(
+            "{name} · {range} · {}/240 samples · RAM only",
+            self.samples.len()
+        )
+    }
+    fn paint(&self, ui: &mut egui::Ui, rect: egui::Rect, metric: StatusChartMetric,
+             palette: crate::config::ColorPalette) {
+        let line_color = if palette == crate::config::ColorPalette::Pastel {
+            let role = match metric {
+                StatusChartMetric::Voltage => "blue",
+                StatusChartMetric::Current => "green",
+                StatusChartMetric::Temperature => "red",
+            };
+            crate::ui::palette::color(palette, ui.visuals().dark_mode, role)
+        } else {
+            ui.visuals().selection.bg_fill
+        };
+        let index = Self::index(metric);
+        let values: Vec<_> = self
+            .samples
+            .iter()
+            .filter_map(|sample| sample.values[index])
+            .collect();
+        let (Some(first), Some(last)) = (self.samples.front(), self.samples.back()) else {
+            return;
+        };
+        if values.is_empty() {
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                "—",
+                egui::FontId::proportional(12.0),
+                ui.visuals().weak_text_color(),
+            );
+            return;
+        }
+        let low = values.iter().copied().fold(f64::INFINITY, f64::min);
+        let high = values.iter().copied().fold(f64::NEG_INFINITY, f64::max);
+        let pad = ((high - low) * 0.1).max(0.1);
+        let span = last.time.duration_since(first.time).as_secs_f64().max(0.5);
+        let mut previous = None;
+        for sample in &self.samples {
+            let point = sample.values[index].map(|value| {
+                egui::pos2(
+                    rect.left()
+                        + rect.width()
+                            * (sample.time.duration_since(first.time).as_secs_f64() / span) as f32,
+                    rect.bottom()
+                        - rect.height() * ((value - low + pad) / (high - low + 2.0 * pad)) as f32,
+                )
+            });
+            if let (Some(start), Some(end)) = (previous, point) {
+                ui.painter().line_segment(
+                    [start, end],
+                    egui::Stroke::new(1.5, line_color),
+                );
             }
-        });
+            previous = point;
+        }
+    }
 }
 
 fn current_status_message(app: &PealayerApp) -> Option<String> {
     let update = crate::update::manager().status();
-    if update.active() {
-        return Some(match update.progress_percent() {
-            Some(percent) => format!("{} · {percent:.0}%", update.message),
-            None => update.message,
-        });
+    if update.active() && !app.status_bar.progress {
+        return Some(update.message);
     }
     let (message, timestamp) = app.osd_message.as_ref()?;
-    let lifetime = std::time::Duration::from_secs_f32(
+    let lifetime = Duration::from_secs_f32(
         app.osd_display_options
             .as_ref()
             .and_then(|options| options.timeout_seconds)
@@ -134,212 +293,2207 @@ fn current_status_message(app: &PealayerApp) -> Option<String> {
     (timestamp.elapsed() <= lifetime).then(|| message.clone())
 }
 
-fn hide_item_menu(app: &PealayerApp, response: egui::Response, label: String) -> bool {
-    let mut hide = false;
-    response.context_menu(|ui| {
-        ui.label(egui::RichText::new(&label).strong());
+fn status_led_display_color(led: &HardwareStatusLed) -> egui::Color32 {
+    egui::Color32::from_rgb(led.red, led.green, led.blue)
+}
+
+fn metric_text(hardware: Option<&HardwareCapabilities>, item: Widget) -> Option<String> {
+    let telemetry = &hardware
+        .filter(|hardware| hardware.board_connected)?
+        .telemetry;
+    match item {
+        Widget::Voltage => telemetry
+            .bus_mv
+            .map(|value| format!("{:.2} V", f64::from(value) / 1000.0)),
+        Widget::Current => telemetry.current_ma.map(|value| format!("{value} mA")),
+        Widget::Temperature => telemetry
+            .led_temperature_centi_c
+            .map(|value| format!("{:.1} °C", f64::from(value) / 100.0)),
+        _ => None,
+    }
+}
+
+fn status_font(ui: &egui::Ui, monospace: bool, strong: bool) -> egui::FontId {
+    let mut font = if monospace {
+        egui::FontId::monospace(12.0)
+    } else {
+        egui::FontId::new(12.0, super::fonts::status_family(ui))
+    };
+    if strong {
+        let family = egui::FontFamily::Name(
+            if monospace {
+                "pealayer-status-mono-strong"
+            } else {
+                "pealayer-status-caption-strong"
+            }
+            .into(),
+        );
+        if ui.fonts_mut(|fonts| fonts.families().contains(&family)) {
+            font.family = family;
+        }
+    }
+    if monospace {
+        // Equal point sizes do not imply equal visible digit heights across the
+        // user's UI and fixed-pitch faces. Match their optical size, keeping the
+        // configured families and their weight rather than choosing another face.
+        let reference = ui.painter().layout_no_wrap("0123456789".into(), status_font(ui, false, strong), ui.visuals().text_color());
+        let sample = ui.painter().layout_no_wrap("0123456789".into(), font.clone(), ui.visuals().text_color());
+        let reference_height = reference.mesh_bounds.height();
+        let sample_height = sample.mesh_bounds.height();
+        if reference_height.is_finite() && sample_height.is_finite() && reference_height > 0.0 && sample_height > 0.0 {
+            font.size *= (reference_height / sample_height).clamp(0.75, 1.25);
+        }
+    }
+    font
+}
+
+fn fps_font(ui: &egui::Ui, monospace: bool) -> egui::FontId {
+    // The counter is secondary telemetry, not a heading. Optical matching in
+    // status_font can enlarge a short fixed-pitch face; never let that make FPS
+    // larger/heavier-looking than the surrounding 12-point captions.
+    let mut font = status_font(ui, monospace, false);
+    font.size = (font.size * 0.9).min(11.0);
+    font
+}
+
+fn fps_slot_width(app: &PealayerApp, ui: &egui::Ui) -> f32 {
+    let font = fps_font(ui, app.status_bar.uses_monospace(Widget::Fps));
+    let digit = ui.fonts_mut(|fonts| {
+        ('0'..='9').max_by(|a, b|
+            fonts.glyph_width(&font, *a).total_cmp(&fonts.glyph_width(&font, *b)))
+            .unwrap_or('9')
+    });
+    // Reserve the widest three-digit value even while displaying 9.99. This
+    // keeps neighboring widgets stationary without assuming fixed-pitch fonts.
+    // Larger factual values may grow the slot, never disappear under its clip.
+    let reference = format!("{digit}{digit}{digit}.{digit}{digit} fps");
+    let measure = |text: String| {
+        let galley = super::numeric_text::layout(ui, &text, font.clone(), ui.visuals().text_color());
+        let ink = galley.mesh_bounds;
+        galley.size().x + if ink.is_finite() {
+            (-ink.left()).max(0.0) + (ink.right() - galley.size().x).max(0.0)
+        } else { 0.0 }
+    };
+    let current = app.current_fps_display(Instant::now())
+        .map(|fps| measure(fps.formatted)).unwrap_or_default();
+    (FPS_ICON_SPACE + 6.0 + measure(reference).max(current)).ceil().max(FPS_MIN_WIDTH)
+}
+
+fn metric_index(item: Widget) -> Option<usize> { match item {
+    Widget::Voltage => Some(0), Widget::Current => Some(1), Widget::Temperature => Some(2), _ => None,
+} }
+fn metric_color(ui: &egui::Ui, config: &crate::config::StatusBarConfig,
+    hardware: Option<&HardwareCapabilities>, item: Widget) -> egui::Color32 {
+    let muted = ui.visuals().weak_text_color();
+    if !config.semantic_colors { return muted; }
+    let Some(hardware) = hardware.filter(|h| h.board_connected) else { return muted; };
+    if item == Widget::Temperature && hardware.telemetry.hot == Some(true) { return ui.visuals().error_fg_color; }
+    let Some(index) = metric_index(item) else { return muted; };
+    let value = [hardware.telemetry.bus_mv, hardware.telemetry.current_ma, hardware.telemetry.led_temperature_centi_c][index];
+    let [low, high] = config.metric_limits[index];
+    if value.is_some_and(|value| low.is_some_and(|low| value < low) || high.is_some_and(|high| value > high)) {
+        ui.visuals().warn_fg_color
+    } else { muted }
+}
+
+fn text_widget(
+    ui: &mut egui::Ui,
+    text: &str,
+    width: f32,
+    monospace: bool,
+    color: egui::Color32,
+    strong: bool,
+    align: egui::Align,
+) -> egui::Response {
+    let font = status_font(ui, monospace, strong);
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(width, ITEM_HEIGHT), egui::Sense::click_and_drag());
+    let mut galley = egui::WidgetText::from(egui::RichText::new(text).font(font.clone()).color(color)
+        .variations([("wght", if strong { 600.0 } else { 400.0 })]))
+        .into_galley(ui, Some(egui::TextWrapMode::Truncate), (width - 6.0).max(1.0), egui::TextStyle::Small);
+    if !strong && !monospace && text.chars().any(|ch| ch.is_ascii_digit()) {
+        let numeric = super::numeric_text::layout(ui, text, font, color);
+        if numeric.size().x <= (width - 6.0).max(1.0) { galley = numeric; }
+    }
+    paint_centered_galley(ui, rect, galley, color, align);
+    response.on_hover_text(text)
+}
+
+fn paint_centered_galley(ui: &egui::Ui, rect: egui::Rect, galley: std::sync::Arc<egui::Galley>,
+    color: egui::Color32, align: egui::Align) {
+    let x = match align { egui::Align::Min => rect.left() + 3.0,
+        egui::Align::Center => rect.center().x - galley.size().x * 0.5,
+        egui::Align::Max => rect.right() - 3.0 - galley.size().x };
+    // Center visible glyphs, not font-specific ascent/descent/line-gap space.
+    // This works for native, bundled and user-selected fonts without offsets.
+    let center_y = if galley.mesh_bounds.is_finite() { galley.mesh_bounds.center().y }
+        else { galley.rect.center().y };
+    ui.painter().with_clip_rect(rect).galley(egui::pos2(x, rect.center().y - center_y), galley, color);
+}
+
+fn connection_caption(app: &PealayerApp, hardware: Option<&HardwareCapabilities>) -> (String, bool) {
+    let requested = app.engine_handle.connection_requested.load(std::sync::atomic::Ordering::Relaxed);
+    let availability = crate::four_d::programming::hardware_availability(app.is_connected, requested, hardware);
+    let ready = availability == crate::four_d::programming::HardwareAvailability::Ready;
+    let text = if ready {
+        hardware.map(|hardware| app.display_text(&hardware.board_name)).filter(|name| !name.is_empty())
+            .unwrap_or_else(|| app.tr("Connected board"))
+    } else { app.tr(availability.label()) };
+    let icon = match app.status_bar.connection_icon {
+        crate::config::StatusConnectionIcon::Plug => crate::ui::icons::PLUG,
+        crate::config::StatusConnectionIcon::Circle => "●",
+        crate::config::StatusConnectionIcon::Controller => crate::ui::icons::CPU,
+        crate::config::StatusConnectionIcon::None => "",
+    };
+    let mode = app.status_bar.connection_mode.then(|| app.engine_handle.active_transport.try_lock().ok()
+        .and_then(|value| value.clone())).flatten();
+    let text = match mode { Some(mode) => format!("{text} · {mode}"), None => text };
+    (format!("{icon} {text}").trim().to_owned(), ready)
+}
+
+fn connection_preferred_width(app: &PealayerApp, ui: &egui::Ui, hardware: Option<&HardwareCapabilities>) -> f32 {
+    let text = connection_caption(app, hardware).0;
+    let galley = egui::WidgetText::from(egui::RichText::new(text).font(status_font(ui, false, true))
+        .variations([("wght", 600.0)]))
+        .into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::TextStyle::Small);
+    (galley.size().x + 6.0).ceil().max(if app.status_bar.connection_mode { 252.0 } else { 148.0 })
+}
+
+fn workspace_trigger(ui: &mut egui::Ui, name: &str, icon: &str, rtl: bool,
+    tooltip: &str) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(egui::vec2(WORKSPACE_WIDTH, ITEM_HEIGHT), egui::Sense::click_and_drag());
+    let visuals = ui.style().interact(&response);
+    // Private-use icon glyphs must use the normal icon-capable font family,
+    // not the custom bold status-caption family.
+    let icon_center = egui::pos2(if rtl { rect.right() - 9.0 } else { rect.left() + 9.0 }, rect.center().y);
+    let chevron_center = egui::pos2(if rtl { rect.left() + 9.0 } else { rect.right() - 9.0 }, rect.center().y);
+    ui.painter().text(icon_center, egui::Align2::CENTER_CENTER, icon,
+        egui::FontId::proportional(12.0), visuals.text_color());
+    let name_rect = rect.shrink2(egui::vec2(20.0, 0.0));
+    let galley = egui::WidgetText::from(egui::RichText::new(name).font(status_font(ui, false, true)).variations([("wght", 600.0)]))
+        .into_galley(ui, Some(egui::TextWrapMode::Truncate), name_rect.width(), egui::TextStyle::Small);
+    paint_centered_galley(ui, name_rect, galley, visuals.text_color(),
+        if rtl { egui::Align::Max } else { egui::Align::Min });
+    crate::ui::control_density::paint_chevron(ui,
+        egui::Rect::from_center_size(chevron_center, egui::vec2(14.0, 14.0)), visuals.text_color());
+    response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::ComboBox, ui.is_enabled(), name));
+    response.on_hover_text(format!("{tooltip} · {name}"))
+}
+
+#[derive(Debug, PartialEq, Eq)]
+enum WorkspaceChoice { Restore(String), Manage }
+
+fn workspace_dropdown(ui: &mut egui::Ui, profiles: &[(String, crate::config::WorkspaceProfile)],
+    active: Option<&str>, name: &str, icon: &str, rtl: bool, tooltip: &str,
+    manage_label: &str) -> (egui::Response, Option<WorkspaceChoice>) {
+    let response = workspace_trigger(ui, name, icon, rtl, tooltip);
+    let mut selected = None;
+    let popup_id = response.id.with("workspace-menu");
+    if response.has_focus() && ui.input_mut(|input|
+        input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowDown)
+            || input.consume_key(egui::Modifiers::NONE, egui::Key::ArrowUp)) {
+        egui::Popup::open_id(ui.ctx(), popup_id);
+    }
+    let popup = egui::Popup::menu(&response).id(popup_id)
+        .align(if rtl { egui::RectAlign::TOP_END } else { egui::RectAlign::TOP_START })
+        .width(200.0).show(|ui| {
+            crate::ui::dropdown::menu_ui(ui, response.id, |ui| {
+                if let Some(id) = crate::ui::workspace_profiles::profile_choices(ui, profiles, active) {
+                    selected = Some(WorkspaceChoice::Restore(id));
+                }
+                ui.separator();
+                if ui.dropdown_choice(false, format!("{}  {}", crate::ui::icons::TABS,
+                    manage_label)).clicked() {
+                    selected = Some(WorkspaceChoice::Manage);
+                    ui.close();
+                }
+            });
+        });
+    if popup.is_none() { crate::ui::dropdown::clear_menu(ui.ctx(), response.id); }
+    (response, selected)
+}
+
+fn workspace_selector(app: &mut PealayerApp, ui: &mut egui::Ui) -> egui::Response {
+    let profiles = app.ordered_workspace_profiles();
+    let icon = app.active_workspace_profile.as_ref().and_then(|id| app.workspace_profiles.get(id))
+        .map(|profile| crate::ui::icons::workspace_icon(&profile.icon)).unwrap_or(crate::ui::icons::APP_WINDOW);
+    let (response, choice) = workspace_dropdown(ui, &profiles, app.active_workspace_profile.as_deref(),
+        &format!("{}: {}", app.tr("Workspace"), app.active_workspace_name()), icon, app.rtl, &app.tr("Switch workspace"), &app.tr("Manage workspaces..."));
+    match choice {
+        Some(WorkspaceChoice::Restore(id)) => app.restore_workspace_profile(ui.ctx(), &id),
+        Some(WorkspaceChoice::Manage) => app.show_workspace_profiles_dialog = true,
+        None => {},
+    }
+    response
+}
+
+/// Structured details are shared by the hover card and the FPS context menu.
+/// One measured column layout keeps values/units aligned across both sections.
+fn fps_details(ui: &mut egui::Ui, app: &PealayerApp, fps: &crate::app::FpsDisplayInfo, heading: bool) {
+    use crate::ui::icons;
+    let mut rows = vec![
+        (icons::FILE_VIDEO, app.tr("Media frame rate"), fps.media_rate, "fps", !fps.is_ui_rate),
+        (icons::GAUGE, app.tr("Screen render rate"), fps.ui_rate, "fps", fps.is_ui_rate),
+    ];
+    if let Some(render) = fps.render_time_ms {
+        rows.push((icons::CPU, app.tr("MPV render time"), Some(render), "ms", false));
+        if let Some(peak) = fps.peak_render_time_ms {
+            rows.push((icons::CLOCK, app.tr("Peak render time"), Some(peak), "ms", false));
+        }
+    }
+    let values: Vec<_> = rows.iter().map(|row| row.2.filter(|value| value.is_finite() && *value > 0.0)
+        .map(|value| format!("{value:.2}")).unwrap_or_else(|| "—".into())).collect();
+    let body = egui::FontId::new(egui::TextStyle::Body.resolve(ui.style()).size, super::fonts::status_family(ui));
+    let mono = body.clone();
+    let measure = |text: &str, font: egui::FontId| super::numeric_text::layout(ui,text,font,ui.visuals().text_color()).size().x;
+    // Reserve a numeric lane independently of today's digit count. Larger real
+    // measurements can still grow rather than clip; ordinary updates cannot
+    // resize every row (including when a rate is temporarily unavailable).
+    let value_width = values.iter().map(|value| measure(value, mono.clone()))
+        .fold(measure("00000.00", mono.clone()), f32::max) + 6.0;
+    // Center a stable digit reference, not each changing value's visible ink.
+    // Native fonts have different overshoot for 0/1/9, which otherwise moves
+    // their baseline by a pixel as measurements change.
+    let numeric_reference = ui.painter().layout_no_wrap("0123456789".into(), mono.clone(), ui.visuals().text_color());
+    let numeric_center = if numeric_reference.mesh_bounds.is_finite() { numeric_reference.mesh_bounds.center().y }
+        else { numeric_reference.rect.center().y };
+    let unit_width = measure("fps", body.clone()).max(measure("ms", body.clone()));
+    let max_width = (ui.ctx().content_rect().width() - 40.0).max(200.0);
+    let label_width = (rows.iter().map(|row| measure(&row.1, body.clone())).fold(0.0_f32, f32::max) + 6.0)
+        .min((max_width - value_width - unit_width - 70.0).max(40.0));
+    let row_height = ui.text_style_height(&egui::TextStyle::Body);
+    let muted = ui.visuals().weak_text_color();
+    let width = label_width + value_width + unit_width + 70.0;
+    // Separators consume the available width. Bound the content itself, not just
+    // its minimum, before creating the RTL scope: an Align::Max child otherwise
+    // anchors its initial minimum rectangle to the desktop-wide trailing edge.
+    ui.set_width(width);
+    ui.allocate_ui_with_layout(egui::vec2(width, 0.0), egui::Layout::top_down(if app.rtl {egui::Align::Max} else {egui::Align::Min}), |ui| {
+    ui.set_width(width);
+    ui.spacing_mut().item_spacing.y = 7.0;
+    if heading {
+        ui.horizontal(|ui| {
+            ui.colored_label(ui.visuals().selection.bg_fill, icons::GAUGE);
+            ui.strong(app.tr("Frame rate"));
+            if app.status_bar.fps_mode == StatusBarFpsMode::Auto { ui.label(egui::RichText::new(app.tr("Auto")).small().color(muted)); }
+        });
         ui.separator();
+    }
+    for range in [0..2, 2..rows.len()] {
+        if range.is_empty() { continue; }
+        if range.start > 0 { ui.separator(); }
+        for index in range {
+            let (icon, label, _, unit, active) = &rows[index];
+            let label_galley = ui.painter().layout(label.clone(), body.clone(), muted, (label_width - 6.0).max(1.0));
+            let (rect, response) = ui.allocate_exact_size(egui::vec2(width, row_height.max(label_galley.size().y)), egui::Sense::hover());
+            response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Label, ui.is_enabled(), format!("{label}: {} {unit}", values[index])));
+            let accent = ui.visuals().selection.bg_fill;
+            let ink = ui.visuals().text_color();
+            let cells = [
+                (18.0, ui.painter().layout_no_wrap((*icon).into(), body.clone(), if *active {accent} else {muted}), if *active {accent} else {muted}, egui::Align::Center),
+                (label_width, label_galley, muted, if app.rtl {egui::Align::Max} else {egui::Align::Min}),
+                (value_width, super::numeric_text::layout(ui, &values[index], mono.clone(), ink), ink, egui::Align::Max),
+                (unit_width, ui.painter().layout_no_wrap((*unit).into(), egui::TextStyle::Small.resolve(ui.style()), muted), muted, egui::Align::Min),
+                (12.0, ui.painter().layout_no_wrap(if *active {icons::CHECK.into()} else {String::new()}, body.clone(), accent), accent, egui::Align::Center),
+            ];
+            let mut offset = 0.0;
+            for (cell_index, (cell_width, galley, color, align)) in cells.into_iter().enumerate() {
+                let left = if app.rtl {rect.right() - offset - cell_width} else {rect.left() + offset};
+                let cell = egui::Rect::from_min_size(egui::pos2(left, rect.top()), egui::vec2(cell_width, rect.height()));
+                if cell_index == 2 {
+                    let x = cell.right() - 3.0 - galley.size().x;
+                    let pixels_per_point = ui.pixels_per_point();
+                    let y = ((cell.center().y - numeric_center) * pixels_per_point).round() / pixels_per_point;
+                    ui.painter().with_clip_rect(cell).galley(egui::pos2(x, y), galley, color);
+                } else {
+                    paint_centered_galley(ui, cell, galley, color, align);
+                }
+                offset += cell_width + 10.0;
+            }
+        }
+    }
+    if heading {
+        ui.separator();
+        ui.horizontal(|ui| { ui.colored_label(muted, icons::HAND_TAP); ui.label(egui::RichText::new(app.tr("Click to switch frame rate source")).small().color(muted)); });
+    }
+    });
+}
+
+fn render_widget(
+    app: &PealayerApp,
+    ui: &mut egui::Ui,
+    item: Widget,
+    hardware: Option<&HardwareCapabilities>,
+    log: &TelemetryLog,
+    progress: &[StatusProgress],
+    connection_width: f32,
+) -> Option<(egui::Response, String)> {
+    let color = ui.visuals().text_color();
+    let (text, width, mono, color) = match item {
+        Widget::Fps => {
+            let fps = app.current_fps_display(Instant::now())?;
+            let text = format!(
+                "{} {}",
+                if fps.is_ui_rate {
+                    crate::ui::icons::GAUGE
+                } else {
+                    crate::ui::icons::FILE_VIDEO
+                },
+                fps.formatted
+            );
+            let (rect, response) = ui.allocate_exact_size(
+                egui::vec2(fps_slot_width(app, ui), ITEM_HEIGHT),
+                egui::Sense::click_and_drag(),
+            );
+            let icon = if fps.is_ui_rate {
+                crate::ui::icons::GAUGE
+            } else {
+                crate::ui::icons::FILE_VIDEO
+            };
+            let icon_x = if app.rtl {
+                rect.right() - 7.0
+            } else {
+                rect.left() + 7.0
+            };
+            let icon_galley = ui.painter().layout_no_wrap(icon.into(), egui::FontId::proportional(12.0), color);
+            paint_centered_galley(ui, egui::Rect::from_center_size(egui::pos2(icon_x,rect.center().y),
+                egui::vec2(18.0,ITEM_HEIGHT)), icon_galley, color, egui::Align::Center);
+            let number_rect = if app.rtl {
+                egui::Rect::from_min_max(rect.min, rect.max - egui::vec2(FPS_ICON_SPACE, 0.0))
+            } else {
+                egui::Rect::from_min_max(rect.min + egui::vec2(FPS_ICON_SPACE, 0.0), rect.max)
+            };
+            let font = fps_font(ui, app.status_bar.uses_monospace(item));
+            let numeric_center = super::numeric_text::center_y(ui, font.clone());
+            let value = fps.formatted.strip_suffix(" fps").unwrap_or(&fps.formatted);
+            let unit = ui.painter().layout_no_wrap("fps".into(), font.clone(), color);
+            let gap = ui.fonts_mut(|fonts| fonts.glyph_width(&font, ' '));
+            let unit_rect = egui::Rect::from_min_max(
+                egui::pos2(number_rect.right()-unit.size().x-6.0,number_rect.top()), number_rect.max);
+            paint_centered_galley(ui, unit_rect, unit.clone(), color, egui::Align::Max);
+            let galley = super::numeric_text::layout(ui, value, font, color);
+            let pos = egui::pos2(number_rect.right()-3.0-unit.size().x-gap-galley.size().x, number_rect.center().y-numeric_center);
+            ui.painter().with_clip_rect(number_rect).galley(pos, galley, color);
+            return Some((
+                response.on_hover_ui(|ui| fps_details(ui, app, &fps, true)),
+                text,
+            ));
+        }
+        Widget::Connection => {
+            let (text, ready) = connection_caption(app, hardware);
+            (
+                text,
+                connection_width,
+                false,
+                if ready && app.is_connected {
+                    egui::Color32::from_rgb(46, 204, 113)
+                } else {
+                    ui.visuals().warn_fg_color
+                },
+            )
+        }
+        Widget::Voltage | Widget::Current | Widget::Temperature => (
+            metric_text(hardware, item)?,
+            if item == Widget::Temperature { 64.0 } else { 58.0 },
+            app.status_bar.uses_monospace(item),
+            metric_color(ui, &app.status_bar, hardware, item),
+        ),
+        Widget::StatusRgb => {
+            let led = hardware
+                .filter(|hardware| hardware.board_connected)?
+                .status_led
+                .as_ref()?;
+            let (rect, response) = ui
+                .allocate_exact_size(egui::vec2(20.0, ITEM_HEIGHT), egui::Sense::click_and_drag());
+            ui.painter()
+                .circle_filled(rect.center(), 6.0, status_led_display_color(led));
+            return Some((
+                response.on_hover_text(format!(
+                    "RGB {}, {}, {} · brightness {}",
+                    led.red, led.green, led.blue, led.brightness
+                )),
+                "RGB".into(),
+            ));
+        }
+        Widget::Hot => {
+            if hardware
+                .filter(|hardware| hardware.board_connected)?
+                .telemetry
+                .hot
+                != Some(true)
+            {
+                return None;
+            }
+            (
+                format!(
+                    "{} HOT · {}",
+                    crate::ui::icons::WARNING,
+                    app.tr("Temperature alert")
+                ),
+                160.0,
+                false,
+                ui.visuals().error_fg_color,
+            )
+        }
+        Widget::Estop => {
+            if !app.estop_active {
+                return None;
+            }
+            (
+                format!("{} {}", crate::ui::icons::WARNING, app.tr("E-STOP ACTIVE")),
+                130.0,
+                false,
+                ui.visuals().error_fg_color,
+            )
+        }
+        Widget::Warnings => {
+            let warning = hardware?.warnings.first()?;
+            let text = format!("{} {}", crate::ui::icons::WARNING, warning.code);
+            return Some((
+                text_widget(
+                    ui,
+                    &text,
+                    150.0,
+                    false,
+                    ui.visuals().warn_fg_color,
+                    true,
+                    egui::Align::Min,
+                )
+                .on_hover_text(&warning.message),
+                text,
+            ));
+        }
+        Widget::Timeline => {
+            if !app.is_connected || !crate::four_d::controller::is_controller_endpoint(&app.serial_port) {
+                return None;
+            }
+            let plan = app.engine_handle.prepared_timeline.try_lock().ok()?;
+            if !plan.has_items() && !plan.play_requested && plan.error.is_none() && plan.deferred_reason.is_none() {
+                return None;
+            }
+            let state = plan.presentation_label();
+            let text = format!("{} {}", crate::ui::icons::CLOCK, app.tr(state));
+            let tooltip = plan
+                .error
+                .clone()
+                .or_else(|| plan.deferred_reason.clone())
+                .unwrap_or_else(|| {
+                    format!(
+                        "Revision {} · ACK {}",
+                        plan.revision, plan.acknowledged_revision
+                    )
+                });
+            let color = if plan.error.is_some() {
+                ui.visuals().error_fg_color
+            } else {
+                color
+            };
+            drop(plan);
+            return Some((
+                text_widget(ui, &text, 148.0, false, color, false, egui::Align::Min)
+                    .on_hover_text(tooltip),
+                text,
+            ));
+        }
+        Widget::Message => (current_status_message(app)?, 180.0, false, color),
+        // The workspace has one dedicated, interactive trailing selector.
+        Widget::Workspace => return None,
+        Widget::Progress => {
+            let operation = progress.first()?;
+            let tint = progress_color(ui, &operation.source);
+            let text = format!(
+                "{} · {}{}",
+                progress_label(app, operation),
+                operation.phase,
+                operation
+                    .fraction
+                    .map(|value| format!(" · {:.0}%", value * 100.0))
+                    .unwrap_or_default()
+            );
+            let (rect, response) = ui.allocate_exact_size(
+                egui::vec2(168.0, ITEM_HEIGHT),
+                egui::Sense::click_and_drag(),
+            );
+            if let Some(fraction) = operation.fraction {
+                ui.painter().rect_filled(
+                    egui::Rect::from_min_size(
+                        rect.left_bottom() - egui::vec2(0.0, 3.0),
+                        egui::vec2(rect.width() * fraction, 3.0),
+                    ),
+                    1.0,
+                    tint,
+                );
+            } else {
+                ui.put(
+                    egui::Rect::from_min_size(rect.left_top(), egui::vec2(14.0, 14.0)),
+                    egui::Spinner::new().size(12.0).color(tint),
+                );
+            }
+            let foreground = if operation.source.starts_with("controller-") {tint} else {color};
+            let label_left = rect.left() + if operation.fraction.is_none() {17.0} else {3.0};
+            let label_rect = egui::Rect::from_min_max(egui::pos2(label_left, rect.top()), rect.right_bottom() - egui::vec2(34.0,0.0));
+            let mut job = egui::text::LayoutJob::simple(format!("{} · {}", progress_label(app, operation),operation.phase),
+                egui::FontId::proportional(11.0),foreground,label_rect.width());
+            job.wrap.max_rows = 1;
+            job.wrap.break_anywhere = true;
+            let galley = ui.fonts_mut(|fonts|fonts.layout_job(job));
+            ui.painter().with_clip_rect(label_rect).galley(egui::pos2(label_rect.left(),label_rect.center().y-galley.size().y/2.0),galley,foreground);
+            let value = operation.fraction.map(|value|format!("{:.0}%",value*100.0)).unwrap_or_else(||"…".into());
+            let galley = super::numeric_text::layout(ui, &value,
+                egui::FontId::new(11.0, super::fonts::status_family(ui)), foreground);
+            paint_centered_galley(ui,rect,galley,foreground,egui::Align::Max);
+            let tooltip = progress
+                .iter()
+                .map(|operation| {
+                    format!(
+                        "{} · {}\n{}",
+                        progress_label(app, operation), operation.phase, operation.detail
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("\n");
+            return Some((response.on_hover_text(tooltip), text));
+        }
+        Widget::Chart => {
+            let (rect, response) = ui.allocate_exact_size(
+                egui::vec2(100.0, ITEM_HEIGHT),
+                egui::Sense::click_and_drag(),
+            );
+            log.paint(
+                ui,
+                rect.shrink2(egui::vec2(3.0, 3.0)),
+                app.status_bar.chart_metric,
+                app.color_palette,
+            );
+            let label = app.tr("Telemetry log chart");
+            let response = response.on_hover_ui(|ui| {
+                ui.label(&label);
+                ui.weak(log.summary(app.status_bar.chart_metric));
+                let (rect, _) =
+                    ui.allocate_exact_size(egui::vec2(260.0, 90.0), egui::Sense::hover());
+                log.paint(ui, rect, app.status_bar.chart_metric, app.color_palette);
+            });
+            return Some((response, label));
+        }
+    };
+    let strong = matches!(
+        item,
+        Widget::Connection
+            | Widget::Hot
+            | Widget::Estop
+    );
+    let align = if mono || metric_index(item).is_some() {
+        egui::Align::Max
+    } else {
+        egui::Align::Min
+    };
+    Some((
+        text_widget(ui, &text, width, mono, color, strong, align),
+        text,
+    ))
+}
+
+fn item_menu(app: &mut PealayerApp, ui: &mut egui::Ui, item: Widget, log_id: egui::Id) {
+    ui.strong(format!(
+        "{} {}",
+        widget_icon(item),
+        app.tr(widget_label(item))
+    ));
+    ui.separator();
+    let mut changed = false;
+    if item == Widget::Fps && let Some(fps) = app.current_fps_display(Instant::now()) {
+        if ui.dropdown_choice(false, app.tr("Copy value")).clicked() { ui.ctx().copy_text(fps.formatted.clone()); ui.close(); }
+        fps_details(ui, app, &fps, false);
+    }
+    if item == Widget::Estop && ui.dropdown_choice(false, app.tr("Release E-STOP...")).clicked() {
+        app.request_emergency_stop_change(false); ui.close();
+    }
+    if matches!(item, Widget::Warnings | Widget::Hot) && let Some(hardware) = app.advertised_hardware() {
+        if let Some(text) = metric_text(Some(&hardware), Widget::Temperature) { ui.label(text); }
+        for warning in &hardware.warnings { ui.label(format!("{} · {}", warning.code, warning.message)); }
+        if ui.dropdown_choice(false, app.tr("Show in chart")).clicked() {
+            app.status_bar.chart_metric = StatusChartMetric::Temperature; app.status_bar.chart = true; changed = true; ui.close();
+        }
+    }
+    if item == Widget::Connection {
+        hardware_preferences_item(app, ui);
+        ui.menu_button(app.tr("Connection icon"), |ui| {
+            use crate::config::StatusConnectionIcon;
+            for (value, label) in [(StatusConnectionIcon::Plug, "Plug"), (StatusConnectionIcon::Circle, "Circle"),
+                (StatusConnectionIcon::Controller, "PCController"), (StatusConnectionIcon::None, "None")] {
+                if ui.dropdown_choice(app.status_bar.connection_icon == value, app.tr(label)).clicked() {
+                    app.status_bar.connection_icon = value; changed = true; ui.close();
+                }
+            }
+        });
+        changed |= ui.themed_checkbox(&mut app.status_bar.connection_mode, "Connection mode").changed();
+        if !app.serial_port.is_empty() && ui.dropdown_choice(false, app.tr("Copy endpoint")).clicked() {
+            ui.ctx().copy_text(app.serial_port.clone()); ui.close();
+        }
+    }
+    if let Some(metric) = metric_index(item).map(|index| [StatusChartMetric::Voltage, StatusChartMetric::Current, StatusChartMetric::Temperature][index]) {
+        if ui.dropdown_choice(false, app.tr("Show in chart")).clicked() {
+            app.status_bar.chart_metric = metric; app.status_bar.chart = true; changed = true; ui.close();
+        }
+        if let Some(text) = metric_text(app.advertised_hardware().as_ref(), item)
+            && ui.dropdown_choice(false, app.tr("Copy value")).clicked() { ui.ctx().copy_text(text); ui.close(); }
+    }
+    if item == Widget::Workspace && ui.dropdown_choice(false, app.tr("Manage workspaces...")).clicked() {
+        app.show_workspace_profiles_dialog = true; ui.close();
+    }
+    if item == Widget::StatusRgb && let Some(led) = app.advertised_hardware().and_then(|h| h.status_led) {
+        let color = format!("#{:02X}{:02X}{:02X}", led.red, led.green, led.blue);
+        if ui.dropdown_choice(false, format!("{} · {color}", app.tr("Copy color"))).clicked() { ui.ctx().copy_text(color); ui.close(); }
+    }
+    if item == Widget::Timeline && ui.dropdown_choice(false, app.tr("Show in timeline")).clicked() {
+        app.open_or_focus_tab(crate::ui::layout::PealayerTab::Timeline); ui.close();
+    }
+    if item == Widget::Progress {
+        if ui.dropdown_choice(false, app.tr("Copy operation details")).clicked() {
+            let text = active_operations(app.advertised_hardware().as_ref()).iter()
+                .map(|operation| format!("{} · {}\n{}", operation.label, operation.phase, operation.detail)).collect::<Vec<_>>().join("\n");
+            ui.ctx().copy_text(text); ui.close();
+        }
+        for operation in active_operations(app.advertised_hardware().as_ref()) {
+            ui.label(format!("{} · {}",operation.label,operation.phase)); ui.weak(operation.detail);
+        }
+        ui.separator();
+    }
+    if item == Widget::Message && let Some(message) = current_status_message(app) { ui.label(message); ui.separator(); }
+    if item == Widget::Message {
+        if ui.dropdown_choice(false, app.tr("Copy message")).clicked() {
+            if let Some(message) = current_status_message(app) { ui.ctx().copy_text(message); } ui.close();
+        }
+        if ui.dropdown_choice(false, app.tr("Dismiss")).clicked() { app.osd_message = None; ui.close(); }
+    }
+    for (end, label) in [(false, "Place at start"), (true, "Place at end")] {
+        if ui.dropdown_choice(app.status_bar.at_end(item) == end, app.tr(label)).clicked() {
+            app.status_bar.place_at_end(item, end); changed = true; ui.close();
+        }
+    }
+    if item == Widget::Fps || metric_index(item).is_some() {
+        let label = app.tr("Use monospace");
+        changed |= ui.themed_checkbox(&mut app.status_bar.monospace[item as usize], label).changed();
+    }
+    if let Some(index) = metric_index(item) {
+        let label = app.tr("Semantic colors");
+        changed |= ui.themed_checkbox(&mut app.status_bar.semantic_colors, label).changed();
+        ui.menu_button(app.tr("Value range"), |ui| {
+            let (factor, unit) = match item { Widget::Voltage => (1000.0, "V"), Widget::Current => (1.0, "mA"), _ => (100.0, "°C") };
+            for (bound, label) in [(0, "Minimum"), (1, "Maximum")] {
+                ui.horizontal(|ui| {
+                    let mut enabled = app.status_bar.metric_limits[index][bound].is_some();
+                    if ui.themed_checkbox(&mut enabled, app.tr(label)).changed() {
+                        let initial = app.status_bar.metric_limits[index][1-bound].map(|other|
+                            if bound==0 { 0.min(other) } else { 0.max(other) }).unwrap_or(0);
+                        app.status_bar.metric_limits[index][bound] = enabled.then_some(initial); changed = true;
+                    }
+                    if let Some(raw) = app.status_bar.metric_limits[index][bound] {
+                        let mut value = f64::from(raw) / factor;
+                        if ui.add(egui::DragValue::new(&mut value).speed(0.1).suffix(format!(" {unit}"))).changed() {
+                            let mut raw = (value * factor).round().clamp(i32::MIN as f64, i32::MAX as f64) as i32;
+                            if let Some(other) = app.status_bar.metric_limits[index][1 - bound] { raw = if bound == 0 { raw.min(other) } else { raw.max(other) }; }
+                            app.status_bar.metric_limits[index][bound] = Some(raw); changed = true;
+                        }
+                    }
+                });
+            }
+        });
+    }
+    ui.separator();
+    if item == Widget::Fps {
+        for (mode, title) in [
+            (StatusBarFpsMode::Media, "Media"),
+            (StatusBarFpsMode::Ui, "Screen"),
+            (StatusBarFpsMode::Auto, "Auto"),
+        ] {
+            if ui
+                .dropdown_choice(app.status_bar.fps_mode == mode, app.tr(title))
+                .clicked()
+            {
+                app.status_bar.fps_mode = mode;
+                changed = true;
+                ui.close();
+            }
+        }
+        ui.separator();
+    }
+    if item == Widget::Chart {
+        let pause_label = app.tr("Pause chart logging");
+        changed |= ui.themed_checkbox(&mut app.status_bar.chart_paused, pause_label).changed();
+        if ui.dropdown_choice(false, app.tr("Copy chart history")).clicked() {
+            let history = ui.ctx().data(|data| data.get_temp::<TelemetryLog>(log_id)).unwrap_or_default();
+            let mut csv = String::from("elapsed_seconds,voltage_V,current_mA,temperature_C\n");
+            if let Some(first) = history.samples.front() { for sample in &history.samples {
+                csv.push_str(&format!("{:.3},{}\n", sample.time.duration_since(first.time).as_secs_f64(),
+                    sample.values.iter().map(|value| value.map(|v| format!("{v:.3}")).unwrap_or_default()).collect::<Vec<_>>().join(",")));
+            } }
+            ui.ctx().copy_text(csv); ui.close();
+        }
+        for (metric, title) in [
+            (StatusChartMetric::Voltage, "Voltage"),
+            (StatusChartMetric::Current, "Current draw"),
+            (StatusChartMetric::Temperature, "Temperature"),
+        ] {
+            if ui
+                .dropdown_choice(app.status_bar.chart_metric == metric, app.tr(title))
+                .clicked()
+            {
+                app.status_bar.chart_metric = metric;
+                changed = true;
+                ui.close();
+            }
+        }
         if ui
-            .button(format!(
-                "{} {} {label}",
-                crate::ui::icons::EYE_SLASH,
-                app.tr("Hide")
-            ))
+            .dropdown_choice(false, app.tr("Clear chart history"))
             .clicked()
         {
-            hide = true;
+            ui.ctx()
+                .data_mut(|data| data.remove::<TelemetryLog>(log_id));
             ui.close();
         }
-    });
-    hide
-}
-
-fn draw_hardware_status(app: &mut PealayerApp, ui: &mut egui::Ui) {
-    let connection_requested = app
-        .engine_handle
-        .connection_requested
-        .load(std::sync::atomic::Ordering::Relaxed);
-    let capabilities = app.advertised_hardware();
-    let board_ready = capabilities
-        .as_ref()
-        .is_some_and(|value| value.board_connected);
-    let coordinator_endpoint = crate::four_d::controller::is_controller_endpoint(&app.serial_port);
-    let selected_transport = app
-        .engine_handle
-        .active_transport
-        .try_lock()
-        .ok()
-        .and_then(|value| value.clone());
-    let dot_color = if app.is_connected && (!coordinator_endpoint || board_ready) {
-        egui::Color32::from_rgb(46, 204, 113)
-    } else if connection_requested || app.is_connected {
-        egui::Color32::from_rgb(241, 196, 15)
-    } else {
-        egui::Color32::from_rgb(231, 76, 60)
-    };
-    let (rect, _) = ui.allocate_exact_size(egui::vec2(12.0, 12.0), egui::Sense::hover());
-    ui.painter().circle_filled(rect.center(), 4.0, dot_color);
-
-    let label_text = if app.is_connected && coordinator_endpoint && board_ready {
-        let board_name = capabilities
-            .as_ref()
-            .map(|value| app.display_text(&value.board_name))
-            .filter(|name| !name.is_empty())
-            .or_else(|| {
-                capabilities
-                    .as_ref()
-                    .and_then(|value| value.board_profile.as_ref())
-                    .map(|profile| friendly_name(&profile.key))
-            })
-            .unwrap_or_else(|| app.tr("Connected board"));
-        selected_transport
-            .as_deref()
-            .map(|transport| format!("{board_name} via {transport}"))
-            .unwrap_or(board_name)
-    } else if app.is_connected && coordinator_endpoint {
-        app.tr("PCController connected; board not connected")
-    } else if app.is_connected {
-        format!("{} direct diagnostic", app.serial_port)
-    } else if connection_requested {
-        format!("{} {}", crate::ui::icons::PLUG, app.tr("Connecting…"))
-    } else {
-        app.tr("Hardware: Disconnected")
-    };
-    let mut connection_label = ui.label(label_text);
-    if app.is_connected && coordinator_endpoint && !board_ready {
-        connection_label =
-            connection_label.on_hover_text(app.hardware_unavailable_detail(capabilities.as_ref()));
-    } else if let Some(notice) = &app.connection_notice {
-        connection_label = connection_label.on_hover_text(notice);
+        ui.separator();
     }
-    if hide_item_menu(app, connection_label, app.tr("Hardware connection")) {
-        app.status_bar.hardware = false;
-        app.save_config();
-        return;
-    }
-
-    let Some(capabilities) = capabilities.as_ref().filter(|value| value.board_connected) else {
-        return;
-    };
-    if app.status_bar.status_rgb
-        && let Some(status_led) = &capabilities.status_led
-    {
-        let brightness = f32::from(status_led.brightness) / 255.0;
-        // PCController publishes the already-composited physical RGB result.
-        // Do not multiply it by brightness a second time: the Web UI mirrors
-        // these raw channels directly and Pealayer must show the same hue.
-        let color = status_led_display_color(status_led);
-        let (led_rect, led_response) =
-            ui.allocate_exact_size(egui::vec2(17.0, 17.0), egui::Sense::click());
-        ui.painter().circle_filled(
-            led_rect.center(),
-            8.0,
-            color.gamma_multiply((0.12 + brightness * 0.20).clamp(0.12, 0.32)),
-        );
-        ui.painter().circle_filled(led_rect.center(), 6.0, color);
-        ui.painter().circle_stroke(
-            led_rect.center(),
-            6.0,
-            egui::Stroke::new(
-                1.25_f32,
-                ui.visuals().widgets.noninteractive.fg_stroke.color,
-            ),
-        );
-        let led_response = led_response.on_hover_text(format!(
-            "{} RGB({}, {}, {}) · {} {} · {} {}",
-            app.tr("Hardware status LED"),
-            status_led.red,
-            status_led.green,
-            status_led.blue,
-            app.tr("brightness"),
-            status_led.brightness,
-            app.tr("effect"),
-            status_led.effect,
-        ));
-        if led_response.clicked() {
-            app.preferences_tab = 2;
-            app.show_preferences_dialog = true;
-        }
-        if hide_item_menu(app, led_response, app.tr("Physical status RGB")) {
-            app.status_bar.status_rgb = false;
-            app.save_config();
-        }
-    }
-
-    if app.status_bar.telemetry {
-        let telemetry = &capabilities.telemetry;
-        let mut telemetry_response = None;
-        if let Some(bus_mv) = telemetry.bus_mv {
-            telemetry_response = Some(ui.label(format!("{:.2} V", f64::from(bus_mv) / 1000.0)));
-        }
-        if let Some(current_ma) = telemetry.current_ma {
-            telemetry_response = Some(ui.label(format!("{current_ma} mA")));
-        }
-        if let Some(temperature) = telemetry.led_temperature_centi_c {
-            telemetry_response =
-                Some(ui.label(format!("{:.1} °C", f64::from(temperature) / 100.0)));
-        }
-        if let Some(response) = telemetry_response
-            && hide_item_menu(app, response, app.tr("Hardware telemetry"))
-        {
-            app.status_bar.telemetry = false;
-            app.save_config();
-        }
-    }
-    if app.status_bar.warnings
-        && let Some(warning) = capabilities.warnings.first()
-    {
-        let response = ui
-            .colored_label(
-                ui.visuals().warn_fg_color,
-                format!("{} {}", crate::ui::icons::WARNING, warning.code),
+    if matches!(
+        item,
+        Widget::Connection
+            | Widget::Voltage
+            | Widget::Current
+            | Widget::Temperature
+            | Widget::StatusRgb
+            | Widget::Warnings
+            | Widget::Hot
+            | Widget::Timeline
+    ) {
+        if ui
+            .dropdown_choice(
+                false,
+                format!("{} {}", crate::ui::icons::GAUGE, app.tr("Hardware Monitor")),
             )
-            .on_hover_text(&warning.message);
-        if response.clicked() {
-            app.preferences_tab = 2;
-            app.show_preferences_dialog = true;
+            .clicked()
+        {
+            app.open_or_focus_tab(crate::ui::layout::PealayerTab::HardwareMonitor);
+            ui.close();
         }
-        if hide_item_menu(app, response, app.tr("Hardware warnings")) {
-            app.status_bar.warnings = false;
-            app.save_config();
+    }
+    let order: Vec<_> = app
+        .status_bar
+        .ordered()
+        .into_iter()
+        .filter(|value| *value != Widget::Workspace)
+        .collect();
+    let index = order.iter().position(|value| *value == item);
+    for (earlier, title) in [(true, "Move earlier"), (false, "Move later")] {
+        let target = index.and_then(|index| {
+            if earlier {
+                index.checked_sub(1)
+            } else {
+                (index + 1 < order.len()).then_some(index + 1)
+            }
+        });
+        if ui
+            .add_enabled_ui(target.is_some(), |ui| {
+                ui.dropdown_choice(false, app.tr(title))
+            })
+            .inner
+            .clicked()
+            && let Some(target) = target
+        {
+            changed |= app.status_bar.reorder(item, order[target], !earlier);
+            ui.close();
         }
+    }
+    ui.separator();
+    if ui
+        .dropdown_choice(
+            false,
+            format!(
+                "{} {} {} {}",
+                crate::ui::icons::EYE_SLASH,
+                app.tr("Hide"),
+                widget_icon(item),
+                app.tr(widget_label(item))
+            ),
+        )
+        .clicked()
+    {
+        app.status_bar.set_visible(item, false);
+        changed = true;
+        ui.close();
+    }
+    if changed {
+        app.request_status_bar_save(ui.ctx());
     }
 }
 
-fn status_led_display_color(
-    status_led: &crate::four_d::controller::HardwareStatusLed,
-) -> egui::Color32 {
-    egui::Color32::from_rgb(status_led.red, status_led.green, status_led.blue)
+fn hardware_preferences_item(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    if ui.dropdown_choice(false, format!("{} {}", super::icons::GEAR, app.tr("Hardware preferences"))).clicked() {
+        super::preferences::navigate(app, ui.ctx(), crate::preferences_contract::PreferencesNavigation {
+            section: Some("hardware".into()), scroll_y: 0.0,
+        });
+        ui.close();
+    }
 }
 
+pub(super) fn hardware_context_menu(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    ui.strong(format!("{} {}",super::icons::PLUG,app.tr("Hardware connection")));
+    ui.separator();
+    if ui.dropdown_choice(false,format!("{} {}",super::icons::GAUGE,app.tr("Hardware Monitor"))).clicked() {
+        app.open_or_focus_tab(super::layout::PealayerTab::HardwareMonitor); ui.close();
+    }
+    hardware_preferences_item(app, ui);
+    if !app.serial_port.is_empty() && ui.dropdown_choice(false,format!("{} {}",super::icons::COPY,app.tr("Copy endpoint"))).clicked() {
+        ui.ctx().copy_text(app.serial_port.clone()); ui.close();
+    }
+}
+
+fn present(app: &PealayerApp, item: Widget, hardware: Option<&HardwareCapabilities>, progress: &[StatusProgress]) -> bool {
+    let live = hardware.filter(|h| h.board_connected);
+    match item {
+        Widget::Voltage | Widget::Current | Widget::Temperature => metric_text(hardware, item).is_some(),
+        Widget::StatusRgb => live.and_then(|h| h.status_led.as_ref()).is_some(),
+        Widget::Hot => live.is_some_and(|h| h.telemetry.hot == Some(true)),
+        Widget::Estop => app.estop_active, Widget::Warnings => hardware.is_some_and(|h| !h.warnings.is_empty()),
+        Widget::Progress => !progress.is_empty(), Widget::Message => current_status_message(app).is_some(),
+        Widget::Timeline => app.is_connected
+            && crate::four_d::controller::is_controller_endpoint(&app.serial_port)
+            && app.engine_handle.prepared_timeline.try_lock().ok().is_some_and(|p|
+                p.has_items() || p.play_requested || p.error.is_some() || p.deferred_reason.is_some()),
+        _ => true,
+    }
+}
+fn slot_width(app: &PealayerApp, ui: &egui::Ui, item: Widget) -> f32 { match item {
+    Widget::Fps => fps_slot_width(app, ui), Widget::Voltage | Widget::Current => 58.0, Widget::Temperature => 64.0,
+    Widget::StatusRgb => 20.0, Widget::Workspace => WORKSPACE_WIDTH, Widget::Chart => 100.0,
+    Widget::Progress => 168.0, Widget::Message => 180.0, Widget::Warnings => 150.0,
+    Widget::Hot => 160.0, Widget::Estop => 130.0, _ => 148.0,
+} }
+fn group_items(app: &PealayerApp, end: bool, hardware: Option<&HardwareCapabilities>, progress: &[StatusProgress]) -> Vec<Widget> {
+    let mut items: Vec<_> = app.status_bar.ordered().into_iter().filter(|item|
+        *item != Widget::Workspace && app.status_bar.visible(*item) && app.status_bar.at_end(*item) == end
+            && present(app, *item, hardware, progress)).collect();
+    // Workspace remains the last item of its selected side, preserving the default end anchor.
+    if app.status_bar.workspace && app.status_bar.at_end(Widget::Workspace) == end { items.push(Widget::Workspace); }
+    items
+}
+fn group_menu(app: &mut PealayerApp, ui: &mut egui::Ui, end: bool) {
+    ui.strong(app.tr("Status bar"));
+    let mut changed = false;
+    let label = app.tr("Show dividers"); changed |= ui.themed_checkbox(&mut app.status_bar.dividers, label).changed();
+    let label = app.tr("Semantic colors"); changed |= ui.themed_checkbox(&mut app.status_bar.semantic_colors, label).changed();
+    ui.separator();
+    for item in app.status_bar.ordered() {
+        let here = app.status_bar.visible(item) && app.status_bar.at_end(item) == end;
+        if ui.dropdown_choice(here, format!("{} {}", widget_icon(item), app.tr(widget_label(item)))).clicked() {
+            app.status_bar.set_visible(item, !here);
+            if !here { app.status_bar.place_at_end(item, end); }
+            changed = true;
+        }
+    }
+    ui.separator();
+    if ui.dropdown_choice(false, app.tr("Fonts…")).clicked() {
+        app.preferences_tab = 0; crate::ui::preferences::open(app, ui.ctx()); ui.close();
+    }
+    if ui.dropdown_choice(false, app.tr("Reset widget order")).clicked() {
+        let defaults = crate::config::StatusBarConfig::default();
+        app.status_bar.order = defaults.order; app.status_bar.trailing = defaults.trailing;
+        changed = true; ui.close();
+    }
+    if changed { app.request_status_bar_save(ui.ctx()); }
+}
+fn click_item(app: &mut PealayerApp, ui: &mut egui::Ui, item: Widget, progress: &[StatusProgress]) {
+    match item {
+        Widget::Fps => { app.status_bar.fps_mode = app.status_bar.fps_mode.next(); app.request_status_bar_save(ui.ctx()); }
+        Widget::Estop => app.request_emergency_stop_change(false),
+        Widget::Progress if progress.first().is_some_and(|p| p.source == "download") => crate::downloads::open(ui.ctx()),
+        Widget::Progress if progress.first().is_some_and(|p| p.source.starts_with("controller")) =>
+            app.open_or_focus_tab(crate::ui::layout::PealayerTab::HardwareMonitor),
+        Widget::Timeline => app.open_or_focus_tab(crate::ui::layout::PealayerTab::Timeline),
+        Widget::Connection | Widget::Voltage | Widget::Current | Widget::Temperature | Widget::StatusRgb
+            | Widget::Warnings | Widget::Hot =>
+                app.open_or_focus_tab(crate::ui::layout::PealayerTab::HardwareMonitor),
+        _ => {},
+    }
+}
+fn draw_group(app: &mut PealayerApp, ui: &mut egui::Ui, end: bool, hardware: Option<&HardwareCapabilities>,
+    log: &TelemetryLog, progress: &[StatusProgress], log_id: egui::Id, rects: &mut Vec<(Widget, egui::Rect)>, connection_width: f32,
+    divider_color: egui::Color32) {
+    let background = ui.interact(ui.max_rect(), ui.id().with(("status-side", end)), egui::Sense::click());
+    let items = group_items(app, end, hardware, progress);
+    egui::ScrollArea::horizontal().id_salt(("status-side-scroll", end))
+        .scroll_bar_visibility(egui::scroll_area::ScrollBarVisibility::AlwaysHidden)
+        .scroll_source(egui::scroll_area::ScrollSource::MOUSE_WHEEL).auto_shrink([false, true])
+        .show(ui, |ui| {
+            ui.with_layout(crate::ui::i18n::layout(app.rtl, egui::Align::Center), |ui| {
+                for (index, item) in items.into_iter().enumerate() {
+                    if (index > 0 || item == Widget::Workspace) && app.status_bar.dividers {
+                        let (rect, _) = ui.allocate_exact_size(egui::vec2(1.0, ITEM_HEIGHT), egui::Sense::hover());
+                        ui.painter().line_segment([rect.center_top()+egui::vec2(0.0,5.0), rect.center_bottom()-egui::vec2(0.0,5.0)],
+                            egui::Stroke::new(1.0, divider_color));
+                    }
+                    let id = ui.make_persistent_id(("status-widget", item));
+                    let offset_id = id.with("offset");
+                    if let Some(source) = ui.ctx().data(|d| d.get_temp::<egui::Rect>(id.with("source"))) {
+                        crate::ui::layout::remember_drag_offset_on_press(ui.ctx(), source, offset_id);
+                    }
+                    let dragging = egui::DragAndDrop::payload::<Widget>(ui.ctx()).is_some_and(|p| *p == item)
+                        && ui.input(|i| i.pointer.primary_down());
+                    let layer = if dragging { egui::LayerId::new(egui::Order::Tooltip, id) } else { ui.layer_id() };
+                    let result = ui.scope_builder(egui::UiBuilder::new().layer_id(layer), |ui| {
+                        if dragging { ui.set_clip_rect(ui.ctx().content_rect()); }
+                        let bg = ui.painter().add(egui::Shape::Noop);
+                        let response = if item == Widget::Workspace { Some((workspace_selector(app, ui), String::new())) }
+                            else { render_widget(app, ui, item, hardware, log, progress, connection_width) };
+                        if let Some((response, _)) = &response {
+                            let alpha = crate::ui::motion::hover_alpha(ui, id.with("hover"), response.hovered() || response.has_focus());
+                            ui.painter().set(bg, egui::Shape::rect_filled(response.rect, 3.0,
+                                ui.visuals().widgets.hovered.weak_bg_fill.gamma_multiply(alpha)));
+                            if response.has_focus() { ui.painter().rect_stroke(response.rect.shrink(0.5), 3.0,
+                                egui::Stroke::new(1.0, ui.visuals().selection.bg_fill), egui::StrokeKind::Inside); }
+                        }
+                        response
+                    }).inner;
+                    let Some((response, _)) = result else { continue };
+                    rects.push((item, response.rect));
+                    if !dragging { ui.ctx().data_mut(|d| d.insert_temp(id.with("source"), response.rect)); }
+                    crate::ui::layout::remember_drag_offset_on_press(ui.ctx(), response.rect, offset_id);
+                    response.dnd_set_drag_payload(item);
+                    if dragging && let Some(pointer) = ui.ctx().pointer_interact_pos() {
+                        let offset = ui.ctx().data(|d| d.get_temp::<egui::Vec2>(offset_id)).unwrap_or(response.rect.size()*0.5);
+                        ui.ctx().transform_layer_shapes(layer, egui::emath::TSTransform::from_translation(pointer-offset-response.rect.min));
+                        ui.ctx().set_cursor_icon(egui::CursorIcon::Grabbing);
+                    }
+                    if response.clicked() { click_item(app, ui, item, progress); }
+                    if response.dnd_hover_payload::<Widget>().is_some_and(|p| *p != item) {
+                        let after = ui.ctx().pointer_interact_pos().is_some_and(|p| (p.x > response.rect.center().x) != app.rtl);
+                        let x = if after != app.rtl { response.rect.right() } else { response.rect.left() };
+                        ui.painter().line_segment([egui::pos2(x,response.rect.top()),egui::pos2(x,response.rect.bottom())],
+                            egui::Stroke::new(2.0,ui.visuals().selection.bg_fill));
+                    }
+                    if let Some(moved) = response.dnd_release_payload::<Widget>() {
+                        let after = ui.ctx().pointer_interact_pos().is_some_and(|p| (p.x > response.rect.center().x) != app.rtl);
+                        app.status_bar.place_at_end(*moved,end); app.status_bar.set_visible(*moved,true);
+                        app.status_bar.reorder(*moved,item,after); app.request_status_bar_save(ui.ctx());
+                    }
+                    if matches!(item, Widget::Chart | Widget::Progress | Widget::Message) {
+                        egui::Popup::menu(&response).show(|ui| item_menu(app,ui,item,log_id));
+                    }
+                    response.context_menu(|ui| item_menu(app,ui,item,log_id));
+                }
+            });
+        });
+    let over_item = ui.ctx().pointer_interact_pos().is_some_and(|p| rects.iter().any(|(_,r)|r.contains(p)));
+    if !over_item {
+        if background.dnd_hover_payload::<Widget>().is_some() {
+            ui.painter().rect_stroke(background.rect.shrink(1.0),3.0,egui::Stroke::new(1.0,ui.visuals().selection.bg_fill),egui::StrokeKind::Inside);
+        }
+        if let Some(moved) = background.dnd_release_payload::<Widget>() {
+            app.status_bar.place_at_end(*moved,end); app.status_bar.set_visible(*moved,true); app.request_status_bar_save(ui.ctx());
+        }
+        background.context_menu(|ui| group_menu(app,ui,end));
+    }
+}
+
+pub(crate) fn status_bar_panel_frame(tokens: &crate::ui::craft_theme::Tokens) -> egui::Frame {
+    egui::Frame::NONE
+        .inner_margin(egui::Margin::symmetric(7, 1))
+        .fill(tokens.well_bg)
+        .stroke(egui::Stroke::new(1.0, tokens.separator))
+}
+
+pub fn draw(app: &mut PealayerApp, ui: &mut egui::Ui) {
+    if !app.show_four_d_editor && !app.simple_workspace.show_status_bar { return; }
+    let _timing = crate::performance::span(crate::performance::Phase::Status);
+    if ui.input(|i| i.viewport().fullscreen.unwrap_or(false)) { return; }
+    let tokens = crate::ui::craft_theme::current(ui.ctx());
+    let hardware = app.advertised_hardware();
+    let progress = active_operations(hardware.as_ref());
+    let log_id = egui::Id::new("status-bar-telemetry-log");
+    let now = Instant::now();
+    let log = ui.ctx().data_mut(|data| { let log=data.get_temp_mut_or_default::<TelemetryLog>(log_id);
+        if !app.status_bar.chart_paused { log.sample(now,hardware.as_ref()); } log.clone() });
+    let payload = egui::DragAndDrop::payload::<Widget>(ui.ctx());
+    let mut rects = Vec::new();
+    let frame = status_bar_panel_frame(&tokens);
+    let panel = egui::Panel::bottom("status_bar")
+        // These are fixed-height slots, not a resizable workspace panel.
+        // An unconstrained centered panel converges from the density-dependent
+        // default size over multiple frames, visibly shifting the whole row.
+        .exact_size(ITEM_HEIGHT + frame.total_margin().sum().y)
+        .resizable(false)
+        .frame(frame)
+        // The themed frame already owns this boundary. Panel otherwise reserves
+        // another point and paints a second line just outside the frame outline.
+        .show_separator_line(false)
+        .show_inside(ui, |ui| {
+        let family = super::fonts::status_family(ui);
+        for font in ui.style_mut().text_styles.values_mut() {
+            if font.family == egui::FontFamily::Proportional { font.family = family.clone(); }
+        }
+        ui.spacing_mut().item_spacing.x=3.0;
+        ui.with_layout(crate::ui::i18n::layout(app.rtl,egui::Align::Center), |ui| {
+            let all_items: Vec<_> = [false, true].into_iter()
+                .flat_map(|end| group_items(app,end,hardware.as_ref(),&progress)).collect();
+            let other_width: f32 = all_items.iter().filter(|item| **item != Widget::Connection)
+                .map(|item| slot_width(app,ui,*item)).sum();
+            let gaps = all_items.len().saturating_sub(1) as f32 * if app.status_bar.dividers { 7.0 } else { 3.0 };
+            let connection_width = connection_preferred_width(app,ui,hardware.as_ref())
+                .min((ui.available_width()-other_width-gaps).max(148.0));
+            let items=group_items(app,true,hardware.as_ref(),&progress);
+            let separators=if app.status_bar.dividers {
+                (items.len().saturating_sub(1)+usize::from(items.first()==Some(&Widget::Workspace))) as f32*4.0
+            } else { 0.0 };
+            let end_width=(items.iter().map(|item| if *item == Widget::Connection { connection_width } else { slot_width(app,ui,*item) }).sum::<f32>() + items.len().saturating_sub(1) as f32*3.0 + separators)
+                .max(24.0).min((ui.available_width()-48.0).max(24.0));
+            let start_width=(ui.available_width()-end_width-3.0).max(1.0);
+            ui.allocate_ui_with_layout(egui::vec2(start_width,ITEM_HEIGHT),crate::ui::i18n::layout(app.rtl,egui::Align::Center),
+                |ui|draw_group(app,ui,false,hardware.as_ref(),&log,&progress,log_id,&mut rects,connection_width,tokens.separator));
+            ui.allocate_ui_with_layout(egui::vec2(end_width,ITEM_HEIGHT),crate::ui::i18n::layout(app.rtl,egui::Align::Center),
+                |ui|draw_group(app,ui,true,hardware.as_ref(),&log,&progress,log_id,&mut rects,connection_width,tokens.separator));
+        });
+    });
+    #[cfg(test)] ui.ctx().data_mut(|data|data.insert_temp(egui::Id::new("test-status-widget-rects"),rects));
+    if let Some(moved)=payload && let Some(pointer)=ui.ctx().pointer_interact_pos()
+        && !panel.response.rect.expand(8.0).contains(pointer) {
+        let painter=ui.ctx().layer_painter(egui::LayerId::new(egui::Order::Tooltip,egui::Id::new("status-remove-hint")));
+        painter.text(pointer+egui::vec2(12.0,20.0),egui::Align2::LEFT_TOP,
+            format!("{} {} {}",crate::ui::icons::EYE_SLASH,app.tr("Hide"),app.tr(widget_label(*moved))),
+            egui::FontId::proportional(12.0),ui.visuals().error_fg_color);
+        if ui.input(|i|i.pointer.any_released()) { app.status_bar.set_visible(*moved,false); app.request_status_bar_save(ui.ctx()); }
+    }
+    if app.status_bar.fps_mode != StatusBarFpsMode::Media || app.status_bar.chart || !progress.is_empty() {
+        ui.ctx().request_repaint_after(Duration::from_millis(500));
+    }
+}
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn hardware_context_menu_opens_and_applies_its_choice_at_the_trailing_end() {
+        let _guard = crate::app::tests::lock_app_tests();
+        for rtl in [false, true] {
+            let ctx = egui::Context::default();
+            crate::ui::i18n::configure_ui_fonts(&ctx, false);
+            let mut app = PealayerApp::default();
+            app.engine_handle = crate::four_d::engine::memory_only_test_engine();
+            app.rtl = rtl;
+            for item in Widget::ALL { app.status_bar.set_visible(item, item == Widget::Connection); }
+            app.status_bar.place_at_end(Widget::Connection, true);
+            app.status_bar.connection_mode = false;
+            let mut time = 0.0;
+            let mut frame = |app: &mut PealayerApp, events| {
+                time += 0.1;
+                let mut output = ctx.run_ui(egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(1000.0,500.0))),
+                    time: Some(time), events, ..Default::default()
+                }, |ui| draw(app,ui));
+                output.textures_delta.clear(); output
+            };
+            frame(&mut app,vec![]); frame(&mut app,vec![]);
+            let rect = ctx.data(|d| d.get_temp::<Vec<(Widget,egui::Rect)>>(egui::Id::new("test-status-widget-rects"))).unwrap()[0].1;
+            let button = |pos, button, pressed| egui::Event::PointerButton {pos,button,pressed,modifiers:egui::Modifiers::NONE};
+            frame(&mut app,vec![egui::Event::PointerMoved(rect.center()),button(rect.center(),egui::PointerButton::Secondary,true)]);
+            frame(&mut app,vec![button(rect.center(),egui::PointerButton::Secondary,false)]);
+            let output = frame(&mut app,vec![]);
+            let row = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(t) if t.galley.text() == "Connection mode" => Some(egui::Rect::from_min_size(t.pos,t.galley.size())), _=>None,
+            }).expect("Hardware context menu must be visible");
+            frame(&mut app,vec![egui::Event::PointerMoved(row.center()),button(row.center(),egui::PointerButton::Primary,true)]);
+            frame(&mut app,vec![button(row.center(),egui::PointerButton::Primary,false)]);
+            assert!(app.status_bar.connection_mode,"choosing the menu item must apply, RTL={rtl}");
+            assert!(app.pending_status_bar_save.is_some());
+        }
+    }
+
+    #[test]
+    fn native_fonts_center_status_ink_and_use_available_connection_space() {
+        let _guard = crate::app::tests::lock_app_tests();
+        for family in [crate::config::UiFontFamily::System, crate::config::UiFontFamily::Bundled] {
+            for scale in [1.0, 1.25, 1.5, 2.0] {
+                for (width,rtl,trailing) in [(1000.0,false,false),(1000.0,true,false),(1000.0,false,true),(420.0,false,false)] {
+                    let context = egui::Context::default();
+                    context.set_pixels_per_point(scale);
+                    let config = crate::config::AppConfig { ui_font_family:family, monospace_font_family:family, ..Default::default() };
+                    crate::ui::fonts::install(&context,&config,false);
+                    let mut app = PealayerApp::default();
+                    app.engine_handle = crate::four_d::engine::memory_only_test_engine();
+                    app.rtl=rtl;
+                    app.status_bar=crate::config::StatusBarConfig::default();
+                    app.status_bar.place_at_end(Widget::Connection,trailing);
+                    app.status_bar.fps_mode=StatusBarFpsMode::Media;
+                    app.current_video_path=Some("fixture.mp4".into());
+                    app.media_fps=23.976;
+                    let mut output=context.run_ui(egui::RawInput {screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(width,420.0))),..Default::default()},|ui|draw(&mut app,ui));
+                    let rects=context.data(|d|d.get_temp::<Vec<(Widget,egui::Rect)>>(egui::Id::new("test-status-widget-rects"))).unwrap();
+                    for widget in [Widget::Fps,Widget::Connection] {
+                        let rect=rects.iter().find(|(w,_)|*w==widget).unwrap().1;
+                        let text=output.shapes.iter().find_map(|shape| match &shape.shape {
+                            egui::Shape::Text(text) if (widget==Widget::Fps && text.galley.text().parse::<f64>().is_ok())
+                                || (widget==Widget::Connection && text.galley.text().contains("Hardware:")) => Some(text),_=>None
+                        }).expect("status caption");
+                        let ink=text.galley.mesh_bounds.translate(text.pos.to_vec2());
+                        if widget == Widget::Connection {
+                            assert!((ink.center().y-rect.center().y).abs()<0.05,"{family:?} {scale} {widget:?}: {ink:?} {rect:?}");
+                        } else {
+                            let icon = output.shapes.iter().find_map(|shape| match &shape.shape {
+                                egui::Shape::Text(icon) if icon.galley.text() == crate::ui::icons::FILE_VIDEO => Some(icon), _ => None,
+                            }).expect("painted FPS icon");
+                            let icon_center = icon.pos.y + icon.galley.mesh_bounds.center().y;
+                            let mut numeric_center = 0.0;
+                            let font = text.galley.job.sections[0].format.font_id.clone();
+                            let mut check=context.run_ui(Default::default(),|ui|numeric_center=super::super::numeric_text::center_y(ui,font.clone()));
+                            check.textures_delta.clear();
+                            assert!((icon_center - text.pos.y - numeric_center).abs() < 0.05,
+                                "icon and numeric center differ");
+                        }
+                        assert!(ink.top()>=rect.top() && ink.bottom()<=rect.bottom(),"glyphs clipped vertically");
+                        if widget==Widget::Connection && width>=1000.0 {
+                            assert!(!text.galley.elided,"space available but hardware caption elided");
+                            assert!(rect.width()>=text.galley.size().x+5.9);
+                        }
+                    }
+                    output.textures_delta.clear();
+                }
+            }
+        }
+    }
     use super::*;
 
     #[test]
-    fn physical_status_led_uses_authoritative_rgb_without_double_dimming() {
-        let led = crate::four_d::controller::HardwareStatusLed {
-            red: 0,
-            green: 255,
-            blue: 0,
-            brightness: 32,
-            effect: 0,
-            condition: 0,
-        };
-        assert_eq!(
-            status_led_display_color(&led),
-            egui::Color32::from_rgb(0, 255, 0)
-        );
+    fn fps_details_align_values_and_use_sections_without_duplicate_narration() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.engine_handle = crate::four_d::engine::memory_only_test_engine();
+        let details = crate::app::FpsDisplayInfo { value: 23.976, formatted: "23.98 fps".into(),
+            is_ui_rate: false, media_rate: Some(23.976), ui_rate: Some(30.62),
+            render_time_ms: Some(1.11), peak_render_time_ms: Some(27.71) };
+        for dark in [false, true] { for rtl in [false, true] { for scale in [1.0, 1.5] { for viewport_width in [390.0, 3002.0] {
+            let ctx = egui::Context::default();
+            ctx.set_pixels_per_point(scale);
+            let config = crate::config::AppConfig { color_palette: crate::config::ColorPalette::Studio,
+                theme: if dark {crate::config::AppTheme::Dark} else {crate::config::AppTheme::Light}, ..Default::default() };
+            crate::ui::configure_native_appearance(&ctx, &config);
+            crate::ui::fonts::install(&ctx, &config, rtl);
+            app.rtl = rtl;
+            app.language = if rtl {crate::config::AppLanguage::Persian} else {crate::config::AppLanguage::English};
+            let mut output = None;
+            let mut bounds = egui::Rect::NOTHING;
+            for _ in 0..3 {
+                let mut frame = ctx.run_ui(egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(viewport_width, 650.0))),
+                    ..Default::default()
+                }, |ui| {
+                    let source = ui.button("23.98 fps");
+                    bounds = egui::Tooltip::for_widget(&source).show(|ui| {
+                        fps_details(ui, &app, &details, true);
+                    }).expect("native tooltip is open").response.rect;
+                });
+                frame.textures_delta.clear(); output = Some(frame);
+            }
+            let output = output.unwrap();
+            let text: Vec<_> = output.shapes.iter().filter_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) => Some(text), _ => None,
+            }).collect();
+            let values: Vec<_> = ["23.98", "30.62", "1.11", "27.71"].iter().map(|value| {
+                text.iter().find(|text| text.galley.text() == *value)
+                    .unwrap_or_else(|| panic!("metric {value} missing; dark={dark}, rtl={rtl}, scale={scale}; painted={:?}", text.iter().map(|t|t.galley.text()).collect::<Vec<_>>()))
+            }).collect();
+            let right = values[0].pos.x + values[0].galley.size().x;
+            for value in values { assert!((value.pos.x + value.galley.size().x - right).abs() < 0.2, "metric value column drifted"); }
+            assert_eq!(text.iter().filter(|text| text.galley.text() == app.tr("Frame rate")).count(), 1);
+            assert_eq!(text.iter().filter(|text| text.galley.text() == app.tr("Click to switch frame rate source")).count(), 1);
+            assert!(!text.iter().any(|text| text.galley.text().contains("Active mode")));
+            assert!(output.shapes.iter().filter(|shape| matches!(&shape.shape, egui::Shape::LineSegment{points,..} if (points[0].y-points[1].y).abs()<0.1)).count() >= 3);
+            assert!(bounds.width() < 390.0, "tooltip expanded beyond its measured content on {viewport_width}-point viewport (dark={dark}, rtl={rtl}, scale={scale}): {bounds:?}");
+            assert!(bounds.left() >= 0.0 && bounds.right() <= viewport_width, "tooltip escaped viewport: {bounds:?}");
+        } } } }
     }
 
     #[test]
+    fn fps_tooltip_updates_keep_numeric_baselines_and_columns_stationary() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.engine_handle = crate::four_d::engine::memory_only_test_engine();
+        for family in [crate::config::UiFontFamily::System, crate::config::UiFontFamily::Bundled] {
+        for rtl in [false, true] { for scale in [1.0, 1.25, 1.5, 2.0] {
+            let ctx = egui::Context::default();
+            ctx.set_pixels_per_point(scale);
+            let config = crate::config::AppConfig { monospace_font_family: family, ..Default::default() };
+            crate::ui::configure_native_appearance(&ctx, &config);
+            crate::ui::fonts::install(&ctx, &config, rtl);
+            app.rtl = rtl;
+            app.language = if rtl {crate::config::AppLanguage::Persian} else {crate::config::AppLanguage::English};
+            let mut baseline: Option<(egui::Vec2, f32, f32)> = None;
+            for rate in [Some(9.99), Some(10.0), Some(99.99), Some(100.0), Some(999.99), None, Some(1.11), Some(18.88)] {
+                let details = crate::app::FpsDisplayInfo { value: 23.976, formatted: "23.98 fps".into(),
+                    is_ui_rate: false, media_rate: Some(23.976), ui_rate: rate,
+                    render_time_ms: Some(2.22), peak_render_time_ms: Some(27.71) };
+                let mut bounds = egui::Rect::NOTHING;
+                let mut output = None;
+                for _ in 0..3 {
+                    let mut frame = ctx.run_ui(egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1200.0, 650.0))),
+                        ..Default::default()
+                    }, |ui| {
+                        let source = ui.button("23.98 fps");
+                        bounds = egui::Tooltip::for_widget(&source).show(|ui| fps_details(ui, &app, &details, true)).unwrap().response.rect;
+                    });
+                    frame.textures_delta.clear(); output = Some(frame);
+                }
+                let expected = rate.map(|rate|format!("{rate:.2}")).unwrap_or_else(||"—".into());
+                let output = output.unwrap();
+                let value = output.shapes.iter().find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text() == expected => Some(text), _ => None,
+                }).expect("changing rate is painted");
+                let current = (bounds.size(), value.pos.y - bounds.top(), value.pos.x + value.galley.size().x - bounds.left());
+                if let Some(previous) = baseline {
+                    assert!((current.0 - previous.0).length() < 0.05, "changing rate resized popup: {family:?}, rtl={rtl}, scale={scale}");
+                    assert!((current.1 - previous.1).abs() < 0.05, "changing digits shifted numeric baseline: {family:?}, rtl={rtl}, scale={scale}");
+                    assert!((current.2 - previous.2).abs() < 0.05, "changing digits shifted numeric column: {family:?}, rtl={rtl}, scale={scale}");
+                } else { baseline = Some(current); }
+            }
+        } } }
+    }
+
+    #[test]
+    fn fps_details_keep_unknown_samples_unknown() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.engine_handle = crate::four_d::engine::memory_only_test_engine();
+        app.current_video_path = Some("fixture.mp4".into());
+        app.media_fps = f64::INFINITY;
+        let details = app.current_fps_display(Instant::now()).unwrap();
+        assert_eq!(details.media_rate, None);
+        assert_eq!(details.ui_rate, None);
+        app.current_video_path = None;
+        let unloaded = app.current_fps_display(Instant::now()).unwrap();
+        assert_eq!(unloaded.render_time_ms, None);
+        assert_eq!(unloaded.peak_render_time_ms, None);
+    }
+
+    #[test]
+    fn update_progress_verification_has_no_completed_download_percentage() {
+        let _lock = crate::app::tests::lock_app_tests();
+        let context = egui::Context::default();
+        let mut app = PealayerApp::default();
+        app.engine_handle = crate::four_d::engine::memory_only_test_engine();
+        let mut status = crate::update::UpdateStatus {
+            state: "receiving".into(), bytes_done: 100, bytes_total: Some(100),
+            ..Default::default()
+        };
+        assert_eq!(app_update_operation(&status).unwrap().fraction, Some(1.0));
+        status.state = "verifying".into();
+        let operation = app_update_operation(&status).unwrap();
+        assert_eq!(operation.fraction, None);
+        let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+            let (response, text) = render_widget(&app, ui, Widget::Progress, None,
+                &TelemetryLog::default(), std::slice::from_ref(&operation), 168.0).unwrap();
+            assert_eq!(response.rect.size(), egui::vec2(168.0, ITEM_HEIGHT));
+            assert!(text.contains("verifying"));
+            assert!(!text.contains('%'));
+        });
+        assert!(!output.shapes.iter().any(|shape| matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text().contains("100%"))));
+        output.textures_delta.clear();
+        status.state = "completed".into();
+        assert!(app_update_operation(&status).is_none());
+    }
+
+    #[test]
+    fn controller_update_operations_keep_host_and_board_identity_and_newest_progress() {
+        use crate::four_d::controller::HardwareOperation;
+        let mut hardware = HardwareCapabilities::default();
+        let operation = |id:&str,kind:&str,time:&str| HardwareOperation {
+            id:id.into(),kind:kind.into(),state:"running".into(),stage:"writing".into(),progress_percent:Some(42),updated_at:time.into(),..Default::default()
+        };
+        hardware.operations = vec![operation("board","firmware","2026-10-14T01:00:00Z"),operation("host","host","2026-10-14T01:00:00.001Z")];
+        let progress = controller_operations(&hardware);
+        assert_eq!(progress[0].source,"controller-host");
+        assert_eq!(progress[0].label,"PCController update");
+        assert_eq!(progress[0].fraction,Some(0.42));
+        assert_eq!(progress[1].source,"controller-board");
+        assert_eq!(progress[1].label,"Board firmware");
+        hardware.operations[1].state="completed".into();
+        assert_eq!(controller_operations(&hardware).len(),1);
+        hardware.operations[0].state="failed".into();
+        assert!(controller_operations(&hardware).is_empty());
+    }
+
+    #[test]
+    fn controller_progress_colors_and_width_do_not_change_with_percentage() {
+        let _lock=crate::app::tests::lock_app_tests();
+        let context=egui::Context::default();
+        let mut app=PealayerApp::default();
+        app.engine_handle=crate::four_d::engine::memory_only_test_engine();
+        let mut output=context.run_ui(egui::RawInput::default(),|ui| {
+            assert_ne!(progress_color(ui,"controller-host"),progress_color(ui,"controller-board"));
+            for source in ["controller-host","controller-board"] {
+                for fraction in [None,Some(0.01),Some(0.99)] {
+                    let progress=StatusProgress{id:"op".into(),source:source.into(),label:"PCController update".into(),phase:"health-checking".into(),fraction,detail:"".into()};
+                    let response=render_widget(&app,ui,Widget::Progress,None,&TelemetryLog::default(),&[progress],148.0).unwrap().0;
+                    assert_eq!(response.rect.size(),egui::vec2(168.0,ITEM_HEIGHT));
+                }
+            }
+        });
+        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,egui::Shape::Text(text) if text.galley.text()=="99%")));
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn programming_latch_status_is_painted_without_a_disconnected_claim() {
+        let _lock=crate::app::tests::lock_app_tests();
+        let context=egui::Context::default();
+        let mut app=PealayerApp::default();
+        app.is_connected=true;
+        app.engine_handle.is_connected.store(true,std::sync::atomic::Ordering::Relaxed);
+        install_hardware_snapshot_for_test(&app);
+        let mut output=context.run_ui(egui::RawInput {
+            screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(1600.0,420.0))),..Default::default()
+        },|ui| draw(&mut app,ui));
+        assert!(output.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Text(text) if text.galley.text().contains("Programming latch"))));
+        assert!(!output.shapes.iter().any(|shape|matches!(&shape.shape,egui::Shape::Text(text) if text.galley.text().contains("Disconnected") || text.galley.text().contains("not connected"))));
+        output.textures_delta.clear();
+    }
+
+    fn install_hardware_snapshot_for_test(app:&PealayerApp) {
+        crate::four_d::engine::install_hardware_snapshot(&app.engine_handle.hardware_capabilities,&app.engine_handle.hardware_revision,
+            Some(HardwareCapabilities {board_connected:true,
+                programming:Some(crate::four_d::programming::HardwareProgrammingState{latch_known:true,programming_latch:true,revision:1,..Default::default()}),..Default::default()}));
+    }
+
+    #[test]
+    fn regular_metrics_are_centered_muted_and_color_only_with_real_limits_or_hot() {
+        let context=egui::Context::default();
+        crate::ui::i18n::configure_ui_fonts(&context,false);
+        let mut config=crate::config::StatusBarConfig::default();
+        let mut hardware=HardwareCapabilities {board_connected:true,..Default::default()};
+        hardware.telemetry.bus_mv=Some(12000);
+        let mut output=context.run_ui(egui::RawInput::default(),|ui|{
+            config.semantic_colors=true; config.metric_limits[0]=[Some(11000),Some(13000)];
+            assert_eq!(metric_color(ui,&config,Some(&hardware),Widget::Voltage),ui.visuals().weak_text_color());
+            hardware.telemetry.bus_mv=Some(14000);
+            assert_eq!(metric_color(ui,&config,Some(&hardware),Widget::Voltage),ui.visuals().warn_fg_color);
+            config.semantic_colors=false;
+            assert_eq!(metric_color(ui,&config,Some(&hardware),Widget::Voltage),ui.visuals().weak_text_color());
+            for mono in [false,true] {
+                let response=text_widget(ui,"12.00 V",58.0,mono,ui.visuals().weak_text_color(),false,egui::Align::Max);
+                ui.ctx().data_mut(|d|d.insert_temp(egui::Id::new(("metric-center",mono)),response.rect));
+            }
+        });
+        output.textures_delta.clear();
+        for (index,text) in output.shapes.iter().filter_map(|s|if let egui::Shape::Text(t)=&s.shape {Some(t)}else{None}).enumerate() {
+            let mono=index==1;
+            let rect=context.data(|d|d.get_temp::<egui::Rect>(egui::Id::new(("metric-center",mono)))).unwrap();
+            assert!((text.pos.y+text.galley.mesh_bounds.center().y-rect.center().y).abs()<0.01);
+            assert_eq!(text.galley.job.sections[0].format.font_id.family,if mono {egui::FontFamily::Monospace}else{egui::FontFamily::Name("pealayer-status".into())});
+        }
+    }
+
+    #[test]
+    fn widget_side_and_typeface_survive_persistence_and_do_not_change_other_widgets() {
+        let mut config=crate::config::StatusBarConfig::default();
+        config.monospace[Widget::Current as usize]=true;
+        config.place_at_end(Widget::Voltage,true); config.monospace[Widget::Voltage as usize]=false;
+        config.set_visible(Widget::Voltage,false); config.set_visible(Widget::Voltage,true);
+        let restored:crate::config::StatusBarConfig=serde_json::from_value(serde_json::to_value(config).unwrap()).unwrap();
+        assert!(restored.at_end(Widget::Voltage)); assert!(restored.at_end(Widget::Workspace));
+        assert!(!restored.at_end(Widget::Current)); assert!(!restored.uses_monospace(Widget::Voltage));
+        assert!(restored.uses_monospace(Widget::Current)); assert_eq!(restored.metric_limits,[[None;2];3]);
+    }
+
+    #[test]
+    fn drag_uses_one_original_render_and_crosses_both_anchored_groups() {
+        let _guard=crate::app::tests::lock_app_tests();
+        let mut app=PealayerApp::default(); app.engine_handle=crate::four_d::engine::memory_only_test_engine();
+        for item in Widget::ALL { app.status_bar.set_visible(item,matches!(item,Widget::Fps|Widget::Connection|Widget::Workspace)); }
+        app.status_bar.fps_mode=StatusBarFpsMode::Media;
+        let context=egui::Context::default();
+        crate::ui::motion::configure(&context,crate::config::UiAnimationMode::Disabled);
+        let mut time=0.0;
+        let mut frame=|app:&mut PealayerApp,events| { time+=0.1; let mut output=context.run_ui(egui::RawInput {
+            screen_rect:Some(egui::Rect::from_min_size(egui::Pos2::ZERO,egui::vec2(700.0,420.0))),
+            time:Some(time),events,..Default::default()
+        },|ui|draw(app,ui)); output.textures_delta.clear(); output };
+        let rect=|item|context.data(|d|d.get_temp::<Vec<(Widget,egui::Rect)>>(egui::Id::new("test-status-widget-rects"))).unwrap()
+            .into_iter().find(|(id,_)|*id==item).unwrap().1;
+        let button=|pos,pressed|egui::Event::PointerButton {pos,pressed,button:egui::PointerButton::Primary,modifiers:egui::Modifiers::NONE};
+        frame(&mut app,vec![]); frame(&mut app,vec![]);
+        for (target,end) in [(Widget::Workspace,true),(Widget::Connection,false)] {
+            let from=rect(Widget::Fps).center()-egui::vec2(7.0,0.0);
+            let to=rect(target).center();
+            frame(&mut app,vec![egui::Event::PointerMoved(from),button(from,true)]);
+            frame(&mut app,vec![egui::Event::PointerMoved(to)]);
+            let output=frame(&mut app,vec![]);
+            let fps:Vec<_>=output.shapes.iter().filter_map(|s|if let egui::Shape::Text(t)=&s.shape {
+                t.galley.text().ends_with("fps").then_some(t)
+            }else{None}).collect();
+            assert_eq!(fps.len(),1,"drag must move existing render, not draw a second copy");
+            assert!(fps[0].pos.x>from.x.min(to.x)-100.0);
+            frame(&mut app,vec![button(to,false)]); frame(&mut app,vec![]);
+            assert_eq!(app.status_bar.at_end(Widget::Fps),end);
+        }
+    }
+
+    #[test]
+    fn workspace_selector_keeps_icon_name_and_chevron_in_a_fixed_slot() {
+        for rtl in [false, true] {
+            for dark in [false, true] {
+                for scale in [1.0, 1.25, 1.5, 2.0] {
+                    let context = egui::Context::default();
+                    context.set_pixels_per_point(scale);
+                    context.set_visuals(if dark { egui::Visuals::dark() } else { egui::Visuals::light() });
+                    crate::ui::i18n::configure_ui_fonts(&context, false);
+                    for name in ["Watch films", "My very long renamed authoring workspace"] {
+                        let mut slot = egui::Rect::NOTHING;
+                        let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+                            slot = workspace_trigger(ui, name, crate::ui::icons::FILE_VIDEO, rtl, "Switch workspace").rect;
+                        });
+                        output.textures_delta.clear();
+                        assert_eq!(slot.size(), egui::vec2(WORKSPACE_WIDTH, ITEM_HEIGHT));
+                        let icon = output.shapes.iter().find_map(|shape| match &shape.shape {
+                            egui::epaint::Shape::Text(text) if text.galley.job.text == crate::ui::icons::FILE_VIDEO => Some(text),
+                            _ => None,
+                        }).expect("Icon must be painted separately from the bold caption");
+                        assert_eq!(icon.galley.job.sections[0].format.font_id.family, egui::FontFamily::Proportional);
+                        let icon_rect = egui::Rect::from_min_size(icon.pos, icon.galley.size());
+                        assert!(slot.contains_rect(icon_rect));
+                        assert!(if rtl { icon_rect.center().x > slot.center().x }
+                            else { icon_rect.center().x < slot.center().x });
+                        assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                            egui::epaint::Shape::Path(path) if path.points.len() == 3)), "Open chevron must be painted");
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn workspace_menu_restores_the_actual_app_and_has_a_leading_divider() {
+        let _guard = crate::app::tests::lock_app_tests();
+        for rtl in [false, true] { for scale in [1.0, 1.5] { for dividers in [false, true] {
+            let ctx = egui::Context::default();
+            ctx.set_pixels_per_point(scale);
+            let mut app = PealayerApp::default();
+            app.engine_handle = crate::four_d::engine::memory_only_test_engine();
+            app.rtl = rtl;
+            app.show_four_d_editor = true;
+            // This test switches into Simple and back through the bar itself.
+            // Simple normally hides it; explicitly enable this optional surface.
+            app.simple_workspace.show_status_bar = true;
+            for widget in Widget::ALL { app.status_bar.set_visible(widget, widget == Widget::Workspace); }
+            app.status_bar.dividers = dividers;
+            let mut author = app.capture_workspace_profile(&ctx);
+            author.egui_memory = None;
+            author.window_geometry = None;
+            author.name = "Authoring desk".into();
+            author.icon = "effects".into();
+            let mut watch = author.clone();
+            watch.name = "Watch films".into();
+            watch.nle = false;
+            app.workspace_profiles = [("author-id".into(), author), ("watch-id".into(), watch)].into();
+            app.active_workspace_profile = Some("author-id".into());
+            let mut time = 0.0;
+            let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary,
+                pressed, modifiers: egui::Modifiers::NONE };
+            let mut render = |app: &mut PealayerApp, events| {
+                let mut output = ctx.run_ui(egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 420.0))),
+                    time: Some(time), events, ..Default::default()
+                }, |ui| draw(app, ui));
+                time += 0.1;
+                output.textures_delta.clear();
+                output
+            };
+            render(&mut app, vec![]);
+            let output = render(&mut app, vec![]);
+            let slot = ctx.data(|data| data.get_temp::<Vec<(Widget, egui::Rect)>>(
+                egui::Id::new("test-status-widget-rects"))).unwrap()[0].1;
+            assert_eq!(slot.width(), WORKSPACE_WIDTH, "No caption/chevron alignment change");
+            let separator = output.shapes.iter().any(|shape| matches!(&shape.shape,
+                egui::Shape::LineSegment { points, stroke } if stroke.width == 1.0
+                    && (points[0].x-points[1].x).abs() < 0.01
+                    && (points[0].y-(slot.top()+5.0)).abs() < 0.1
+                    && (points[1].y-(slot.bottom()-5.0)).abs() < 0.1
+                    && if rtl { points[0].x > slot.right() && points[0].x < slot.right()+5.0 }
+                       else { points[0].x < slot.left() && points[0].x > slot.left()-5.0 }));
+            assert_eq!(separator, dividers, "Missing/extra Workspace divider: rtl={rtl}, scale={scale}");
+            for (id, caption, nle) in [("watch-id", "Watch films", false), ("author-id", "Authoring desk", true)] {
+                render(&mut app, vec![egui::Event::PointerMoved(slot.center()), button(slot.center(), true)]);
+                render(&mut app, vec![button(slot.center(), false)]);
+                let output = render(&mut app, vec![]);
+                let row = output.shapes.iter().find_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) if text.galley.text().ends_with(caption) && text.galley.text().contains("  ") =>
+                        Some(egui::Rect::from_min_size(text.pos, text.galley.size())),
+                    _ => None,
+                }).expect("Workspace menu row");
+                render(&mut app, vec![egui::Event::PointerMoved(row.center()), button(row.center(), true)]);
+                render(&mut app, vec![button(row.center(), false)]);
+                assert_eq!(app.active_workspace_profile.as_deref(), Some(id));
+                assert_eq!(app.show_four_d_editor, nle, "Menu choice must reach the actual app restore");
+                assert_eq!(app.runtime_config_snapshot().workspace_session.nle, nle);
+            }
+        } } }
+    }
+
+    #[test]
+    fn workspace_dropdown_click_and_keyboard_return_stable_profile_ids() {
+        let profiles = vec![
+            ("simple-id".into(), crate::config::WorkspaceProfile { name: "Watch films".into(), icon: "video".into(), ..Default::default() }),
+            ("author-id".into(), crate::config::WorkspaceProfile { name: "My authoring desk".into(), icon: "effects".into(), ..Default::default() }),
+        ];
+        for opening_key in [None, Some(egui::Key::ArrowDown), Some(egui::Key::Enter)] {
+            let context = egui::Context::default();
+            let mut time = 0.0;
+            let mut render = |events| {
+                let mut result = None;
+                let mut output = context.run_ui(egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(400.0, 360.0))),
+                    events, time: Some(time), ..Default::default()
+                }, |ui| {
+                    ui.add_space(260.0);
+                    result = Some(workspace_dropdown(ui, &profiles, Some("simple-id"), "Watch films",
+                        crate::ui::icons::FILE_VIDEO, false, "Switch workspace", "Manage workspaces..."));
+                });
+                time += 0.1;
+                output.textures_delta.clear();
+                (result.unwrap(), output)
+            };
+            let ((trigger, choice), _) = render(vec![]);
+            assert_eq!(choice, None);
+            let popup_id = trigger.id.with("workspace-menu");
+            let button = |pos, pressed| egui::Event::PointerButton { pos, button: egui::PointerButton::Primary,
+                pressed, modifiers: egui::Modifiers::NONE };
+            let key = |key, pressed| egui::Event::Key { key, physical_key: Some(key), pressed, repeat: false,
+                modifiers: egui::Modifiers::NONE };
+            if let Some(opening_key) = opening_key {
+                context.memory_mut(|memory| memory.request_focus(trigger.id));
+                render(vec![key(opening_key, true)]);
+                render(vec![key(opening_key, false)]);
+            } else {
+                render(vec![egui::Event::PointerMoved(trigger.rect.center()), button(trigger.rect.center(), true)]);
+                render(vec![button(trigger.rect.center(), false)]);
+            }
+            assert!(egui::Popup::is_id_open(&context, popup_id), "Primary click/arrows must open the selector");
+            let (_, output) = render(vec![]);
+            let row_text = format!("{}  My authoring desk", crate::ui::icons::SPARKLE);
+            let row = output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::epaint::Shape::Text(text) if text.galley.job.text == row_text =>
+                    Some(egui::Rect::from_min_size(text.pos, text.galley.size())),
+                _ => None,
+            }).expect("Renamed workspace must be present in the open menu");
+            assert!(row.bottom() < trigger.rect.top(), "Status menu must fit above its trigger");
+            let choice = if opening_key.is_some() {
+                render(vec![key(egui::Key::ArrowDown, true)]);
+                render(vec![key(egui::Key::ArrowDown, false)]);
+                render(vec![key(egui::Key::Enter, true)]).0.1
+            } else {
+                render(vec![egui::Event::PointerMoved(row.center()), button(row.center(), true)]);
+                render(vec![button(row.center(), false)]).0.1
+            };
+            assert_eq!(choice, Some(WorkspaceChoice::Restore("author-id".into())));
+            assert!(!egui::Popup::is_id_open(&context, popup_id));
+            assert_eq!(profiles[0].1.name, "Watch films", "Menu drawing cannot mutate profiles");
+        }
+    }
+    #[test]
+    fn physical_status_led_uses_authoritative_rgb_without_double_dimming() {
+        assert_eq!(
+            status_led_display_color(&HardwareStatusLed {
+                red: 0,
+                green: 255,
+                blue: 0,
+                brightness: 32,
+                effect: 0,
+                condition: 0
+            }),
+            egui::Color32::GREEN
+        );
+    }
+    #[test]
     fn status_bar_message_uses_the_same_lifetime_as_osd() {
+        let _guard = crate::app::tests::lock_app_tests();
         let mut app = PealayerApp::default();
         app.osd_timeout_seconds = 4.0;
-        app.set_osd("Remote command accepted".to_string());
+        app.set_osd("Remote command accepted".into());
         assert_eq!(
             current_status_message(&app).as_deref(),
             Some("Remote command accepted")
         );
+    }
+    #[test]
+    fn chart_is_bounded_and_disconnect_does_not_become_zero() {
+        let mut log = TelemetryLog::default();
+        let now = Instant::now();
+        for index in 0..300 {
+            log.sample(now + Duration::from_secs(index), None);
+        }
+        assert_eq!(log.samples.len(), LOG_LIMIT);
+        assert!(log.samples.iter().all(|sample| sample.values == [None; 3]));
+    }
+    #[test]
+    fn widget_reorder_is_unique_and_visibility_is_independent() {
+        let mut config = crate::config::StatusBarConfig::default();
+        assert!(!config.chart);
+        assert!(config.reorder(Widget::Temperature, Widget::Fps, false));
+        assert_eq!(config.order[0], Widget::Temperature);
+        assert_eq!(config.ordered().len(), Widget::ALL.len());
+        config.set_visible(Widget::Voltage, false);
+        assert!(config.visible(Widget::Current) && !config.visible(Widget::Voltage));
+        config.set_visible(Widget::Connection, false);
+        assert!(config.visible(Widget::Current));
+    }
+    #[test]
+    fn fps_auto_uses_play_pause_and_unknown_rate_stays_visible() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.status_bar.fps_mode = StatusBarFpsMode::Auto;
+        app.current_video_path = Some("fixture.mp4".into());
+        app.media_fps = 24.0;
+        app.is_paused = false;
+        assert!(!app.current_fps_display(Instant::now()).unwrap().is_ui_rate);
+        app.is_paused = true;
+        assert!(app.current_fps_display(Instant::now()).unwrap().is_ui_rate);
+        app.status_bar.fps_mode = StatusBarFpsMode::Media;
+        app.media_fps = 0.0;
+        assert_eq!(
+            app.current_fps_display(Instant::now()).unwrap().formatted,
+            "— fps"
+        );
+        assert_eq!(
+            StatusBarFpsMode::Media.next().next().next(),
+            StatusBarFpsMode::Media
+        );
+    }
+
+    #[test]
+    fn status_monospace_digits_match_ui_optical_size() {
+        for ui_family in [crate::config::UiFontFamily::System, crate::config::UiFontFamily::Bundled] {
+        for mono_family in [crate::config::UiFontFamily::System, crate::config::UiFontFamily::Bundled] {
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+            let ctx = egui::Context::default();
+            ctx.set_pixels_per_point(scale);
+            crate::ui::fonts::install(&ctx, &crate::config::AppConfig {
+                ui_font_family: ui_family, monospace_font_family: mono_family, ..Default::default()
+            }, false);
+            let mut output = ctx.run_ui(Default::default(), |ui| {
+                let regular = status_font(ui, true, false);
+                assert_eq!(regular.family, egui::FontFamily::Monospace, "regular numeric text must not use an emphasis face");
+                let reference = ui.painter().layout_no_wrap("0123456789".into(), status_font(ui, false, false), ui.visuals().text_color());
+                let numeric = ui.painter().layout_no_wrap("0123456789".into(), regular, ui.visuals().text_color());
+                assert!((reference.mesh_bounds.height() - numeric.mesh_bounds.height()).abs() * ui.pixels_per_point() <= 2.0,
+                    "status digits are optically larger/smaller than the UI face: ui={ui_family:?}, mono={mono_family:?}, scale={scale}");
+            });
+            output.textures_delta.clear();
+        } } }
+    }
+
+    #[test]
+    fn fps_digits_fit_their_real_clip_and_stay_subordinate_to_status_captions() {
+        let _guard = crate::app::tests::lock_app_tests();
+        for family in [crate::config::UiFontFamily::System, crate::config::UiFontFamily::Bundled] {
+        for scale in [1.0, 1.25, 1.5, 2.0] {
+        for rtl in [false, true] {
+        for mono in [false, true] {
+            let ctx = egui::Context::default();
+            ctx.set_pixels_per_point(scale);
+            crate::ui::fonts::install(&ctx, &crate::config::AppConfig {
+                ui_font_family: family, monospace_font_family: family, ..Default::default()
+            }, false);
+            let mut app = PealayerApp::default();
+            app.engine_handle = crate::four_d::engine::memory_only_test_engine();
+            app.current_video_path = Some("fixture.mp4".into());
+            app.status_bar.fps_mode = StatusBarFpsMode::Media;
+            app.status_bar.monospace[Widget::Fps as usize] = mono;
+            app.rtl = rtl;
+            let mut normal_width = None;
+            for value in [9.99, 99.99, 100.0, 144.12, 999.99, 1000.0, 9999.99] {
+                app.media_fps = value;
+                let mut bounds = egui::Rect::NOTHING;
+                let mut output = ctx.run_ui(Default::default(), |ui| {
+                    bounds = render_widget(&app, ui, Widget::Fps, None,
+                        &TelemetryLog::default(), &[], 148.0).unwrap().0.rect;
+                });
+                let shape = output.shapes.iter().find(|shape|
+                    matches!(&shape.shape, egui::Shape::Text(text) if text.galley.text().parse::<f64>().is_ok()))
+                    .expect("painted FPS value");
+                let egui::Shape::Text(text) = &shape.shape else { unreachable!() };
+                let ink = text.galley.mesh_bounds.translate(text.pos.to_vec2());
+                assert!(shape.clip_rect.expand(0.05).contains_rect(ink),
+                    "FPS clipped: value={value}, {family:?}, mono={mono}, rtl={rtl}, scale={scale}: ink={ink:?}, clip={:?}", shape.clip_rect);
+                assert!(text.galley.job.sections[0].format.font_id.size <= 11.0,
+                    "FPS must be smaller than the 12-point status captions");
+                let reference = text.galley.job.sections[0].format.font_id.clone();
+                let mut center = 0.0;
+                let mut check = ctx.run_ui(Default::default(), |ui| { center=super::super::numeric_text::center_y(ui,reference.clone()); });
+                check.textures_delta.clear();
+                assert!((text.pos.y + center - bounds.center().y).abs() < 0.05,
+                    "FPS lost its stable numeric center");
+                if value < 1000.0 {
+                    if let Some(width) = normal_width { assert_eq!(bounds.width(), width, "ordinary FPS changes moved adjacent widgets"); }
+                    normal_width = Some(bounds.width());
+                }
+                output.textures_delta.clear();
+            }
+        } } } }
+    }
+
+    #[test]
+    fn render_fps_uses_regular_font_in_every_source_mode() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let context = egui::Context::default();
+        crate::ui::fonts::install(&context,&crate::config::AppConfig::default(),false);
+        let mut app = PealayerApp::default();
+        app.engine_handle = crate::four_d::engine::memory_only_test_engine();
+        app.current_video_path = Some("fixture.mp4".into());
+        app.media_fps = 24.0;
+        for (mode,paused) in [(StatusBarFpsMode::Ui,false),(StatusBarFpsMode::Media,true),(StatusBarFpsMode::Auto,true),(StatusBarFpsMode::Auto,false)] {
+            app.status_bar.fps_mode=mode; app.is_paused=paused;
+            let mut expected=None;
+            let mut numeric_center=0.0;
+            let mut output=context.run_ui(Default::default(),|ui| {
+                expected=Some(fps_font(ui,app.status_bar.uses_monospace(Widget::Fps)));
+                numeric_center=super::super::numeric_text::center_y(ui,expected.clone().unwrap());
+                render_widget(&app,ui,Widget::Fps,None,&TelemetryLog::default(),&[],100.0);
+            });
+            let actual=output.shapes.iter().find_map(|s| match &s.shape {
+                egui::Shape::Text(t) if t.galley.text() != "fps" && (t.galley.text().parse::<f64>().is_ok() || t.galley.text() == "—") => Some(t.galley.job.sections[0].format.font_id.clone()),_=>None
+            }).unwrap();
+            assert_eq!(Some(actual),expected,"wrong FPS weight for {mode:?}, paused={paused}");
+            let caption=output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if text.galley.text().parse::<f64>().is_ok() || text.galley.text() == "—" => Some(text), _=>None,
+            }).unwrap();
+            let icon=output.shapes.iter().find_map(|shape| match &shape.shape {
+                egui::Shape::Text(text) if [crate::ui::icons::GAUGE,crate::ui::icons::FILE_VIDEO].contains(&text.galley.text()) => Some(text), _=>None,
+            }).unwrap();
+            assert!((icon.pos.y+icon.galley.mesh_bounds.center().y-caption.pos.y-numeric_center).abs()<0.05,
+                "icon and numeric center diverged for {mode:?}");
+            let unit=output.shapes.iter().find_map(|shape|match &shape.shape {
+                egui::Shape::Text(t) if t.galley.text()=="fps"=>Some(t),_=>None,
+            }).unwrap();
+            assert!((unit.pos.y+unit.galley.mesh_bounds.center().y-caption.pos.y-numeric_center).abs()<0.05,
+                "fps unit must share the visible numeric center, not its descender baseline");
+            output.textures_delta.clear();
+        }
+    }
+    #[test]
+    fn reactive_idle_screen_rate_uses_real_intervals_without_continuous_repaint() {
+        let mut tracker = crate::app::FrameRateTracker::default();
+        let start = Instant::now();
+        tracker.record_frame(start);
+        assert_eq!(tracker.live_fps(), None);
+        tracker.record_frame(start + Duration::from_millis(500));
+        assert_eq!(tracker.live_fps(), Some(2.0));
+        tracker.record_frame(start + Duration::from_millis(1000));
+        assert_eq!(tracker.live_fps(), Some(2.0));
+    }
+    #[test]
+    fn paused_status_rgb_paints_each_installed_peer_frame_without_input() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let context = egui::Context::default();
+        let mut app = PealayerApp::default();
+        app.is_paused = true;
+        app.is_connected = true;
+        app.status_bar.status_rgb = true;
+        assert!(app.advertised_hardware().is_none());
+        for (red, green, blue) in [(0, 128, 40), (0, 0, 0), (255, 0, 64)] {
+            crate::four_d::engine::install_hardware_snapshot(
+                &app.engine_handle.hardware_capabilities,
+                &app.engine_handle.hardware_revision,
+                Some(HardwareCapabilities {
+                    board_connected: true,
+                    status_led: Some(HardwareStatusLed {
+                        red, green, blue, brightness: 128, effect: 1, condition: 8,
+                    }),
+                    ..Default::default()
+                }),
+            );
+            let mut output = context.run_ui(egui::RawInput {
+                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1000.0, 420.0))),
+                ..Default::default()
+            }, |ui| draw(&mut app, ui));
+            assert!(output.shapes.iter().any(|shape| matches!(&shape.shape,
+                egui::epaint::Shape::Circle(circle) if circle.radius == 6.0
+                    && circle.fill == egui::Color32::from_rgb(red, green, blue)
+            )), "paused RGB dot did not paint the installed peer frame");
+            output.textures_delta.clear();
+        }
+    }
+
+    #[test]
+    fn updating_values_keep_slots_and_workspace_stays_at_the_logical_end() {
+        let _guard = crate::app::tests::lock_app_tests();
+        for (width, rtl) in [(1000.0, false), (420.0, false), (1000.0, true)] {
+            let context = egui::Context::default();
+            let mut app = PealayerApp::default();
+            app.rtl = rtl;
+            app.is_connected = true;
+            app.status_bar = crate::config::StatusBarConfig::default();
+            app.status_bar.fps_mode = StatusBarFpsMode::Media;
+            app.current_video_path = Some("fixture.mp4".into());
+            // Even an old saved order cannot drag the workspace into the group.
+            app.status_bar
+                .reorder(Widget::Workspace, Widget::Fps, false);
+            let mut previous: Option<Vec<(Widget, egui::Rect)>> = None;
+            let mut previous_fps_end: Option<f32> = None;
+            for index in 0..5 {
+                app.media_fps = if index % 2 == 0 { 9.99 } else { 144.12 };
+                let mut hardware = HardwareCapabilities::default();
+                hardware.board_connected = true;
+                hardware.board_name = "PCController".into();
+                hardware.telemetry.bus_mv = Some(if index % 2 == 0 { 999 } else { 12021 });
+                hardware.telemetry.current_ma = Some(if index % 2 == 0 { 9 } else { 1001 });
+                hardware.telemetry.led_temperature_centi_c =
+                    Some(if index % 2 == 0 { -501 } else { 3201 });
+                app.update_hardware_capabilities(Some(hardware));
+                let mut output = context.run_ui(
+                    egui::RawInput {
+                        screen_rect: Some(egui::Rect::from_min_size(
+                            egui::Pos2::ZERO,
+                            egui::vec2(width, 420.0),
+                        )),
+                        ..Default::default()
+                    },
+                    |ui| draw(&mut app, ui),
+                );
+                let fps_end = output
+                    .shapes
+                    .iter()
+                    .find_map(|shape| match &shape.shape {
+                        egui::epaint::Shape::Text(text) if text.galley.text().ends_with("fps") => {
+                            Some(text.pos.x + text.galley.size().x)
+                        }
+                        _ => None,
+                    })
+                    .expect("numeric FPS caption");
+                if let Some(previous) = previous_fps_end {
+                    assert!(
+                        (previous - fps_end).abs() < 1.0,
+                        "FPS unit shifted with digit count"
+                    );
+                }
+                previous_fps_end = Some(fps_end);
+                let texts: Vec<_> = output
+                    .shapes
+                    .iter()
+                    .filter_map(|shape| {
+                        if let egui::epaint::Shape::Text(text) = &shape.shape {
+                            Some(text.galley.text())
+                        } else {
+                            None
+                        }
+                    })
+                    .collect();
+                assert!(!texts.iter().any(|text| text.contains("Auto")
+                    || text.contains("Media ·")
+                    || text.contains("Screen ·")));
+                output.textures_delta.clear();
+                let rects = context
+                    .data(|data| {
+                        data.get_temp::<Vec<(Widget, egui::Rect)>>(egui::Id::new(
+                            "test-status-widget-rects",
+                        ))
+                    })
+                    .unwrap();
+                if index > 1 {
+                    assert_eq!(
+                        previous.as_ref().unwrap(),
+                        &rects,
+                        "values changed geometry at {width}, RTL={rtl}"
+                    );
+                }
+                let workspace = rects
+                    .iter()
+                    .find(|(widget, _)| *widget == Widget::Workspace)
+                    .unwrap()
+                    .1;
+                assert!(
+                    (if rtl {
+                        workspace.left() - 8.0
+                    } else {
+                        workspace.right() - (width - 8.0)
+                    })
+                    .abs()
+                        < 1.0,
+                    "workspace lost its trailing anchor: {workspace:?}"
+                );
+                let fps = rects
+                    .iter()
+                    .find(|(widget, _)| *widget == Widget::Fps)
+                    .unwrap()
+                    .1;
+                assert!(fps.width() >= FPS_MIN_WIDTH);
+                previous = Some(rects);
+            }
+        }
+    }
+
+    #[test]
+    fn real_status_bar_click_menu_and_drag_do_not_lose_widget_ownership() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.status_bar = crate::config::StatusBarConfig::default();
+        for widget in Widget::ALL {
+            app.status_bar.set_visible(
+                widget,
+                matches!(widget, Widget::Fps | Widget::Connection | Widget::Workspace),
+            );
+        }
+        app.status_bar.fps_mode = StatusBarFpsMode::Media;
+        let context = egui::Context::default();
+        let mut time = 0.0;
+        let mut frame = |app: &mut PealayerApp, events: Vec<egui::Event>| {
+            time += 0.05;
+            let mut output = context.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(
+                        egui::Pos2::ZERO,
+                        egui::vec2(700.0, 420.0),
+                    )),
+                    time: Some(time),
+                    events,
+                    ..Default::default()
+                },
+                |ui| draw(app, ui),
+            );
+            output.textures_delta.clear();
+            output
+        };
+        let find_text = |output: &egui::FullOutput, needle: &str| {
+            output
+                .shapes
+                .iter()
+                .find_map(|shape| {
+                    if let egui::epaint::Shape::Text(text) = &shape.shape {
+                        text.galley
+                            .text()
+                            .contains(needle)
+                            .then(|| egui::Rect::from_min_size(text.pos, text.galley.size()))
+                    } else {
+                        None
+                    }
+                })
+                .unwrap_or_else(|| panic!("missing status text {needle}"))
+        };
+        let button = |pos, which, pressed| egui::Event::PointerButton {
+            pos,
+            button: which,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(&mut app, vec![]);
+        let output = frame(&mut app, vec![]);
+        find_text(&output, "fps");
+        let widget_rect = |widget| {
+            context
+                .data(|data| {
+                    data.get_temp::<Vec<(Widget, egui::Rect)>>(egui::Id::new(
+                        "test-status-widget-rects",
+                    ))
+                })
+                .unwrap()
+                .into_iter()
+                .find(|(item, _)| *item == widget)
+                .unwrap()
+                .1
+        };
+        let point = widget_rect(Widget::Fps).center();
+        frame(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(point),
+                button(point, egui::PointerButton::Primary, true),
+            ],
+        );
+        frame(
+            &mut app,
+            vec![button(point, egui::PointerButton::Primary, false)],
+        );
+        assert_eq!(app.status_bar.fps_mode, StatusBarFpsMode::Ui);
+        let output = frame(&mut app, vec![]);
+        find_text(&output, "fps");
+        let source = widget_rect(Widget::Fps).center();
+        let target = widget_rect(Widget::Connection).right_center() - egui::vec2(2.0, 0.0);
+        frame(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(source),
+                button(source, egui::PointerButton::Primary, true),
+            ],
+        );
+        frame(
+            &mut app,
+            vec![egui::Event::PointerMoved(source + egui::vec2(15.0, 0.0))],
+        );
+        frame(&mut app, vec![egui::Event::PointerMoved(target)]);
+        frame(
+            &mut app,
+            vec![button(target, egui::PointerButton::Primary, false)],
+        );
+        assert!(
+            app.status_bar
+                .order
+                .iter()
+                .position(|item| *item == Widget::Fps)
+                > app
+                    .status_bar
+                    .order
+                    .iter()
+                    .position(|item| *item == Widget::Connection)
+        );
+        let output = frame(&mut app, vec![]);
+        find_text(&output, "fps");
+        let point = widget_rect(Widget::Fps).center();
+        frame(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(point),
+                button(point, egui::PointerButton::Secondary, true),
+            ],
+        );
+        frame(
+            &mut app,
+            vec![button(point, egui::PointerButton::Secondary, false)],
+        );
+        let output = frame(&mut app, vec![]);
+        let hide = find_text(&output, "Hide");
+        find_text(&output, "Frame rate");
+        frame(
+            &mut app,
+            vec![
+                egui::Event::PointerMoved(hide.center()),
+                button(hide.center(), egui::PointerButton::Primary, true),
+            ],
+        );
+        frame(
+            &mut app,
+            vec![button(hide.center(), egui::PointerButton::Primary, false)],
+        );
+        assert!(!app.status_bar.media_rate);
+        assert!(
+            app.status_bar.workspace,
+            "item menu must not toggle the background's other widgets"
+        );
+    }
+
+    #[test]
+    fn timeline_widget_hidden_for_demo_and_direct_endpoints() {
+        let _guard = crate::app::tests::lock_app_tests();
+        let mut app = PealayerApp::default();
+        app.engine_handle = crate::four_d::engine::memory_only_test_engine();
+        app.is_connected = true;
+        app.engine_handle.is_connected.store(true, std::sync::atomic::Ordering::Relaxed);
+
+        if let Ok(mut plan) = app.engine_handle.prepared_timeline.lock() {
+            plan.replace(Ok(serde_json::json!({"cues": [{"time_ms": 100}]})));
+            assert!(plan.has_items());
+            assert_eq!(plan.presentation_label(), "Preparing hardware");
+        }
+
+        let context = egui::Context::default();
+        let mut output = context.run_ui(egui::RawInput::default(), |ui| {
+            // For Demo endpoint, Widget::Timeline must return None (no "Preparing hardware")
+            app.serial_port = crate::four_d::controller::DEMO_ENDPOINT.to_string();
+            assert!(render_widget(&app, ui, Widget::Timeline, None, &TelemetryLog::default(), &[],148.0).is_none());
+
+            // For direct serial, Widget::Timeline must also return None
+            app.serial_port = "direct:COM3".to_string();
+            assert!(render_widget(&app, ui, Widget::Timeline, None, &TelemetryLog::default(), &[],148.0).is_none());
+
+            // For controller endpoint, Widget::Timeline renders the coordinator timeline status
+            app.serial_port = "pccontroller://127.0.0.1:8787".to_string();
+            assert!(render_widget(&app, ui, Widget::Timeline, None, &TelemetryLog::default(), &[],148.0).is_some());
+        });
+        output.textures_delta.clear();
+    }
+
+    #[test]
+    fn status_dividers_have_one_boundary_and_stable_inset_geometry() {
+        let _guard = crate::app::tests::lock_app_tests();
+        for theme in [egui::Theme::Dark, egui::Theme::Light] {
+            for scale in [1.0, 1.25, 1.5, 2.0] {
+                for rtl in [false, true] {
+                    let context = egui::Context::default();
+                    context.set_pixels_per_point(scale);
+                    let config = crate::config::AppConfig {
+                        ui_control_density: if rtl { crate::config::UiControlDensity::Spacious }
+                            else { crate::config::UiControlDensity::ExtraCompact },
+                        ..Default::default()
+                    };
+                    crate::ui::configure_native_visuals(&context, &config);
+                    context.set_theme(theme);
+                    let tokens = crate::ui::craft_theme::current(&context);
+                    let mut app = PealayerApp::default();
+                    app.engine_handle = crate::four_d::engine::memory_only_test_engine();
+                    app.rtl = rtl;
+                    app.status_bar = crate::config::StatusBarConfig::default();
+                    app.status_bar.fps_mode = StatusBarFpsMode::Ui;
+                    let width = if rtl { 420.0 } else { 1000.0 };
+                    // Apply the Context's pending zoom/viewport changes before
+                    // the first status draw. A headless sizing pass has an
+                    // intentionally unbounded (8000-point) viewport.
+                    for _ in 0..2 {
+                        let mut setup = context.run_ui(egui::RawInput {
+                            screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 420.0))),
+                            ..Default::default()
+                        }, |_| {});
+                        setup.textures_delta.clear();
+                    }
+                    for enabled in [true, false] {
+                        app.status_bar.dividers = enabled;
+                        let mut previous_rects = None;
+                        let mut pointer = egui::pos2(-1.0, -1.0);
+                        for hover in [false, true, false] {
+                            let mut output = context.run_ui(egui::RawInput {
+                                screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(width, 420.0))),
+                                events: vec![egui::Event::PointerMoved(if hover { pointer } else { egui::pos2(-1.0, -1.0) })],
+                                ..Default::default()
+                            }, |ui| draw(&mut app, ui));
+                            let rects = context.data(|d| d.get_temp::<Vec<(Widget, egui::Rect)>>(egui::Id::new("test-status-widget-rects"))).unwrap();
+                            let connection = rects.iter().find(|(w, _)| *w == Widget::Connection).unwrap().1;
+                            pointer = connection.center();
+                            if let Some(previous) = &previous_rects { assert_eq!(&rects, previous, "hover changed status slots"); }
+                            previous_rects = Some(rects);
+                            let mut frames = 0;
+                            let mut dividers = 0;
+                            for shape in &output.shapes {
+                                match &shape.shape {
+                                    egui::Shape::Rect(rect) if rect.rect.width() > width - 2.0 && rect.stroke.width > 0.0 => {
+                                        frames += 1;
+                                        assert_eq!(rect.stroke, egui::Stroke::new(1.0, tokens.separator));
+                                        assert_eq!(rect.fill, tokens.well_bg);
+                                        assert!(rect.rect.top() <= connection.top() && rect.rect.bottom() >= connection.bottom(),
+                                            "frame must contain the row at {theme:?}/{scale}/{rtl}");
+                                    }
+                                    egui::Shape::LineSegment { points, stroke } => {
+                                        assert!((points[1].x - points[0].x).abs() < width - 2.0,
+                                            "duplicate full-width Panel separator outside the frame");
+                                        if points[0].x == points[1].x && stroke.color == tokens.separator {
+                                            dividers += 1;
+                                            assert_eq!(*stroke, egui::Stroke::new(1.0, tokens.separator));
+                                            assert!(((points[1].y - points[0].y).abs() - (ITEM_HEIGHT - 10.0)).abs() <= 1.0 / scale);
+                                            assert!(((points[0].y + points[1].y) * 0.5 - connection.center().y).abs() <= 1.0 / scale);
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                            assert_eq!(frames, 1, "one themed frame owns the boundary");
+                            assert_eq!(dividers, 2 * usize::from(enabled), "start widgets and the anchored Workspace each need their divider");
+                            output.textures_delta.clear();
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn status_bar_uses_craft_theme_surface_and_separator_tokens() {
+        let ctx = egui::Context::default();
+        let config = crate::config::AppConfig::default();
+        crate::ui::configure_native_visuals(&ctx, &config);
+        let tokens = crate::ui::craft_theme::current(&ctx);
+
+        let frame = status_bar_panel_frame(&tokens);
+        assert_eq!(frame.fill, tokens.well_bg);
+        assert_eq!(frame.stroke.color, tokens.separator);
+        assert_eq!(frame.stroke.width, 1.0);
     }
 }

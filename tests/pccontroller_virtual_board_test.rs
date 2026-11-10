@@ -1,10 +1,13 @@
 use std::io::{Read, Write};
-use std::net::TcpStream;
+use std::net::{TcpListener, TcpStream};
 use std::process::{Child, Command as ProcessCommand, Stdio};
 use std::thread;
 use std::time::Duration;
 
 use pealayer::four_d::protocol::{Command, decode_pccontroller_frame, encode_pccontroller_frame};
+use pealayer::four_d::controller::ControllerClient;
+use pealayer::four_d::embedded_host::{EmbeddedHost, EmbeddedHostOptions};
+use serde_json::json;
 
 struct VirtualBoardProcess {
     child: Child,
@@ -13,11 +16,12 @@ struct VirtualBoardProcess {
 }
 
 impl VirtualBoardProcess {
-    fn try_spawn(port: u16) -> Option<Self> {
-        let bin_path = "scratch/PCController/Tools/VirtualBoard/.build/release/bin/virtual_board";
-        if !std::path::Path::new(bin_path).exists() {
-            return None;
-        }
+    fn try_spawn() -> Option<Self> {
+        let bin_path = std::env::var_os("PEALAYER_VIRTUAL_BOARD_BINARY")?;
+        assert!(std::path::Path::new(&bin_path).is_file(), "configured shared-firmware VirtualBoard binary does not exist");
+        let listener = TcpListener::bind(("127.0.0.1", 0)).expect("reserve test port");
+        let port = listener.local_addr().unwrap().port();
+        drop(listener);
         let child = ProcessCommand::new(bin_path)
             .args([
                 "--bind",
@@ -26,16 +30,23 @@ impl VirtualBoardProcess {
                 &port.to_string(),
                 "--no-stdin",
                 "--quiet",
+                "--memory",
             ])
             .stdout(Stdio::null())
             .stderr(Stdio::null())
             .spawn()
-            .ok()?;
-
-        // Give the virtual board a moment to start listening
-        thread::sleep(Duration::from_millis(150));
+            .expect("start explicitly configured shared firmware");
 
         Some(Self { child, port })
+    }
+
+    fn connect(&self) -> TcpStream {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        loop {
+            if let Ok(stream) = TcpStream::connect(("127.0.0.1", self.port)) { return stream; }
+            assert!(std::time::Instant::now() < deadline, "configured VirtualBoard never became ready");
+            thread::sleep(Duration::from_millis(20));
+        }
     }
 }
 
@@ -87,18 +98,16 @@ fn read_response(stream: &mut TcpStream, target_opcode: u8, target_seq: u8) -> (
 
 #[test]
 fn test_pccontroller_virtual_board_live_interaction() {
-    let port = 8792;
-    let _vb = match VirtualBoardProcess::try_spawn(port) {
+    let vb = match VirtualBoardProcess::try_spawn() {
         Some(vb) => vb,
         None => {
-            eprintln!("VirtualBoard binary not found in scratch/, skipping integration test.");
+            eprintln!("set PEALAYER_VIRTUAL_BOARD_BINARY to test the actual shared production firmware");
             return;
         }
     };
 
     // Connect to VirtualBoard over TCP loopback
-    let mut stream = TcpStream::connect(("127.0.0.1", port))
-        .expect("Failed to connect to VirtualBoard TCP server");
+    let mut stream = vb.connect();
 
     // 1. Send Hello handshake (Opcode 0x01)
     let hello_frame = encode_pccontroller_frame(0x01, 1, &[]);
@@ -109,7 +118,8 @@ fn test_pccontroller_virtual_board_live_interaction() {
     let (opcode, seq, payload) = read_response(&mut stream, 0x81, 1);
     assert_eq!(opcode, 0x81); // 0x81 = HelloResponse
     assert_eq!(seq, 1);
-    assert!(!payload.is_empty()); // Returns build timestamp / version
+    assert_eq!(payload.len(), 16);
+    assert_ne!(payload[15] & 128, 0, "refuse physical/non-native actuation");
 
     // 2. Send RelaySet (Relay 1 ON)
     let relay_cmd = Command::RelaySet { id: 1, state: true };
@@ -152,4 +162,68 @@ fn test_pccontroller_virtual_board_live_interaction() {
     assert_eq!(seq, 4);
     assert_eq!(payload[0], 0x33); // RelayAllOff = 0x33
     assert_eq!(payload[1], 0x00); // NoError
+}
+
+#[test]
+fn pealayer_coordinator_catalog_and_outputs_without_hardware() {
+    let Some(library) = std::env::var_os("PEALAYER_PCCONTROLLER_LIBRARY") else {
+        eprintln!("set PEALAYER_PCCONTROLLER_LIBRARY and PEALAYER_VIRTUAL_BOARD_BINARY for the full no-hardware stack");
+        return;
+    };
+    let Some(vb) = VirtualBoardProcess::try_spawn() else {
+        panic!("PEALAYER_VIRTUAL_BOARD_BINARY is required when opting into this integration");
+    };
+    // Readiness against our child only; no system discovery or physical endpoint.
+    drop(vb.connect());
+    let run_id = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos();
+    let root = std::env::temp_dir().join(format!("pealayer-virtual-development-{}-{run_id}", std::process::id()));
+    assert!(!root.exists(), "refuse to overwrite previous test evidence");
+    let options = EmbeddedHostOptions {
+        data_root: root.clone(), app_id: "pealayer.virtual-test".into(),
+        app_name: "Pealayer VirtualBoard test".into(), disable_auto_connect: true,
+        disable_native: true, enable_integrations: false,
+        http_address: Some("127.0.0.1:0".into()),
+    };
+    let mut host = EmbeddedHost::load_and_start(std::path::Path::new(&library), &options).expect("isolated packaged coordinator");
+    let address = host.endpoints().as_array().unwrap()[0]["address"].as_str().unwrap().to_owned();
+    let mut client = ControllerClient::connect(&address).expect("Pealayer current TCP coordinator client");
+    let connected = client.call("controller.connect", json!({"port": format!("tcp://127.0.0.1:{}", vb.port)})).expect("attach own native child");
+    assert_eq!(connected["connected"], true);
+    assert_ne!(connected["hello"]["build_features"].as_u64().unwrap() & 128, 0, "refuse non-native actuation");
+    let profile = client.call("controller.board_profile.get", json!({})).unwrap();
+    client.call("controller.board_profile.update", json!({"key":"development", "mode":"cinema-seat-motion", "expected_revision": profile["revision"]})).expect("explicit cinema authoring profile");
+    let hardware = client.hardware_capabilities().expect("real Pealayer catalog reconciliation");
+    assert!(hardware.board_connected);
+    assert!(hardware.supports_segment_display && hardware.supports_addressable_led);
+    assert!(hardware.settings.is_some() && hardware.front_panel.is_some(), "native caches must bootstrap without a controller GUI");
+    assert!(hardware.controls.iter().any(|control| control.key == "seat.a"));
+    assert!(hardware.controls.iter().any(|control| control.key == "seat.b"));
+    assert!(hardware.telemetry.bus_mv.is_none(), "missing power must not become synthetic voltage");
+    assert_eq!(hardware.peripheral_names.get("sensor.temperature-led").map(String::as_str), Some("Native temperature 1"));
+    client.call("controller.command.execute", json!({"command":"relay 5 on"})).expect("native relay dispatch");
+    let status = client.call("controller.status", json!({})).unwrap();
+    assert_ne!(status["active_relays"].as_u64().unwrap() & 16, 0);
+    let pwm = client.call("controller.pwm.set", json!({"channel":0,"raw_value":1024})).expect("native PWM dispatch");
+    assert!(pwm.to_string().contains("1024"), "PWM must be observed, not just queued");
+    client.call("controller.display.send", json!({"target":"segments","text":"1234","duration_ms":5000})).expect("real native segment presentation");
+    // Production boot/door notices keep their priority on the native target;
+    // observe scheduled presentation rather than assuming an ACK painted it.
+    let deadline = std::time::Instant::now() + Duration::from_secs(3);
+    let panel = loop {
+        let panel = client.call("controller.front_panel", json!({})).unwrap();
+        if panel["raw_segments"] == json!([6,91,79,102]) { break panel; }
+        assert!(std::time::Instant::now() < deadline, "native display never presented requested cells: {panel}");
+        thread::sleep(Duration::from_millis(50));
+    };
+    assert_eq!(panel["raw_segments"], json!([6,91,79,102]));
+    assert_eq!(panel["tm1637_detected"], true);
+    client.call("controller.command.execute", json!({"command":"relay off"})).unwrap();
+    client.call("controller.pwm.off", json!({})).unwrap();
+    let stopped = client.call("controller.status", json!({})).unwrap();
+    assert_eq!(stopped["active_relays"], 0);
+    assert!(client.hardware_capabilities().unwrap().board_connected);
+    drop(client);
+    host.shutdown().expect("stop own coordinator");
+    drop(host);
+    std::fs::remove_dir_all(root).expect("remove only own isolated test state");
 }

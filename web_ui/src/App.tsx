@@ -1,21 +1,38 @@
 import React, { useCallback, useEffect, useLayoutEffect, useState, useRef } from 'react';
-import { Alert, ConfigProvider, theme, Layout, Menu, Spin } from 'antd';
+import { Alert, ConfigProvider, theme, Layout, Menu, message } from 'antd';
 import {
   AppstoreOutlined,
   BulbOutlined,
   ControlOutlined,
+  CodeOutlined,
   DashboardOutlined,
+  DownloadOutlined,
   FolderOpenOutlined,
   InfoCircleOutlined,
   SettingOutlined,
 } from '@ant-design/icons';
 import { HeaderBar } from './components/HeaderBar';
+import { ApplicationStatusBar, StatusBarVisibility } from './components/ApplicationStatusBar';
+import { SharedToasts } from './components/SharedToasts';
+import { PublishingAuthority } from './components/PublishingAuthority';
+import { FujiLoader } from './components/FujiLoader';
+import { WebViewBoundary } from './components/WebViewBoundary';
+import { RemoteLocationDialog } from './components/RemoteLocationDialog';
+import { AssetDropTarget } from './components/AssetDropTarget';
+import { AssetImportReview, PendingTimelineChange } from './components/AssetImportReview';
+import { assetDropDestination, type ImportedEffect } from './assetImports';
+import { useClipboardUrls } from './clipboardUrls';
+import './remote-location.css';
 import type { PlayerState } from './components/RemoteControlTab';
+import type { MediaGesturePreferences } from './components/MediaSurface';
+import type { ControlLayout, ControlSurface } from './controlBars';
 import { tr } from './i18n';
 import { useWebPlatform } from './webPlatform';
 import './styles.css';
+import './shared-toasts.css';
+import './asset-imports.css';
 import palettes from '../../assets/themes/palettes.json';
-import { accentForeground, mergeAppearance, paletteName as resolvePaletteName, resolvedAccent, resolvedAppearanceTheme } from './appearance';
+import { accentForeground, controlDensityHeight, controlDensityText, mergeAppearance, paletteName as resolvePaletteName, resolvedAccent, resolvedAppearanceTheme, uiFontCss, monoFontCss, statusFontCss } from './appearance';
 
 const { Sider, Content } = Layout;
 const RemoteControlTab = React.lazy(() => import('./components/RemoteControlTab').then((module) => ({ default: module.RemoteControlTab })));
@@ -25,8 +42,10 @@ const StudioTab = React.lazy(() => import('./components/StudioTab').then((module
 const PreferencesTab = React.lazy(() => import('./components/PreferencesTab').then((module) => ({ default: module.PreferencesTab })));
 const EffectsTab = React.lazy(() => import('./components/EffectsTab').then((module) => ({ default: module.EffectsTab })));
 const HardwareTab = React.lazy(() => import('./components/HardwareTab').then((module) => ({ default: module.HardwareTab })));
+const DownloadsTab = React.lazy(() => import('./components/DownloadsTab').then((module) => ({ default: module.DownloadsTab })));
+const TerminalTab = React.lazy(() => import('./components/TerminalTab').then(module => ({ default: module.TerminalTab })));
 
-const SURFACE_IDS = ['player', 'timeline', 'effects', 'hardware', 'library', 'about', 'preferences'] as const;
+const SURFACE_IDS = ['player', 'timeline', 'effects', 'hardware', 'library', 'downloads', 'terminal', 'about', 'preferences'] as const;
 type SurfaceId = typeof SURFACE_IDS[number];
 
 const STORAGE = {
@@ -44,8 +63,48 @@ function readStoredJson<T>(key: string, fallback: T): T {
   }
 }
 
-function persistJson(key: string, value: unknown): void {
-  try { window.localStorage.setItem(key, JSON.stringify(value)); } catch { /* Storage can be disabled or full. */ }
+const pendingStorageWrites = new Map<string, unknown>();
+let storageWriteTimer: number | null = null;
+
+function flushStorageWrites(): void {
+  if (storageWriteTimer !== null) {
+    window.clearTimeout(storageWriteTimer);
+    storageWriteTimer = null;
+  }
+  for (const [key, value] of pendingStorageWrites.entries()) {
+    try {
+      window.localStorage.setItem(key, JSON.stringify(value));
+    } catch {
+      /* Storage can be disabled or full. */
+    }
+  }
+  pendingStorageWrites.clear();
+}
+
+if (typeof window !== 'undefined') {
+  window.addEventListener('beforeunload', flushStorageWrites);
+  window.addEventListener('pagehide', flushStorageWrites);
+}
+
+function persistJson(key: string, value: unknown, immediate = false): void {
+  // Never resurrect transient notifications from offline storage.
+  if (key === STORAGE.state && value && typeof value === 'object') {
+    const { messages: _messages, remote_browser: _remoteBrowser, asset_imports: _assetImports, pending_timeline_change: _pendingTimeline, ...snapshot } = value as PlayerState;
+    value = snapshot;
+  }
+  if (immediate) {
+    pendingStorageWrites.delete(key);
+    try {
+      window.localStorage.setItem(key, JSON.stringify(value));
+    } catch {
+      /* Storage can be disabled or full. */
+    }
+    return;
+  }
+  pendingStorageWrites.set(key, value);
+  if (storageWriteTimer === null) {
+    storageWriteTimer = window.setTimeout(flushStorageWrites, 1000);
+  }
 }
 
 function surfaceFromLocation(): SurfaceId {
@@ -55,6 +114,7 @@ function surfaceFromLocation(): SurfaceId {
 
 export interface RuntimeConfig {
   appName: string;
+  appDescription: string;
   version: string;
   websocketPath: string;
   appIconPath: string;
@@ -69,7 +129,8 @@ const App: React.FC = () => {
   const [activeTab, setActiveTabState] = useState<SurfaceId>(surfaceFromLocation);
   const [connected, setConnected] = useState<boolean>(false);
   const [connectionMode, setConnectionMode] = useState<'ws' | 'http'>('http');
-  const [state, setState] = useState<PlayerState>(() => readStoredJson<PlayerState>(STORAGE.state, { status: 'initializing' }));
+  const [state, setState] = useState<PlayerState>(() => ({ ...readStoredJson<PlayerState>(STORAGE.state, { status: 'initializing' }), messages: undefined, asset_imports: undefined, pending_timeline_change: false }));
+  const [importedEffect, setImportedEffect] = useState<ImportedEffect | null>(null);
   const [runtime, setRuntime] = useState<RuntimeConfig | null>(() => readStoredJson<RuntimeConfig | null>(STORAGE.runtime, null));
   const [resolvedTheme, setResolvedTheme] = useState<'light' | 'dark'>('dark');
   const [quickSeekSeconds, setQuickSeekSeconds] = useState<number>(10);
@@ -84,10 +145,51 @@ const App: React.FC = () => {
   const siderRef = useRef<HTMLDivElement | null>(null);
   const contentRef = useRef<HTMLDivElement | null>(null);
   const appearance = state.appearance;
+  const [systemReducedMotion, setSystemReducedMotion] = useState(() => window.matchMedia('(prefers-reduced-motion: reduce)').matches);
+  useEffect(() => {
+    const media = window.matchMedia('(prefers-reduced-motion: reduce)');
+    const change = () => setSystemReducedMotion(media.matches);
+    media.addEventListener('change', change); return () => media.removeEventListener('change', change);
+  }, []);
+  const motionMode = appearance?.ui_animation_mode ?? appConfig?.ui_animation_mode ?? 'system';
+  const animationsEnabled = motionMode === 'enabled' || (motionMode === 'system' && !systemReducedMotion);
+  const controlDensity = appearance?.ui_control_density ?? appConfig?.ui_control_density ?? 'compact';
+  const controlHeight = controlDensityHeight(controlDensity);
+  const uiFont = uiFontCss(appearance?.ui_font_family ?? appConfig?.ui_font_family ?? 'system', appearance?.ui_font_name ?? appConfig?.ui_font_name);
+  const monoFont = monoFontCss(appearance?.monospace_font_family ?? appConfig?.monospace_font_family ?? 'system', appearance?.monospace_font_name ?? appConfig?.monospace_font_name);
+  const statusFont = statusFontCss(appearance?.ui_font_family ?? appConfig?.ui_font_family ?? 'system', appearance?.ui_font_name ?? appConfig?.ui_font_name, navigator.userAgent);
+  useEffect(() => {
+    document.documentElement.style.setProperty('--ui-font', uiFont);
+    document.documentElement.style.setProperty('--mono-font', monoFont);
+    document.documentElement.style.setProperty('--status-font', statusFont);
+  }, [uiFont, monoFont, statusFont]);
+  useEffect(() => { document.documentElement.style.setProperty('--control-height', `${controlHeight}px`); }, [controlHeight]);
+  useEffect(() => { document.documentElement.dataset.motion = animationsEnabled ? 'enabled' : 'disabled'; }, [animationsEnabled]);
 
   useEffect(() => {
     window.localStorage.setItem('pealayer.sidebarCollapsed', String(collapsed));
   }, [collapsed]);
+
+  const siderScrollTimer = useRef<number | null>(null);
+  const handleSiderScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
+    const top = event.currentTarget.scrollTop;
+    if (siderScrollTimer.current !== null) window.clearTimeout(siderScrollTimer.current);
+    siderScrollTimer.current = window.setTimeout(() => {
+      window.localStorage.setItem('pealayer.scroll.sider', String(top));
+    }, 200);
+  }, []);
+
+  const contentScrollTimer = useRef<number | null>(null);
+  const handleContentScroll = useCallback((event: React.UIEvent<HTMLDivElement>) => {
+    const top = event.currentTarget.scrollTop;
+    const left = event.currentTarget.scrollLeft;
+    const tab = activeTab;
+    if (contentScrollTimer.current !== null) window.clearTimeout(contentScrollTimer.current);
+    contentScrollTimer.current = window.setTimeout(() => {
+      window.localStorage.setItem(`pealayer.scroll.${tab}.top`, String(top));
+      window.localStorage.setItem(`pealayer.scroll.${tab}.left`, String(left));
+    }, 200);
+  }, [activeTab]);
 
   useEffect(() => {
     const restoreScroll = () => {
@@ -108,6 +210,11 @@ const App: React.FC = () => {
       window.clearTimeout(afterLazySurface);
     };
   }, [activeTab]);
+
+  useEffect(() => () => {
+    if (siderScrollTimer.current !== null) window.clearTimeout(siderScrollTimer.current);
+    if (contentScrollTimer.current !== null) window.clearTimeout(contentScrollTimer.current);
+  }, []);
 
   const setActiveTab = useCallback((requested: string) => {
     const tab = SURFACE_IDS.includes(requested as SurfaceId) ? requested as SurfaceId : 'player';
@@ -139,9 +246,12 @@ const App: React.FC = () => {
     document.documentElement.dir = runtime.direction;
     const surfaceNames: Record<SurfaceId, string> = {
       player: 'Player', timeline: 'Timeline', effects: 'Effects Library', hardware: 'Hardware Monitor',
-      library: 'Media Library', about: 'About and system', preferences: 'Preferences',
+      library: 'Media Library', downloads: 'Downloads', terminal: 'Terminal', about: 'About and system', preferences: 'Preferences',
     };
     document.title = `${tr(runtime.locale, surfaceNames[activeTab])} — ${runtime.appName}`;
+    let description = document.querySelector<HTMLMetaElement>('meta[name="description"]');
+    if (!description) { description = document.createElement('meta'); description.name = 'description'; document.head.append(description); }
+    description.content = runtime.appDescription;
     const media = window.matchMedia('(prefers-color-scheme: light)');
     const applyTheme = () => {
       const preference = appConfig?.theme ?? runtime.theme;
@@ -160,23 +270,50 @@ const App: React.FC = () => {
       if (previous?.theme === appearance.theme
         && previous?.color_palette === appearance.color_palette
         && previous?.accent_color === appearance.accent_color
-        && previous?.custom_accent_color === appearance.custom_accent_color) return previous;
+        && previous?.custom_accent_color === appearance.custom_accent_color
+        && previous?.ui_animation_mode === appearance.ui_animation_mode
+        && previous?.ui_control_density === appearance.ui_control_density
+        && previous?.ui_font_family === appearance.ui_font_family
+        && previous?.ui_font_name === appearance.ui_font_name
+        && previous?.monospace_font_name === appearance.monospace_font_name
+        && previous?.workspace_ui === appearance.workspace_ui
+        && previous?.preferences_grouped_navigation === appearance.preferences_grouped_navigation
+        && previous?.monospace_font_family === appearance.monospace_font_family) return previous;
+        // Motion is part of the shared appearance contract, not a browser-only toggle.
       const next = mergeAppearance(previous ?? {}, appearance);
       persistJson(STORAGE.config, next);
       return next;
     });
-  }, [appearance?.theme, appearance?.color_palette, appearance?.accent_color, appearance?.custom_accent_color]);
+  }, [appearance?.theme, appearance?.color_palette, appearance?.accent_color, appearance?.custom_accent_color, appearance?.ui_animation_mode, appearance?.ui_control_density, appearance?.ui_font_family, appearance?.monospace_font_family, appearance?.ui_font_name, appearance?.monospace_font_name, appearance?.workspace_ui, appearance?.preferences_grouped_navigation]);
 
   const accentColor = resolvedAccent(runtime, appConfig, appearance);
   const accentTextColor = accentForeground(accentColor);
   const paletteName = resolvePaletteName(appConfig);
   const palette = palettes[paletteName][resolvedTheme];
+  const mediaGestures: MediaGesturePreferences = {
+    clickPlayerToToggle: appConfig?.click_player_to_toggle ?? true,
+    videoClickFrameOnly: appConfig?.video_click_frame_only ?? true,
+    pausedDragAction: appConfig?.paused_drag_action ?? 'move_window',
+    playingDragAction: appConfig?.playing_drag_action ?? 'temporary_fast_forward',
+    middleClickAction: appConfig?.middle_click_action ?? 'toggle_fullscreen',
+    middleHoldAction: appConfig?.middle_hold_action ?? 'none',
+    rightClickAction: appConfig?.right_click_action ?? 'context_menu',
+    rightHoldAction: appConfig?.right_hold_action ?? 'seek',
+    mouseBindings: appConfig?.mouse_bindings ?? state.mouse_bindings,
+    frameStepCount: Number(appConfig?.frame_step_count ?? 1),
+    temporaryFastForwardSpeed: Number(appConfig?.temporary_fast_forward_speed ?? 2),
+    playbackSpeed: Number(appConfig?.playback_speed ?? state.playback_rate ?? 1),
+  };
 
   useLayoutEffect(() => {
     document.documentElement.dataset.palette = paletteName;
+    const style = document.documentElement.style;
     for (const [role, value] of Object.entries(palette)) {
-      document.documentElement.style.setProperty(`--${role}`, value);
+      style.setProperty(`--${role}`, value);
     }
+    return () => {
+      for (const role of Object.keys(palette)) style.removeProperty(`--${role}`);
+    };
   }, [paletteName, palette]);
 
   useEffect(() => {
@@ -186,57 +323,117 @@ const App: React.FC = () => {
   }, [accentColor, accentTextColor]);
 
   const nextRequestId = useRef(1);
-  const rawSendCmd = useCallback((command: string, payload: Record<string, any> = {}) => {
+  const pendingRequests = useRef(new Map<number, { finish: (ok: boolean) => void; timer: number }>());
+  const apiEndpoint = useCallback((path: string) => {
+    if (!connectionTarget) return path;
+    const address = connectionTarget.replace(/^pealayer:\/\//i, 'http://');
+    const target = new URL(address.includes('://') ? address : `http://${address}`);
+    if (target.protocol === 'ws:') target.protocol = 'http:';
+    if (target.protocol === 'wss:') target.protocol = 'https:';
+    target.pathname = path;
+    target.search = '';
+    target.hash = '';
+    return target.toString();
+  }, [connectionTarget]);
+  const completeRequest = useCallback((response: any) => {
+    const pending = pendingRequests.current.get(Number(response.id));
+    if (!pending) return;
+    window.clearTimeout(pending.timer);
+    pendingRequests.current.delete(Number(response.id));
+    const error = response.error?.message || response.error || (response.result?.accepted === false ? 'Command dispatcher unavailable' : null);
+    if (error) void message.error(String(error));
+    pending.finish(!error);
+  }, []);
+  const rawSendCmd = useCallback((command: string, payload: Record<string, any> = {}): Promise<boolean> => {
+    const id = nextRequestId.current++;
+    const request = { jsonrpc: '2.0', id, method: command, params: payload };
+    return new Promise((finish) => {
+      const timer = window.setTimeout(() => {
+        completeRequest({ id, error: { message: 'Command acknowledgement timed out; check the current state before retrying.' } });
+      }, 15_000);
+      pendingRequests.current.set(id, { finish, timer });
     if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
-      const methodAliases: Record<string, string> = {
-        add_effect_cue: 'pealayer.timeline.effect.add',
-        remove_effect_cue: 'pealayer.timeline.effect.remove',
-        set_recording: 'pealayer.recording.set',
-      };
-      wsRef.current.send(JSON.stringify({
-        jsonrpc: '2.0',
-        id: nextRequestId.current++,
-        method: methodAliases[command] || command,
-        params: payload,
-      }));
+      try { wsRef.current.send(JSON.stringify(request)); }
+      catch (error) { completeRequest({ id, error: { message: String(error) } }); }
     } else {
-      const body = JSON.stringify({ command, ...payload });
-      let endpoint = '/api/player/command';
-      if (connectionTarget) {
-        try {
-          const target = new URL(connectionTarget.includes('://') ? connectionTarget : `http://${connectionTarget}`);
-          if (target.protocol === 'ws:') target.protocol = 'http:';
-          if (target.protocol === 'wss:') target.protocol = 'https:';
-          target.pathname = '/api/player/command';
-          target.search = '';
-          target.hash = '';
-          endpoint = target.toString();
-        } catch {
-          return;
-        }
-      }
-      fetch(endpoint, {
+      // Identical method, parameters and correlation ID on both transports.
+      try { void fetch(apiEndpoint('/api/rpc'), {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body,
-      }).catch(() => {});
+        body: JSON.stringify(request),
+      }).then(async (response) => {
+        const result = await response.json();
+        if (!response.ok && !result.error) result.error = { message: `Command rejected (${response.status})` };
+        completeRequest({ ...result, id });
+      }).catch((error) => completeRequest({ id, error: { message: String(error) } })); }
+      catch (error) { completeRequest({ id, error: { message: String(error) } }); }
     }
-  }, [connectionTarget]);
+    });
+  }, [apiEndpoint, completeRequest]);
 
+  const playbackIconState = !state.current_video ? 'stopped' : state.playing ? 'playing' : 'paused';
+  const stateAppIconPath = `${runtime?.appIconPath || '/api/runtime/app-icon'}?state=${playbackIconState}&revision=${state.app_icon_revision ?? 0}`;
   const platform = useWebPlatform(
     state,
     rawSendCmd,
     runtime?.appName || 'Pealayer',
-    runtime?.appIconPath || '/api/runtime/app-icon-192.png',
+    stateAppIconPath,
   );
 
   const signalInteraction = platform.signalInteraction;
 
   const sendCmd = useCallback((command: string, payload: Record<string, any> = {}) => {
-    if (!platform.online && !connected) return;
+    if (!platform.online && !connected) {
+      void message.error(tr(runtime?.locale || 'en', 'Pealayer backend unavailable'));
+      return Promise.resolve(false);
+    }
     signalInteraction();
-    rawSendCmd(command, payload);
-  }, [connected, platform.online, rawSendCmd, signalInteraction]);
+    return rawSendCmd(command, payload);
+  }, [connected, platform.online, rawSendCmd, signalInteraction, runtime?.locale]);
+
+  const updateStatusBarVisibility = useCallback((visibility: StatusBarVisibility) => {
+    setAppConfig((previous) => {
+      const next = { ...(previous ?? {}), status_bar: visibility };
+      persistJson(STORAGE.config, next);
+      return next;
+    });
+    void fetch(apiEndpoint('/api/config'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ status_bar: visibility }),
+    }).then(async (response) => {
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.error || `Status bar update failed (${response.status})`);
+      }
+    }).catch((error) => void message.error(String(error)));
+  }, [apiEndpoint]);
+  const browseClipboard = useCallback((target: string) => {
+    if (state.remote_browser?.visible && state.remote_browser.target === target) return;
+    void sendCmd('pealayer.remote.browse', { target, clipboard: true });
+  }, [sendCmd, state.remote_browser?.target, state.remote_browser?.visible]);
+
+  const updateControlBar = useCallback(async (surface: ControlSurface, layout: ControlLayout) => {
+    try {
+      // Read the latest authority before a narrow CAS; never overwrite a peer's
+      // other bar or the working dock/session with a cached full config.
+      const currentResponse = await fetch(apiEndpoint('/api/config'), {signal:AbortSignal.timeout(10000)});
+      if (!currentResponse.ok) throw new Error('Remote preferences are unavailable');
+      const current = await currentResponse.json();
+      if (!current.control_bars) throw new Error('Control bar preferences are unavailable');
+      const next = { ...current.control_bars, [surface]: layout };
+      const response = await fetch(apiEndpoint('/api/peer/config'), {
+        method: 'POST', headers: {'Content-Type':'application/json'},signal:AbortSignal.timeout(10000),
+        body: JSON.stringify({operation:'save', expected:{control_bars:current.control_bars}, values:{control_bars:next}}),
+      });
+      const reply = await response.json();
+      if (!response.ok || reply.error) throw new Error(reply.error || 'Control bar update failed');
+      return true;
+    } catch(error) { void message.error(String(error));return false; }
+  },[apiEndpoint]);
+  const controlBar = {onLayoutChange:updateControlBar, onPreferences:()=>setActiveTab('preferences'),
+    onFullscreen:()=>{void platform.toggleFullscreen();}};
+  useClipboardUrls(appConfig?.clipboard_url_detection === true, connected, browseClipboard);
 
   const resolveWebSocketUrl = useCallback(() => {
     const fallbackProtocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -244,7 +441,8 @@ const App: React.FC = () => {
       return `${fallbackProtocol}//${window.location.host}${runtime?.websocketPath || '/ws'}`;
     }
     try {
-      const target = new URL(connectionTarget.includes('://') ? connectionTarget : `ws://${connectionTarget}`);
+      const address = connectionTarget.replace(/^pealayer:\/\//i, 'ws://');
+      const target = new URL(address.includes('://') ? address : `ws://${address}`);
       if (target.protocol === 'http:') target.protocol = 'ws:';
       if (target.protocol === 'https:') target.protocol = 'wss:';
       if (!target.pathname || target.pathname === '/') target.pathname = runtime?.websocketPath || '/ws';
@@ -252,7 +450,7 @@ const App: React.FC = () => {
     } catch {
       return connectionTarget;
     }
-  }, [connectionTarget, runtime]);
+  }, [connectionTarget, runtime?.websocketPath]);
 
   const apiBaseUrl = (() => {
     try {
@@ -269,25 +467,26 @@ const App: React.FC = () => {
 
   useEffect(() => {
     let disposed = false;
-    fetch('/api/runtime/config')
+    fetch(apiEndpoint('/api/runtime/config'))
       .then((response) => {
         if (!response.ok) throw new Error(`runtime config ${response.status}`);
         return response.json();
       })
       .then((value: RuntimeConfig) => {
         if (!disposed) {
-          setRuntime(value);
+          setRuntime((previous) => JSON.stringify(previous) === JSON.stringify(value) ? previous : value);
           persistJson(STORAGE.runtime, value);
         }
       })
       .catch(() => {});
     return () => { disposed = true; };
-  }, []);
+    // Reuse the authoritative status revision, not a separate polling loop.
+  }, [apiEndpoint, state.app_icon_revision]);
 
   useEffect(() => {
     if (!runtime) return;
     let disposed = false;
-    fetch('/api/config')
+    fetch(apiEndpoint('/api/config'))
       .then((response) => response.ok ? response.json() : Promise.reject())
       .then((value) => {
         if (!disposed && value && typeof value === 'object') {
@@ -301,7 +500,7 @@ const App: React.FC = () => {
       })
       .catch(() => {});
     return () => { disposed = true; };
-  }, [runtime]);
+  }, [runtime, apiEndpoint]);
 
   useEffect(() => {
     if (!runtime) return;
@@ -346,7 +545,7 @@ const App: React.FC = () => {
         ws.onmessage = (ev) => {
           try {
             const data = JSON.parse(ev.data);
-            if (data && data.jsonrpc === '2.0') return;
+            if (data && data.jsonrpc === '2.0') { completeRequest(data); return; }
             const nextState = data?.type === 'state' ? data.state : data;
             if (nextState && typeof nextState === 'object' && typeof nextState.status === 'string') {
               setState((prev) => {
@@ -369,11 +568,11 @@ const App: React.FC = () => {
     connectWS();
 
     const httpInterval = setInterval(async () => {
-      if (connectionTarget || (wsRef.current && wsRef.current.readyState === WebSocket.OPEN)) {
+      if (wsRef.current && wsRef.current.readyState === WebSocket.OPEN) {
         return; // Skip HTTP polling when WebSocket is connected
       }
       try {
-        const res = await fetch('/api/player/status');
+        const res = await fetch(apiEndpoint('/api/player/status'));
         if (res.ok) {
           const data = await res.json();
           setState((prev) => {
@@ -405,7 +604,16 @@ const App: React.FC = () => {
       wsRef.current = null;
       window.removeEventListener('online', reconnectNow);
     };
-  }, [runtime, connectionTarget, resolveWebSocketUrl]);
+  // Branding/theme changes must not disconnect an active control socket.
+  }, [Boolean(runtime), connectionTarget, resolveWebSocketUrl, apiEndpoint, completeRequest]);
+
+  useEffect(() => () => {
+    for (const pending of pendingRequests.current.values()) {
+      window.clearTimeout(pending.timer);
+      pending.finish(false);
+    }
+    pendingRequests.current.clear();
+  }, []);
 
   const changeConnectionTarget = (target: string) => {
     setConnectionTarget(target);
@@ -444,6 +652,8 @@ const App: React.FC = () => {
       icon: <InfoCircleOutlined style={{ fontSize: 18 }} />,
       label: tr(runtime?.locale || 'en', 'About and system'),
     },
+    { key: 'downloads', icon: <DownloadOutlined style={{ fontSize: 18 }} />, label: 'Downloads' },
+    ...(appConfig?.ui?.terminal?.enabled || appConfig?.ui?.terminal?.allow_remote ? [{ key: 'terminal', icon: <CodeOutlined style={{ fontSize: 18 }} />, label: 'Terminal' }] : []),
     {
       key: 'preferences',
       icon: <SettingOutlined style={{ fontSize: 18 }} />,
@@ -453,9 +663,14 @@ const App: React.FC = () => {
 
   return (
     <ConfigProvider direction={runtime?.direction}
+      componentSize={controlHeight <= 24 ? 'small' : 'middle'}
       theme={{
         algorithm: resolvedTheme === 'light' ? theme.defaultAlgorithm : theme.darkAlgorithm,
-        token: {
+          token: {
+            motion: animationsEnabled,
+          controlHeight,
+          controlHeightSM: controlHeight,
+          controlHeightLG: controlHeight,
           colorPrimary: accentColor,
           colorTextLightSolid: accentTextColor,
           // Ant Design derives additional colors from these tokens. Supply
@@ -471,9 +686,14 @@ const App: React.FC = () => {
           colorText: palette.text,
           colorTextSecondary: palette.muted,
           borderRadius: 9,
-          fontFamily: `-apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif`,
+          fontFamily: uiFont,
         },
         components: {
+          Input: controlDensityText(controlDensity),
+          InputNumber: controlDensityText(controlDensity),
+          Button: controlDensityText(controlDensity),
+          Select: { ...controlDensityText(controlDensity), optionHeight: controlHeight, optionPadding: '0 8px' },
+          Menu: { ...controlDensityText(controlDensity), itemHeight: controlHeight },
           Modal: {
             contentBg: palette['surface-1'],
             headerBg: 'transparent',
@@ -483,6 +703,9 @@ const App: React.FC = () => {
         },
       }}
     >
+      <SharedToasts snapshot={state.messages} connected={connected} locale={runtime?.locale || 'en'} dismiss={id => sendCmd('pealayer.toast.dismiss', { id })} invoke={(id, created_at_ms, action_id) => sendCmd('pealayer.toast.invoke', { id, created_at_ms, action_id })} />
+      <PublishingAuthority state={state} sendCmd={sendCmd} locale={runtime?.locale ?? 'en'} />
+      <RemoteLocationDialog state={state.remote_browser} connected={connected} base={apiBaseUrl} sendCmd={sendCmd} autoInspect={appConfig?.open_url_fetch_remote_info !== false} mouseBindings={state.mouse_bindings} />
       <Layout className="app-shell">
         <HeaderBar
           collapsed={collapsed}
@@ -490,11 +713,13 @@ const App: React.FC = () => {
           connected={connected}
           connectionMode={connectionMode}
           appName={runtime?.appName}
-          appIconPath={runtime?.appIconPath}
+          appDescription={runtime?.appDescription}
+          appIconPath={stateAppIconPath}
           locale={runtime?.locale || 'en'}
           connectionTarget={connectionTarget}
           onConnectionTargetChange={changeConnectionTarget}
           platform={platform}
+          onBrowseRemote={() => sendCmd('pealayer.remote.browse', { target: '' })}
         />
 
         {!connected && (
@@ -521,7 +746,7 @@ const App: React.FC = () => {
             onBreakpoint={(broken) => setCollapsed(broken)}
             className="app-sider"
             width={220}
-            onScroll={(event) => window.localStorage.setItem('pealayer.scroll.sider', String(event.currentTarget.scrollTop))}
+            onScroll={handleSiderScroll}
           >
             <Menu
               mode="inline"
@@ -535,14 +760,19 @@ const App: React.FC = () => {
           <Content
             ref={contentRef}
             className={`app-content ${activeTab === 'timeline' ? 'app-content--studio' : ''}`}
-            onScroll={(event) => {
-              window.localStorage.setItem(`pealayer.scroll.${activeTab}.top`, String(event.currentTarget.scrollTop));
-              window.localStorage.setItem(`pealayer.scroll.${activeTab}.left`, String(event.currentTarget.scrollLeft));
-            }}
+            onScroll={handleContentScroll}
           >
-            <React.Suspense fallback={<div className="surface-loading"><Spin size="large" /></div>}>
+            <AssetDropTarget apiBaseUrl={apiBaseUrl} sendCmd={sendCmd}
+              enabled={['timeline','player','effects'].includes(activeTab)}
+              destination={activeTab === 'effects' ? { surface: 'library' } : activeTab === 'timeline' ? { surface: 'timeline', start_time_ms: Math.max(0, Math.round((state.playback_time ?? 0) * 1000)) } : { surface: 'player' }}
+              destinationForDrop={event => {
+                return assetDropDestination(event.target,event.clientX,activeTab === 'effects' ? { surface: 'library' } : activeTab === 'timeline' ? { surface: 'timeline', start_time_ms: Math.max(0, Math.round((state.playback_time ?? 0) * 1000)) } : { surface: 'player' });
+              }}>
+            <WebViewBoundary key={activeTab} locale={runtime?.locale || 'en'}>
+            <React.Suspense fallback={<FujiLoader locale={runtime?.locale || 'en'} />}>
             {activeTab === 'timeline' && (
               <StudioTab
+                controlBar={controlBar}
                 state={state}
                 sendCmd={sendCmd}
                 locale={runtime?.locale || 'en'}
@@ -550,11 +780,20 @@ const App: React.FC = () => {
                 quickSeekSeconds={quickSeekSeconds}
                 apiBaseUrl={apiBaseUrl}
                 seekbarHoverThumbnails={Boolean(appConfig?.nle_seekbar_hover_thumbnails)}
+                showSubseconds={appConfig?.show_subseconds !== false}
                 surface="timeline"
+                timelineWheelPreferences={state.timeline_wheel_preferences ?? {
+                  plain: appConfig?.timeline_plain_wheel_action ?? 'vertical_scroll',
+                  ctrl: appConfig?.timeline_ctrl_wheel_action ?? 'zoom',
+                  shift: appConfig?.timeline_shift_wheel_action ?? 'horizontal_scroll',
+                  alt: appConfig?.timeline_alt_wheel_action ?? 'zoom',
+                }}
+                mediaGestures={mediaGestures}
               />
             )}
             {activeTab === 'player' && (
               <RemoteControlTab
+                controlBar={controlBar}
                 state={state}
                 sendCmd={sendCmd}
                 onOpenLibraryTab={() => setActiveTab('library')}
@@ -562,6 +801,8 @@ const App: React.FC = () => {
                 quickSeekSeconds={quickSeekSeconds}
                 apiBaseUrl={apiBaseUrl}
                 seekbarHoverThumbnails={Boolean(appConfig?.seekbar_hover_thumbnails)}
+                showSubseconds={appConfig?.show_subseconds !== false}
+                mediaGestures={mediaGestures}
               />
             )}
             {activeTab === 'library' && (
@@ -572,8 +813,10 @@ const App: React.FC = () => {
                 apiBaseUrl={apiBaseUrl}
               />
             )}
-            {activeTab === 'effects' && <EffectsTab state={state} sendCmd={sendCmd} locale={runtime?.locale || 'en'} />}
-            {activeTab === 'hardware' && <HardwareTab state={state} sendCmd={sendCmd} locale={runtime?.locale || 'en'} />}
+            {activeTab === 'effects' && <EffectsTab state={state} sendCmd={sendCmd} locale={runtime?.locale || 'en'} apiBaseUrl={apiBaseUrl} importedEffect={importedEffect} onImported={() => setImportedEffect(null)} />}
+            {activeTab === 'downloads' && <DownloadsTab apiBaseUrl={apiBaseUrl} sendCmd={sendCmd} />}
+            {activeTab === 'terminal' && <TerminalTab apiBaseUrl={apiBaseUrl} />}
+            {activeTab === 'hardware' && <HardwareTab state={state} sendCmd={sendCmd} locale={runtime?.locale || 'en'} onPreferences={() => setActiveTab('preferences')} />}
             {activeTab === 'about' && (
               <PlayerInfoTab state={state} connectionMode={connectionMode} runtime={runtime} locale={runtime?.locale || 'en'} apiBaseUrl={apiBaseUrl} websocketUrl={resolveWebSocketUrl()} platform={platform} />
             )}
@@ -582,6 +825,7 @@ const App: React.FC = () => {
                 apiBaseUrl={apiBaseUrl}
                 locale={runtime?.locale || 'en'}
                 appearance={appearance}
+                timelineWheelPreferences={state.timeline_wheel_preferences}
                 onConfigChange={(values) => {
                   setAppConfig(values);
                   persistJson(STORAGE.config, values);
@@ -591,8 +835,22 @@ const App: React.FC = () => {
               />
             )}
             </React.Suspense>
+            </WebViewBoundary>
+            </AssetDropTarget>
+            <AssetImportReview state={state.pending_timeline_change?undefined:state.asset_imports} sendCmd={sendCmd} openEffect={effect => { setImportedEffect(effect); setActiveTab('effects'); }} />
+            <PendingTimelineChange open={connected && state.pending_timeline_change===true} sendCmd={sendCmd} locale={runtime?.locale||'en'}/>
           </Content>
         </Layout>
+        <ApplicationStatusBar
+          state={state}
+          connected={connected}
+          connectionMode={connectionMode}
+          sendCmd={sendCmd}
+          locale={runtime?.locale || 'en'}
+          visibility={appConfig?.status_bar}
+          onVisibilityChange={updateStatusBarVisibility}
+          onNavigate={setActiveTab}
+        />
       </Layout>
     </ConfigProvider>
   );

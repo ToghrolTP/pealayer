@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { Card, Table, Breadcrumb, Button, Input, Tag, Space, Avatar, message, Popconfirm, Spin, Typography } from 'antd';
+import React, { useEffect, useRef, useState } from 'react';
+import { Card, Table, Breadcrumb, Button, Input, Tag, Space, Avatar, message, Popconfirm, Spin, Typography, Dropdown } from 'antd';
 import {
   FolderOutlined,
   VideoCameraOutlined,
@@ -8,8 +8,11 @@ import {
   ReloadOutlined,
   DeleteOutlined,
   SearchOutlined,
+  CopyOutlined,
 } from '@ant-design/icons';
 import { tr, UiLocale } from '../i18n';
+import { FileLocationSelect } from './FileLocationSelect';
+import { filesystemBreadcrumbs } from '../fileLocations';
 
 const { Text } = Typography;
 
@@ -40,37 +43,72 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
   const [loading, setLoading] = useState<boolean>(false);
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [currentPath, setCurrentPath] = useState<string | undefined>(undefined);
+  const [pathInput, setPathInput] = useState('');
+  const request = useRef<AbortController | null>(null);
 
   const fetchDirectory = async (path?: string) => {
+    request.current?.abort();
+    const controller = new AbortController(); request.current = controller;
     setLoading(true);
     try {
       const query = path ? `?path=${encodeURIComponent(path)}` : '';
-      const res = await fetch(`${apiBaseUrl}/api/fs/browse${query}`);
+      const res = await fetch(`${apiBaseUrl}/api/fs/browse${query}`, { signal: controller.signal });
       if (res.ok) {
         const json: BrowseResponse = await res.json();
+        if (controller.signal.aborted) return;
         setData(json);
         setCurrentPath(json.current_path);
+        setPathInput(json.current_path);
       } else {
-        message.error(tr(locale, 'Failed loading directory'));
+        const failure = await res.json();
+        if (!controller.signal.aborted) message.error(failure.error || tr(locale, 'Failed loading directory'));
       }
     } catch {
-      message.error(tr(locale, 'Error connecting to file system API'));
+      if (!controller.signal.aborted) message.error(tr(locale, 'Error connecting to file system API'));
     } finally {
-      setLoading(false);
+      if (!controller.signal.aborted) setLoading(false);
     }
   };
 
   useEffect(() => {
-    fetchDirectory(currentPath);
-  }, []);
+    setData(null); setCurrentPath(undefined); setPathInput('');
+    void fetchDirectory();
+    return () => request.current?.abort();
+  }, [apiBaseUrl]);
 
   const handlePlayMedia = (filePath: string, fileName: string) => {
-    sendCmd('open_video', { path: filePath });
+    sendCmd('pealayer.open', { target: filePath });
     message.success(`${tr(locale, 'Playing:')} ${fileName}`);
     if (onMediaPlayStarted) {
       onMediaPlayStarted();
     }
   };
+
+  const entryContextMenu = (record: FileEntry) => ({
+    items: [
+      record.is_dir
+        ? { key: 'open', icon: <FolderOutlined />, label: tr(locale, 'Open folder') }
+        : record.is_media
+          ? { key: 'play', icon: <PlayCircleOutlined />, label: tr(locale, 'Play') }
+          : null,
+      { key: 'copy', icon: <CopyOutlined />, label: tr(locale, 'Copy full path') },
+      { type: 'divider' as const },
+      { key: 'refresh', icon: <ReloadOutlined />, label: tr(locale, 'Refresh') },
+    ].filter(Boolean) as any,
+    onClick: async ({ key }: { key: string }) => {
+      if (key === 'open') await fetchDirectory(record.path);
+      if (key === 'play') handlePlayMedia(record.path, record.name);
+      if (key === 'refresh') await fetchDirectory(currentPath);
+      if (key === 'copy') {
+        try {
+          await navigator.clipboard.writeText(record.path);
+          void message.success(tr(locale, 'Path copied'));
+        } catch {
+          void message.error(tr(locale, 'Unable to copy path'));
+        }
+      }
+    },
+  });
 
   const handleDeleteFile = async (filePath: string) => {
     try {
@@ -108,7 +146,8 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
       dataIndex: 'name',
       key: 'name',
       render: (_: any, record: FileEntry) => (
-        <Space size="middle">
+        <Dropdown trigger={['contextMenu']} menu={entryContextMenu(record)}>
+        <Space size="middle" className="media-library__entry">
           {record.is_dir ? (
             <Avatar shape="square" icon={<FolderOutlined />} className="media-library__avatar media-library__avatar--folder" />
           ) : record.has_thumbnail ? (
@@ -136,6 +175,7 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
             </Text>
           )}
         </Space>
+        </Dropdown>
       ),
     },
     {
@@ -192,32 +232,21 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
     },
   ];
 
-  const pathParts = data?.current_path ? data.current_path.split('/').filter(Boolean) : [];
-
-  const breadcrumbItems = [
-    {
-      title: (
-        <a onClick={() => fetchDirectory('/')}>
-          {tr(locale, 'Root')}
-        </a>
-      ),
-    },
-    ...pathParts.map((part, index) => {
-      const subPath = '/' + pathParts.slice(0, index + 1).join('/');
-      return {
-        title: (
-          <a onClick={() => fetchDirectory(subPath)}>
-            {part}
-          </a>
-        ),
-      };
-    }),
-  ];
+  const breadcrumbItems = data ? filesystemBreadcrumbs(data.current_path).map(item => ({
+    title: <a onClick={() => void fetchDirectory(item.path)}>{item.name === 'Root' ? tr(locale, 'Root') : item.name}</a>,
+  })) : [];
 
   return (
     <Card bordered={false} className="surface-card media-library" bodyStyle={{ padding: 20 }}>
       {/* Header controls: Breadcrumb & Search bar */}
       <Space direction="vertical" style={{ width: '100%' }} size="middle">
+        <div className="media-library__location-bar">
+          <FileLocationSelect apiBaseUrl={apiBaseUrl} locale={locale} disabled={loading} onSelect={path => void fetchDirectory(path)} />
+          <Input value={pathInput} aria-label={tr(locale, 'Folder path')} placeholder={tr(locale, 'Folder path')}
+            onChange={event => setPathInput(event.target.value)} onPressEnter={() => void fetchDirectory(pathInput)} />
+          <Button icon={<FolderOutlined />} disabled={loading || !pathInput.trim()} aria-label={tr(locale, 'Open folder')}
+            onClick={() => void fetchDirectory(pathInput)} />
+        </div>
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
           <Space>
             {data?.parent_path && (
@@ -253,6 +282,7 @@ export const MediaLibraryTab: React.FC<MediaLibraryTabProps> = ({ sendCmd, onMed
             dataSource={filteredEntries}
             columns={columns}
             rowKey="path"
+            scroll={{ x: 640 }}
             pagination={{ pageSize: 15, showSizeChanger: true }}
             style={{ marginTop: 8 }}
           />

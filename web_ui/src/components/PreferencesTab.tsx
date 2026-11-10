@@ -1,23 +1,27 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { ColorPicker } from './ColorPicker';
+import { ColorDropdown } from './ColorDropdown';
+import { ShortcutInput } from './ShortcutInput';
 import {
   Alert,
   Button,
   Card,
-  ColorPicker,
+  Collapse,
   Input,
-  InputNumber,
   Select,
   Slider,
-  Spin,
   Switch,
   Typography,
+  Tooltip,
 } from 'antd';
+import { FujiLoader } from './FujiLoader';
 import {
   BgColorsOutlined,
-  BarsOutlined,
   CheckOutlined,
+  InfoCircleOutlined,
   CheckSquareOutlined,
   ControlOutlined,
+  CodeOutlined,
   EditOutlined,
   ExperimentOutlined,
   PlayCircleOutlined,
@@ -33,9 +37,34 @@ import {
   SafetyCertificateOutlined,
   SyncOutlined,
   WifiOutlined,
+  FileImageOutlined,
+  FolderOpenOutlined,
+  UndoOutlined,
+  ClockCircleOutlined,
+  TranslationOutlined,
+  PushpinOutlined,
+  ExpandOutlined,
+  AimOutlined,
+  PauseCircleOutlined,
+  StopOutlined,
+  SoundOutlined,
+  FontSizeOutlined,
+  LineChartOutlined,
+  BorderOutlined,
+  GatewayOutlined,
+  MenuOutlined,
+  KeyOutlined,
+  DashboardOutlined,
+  VideoCameraOutlined,
+  ArrowUpOutlined,
+  ArrowDownOutlined,
 } from '@ant-design/icons';
 import { tr } from '../i18n';
-import { mergeAppearance } from '../appearance';
+import { mergeAppearance, paletteName, resolvedAppearanceTheme } from '../appearance';
+import palettes from '../../../assets/themes/palettes.json';
+import { NumericValueControl } from './NumericValueControl';
+import { ServerFilePicker } from './ServerFilePicker';
+import type { TimelineWheelPreferences } from '../timelineWheel';
 
 type JsonObject = Record<string, any>;
 
@@ -43,6 +72,7 @@ interface PreferenceSection {
   id: string;
   label: string;
   icon: string;
+  navigation_group: string;
 }
 
 interface PreferenceOption {
@@ -58,29 +88,42 @@ interface PreferenceControl {
   section: string;
   group: string;
   label: string;
-  kind: 'accent' | 'boolean' | 'multi_select' | 'number' | 'replacement_list' | 'select' | 'text';
+  kind: 'action_list' | 'accent' | 'color' | 'boolean' | 'file' | 'multi_select' | 'number' | 'replacement_list' | 'select' | 'choice_slider' | 'text';
+  icon: string;
   description?: string;
   options?: PreferenceOption[];
   minimum?: number;
   maximum?: number;
   step?: number;
+  integer?: boolean;
   logarithmic?: boolean;
   inverted?: boolean;
   placeholder?: string;
   custom_key?: string;
+  file_extensions?: string[];
+}
+
+interface PreferenceGroup {
+  section: string;
+  name: string;
+  collapsible: boolean;
+  default_open: boolean;
 }
 
 interface PreferencesContract {
   format: 'pealayer-preferences';
   sections: PreferenceSection[];
   controls: PreferenceControl[];
+  groups: PreferenceGroup[];
   values: JsonObject;
+  defaults: JsonObject;
 }
 
 interface PreferencesTabProps {
   apiBaseUrl: string;
   locale: 'en' | 'fa';
   appearance?: import('../appearance').AppearanceState;
+  timelineWheelPreferences?: TimelineWheelPreferences;
   onConfigChange?: (values: JsonObject) => void;
 }
 
@@ -89,22 +132,69 @@ const sectionIcons: Record<string, React.ReactNode> = {
   playback: <PlayCircleOutlined />,
   hardware: <ExperimentOutlined />,
   input: <ControlOutlined />,
+  timeline_toolbar: <ControlOutlined />,
+  sidebar_rail: <MenuOutlined />,
+  workspace_tools: <CodeOutlined />,
   web: <GlobalOutlined />,
   advanced: <SettingOutlined />,
 };
 
-const controlIcons: Record<PreferenceControl['kind'], React.ReactNode> = {
-  accent: <BgColorsOutlined />,
-  boolean: <CheckSquareOutlined />,
-  multi_select: <GlobalOutlined />,
-  number: <ControlOutlined />,
-  replacement_list: <SwapRightOutlined />,
-  select: <BarsOutlined />,
-  text: <EditOutlined />,
+const controlIcons: Record<string, React.ReactNode> = {
+  'terminal-window': <CodeOutlined />,
+  plug: <LinkOutlined />,
+  'monitor-play': <VideoCameraOutlined />,
+  'arrow-square-out': <ExpandOutlined />,
+  'squares-four': <GatewayOutlined />,
+  'plugs-connected': <LinkOutlined />,
+  'circle-half': <GatewayOutlined />,
+  gauge: <DashboardOutlined />,
+  'film-strip': <VideoCameraOutlined />,
+  palette: <BgColorsOutlined />,
+  swatches: <BgColorsOutlined />,
+  translate: <TranslationOutlined />,
+  'frame-corners': <BorderOutlined />,
+  'push-pin': <PushpinOutlined />,
+  'arrows-out': <ExpandOutlined />,
+  target: <AimOutlined />,
+  clock: <ClockCircleOutlined />,
+  image: <FileImageOutlined />,
+  play: <PlayCircleOutlined />,
+  pause: <PauseCircleOutlined />,
+  'stop-circle': <StopOutlined />,
+  'speaker-high': <SoundOutlined />,
+  subtitles: <FontSizeOutlined />,
+  waveform: <LineChartOutlined />,
+  globe: <GlobalOutlined />,
+  keyboard: <KeyOutlined />,
+  'check-square': <CheckSquareOutlined />,
+  'sliders-horizontal': <ControlOutlined />,
+  'text-align-left': <SwapRightOutlined />,
+  'text-t': <FontSizeOutlined />,
+  'list-checks': <MenuOutlined />,
+  'pencil-simple': <EditOutlined />,
 };
+
+function PlayerExecutableHint({ executable }: { executable: string }) {
+  const [result, setResult] = useState<{ resolved?: string; error?: string }>();
+  useEffect(() => {
+    const controller = new AbortController();
+    setResult(undefined);
+    void fetch('/api/rpc', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'pealayer.player.executable.resolve', params: { executable } }),
+      signal: controller.signal,
+    }).then(response => response.json()).then(reply => setResult(reply.result ?? { error: reply.error?.message ?? 'Could not resolve executable' }))
+      .catch(error => { if (error.name !== 'AbortError') setResult({ error: 'Could not resolve executable' }); });
+    return () => controller.abort();
+  }, [executable]);
+  return result ? <small className="preference-player-path" role="status">
+    {result.resolved ? <CheckOutlined /> : <InfoCircleOutlined />} {result.resolved ?? result.error}
+  </small> : null;
+}
 
 const networkOptionIcon = (icon?: string) => {
   switch (icon) {
+    case 'terminal-window': return <CodeOutlined />;
+    case 'plug': return <LinkOutlined />;
     case 'wifi': return <WifiOutlined />;
     case 'ethernet': return <DesktopOutlined />;
     case 'vpn': return <SafetyCertificateOutlined />;
@@ -136,12 +226,67 @@ function patchForPath(values: JsonObject, path: string): JsonObject {
   return { [root]: values[root] };
 }
 
-export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, locale, appearance, onConfigChange }) => {
+export function ChoiceSlider({ options, value, label, locale, disabled, onCommit }: {
+  options: PreferenceOption[]; value: unknown; label: string; locale: 'en' | 'fa';
+  disabled: boolean; onCommit: (value: PreferenceOption['value']) => void;
+}) {
+  const selected = Math.max(0, options.findIndex(option => option.value === value));
+  const [index, setIndex] = useState(selected);
+  useEffect(() => { if (!disabled) setIndex(selected); }, [selected, disabled]);
+  if (!options.length) return null;
+  return <div className="preference-choice-slider" data-disabled={disabled}>
+    <Slider min={0} max={options.length - 1} step={1} value={index} disabled={disabled}
+      ariaLabelForHandle={tr(locale, label)}
+      ariaValueTextFormatterForHandle={position => tr(locale, options[position]?.label ?? '')}
+      marks={Object.fromEntries(options.map((_, position) => [position, '']))}
+      tooltip={{ formatter: position => tr(locale, options[position ?? index]?.label ?? '') }}
+      onChange={setIndex} onChangeComplete={position => {
+        if (options[position].value !== value) onCommit(options[position].value);
+      }} />
+    <button type="button" className="preference-choice-slider__value" disabled={disabled}
+      aria-label={tr(locale, label)} title={`${tr(locale, options[index]?.label ?? '')} → ${tr(locale, options[(index + 1) % options.length].label)}`}
+      onClick={() => { const next = (index + 1) % options.length; setIndex(next); onCommit(options[next].value); }}>
+      {options.map((option, position) => <span key={position} aria-hidden="true" className="preference-choice-slider__measure">{tr(locale, option.label)}</span>)}
+      <span className="preference-choice-slider__caption">{tr(locale, options[index]?.label ?? '')}</span>
+    </button>
+  </div>;
+}
+
+export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, locale, appearance, timelineWheelPreferences, onConfigChange }) => {
   const [contract, setContract] = useState<PreferencesContract | null>(null);
   const [section, setSection] = useState('appearance');
+  const [schemaRevision, setSchemaRevision] = useState(0);
+  const detail = useRef<HTMLElement>(null);
+  const sectionScroll = useRef<Record<string, number>>({});
+  const selectSection = (next: string) => {
+    const scroller = detail.current?.closest('.app-content');
+    if (scroller) sectionScroll.current[section] = scroller.scrollTop;
+    setSection(next);
+  };
+  useLayoutEffect(() => {
+    const scroller = detail.current?.closest('.app-content');
+    if (scroller) scroller.scrollTop = sectionScroll.current[section] ?? 0;
+  }, [section]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState<string | null>(null);
   const [status, setStatus] = useState<{ kind: 'success' | 'error'; text: string } | null>(null);
+  const [filePicker, setFilePicker] = useState<PreferenceControl | null>(null);
+  const refreshAudioOutputs = async () => {
+    try {
+      const response = await fetch(`${apiBaseUrl}/api/rpc`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ jsonrpc: '2.0', id: 'audio-outputs', method: 'audio.outputs.refresh', params: {} }) });
+      const result = await response.json();
+      if (!response.ok || result.error) throw new Error(result.error?.message || 'Audio output discovery failed');
+      // Discovery is asynchronous. Refresh only the options, never overwrite
+      // a user's draft or replace the form with its loading state.
+      for (const delay of [400, 1000]) {
+        await new Promise((resolve) => window.setTimeout(resolve, delay));
+        const catalog = await fetch(`${apiBaseUrl}/api/preferences`);
+        if (!catalog.ok) continue;
+        const next = await catalog.json() as PreferencesContract;
+        setContract((current) => current ? { ...current, controls: next.controls } : current);
+      }
+    } catch (error) { setStatus({ kind: 'error', text: String(error) }); }
+  };
 
   const load = async () => {
     setLoading(true);
@@ -170,18 +315,47 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
     setContract((current) => current
       ? { ...current, values: mergeAppearance(current.values, appearance) }
       : current);
-  }, [appearance?.theme, appearance?.color_palette, appearance?.accent_color, appearance?.custom_accent_color]);
+  }, [appearance?.theme, appearance?.color_palette, appearance?.accent_color, appearance?.custom_accent_color,
+    appearance?.ui_animation_mode, appearance?.ui_control_density, appearance?.ui_font_family, appearance?.monospace_font_family,
+    appearance?.ui_font_name, appearance?.monospace_font_name, appearance?.workspace_ui,
+    appearance?.native_monitor_style, appearance?.native_timeline_style, appearance?.preferences_grouped_navigation]);
+
+  // Installed-font controls are host-owned and conditional on the font choice.
+  // Refresh on local changes and remote/native previews without overwriting drafts.
+  useEffect(() => {
+    if (!contract) return;
+    const abort = new AbortController();
+    void fetch(`${apiBaseUrl}/api/preferences`, { signal: abort.signal }).then(response => {
+      if (!response.ok) throw new Error(`Preferences request failed (${response.status})`);
+      return response.json() as Promise<PreferencesContract>;
+    }).then(next => setContract(current => current ? { ...current, controls: next.controls, groups: next.groups } : current))
+      .catch(error => { if (!abort.signal.aborted) setStatus({ kind: 'error', text: String(error) }); });
+    return () => abort.abort();
+  }, [apiBaseUrl, appearance?.ui_font_family, appearance?.monospace_font_family, schemaRevision]);
+
+  useEffect(() => {
+    if (!timelineWheelPreferences) return;
+    setContract((current) => current ? { ...current, values: {
+      ...current.values,
+      timeline_plain_wheel_action: timelineWheelPreferences.plain,
+      timeline_ctrl_wheel_action: timelineWheelPreferences.ctrl,
+      timeline_shift_wheel_action: timelineWheelPreferences.shift,
+      timeline_alt_wheel_action: timelineWheelPreferences.alt,
+    } } : current);
+  }, [timelineWheelPreferences?.plain, timelineWheelPreferences?.ctrl,
+    timelineWheelPreferences?.shift, timelineWheelPreferences?.alt]);
 
   const controls = useMemo(
     () => contract?.controls.filter((control) => control.section === section) ?? [],
     [contract, section],
   );
-  const groups = useMemo(() => Array.from(new Set(controls.map((control) => control.group))), [controls]);
+  const groups = useMemo(() => contract?.groups.filter((group) => group.section === section) ?? [], [contract, section]);
 
   const updatePaths = async (updates: Array<{ key: string; value: any }>) => {
     if (!contract) return;
     const nextValues = updates.reduce(
-      (values, update) => valueWithPath(values, update.key, update.value === '' ? null : update.value),
+      (values, update) => valueWithPath(values, update.key,
+        update.value === '' && !update.key.startsWith('ui.terminal.') ? null : update.value),
       contract.values,
     );
     setContract({ ...contract, values: nextValues });
@@ -202,6 +376,7 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
         throw new Error(body.error || `Save failed (${response.status})`);
       }
       onConfigChange?.(nextValues);
+      if (updates.some(update => update.key === 'ui.terminal.target')) setSchemaRevision(revision => revision + 1);
       setStatus({ kind: 'success', text: tr(locale, 'Preferences saved') });
     } catch (error) {
       setContract(contract);
@@ -225,84 +400,84 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
     const value = control.inverted ? !Boolean(stored) : stored;
     const commonLabel = (
       <span className="preference-control__label">
-        {controlIcons[control.kind]}
+        {controlIcons[control.icon]}
         <span>{tr(locale, control.label)}</span>
       </span>
     );
+    if (control.kind === 'file') {
+      const executable = control.key === 'external_mpv.executable';
+      const terminalExecutable = control.key === 'ui.terminal.shell_program';
+      const resetLabel = terminalExecutable ? 'Use default shell' : executable ? 'Use default player' : 'Use default icon';
+      const normalize = (text: string) => executable || terminalExecutable ? text.trim().replace(/^"|"$/g, '') : text.trim();
+      return <div className="preference-control" key={control.key}>
+        {commonLabel}
+        <div className="preference-control__file">
+          <Input key={String(value ?? '')} defaultValue={value ?? ''}
+            aria-label={tr(locale, control.label)} title={String(value ?? '')}
+            placeholder={tr(locale, control.placeholder ?? '')}
+            onPressEnter={(event) => void update(control, normalize(event.currentTarget.value))}
+            onBlur={(event) => event.currentTarget.value !== (value ?? '') && void update(control, normalize(event.currentTarget.value))} />
+          <Button icon={<FolderOpenOutlined />} onClick={() => setFilePicker(control)}>{tr(locale, 'Browse…')}</Button>
+          <Tooltip title={tr(locale, resetLabel)}>
+            <Button icon={<UndoOutlined />} aria-label={tr(locale, resetLabel)} disabled={!value}
+              onClick={() => void update(control, executable ? 'mpv' : terminalExecutable ? '' : null)} />
+          </Tooltip>
+        </div>
+        {executable && <PlayerExecutableHint executable={String(value ?? '')} />}
+      </div>;
+    }
     if (control.kind === 'accent') {
       const customKey = control.custom_key ?? 'custom_accent_color';
       const customHex = String(valueAtPath(contract?.values ?? {}, customKey) ?? '#0078d4');
-      const accentOptions = (control.options ?? []).map((option) => ({
-        value: option.value,
-        label: tr(locale, option.label),
-        color: option.value === 'custom' ? customHex : option.color,
+      const options = (control.options ?? []).filter(option => option.value !== 'custom').map(option => ({
+        value: String(option.value), label: tr(locale, option.label), color: String(option.color ?? '#0078d4'),
       }));
-      return (
-        <label className="preference-control" key={control.key}>
-          {commonLabel}
-          <div className="preference-control__accent">
-            <Select
-              value={value}
-              options={accentOptions}
-              onChange={(next) => void update(control, next)}
-              labelRender={({ label }) => <span>{label}</span>}
-              optionRender={(option) => {
-                const isCustom = option.value === 'custom';
-                return (
-                  <span className={`accent-option${isCustom ? ' accent-option--custom' : ''}`}>
-                    {!isCustom && (
-                      <span
-                        className="accent-option__swatch"
-                        style={{ backgroundColor: String(option.data.color || 'transparent') }}
-                      />
-                    )}
-                    <span className="accent-option__label">{option.label}</span>
-                    {isCustom && (
-                      <span
-                        className="accent-option__editor"
-                        onMouseDown={(event) => event.stopPropagation()}
-                        onClick={(event) => event.stopPropagation()}
-                      >
-                        <ColorPicker
-                          value={customHex}
-                          disabledAlpha
-                          onChangeComplete={(color) => {
-                            void updatePaths([
-                              { key: control.key, value: 'custom' },
-                              { key: customKey, value: color.toHexString().toUpperCase() },
-                            ]);
-                          }}
-                        />
-                        <Input
-                          key={customHex}
-                          className="preference-control__hex"
-                          defaultValue={customHex.toUpperCase()}
-                          maxLength={7}
-                          aria-label={tr(locale, 'Custom accent')}
-                          onPressEnter={(event) => {
-                            void updatePaths([
-                              { key: control.key, value: 'custom' },
-                              { key: customKey, value: event.currentTarget.value.trim() },
-                            ]);
-                          }}
-                          onBlur={(event) => {
-                            if (event.currentTarget.value !== customHex) {
-                              void updatePaths([
-                                { key: control.key, value: 'custom' },
-                                { key: customKey, value: event.currentTarget.value.trim() },
-                              ]);
-                            }
-                          }}
-                        />
-                      </span>
-                    )}
-                  </span>
-                );
-              }}
-            />
-          </div>
-        </label>
-      );
+      return <label className="preference-control" key={control.key}>{commonLabel}
+        <ColorDropdown value={String(value)} customHex={customHex} options={options} locale={locale}
+          disabled={saving === control.key} onChange={(next, hex) => {
+            if (next === 'custom') void updatePaths([{ key: control.key, value: next }, { key: customKey, value: hex ?? customHex }]);
+            else void update(control, next);
+          }} />
+      </label>;
+    }
+    if (control.kind === 'color') {
+      return <label className="preference-control" key={control.key}><span>{commonLabel}</span>
+        <ColorPicker value={String(value)} disabledAlpha showText disabled={saving === control.key}
+          onChangeComplete={(color) => void update(control, color.toHexString().toUpperCase())} />
+      </label>;
+    }
+    if (control.kind === 'action_list') {
+      const schema = contract;
+      if (!schema) return null;
+      const options = control.options ?? [];
+      const order = [...new Set([...(Array.isArray(value) ? value : []), ...options.map(option => option.value)])]
+        .filter(value => options.some(option => option.value === value));
+      const hiddenKey = control.custom_key!;
+      const hidden: unknown[] = valueAtPath(schema.values, hiddenKey) ?? [];
+      const move = (index: number, next: number) => {
+        const values = [...order]; [values[index], values[next]] = [values[next], values[index]];
+        void update(control, values);
+      };
+      return <div key={control.key} className="preference-action-list">
+        {order.map((value, index) => {
+          const option = options.find(option => option.value === value)!;
+          return <div key={String(value)} style={{display:'flex',alignItems:'center',gap:8,marginBlock:6}}>
+            <Switch size="small" checked={!hidden.includes(value)} disabled={saving !== null}
+              aria-label={tr(locale, option.label)} onChange={visible => void updatePaths([{key:hiddenKey,
+                value:visible ? hidden.filter(item => item !== value) : [...hidden.filter(item => item !== value), value]}])} />
+            <span className="phosphor-icon" aria-hidden="true">{option.icon}</span>
+            <span style={{flex:1,minWidth:0}}>{tr(locale, option.label)}</span>
+            <Button size="small" icon={<ArrowUpOutlined />} title={tr(locale,'Move up')}
+              disabled={index === 0 || saving !== null} onClick={() => move(index,index-1)} />
+            <Button size="small" icon={<ArrowDownOutlined />} title={tr(locale,'Move down')}
+              disabled={index === order.length-1 || saving !== null} onClick={() => move(index,index+1)} />
+          </div>;
+        })}
+        <Button icon={<UndoOutlined />} disabled={saving !== null} onClick={() => void updatePaths([
+          {key:control.key,value:valueAtPath(schema.defaults,control.key)},
+          {key:hiddenKey,value:valueAtPath(schema.defaults,hiddenKey)},
+        ])}>{tr(locale,'Reset shortcuts')}</Button>
+      </div>;
     }
     if (control.kind === 'boolean') {
       return (
@@ -344,13 +519,39 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
         </label>
       );
     }
+    if (control.kind === 'choice_slider') {
+      return <div className="preference-control" key={control.key}>
+        {commonLabel}
+        <ChoiceSlider options={control.options ?? []} value={value} label={control.label} locale={locale}
+          disabled={saving === control.key} onCommit={next => void update(control, next)} />
+      </div>;
+    }
     if (control.kind === 'select') {
+      const scheme = resolvedAppearanceTheme(contract?.values.theme ?? 'system', window.matchMedia('(prefers-color-scheme: light)').matches, appearance);
+      const paletteLabel = (value: unknown, label: string) => {
+        const colors = palettes[paletteName({ color_palette: value })][scheme];
+        const panel = 'gradient-start' in colors
+          ? `linear-gradient(110deg, color-mix(in srgb, ${colors['gradient-start']} 38%, ${colors['surface-2']}), color-mix(in srgb, ${colors['gradient-end']} 38%, ${colors['surface-2']}))`
+          : colors['surface-2'];
+        return <span className="preference-palette-option"><span aria-hidden="true" className="preference-palette-preview"
+          style={{ background: colors.canvas, borderColor: colors['line-strong'], color: colors.text }}>
+          <span style={{ background: panel }}><i /></span>
+        </span><span>{label}</span></span>;
+      };
       return (
         <label className="preference-control" key={control.key}>
           {commonLabel}
           <Select
             value={value}
-            options={(control.options ?? []).map((option) => ({ value: option.value, label: tr(locale, option.label) }))}
+            showSearch={['ui_font_name', 'monospace_font_name'].includes(control.key) ? { optionFilterProp: 'label' } : undefined}
+            onOpenChange={(open) => { if (open && ['audio_device', 'sfx_audio_device'].includes(control.key)) void refreshAudioOutputs(); }}
+            options={(control.options ?? []).map((option) => ({ value: option.value, label: control.key === 'external_mpv.mode' ? tr(locale, option.label) : option.description || tr(locale, option.label), description: option.description, icon: option.icon }))}
+            optionRender={control.key === 'color_palette' ? option => paletteLabel(option.value, String(option.label))
+              : control.key === 'external_mpv.mode' ? option => <span className="preference-player-option">
+                <span aria-hidden="true">{controlIcons[option.data.icon ?? 'monitor-play']}</span>
+                <span>{option.label}<small>{option.data.description}</small></span>
+              </span> : undefined}
+            labelRender={control.key === 'color_palette' ? option => paletteLabel(option.value, String(option.label)) : undefined}
             onChange={(next) => void update(control, next)}
           />
         </label>
@@ -360,22 +561,11 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
       return (
         <label className="preference-control preference-control--number" key={control.key}>
           {commonLabel}
-          <div className="preference-control__number">
-            <Slider
-              min={control.minimum}
-              max={control.maximum}
-              step={control.step}
-              value={Number(value)}
-              onChangeComplete={(next) => void update(control, next)}
-            />
-            <InputNumber
-              min={control.minimum}
-              max={control.maximum}
-              step={control.step}
-              value={Number(value)}
-              onChange={(next) => next !== null && void update(control, next)}
-            />
-          </div>
+          <NumericValueControl value={Number(value)} minimum={control.minimum ?? 0} maximum={control.maximum ?? 100}
+            defaultStep={control.step ?? 1} defaultValue={Number(valueAtPath(contract?.defaults ?? {}, control.key) ?? control.minimum ?? 0)}
+            integer={control.integer} label={tr(locale, control.label)} tr={(label) => tr(locale, label)}
+            steps={contract?.values.numeric_input_steps?.[control.key]} onChange={(next) => void update(control, next)}
+            onStepsChange={(steps) => void updatePath('numeric_input_steps', { ...contract?.values.numeric_input_steps, [control.key]: steps })} />
         </label>
       );
     }
@@ -432,6 +622,13 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
         </div>
       );
     }
+    if (control.key.startsWith('application_shortcuts.')) {
+      return <label className="preference-control" key={control.key}>
+        {commonLabel}
+        <ShortcutInput value={String(value ?? '')} label={tr(locale, control.label)}
+          placeholder={control.placeholder} onCommit={next => void update(control, next)} />
+      </label>;
+    }
     return (
       <label className="preference-control" key={control.key}>
         {commonLabel}
@@ -457,35 +654,48 @@ export const PreferencesTab: React.FC<PreferencesTabProps> = ({ apiBaseUrl, loca
 
       {status && <Alert showIcon type={status.kind} message={status.text} closable onClose={() => setStatus(null)} />}
 
-      {loading && !contract ? <div className="preferences-page__loading"><Spin /></div> : contract && (
+      {loading && !contract ? <FujiLoader locale={locale} /> : contract && (
         <div className="preferences-layout">
           <nav className="preferences-rail" aria-label={tr(locale, 'Preference sections')}>
-            {contract.sections.map((item) => (
+            {contract.sections.map((item, index) => (
+              <React.Fragment key={item.id}>
+              {contract.values.preferences_grouped_navigation && (index === 0 || contract.sections[index - 1].navigation_group !== item.navigation_group) &&
+                <span className="preferences-rail-group">{tr(locale, item.navigation_group)}</span>}
               <button
                 key={item.id}
                 type="button"
                 className={item.id === section ? 'is-active' : ''}
-                onClick={() => setSection(item.id)}
+                aria-pressed={item.id === section}
+                onClick={() => selectSection(item.id)}
               >
                 {sectionIcons[item.id] ?? <SettingOutlined />}
                 <span>{tr(locale, item.label)}</span>
               </button>
+              </React.Fragment>
             ))}
           </nav>
-          <main className="preferences-detail">
-            {groups.map((group) => (
-              <Card key={group} className="preferences-group" title={group} bordered>
-                <div className="preferences-group__controls">
-                  {controls.filter((control) => control.group === group).map(renderControl)}
-                </div>
-              </Card>
-            ))}
+          <main className="preferences-detail" ref={detail}>
+            {groups.map((group) => {
+              const children = <div className="preferences-group__controls">
+                {controls.filter((control) => control.group === group.name).map(renderControl)}
+              </div>;
+              return group.collapsible
+                ? <Collapse key={`${section}:${group.name}`} className="preferences-group preferences-group--optional"
+                    defaultActiveKey={group.default_open ? [group.name] : []}
+                    items={[{ key: group.name, label: <span><FileImageOutlined /> {tr(locale, group.name)}</span>, children }]} />
+                : <Card key={group.name} className="preferences-group" title={tr(locale, group.name)} bordered>{children}</Card>;
+            })}
             <div className="preferences-save-state" aria-live="polite">
               {saving ? <><SaveOutlined /> {tr(locale, 'Saving')}</> : <><CheckOutlined /> {tr(locale, 'Changes save automatically')}</>}
             </div>
           </main>
         </div>
       )}
+      {filePicker && <ServerFilePicker apiBaseUrl={apiBaseUrl} locale={locale}
+        allowAnyFile={filePicker.key.startsWith('ui.terminal.') && !filePicker.file_extensions?.length}
+        extensions={filePicker.file_extensions ?? []} initialFile={valueAtPath(contract?.values ?? {}, filePicker.key) ?? undefined}
+        title={tr(locale, filePicker.key.startsWith('ui.terminal.') ? 'Choose terminal executable' : filePicker.key === 'external_mpv.executable' ? 'Choose mpv executable' : 'Choose an image file')} onCancel={() => setFilePicker(null)}
+        onSelect={(path) => { void update(filePicker, path); setFilePicker(null); }} />}
     </section>
   );
 };

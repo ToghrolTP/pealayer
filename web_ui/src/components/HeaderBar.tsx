@@ -7,6 +7,7 @@ import {
   CheckCircleOutlined,
   DisconnectOutlined,
   FullscreenOutlined,
+  FolderOpenOutlined,
   GlobalOutlined,
   MenuFoldOutlined,
   MenuUnfoldOutlined,
@@ -28,11 +29,13 @@ interface HeaderBarProps {
   connected: boolean;
   connectionMode: 'ws' | 'http';
   appName?: string;
+  appDescription?: string;
   appIconPath?: string;
   locale: UiLocale;
   connectionTarget: string;
   onConnectionTargetChange: (target: string) => void;
   platform: WebPlatformController;
+  onBrowseRemote: () => void;
 }
 
 export const HeaderBar: React.FC<HeaderBarProps> = ({
@@ -41,11 +44,13 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
   connected,
   connectionMode,
   appName,
+  appDescription,
   appIconPath,
   locale,
   connectionTarget,
   onConnectionTargetChange,
   platform,
+  onBrowseRemote,
 }) => {
   const [connectionOpen, setConnectionOpen] = React.useState(false);
   const [draftTarget, setDraftTarget] = React.useState(connectionTarget);
@@ -71,39 +76,68 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
           </span>
           <div className="studio-brand__copy">
             <Title level={4}>{appName || 'Pealayer'}</Title>
-            <span>{connected ? tr(locale, 'Connected workspace') : tr(locale, 'Connecting')}</span>
+            <span className="studio-brand__subtitle" title={appDescription}>{appDescription || (connected ? tr(locale, 'Connected workspace') : tr(locale, 'Connecting'))}</span>
           </div>
         </div>
       </div>
 
       <div className="connection-cluster" aria-live="polite">
+        <Tooltip title={tr(locale, 'Browse remote folder')}>
+          <Button
+            type="text"
+            icon={<FolderOpenOutlined />}
+            disabled={!connected}
+            onClick={onBrowseRemote}
+            className="studio-header__button connection-target-button connection-cluster__btn--collapsible"
+            aria-label={tr(locale, 'Browse remote folder')}
+          />
+        </Tooltip>
         <Tooltip title={tr(locale, 'Connect to another Pealayer')}>
           <Button
             type="text"
             icon={<GlobalOutlined />}
-            className="connection-target-button"
+            className="studio-header__button connection-target-button connection-cluster__btn--collapsible"
+            aria-label={tr(locale, 'Connect to another Pealayer')}
             onClick={() => setConnectionOpen(true)}
           />
         </Tooltip>
-        {connected ? (
+        <Tooltip title={connected ? (connectionMode === 'ws' ? tr(locale, 'Live connection') : tr(locale, 'Polling connection')) : tr(locale, 'Offline')}>
           <Tag
-            icon={connectionMode === 'ws' ? <ApiOutlined /> : <CheckCircleOutlined />}
-            className="connection-pill connection-pill--online"
+            icon={connected ? (connectionMode === 'ws' ? <ApiOutlined /> : <CheckCircleOutlined />) : <DisconnectOutlined />}
+            className={`connection-pill ${connected ? 'connection-pill--online' : 'connection-pill--offline'}`}
+            onClick={() => setConnectionOpen(true)}
+            role="button"
+            tabIndex={0}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' || e.key === ' ') {
+                e.preventDefault();
+                setConnectionOpen(true);
+              }
+            }}
           >
-            {connectionMode === 'ws' ? tr(locale, 'Live') : tr(locale, 'Polling')}
+            <span className="connection-pill__label">
+              {connected ? (connectionMode === 'ws' ? tr(locale, 'Live') : tr(locale, 'Polling')) : tr(locale, 'Offline')}
+            </span>
           </Tag>
-        ) : (
-          <Tag
-            icon={<DisconnectOutlined />}
-            className="connection-pill connection-pill--offline"
-          >
-            {tr(locale, 'Offline')}
-          </Tag>
-        )}
+        </Tooltip>
         <Dropdown
           trigger={['click']}
           menu={{
             items: [
+              {
+                key: 'browse-remote',
+                icon: <FolderOpenOutlined />,
+                label: tr(locale, 'Browse remote folder'),
+                disabled: !connected,
+                onClick: onBrowseRemote,
+              },
+              {
+                key: 'connect-target',
+                icon: <GlobalOutlined />,
+                label: tr(locale, 'Connect to another Pealayer'),
+                onClick: () => setConnectionOpen(true),
+              },
+              { type: 'divider' },
               platform.capabilities.install && !platform.standalone ? {
                 key: 'install', icon: <AppstoreAddOutlined />, label: tr(locale, 'Install app'),
                 onClick: () => void platform.install(),
@@ -144,7 +178,12 @@ export const HeaderBar: React.FC<HeaderBarProps> = ({
           }}
         >
           <Tooltip title={tr(locale, 'Web app features')}>
-            <Button type="text" icon={<MoreOutlined />} className="connection-target-button" aria-label={tr(locale, 'Web app features')} />
+            <Button
+              type="text"
+              icon={<MoreOutlined />}
+              className="studio-header__button connection-target-button"
+              aria-label={tr(locale, 'Web app features')}
+            />
           </Tooltip>
         </Dropdown>
       </div>

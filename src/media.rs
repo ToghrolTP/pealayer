@@ -30,10 +30,16 @@ pub fn timeline_state(
     let Some(target) = target else {
         return MediaTimelineState::NoMedia;
     };
+    let live_transport = is_live_media_target(target);
+    // A live demuxer can report a duration for the received window without
+    // supporting seeking. Keep the live presentation for those windows.
+    if live_transport && !seekable {
+        return MediaTimelineState::Live;
+    }
     if duration.is_finite() && duration > 0.0 {
         return MediaTimelineState::Finite { duration, seekable };
     }
-    if is_live_media_target(target) || metadata_loaded {
+    if live_transport || metadata_loaded {
         MediaTimelineState::Live
     } else {
         MediaTimelineState::Determining
@@ -59,6 +65,15 @@ pub fn is_remote_media_target(target: &str) -> bool {
             .iter()
             .any(|candidate| scheme.eq_ignore_ascii_case(candidate))
     })
+}
+
+/// Explicit clipboard action: keep the original URL bytes, not a proxy/cache
+/// path or redacted diagnostics. Local paths are made absolute without IO.
+pub fn source_location(path:&std::path::Path)->Result<String,String> {
+    let target=path.to_str().ok_or("Media location is not valid text")?;
+    if target.is_empty(){return Err("No media is loaded".into());}
+    if media_scheme(target).is_some() {Ok(target.to_owned())}
+    else {std::path::absolute(path).map(|path|path.to_string_lossy().into_owned()).map_err(|error|error.to_string())}
 }
 
 pub fn is_live_media_target(target: &str) -> bool {
@@ -89,14 +104,74 @@ pub fn redact_media_target(target: &str) -> String {
 }
 
 pub fn media_target_label(target: &str) -> String {
-    if is_remote_media_target(target) {
-        redact_media_target(target)
+    if media_scheme(target).is_some() && let Ok(url) = url::Url::parse(target) {
+        return url.path_segments()
+            .and_then(|mut parts| parts.rfind(|part| !part.is_empty()))
+            .map(decode_media_name)
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| url.host_str().unwrap_or("Media").to_owned());
+    }
+    if media_scheme(target).is_some() { return "Media".into(); }
+    // Windows locations must also be presentable by remote/non-Windows clients.
+    let name = if target.as_bytes().get(1) == Some(&b':') || target.starts_with("\\\\") {
+        target.rsplit(['/', '\\']).next().unwrap_or(target)
     } else {
-        std::path::Path::new(target)
-            .file_name()
-            .and_then(|name| name.to_str())
-            .unwrap_or(target)
-            .to_string()
+        std::path::Path::new(target).file_name().and_then(|name| name.to_str()).unwrap_or(target)
+    };
+    clean_display_text(name)
+}
+
+fn clean_display_text(value: &str) -> String {
+    value.chars().filter(|c| !c.is_control() && !matches!(c, '\u{202a}'..='\u{202e}' | '\u{2066}'..='\u{2069}')).collect()
+}
+
+/// Decode URL path presentation once, not form data (`+` is a literal plus).
+/// Never pass this result back to a loader, history key or directory-scope check.
+pub fn decode_media_name(value: &str) -> String {
+    let mut bytes = Vec::with_capacity(value.len());
+    let mut source = value.as_bytes().iter().copied().peekable();
+    while let Some(byte) = source.next() {
+        if byte == b'%' {
+            let mut probe = source.clone();
+            if let (Some(a), Some(b)) = (probe.next(), probe.next())
+                && let (Some(a), Some(b)) = ((a as char).to_digit(16), (b as char).to_digit(16)) {
+                bytes.push((a * 16 + b) as u8);
+                source = probe;
+                continue;
+            }
+        }
+        bytes.push(byte);
+    }
+    let decoded = clean_display_text(&String::from_utf8_lossy(&bytes));
+    if !decoded.contains('&') { return decoded; }
+    // Reuse the existing HTML entity parser, but escape literal angle brackets
+    // first so filenames cannot become markup. Only one entity-decoding pass:
+    // &amp;amp; stays &amp;, and URL %2520 stays %20.
+    let text = decoded.replace('<', "&lt;").replace('>', "&gt;");
+    let fragment = scraper::Html::parse_fragment(&text);
+    clean_display_text(&fragment.root_element().text().collect::<String>())
+}
+
+/// Full-location display is opt-in; credentials remain redacted. The original
+/// encoded source is retained separately for copying and playback.
+pub fn media_location_display(target: &str) -> String {
+    if media_scheme(target).is_some() { decode_media_name(&redact_media_target(target)) }
+    else { clean_display_text(target) }
+}
+
+pub fn media_title(target: &str, format: crate::config::MediaTitleFormat) -> String {
+    use crate::config::MediaTitleFormat;
+    match format {
+        MediaTitleFormat::FileName => media_target_label(target),
+        MediaTitleFormat::FileStem => {
+            let name = media_target_label(target);
+            if media_scheme(target).is_some() && url::Url::parse(target).ok()
+                .is_none_or(|url| url.path().trim_matches('/').is_empty()) { return name; }
+            // Only remove an actual final extension, not a leading dot.
+            name.rsplit_once('.').filter(|(stem, _)| !stem.is_empty())
+                .map(|(stem, _)| stem.to_owned()).unwrap_or(name)
+        }
+        MediaTitleFormat::Location => media_location_display(target),
     }
 }
 
@@ -180,6 +255,51 @@ mod tests {
     use super::*;
 
     #[test]
+    fn names_decode_once_without_changing_source_identity_or_local_percent_names() {
+        for (target, expected) in [
+            ("https://user:secret@example.invalid/dir/My%20movie%20%26amp%3B%20you.mkv?token=private#chapter", "My movie & you.mkv"),
+            ("https://example.invalid/%D9%81%DB%8C%D9%84%D9%85.mp4", "فیلم.mp4"),
+            ("https://example.invalid/a+b%2520%26amp%3Bamp%3B.mp4", "a+b%20&amp;.mp4"),
+            ("https://example.invalid/a%ZZ%00%0A%E2%80%AE.mp4", "a%ZZ.mp4"),
+            ("https://user:secret@example.invalid/?token=private", "example.invalid"),
+            ("https://user:secret@[invalid", "Media"),
+            ("file:///C:/media/My%20movie.mp4", "My movie.mp4"),
+            (r"C:\media\Literal%20&amp;.mp4", "Literal%20&amp;.mp4"),
+            ("/media/Literal%20&amp;.mp4", "Literal%20&amp;.mp4"),
+            ("https://example.invalid/a%26%23x41%3B%26%2366%3B%26lt%3B.mp4", "aAB<.mp4"),
+            ("https://example.invalid/A%26ndash%3BB%26copy%3B%3Cclip%3E.mp4", "A–B©<clip>.mp4"),
+            ("https://example.invalid/A%00%26amp%3BB.mp4", "A&B.mp4"),
+        ] {
+            let original = target.to_owned();
+            assert_eq!(media_target_label(target), expected, "{target}");
+            assert_eq!(target, original);
+        }
+    }
+
+    #[test]
+    fn media_title_formats_are_explicit_persistent_and_safe() {
+        use crate::config::MediaTitleFormat::*;
+        let target = "https://user:secret@example.invalid/dir/My%20movie.mkv";
+        assert_eq!(media_title(target, FileName), "My movie.mkv");
+        assert_eq!(media_title(target, FileStem), "My movie");
+        assert_eq!(media_title(target, Location), "https://***@example.invalid/dir/My movie.mkv");
+        assert_eq!(media_title(".hidden", FileStem), ".hidden");
+        assert_eq!(media_title("https://example.invalid/", FileStem), "example.invalid");
+        let mut config = crate::config::AppConfig::default();
+        assert_eq!(config.local_media_title_format, FileName);
+        assert_eq!(config.remote_media_title_format, FileName);
+        config.local_media_title_format = Location;
+        config.remote_media_title_format = FileStem;
+        let restored: crate::config::AppConfig = serde_json::from_value(serde_json::to_value(&config).unwrap()).unwrap();
+        assert_eq!(restored.local_media_title_format, Location);
+        assert_eq!(restored.remote_media_title_format, FileStem);
+        let updated = restored.apply_patch(&serde_json::json!({"remote_media_title_format":"file_name"})).unwrap();
+        assert_eq!(updated.local_media_title_format, Location);
+        assert_eq!(updated.remote_media_title_format, FileName);
+        assert!(updated.apply_patch(&serde_json::json!({"remote_media_title_format":"bogus"})).is_err());
+    }
+
+    #[test]
     fn recognizes_network_media_protocols_without_mistaking_windows_paths() {
         assert!(is_remote_media_target("rtsp://camera.invalid/live"));
         assert!(is_remote_media_target("HTTPS://cdn.invalid/video.mp4"));
@@ -230,6 +350,28 @@ mod tests {
             MediaTimelineState::Finite {
                 duration: 125.0,
                 seekable: true,
+            }
+        );
+    }
+
+    #[test]
+    fn timeline_keeps_nonseekable_live_transports_live_when_duration_is_reported() {
+        assert_eq!(
+            timeline_state(Some("rtsp://camera.invalid/live"), true, 30.0, false),
+            MediaTimelineState::Live
+        );
+        assert_eq!(
+            timeline_state(Some("rtsp://camera.invalid/recording"), true, 30.0, true),
+            MediaTimelineState::Finite {
+                duration: 30.0,
+                seekable: true,
+            }
+        );
+        assert_eq!(
+            timeline_state(Some("https://cdn.invalid/clip.mp4"), true, 30.0, false),
+            MediaTimelineState::Finite {
+                duration: 30.0,
+                seekable: false,
             }
         );
     }
@@ -291,5 +433,13 @@ mod tests {
             .as_deref(),
             Some("https://example.invalid/movie.mp4")
         );
+    }
+    #[test]
+    fn clipboard_location_preserves_url_bytes_and_resolves_local_paths() {
+        let url="https://example.invalid/a%2Fb%20c.mkv?token=example&x=a+b";
+        assert_eq!(source_location(std::path::Path::new(url)).unwrap(),url);
+        let local=source_location(std::path::Path::new("movie with spaces.mkv")).unwrap();
+        assert!(std::path::Path::new(&local).is_absolute());
+        assert!(local.ends_with("movie with spaces.mkv"));
     }
 }

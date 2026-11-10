@@ -22,6 +22,8 @@
 
 [Key Features](#key-features) • [System Architecture](#system-architecture) • [Feature Walkthrough](#feature-walkthrough) • [Hardware Protocols](#hardware-serial-protocol) • [Web Remote Control](#web-remote-control--restwebsocket-apis) • [Installation & Building](#installation--prerequisites) • [Shortcuts](#shortcut-keybindings)
 
+[📚 Version history and downloads](docs/releases/README.md) • [📝 Changelog](CHANGELOG.md) • [📸 Screenshots and provenance](docs/releases/SCREENSHOT-EVOLUTION.md)
+
 </div>
 
 ---
@@ -58,12 +60,18 @@ without duplicating PCController's effect steps.
    snapping, quantization, keyboard nudging, duplicate/delete, or **Remove
    delay** to refine the sequence. The selected cue exposes the right control
    for its channel type, including seat/relay duration, PWM or RGB fade target,
-   easing, curve quality, and repetition.
+   easing, curve quality, and repetition. Time fields accept bare milliseconds,
+   explicit units such as `250ms`, `1.5s`, `2m`, `1h`, compound values, and
+   clock notation; Enter or focus loss commits and normalizes the value.
 4. Live capture is available in that same editor. Start recording, operate any
    advertised controls, inspect status, then choose **Finish and edit**. The
    saved PCController take opens on the editor timeline and is also placed at
    the playhead where recording started.
-5. Timeline playback calls `effect play effect:<stable-id>`; lighting cues
+5. **Add melody** reads PCController's current named buzzer catalog and expands
+   the selected notes and gaps into editable sequence steps. Pealayer refreshes
+   on `melodies.changed` and explicitly re-queries when the picker opens, so it
+   never treats a previously displayed list as authoritative.
+6. Timeline playback calls `effect play effect:<stable-id>`; lighting cues
    receive a matching `effect stop` at their authored end. The stored
    definition remains solely in PCController.
 
@@ -86,6 +94,7 @@ hardware-free verification.
 * **Template Isolation (Copy-on-Write)**: Modifying a placed cue automatically clones the template, protecting shared library presets from unintended edits.
 * **Deep Multi-Level Undo/Redo**: Full history tracking across all moves, trims, deletions, and track relocations (`Ctrl+Z` / `Ctrl+Y`).
 * **Lasso Marquee Selection**: Click-and-drag rubber-band selection across multiple cues and keyframes simultaneously.
+* **Playhead-Aware Navigation**: The ruler toolbar provides animated zoom, pan, playhead reveal, and an optional follow lock that eases the viewport forward before the playhead reaches its trailing edge. Its buttons can be shown, hidden, and reordered from the always-available overflow menu; advanced cue selection, nudge, keyframe, and delete controls are available but hidden by default.
 * **Capability-Driven Track Routing**: Accepts and relocates cues only against the exact output IDs and names advertised by the connected PCController. No actuator roles or fallback relay mappings are invented locally.
 
 ### 📈 Continuous Analog Curve Automation
@@ -116,15 +125,22 @@ hardware-free verification.
 ### 🖥 Operating System Integration & IPC
 Application accelerators are editable in **Preferences → Input → Application shortcuts** and persisted in the shared configuration (also exposed by Web UI preferences). Defaults: **F11** toggles fullscreen, **Shift+F10** reveals/focuses the Media Inspector, **Ctrl+Shift+F10** opens the local media's containing folder, **Ctrl+,** opens Preferences, and **Ctrl+Shift+,** opens the configuration file through its OS-registered external handler. On macOS the last two use **Cmd** instead of **Ctrl**. Empty bindings disable an accelerator; invalid/duplicate chords are rejected. These are focused-application shortcuts, not background/global hardware hotkeys. Remote streams have no local containing folder.
 
+Editable durations use human-readable units by default. **Preferences → Input → Numeric input → Human-readable time units** chooses automatic `ms`/`s`/`min`/`h` formatting; disable it when every time field should remain displayed in milliseconds. Both modes continue to accept explicit unit suffixes.
+
 Equivalent shared commands: `pealayer --media-info`, `pealayer --media-folder`, `pealayer --edit-config`, and `pealayer --preferences`. The command catalog advertises `open_media_information`, `open_media_folder`, and `edit_configuration` for IPC/HTTP/JSON-RPC consumers.
 
 * **Unix Domain Socket IPC**: Direct headless automation on Linux via `/tmp/pealayer.sock` or `$XDG_RUNTIME_DIR/pealayer.sock`.
 * **Windows Named-Pipe IPC**: Second-process launches and local commands use a per-application, per-session named pipe before trying the loopback HTTP fallback. Single-instance mode is enabled by default and can be changed in **Preferences → Advanced → Application instance**.
 * **Pealayer Automation Endpoint**: Pealayer's newline-compatible command transport is available at `POST http://127.0.0.1:8080/api/ipc`, while JSON-RPC 2.0 remains at `/api/rpc`. These are distinct from the PCController coordinator endpoint on `:8787`; `:8787` remains the controller fallback.
+* **Window and Media Automation**: [Window placement, observed state, playback and media queries](docs/WINDOW-AND-MEDIA-CONTROL.md) share the typed dispatcher across native IPC, HTTP/RPC, WebSocket, raw NDJSON TCP, binary UDP and Windows `WM_COPYDATA`. Window commands address the local process; playback follows session authority.
 * **Desktop File Associations**: 1-click registration as default system player for 9+ media formats (`.mp4`, `.mkv`, `.avi`, `.webm`, `.mov`, `.flv`, `.mp3`, `.flac`, `.wav`) via Windows Registry (`winreg`) and Linux FreeDesktop XDG desktop entries (`xdg-mime`).
 * **Automatic Sidecar Mounting**: Automatically discovers and loads `<video>.4d.json` timeline projects saved alongside movie files.
 * **Native Multi-File Drop**: Dropped media is opened or queued, external subtitles are attached, and timeline JSON is imported according to the actual file type.
-* **System-Aware Desktop UI**: Uses the host UI font and light/dark preference, keeps the Windows caption synchronized, and updates the window title from the active media and hardware state. `APP_NAME`, `APP_ICON` (PNG path), `APP_THEME=system|light|dark`, `APP_LOCALE=system|en|fa`, and `APP_DIRECTION=auto|ltr|rtl` override deployment branding and appearance without recompilation. These locale, direction, and theme values intentionally match PCController WebUI's appearance contract. Persian uses a bundled Vazirmatn fallback and right-to-left application chrome; live PCController board, relay, effect, and macro names remain exactly as advertised instead of being replaced with translated samples.
+* **System-Aware Desktop UI**: Uses the host UI font and light/dark preference, keeps the Windows caption synchronized, and updates the window title from the active media and hardware state. `APP_NAME`, `APP_ICON`, `APP_ICON_PLAYING`, `APP_ICON_PAUSED`, `APP_ICON_STOPPED` (raster paths), `APP_THEME=system|light|dark`, `APP_LOCALE=system|en|fa`, and `APP_DIRECTION=auto|ltr|rtl` override deployment branding and appearance without recompilation. The corresponding `app_icon_playing`, `app_icon_paused`, and `app_icon_stopped` Preferences fields let users supply their own PNG, JPEG, WebP, or ICO files. Native titlebar/taskbar icons, Web UI branding, favicon, PWA artwork, and media-session artwork follow the actual playback state. These locale, direction, and theme values intentionally match PCController WebUI's appearance contract. Persian uses a bundled Vazirmatn fallback and right-to-left application chrome; live PCController board, relay, effect, and macro names remain exactly as advertised instead of being replaced with translated samples.
+
+The native cue-entry and unsaved-Preferences dialogs use [egui-elegance](https://github.com/matrix-research-inc/egui-elegance) for accessible modal presentation, structured cards, segmented relay actions, inline errors, and semantic buttons. Pealayer maps its active system-aware palette into those widgets while retaining its own application-wide spacing, fonts, and light/dark styles. The PWM cue editor keeps its precise percentage parser, and duration fields keep Pealayer's unit-aware input.
+
+  `scripts/new-icon-pack.ps1` converts separate source images or splits a side-by-side pair into native Windows `playing.ico`, `paused.ico`, `stopped.ico`, and `app.ico`. Each ICO contains 16, 24, 32, 48, 64, 128, and 256 pixel images resized with Lanczos filtering. Configure the native playback-state paths with these ICO files; retain raster masters privately as authoring inputs, rather than configuring single-resolution PNGs as Windows icons. Web/PWA artwork can still be rendered in the browser-required format. Set `APP_ICON_ICO` while building to embed `app.ico` through the Windows resource compiler. For an already-built unsigned executable, `scripts/patch-windows-icon.ps1` uses an installed rcedit or Resource Hacker and preserves a backup by default. UPX-packed executables are automatically unpacked before resource editing, then recompressed and validated; use `-KeepUnpacked` only for an intentional diagnostic deployment. Patch before Authenticode signing because any resource edit invalidates the signature. Artwork is deployment-owned and is not stored in the Pealayer repository.
 * **Portable Mode**: Automatic detection of `portable.flag` or local `pealayer.json` for self-contained, configuration-free deployments on USB drives.
 * **Reproducible visual QA**: Windows and Linux screenshot update commands, artifact hashes, and stale-image checks are documented in [`docs/SCREENSHOTS.md`](docs/SCREENSHOTS.md).
 * **Documentation**: Operator, integration, packaging, localization, and troubleshooting guidance lives in the [Pealayer Wiki](https://github.com/ToghrolTP/pealayer/wiki).
@@ -220,11 +236,20 @@ Pealayer timeline -> JSON-RPC 2.0 -> PCController -> COBS/CRC-8/ATM -> board
 board keys/menu   -> COBS/CRC-8/ATM -> PCController -> Pealayer JSON-RPC/API
 ```
 
-The default endpoint is `pccontroller://127.0.0.1:8787`. Relay commands use PCController's shared command dispatcher; PWM uses typed `controller.pwm.set`/`controller.pwm.off` methods. Pealayer's live integration test calls `controller.status`, which crosses JSON-RPC, PCController's native board request, COBS decoding, and the correlated response path.
+The default endpoint is `pccontroller://127.0.0.1:8787`. Relay commands use PCController's shared command dispatcher; PWM uses typed `controller.pwm.set`/`controller.pwm.off` methods. Normal PWM writes are logical `percent` values, so PCController applies the channel's advertised lighting/indicator/motor/general transfer curve exactly once; exact raw duty remains a PCController diagnostic operation. Pealayer's live integration test calls `controller.status`, which crosses JSON-RPC, PCController's native board request, COBS decoding, and the correlated response path.
 
 Hardware discovery and connection are enabled by default and can be disabled in **Preferences → PCController and hardware**. At startup Pealayer probes the configured coordinator and the canonical local endpoint, prefers a healthy coordinator whose advertised board profile is both attached and configured, and otherwise selects `pccontroller://127.0.0.1:8787` so the bundled-host/external-host retry path remains available. It does not infer a seat profile from relay order.
 
-PCController's peripheral catalog is authoritative for stable control/action keys and mutable names, icons, and groups. Pealayer renders semantic controls only from advertised action IDs, invokes them through `controller.action.invoke`, and edits channel names through the presentation contract. Older coordinators remain rename-compatible through `controller.peripherals.set`. Renames made in PCController WebUI/TUI are refreshed into Pealayer after the `peripherals.changed` notification (with periodic catalog refresh as recovery), while saved projects continue to identify hardware by stable keys rather than labels.
+PCController's peripheral catalog is authoritative for stable control/action keys and mutable names, icons, groups, PWM output types, and transfer curves. Pealayer renders semantic controls only from advertised action IDs, invokes them through `controller.action.invoke`, and edits channel names through the current typed presentation contract. Renames or PWM configuration changes made in PCController WebUI/TUI are refreshed into Pealayer after the `peripherals.changed` notification (with periodic catalog refresh as recovery), while saved projects continue to identify hardware by stable keys rather than labels. Pealayer displays PCController's authoritative inverse-mapped logical percentage and never reapplies gamma to it.
+
+Live motion, relay, and PWM input uses bounded latest-intent delivery per stable control key. Pealayer drains and coalesces rapid UI/API input before issuing one acknowledged controller RPC per engine pass, so a slow board reply cannot build a stale command FIFO or starve feedback. Different controls retain fair insertion order, the final stop/off/value always replaces an older pending value for that control, and E-STOP or endpoint changes discard pre-existing intents.
+
+Seat direction indicators use PCController's semantic per-side motion state.
+While the firmware safely disables a side before reversing its direction relay,
+Pealayer continues to show the accepted `requested` direction and marks it as
+transitioning; after board feedback settles, it shows the reconciled `applied`
+direction. Raw relay edges remain available for recording and diagnostics, but
+Pealayer does not reinterpret them as a substitute semantic-motion contract.
 
 #### Hardware effect authoring
 
@@ -237,7 +262,7 @@ authoritative catalog, inserts its durable cue at the original video anchor,
 and opens the captured sequence for timeline refinement. **Discard take**
 keeps neither the recording nor a timeline cue.
 
-Addressable-strip effects are never synthesized by Pealayer. Only stable effect IDs advertised by the connected PCController are shown. Use **Preview**/**Stop preview** in Hardware Monitor for the live board, or drag an advertised strip effect from **Effects Library** onto **Controller effects**. The cue duration controls when Pealayer sends the matching start and stop commands during video playback; pause and seek stop an active preview so lighting cannot drift from the playhead.
+Addressable-strip effects are never synthesized by Pealayer. Only stable effect IDs advertised by the connected PCController are shown. Hardware Monitor exposes the controller's live solid, pixel, exact-frame/gradient, rainbow and advertised-effect modes in both native and Web surfaces, with status, stop and clear actions bound to the authoritative strip state. The Web surface uses the capability-checked `hardware.strip.*` JSON-RPC methods rather than a generic controller command. Use **Preview**/**Stop preview** in Hardware Monitor for the live board, or drag an advertised strip effect from **Effects Library** onto **Controller effects**. The cue duration controls when Pealayer sends the matching start and stop commands during video playback; pause and seek stop an active preview so lighting cannot drift from the playhead.
 
 Pealayer also registers a leased `pealayer` application instance over PCController's `/ipc` WebSocket, subscribes to pushed state/event/opcode streams, and advertises exact-target player actions. PCController or a board mapping can send `pealayer.play`, `pealayer.pause`, `pealayer.toggle`, `pealayer.seek`, `pealayer.seek_absolute`, `pealayer.volume.set`, `pealayer.open`, or the compatible `app.page` navigation aliases. Pealayer deduplicates each operation/delivery pair, rejects malformed, expired, or unsupported deliveries, applies valid commands on the player thread, and acknowledges the coordinator's delivery nonce.
 
@@ -308,11 +333,11 @@ notifications, and vibration remain capability/secure-context dependent.
 
 | Method | Endpoint | Description |
 | :--- | :--- | :--- |
-| `GET` | `/api/player/status` | Returns playback state, including `duration`, `seekable`, `live`, `buffered_until`, and `buffering_percent` |
+| `GET` | `/api/player/status` | Returns playback state plus self-diagnostics in `application` and `runtime`, including build/commit, PID/session, the unified control endpoints, executable fingerprint, and adjacent libmpv fingerprint |
 | `GET` | `/api/player/commands` | Discovers the shared typed command contract and supported transports |
 | `POST` | `/api/player/command` | Dispatches player commands (JSON payload), including local files and remote media URLs |
-| `POST` | `/api/rpc` | JSON-RPC 2.0 methods such as `pealayer.play`, `pealayer.seek`, `pealayer.open`, and `pealayer.status` |
-| `POST` | `/api/ipc` | CLI and single-instance command transport; accepts legacy command JSON or newline-compatible JSON-RPC payloads |
+| `POST` | `/api/rpc` | JSON-RPC 2.0 methods such as `pealayer.play`, `pealayer.seek`, `pealayer.open`, and `pealayer.status`; status includes the same `application` and `runtime` self-diagnostics as the REST snapshot |
+| `POST` | `/api/ipc` | CLI and single-instance command transport; accepts typed command JSON or newline-compatible JSON-RPC payloads |
 | `POST` | `/api/osd` | Shows a message using optional anchor/X-Y percentages, font size, icon, colors, timeout, padding, and corner radius; an empty message hides it |
 | `DELETE` | `/api/osd` | Immediately hides the currently displayed OSD and status-bar message |
 | `GET` | `/healthz` | Service/API liveness for coordinators and supervisors |
@@ -410,6 +435,13 @@ To bridge virtual PTYs directly to a TCP socket:
 | `Ctrl` + `Z` | Undo last timeline edit / move / trim |
 | `Ctrl` + `Y` / `Ctrl` + `Shift` + `Z` | Redo last reverted edit |
 | `Delete` / `Backspace` | Delete selected timeline instances or keyframes |
+| `+` / `=` and `-` | Zoom the focused timeline in or out |
+| `Shift` + `Arrow Left` / `Right` | Pan the focused timeline left or right |
+| `C` | Bring the playhead into the focused timeline viewport |
+| `Ctrl` + `Shift` + `L` | Toggle smooth playhead-follow lock for the focused timeline |
+| `K` | Add an exact timeline keyframe at the playhead |
+| `Shift` + `Tab` / `Tab` | Select the previous / next cue |
+| `Alt` + `Arrow Left` / `Right` | Nudge selected cues by one configured frame step |
 | Available `F1` to `F8` positions | Hold during playback to record the correspondingly ordered PCController-advertised output; unavailable positions do nothing |
 | `W` / `S` or `Up` / `Down` | Ramp analog throttle up / down during curve recording |
 
@@ -474,7 +506,7 @@ Get-Content "$env:LOCALAPPDATA\Programs\Pealayer\config\windows-build-host.json"
 
 For the canonical tested Windows package, run `build.cmd`. The one Windows checkout lives at `%LOCALAPPDATA%\Programs\Pealayer\source\Pealayer` and the script mirrors PCController's stable layout by publishing the real files `%LOCALAPPDATA%\Programs\Pealayer\bin\pealayer.exe`, `libmpv-2.dll`, and `host-manifest.json` (no hashed package directory and no `bin` junction). Outside that canonical layout it falls back to a repository-local `bin` for contributor builds. The manifest records the computer name plus exact import-library and runtime-DLL paths, sizes, versions, and SHA-256 hashes, so DAVID-PC and CAFE-PC are represented as separate verified host builds rather than one ambiguous Windows artifact. Peer updates advertise the adjacent runtime hash and reject an executable packaged for a different libmpv profile. Tests and Win32 resources are verified before UPX 5.2 packages the executable with `--best --lzma`; `upx -t` and a packed libmpv smoke test must then pass. Use `build.cmd -NoUpx` only when an unpacked diagnostic binary is intentionally required, or `build.cmd -SkipTests` for a measured incremental package rebuild.
 
-The lower-level launcher accepts additional application arguments after its switches and keeps Cargo output under this repository's `target` directory. It uses `CARGO_ENCODED_RUSTFLAGS` so installation paths containing spaces are passed to `rustc` correctly.
+The lower-level launcher accepts additional application arguments after its switches and shares Cargo output at `%LOCALAPPDATA%\Programs\Pealayer\build-cache\cargo-target`, including across existing worktrees. The host profile and generated repository-local Cargo configuration record that path, so direct Cargo commands use the same cache. An explicit `CARGO_TARGET_DIR` remains available for intentional contributor/CI overrides; relative overrides are resolved against the repository root. Do not store Pealayer source or build products under `C:\development`, which is reserved for development tools. The launcher uses `CARGO_ENCODED_RUSTFLAGS` so installation paths containing spaces are passed to `rustc` correctly.
 
 Current mpv builds require a Vulkan loader that exports Vulkan 1.1 entry points. If `mpv.com --version` exits with Windows status `0xc0000139`, update the graphics driver or install the current [LunarG Vulkan Runtime](https://vulkan.lunarg.com/sdk/home) and retry before debugging Pealayer itself.
 
